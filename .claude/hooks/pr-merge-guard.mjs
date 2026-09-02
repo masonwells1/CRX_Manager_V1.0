@@ -40,6 +40,12 @@ import {
   pullRequestReviewBlocked,
   riskyFiles,
 } from "./codex-push-lib.mjs";
+import {
+  CODEX_THREADS_QUERY,
+  CODEX_THREAD_PAGE_SIZE,
+  codexBotFindingsDenial,
+  evaluateCodexBotReview,
+} from "./codex-bot-review-lib.mjs";
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 
@@ -198,6 +204,73 @@ function gateRequest(request) {
       "this pull request. Removing main's required-approval rule did not authorize merging over a review " +
       "that asked for changes. Fix every real finding and push it; a genuine nitpick may be dismissed with " +
       "a one-line reason in the thread. Merge only after that."
+    );
+  }
+
+  // ── the Codex GitHub App's review — read it instead of ignoring it ────────
+  // Added 2026-09-02. The App has reviewed every PR in this repo since it was
+  // enabled, and until now nothing here read a word of it: a grep for
+  // `chatgpt-codex-connector` across hooks, skills, commands, scripts and docs
+  // returned zero hits. With the approval gate downgraded to a notice on the
+  // same day, an unread automated review is the largest remaining hole.
+  //
+  // Deliberately a SEPARATE gh call rather than extra fields on the resolve
+  // above: `gh pr view` has no reviewThreads field at all (verified — "Unknown
+  // JSON field"), so thread resolution state only comes from GraphQL. Keeping
+  // this self-contained also keeps the shared resolve line conflict-free for the
+  // other in-flight guard work.
+  //
+  // Fail-OPEN by design: any failure here leaves codexVerdict null, which
+  // prints a notice and merges. See the header of codex-bot-review-lib.mjs for
+  // why this one predicate does not fail closed like its neighbours.
+  let codexVerdict = null;
+  try {
+    const metaArgs = ["pr", "view"];
+    if (request.selector) metaArgs.push(String(request.selector));
+    metaArgs.push("--json", "number,url");
+    if (request.repo) metaArgs.push("--repo", request.repo);
+    const meta = JSON.parse(gh(metaArgs));
+    const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
+    if (slug && Number.isInteger(meta?.number)) {
+      const raw = gh([
+        "api", "graphql",
+        "-f", `query=${CODEX_THREADS_QUERY}`,
+        "-F", `owner=${slug[1]}`,
+        "-F", `name=${slug[2]}`,
+        "-F", `number=${meta.number}`,
+        "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
+      ]);
+      const node = JSON.parse(raw)?.data?.repository?.pullRequest;
+      if (node) codexVerdict = evaluateCodexBotReview(node);
+    }
+  } catch {
+    codexVerdict = null; // notice below; never a deny
+  }
+
+  // The one blocking case: it flagged THIS commit and nobody answered. Not
+  // exempted by --auto — queueing a merge does not answer a review comment, and
+  // the exit (fix it, or resolve the thread with a reason) is available either
+  // way.
+  if (codexVerdict?.status === "findings-at-head") {
+    deny(codexBotFindingsDenial("PR MERGE GATE", request.selector, codexVerdict.unresolvedAtHead));
+  }
+  if (!codexVerdict) {
+    process.stderr.write(
+      "CODEX REVIEW NOTICE: could not read the Codex GitHub App's review threads for this PR, so its " +
+      "findings were NOT checked. Merging anyway (this gate fails open by design). Read them by hand: " +
+      `gh pr view ${request.selector || "<number>"} --comments\n`,
+    );
+  } else if (codexVerdict.status === "stale") {
+    process.stderr.write(
+      `CODEX REVIEW NOTICE: the Codex GitHub App has ${codexVerdict.codexThreads} comment thread(s) on this ` +
+      "PR, none of them unresolved against the exact commit being merged. Nothing blocks, but if you have " +
+      "not read them, do: " +
+      `gh pr view ${request.selector || "<number>"} --comments\n`,
+    );
+  } else if (codexVerdict.status === "none") {
+    process.stderr.write(
+      "CODEX REVIEW NOTICE: the Codex GitHub App has left no review comments on this PR. If it never ran, " +
+      "comment `@codex review` and read the result before merging anything non-trivial.\n",
     );
   }
 

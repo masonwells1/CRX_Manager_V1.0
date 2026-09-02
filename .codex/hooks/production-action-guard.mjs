@@ -22,6 +22,12 @@ import {
   riskyFiles,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
+import {
+  CODEX_THREADS_QUERY,
+  CODEX_THREAD_PAGE_SIZE,
+  codexBotFindingsDenial,
+  evaluateCodexBotReview,
+} from "../../.claude/hooks/codex-bot-review-lib.mjs";
 
 // Sol HIGH finding (2026-08-14, write-scope review): with the Supabase connector
 // write-enabled, ANY mutating Supabase tool Codex can reach is a route to
@@ -656,6 +662,41 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "(`@coderabbitai review`, fix its findings, merge once it approves), or hand the PR to Mason and say why."
     );
   }
+  // ── the Codex GitHub App's own review — mirror of pr-merge-guard.mjs ───────
+  // Added 2026-09-02 alongside the Claude-side check. Wiring it on only one side
+  // would mean a merge driven from Codex skips a gate a merge driven from Claude
+  // gets, which is exactly the asymmetry AGENTS.md forbids leaving undeclared.
+  //
+  // Runs BEFORE the green-pipeline check so an unanswered review comment is the
+  // message the reader gets, rather than "wait for CI". Fails OPEN on any error:
+  // see the header of codex-bot-review-lib.mjs for why this one predicate does
+  // not fail closed like its neighbours here.
+  let codexVerdict = null;
+  try {
+    const metaArgs = ["pr", "view"];
+    if (request.selector) metaArgs.push(String(request.selector));
+    metaArgs.push("--json", "number,url");
+    if (request.repo) metaArgs.push("--repo", request.repo);
+    const meta = JSON.parse(runGh(metaArgs, repoDir));
+    const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
+    if (slug && Number.isInteger(meta?.number)) {
+      const node = JSON.parse(runGh([
+        "api", "graphql",
+        "-f", `query=${CODEX_THREADS_QUERY}`,
+        "-F", `owner=${slug[1]}`,
+        "-F", `name=${slug[2]}`,
+        "-F", `number=${meta.number}`,
+        "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
+      ], repoDir))?.data?.repository?.pullRequest;
+      if (node) codexVerdict = evaluateCodexBotReview(node);
+    }
+  } catch {
+    codexVerdict = null; // never a deny
+  }
+  if (codexVerdict?.status === "findings-at-head") {
+    return denied(codexBotFindingsDenial("CODEX PRODUCTION GATE", request.selector, codexVerdict.unresolvedAtHead));
+  }
+
   if (!pullRequestChecksGreen(pullRequest)) {
     return denied(
       "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."

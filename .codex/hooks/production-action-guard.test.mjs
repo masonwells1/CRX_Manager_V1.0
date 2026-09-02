@@ -1058,15 +1058,23 @@ try {
     assert.equal(noBaseOid.blocked, true, "PR payload without baseRefOid fails closed");
 
     // The gh query must actually ask for baseRefOid.
-    let askedFor = "";
+    //
+    // Collect EVERY invocation rather than keeping only the last one: since
+    // 2026-09-02 the merge route makes further gh calls after resolving the PR
+    // (the Codex GitHub App review lookup), and a last-write-wins capture then
+    // asserts against the wrong call and fails for the wrong reason.
+    const ghCalls = [];
     evaluateProductionAction({
       toolName: "PowerShell",
       toolInput: { command: "gh pr merge 123 --squash" },
       repoDir: stale.repo,
       nowMs: now,
-      runGh: (args) => { askedFor = args.join(" "); return prAt(githubBase); },
+      runGh: (args) => { ghCalls.push(args.join(" ")); return prAt(githubBase); },
     });
-    assert.match(askedFor, /baseRefOid/, "gh pr view requests baseRefOid");
+    assert.ok(
+      ghCalls.some((call) => /baseRefOid/.test(call)),
+      "gh pr view requests baseRefOid",
+    );
 
     // A base that is not a full commit id must fail closed: `rev-parse --verify`
     // resolves ref names too, so an abbreviated/symbolic value would otherwise

@@ -146,11 +146,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // pullRequestReviewBlocked (denies CHANGES_REQUESTED only) and reworded the
   // pullRequestApproved comment. Anchors unchanged; the transform is still
   // identity.
-  codexGuard: "1c921605467e613f820bc3413d5bff255296c4ec",
+  // codexGuard re-pinned 2026-09-02: the merge route gained the Codex GitHub
+  // App review check (unresolved App comments on the exact head block a merge),
+  // mirroring the same check added to pr-merge-guard.mjs. Anchors unchanged; the
+  // transform is still identity.
+  codexGuard: "8497cee3d3d2e7cfea9f6b1c7591622d1992fd52",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "a9829ef4ae86d6c157c7409981fbf52a44ba7f0a",
+  codexGuard: "b975a0a6aa6835f073dd65f531473c8d6a31120c",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

@@ -1,0 +1,240 @@
+#!/usr/bin/env node
+// Tests for the Codex GitHub App review predicates (2026-09-02).
+//
+// The failure mode this suite exists to prevent is SILENT: if the login match,
+// the oid binding, or the resolution check is wrong, every predicate returns
+// "nothing to see here" and every merge sails through looking checked. A green
+// run of this file must therefore mean the checks actually fired, so the
+// canaries below assert the DENY direction, not only the allow direction.
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  CODEX_BOT_LOGINS,
+  CODEX_THREADS_QUERY,
+  codexBotFindingsDenial,
+  codexBotThreads,
+  evaluateCodexBotReview,
+  isCodexBotLogin,
+  isStandingAtHead,
+  oidMatchesHead,
+} from "./codex-bot-review-lib.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let pass = 0;
+function ok(v, m) { assert.ok(v, m); pass++; }
+function eq(a, b, m) { assert.deepEqual(a, b, m); pass++; }
+
+const HEAD = "53e9c07142a4428848a3cebc0c31d2c1b83334c9";
+const OLD = "306d1e263e0000000000000000000000000000aa";
+
+// Build a GraphQL-shaped reviewThread node.
+const thread = ({ login = "chatgpt-codex-connector", oid = HEAD, resolved = false } = {}) => ({
+  isResolved: resolved,
+  isOutdated: false,
+  comments: { nodes: [{ author: { login }, originalCommit: { oid } }] },
+});
+const pr = (threads, headRefOid = HEAD) => ({ headRefOid, reviewThreads: { nodes: threads } });
+
+// ── the two spellings of the bot's name ──────────────────────────────────────
+// Verified live 2026-09-02 on PR #556: `gh pr view --json reviews` reports
+// author.login "chatgpt-codex-connector"; REST .../pulls/556/reviews reports
+// user.login "chatgpt-codex-connector[bot]". Matching one and not the other is
+// the silent no-op this whole file guards against.
+ok(isCodexBotLogin("chatgpt-codex-connector"), "gh/GraphQL spelling (no [bot] suffix) matches");
+ok(isCodexBotLogin("chatgpt-codex-connector[bot]"), "REST spelling (with [bot] suffix) matches");
+ok(isCodexBotLogin("  Chatgpt-Codex-Connector[BOT]  "), "match is case- and whitespace-insensitive");
+ok(!isCodexBotLogin("coderabbitai[bot]"), "a different review bot does not match");
+ok(!isCodexBotLogin("masonwells1"), "a human does not match");
+ok(!isCodexBotLogin(""), "empty login does not match");
+ok(!isCodexBotLogin(undefined), "missing login does not match");
+// Substring matching would let an impostor account pass; the list is exact.
+ok(!isCodexBotLogin("not-chatgpt-codex-connector"), "MUST NOT MATCH: compared exactly, not by substring");
+ok(!isCodexBotLogin("chatgpt-codex-connector-evil"), "MUST NOT MATCH: suffixed impostor login");
+eq(CODEX_BOT_LOGINS.length, 2, "both API spellings are pinned");
+
+// ── thread extraction ────────────────────────────────────────────────────────
+eq(codexBotThreads(pr([thread()])).length, 1, "a Codex thread is found");
+eq(codexBotThreads(pr([thread({ login: "coderabbitai" })])).length, 0, "CodeRabbit's threads are not Codex's");
+eq(codexBotThreads(pr([])).length, 0, "no threads yields none");
+eq(codexBotThreads({ headRefOid: HEAD }).length, 0, "absent reviewThreads yields none rather than throwing");
+eq(codexBotThreads({ headRefOid: HEAD, reviewThreads: { nodes: "x" } }).length, 0, "non-array nodes yields none");
+eq(codexBotThreads(pr([{ isResolved: false, comments: { nodes: [] } }])).length, 0, "a thread with no comments has no author and is skipped");
+
+// ── THE BLOCKING CASE: an unresolved thread on the exact head ────────────────
+eq(
+  evaluateCodexBotReview(pr([thread({ resolved: false, oid: HEAD })])).status,
+  "findings-at-head",
+  "MUST BLOCK: an unresolved Codex thread raised against the head is standing findings",
+);
+eq(
+  evaluateCodexBotReview(pr([thread({ resolved: false, oid: HEAD })])).unresolvedAtHead,
+  1,
+  "the count of standing items is reported so the denial can name it",
+);
+eq(
+  evaluateCodexBotReview(pr([
+    thread({ resolved: false, oid: HEAD }),
+    thread({ resolved: false, oid: HEAD }),
+    thread({ resolved: true, oid: HEAD }),
+  ])).unresolvedAtHead,
+  2,
+  "only UNRESOLVED at-head threads are counted",
+);
+// Oid comparison must be case-insensitive: GitHub renders oids lowercase, but a
+// caller could pass an uppercased head.
+eq(
+  evaluateCodexBotReview({
+    headRefOid: HEAD.toUpperCase(),
+    reviewThreads: { nodes: [thread({ resolved: false, oid: HEAD })] },
+  }).status,
+  "findings-at-head",
+  "MUST BLOCK: head/oid match is case-insensitive",
+);
+
+// ── the non-blocking cases (deliberate fail-open — see the lib header) ───────
+eq(
+  evaluateCodexBotReview(pr([thread({ resolved: true, oid: HEAD })])).status,
+  "clean-at-head",
+  "a RESOLVED thread on the head is handled, not standing — resolving is the intended exit",
+);
+eq(
+  evaluateCodexBotReview(pr([thread({ resolved: false, oid: OLD })])).status,
+  "stale",
+  "an unresolved thread raised against an OLDER commit is a notice, never a block",
+);
+eq(
+  evaluateCodexBotReview(pr([])).status,
+  "none",
+  "no Codex threads at all is a notice, never a block",
+);
+eq(
+  evaluateCodexBotReview({ headRefOid: HEAD }).status,
+  "none",
+  "threads never fetched is a notice, never a block — a failed GraphQL call must not deny",
+);
+// This asymmetry is load-bearing. Measured on the live board 2026-09-02, the
+// Codex App re-reviews on essentially every push (#547 had 13 review objects,
+// #530 19, #516 23), so a gate keyed to review OBJECTS would have flagged 6 of
+// 10 open PRs with no way to ever satisfy it. These assertions are the ones
+// that should fail if someone widens the block back out.
+ok(
+  evaluateCodexBotReview(pr([thread({ resolved: false, oid: OLD })])).status !== "findings-at-head",
+  "MUST NOT BLOCK: an older-commit finding must never be reported as standing at the head",
+);
+ok(
+  evaluateCodexBotReview(pr([thread({ resolved: true, oid: HEAD })])).status !== "findings-at-head",
+  "MUST NOT BLOCK: a resolved thread must never be reported as standing findings",
+);
+ok(
+  evaluateCodexBotReview(pr([])).status !== "findings-at-head",
+  "MUST NOT BLOCK: absent findings must never be reported as standing findings",
+);
+
+// ── the empty-oid trap, tested at the primitive ──────────────────────────────
+// These MUST be asserted against oidMatchesHead/isStandingAtHead directly.
+// Inside evaluateCodexBotReview an empty head returns early, so an emptiness
+// test buried in the filter is unreachable — mutation testing on 2026-09-02
+// deleted exactly that check and the whole suite stayed green.
+ok(!oidMatchesHead("", ""), "MUST NOT MATCH: unknown oid vs unknown head");
+ok(!oidMatchesHead("", HEAD), "MUST NOT MATCH: unknown oid vs a real head");
+ok(!oidMatchesHead(HEAD, ""), "MUST NOT MATCH: a real oid vs an unknown head");
+ok(!oidMatchesHead(undefined, undefined), "MUST NOT MATCH: both sides missing");
+ok(!oidMatchesHead("   ", "   "), "MUST NOT MATCH: whitespace-only is still unknown");
+ok(oidMatchesHead(HEAD, HEAD), "a real oid matches an identical head");
+ok(oidMatchesHead(HEAD.toUpperCase(), HEAD), "oid match is case-insensitive");
+ok(oidMatchesHead(` ${HEAD} `, HEAD), "oid match tolerates surrounding whitespace");
+ok(!isStandingAtHead({ resolved: false, oid: "" }, ""), "MUST NOT BLOCK: unknown-vs-unknown is not a standing finding");
+ok(isStandingAtHead({ resolved: false, oid: HEAD }, HEAD), "unresolved at the head IS a standing finding");
+ok(!isStandingAtHead({ resolved: true, oid: HEAD }, HEAD), "MUST NOT BLOCK: resolved at the head is not standing");
+
+// An unknown oid must never compare equal to a head, in either direction.
+eq(
+  evaluateCodexBotReview(pr([thread({ resolved: false, oid: "" })])).status,
+  "stale",
+  "an empty thread oid is unknown, not a match for the head",
+);
+eq(
+  evaluateCodexBotReview({ headRefOid: "", reviewThreads: { nodes: [thread({ oid: "" })] } }).status,
+  "stale",
+  "MUST NOT MATCH: empty head vs empty oid is not a head-bound finding",
+);
+eq(
+  evaluateCodexBotReview({ headRefOid: "", reviewThreads: { nodes: [thread()] } }).status,
+  "stale",
+  "an unknown head cannot bind any thread",
+);
+
+// ── measured real-board shapes (2026-09-02) ──────────────────────────────────
+// PR #449: 24 Codex threads, exactly 1 unresolved, at the head. The point of
+// this case is that a PR can carry a long history of worked threads and still
+// be correctly reduced to one outstanding item.
+const pr449 = [
+  ...Array.from({ length: 23 }, () => thread({ resolved: true, oid: OLD })),
+  thread({ resolved: false, oid: HEAD }),
+];
+eq(evaluateCodexBotReview(pr(pr449)).status, "findings-at-head", "PR #449 shape: 23 worked threads + 1 standing at head still blocks");
+eq(evaluateCodexBotReview(pr(pr449)).unresolvedAtHead, 1, "PR #449 shape: exactly one item to act on");
+eq(evaluateCodexBotReview(pr(pr449)).codexThreads, 24, "PR #449 shape: total Codex threads reported for context");
+// PR #530: 40 Codex threads, 40 unresolved, but only 1 anchored to the head.
+// Restricting to the head is what keeps the ask actionable instead of a wall.
+const pr530 = [
+  ...Array.from({ length: 39 }, () => thread({ resolved: false, oid: OLD })),
+  thread({ resolved: false, oid: HEAD }),
+];
+eq(evaluateCodexBotReview(pr(pr530)).unresolvedAtHead, 1, "PR #530 shape: 40 unresolved overall reduces to 1 at the head");
+
+// ── the denial text names the count and the exit ─────────────────────────────
+const denial = codexBotFindingsDenial("PR MERGE GATE", "561", 2);
+ok(/chatgpt-codex-connector/.test(denial), "denial names the bot so the reader can find the thread");
+ok(/gh pr view 561 --comments/.test(denial), "denial carries the exact command to read the findings");
+ok(/2 unresolved comments/.test(denial), "denial states how many items are standing");
+ok(/RESOLVE the thread/i.test(denial), "denial states the exit, so the gate is satisfiable");
+ok(/an unresolved comment\b/.test(codexBotFindingsDenial("X", "1", 1)), "denial is singular for one item");
+
+// ── the query asks for the fields the predicate reads ────────────────────────
+// `gh pr view` has no reviewThreads field, so GraphQL is the only route to
+// isResolved. If the query stops selecting one of these, the predicate silently
+// sees undefined and reports "none" for every PR.
+ok(/reviewThreads/.test(CODEX_THREADS_QUERY), "query selects reviewThreads");
+ok(/isResolved/.test(CODEX_THREADS_QUERY), "query selects isResolved — the whole point of the thread route");
+ok(/originalCommit/.test(CODEX_THREADS_QUERY), "query selects originalCommit, the commit a finding was raised against");
+ok(/author/.test(CODEX_THREADS_QUERY), "query selects the comment author, used to tell Codex from CodeRabbit");
+ok(/headRefOid/.test(CODEX_THREADS_QUERY), "query selects headRefOid to bind against");
+
+// ── the guard actually calls this, and only findings-at-head denies ──────────
+// A predicate nobody wires in is worth nothing; assert the call site exists.
+const guardSource = readFileSync(path.join(__dirname, "pr-merge-guard.mjs"), "utf8");
+ok(/codex-bot-review-lib\.mjs/.test(guardSource), "pr-merge-guard.mjs imports from codex-bot-review-lib.mjs");
+// Assert the CALL SITE, not the name: the import statement alone satisfies a
+// bare /evaluateCodexBotReview/ match, so mutation testing was able to replace
+// the call with `null` while this assertion stayed green (2026-09-02).
+ok(
+  /codexVerdict\s*=\s*evaluateCodexBotReview\s*\(/.test(guardSource),
+  "pr-merge-guard.mjs assigns the result of an actual evaluateCodexBotReview(...) call — importing the name is not wiring it in",
+);
+ok(/findings-at-head/.test(guardSource), "pr-merge-guard.mjs branches on the findings-at-head status");
+ok(/CODEX_THREADS_QUERY/.test(guardSource), "pr-merge-guard.mjs runs the shared GraphQL query rather than a private copy");
+// The notice path must exist too, or the stale/none cases vanish silently and
+// the whole "stop ignoring this reviewer" purpose is lost.
+// All THREE non-blocking paths must announce themselves. A bare
+// /CODEX REVIEW NOTICE/ test is satisfied by any one of them, so mutation
+// testing was able to silence the fetch-failure branch — the most important one,
+// because that is the case where the reviewer was never consulted at all — with
+// the suite still green (2026-09-02).
+eq(
+  (guardSource.match(/CODEX REVIEW NOTICE/g) || []).length,
+  3,
+  "pr-merge-guard.mjs prints a notice on all three non-blocking paths (fetch-failed, stale, none)",
+);
+ok(
+  /CODEX REVIEW NOTICE: could not read/.test(guardSource),
+  "the fetch-failure path says the findings were NOT checked — silence there would look like a clean pass",
+);
+ok(
+  /fails open by design/.test(guardSource),
+  "the fetch-failure notice states that this gate fails open, so the reader knows what the silence means",
+);
+
+console.log(`codex-bot-review-lib: ${pass} assertions passed`);
