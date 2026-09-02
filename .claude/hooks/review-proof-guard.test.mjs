@@ -503,6 +503,24 @@ for (const command of [
   "cp /tmp/evil scripts/verify-deps.mjs",
   "rm -f scripts/agent-manifest-parity.mjs",
   "cp /tmp/evil scripts/sync-agent-workflows.mjs",
+  // SEVENTH gpt-5.6-sol round, both P1 and both reproduced by the reviewer.
+  //
+  // (a) `rg --pre CMD` runs CMD on every input path, so an allowlisted READER
+  // executes an arbitrary writer against the protected file. Same shape as
+  // `node -e` and `find -exec`, which were already denied.
+  "rg --pre rm pattern .github/workflows/ci.yml",
+  "rg --pre=rm pattern .claude/hooks/review-proof-guard.mjs",
+  "rg --hostname-bin rm pattern .husky/pre-push",
+  "rg --pre-glob '*' --pre rm x .codex/hooks.json",
+  // (b) A doubled separator is the same file to the OS and a different string to
+  // the matcher. Reported for the shell channel; the path-field channel had the
+  // identical early return and is pinned here too.
+  "rm -f .github//workflows/ci.yml",
+  "rm -f .codex//hooks/production-action-guard.mjs",
+  "cp /tmp/evil .claude//hooks/review-proof-guard.mjs",
+  "echo x > scripts//verify-deps.mjs",
+  "cp /tmp/evil .husky//pre-push",
+  "cp /tmp/evil .claude///hooks/sql-safety.mjs",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
@@ -554,6 +572,11 @@ for (const command of [
   // A redirect that READS one of these and writes somewhere harmless is not a
   // write INTO the surface; the old lock got this wrong and blocked diagnostics.
   "cat .husky/pre-push > /tmp/out.txt",
+  // Plain ripgrep stays allowed — only the flags that make it EXECUTE a program are
+  // refused, so ordinary searching of a guarded file is unaffected.
+  "rg typecheck .husky/pre-push",
+  "rg --files-with-matches typecheck .github/workflows",
+  "rg -n --no-heading pattern .claude/hooks/review-proof-guard.mjs",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
@@ -582,6 +605,12 @@ for (const payload of [
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/../hooks/review-proof-guard.mjs" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".github/ISSUE_TEMPLATE/../workflows/ci.yml" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude\\commands\\..\\hooks\\sql-safety.mjs" } },
+  // Doubled separators through the path field — the channel the reviewer did not
+  // test, which had the same early return as the shell resolver.
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude//hooks/review-proof-guard.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".github//workflows/ci.yml" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".husky//pre-push" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude\\\\hooks\\sql-safety.mjs" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);

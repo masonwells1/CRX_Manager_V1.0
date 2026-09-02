@@ -528,6 +528,15 @@ if (shellTool) {
     // `-fprintf` writes a named file; the old `fprint\b` missed it because the
     // trailing `f` is a word character.
     if (head === "find" && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fls|fprint\w*)\b/i.test(segment)) return false;
+    // A READER THAT CAN EXECUTE. Seventh gpt-5.6-sol round, P1: ripgrep's `--pre`
+    // runs an arbitrary program on every input path — `rg --pre rm pattern
+    // .github/workflows/ci.yml` runs `rm .github/workflows/ci.yml`, and the
+    // reviewer reproduced the deletion. `--hostname-bin` likewise names a program
+    // to run. That makes `rg` a runner wearing a reader's name, which is the same
+    // shape already denied for `node -e` and `find -exec` above, not a new kind of
+    // rule. `--pre-glob` only selects which files `--pre` applies to, but it is
+    // meaningless without `--pre` and refusing it costs nothing.
+    if (head === "rg" && /(?:^|\s)--(?:pre|pre-glob|hostname-bin)(?:[=\s]|$)/i.test(segment)) return false;
     if (head === "git") {
       const sub = gitSubcommandOf(segment);
       if (!sub || !ENFORCEMENT_READ_ONLY_GIT.has(sub)) return false;
@@ -580,7 +589,19 @@ if (shellTool) {
   // traversal for exactly this reason, and not porting it re-opened a bypass its
   // own history had already classified HIGH. A leading `..` that escapes the root
   // is KEPT, never dropped: discarding it would fabricate a different path.
-  const resolveDotSegments = (p) => {
+  const resolveDotSegments = (input) => {
+    // REPEATED SEPARATORS, collapsed before anything else looks at the path.
+    // Seventh gpt-5.6-sol round, P1: `rm -f .github//workflows/ci.yml` and
+    // `rm -f .codex//hooks/production-action-guard.mjs` passed the whole registered
+    // hook chain. POSIX and Win32 both treat `a//b` as `a/b`, so the write lands on
+    // the guarded file while the matcher — which spells the separator exactly once
+    // — sees an unguarded path. The early return below used to hand such a path
+    // straight back untouched, which is why resolving dot segments alone did not
+    // catch it.
+    // Belt-and-braces only: the sole caller (namesEnforcementSurface) already
+    // collapsed separators, and removing THIS line leaves the suite green — so it
+    // protects a future second caller, nothing that exists today. @unproven
+    const p = String(input).replace(/\/{2,}/g, "/");
     if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
     const isAbsolute = p.startsWith("/");
     const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
@@ -600,7 +621,10 @@ if (shellTool) {
     return isAbsolute ? `/${joined}` : joined;
   };
   const namesEnforcementSurface = (text) => {
-    const flat = String(text ?? "").replace(/\\/g, "/");
+    // `\` → `/` first, then repeated separators collapsed, so the whole-string test
+    // below and every token split out of `flat` both see the canonical path. See
+    // the separator note in resolveDotSegments.
+    const flat = String(text ?? "").replace(/\\/g, "/").replace(/\/{2,}/g, "/");
     if (ENFORCEMENT_SURFACE_RE.test(flat)) return true;
     return flat
       .split(/[\s"'=:;&|()<>]+/)
@@ -671,7 +695,12 @@ if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todow
   // `.claude/commands/../hooks/review-proof-guard.mjs` was probe-confirmed ALLOW —
   // the intermediate directory exists, so the filesystem lands on the real hook.
   const resolvePathCandidate = (value) => {
-    const p = String(value).replace(/\\/g, "/").replace(/\/+$/, "");
+    // Repeated separators collapse here too. The reviewer only demonstrated the
+    // shell channel, but this resolver had the identical early return, so an MCP or
+    // tool-input write to `.claude//hooks/review-proof-guard.mjs` would have slipped
+    // the path-field rule the same way. Fixing one channel and not the other leaves
+    // the same defect reachable.
+    const p = String(value).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "");
     if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
     const isAbsolute = p.startsWith("/");
     const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
