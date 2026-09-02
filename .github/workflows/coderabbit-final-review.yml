@@ -1,10 +1,24 @@
 name: CodeRabbit final review gate
 
+# `pull_request_target` ONLY. Do NOT add `pull_request_review` (or any other
+# pull-request event) back to this workflow.
+#
+# This job holds `issues: write`, and it is allowed to hold it because
+# `pull_request_target` selects the workflow YAML from the DEFAULT BRANCH — the
+# pull request cannot supply the steps that run. `pull_request_review` does not
+# behave that way: it selects the YAML from the PULL REQUEST's own ref, so a PR
+# that edits this file would execute its own version of these steps with this
+# job's write token. Checking out the default branch below does not help, because
+# the step doing the checkout would itself come from the PR.
+#
+# Proven on this PR, not theorised: while this file did not exist on `main` at
+# all, a `pull_request_review` event still produced a successful run of it —
+# event=pull_request_review, head_sha=8ddcd9aee…, head_branch=codex/coderabbit-
+# ready-label-20260830. A file absent from `main` can only have come from the PR.
+# `no review event triggers this privileged workflow` in the test suite pins this.
 on:
   pull_request_target:
     types: [labeled, unlabeled, synchronize, closed, reopened, converted_to_draft, ready_for_review, auto_merge_enabled, auto_merge_disabled, edited]
-  pull_request_review:
-    types: [submitted, dismissed]
 
 permissions:
   # Required by actions.getWorkflowRun to bind required checks to their trusted workflow.
