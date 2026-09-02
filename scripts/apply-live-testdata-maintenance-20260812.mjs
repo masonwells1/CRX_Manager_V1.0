@@ -146,11 +146,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // pullRequestReviewBlocked (denies CHANGES_REQUESTED only) and reworded the
   // pullRequestApproved comment. Anchors unchanged; the transform is still
   // identity.
-  codexGuard: "1c921605467e613f820bc3413d5bff255296c4ec",
+  // codexGuard re-pinned 2026-09-02 (PR #559, Codex Medium): the Codex-side merge
+  // gate was migrated off pullRequestApproved onto pullRequestReviewBlocked so it
+  // matches the Claude side after main's required review was removed. The
+  // objection check is deliberately NOT exempt for --auto (Codex High, same run).
+  codexGuard: "1ab6e5581947ea72b8b1f7ff67c090789cb25c43",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "a9829ef4ae86d6c157c7409981fbf52a44ba7f0a",
+  codexGuard: "9a12789243afa46978e3446ed8b0abda6b70f300",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

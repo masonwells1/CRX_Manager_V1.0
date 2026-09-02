@@ -611,6 +611,17 @@ export function pullRequestApproved(pullRequest) {
   return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
 }
 
+// The merge-blocking half of the review verdict (Mason, 2026-09-02). Mirrors
+// pullRequestReviewBlocked() in .claude/hooks/codex-push-lib.mjs — the two gates
+// must not drift, and this side was left behind in the first cut (Codex Medium,
+// found on PR #559). main no longer requires an approving review, so a MISSING
+// approval no longer blocks. An ACTIVE objection still does, and unlike every
+// other gate here it is NOT exempt for auto-merge: the server-side requirement
+// that used to hold a queued auto-merge was the required review itself.
+export function pullRequestReviewBlocked(pullRequest) {
+  return String(pullRequest?.reviewDecision || "").toUpperCase() === "CHANGES_REQUESTED";
+}
+
 export function pullRequestChecksGreen(pullRequest) {
   if (String(pullRequest?.mergeStateStatus || "").toUpperCase() !== "CLEAN") return false;
   const checks = pullRequest?.statusCheckRollup;
@@ -648,12 +659,12 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "so the merge cannot be bound to the base it will actually land on and is denied (fail closed)."
     );
   }
-  if (!pullRequestApproved(pullRequest)) {
+  if (pullRequestReviewBlocked(pullRequest)) {
     return denied(
-      `CODEX PRODUCTION GATE: GitHub reports reviewDecision=${String(pullRequest.reviewDecision || "").toUpperCase() || "<none>"} — ` +
-      "this pull request has no current approval and main requires one. Since 2026-09-01 the administrator " +
-      "override that could skip the review is Mason's to use by hand, not an agent's. Get a real approval " +
-      "(`@coderabbitai review`, fix its findings, merge once it approves), or hand the PR to Mason and say why."
+      "CODEX PRODUCTION GATE: GitHub reports reviewDecision=CHANGES_REQUESTED — a reviewer has open " +
+      "objections on this pull request. Mason removed main's required-approval rule on 2026-09-02, which " +
+      "did not authorize merging over a review that asked for changes. Fix every real finding and push it; " +
+      "a genuine nitpick may be dismissed with a one-line reason in the thread. Merge only after that."
     );
   }
   if (!pullRequestChecksGreen(pullRequest)) {
