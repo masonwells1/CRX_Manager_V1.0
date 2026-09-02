@@ -161,12 +161,21 @@ case "$expected" in
 esac
 [ "${#expected}" -eq 40 ] || { printf 'expected is not a full 40-char OID\n' >&2; exit 1; }
 
-# the destination must NOT already exist -- these branches were deleted
-if gh api "repos/$repo/git/ref/heads/$branch" >/dev/null 2>&1; then
-  printf '%s already exists on origin; stop and re-read the ledger\n' "$branch" >&2; exit 1
-fi
+# The destination must NOT already exist -- these branches were deleted. Read the HTTP
+# status rather than the exit code: "could not tell" is not "absent". An expired token,
+# a GitHub outage, or missing read permission all exit nonzero, and treating that as
+# absent would fail OPEN into a publish. Only a definite 404 continues.
+status=$(gh api "repos/$repo/git/ref/heads/$branch" -i 2>/dev/null | head -1 | awk '{print $2}')
+case "$status" in
+  404) : ;;  # absent -- the expected case for every row in this ledger
+  200) printf '%s already exists; stop and re-read the ledger\n' "$branch" >&2; exit 1 ;;
+  *)   printf 'destination lookup returned "%s"; aborting rather than assuming absent\n' "$status" >&2; exit 1 ;;
+esac
 
-git push origin "$expected:refs/heads/$branch"
+# Publish to the repository that was just CHECKED, by URL. `origin` may be a fork or carry a
+# separate pushURL, which would check one repository and publish to another -- the same
+# mismatch recorded for the deletion step at the top of this document.
+git push "https://github.com/$repo.git" "$expected:refs/heads/$branch"
 ```
 
 Do not substitute the original branch name as the source ref. It does not exist locally for most
