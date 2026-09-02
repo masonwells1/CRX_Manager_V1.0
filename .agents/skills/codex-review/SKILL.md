@@ -205,12 +205,13 @@ dismissed with a one-line reason. A fix or base update that changes the commit c
 labels and requires restarted checks, a refreshed exact-HEAD Codex proof when the corrected diff is
 Codex-worthy, a newly frozen and recorded SHA, and one follow-up ready-label trigger. Never use
 `@coderabbitai resume`, and reserve `@coderabbitai full review` for a deliberately justified
-complete reread. GitHub requires one current formal approval, dismisses stale approvals after a
-new commit, and requires approval from someone other than the last pusher. Immediately before
-merge, verify live `main` protection still requires current approval with stale-review dismissal,
-then confirm an `APPROVED` CodeRabbit review has `commit_id` equal to the PR's final `headRefOid`;
-a green status row is not approval proof. CodeRabbit's final approval is the normal merge-unlock
-path; the Codex proof below remains an additional hard gate
+complete reread. An approving GitHub review is **NOT** required to merge: Mason removed
+`required_pull_request_reviews` from `main` on 2026-09-02, so CI is the merge gate. A
+`CHANGES_REQUESTED` verdict still blocks, and both agent merge gates refuse to merge over one.
+Immediately before merge, verify live `main` protection still requires the branch current and
+every required check green, and confirm CodeRabbit actually reviewed the frozen candidate — a
+green status row is not review proof. When CodeRabbit HAS approved, its `commit_id` must equal
+the PR's final `headRefOid`. The Codex proof below remains an additional hard gate
 for risky money/RLS/migration diffs. Both run — neither replaces the other.
 
 **If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
