@@ -95,6 +95,34 @@ authenticated-executable `SECURITY DEFINER` routine (`batch_cancel_deliveries`, 
 binds `v_actor := auth.uid()`, refuses a mismatched `p_performed_by`, and role-checks); the shipped
 pinned form matches **zero**. The change therefore adds no sweep noise on live.
 
+### Two further sweep gaps closed, then a hard stop (Mason, 2026-09-01)
+
+Both were reported after the fixes above, both are in the load-bearing control rather than the capped
+hook, and both had a **structural** fix rather than another pattern — which is the test the cap sets
+for whether work is worth doing. Mason authorised these two and only these two: the next finding on
+this PR, whatever it is, is a follow-up, not another round here.
+
+**A logically dead refusal was credited.** `IF p_actor IS DISTINCT FROM auth.uid() AND false THEN`
+is textually canonical, so the slop (`[^;]*`) between the comparison and `THEN` accepted it and the
+scan was truncated at a `RAISE` that can never run. The block counter accepted it too — there is only
+one `IF`. Fixed by shape, not by enumerating weakeners: the credited condition may now contain only
+whitespace and balancing parentheses between `IF` and the actor, and between the comparison and
+`THEN`. Any added term — `AND false`, `OR true`, anything else — fails to be credited and the routine
+is reported. Applied to all three refusal patterns in both predicates. Fixtures
+`actor_weakened_condition_forward` and `actor_weakened_local_condition_forward`.
+
+**A dynamic audit write hid the sink.** The financial-audit predicate decided its own scope with
+`executable_src ~* 'financial_audit_log'` — the *lexed* source, in which strings and dollar-quoted
+bodies are masked. An `EXECUTE 'INSERT INTO financial_audit_log …'` therefore removed the routine from
+the predicate entirely while its actor parameter stayed plainly visible. Raw `prosrc` is now carried
+through `lexed` as `raw_src` and used for the sink-**presence** test only; every analysis test still
+runs on the lexed source, so masked text still cannot forge a refusal. Fixture
+`actor_dynamic_audit_sink_forward`.
+
+Both mutation-proved (restoring the slop, and reverting to `executable_src`, each turn the matching
+fixture red). Live read-only checks: **zero** production routines lose refusal credit under the
+tightening, and **zero** are newly reported. Neither change adds sweep noise.
+
 ### Not changed
 
 No migration is applied and no live data is touched. The three files under

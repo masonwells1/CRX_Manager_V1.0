@@ -127,8 +127,8 @@ WITH RECURSIVE cand AS (
          )
          AND executable_src ~* (
            '\mv_actor\M\s*:=\s*auth\s*\.\s*uid\s*\(\s*\)\s*;.*?'
-           || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
-           || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
+           || '\mIF\M\s*\(*\s*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
+           || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M\s*\)*\s*'
            || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
          ) AS has_bound_local_refusal,
          -- A PL/pgSQL IN parameter is an ordinary writable local, so the
@@ -197,12 +197,12 @@ WITH RECURSIVE cand AS (
     SELECT regexp_replace(
              executable_src,
              '('
-               || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
-               || '\s+IS\s+DISTINCT\s+FROM\s+auth\s*\.\s*uid\s*\(\s*\)[^;]*'
+               || '\mIF\M\s*\(*\s*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
+               || '\s+IS\s+DISTINCT\s+FROM\s+auth\s*\.\s*uid\s*\(\s*\)\s*\)*\s*'
                || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
                || CASE WHEN has_bound_local_refusal THEN
-                    '|\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
-                    || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
+                    '|\mIF\M\s*\(*\s*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
+                    || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M\s*\)*\s*'
                     || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
                   ELSE '' END
              || ').*$',

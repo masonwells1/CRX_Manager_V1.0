@@ -355,6 +355,46 @@ BEGIN
 END;
 $body$;
 
+-- The refusal is textually canonical but logically dead: the condition is
+-- weakened inside itself, so the RAISE can never run. Slop between the
+-- comparison and THEN used to accept this and truncate everything after it.
+-- The block counter accepts it too, because there is only one IF.
+CREATE FUNCTION public.actor_weakened_condition_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS DISTINCT FROM auth.uid() AND false THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- The same weakening on the bound-local form, which has its own refusal regex.
+CREATE FUNCTION public.actor_weakened_local_condition_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid;
+BEGIN
+  v_actor := auth.uid();
+  IF p_actor_source IS DISTINCT FROM v_actor AND false THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- The audit sink is written by DYNAMIC SQL, so the lexer masks it out of
+-- executable_src. Scope must be decided on raw source or this routine silently
+-- leaves the financial-audit predicate while its actor parameter stays visible.
+CREATE FUNCTION public.actor_dynamic_audit_sink_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  PERFORM public.forward_actor(p_actor_source);
+  EXECUTE 'INSERT INTO public.financial_audit_log(actor_user_id) VALUES ($1)' USING p_actor_source;
+END;
+$body$;
+
 -- PL/pgSQL accepts a plain equals sign as the assignment operator too, and the
 -- write-time hook already treats that spelling as a rebinding. A sweep matching
 -- only the walrus form would leave the cheaper spelling open.
@@ -536,6 +576,9 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_out_before_positional',
     'actor_local_pre_refusal_forward',
     'actor_rebound_param_forward',
+    'actor_weakened_condition_forward',
+    'actor_weakened_local_condition_forward',
+    'actor_dynamic_audit_sink_forward',
     'actor_equals_rebound_param_forward',
     'actor_stash_then_rebind_forward',
     'actor_unbound_local_refusal_forward',

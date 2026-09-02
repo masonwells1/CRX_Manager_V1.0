@@ -127,7 +127,15 @@ WITH RECURSIVE cand AS (
     AND NOT l.lex_error
 ), lexed AS (
   SELECT cand.oid, cand.proname, cand.args, cand.argname, cand.argname_pattern,
-         cand.argument_position, cand.actor_is_uuid, l.executable_src, l.lex_error
+         cand.argument_position, cand.actor_is_uuid, l.executable_src, l.lex_error,
+         -- Raw, unlexed source. Used ONLY for the sink-PRESENCE test below.
+         -- The lexer masks string and dollar-quoted bodies, so a dynamic write
+         -- (EXECUTE 'INSERT INTO financial_audit_log ...') vanishes from
+         -- executable_src and the routine drops out of this predicate's scope
+         -- entirely, while its actor parameter stays plainly visible. Scope must
+         -- therefore be decided on raw source. Every ANALYSIS test keeps using
+         -- the lexed source, so masked text still cannot forge a refusal.
+         cand.prosrc AS raw_src
   FROM lexer l
   JOIN cand ON cand.oid = l.oid
   WHERE l.lex_error OR l.scan_pos > l.src_len
@@ -140,8 +148,8 @@ WITH RECURSIVE cand AS (
          )
          AND executable_src ~* (
            '\mv_actor\M\s*:=\s*auth\s*\.\s*uid\s*\(\s*\)\s*;.*?'
-           || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
-           || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
+           || '\mIF\M\s*\(*\s*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
+           || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M\s*\)*\s*'
            || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
          ) AS has_bound_local_refusal,
          -- Mirror of actor-forgery.sql. A PL/pgSQL IN parameter is a writable
@@ -194,12 +202,12 @@ WITH RECURSIVE cand AS (
     SELECT regexp_replace(
              executable_src,
              '('
-               || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
-               || '\s+IS\s+DISTINCT\s+FROM\s+auth\s*\.\s*uid\s*\(\s*\)[^;]*'
+               || '\mIF\M\s*\(*\s*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
+               || '\s+IS\s+DISTINCT\s+FROM\s+auth\s*\.\s*uid\s*\(\s*\)\s*\)*\s*'
                || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
                || CASE WHEN has_bound_local_refusal THEN
-                    '|\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
-                    || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
+                    '|\mIF\M\s*\(*\s*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
+                    || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M\s*\)*\s*'
                     || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
                   ELSE '' END
              || ').*$',
@@ -235,8 +243,12 @@ WHERE lex_error OR
       -- routine that writes financial_audit_log AND overwrites its own actor
       -- parameter cannot be cleared by reading its refusal, and the value that
       -- reaches the sink may be a local this predicate does not track.
-      (executable_src ~* 'financial_audit_log' AND has_actor_rebinding) OR
+      -- Sink PRESENCE is decided on raw_src, never on the lexed source: a
+      -- dynamic `EXECUTE 'INSERT INTO financial_audit_log ...'` is masked out of
+      -- executable_src, which silently removed the routine from this predicate's
+      -- scope while its actor parameter stayed visible.
+      (raw_src ~* 'financial_audit_log' AND has_actor_rebinding) OR
       pre_refusal_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)') OR
-      (executable_src ~* 'financial_audit_log' AND
+      (raw_src ~* 'financial_audit_log' AND
        pre_refusal_src ~* ('(?:(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\.\s*)*(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\([^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)'))
 ORDER BY violation_key;
