@@ -528,7 +528,20 @@ if (shellTool) {
     // flags keeps `node .claude/hooks/x.test.mjs` — how this suite is actually
     // run — working. A script FILE that writes is the documented residual: no
     // command-text rule can see inside it.
-    if (head === "node" && /(?:^|\s)(?:-e|-p|--eval|--print|--input-type)\b/i.test(segment)) return false;
+    // Node injects code through THREE channels, not one. The eval flags were
+    // covered; PRELOAD (`-r`/`--require`/`--import`) and LOADER hooks were not, and
+    // both run before the entrypoint — so `node -r ./payload.cjs .husky/pre-push`
+    // executed the payload against the named hook and was ALLOW (Codex P1, and
+    // CodeRabbit independently). The old regex also missed BUNDLED short forms:
+    // `\b` after `-p` does not match in `-pe`, so `node -pe "…"` slipped the eval
+    // check it was written for.
+    //
+    // Matching a short-option CLUSTER containing e, p or r closes the bundling gap
+    // without a spelling list. Node's other short flags (`-c`, `-i`, `-v`) contain
+    // none of those letters, so `node script.mjs` and `node --check x.mjs` — how
+    // this suite actually runs — stay allowed. A script FILE that writes remains
+    // the documented residual: no command-text rule can see inside it.
+    if (head === "node" && /(?:^|\s)(?:-[A-Za-z]*[epr][A-Za-z]*|--eval|--print|--input-type|--require|--import|--loader|--experimental-loader)(?:[=\s]|$)/i.test(segment)) return false;
     // `-fprintf` writes a named file; the old `fprint\b` missed it because the
     // trailing `f` is a word character.
     if (head === "find" && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fls|fprint\w*)\b/i.test(segment)) return false;
@@ -561,6 +574,40 @@ if (shellTool) {
       if (/(?:^|\s)(?:--ext-diff|--open-files-in-pager|-O)(?:[=\s]|$)/.test(segment)) return false;
       const sub = gitSubcommandOf(segment);
       if (!sub || !ENFORCEMENT_READ_ONLY_GIT.has(sub)) return false;
+      // `git config` WRITES, and the one write that matters here does not touch a
+      // guarded file at all — it decides whether the guards RUN.
+      // `git config core.hooksPath <elsewhere>` disables every husky gate in a
+      // single ordinary-looking command (its own KNOWN_ISSUES entry), and `config`
+      // sat in the read-only allowlist above, so it was ALLOW. CodeRabbit found
+      // this after seven adversarial rounds missed it: every earlier bypass needed
+      // an exotic flag to smuggle an executor past a reader, while this one is a
+      // command anybody might type, and it takes down the whole gate rather than
+      // one file.
+      //
+      // Reads stay allowed. The ONE write that stays allowed is repointing
+      // hooksPath AT THE TRACKED `.husky` — the documented repair, which a fresh
+      // worktree needs because it is seeded pointing at a foreign checkout. Denying
+      // that too would strand the repair, which is the deadlock this file's history
+      // already paid for twice.
+      //
+      // Pinned to the safe DESTINATION rather than enumerating unsafe ones: a value
+      // that is exactly `.husky` is the only accepted target, so a spelling nobody
+      // has thought of yet is refused by default instead of admitted by omission.
+      if (sub === "config") {
+        // A READ must actually be a read. `--type` is NOT a read flag — it is a
+        // modifier that a SET also takes, so listing it would have let
+        // `git config --type=path core.hooksPath /evil/.husky` through.
+        const readOnlyConfig = /(?:^|\s)(?:--get|--get-all|--get-regexp|--get-urlmatch|--list|-l|--show-origin|--show-scope|--name-only)(?:[=\s]|$)/.test(segment)
+          && !/(?:^|\s)(?:--unset|--unset-all|--remove-section|--rename-section|--replace-all|--add|--edit|-e)(?:[=\s]|$)/.test(segment);
+        // The repair is matched as an EXACT WHOLE-SEGMENT SHAPE, not by searching
+        // for `.husky` somewhere in the line. A loose search accepted
+        // `git config --unset core.hooksPath .husky`, which REMOVES the setting and
+        // drops hooks back to `.git/hooks` — disabling husky just as thoroughly as
+        // repointing it. Spelling out the entire accepted command means any other
+        // form, including ones not yet invented, falls through to the denial.
+        const repairsHooksPath = /^git(?:\s+--(?:worktree|local|global|system))*\s+config(?:\s+--(?:worktree|local|global|system))*\s+core\.hooksPath\s+(?:"\.husky"|'\.husky'|\.husky)\s*$/.test(String(segment).trim());
+        if (!readOnlyConfig && !repairsHooksPath) return false;
+      }
     }
     // A protected path supplied as the VALUE OF A FLAG is an output target, no
     // matter what the flag is called. Fourth gpt-5.6-sol round, HIGH: the git

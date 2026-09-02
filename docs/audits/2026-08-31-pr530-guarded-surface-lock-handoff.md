@@ -62,15 +62,15 @@ tests encode the author's model of the threat.
 A fourth exact-SHA round returned BLOCKED with three more HIGH findings, bringing the total to
 **eleven**. They are recorded, deliberately unfixed:
 
-9. **Channel coverage again.** Codex's `write_stdin` carries its payload in a `chars` field the
+1. **Finding 9 — channel coverage again.** Codex's `write_stdin` carries its payload in a `chars` field the
    evaluator never reads, and PowerShell backtick escaping (`` .clau`de/hooks/… ``) is not
    normalized. Both payloads passed the complete candidate hook chain.
-10. **`git config core.hooksPath NUL` disables every husky gate** without touching `.husky/**`.
-    Promoted to its own entry in `docs/manual/KNOWN_ISSUES.md` because it is a live weakness on
-    `main` today, independent of this PR.
-11. **The unlock is not owner-only**, restating finding 8 with a mechanism: `node` is allowlisted as
-    read-only, so the lock permits executing `guard-unlock.mjs`, and a PTY-capable agent can then
-    satisfy the TTY check and type a phrase that is a literal in the source.
+2. **Finding 10 — `git config core.hooksPath NUL` disables every husky gate** without touching `.husky/**`.
+   Promoted to its own entry in `docs/manual/KNOWN_ISSUES.md` because it is a live weakness on
+   `main` today, independent of this PR.
+3. **Finding 11 — the unlock is not owner-only**, restating finding 8 with a mechanism: `node` is allowlisted as
+   read-only, so the lock permits executing `guard-unlock.mjs`, and a PTY-capable agent can then
+   satisfy the TTY check and type a phrase that is a literal in the source.
 
 **The decision is to stop, not to patch.** Each round found a NEW channel — `input`/`stdin`, then
 `write_stdin.chars`, then PowerShell escapes, then `git config`. That is the signature of a

@@ -19,7 +19,7 @@ stops anyone building the real one.
 **The rule.** `scripts/guard-claim-audit.mjs` scans guard sources for absolute claims about their
 own strength (`fail-closed`, `cannot be bypassed`, `no agent can`, `only a human`, `guarantee`, …).
 A NEW claim must carry `@proven-by <test>`, `@speed-bump`, or `@unproven` within three lines.
-Existing claims are grandfathered in `guard-claim-audit.baseline.json` (159 entries) so the check
+Existing claims are grandfathered in `guard-claim-audit.baseline.json` (163 entries) so the check
 lands green and ratchets from there; shrinking that list is the point.
 
 It reports **user-facing** claims separately — the ones in refusal text an operator actually reads,

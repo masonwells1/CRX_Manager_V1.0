@@ -244,7 +244,17 @@ if (invokedDirectly) {
   const claims = auditAll();
 
   if (update) {
-    const keys = [...new Set(claims.map(claimKey))].sort();
+    // ANNOTATED CLAIMS MUST NOT BE GRANDFATHERED. CodeRabbit, PR #530: this
+    // baselined every claim it found, annotated ones included — but the check
+    // below already exempts anything annotated, so those entries did nothing
+    // except survive the annotation. Delete a claim's `@proven-by` later and the
+    // baseline still vouched for it, so the ratchet stayed green while the
+    // evidence it named was gone. That is the failure this whole script exists to
+    // prevent, sitting inside the script.
+    //
+    // Baselining only UNANNOTATED claims means an annotation is the only thing
+    // holding an annotated claim green, so removing one surfaces it as new.
+    const keys = [...new Set(claims.filter((c) => !c.annotated).map(claimKey))].sort();
     writeFileSync(BASELINE, `${JSON.stringify({
       note: "Grandfathered guard claims as of the ratchet's introduction. A NEW claim must carry @proven-by, @unproven, or @speed-bump. Shrinking this list is the point; do not grow it without a reason. Re-baselined 2026-09-01 after four reviewer-reported scanner defects were fixed (truncated identity, whole-line negation, single-line-only scanning, and a two-line wrap window that a three-line claim still escaped): the identity now uses the complete claim text, so every key changed, and widening the wrap window changed it again for the handful of claims that actually wrap. Six entries are newly DETECTED rather than newly written — pre-existing claims in codex-push-lib, idempotency-body-check, migration-apply-lib, and production-action-guard that the old scanner could not see. The three the fixes surfaced in review-proof-guard.mjs were annotated instead of grandfathered.",
       claims: keys,

@@ -14,14 +14,14 @@ Evidence, all read directly from the installed binary and its own state files:
    `…/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe`
    returns the two literals the artifacts are built from:
 
-   ```
+   ```text
    Use this skill when the user asks to run the migrated source command `
    Migrated source command `
    ```
 
 2. **The generating modules are named in the binary's own trace strings:**
 
-   ```
+   ```text
    core-plugins\src\command_migration\render.rs
    external-agent-migration\src\source_cla.rs      (cla = Claude)
    external-agent-migration\src\source_cur.rs      (cur = Cursor)

@@ -678,7 +678,12 @@ for (const payload of [
   assert.match(result.stdout, /"permissionDecision":"deny"/);
 }
 // …while the bracket-class form of the same read is allowed, which is the
-// documented workaround.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "grep -E typecheck .husky/pre-push" } }).stdout, "");
+// documented workaround. CodeRabbit, PR #530: this assertion used to pass a plain
+// literal (`grep -E typecheck …`) that contains neither a bracket class nor the
+// quoting which triggers the over-block — so it proved the workaround "worked"
+// without ever exercising it, and would have stayed green if the workaround broke.
+// The pattern below is the real thing: quoted, bracket-classed, and free of the
+// `|` that splits the segment.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");
