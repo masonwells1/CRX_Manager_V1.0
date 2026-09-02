@@ -105,7 +105,7 @@ compensating controls, and conflating them would overstate the defence:
    happen to cover, and asserting it flatly is the same overclaim this entry exists to remove.
 2. **Re-binding and laundering bypasses** — `p_performed_by := p_target_id;` after a passing check,
    `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips.
-   **NARROWED 2026-09-01 when PR #449 landed: the direct-assignment form IS now covered by both
+   **NARROWED 2026-09-01 (ships with PR #449): the direct-assignment form IS now covered by both
    post-apply sweep predicates.** Each fails closed and scans the whole body — rather than truncating
    at the refusal — when the actor parameter is assigned to at statement position, so a routine that
    passes a binding check and then re-assigns the parameter is no longer excluded. The match is pinned
@@ -118,6 +118,19 @@ compensating controls, and conflating them would overstate the defence:
    `actor-forgery-fin-audit.sql` requires it to appear after `financial_audit_log` **before the next
    semicolon**, so stashing the parameter in a temp table in one statement and inserting it into the audit
    log in another satisfies neither. Only the Codex proof and the CodeRabbit review stand here.
+
+   **Proven still open, 2026-09-02 — rebinding through a NON-FIRST `INTO` target.** The exact-SHA
+   `gpt-5.6-sol` proof on PR #449 head `4976ed08` returned **BLOCKERS** on this, and it did not
+   theorise: it ran the payload through the real hook with an authenticated grant and observed
+   `allow`. `SELECT 1, p_target_id INTO v_dummy, p_performed_by` re-forges the actor after a passing
+   check; moving the actor to the FIRST `INTO` target correctly returns `deny`. The same second-target
+   overwrite of a trusted `v_actor := auth.uid()` local also returns `allow`. **Both sweep predicates
+   miss it too** — their rebinding rule recognises assignment syntax (`:=` / `=`) and not `INTO`
+   target lists — so the 2026-09-01 narrowing above covers the *assignment* form ONLY. Do not read it
+   more broadly. Closing this properly means inspecting every `INTO` target in the hook and mirroring
+   that in both predicates; **the hook half is exactly what this entry caps**, which is why PR #449
+   cannot reach a clean Codex proof without reopening the capped surface. That deadlock is an owner
+   decision, not an agent one — see the 2026-09-02 note in `docs/manual/KNOWN_ISSUES.md`.
 3. **The naming-scope gap** — actor-shaped parameters that do not match `^p_\w*by$|^p_actor|^p_user`, e.g.
    `p_target_id` or `p_acting_user_id`. **The live sweep predicates share this exact name pattern, so the
    sweep does NOT cover this path either.** Do not claim the sweep as the compensating control for it. The

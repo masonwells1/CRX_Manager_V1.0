@@ -45,7 +45,9 @@ name-scope limit as out of scope. It now also names `EXECUTE … USING`,
 `INSERT … RETURNING … INTO`, and temp-table round trips, and states explicitly that the post-apply
 sweeps do **not** compensate for them.
 
-**Actor rebinding is now caught by the post-apply sweeps (CodeRabbit Major).** This one was fixed
+**Actor rebinding by ASSIGNMENT is now caught by the post-apply sweeps (CodeRabbit Major).** Read
+that scope literally — the `INTO`-target form is proven still open, see the deadlock note at the end
+of this entry. This one was fixed
 rather than dismissed, and the distinction matters: the cap closed pattern-hardening on the
 *write-time hook*, while naming the **sweep predicates as a load-bearing control**. Strengthening
 that control is not the capped activity.
@@ -122,6 +124,32 @@ runs on the lexed source, so masked text still cannot forge a refusal. Fixture
 Both mutation-proved (restoring the slop, and reverting to `executable_src`, each turn the matching
 fixture red). Live read-only checks: **zero** production routines lose refusal credit under the
 tightening, and **zero** are newly reported. Neither change adds sweep noise.
+
+### The merge gate and the cap now contradict each other — owner decision required (2026-09-02)
+
+The exact-SHA `gpt-5.6-sol` proof on head `4976ed08` returned **BLOCKERS**, so
+`.claude/hooks/pr-merge-guard.mjs` will not let this PR merge from a session: the diff touches
+`.claude/hooks/`, which is a risky path, and a risky merge requires a fresh CLEAN proof. Self-certifying
+is forbidden and was not attempted.
+
+**The blocker is real and was executed, not theorised.** Codex ran
+`SELECT 1, p_target_id INTO v_dummy, p_performed_by` through the candidate's real hook with an
+authenticated grant and observed `permissionDecision: "allow"`; moving the actor to the *first* `INTO`
+target returns `deny`. The same second-target overwrite of a trusted `v_actor := auth.uid()` local
+also returns `allow`. Both sweep predicates miss it as well — the rebinding rule added above reads
+assignment syntax, not `INTO` target lists.
+
+**Why this cannot be fixed under the cap.** Codex's required fix names the hook first: inspect every
+`INTO` target when invalidating actor parameters and trusted locals. That is pattern-hardening of the
+write-time hook — precisely what the 2026-09-01 cap forbids. Fixing only the sweep half would leave
+the proof BLOCKED, so it would not unlock the merge either. The gate and the cap therefore point in
+opposite directions, and nothing an agent can do resolves that.
+
+**State handed to Mason.** Branch green, current, all review threads closed, head `4976ed08`. Three
+ways forward, all his: (a) lift the cap for this one bounded `INTO`-target fix and re-run the proof;
+(b) merge by hand using the administrator override, accepting the documented gap, which the docs above
+now state accurately; or (c) leave the PR parked. Recorded rather than decided, per the standing rule
+that a stuck review is handed over with the reason.
 
 ### Not changed
 
