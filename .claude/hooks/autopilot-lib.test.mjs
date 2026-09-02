@@ -70,6 +70,24 @@ eq(overnightGateDecision("Bash", { command: "node scripts/clear-overnight-intent
 eq(overnightGateDecision("Bash", { command: "npm run build && node scripts/clear-overnight-intent.mjs" }), "deny-until-armed", "clear script as a suffix does not unlock the prefix");
 eq(overnightGateDecision("Bash", { command: "echo clear-overnight-intent.mjs > x.txt" }), "deny-until-armed", "merely naming the script does not unlock");
 eq(overnightGateDecision("Bash", { command: "node scripts/clear-overnight-intent.mjs --hours 9" }), "deny-until-armed", "unknown argument is not covered by the allowance");
+// Codex (gpt-5.6-sol, exact-SHA review 2026-09-01) proved the first draft — an
+// anchored regex over the command SHAPE — was a HIGH bypass: it validated only the
+// two BASENAMES, so any attacker-controlled file with that name, run by any
+// interpreter, executed arbitrary JS during the very pause the latch enforces.
+// The allowance is now an exact-string Set. These are the proven exploits.
+eq(overnightGateDecision("Bash", { command: "node attacker/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "PROVEN BYPASS: alternate directory must not ride the basename");
+eq(overnightGateDecision("Bash", { command: '"C:\\attacker\\node.exe" "C:\\attacker\\clear-overnight-intent.mjs" --not-a-hands-free-run' }), "deny-until-armed", "PROVEN BYPASS: alternate interpreter + absolute script path");
+eq(overnightGateDecision("Bash", { command: "node ../clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "traversal out of the repo is not the sanctioned script");
+eq(overnightGateDecision("Bash", { command: "node scripts/../scripts/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "a traversal-normalized spelling is still not the literal command");
+eq(overnightGateDecision("Bash", { command: "node //server/share/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "UNC path is not the sanctioned script");
+eq(overnightGateDecision("Bash", { command: "node scripts/*/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "a glob is not the sanctioned script");
+eq(overnightGateDecision("Bash", { command: "node $DIR/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "an expansion is not the sanctioned script");
+eq(overnightGateDecision("Bash", { command: 'node "scripts/clear-overnight-intent.mjs" --not-a-hands-free-run' }), "deny-until-armed", "a quoting variant is not the literal command");
+eq(overnightGateDecision("Bash", { command: "NODE_OPTIONS=--require=./evil.js node scripts/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "an env prefix that injects a module is not the literal command");
+eq(overnightGateDecision("Bash", { command: "node  scripts/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "extra internal whitespace is not the literal command");
+eq(overnightGateDecision("Bash", { command: "NODE scripts/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "the allowance is case-sensitive by design");
+// Leading/trailing whitespace only is trimmed — that is the one normalization.
+eq(overnightGateDecision("Bash", { command: "  node scripts/clear-overnight-intent.mjs --not-a-hands-free-run  " }), "allow-through", "surrounding whitespace is trimmed");
 eq(overnightGateDecision("Bash", { command: "git status" }), "allow-through", "git status passes");
 // Codex 2026-07-05 P2: read-only leading token + write redirect must NOT pass
 eq(overnightGateDecision("Bash", { command: "cat src/a.ts > src/b.ts" }), "deny-until-armed", "cat with redirect blocked until armed");

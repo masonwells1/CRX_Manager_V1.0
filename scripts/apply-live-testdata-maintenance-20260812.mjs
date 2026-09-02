@@ -141,12 +141,23 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // ParseBool TRUE spellings count as auto, and a merge segment carrying a
   // command substitution is refused as unresolvable rather than gated. Anchors
   // unchanged; the pushLib transform is still identity.
+  // pushLib re-pinned 2026-09-01: scripts/clear-overnight-intent.mjs joined
+  // RISKY_PATH_RES — the same treatment scripts/remove-applied-ledger-entry.mjs
+  // got on 2026-08-19. autopilot-lib.mjs allows that script's exact command
+  // through the overnight handshake while every other build/mutate call is
+  // paused, so an unreviewed edit to its BODY would become arbitrary code
+  // execution during that pause (Codex gpt-5.6-sol exact-SHA review, HIGH).
+  // Listing it here means a push touching it needs an exact-head proof.
+  // RISKY_CONTENT_RE, contentIsRisky, and the apply-live-testdata risky-path
+  // anchor this transform verifies are all byte-for-byte unchanged, so the
+  // transform is still identity and input == output. codexGuard is untouched by
+  // this change and keeps its blobs.
   codexGuard: "1c921605467e613f820bc3413d5bff255296c4ec",
-  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
+  pushLib: "62e9a7a45defe4029ba0f4f9ce0bb193172cbcf8",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "a9829ef4ae86d6c157c7409981fbf52a44ba7f0a",
-  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
+  pushLib: "62e9a7a45defe4029ba0f4f9ce0bb193172cbcf8",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

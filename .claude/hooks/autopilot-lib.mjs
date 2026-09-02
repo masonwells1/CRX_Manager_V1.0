@@ -103,20 +103,45 @@ const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|work
 // returned allow-through here while the real stack denied (proven live 2026-09-01,
 // and asserted green by autopilot-lib.test.mjs the whole time).
 //
-// ANCHORED to a WHOLE command, unlike the arm allowance beside it: a bare substring
-// test would let the allowance ride as a prefix/suffix on a chained command
-// (`node scripts/clear-overnight-intent.mjs && npm run build`) and defeat the pause
-// it is carved out of. Optional-quoted node/script paths are accepted; a trailing
-// --not-a-hands-free-run is accepted (the script itself requires it); nothing else is.
-const CLEAR_INTENT_CMD_RE =
-  /^\s*(?:"[^"]*node(?:\.exe)?"|'[^']*node(?:\.exe)?'|[^\s;&|<>()]*\bnode(?:\.exe)?)\s+(?:"[^"]*clear-overnight-intent\.mjs"|'[^']*clear-overnight-intent\.mjs'|[^\s;&|<>()"']*clear-overnight-intent\.mjs)(?:\s+--not-a-hands-free-run)?\s*$/i;
+// An EXACT-STRING allowlist, not a regex grammar — the same shape
+// bash-safety-lib.mjs uses for MAINTENANCE_PRODUCER_ALLOWED_COMMANDS.
+//
+// The first draft of this allowance was an anchored regex over the command SHAPE:
+// `<node><ws><anything>clear-overnight-intent.mjs`. Codex (gpt-5.6-sol, exact-SHA
+// review 2026-09-01) proved it a HIGH bypass — it validated only the two BASENAMES,
+// never the script's identity, so both of these returned allow-through:
+//     node attacker/clear-overnight-intent.mjs --not-a-hands-free-run
+//     "C:\attacker\node.exe" "C:\attacker\clear-overnight-intent.mjs" --not-a-hands-free-run
+// Bash is globally allowed in settings.json and the other hooks inspect the visible
+// command, not the JavaScript it executes, so any pre-existing attacker-controlled
+// file with that basename became arbitrary code execution during the very pause the
+// latch exists to enforce. The comment claimed "the allowlist is ONE FILE, not a
+// command grammar" while the code implemented exactly such a grammar.
+//
+// A Set of exact strings has no slots to smuggle anything through: no directory
+// prefix, no alternate interpreter, no quoting variant, no traversal, no glob, no
+// chaining. Both canonical spellings of the one repo-root script are listed; the
+// argument-free form is allowed so the script itself can print its refusal and the
+// usage hint. Anything else waits for the arm. Deliberately NOT case-insensitive
+// and NOT whitespace-normalized: the sanctioned command is a fixed literal, and
+// every loosening is a slot.
+const CLEAR_INTENT_ALLOWED_COMMANDS = new Set([
+  "node scripts/clear-overnight-intent.mjs",
+  "node scripts/clear-overnight-intent.mjs --not-a-hands-free-run",
+  "node ./scripts/clear-overnight-intent.mjs",
+  "node ./scripts/clear-overnight-intent.mjs --not-a-hands-free-run",
+]);
+
+export function isSanctionedClearIntentCommand(command) {
+  return CLEAR_INTENT_ALLOWED_COMMANDS.has(String(command ?? "").trim());
+}
 
 export function overnightGateDecision(toolName, toolInput) {
   const name = String(toolName || "");
   if (INTENT_ALLOW_TOOL_RE.test(name)) return "allow-through";
   const input = toolInput || {};
   const cmd = typeof input.command === "string" ? input.command : "";
-  if (cmd && (/autopilot-arm\.mjs/.test(cmd) || CLEAR_INTENT_CMD_RE.test(cmd))) return "allow-through";
+  if (cmd && (/autopilot-arm\.mjs/.test(cmd) || isSanctionedClearIntentCommand(cmd))) return "allow-through";
   if (/^(Bash|PowerShell)$/i.test(name)) {
     // Read-only leading token AND no write redirect: `cat > file` / `echo .. >> f`
     // / `... | tee f` still mutate files (Codex 2026-07-05) — those wait for the arm.
@@ -146,4 +171,4 @@ export function flagActive(content, nowMs) {
   return { active: true, expires: data.expires };
 }
 
-export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, CLEAR_INTENT_CMD_RE };
+export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, CLEAR_INTENT_ALLOWED_COMMANDS };

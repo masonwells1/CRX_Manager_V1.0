@@ -48,6 +48,15 @@
 // There is deliberately NO argument that selects a target: this script can only
 // ever remove that one filename, so it cannot be aimed at the applied-source
 // ledger, a review proof, or anything else in the state directory.
+//
+// PROTECTED MACHINERY. autopilot-lib.mjs allows this exact command through the
+// overnight handshake while every other build/mutate call is paused, so an
+// unreviewed edit to this file would turn the sanctioned command into arbitrary
+// code execution during that pause (Codex gpt-5.6-sol exact-SHA review 2026-09-01,
+// HIGH). It is therefore registered alongside run-claude-review.mjs and
+// write-codex-push-proof.mjs in codex-push-lib.mjs's RISKY_PATH_RES, the Codex
+// PROTECTED_HARNESS set, and .claude/settings.json's protected-path rules.
+// Changing this file requires the independent review gate. Keep it that way.
 
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";

@@ -168,6 +168,33 @@ check("the allowance cannot be used as a prefix to smuggle a chained command", (
   );
 });
 
+// Codex (gpt-5.6-sol, exact-SHA review 2026-09-01) proved that the first draft of
+// this allowance — an anchored regex over the command SHAPE — validated only the
+// executable and script BASENAMES. Since Bash is globally allowed and the other
+// hooks inspect the visible command rather than the JavaScript it runs, any
+// pre-existing attacker-controlled file named clear-overnight-intent.mjs became
+// arbitrary code execution during the very pause the latch enforces. The original
+// version of this test missed it entirely: it only ever tried sanctioned commands.
+// Every entry below is a command that must NOT reach the shell while latched.
+for (const [label, command] of [
+  ["alternate directory", "node attacker/clear-overnight-intent.mjs --not-a-hands-free-run"],
+  ["alternate interpreter + absolute path", '"C:\\attacker\\node.exe" "C:\\attacker\\clear-overnight-intent.mjs" --not-a-hands-free-run'],
+  ["parent-directory traversal", "node ../clear-overnight-intent.mjs --not-a-hands-free-run"],
+  ["UNC path", "node //server/share/clear-overnight-intent.mjs --not-a-hands-free-run"],
+  ["glob in the path", "node scripts/*/clear-overnight-intent.mjs --not-a-hands-free-run"],
+  ["shell expansion in the path", "node $DIR/clear-overnight-intent.mjs --not-a-hands-free-run"],
+  ["NODE_OPTIONS module injection", "NODE_OPTIONS=--require=./evil.js node scripts/clear-overnight-intent.mjs --not-a-hands-free-run"],
+]) {
+  check(`PROVEN BYPASS stays gated end-to-end: ${label}`, () => {
+    armLatch();
+    const denied = denialsFor(command);
+    assert.ok(
+      denied.includes("unattended-autopilot.mjs"),
+      `expected the handshake to still pause this, got: ${denied.join(", ") || "(nothing denied)"}`
+    );
+  });
+}
+
 // ── 3. The script itself does what it claims ────────────────────────────────
 function runClear(args, cwd = fixture) {
   return spawnSync(process.execPath, [clearScript, ...args], {
