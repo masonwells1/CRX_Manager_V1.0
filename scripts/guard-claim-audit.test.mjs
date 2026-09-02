@@ -140,6 +140,18 @@ ok(guardSourceFiles().every((f) => !f.includes(".test.")), "test files are proof
   // cannot be spliced into a claim neither of them makes.
   ok(scanFile("/repo/.claude/hooks/x.mjs", "// This cannot\n//\n// be bypassed.").length === 0,
     "a blank comment line must end the wrap window");
+  // Follow-up P2, and the one that would have bitten other people: the window fed
+  // the baseline identity, so CODE below a wrapped claim entered its key. Editing
+  // that unrelated code made an untouched claim read as NEW, failing the enforced
+  // suite on a change that touched no claim. Code must end the window.
+  {
+    const withCode = (tail) => `// the operation is denied (fail\n// closed).\n${tail}`;
+    const a = scanFile("/repo/.claude/hooks/x.mjs", withCode("if (reconstructed) return null;"))[0];
+    const b = scanFile("/repo/.claude/hooks/x.mjs", withCode("if (somethingElse) return false;"))[0];
+    ok(a && b, "the wrapped claim must still be found with code beneath it");
+    ok(claimKey(a) === claimKey(b), "editing code below a wrapped claim must NOT change its identity");
+    ok(!/reconstructed/.test(a.claim), "implementation code must never enter the claim identity");
+  }
 }
 
 // …and the two-line join must not DOUBLE-count. A bare `//` before a claim line

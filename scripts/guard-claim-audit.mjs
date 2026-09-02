@@ -127,14 +127,32 @@ const NEGATION_WINDOW = 30;
 const WRAP_WINDOW = 5;
 
 /**
+ * A line that can CONTINUE a wrapped claim: another comment line, or the next
+ * piece of a split string literal. Implementation code cannot.
+ */
+function isProseLine(raw) {
+  return /^\s*(?:\/\/+|\*|#)/.test(raw) || /^\s*["'`]/.test(raw);
+}
+
+/**
  * The contiguous prose run starting at line `i`, joined into one string. A line
  * that strips to nothing — blank, or a bare `//` — ends the run, because that is
  * where one comment paragraph stops and the next begins.
+ *
+ * CODE ends the run too, and that is load-bearing rather than cosmetic. Reviewer
+ * P2: the window fed `claimKey`, so a claim that wrapped and was followed by
+ * implementation code carried that code in its identity — editing an unrelated
+ * `if (…)` line below a wrapped `Fail closed.` comment changed the key, the
+ * unchanged claim then read as NEW and unannotated, and the enforced
+ * `test:correction-guards` suite failed on a change that touched no claim at all.
+ * A ratchet that red-flags innocent edits gets switched off, so this matters more
+ * than a missed claim.
  */
-export function wrapWindow(flat, i) {
+export function wrapWindow(flat, lines, i) {
   const parts = [flat[i]];
   for (let j = i + 1; j < flat.length && parts.length < WRAP_WINDOW; j += 1) {
     if (!flat[j]) break;
+    if (!isProseLine(lines[j])) break;
     parts.push(flat[j]);
   }
   return parts.join(" ").trim();
@@ -155,7 +173,7 @@ export function scanFile(filePath, text) {
     // by wrapping it over three lines. The window now runs to the end of the
     // contiguous prose block (a blank or marker-only line ends it), capped so a
     // long comment cannot make this quadratic.
-    const pair = wrapWindow(flat, i);
+    const pair = wrapWindow(flat, lines, i);
     for (const [re, kind] of CLAIM_PATTERNS) {
       let m = re.exec(single);
       if (!m && pair !== single) {
