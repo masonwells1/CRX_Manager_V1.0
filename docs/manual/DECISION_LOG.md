@@ -104,11 +104,29 @@ compensating controls, and conflating them would overstate the defence:
    "an attacker must clear all three" — that is true only for the subset of shapes the predicates' sinks
    happen to cover, and asserting it flatly is the same overclaim this entry exists to remove.
 2. **Re-binding and laundering bypasses** — `p_performed_by := p_target_id;` after a passing check,
-   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips. **The post-apply sweeps do NOT
-   cover these, and it is not a near miss.** Both predicates select only rows where
-   `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that performs a legitimate-looking binding check and *then*
-   re-assigns the parameter is excluded from both sweeps outright — the very presence of the check it
-   defeated is what hides it. A temp-table round trip evades them for a second, independent reason:
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips.
+
+   **NARROWED 2026-09-02: the ASSIGNMENT form is now covered by both post-apply sweep predicates.**
+   Each fails closed and scans the whole body — instead of truncating at the refusal — when the actor
+   parameter is assigned to at statement position, and assignment-form rebinding is reportable in its
+   own right. Both the `:=` and bare `=` spellings are matched. The match is pinned to statement
+   position because PL/pgSQL named-argument syntax (`f(p_performed_by := v_actor)`) is lexically
+   identical to assignment; live `batch_cancel_deliveries` is exactly that shape and is correctly
+   bound. Proved on real PostgreSQL 17 in both directions, and confirmed to add **zero** findings
+   against the live catalog.
+
+   **Read that scope literally — the `INTO`-target form is proven STILL OPEN.** The exact-SHA
+   `gpt-5.6-sol` proof on PR #449 ran `SELECT 1, p_target_id INTO v_dummy, p_performed_by` through the
+   real write-time hook and observed `allow`; moving the actor to the FIRST `INTO` target returns
+   `deny`. Both sweeps miss it too, because the rebinding rule reads assignment syntax and not `INTO`
+   target lists. Closing it properly means inspecting every `INTO` target in the hook and mirroring
+   that in both predicates — and **the hook half is exactly what this entry caps**, which is why
+   PR #449 cannot reach a clean Codex proof without reopening the capped surface. That deadlock is an
+   owner decision; Mason's 2026-09-02 call was to **split** it: the sweep improvements above land on
+   their own, and the hook rewrite stays parked in #449.
+
+   The remaining laundering forms are unchanged and uncovered. A temp-table round trip evades them for
+   a second, independent reason:
    `actor-forgery.sql` requires the parameter to appear near `coalesce`/`auth.uid`/role text, and
    `actor-forgery-fin-audit.sql` requires it to appear after `financial_audit_log` **before the next
    semicolon**, so stashing the parameter in a temp table in one statement and inserting it into the audit
