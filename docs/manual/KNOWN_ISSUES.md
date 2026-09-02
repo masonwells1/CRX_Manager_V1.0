@@ -248,6 +248,47 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
+
+The gate landed on `main` as `f2307fbf9` with these four items knowingly open. They were recorded
+on the pull request and are lifted here so they do not live only in a PR comment. **None blocks
+the gate; none is a production-behaviour risk.** The gate is label-triggered, so the worst outcome
+in items 1 and 2 is a wasted paid CodeRabbit review, recoverable by removing the label.
+
+**1. `coderabbit-final-review.cjs` — reset requested state before rejecting invalid ready events**
+(Codex P2). When a `ready-for-coderabbit` event replaces a queued draft/base/auto-merge reset,
+`blockCandidate()` removes only the ready label, so an invalid candidate's already-posted command
+survives and can still consume a review. Fix shape: route through the full reset path whenever
+requested state is present.
+
+**2. `coderabbit-final-review.cjs` — require checks newer than same-head invalidations** (Codex
+P2). After a base edit, reopen or draft transition invalidates a candidate **without changing its
+head SHA**, prior successful runs stay discoverable under the same ref, so a reapplied label can
+accept stale green. Fix shape: bind accepted workflow runs to the current base/invalidation
+generation, not to `headSha` alone.
+
+**3. The privileged workflow pins actions by mutable major-version tags.**
+`actions/checkout@v7` and `actions/github-script@v8` rather than commit SHAs. Rated Low by two
+separate Codex reviews; token scope is repository reads plus issue labels/comments. Deliberately
+not done in #516: re-pinning a brand-new `pull_request_target` workflow's actions can break it on
+its first real run, and #516 was the run that would have proven it.
+
+**4. Both merge guards still accept a generic `APPROVED` verdict.**
+`.claude/hooks/pr-merge-guard.mjs` and `.codex/hooks/production-action-guard.mjs` never read
+`coderabbit-review-requested`, the hidden marker SHA, or the approving reviewer's identity, so the
+gate's recorded authorization is documentation rather than enforcement. **This gap pre-dates #516
+and exists on `main` independently of it** — #516 neither created nor closed it. Binding the guards
+belongs with PR #556, which is already reworking both guard files; doing it inside #516 would have
+re-broken the blob pin that PR had just cleared.
+
+**Why these stopped rather than continued.** #516 took eight exact-head Codex reviews, and
+essentially every commit produced a fresh P2 of the same class — reset/dedupe semantics in a new
+state machine. The two worst instances *were* fixed there and mutation-tested (a superseded command
+surviving a retry; a queued payload clearing a live dedupe marker). Continuing to fix-and-re-review
+inside one PR is the known non-terminating pattern, and each round costs another review out of a
+shared ~2/hour allowance. The hard gate defined in `AGENTS.md` — the exact-SHA `gpt-5.6-sol`
+high-effort proof — returned CLEAN on the merged head with "Nothing required remains".
+
 ## OPEN 2026-09-02 (writer IDENTIFIED; opened 2026-08-31) — the Codex CLI `/import` writes 24 corrupted `source-command-*` adapters
 
 **Identified 2026-09-01.** Twenty-four untracked directories named
