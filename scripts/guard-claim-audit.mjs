@@ -121,6 +121,25 @@ export function stripCommentSyntax(s) {
 // the match itself.
 const NEGATION_WINDOW = 30;
 
+// How many source lines a single wrapped claim may span. Five covers every
+// wrapped claim in this repo's guards with room to spare; the cap exists so a
+// 200-line comment block does not turn the scan quadratic.
+const WRAP_WINDOW = 5;
+
+/**
+ * The contiguous prose run starting at line `i`, joined into one string. A line
+ * that strips to nothing — blank, or a bare `//` — ends the run, because that is
+ * where one comment paragraph stops and the next begins.
+ */
+export function wrapWindow(flat, i) {
+  const parts = [flat[i]];
+  for (let j = i + 1; j < flat.length && parts.length < WRAP_WINDOW; j += 1) {
+    if (!flat[j]) break;
+    parts.push(flat[j]);
+  }
+  return parts.join(" ").trim();
+}
+
 export function scanFile(filePath, text) {
   const lines = text.split(/\r?\n/);
   const flat = lines.map(stripCommentSyntax);
@@ -129,9 +148,14 @@ export function scanFile(filePath, text) {
     const single = flat[i];
     // WRAPPED CLAIMS. Reviewer P2: guard comments in this repo routinely break a
     // phrase across lines (`fails` / `closed`, `cannot be` / `bypassed`), and
-    // scanning each line alone found nothing at all. The two-line join is checked
-    // only when the single line does not already match.
-    const pair = i + 1 < flat.length ? `${single} ${flat[i + 1]}`.trim() : single;
+    // scanning each line alone found nothing at all.
+    //
+    // A follow-up P2 showed a two-line join is not enough — `// This cannot` /
+    // `// be` / `// bypassed.` still escaped, so any claim could be hidden simply
+    // by wrapping it over three lines. The window now runs to the end of the
+    // contiguous prose block (a blank or marker-only line ends it), capped so a
+    // long comment cannot make this quadratic.
+    const pair = wrapWindow(flat, i);
     for (const [re, kind] of CLAIM_PATTERNS) {
       let m = re.exec(single);
       if (!m && pair !== single) {
@@ -204,7 +228,7 @@ if (invokedDirectly) {
   if (update) {
     const keys = [...new Set(claims.map(claimKey))].sort();
     writeFileSync(BASELINE, `${JSON.stringify({
-      note: "Grandfathered guard claims as of the ratchet's introduction. A NEW claim must carry @proven-by, @unproven, or @speed-bump. Shrinking this list is the point; do not grow it without a reason. Re-baselined 2026-09-01 after three reviewer-reported scanner defects were fixed (truncated identity, whole-line negation, single-line-only scanning): the identity now uses the complete claim text, so every key changed. Six entries are newly DETECTED rather than newly written — pre-existing claims in codex-push-lib, idempotency-body-check, migration-apply-lib, and production-action-guard that the old scanner could not see. The three the fixes surfaced in review-proof-guard.mjs were annotated instead of grandfathered.",
+      note: "Grandfathered guard claims as of the ratchet's introduction. A NEW claim must carry @proven-by, @unproven, or @speed-bump. Shrinking this list is the point; do not grow it without a reason. Re-baselined 2026-09-01 after four reviewer-reported scanner defects were fixed (truncated identity, whole-line negation, single-line-only scanning, and a two-line wrap window that a three-line claim still escaped): the identity now uses the complete claim text, so every key changed, and widening the wrap window changed it again for the handful of claims that actually wrap. Six entries are newly DETECTED rather than newly written — pre-existing claims in codex-push-lib, idempotency-body-check, migration-apply-lib, and production-action-guard that the old scanner could not see. The three the fixes surfaced in review-proof-guard.mjs were annotated instead of grandfathered.",
       claims: keys,
     }, null, 2)}\n`, "utf8");
     process.stdout.write(`Baseline written: ${keys.length} grandfathered claim(s).\n`);

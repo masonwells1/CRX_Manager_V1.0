@@ -130,6 +130,16 @@ ok(guardSourceFiles().every((f) => !f.includes(".test.")), "test files are proof
     "a claim split across a string concatenation must be found");
   ok(scanFile("/repo/.claude/hooks/x.mjs", "// this cannot be\n// bypassed by any agent.").length === 1,
     "`cannot be` / `bypassed` split across lines must be found");
+  // Follow-up P2: a two-line join was not enough — a claim wrapped over THREE or
+  // more lines still escaped the enforced audit entirely.
+  ok(scanFile("/repo/.claude/hooks/x.mjs", "// This cannot\n// be\n// bypassed.").length === 1,
+    "a claim wrapped over three lines must be found");
+  ok(scanFile("/repo/.claude/hooks/x.mjs", "// This\n// cannot\n// be\n// bypassed.").length === 1,
+    "a claim wrapped over four lines must be found");
+  // …but the window stops at a paragraph break, so two unrelated comment blocks
+  // cannot be spliced into a claim neither of them makes.
+  ok(scanFile("/repo/.claude/hooks/x.mjs", "// This cannot\n//\n// be bypassed.").length === 0,
+    "a blank comment line must end the wrap window");
 }
 
 // …and the two-line join must not DOUBLE-count. A bare `//` before a claim line

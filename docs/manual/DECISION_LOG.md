@@ -9,10 +9,21 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-09-01 (end of day) — SIX adversarial rounds on the enforcement-surface rule, then a deliberate stop
 
-**Mason's decision, 2026-09-01, after the sixth round: fix what that round found, then stop — no
-seventh review.** Do not reopen this by running more rounds at it; the remaining gaps are recorded
-in `KNOWN_ISSUES.md` and in the round-6 changelog entry, and closing them is not what a command-text
-rule can do.
+**Mason's decision, 2026-09-01, after the sixth round: fix what that round found, then stop
+commissioning rounds.** Do not reopen this by running more adversarial reviews at it; the remaining
+gaps are recorded in `KNOWN_ISSUES.md` and in the round-6 changelog entry, and closing them is not
+what a command-text rule can do.
+
+**What the cap does and does not cover — read this before concluding the cap was broken.** It caps
+reviews *this project commissions*. It does not silence the repo's **automatic PR reviewer**, which
+fires on every push to an open PR by configuration and is not a commissioned round. That reviewer
+went on to report further real bypasses on PR #530 — `rg --pre` executing an arbitrary program
+against a protected file, and doubled path separators (`.github//workflows/…`) defeating the
+matcher — plus several defects in the guard-claim ratchet itself. Those were fixed, because
+**fixing a finding that has already been delivered is not commissioning a round.** The changelog
+entries and the test comments number those findings by review round for traceability, which is why
+they say "seventh"; that numbering describes the reviews that happened, not a decision to reopen the
+cap. The cap stands: do not commission an eighth.
 
 Each of six independent exact-SHA `gpt-5.6-sol` reviews found a REAL bypass in the rule that replaced
 the deleted lock. In order: a destructive-verb blocklist that `cp`/`tee`/`sed -i` walked past; `..`

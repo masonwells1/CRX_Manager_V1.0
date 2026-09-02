@@ -1,5 +1,5 @@
 {
-  "note": "Grandfathered guard claims as of the ratchet's introduction. A NEW claim must carry @proven-by, @unproven, or @speed-bump. Shrinking this list is the point; do not grow it without a reason. Re-baselined 2026-09-01 after three reviewer-reported scanner defects were fixed (truncated identity, whole-line negation, single-line-only scanning): the identity now uses the complete claim text, so every key changed. Six entries are newly DETECTED rather than newly written — pre-existing claims in codex-push-lib, idempotency-body-check, migration-apply-lib, and production-action-guard that the old scanner could not see. The three the fixes surfaced in review-proof-guard.mjs were annotated instead of grandfathered.",
+  "note": "Grandfathered guard claims as of the ratchet's introduction. A NEW claim must carry @proven-by, @unproven, or @speed-bump. Shrinking this list is the point; do not grow it without a reason. Re-baselined 2026-09-01 after four reviewer-reported scanner defects were fixed (truncated identity, whole-line negation, single-line-only scanning, and a two-line wrap window that a three-line claim still escaped): the identity now uses the complete claim text, so every key changed, and widening the wrap window changed it again for the handful of claims that actually wrap. Six entries are newly DETECTED rather than newly written — pre-existing claims in codex-push-lib, idempotency-body-check, migration-apply-lib, and production-action-guard that the old scanner could not see. The three the fixes surfaced in review-proof-guard.mjs were annotated instead of grandfathered.",
   "claims": [
     ".claude/hooks/active-area-guard.mjs::fail-open::FAIL-OPEN: any error → allow.",
     ".claude/hooks/actor-binding-check.mjs::fail-open::FAIL-OPEN, but loud: a broken hook must never brick the session.",
@@ -59,7 +59,7 @@
     ".claude/hooks/generated-column-check.mjs::fail-open::validate anything — still allow (fail-open by design), but say so loudly",
     ".claude/hooks/grant-change-guard.mjs::fail-closed::marker-deleting edit through unanalyzed (CodeRabbit PR #489). Fail closed.",
     ".claude/hooks/hold-latch-guard.mjs::fail-open::FAIL-OPEN: any error, or no latch → emit nothing (normal flow). The latch is cleared",
-    ".claude/hooks/idempotency-body-check.mjs::fail-closed::(CodeRabbit PR #489; same rule as the other splice-aware guards). Fail closed.",
+    ".claude/hooks/idempotency-body-check.mjs::fail-closed::(CodeRabbit PR #489; same rule as the other splice-aware guards). Fail closed. if (reconstructed) out( allow ); out( block , IDEMPOTENCY GUARD: this Edit deletes content from a migration file, but the on-disk file",
     ".claude/hooks/idempotency-body-check.mjs::fail-closed::(caller fails CLOSED).",
     ".claude/hooks/idempotency-body-check.mjs::fail-closed::DDL (its unmatched paren tripped the fail-closed deny — Codex P2 round 4);",
     ".claude/hooks/idempotency-body-check.mjs::fail-closed::FAIL CLOSED on a payload we judged executable: masking it opaque",
@@ -100,7 +100,7 @@
     ".claude/hooks/registry-freshness.mjs::fail-open::FAIL-OPEN: never let this watchdog break a tool call.",
     ".claude/hooks/registry-freshness.mjs::fail-open::generated-column-check) all FAIL OPEN on stale data, so they could wave",
     ".claude/hooks/registry-freshness.mjs::fail-open::hooks FAIL OPEN on stale data — they could miss the very bug class they exist to catch.\\n\\n",
-    ".claude/hooks/review-proof-guard.mjs::fail-closed::(round 2 — a proven bypass). This is a self-certification gate, so fail closed whenever such a target appears in a command that also mentions",
+    ".claude/hooks/review-proof-guard.mjs::fail-closed::(round 2 — a proven bypass). This is a self-certification gate, so fail closed whenever such a target appears in a command that also mentions the state directory. @proven-by review-proof-guard.test.mjs (the session-state deny cases cover the expansion, glob, and glued-verb forms). const afterToken = scan.charAt(match.index + match[0].length - match[1].length);",
     ".claude/hooks/review-proof-guard.mjs::fail-closed::.claude/session-state string is never spelled out. Fail closed on the",
     ".claude/hooks/review-proof-guard.mjs::fail-closed::FAIL-CLOSED READ-ONLY ALLOWLIST — deliberately NOT a destructive-verb list.",
     ".claude/hooks/review-proof-guard.mjs::fail-closed::Fail closed. A too-generic lead ( * , *.tmp , x* ) is ignored so ordinary",
@@ -154,7 +154,7 @@
     ".codex/hooks/production-action-guard.mjs::fail-closed::CODEX PRODUCTION GATE: could not inspect ${baseSha}...${headSha}, so the operation is denied (fail closed). ${error?.message || error}",
     ".codex/hooks/production-action-guard.mjs::fail-closed::CODEX PRODUCTION GATE: could not inspect the full diff for money/security risk, so the operation is denied (fail closed). ${error?.message || error}",
     ".codex/hooks/production-action-guard.mjs::fail-closed::CODEX PRODUCTION GATE: could not resolve the base branch or the exact ref being sent to main, so the operation is denied (fail closed). ${error?.message || error}",
-    ".codex/hooks/production-action-guard.mjs::fail-closed::The object must exist locally or every diff below is meaningless. Fail closed with actionable guidance rather than an opaque git error.",
+    ".codex/hooks/production-action-guard.mjs::fail-closed::The object must exist locally or every diff below is meaningless. Fail closed with actionable guidance rather than an opaque git error. try { baseSha = runGit([ rev-parse , --verify , ${baseSha}^{commit} ], repoDir); } catch {",
     ".codex/hooks/production-action-guard.mjs::fail-closed::and is denied (fail closed).",
     ".codex/hooks/production-action-guard.mjs::fail-closed::call fails closed and must use a purpose-built read-only connector/tool.",
     ".codex/hooks/production-action-guard.mjs::fail-closed::everything the merge lands (fail closed). Update the branch first — merge origin/main into it (or",
