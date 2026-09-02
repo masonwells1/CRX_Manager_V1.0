@@ -159,7 +159,7 @@ Row numbering follows the disposition plan. **Row 11 is deliberately absent** �
 | Branch | Why it is excluded |
 |---|---|
 | `claude/offline-review-stale-snapshot` (row 11) | **HOLD.** Checked out at `C:\crx-wt\ledger-gitdir`. Hand the lane off first. |
-| `claude/pr364-guard-commits-local-20260831` | **PROTECTED.** A separate session is working PR #364. Its F4 finding was **withdrawn** — `main` is strictly stronger and those commits must not be re-applied — but the branch has never been enumerated for incidental value. |
+| `claude/pr364-guard-commits-local-20260831` | **NEVER DELETE — this is the only copy.** Not a temporary hold. PR #364 is **closed** (2026-09-01, Mason's approval), and closing it did not make this branch disposable: it is the sole remaining home for three protections `main` still lacks, roughly **8 files and +9,250 lines**, dominated by `.claude/hooks/apply-time-dml-lib.mjs` (2,612 lines). Scoped in `docs/audits/2026-09-01-pr364-guard-extraction-scope.md` and tracked in `docs/manual/KNOWN_ISSUES.md`; **scoped but not approved to build**, so it will sit here indefinitely and that is expected. Tip `57d27e79105b62ee9887d59bdd1f2f58ed3c0e2d`. Its separate F4 finding was withdrawn — `main` is strictly stronger on that guard and those particular commits must not be re-applied — but that withdrawal says nothing about the three unextracted protections, which are the reason the branch exists. Do not read "no active session" or "PR closed" as "safe to remove". |
 
 ## Known local-only work — not at risk from this sweep, but recorded
 
