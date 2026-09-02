@@ -33,6 +33,7 @@ import { parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCents } from '../lib/money';
 import { Sentry } from '../lib/sentry';
 import { activeInvoiceCoversDelivery } from '../lib/deliveryInvoiceCoverage';
+import { fetchSplitBillingOrderIds, SPLIT_BILLING_BLOCK_REASON } from '../lib/deliverySplitBilling';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { addDeliveryEditItem, removeDeliveryEditItem, type AvailableDeliveryEditItem, type DeliveryEditItem } from '../lib/deliveryEditItems';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -182,6 +183,12 @@ export default function DeliveryDetail() {
     invoice_type: string; deleted_at: string | null;
   }>>([]);
 
+  // H5: true when the server's ORDER_NEEDS_SPLIT_BILLING guard would refuse a
+  // single backfilled invoice for this delivery's order. Defaults to false and
+  // stays false on a read failure — see the fail-open note in
+  // fetchSplitBillingOrderIds.
+  const [orderNeedsSplitBilling, setOrderNeedsSplitBilling] = useState(false);
+
   // Sibling deliveries + quote context for transaction thread
   const [siblingDeliveries, setSiblingDeliveries] = useState<{ id: string; delivery_number: string }[]>([]);
   const [parentQuote, setParentQuote] = useState<{ id: string; quote_number: string } | null>(null);
@@ -199,7 +206,17 @@ export default function DeliveryDetail() {
     activeInvoiceCoversDelivery(invoice, delivery.id, delivery.order_id)
   );
   // RPC is admin-only (finding #78's backfill twin); sales_reps bill jobs, not stray deliveries.
-  const canCreateInvoice = isAdmin && delivery?.status === 'completed' && !hasActiveRelatedInvoice;
+  // H5: also mirror the server's ORDER_NEEDS_SPLIT_BILLING refusal via the shared
+  // predicate, so this surface and IntegrityCleanupPanel cannot drift apart.
+  const canCreateInvoice = isAdmin
+    && delivery?.status === 'completed'
+    && !hasActiveRelatedInvoice
+    && !orderNeedsSplitBilling;
+  // Only worth explaining where the button would otherwise have been offered.
+  const splitBillingBlocksInvoice = isAdmin
+    && delivery?.status === 'completed'
+    && !hasActiveRelatedInvoice
+    && orderNeedsSplitBilling;
 
   const fetchDelivery = useCallback(async () => {
     const { data: delData, error: delError } = await supabase
@@ -252,7 +269,12 @@ export default function DeliveryDetail() {
 
         // Fetch order item context for items display
         if (del.order_id) {
-          const [oiRes, orderRes, invRes] = await Promise.all([
+          // H5: does the server's split-billing guard cover this order? Read via
+          // the shared predicate so this page and the integrity panel ask the
+          // same question. `order_item_field_allocations` is admin/sales_rep
+          // readable (RLS `oifa_select`); a driver never sees the button anyway.
+          const orderIdForSplitCheck = del.order_id;
+          const [oiRes, orderRes, invRes, splitRes] = await Promise.all([
             supabase
               .from('order_items')
               .select('id, total_units_needed, quantity_delivered, quantity_remaining')
@@ -268,7 +290,18 @@ export default function DeliveryDetail() {
               .eq('order_id', del.order_id)
               .is('deleted_at', null)
               .order('invoice_date', { ascending: false }),
+            fetchSplitBillingOrderIds([orderIdForSplitCheck]),
           ]);
+          if (splitRes.error) {
+            // Fail OPEN: keep the button. The server still refuses, and this page
+            // already surfaces that refusal verbatim via sanitizeError().
+            Sentry.captureException(splitRes.error, {
+              extra: { context: 'load_split_billing_eligibility', orderId: orderIdForSplitCheck },
+            });
+            setOrderNeedsSplitBilling(false);
+          } else {
+            setOrderNeedsSplitBilling(splitRes.data?.has(orderIdForSplitCheck) ?? false);
+          }
           if (oiRes.error) {
             toast('error', sanitizeError(oiRes.error));
           } else if (oiRes.data) {
@@ -315,6 +348,10 @@ export default function DeliveryDetail() {
               setParentQuote(qData as { id: string; quote_number: string } | null);
             } else { setParentQuote(null); }
           }
+        } else {
+          // Orphan delivery: no order, so no split-billing state to carry over
+          // from a previously viewed delivery.
+          setOrderNeedsSplitBilling(false);
         }
 
         // Fetch remainders for completed deliveries
@@ -1634,6 +1671,21 @@ export default function DeliveryDetail() {
               >
                 Create Invoice
               </Button>
+            )}
+            {/* H5: the server would refuse this one. Show it disabled with the
+                reason instead of a button that cannot succeed. */}
+            {splitBillingBlocksInvoice && (
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  icon={<FileText className="w-4 h-4" />}
+                  showChevron={false}
+                  disabled
+                >
+                  Create Invoice
+                </Button>
+                <HelpTip text={SPLIT_BILLING_BLOCK_REASON} />
+              </div>
             )}
             <Button
               variant="secondary"
