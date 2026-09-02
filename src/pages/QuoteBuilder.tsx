@@ -38,7 +38,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, rpcAuthErrorMessage, RpcErrorCodes } from '../lib/db';
+import { sanitizeError, supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, rpcAuthErrorMessage, RpcErrorCodes } from '../lib/db';
 import {
   convertQuoteToOrderWithRowVersion,
   createQuoteVersionWithRowVersion,
@@ -1769,7 +1769,7 @@ export default function QuoteBuilder() {
       toast('success', `Quote ${newStatus} — any inventory holds were released.`);
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'mutation', action: `quote_${newStatus}` } });
-      toast('error', err instanceof Error ? err.message : `Failed to ${verb} the quote`);
+      toast('error', sanitizeError(err));
     } finally {
       setStatusActionLoading(false);
       setConfirmDeclineOpen(false);
@@ -1815,7 +1815,7 @@ export default function QuoteBuilder() {
       if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
         toast('warning', 'This booking is no longer open — refresh the page to see its current status.');
       } else {
-        toast('error', err instanceof Error ? err.message : 'Failed to close the booking');
+        toast('error', sanitizeError(err));
       }
     } finally {
       setClosingApplied(false);
@@ -1863,7 +1863,7 @@ export default function QuoteBuilder() {
       } else if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
         toast('warning', 'This booking is no longer open — refresh the page to see its current status.');
       } else {
-        toast('error', err instanceof Error ? err.message : 'Failed to close the booking');
+        toast('error', sanitizeError(err));
       }
     } finally {
       setClosingShort(false);
@@ -1916,7 +1916,7 @@ export default function QuoteBuilder() {
       } else {
         // Server messages here are plain-English and actionable (e.g. "an order
         // has already been created from it") — surface them as-is.
-        toast('error', err instanceof Error ? err.message : 'Failed to reopen the quote');
+        toast('error', sanitizeError(err));
       }
     } finally {
       setReverting(false);
@@ -2127,7 +2127,7 @@ export default function QuoteBuilder() {
         setStaleSaveOpen(true);
         toast('error', 'The quote changed and the email was NOT sent. Reload the quote, then review and send it again.');
       } else {
-        toast('error', err instanceof Error ? err.message : 'Failed to email the quote');
+        toast('error', sanitizeError(err));
       }
     } finally {
       setEmailingGrower(false);
@@ -2347,7 +2347,7 @@ export default function QuoteBuilder() {
       })();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'schedule_job_from_quote' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to schedule job');
+      toast('error', sanitizeError(err));
     }
     setSchedulingJobSectionKey(null);
   };

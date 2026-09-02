@@ -231,7 +231,7 @@ export default function ApplicationServiceDetail() {
       }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_application_service' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to save service');
+      toast('error', sanitizeError(err));
     }
     setSaving(false);
   };
