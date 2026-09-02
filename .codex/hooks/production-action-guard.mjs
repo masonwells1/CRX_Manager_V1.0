@@ -26,6 +26,7 @@ import {
   CODEX_THREADS_QUERY,
   CODEX_THREAD_PAGE_SIZE,
   codexBotFindingsDenial,
+  collectCodexThreads,
   evaluateCodexBotReview,
 } from "../../.claude/hooks/codex-bot-review-lib.mjs";
 
@@ -680,21 +681,49 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     const meta = JSON.parse(runGh(metaArgs, repoDir));
     const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
     if (slug && Number.isInteger(meta?.number)) {
-      const node = JSON.parse(runGh([
-        "api", "graphql",
-        "-f", `query=${CODEX_THREADS_QUERY}`,
-        "-F", `owner=${slug[1]}`,
-        "-F", `name=${slug[2]}`,
-        "-F", `number=${meta.number}`,
-        "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
-      ], repoDir))?.data?.repository?.pullRequest;
-      if (node) codexVerdict = evaluateCodexBotReview(node);
+      const node = collectCodexThreads((cursor) => {
+        const args = [
+          "api", "graphql",
+          "-f", `query=${CODEX_THREADS_QUERY}`,
+          "-F", `owner=${slug[1]}`,
+          "-F", `name=${slug[2]}`,
+          "-F", `number=${meta.number}`,
+          "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
+        ];
+        // Omit `after` on the first page — see the Claude-side note.
+        if (cursor) args.push("-F", `after=${cursor}`);
+        return JSON.parse(runGh(args, repoDir))?.data?.repository?.pullRequest;
+      });
+      if (node.headRefOid) codexVerdict = evaluateCodexBotReview(node);
     }
   } catch {
     codexVerdict = null; // never a deny
   }
   if (codexVerdict?.status === "findings-at-head") {
     return denied(codexBotFindingsDenial("CODEX PRODUCTION GATE", request.selector, codexVerdict.unresolvedAtHead));
+  }
+  // Say what happened on every non-blocking path. Failing open SILENTLY is
+  // indistinguishable from "the reviewer had nothing to say" (CRX-REV-003 on
+  // this PR's own Codex review) — the Claude guard already prints these, and a
+  // one-sided silence is exactly the drift AGENTS.md forbids.
+  if (!codexVerdict) {
+    process.stderr.write(
+      "CODEX REVIEW NOTICE: could not read the Codex GitHub App's review threads for this PR, so its " +
+      "findings were NOT checked. Merging anyway (this gate fails open by design). Read them by hand: " +
+      `gh pr view ${request.selector || "<number>"} --comments\n`,
+    );
+  } else if (codexVerdict.status === "stale") {
+    process.stderr.write(
+      `CODEX REVIEW NOTICE: the Codex GitHub App has ${codexVerdict.codexThreads} comment thread(s) on this ` +
+      "PR, none of them unresolved against the exact commit being merged. Nothing blocks, but if you have " +
+      "not read them, do: " +
+      `gh pr view ${request.selector || "<number>"} --comments\n`,
+    );
+  } else if (codexVerdict.status === "none") {
+    process.stderr.write(
+      "CODEX REVIEW NOTICE: the Codex GitHub App has left no review comments on this PR. If it never ran, " +
+      "comment `@codex review` and read the result before merging anything non-trivial.\n",
+    );
   }
 
   if (!pullRequestChecksGreen(pullRequest)) {

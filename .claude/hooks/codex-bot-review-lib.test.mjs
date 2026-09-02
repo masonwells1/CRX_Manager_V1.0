@@ -13,8 +13,10 @@ import { fileURLToPath } from "node:url";
 import {
   CODEX_BOT_LOGINS,
   CODEX_THREADS_QUERY,
+  CODEX_THREAD_MAX_PAGES,
   codexBotFindingsDenial,
   codexBotThreads,
+  collectCodexThreads,
   evaluateCodexBotReview,
   isCodexBotLogin,
   isStandingAtHead,
@@ -185,6 +187,63 @@ const pr530 = [
 ];
 eq(evaluateCodexBotReview(pr(pr530)).unresolvedAtHead, 1, "PR #530 shape: 40 unresolved overall reduces to 1 at the head");
 
+// ── paging (CRX-REV-002 from this PR's own Codex review) ─────────────────────
+// A single 100-thread page can hide the one unresolved thread that matters.
+{
+  const page = (nodes, hasNextPage, endCursor) => ({
+    headRefOid: HEAD,
+    reviewThreads: { pageInfo: { hasNextPage, endCursor }, nodes },
+  });
+
+  // Two pages: the standing finding is on page 2 and MUST be found.
+  const calls = [];
+  const two = collectCodexThreads((cursor) => {
+    calls.push(cursor);
+    return cursor === null
+      ? page([thread({ resolved: true, oid: HEAD })], true, "c1")
+      : page([thread({ resolved: false, oid: HEAD })], false, null);
+  });
+  eq(calls, [null, "c1"], "the first page is fetched with no cursor, the second with the returned cursor");
+  eq(two.reviewThreads.nodes.length, 2, "nodes from both pages are merged");
+  eq(
+    evaluateCodexBotReview(two).status,
+    "findings-at-head",
+    "MUST BLOCK: an unresolved thread on the SECOND page is still found",
+  );
+
+  // hasNextPage:false stops immediately.
+  let n = 0;
+  collectCodexThreads(() => { n += 1; return page([], false, null); });
+  eq(n, 1, "paging stops when hasNextPage is false");
+
+  // A server that claims hasNextPage forever must not spin: bounded by
+  // CODEX_THREAD_MAX_PAGES.
+  let runaway = 0;
+  collectCodexThreads(() => { runaway += 1; return page([thread()], true, `c${runaway}`); });
+  eq(runaway, CODEX_THREAD_MAX_PAGES, "paging is bounded by CODEX_THREAD_MAX_PAGES");
+
+  // hasNextPage true but no usable cursor would otherwise refetch page 1 forever.
+  let stuck = 0;
+  collectCodexThreads(() => { stuck += 1; return page([thread()], true, ""); });
+  eq(stuck, 1, "an empty endCursor stops paging instead of refetching the same page");
+  let repeat = 0;
+  collectCodexThreads(() => { repeat += 1; return page([thread()], true, "same"); });
+  eq(repeat, 2, "a repeated endCursor stops paging rather than looping");
+
+  // A failed request mid-walk keeps what was already read.
+  const partial = collectCodexThreads((cursor) =>
+    cursor === null ? page([thread({ resolved: false, oid: HEAD })], true, "c1") : null);
+  eq(partial.reviewThreads.nodes.length, 1, "a null page ends the walk without discarding earlier nodes");
+  eq(evaluateCodexBotReview(partial).status, "findings-at-head", "partial results still block when they carry a standing finding");
+  eq(collectCodexThreads(() => null).headRefOid, "", "an immediately failed fetch yields an empty head, which reads as 'none'");
+  eq(evaluateCodexBotReview(collectCodexThreads(() => null)).status, "none", "a total fetch failure is 'none', never a block");
+}
+// The query must accept a cursor, or paging silently refetches page one.
+ok(/\$after\s*:\s*String/.test(CODEX_THREADS_QUERY), "query declares an $after cursor variable");
+ok(/after\s*:\s*\$after/.test(CODEX_THREADS_QUERY), "query passes $after to reviewThreads");
+ok(/pageInfo\s*{[^}]*hasNextPage/.test(CODEX_THREADS_QUERY), "query selects pageInfo.hasNextPage");
+ok(/pageInfo\s*{[^}]*endCursor/.test(CODEX_THREADS_QUERY), "query selects pageInfo.endCursor");
+
 // ── the denial text names the count and the exit ─────────────────────────────
 const denial = codexBotFindingsDenial("PR MERGE GATE", "561", 2);
 ok(/chatgpt-codex-connector/.test(denial), "denial names the bot so the reader can find the thread");
@@ -235,6 +294,27 @@ ok(
 ok(
   /fails open by design/.test(guardSource),
   "the fetch-failure notice states that this gate fails open, so the reader knows what the silence means",
+);
+ok(/collectCodexThreads/.test(guardSource), "pr-merge-guard.mjs pages the thread read rather than taking one page");
+
+// ── the Codex-side guard must not be the silent twin (CRX-REV-003) ───────────
+// A one-sided guard is the drift AGENTS.md forbids, and a SILENT fail-open there
+// is indistinguishable from "the reviewer had nothing to say".
+const codexGuardSource = readFileSync(
+  path.join(__dirname, "..", "..", ".codex", "hooks", "production-action-guard.mjs"),
+  "utf8",
+);
+ok(/codex-bot-review-lib\.mjs/.test(codexGuardSource), "the Codex guard imports the same shared predicates, not a copy");
+ok(
+  /codexVerdict\s*=\s*evaluateCodexBotReview\s*\(/.test(codexGuardSource),
+  "the Codex guard actually calls evaluateCodexBotReview(...)",
+);
+ok(/findings-at-head/.test(codexGuardSource), "the Codex guard branches on findings-at-head");
+ok(/collectCodexThreads/.test(codexGuardSource), "the Codex guard pages the thread read too");
+eq(
+  (codexGuardSource.match(/CODEX REVIEW NOTICE/g) || []).length,
+  3,
+  "the Codex guard prints all three non-blocking notices, matching the Claude guard",
 );
 
 console.log(`codex-bot-review-lib: ${pass} assertions passed`);

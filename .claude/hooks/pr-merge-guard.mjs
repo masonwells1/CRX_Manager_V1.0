@@ -44,6 +44,7 @@ import {
   CODEX_THREADS_QUERY,
   CODEX_THREAD_PAGE_SIZE,
   codexBotFindingsDenial,
+  collectCodexThreads,
   evaluateCodexBotReview,
 } from "./codex-bot-review-lib.mjs";
 
@@ -232,16 +233,21 @@ function gateRequest(request) {
     const meta = JSON.parse(gh(metaArgs));
     const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
     if (slug && Number.isInteger(meta?.number)) {
-      const raw = gh([
-        "api", "graphql",
-        "-f", `query=${CODEX_THREADS_QUERY}`,
-        "-F", `owner=${slug[1]}`,
-        "-F", `name=${slug[2]}`,
-        "-F", `number=${meta.number}`,
-        "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
-      ]);
-      const node = JSON.parse(raw)?.data?.repository?.pullRequest;
-      if (node) codexVerdict = evaluateCodexBotReview(node);
+      const node = collectCodexThreads((cursor) => {
+        const args = [
+          "api", "graphql",
+          "-f", `query=${CODEX_THREADS_QUERY}`,
+          "-F", `owner=${slug[1]}`,
+          "-F", `name=${slug[2]}`,
+          "-F", `number=${meta.number}`,
+          "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
+        ];
+        // Omit `after` entirely on the first page: -F after= would send the
+        // empty string, which GraphQL treats as a cursor rather than as null.
+        if (cursor) args.push("-F", `after=${cursor}`);
+        return JSON.parse(gh(args))?.data?.repository?.pullRequest;
+      });
+      if (node.headRefOid) codexVerdict = evaluateCodexBotReview(node);
     }
   } catch {
     codexVerdict = null; // notice below; never a deny

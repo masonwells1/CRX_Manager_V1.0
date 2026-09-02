@@ -77,9 +77,9 @@
 //   none             : no Codex threads / the data could not be fetched -> NOTICE
 //   clean-at-head    : it reviewed this head and nothing is outstanding -> silent
 //
-// Thread pagination is capped at 100 (see CODEX_THREAD_PAGE_SIZE). A PR with
-// more threads than that could hide an unresolved one, which loses a DENY
-// rather than inventing one — the safe direction for a fail-open gate.
+// Thread reads page up to CODEX_THREAD_MAX_PAGES (see collectCodexThreads).
+// Beyond that a PR could hide an unresolved thread, which loses a DENY rather
+// than inventing one — the safe direction for a fail-open gate.
 
 // Both API spellings, lowercased. `[bot]` is a suffix GitHub's REST API adds
 // and `gh`/GraphQL strip; neither is more canonical than the other.
@@ -88,8 +88,15 @@ export const CODEX_BOT_LOGINS = Object.freeze([
   "chatgpt-codex-connector[bot]",
 ]);
 
-// GraphQL page size for reviewThreads. See the fail-open note above.
+// GraphQL page size for reviewThreads. 100 is GitHub's per-page maximum, so
+// covering a longer PR means paging, not a bigger number.
 export const CODEX_THREAD_PAGE_SIZE = 100;
+
+// How many pages collectCodexThreads() will walk. Three pages = 300 threads,
+// which clears every PR on this board by a wide margin (the largest, #530, has
+// 48) while keeping the worst case to three API calls inside a hook that must
+// answer quickly. Running out of pages loses a DENY rather than inventing one.
+export const CODEX_THREAD_MAX_PAGES = 3;
 
 export function isCodexBotLogin(login) {
   return CODEX_BOT_LOGINS.includes(String(login || "").trim().toLowerCase());
@@ -104,11 +111,12 @@ export function isCodexBotLogin(login) {
 // heads for display, so the thread's displayed position is not evidence of when
 // it was raised.
 export const CODEX_THREADS_QUERY = `
-query($owner:String!, $name:String!, $number:Int!, $first:Int!) {
+query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
   repository(owner:$owner, name:$name) {
     pullRequest(number:$number) {
       headRefOid
-      reviewThreads(first:$first) {
+      reviewThreads(first:$first, after:$after) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           isResolved
           isOutdated
@@ -118,6 +126,37 @@ query($owner:String!, $name:String!, $number:Int!, $first:Int!) {
     }
   }
 }`;
+
+// Walk up to CODEX_THREAD_MAX_PAGES pages of review threads and return a single
+// pullRequest-shaped object for evaluateCodexBotReview().
+//
+// `runQuery(cursor)` performs one GraphQL request and returns the parsed
+// `pullRequest` node (or null/undefined). The caller owns transport, so the
+// Claude and Codex guards can each use their own gh runner without forking this
+// paging logic.
+//
+// Added after a Codex review of this file's own PR flagged the unpaginated
+// single-page read (CRX-REV-002): on a PR with more than 100 threads the
+// unresolved one could sit on a page nobody fetched, and the gate would report
+// "nothing standing" while something was.
+export function collectCodexThreads(runQuery) {
+  let cursor = null;
+  let headRefOid = "";
+  const nodes = [];
+  for (let page = 0; page < CODEX_THREAD_MAX_PAGES; page += 1) {
+    const pr = runQuery(cursor);
+    if (!pr) break;
+    if (!headRefOid) headRefOid = String(pr.headRefOid || "");
+    const threads = pr?.reviewThreads;
+    if (Array.isArray(threads?.nodes)) nodes.push(...threads.nodes);
+    if (threads?.pageInfo?.hasNextPage !== true) break;
+    const next = String(threads?.pageInfo?.endCursor || "");
+    // No cursor but "hasNextPage" would loop forever on the same page.
+    if (!next || next === cursor) break;
+    cursor = next;
+  }
+  return { headRefOid, reviewThreads: { nodes } };
+}
 
 // Normalize one GraphQL reviewThread node into { author, oid, resolved }.
 // Everything unknown becomes "" / false, which never matches a head.
