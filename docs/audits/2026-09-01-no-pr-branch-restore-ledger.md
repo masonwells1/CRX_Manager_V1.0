@@ -170,6 +170,15 @@ Row numbering follows the disposition plan. **Row 11 is deliberately absent** �
 
 ## Not in this sweep
 
+> **No further deletion pass is planned (Mason, 2026-09-02).** Read the "becomes eligible" and "may
+> be considered" wording below as describing the conditions that *were* attached to these two rows,
+> not as pending work. After Codex reviewed the follow-up plan for the 28 closed/merged-PR branches
+> and found that five of them held commits existing **only** in local checkouts — which tagging a
+> remote tip does not preserve — Mason declined the remaining deletions: the upside was tidiness and
+> the downside was losing work. The remaining branches stay. The inventory in
+> `docs/audits/2026-09-01-closed-pr-branch-disposition-plan.md` and the rescue of orphaned documents
+> to `main` were the parts worth keeping. **Do not reopen the deletion plan without a new reason.**
+
 | Branch | Why it is excluded |
 |---|---|
 | `claude/offline-review-stale-snapshot` (row 11) | **HOLD.** Checked out at `C:\crx-wt\ledger-gitdir`. Hand the lane off before it becomes eligible. |
