@@ -37,6 +37,7 @@ import {
   proofValid,
   pullRequestApproved,
   pullRequestChecksGreen,
+  pullRequestReviewBlocked,
   riskyFiles,
 } from "./codex-push-lib.mjs";
 
@@ -185,20 +186,29 @@ function gateRequest(request) {
   }
   if (base !== "main") return; // ordinary feature-branch merges are not production landings
 
-  // ── a real, current approval ───────────────────────────────────────────────
-  // Until 2026-09-01 this was implicit: GitHub itself refused an unapproved
-  // merge, so reaching the code below meant an approval existed. Mason's manual
-  // override (branch protection's "Include administrators" turned OFF) removed
-  // that floor for anyone holding admin rights, which is every agent session on
-  // his token. So the approval is now read from GitHub's own verdict.
-  // `--auto` is exempt because GitHub holds an auto-merge until every
-  // requirement is satisfied and auto-merge never uses the admin bypass.
-  if (!request.auto && !pullRequestApproved(pr)) {
+  // ── no merging over an unresolved objection ────────────────────────────────
+  // Mason removed main's required-approval rule on 2026-09-02, so a MISSING
+  // approval is no longer a blocker here. An ACTIVE objection still is: merging
+  // over CHANGES_REQUESTED throws away a review that already found something.
+  // `--auto` is exempt because GitHub holds an auto-merge until its own
+  // requirements are satisfied.
+  if (!request.auto && pullRequestReviewBlocked(pr)) {
     deny(
-      `PR MERGE GATE: GitHub reports reviewDecision=${String(pr.reviewDecision || "").toUpperCase() || "<none>"} ` +
-      "— this pull request has no current approval, and main requires one. The administrator override that " +
-      "could skip it is Mason's to use by hand, not an agent's. Post `@coderabbitai review`, fix every real " +
-      "finding, and merge only after it approves; if the review is stuck, hand the PR to Mason and say so."
+      "PR MERGE GATE: GitHub reports reviewDecision=CHANGES_REQUESTED — a reviewer has open objections on " +
+      "this pull request. Removing main's required-approval rule did not authorize merging over a review " +
+      "that asked for changes. Fix every real finding and push it; a genuine nitpick may be dismissed with " +
+      "a one-line reason in the thread. Merge only after that."
+    );
+  }
+
+  // An unreviewed PR may now land, but say so out loud — the standing policy is
+  // still that CodeRabbit reviews the frozen candidate and its real findings get
+  // fixed. This is a notice, not a gate: write to stderr, then keep going.
+  if (!request.auto && !pullRequestApproved(pr)) {
+    process.stderr.write(
+      `PR MERGE NOTICE: reviewDecision=${String(pr.reviewDecision || "").toUpperCase() || "<none>"} — merging ` +
+      "without a current approval, which main no longer requires (Mason, 2026-09-02). If CodeRabbit has " +
+      "not reviewed this candidate, post `@coderabbitai review`, read it, and fix what it finds first.\n"
     );
   }
 

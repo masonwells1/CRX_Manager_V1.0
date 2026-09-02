@@ -13,6 +13,7 @@ import {
   proofSearchDirs,
   pullRequestApproved,
   pullRequestChecksGreen,
+  pullRequestReviewBlocked,
 } from "./codex-push-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -81,6 +82,19 @@ ok(!pullRequestApproved({ reviewDecision: "CHANGES_REQUESTED" }), "CHANGES_REQUE
 ok(!pullRequestApproved({ reviewDecision: null }), "null verdict fails closed");
 ok(!pullRequestApproved({}), "missing field fails closed — a PR view that never asked for it is not an approval");
 ok(!pullRequestApproved(undefined), "undefined PR fails closed");
+
+// ── pullRequestReviewBlocked (Mason, 2026-09-02) ─────────────────────────────
+// main no longer requires an approval, so ONLY an active objection blocks a
+// merge. These pin both halves: what still denies, and what deliberately does
+// not — a regression that re-blocked REVIEW_REQUIRED or null would restore the
+// exact deadlock the protection change removed.
+ok(pullRequestReviewBlocked({ reviewDecision: "CHANGES_REQUESTED" }), "CHANGES_REQUESTED blocks the merge");
+ok(pullRequestReviewBlocked({ reviewDecision: "changes_requested" }), "case-insensitive");
+ok(!pullRequestReviewBlocked({ reviewDecision: "APPROVED" }), "APPROVED does not block");
+ok(!pullRequestReviewBlocked({ reviewDecision: "REVIEW_REQUIRED" }), "REVIEW_REQUIRED no longer blocks");
+ok(!pullRequestReviewBlocked({ reviewDecision: null }), "null (no review required) does not block");
+ok(!pullRequestReviewBlocked({}), "missing field does not block — gateRequest already denied an unfetchable PR");
+ok(!pullRequestReviewBlocked(undefined), "undefined PR does not block here");
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
 eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge"), { selector: "12", repo: "o/r", auto: false }, "REST merge endpoint parses");
