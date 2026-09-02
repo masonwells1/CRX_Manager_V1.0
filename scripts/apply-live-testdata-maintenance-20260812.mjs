@@ -141,12 +141,17 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // ParseBool TRUE spellings count as auto, and a merge segment carrying a
   // command substitution is refused as unresolvable rather than gated. Anchors
   // unchanged; the pushLib transform is still identity.
+  // pushLib re-pinned 2026-09-02: Mason removed main's required-approval rule,
+  // so the merge gates stopped denying a missing approval. codex-push-lib gained
+  // pullRequestReviewBlocked (denies CHANGES_REQUESTED only) and reworded the
+  // pullRequestApproved comment. Anchors unchanged; the transform is still
+  // identity.
   codexGuard: "1c921605467e613f820bc3413d5bff255296c4ec",
-  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
+  pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "a9829ef4ae86d6c157c7409981fbf52a44ba7f0a",
-  pushLib: "0bd618133ad64b813454c1e7a308f4b953c0a643",
+  pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
