@@ -726,8 +726,25 @@ async function runGate({ github, context, core, config, attemptState }) {
         core.notice(`CodeRabbit was already requested for ${expectedHeadSha}; duplicate event ignored.`);
         return { status: 'duplicate', headSha: expectedHeadSha };
       }
+      // The marker had no command for THIS head, but the pull request can still
+      // carry a superseded head's command from a run this event replaced. Delete
+      // any Actions-authored command BEFORE clearing the marker — the ordering
+      // resetCandidate uses — or the retry posts a second paid request beside it.
+      const supersededCleanup = await deleteReviewCommands({
+        github, owner, repo, pullNumber, core,
+      });
+      if (!supersededCleanup.verified) {
+        return blockCandidate({
+          github,
+          owner,
+          repo,
+          pullNumber,
+          core,
+          reason: `${supersededCleanup.reason}; the requested marker was preserved so a relabel cannot buy a second review`,
+        });
+      }
       await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
-      core.warning('Cleared a requested marker that had no matching GitHub Actions review command; retrying the gate.');
+      core.warning('Cleared a requested marker and any superseded review command; retrying the gate.');
     } catch (verificationError) {
       return blockCandidate({
         github,
@@ -1420,8 +1437,22 @@ async function run(args) {
     let commandCommentExists = false;
 
     if (attemptState.preexistingCommentIds === null) {
-      // The current attempt cannot have posted a command before its comment snapshot.
-      verificationSucceeded = !attemptState.requestedMarkerPreexisted;
+      // The current attempt cannot have posted a command before its comment
+      // snapshot — but the QUEUED payload is not evidence of that. A ready-label
+      // event can queue behind an earlier run and carry a payload predating that
+      // run's marker; trusting it here clears a marker whose command is live, and
+      // the next relabel buys a second paid review. Metadata and unrelated-label
+      // events already force the conservative value; read the LIVE labels so every
+      // path is accurate, and preserve the marker when that read fails.
+      try {
+        const livePullRequest = (await github.rest.pulls.get({
+          owner, repo, pull_number: pullNumber,
+        })).data;
+        verificationSucceeded = !pullRequestLabelNames(livePullRequest).has(REQUESTED_LABEL);
+      } catch (liveStateError) {
+        core.warning(`Could not read live gate state after an unexpected gate failure: ${liveStateError.message}`);
+        verificationSucceeded = false;
+      }
     } else {
       try {
         const comments = await github.paginate(

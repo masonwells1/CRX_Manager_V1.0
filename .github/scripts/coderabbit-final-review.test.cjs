@@ -518,7 +518,7 @@ test('a stranded requested marker without a matching Actions comment self-heals 
   assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
-  assert.match(harness.notices.join('\n'), /no matching GitHub Actions review command/);
+  assert.match(harness.notices.join('\n'), /any superseded review command/);
 });
 
 test('an unverifiable requested marker stays attached and cannot cause a duplicate paid review', async () => {
@@ -1275,6 +1275,33 @@ test('an ordinary unrelated label event with no gate state is ignored', async ()
   assert.equal(result.reason, 'pull_request_target.unlabeled.unrelated-label.no_gate_state');
 });
 
+test('a stale ready-label payload cannot clear a live dedupe marker', async () => {
+  // Same race as the unrelated-label case above, on the ready-label path: the
+  // queued payload predates the in-flight run's marker. Recovery must read the
+  // LIVE labels, not the payload, or it clears a marker whose command is live.
+  const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    action: 'labeled',
+    eventLabel: READY_LABEL,
+    eventPullRequest: pullRequest({ labels: [] }),
+    pulls: [current],
+    pullFailuresAt: [1],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.comments.length, 1);
+  assert.match(harness.failures[0], /requested marker was preserved/);
+});
+
 test('a stale unrelated-label payload cannot lose dedupe state after the first live read fails', async () => {
   const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
   const harness = makeHarness({
@@ -1966,7 +1993,7 @@ test('ambiguous recovery never mistakes an old-head Actions command for a new wr
   assert.match(harness.failures[0], /marker was cleared/);
 });
 
-test('an old-head marker and command cannot suppress the current-head request', async () => {
+test('an old-head marker and command are deleted, not left beside the current-head request', async () => {
   const harness = makeHarness({
     pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
     existingComments: [{
@@ -1979,9 +2006,11 @@ test('an old-head marker and command cannot suppress the current-head request', 
   const result = await execute(harness);
 
   assert.equal(result.status, 'requested');
+  // The superseded command must be GONE. Leaving it beside the new one spends a
+  // second review out of the paid hourly allowance on one frozen candidate.
   assert.deepEqual(
     harness.comments.map((comment) => comment.body),
-    [reviewCommandBody(NEXT_HEAD), reviewCommandBody(HEAD)],
+    [reviewCommandBody(HEAD)],
   );
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
 });
