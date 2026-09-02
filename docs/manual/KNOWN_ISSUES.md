@@ -240,7 +240,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-08-31 — a command-to-skill migrator wrote 24 corrupted `source-command-*` adapters into six worktrees
+## OPEN 2026-09-02 (writer IDENTIFIED; opened 2026-08-31) — the Codex CLI `/import` writes 24 corrupted `source-command-*` adapters
 
 **Identified 2026-09-01.** Twenty-four untracked directories named
 `.agents/skills/source-command-<name>/SKILL.md` appeared in six worktrees under
@@ -295,6 +295,40 @@ So this is **not a one-off**: it has been running since at least 2026-08-30, the
 corresponds to the same morning as the stash, and it reproduces wherever the Codex CLI operates on
 this repo. Expect it to recur until whatever invokes it is identified — deleting the copies without
 finding the trigger will just defer it.
+
+**IDENTIFIED 2026-09-02: it is the Codex CLI's "Import from other apps" feature (`/import`).** The
+sweep's conclusion above was right — no generator script exists, because the generator is compiled
+into `codex.exe`. Evidence:
+
+- The artifacts' exact template literals are inside the binary
+  (`…/@openai/codex/…/bin/codex.exe`): `Migrated source command \`` and `Use this skill when the
+  user asks to run the migrated source command \``.
+- Its module paths appear in the binary's own trace strings:
+  `core-plugins\src\command_migration\render.rs`, `external-agent-migration\src\source_cla.rs`
+  (cla = Claude), `source_cur.rs` (Cursor), `tui\src\external_agent_config_migration\flow.rs`,
+  `app-server\src\external_agent_migration\processor.rs`. The source enum it selects from is the
+  literal string `claude-codeClaude CodeCursor`.
+- **A third run, timed to the second.** The 24 directories in `C:/CRX_Manager/.agents/skills/` carry
+  `SKILL.md` timestamps of `2026-09-02 01:38:50` (~13ms apart — one process, one burst), and
+  `C:/Users/mason/.codex/external_agent_session_imports.json` was last written at
+  `2026-09-02 01:38`. That ledger's records reference `C:\Users\mason\.claude\projects\…\*.jsonl`,
+  so the feature was reading the Claude Code configuration at that instant.
+- Durable state confirms a first-class feature rather than a stray one-shot: the SQLite table
+  `external_agent_config_imports`, the JSON session ledger above, and telemetry events
+  `codex.external_agent_config.detect` / `.import` and
+  `codex_onboarding_external_agent_import_complete`.
+
+**No off-switch exists.** The binary was searched for a disabling configuration key
+(`skip_external_agent*`, `disable_external_agent*`, `*import*enabled/disabled/skip`); there is none.
+The trigger cannot be turned off from our side, so any durable fix must be ours.
+
+**Severity has increased since this entry was first written: it now BLOCKS COMMITS.**
+`sync-agent-workflows.mjs --check` rejects all 24 as "not generated from `.claude`", failing the
+pre-commit workflow-parity gate. Verified live 2026-09-02 — the check fails in `C:/CRX_Manager`, so
+every commit in the main checkout is blocked while the directories are present. **`.gitignore` does
+not help:** the checker walks the filesystem via `readdirSync`, not the git index. The candidate fix
+is therefore to make the parity checker treat `source-command-*` as foreign and ignore it, as its own
+reviewed change.
 
 **Status:** quarantined (NOT deleted) out of
 `.claude/worktrees/permission-grants-claude-codex-9f7108` to the session scratchpad; still present
@@ -399,6 +433,94 @@ COMMENTS overclaim, and its failure mode is a missed annotation, not a bypassed 
    or reworded with no annotation while `test:correction-guards` stays green. Fix shape: an explicit
    manifest of guard/check runners, or a documented recursive scope. Expect a large one-time baseline
    growth when this lands; do that as its own reviewed change, not as a rider.
+
+## OPEN 2026-09-02 — three executor bypasses of `review-proof-guard`, all PRE-EXISTING on `main`
+
+Reported by the Codex connector on PR #530 and **not fixed there.** All three are the same shape as
+the four that PR closes, and all three are **already open on `main` today** — no diff in #530 causes
+them. They are recorded here as pre-existing known-open, not as a regression.
+
+Measured 2026-09-02 by running each shape through both trees' hooks, with must-DENY regression
+canaries and must-ALLOW false-positive canaries (0 crashes, 0 false positives, 5/5 canaries correct):
+
+```
+                                          main     PR530 head
+node -r / --require / --import / --loader ALLOW    ALLOW     open on BOTH
+node -pe  (bundled eval form)             ALLOW    ALLOW     open on BOTH
+export GIT_EXTERNAL_DIFF=…; git diff --   ALLOW    ALLOW     open on BOTH
+export GIT_PAGER=…; git log --            ALLOW    ALLOW     open on BOTH
+gh release download --clobber -D <dir>    ALLOW    ALLOW     open on BOTH
+rg --pre                                  ALLOW    DENY      #530 closes
+doubled separator (.github//workflows/…)  ALLOW    DENY      #530 closes
+git grep --open-files-in-pager            ALLOW    DENY      #530 closes
+git -c diff.external … --ext-diff         ALLOW    DENY      #530 closes
+```
+
+1. **Node preload and bundled-eval flags.** `enforcementSegmentIsReadOnly()` rejects `node`'s eval
+   forms (`-e`, `-p`, `--eval`, `--print`, `--input-type`) but not its **module-preload** forms.
+   `node -r ./payload.cjs .husky/pre-push` runs the preloaded module before the entrypoint, so that
+   module can rewrite or delete the named hook. `--require`, `--import` and `--loader` are the same
+   channel. Separately, the eval regex applies `\b` after `-p`, so the bundled `-pe` spelling does
+   not match it either.
+
+2. **Git executor environment variables.** The guard rejects the `-c` / `--config-env` channel and
+   `--ext-diff` / `--open-files-in-pager`, but git also takes its executor from the environment.
+   `export GIT_EXTERNAL_DIFF=<cmd>; git diff -- <guarded>` passes because the `export` segment names
+   no protected path and the following `git diff` is allowlisted. `GIT_PAGER` is the same shape. The
+   **inline** (`GIT_EXTERNAL_DIFF=… git diff …`) and `env`-prefixed forms are correctly denied — it is
+   specifically the separate-`export`-segment form that slips.
+
+3. **`gh` is treated as wholly read-only.** `gh release download … --clobber -D .github/workflows`
+   writes a downloaded asset over a protected path. No `gh` subcommand or output-flag validation
+   exists.
+
+**Why these are not being fixed.** With these three, that is **seven** distinct bypasses of one
+shape — an allowlisted *reader* that accepts a flag naming a *command* to execute (`rg --pre`,
+`git -c`, `git grep -O`, `git --ext-diff`, `node -r`, `GIT_EXTERNAL_DIFF`, `gh -D`). That is one
+design being patched by spelling, and each round has found another. Mason capped adversarial
+iteration on this file at six commissioned rounds (`DECISION_LOG.md`, 2026-09-01) for exactly this
+reason, and the file's own comments already call enumerating them "the blocklist mistake this file
+has already made twice." **Do not open round seven on this PR.** `DECISION_LOG.md` records the real
+gate as the `ask` permission tier, with this hook a speed bump rather than a boundary; under that
+framing these residuals are not load-bearing.
+
+## OPEN 2026-09-02 — `review-proof-guard` fails OPEN, and SILENTLY, when it cannot parse its own input
+
+`review-proof-guard.mjs` begins:
+
+```js
+let payload;
+try { payload = JSON.parse(readFileSync(0, "utf8")); }
+catch { process.exit(0); }   // exit 0 with no output == ALLOW
+```
+
+Verified 2026-09-02 against both trees with a well-formed must-DENY baseline as the canary: malformed
+JSON, empty stdin, truncated JSON, a bare array and a `null` payload all return ALLOW on `main` and on
+PR #530 alike. **Pre-existing and identical on both; #530 does not introduce it.** The baseline row is
+what makes the result readable — without it, "correctly denies malformed input" and "broken in the
+same way as main" both render as a column of ALLOWs.
+
+**This is deliberately NOT being fixed, and the reason must survive.** The obvious change is
+`catch { deny(...) }`. This hook is registered under `matcher: "*"`, so it sees every tool call in the
+session — making it deny on unparseable input turns any single stdin hiccup (an EAGAIN on Windows, an
+oversized payload, a pipe glitch) into a session-wide lockout. That is precisely what killed
+`guarded-surface-lock` (see the RESOLVED 2026-09-01 entry): a universal-matcher guard became a single
+point of failure where a runtime error denied every tool call. **Fail-closed on a universal-matcher
+hook trades a low-reachability permit for a total-lockout risk.** Reachability here is low — an agent
+cannot readily control whether the harness emits valid JSON.
+
+**The cheap improvement someone can make later**, which carries none of that risk: make the fail-open
+**loud** rather than silent. `catch { process.exit(0) }` permits *and says nothing*, so a guard that
+has stopped functioning is indistinguishable from a guard finding nothing wrong. Writing a warning to
+stderr before exiting 0 costs no availability and no lockout risk, and converts a silent fail-open
+into a visible one.
+
+**The in-repo precedent for the correct shape** is in `codex-push-lib.mjs`: `proofSearchDirs()` and
+`resolveSessionWorktree()` both fall back to the *narrower* set when worktree enumeration fails, and
+both say in a comment which direction they fell — losing the widening makes the gate stricter, never
+laxer. The rule those two follow: **when you cannot determine, fall toward the more restrictive
+answer, and record which way you fell.** The `matcher: "*"` case above is a deliberate exception to
+that rule, not an inconsistency with it.
 
 ## OPEN 2026-09-01 — three migration-apply protections live only on a closed PR's branch, not on `main`
 
