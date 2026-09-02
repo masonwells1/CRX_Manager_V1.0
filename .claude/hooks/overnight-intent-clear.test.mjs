@@ -127,10 +127,24 @@ function denialsFor(command) {
     if (res.status !== 0) {
       throw new Error(`hook ${name} exited ${res.status} — a crashed hook must not read as "allowed"\n${res.stderr || ""}`);
     }
+    // EMPTY stdout is the legitimate "I defer to the normal permission flow"
+    // answer — most hooks exit 0 saying nothing. But stdout that is non-empty and
+    // UNPARSEABLE is a malformed answer, and swallowing it scored the hook as
+    // "allowed" (Codex gpt-5.6-sol review, 2026-09-01 — the third instance of this
+    // false-green class in this one file). Only silence may mean "no decision".
+    const stdout = String(res.stdout ?? "").trim();
     let decision = null;
-    try {
-      decision = JSON.parse(res.stdout || "{}")?.hookSpecificOutput?.permissionDecision ?? null;
-    } catch { /* non-JSON stdout means no decision */ }
+    if (stdout !== "") {
+      let parsed;
+      try {
+        parsed = JSON.parse(stdout);
+      } catch {
+        throw new Error(
+          `hook ${name} emitted unparseable output — a malformed answer must not read as "allowed":\n${stdout.slice(0, 500)}`
+        );
+      }
+      decision = parsed?.hookSpecificOutput?.permissionDecision ?? null;
+    }
     if (decision === "deny") denied.push(name);
   }
   return denied;
