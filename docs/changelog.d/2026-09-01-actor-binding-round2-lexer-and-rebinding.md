@@ -85,6 +85,24 @@ stamped into an actor column right after a correctly proven guard on a sibling
 actor parameter. Closing that needs real dataflow over the write targets, not a
 wider name regex.
 
+**The reader is a regex reader, not a parser, so the dataflow limits below are
+structural and will not be closed by another pattern.** Naming them here so no
+future session re-derives them or credits the guard with coverage it lacks:
+
+- `EXECUTE … USING` — the actor reaches the statement as a bound parameter, not
+  as text the reader can follow into a sink.
+- `INSERT … RETURNING … INTO` — the actor round-trips through a returned column
+  into a local, which the taint model does not track.
+- Temporary tables — the actor is stashed in one statement and read back in
+  another, so no single-statement pattern spans it.
+
+The **post-apply sweep predicates do not compensate for any of these**: both
+select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a
+binding check and then launders the actor is excluded outright, and a temp-table
+round trip matches neither predicate's sink test. The controls that stand here
+are the exact-SHA Codex proof on the migration diff and the CodeRabbit final
+review — see the 2026-09-01 cap entry in `docs/manual/DECISION_LOG.md`.
+
 ## Evidence
 
 87 adversarial probe payloads across four batches, run against the real hook.
