@@ -1242,7 +1242,13 @@ describe('QuoteBuilder', () => {
     renderQuoteBuilder(quote.id);
     fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Email to Grower' }));
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to email the quote'));
+    // ASSERTION DELIBERATELY CHANGED (H5 follow-up). This waited on the canned
+    // literal 'Failed to email the quote', which only appeared because the
+    // create_quote_version failure — a PLAIN OBJECT from a non-throwing rpc, so
+    // `err instanceof Error` was false — had its real message discarded. The
+    // subject of this test is the cached post token, not the toast text; it now
+    // waits on the reason the server actually gave.
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'network response lost'));
     expect(mockSendEmail).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));

@@ -2611,7 +2611,7 @@ export default function JobDetail() {
         toast('error', "Each field's customer shares must total 100%.");
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_job' } });
-        toast('error', err instanceof Error ? err.message : 'Failed to save job');
+        toast('error', sanitizeError(err));
       }
     }
     setSaving(false);
@@ -2635,7 +2635,7 @@ export default function JobDetail() {
       await fetchJob();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'start_job' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to start job');
+      toast('error', sanitizeError(err));
     }
     setStarting(false);
   };
@@ -2706,7 +2706,7 @@ export default function JobDetail() {
       await fetchJob();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'cancel_job' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to cancel job');
+      toast('error', sanitizeError(err));
     }
     setCancelling(false);
   };
@@ -2746,7 +2746,7 @@ export default function JobDetail() {
       } else if (hasRpcCode(err, RpcErrorCodes.SPLIT_NO_ACRES)) {
         toast('error', 'This multi-owner job has no billable acres to split. Enter acres to treat on its fields, then transfer again.');
       } else {
-        toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
+        toast('error', sanitizeError(err));
       }
     }
     setTransferring(false);
@@ -2810,7 +2810,7 @@ export default function JobDetail() {
       setShowRecipeModal(false);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_recipe_into_job' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to load recipe');
+      toast('error', sanitizeError(err));
     }
     setLoadingRecipe(false);
   };
@@ -2908,7 +2908,7 @@ export default function JobDetail() {
       setNewRecipeName('');
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_blend_recipe' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to save recipe');
+      toast('error', sanitizeError(err));
     }
     setSavingRecipe(false);
   };

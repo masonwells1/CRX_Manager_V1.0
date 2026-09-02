@@ -100,7 +100,15 @@ function chainable(resolveWith: unknown) {
   return builder;
 }
 
-vi.mock('../lib/db', () => {
+vi.mock('../lib/db', async () => {
+  // Use the REAL sanitizeError. Stubbing it as `e instanceof Error ? e.message : …`
+  // would re-implement the very defect these screens were just fixed for: a
+  // non-throwing postgrest call resolves its error as a PLAIN OBJECT, so an
+  // `instanceof Error` stub silently reproduces the swallowed-message bug and the
+  // test would pass against a regressed product.
+  const { sanitizeError } = await vi.importActual<typeof import('../lib/errorSanitizer')>(
+    '../lib/errorSanitizer',
+  );
   const supabase = {
     from: vi.fn((table: string) => chainable(
       table === 'products'
@@ -117,6 +125,7 @@ vi.mock('../lib/db', () => {
     supabaseUntyped: supabase,
     assertRpcResult: vi.fn((value: unknown) => value),
     checkMutationResult: vi.fn(),
+    sanitizeError,
   };
 });
 
