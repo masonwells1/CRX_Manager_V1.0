@@ -150,11 +150,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // gate was migrated off pullRequestApproved onto pullRequestReviewBlocked so it
   // matches the Claude side after main's required review was removed. The
   // objection check is deliberately NOT exempt for --auto (Codex High, same run).
-  codexGuard: "1ab6e5581947ea72b8b1f7ff67c090789cb25c43",
+  // codexGuard re-pinned again 2026-09-02 (PR #560, CodeRabbit): the guard now
+  // IMPORTS pullRequestReviewBlocked from .claude/hooks/codex-push-lib.mjs
+  // instead of mirroring it locally. Mirroring is what let the two sides drift.
+  codexGuard: "0fd170d5b972a2b5fc660136949df1bb48917f43",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "9a12789243afa46978e3446ed8b0abda6b70f300",
+  codexGuard: "4ce9ecd68f006392df3291f1b0c3df40c8e5add3",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

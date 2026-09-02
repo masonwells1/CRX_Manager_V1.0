@@ -13,6 +13,7 @@ import {
   mainPushSource,
   proofSearchDirs,
   proofValid,
+  pullRequestReviewBlocked,
   pushContextIsAmbiguous,
   pushIsForced,
   pushTargetsCurrentHead,
@@ -609,17 +610,6 @@ function resolvePullRequest({ request, repoDir, runGh }) {
 // headRefOid. Mirrors pullRequestApproved() in .claude/hooks/codex-push-lib.mjs.
 export function pullRequestApproved(pullRequest) {
   return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
-}
-
-// The merge-blocking half of the review verdict (Mason, 2026-09-02). Mirrors
-// pullRequestReviewBlocked() in .claude/hooks/codex-push-lib.mjs — the two gates
-// must not drift, and this side was left behind in the first cut (Codex Medium,
-// found on PR #559). main no longer requires an approving review, so a MISSING
-// approval no longer blocks. An ACTIVE objection still does, and unlike every
-// other gate here it is NOT exempt for auto-merge: the server-side requirement
-// that used to hold a queued auto-merge was the required review itself.
-export function pullRequestReviewBlocked(pullRequest) {
-  return String(pullRequest?.reviewDecision || "").toUpperCase() === "CHANGES_REQUESTED";
 }
 
 export function pullRequestChecksGreen(pullRequest) {
