@@ -273,7 +273,11 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toContain("waitForSessionLock('same-key-second-close'");
     expect(proof).not.toContain('await waiting(');
     expect(proof).not.toContain('pause(500)');
-    expect(proof.match(/pg_sleep\(\$\{BARRIER_SECONDS\}\)/g)).toHaveLength(15);
+    expect(proof.match(/pg_sleep\(\$\{BARRIER_SECONDS\}\)/g)).toHaveLength(16);
+    expect(proof).toContain('CANDIDATE_SECTION9_CUTOVER_DRAINS_LEGACY_WRITER_PASS');
+    expect(proof).toContain('CANDIDATE_SECTION9_LATE_OLD_BODY_ROLLBACK_PASS');
+    expect(proof).toContain("waitForSessionLock('section9-cutover-migration'");
+    expect(proof).toContain('SECTION9_UNBOUND_IDEMPOTENCY_RECEIPT');
     for (const marker of [
       'CANDIDATE_AP_RECORD_PAYMENT_WRITER_FIRST_CLOSE_WAITS_PASS',
       'CANDIDATE_AP_RECORD_PAYMENT_CLOSE_FIRST_FAIL_CLOSED_PASS',
@@ -294,6 +298,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(section9.chain).toBe('smoke-section9-po-ap-high-remediation.sql');
     expect(section9.covers).toEqual(expect.arrayContaining([
       'create_vendor_bill',
+      'get_ap_dashboard_summary',
       'update_vendor_bill',
       'close_accounting_period',
       'check_period_open',

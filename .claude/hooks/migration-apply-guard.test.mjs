@@ -136,6 +136,45 @@ function writeAppliedSnapshot(stateDir, { applied = ["20260808150400_round_money
     applied,
   }));
 }
+// The source-provenance rule refuses SQL that is not the content of a file under
+// <checkout>/supabase/migrations/. Every real apply has that file, so a fixture
+// that means to exercise a LATER check must supply it — otherwise provenance
+// short-circuits first and the assertion passes for the wrong reason.
+function writeMigrationFile(root, name, sql) {
+  const dir = path.join(root, "supabase", "migrations");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, `${name}.sql`), sql);
+}
+// The pending-set preflight (2026-08-26) asks the question the ordering check
+// never did: is an OLDER tracked migration still waiting? It reads the schema
+// baseline for its floor and origin/main for the tracked set, and refuses when it
+// cannot read either. Both are real files/refs — the hook is a subprocess, so
+// there is nothing to inject — and every fixture that expects to reach the proof
+// gate has to supply them. hermeticEnv() keeps `git init` off the real repository.
+function makePendingSetInputs(root) {
+  mkdirSync(path.join(root, "supabase", "baselines"), { recursive: true });
+  writeFileSync(
+    path.join(root, "supabase", "baselines", "manifest.json"),
+    JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }));
+  mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+  writeFileSync(path.join(root, "supabase", "migrations", `${MIG}.sql`), BENIGN_SQL);
+  const git = (...args) => spawnSync("git", [
+    "-c", "user.name=fixture",
+    "-c", "user.email=fixture@example.invalid",
+    "-c", "commit.gpgsign=false",
+    "-c", "core.hooksPath=",
+    "-C", root, ...args,
+  ], { encoding: "utf8", env: hermeticEnv() });
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-q", "-m", "fixture");
+  const ref = git("update-ref", "refs/remotes/origin/main", "HEAD");
+  ok(ref.status === 0, `fixture origin/main is created (git said: ${ref.stderr})`);
+  // The freshness gate reads FETCH_HEAD's mtime. `git init` never writes one, so
+  // without this the fixture looks like a checkout that has never fetched — which
+  // the guard correctly refuses. This stands in for a just-completed fetch.
+  writeFileSync(path.join(root, ".git", "FETCH_HEAD"), "fixture\n");
+}
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
     expires: new Date(Date.now() + hoursFromNow * 3600_000).toISOString(),
@@ -146,6 +185,12 @@ function armAutopilot(stateDir, hoursFromNow) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-"));
   const stateDir = path.join(tmp, ".claude", "session-state");
   mkdirSync(stateDir, { recursive: true });
+  // Both: the pending-set inputs (baseline manifest + origin/main + FETCH_HEAD) and
+  // the migration file source provenance requires. makePendingSetInputs already
+  // writes the file, but the explicit call keeps the provenance precondition visible
+  // at the fixture site rather than depending on a side effect of the other helper.
+  makePendingSetInputs(tmp);
+  writeMigrationFile(tmp, MIG, BENIGN_SQL);
   try {
     const call = (query, projectId = CRX_PROJECT) => ({
       tool_name: "mcp__supabase__apply_migration",
@@ -224,8 +269,17 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeProof(stateDir, BENIGN_SQL);
 
     // 3. Proof whose queryHash doesn't match the transmitted SQL → deny.
-    r = runHook(call(BENIGN_SQL + " -- edited after review"), tmp);
+    //    The migration FILE is edited too, which is what really happens: someone
+    //    changes the migration after review and re-applies without re-minting.
+    //    Writing the edit to disk keeps source provenance satisfied, so the deny
+    //    has to come from content binding — the check this case is about.
+    const EDITED_SQL = BENIGN_SQL + " -- edited after review";
+    writeMigrationFile(tmp, MIG, EDITED_SQL);
+    r = runHook(call(EDITED_SQL), tmp);
     ok(isDeny(r), "edited-after-review SQL (hash mismatch) → denied");
+    ok(!/MIGRATION SOURCE GUARD/.test(r.stdout),
+      "the edited-after-review deny is content binding, not source provenance short-circuiting it");
+    writeMigrationFile(tmp, MIG, BENIGN_SQL);
 
     // 3b. FUTURE-dated reviewer proof → deny (Codex R5 P2: a negative age
     //     must not count as fresh — it would stay "valid" for years).
@@ -236,6 +290,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 4. No flag file at all + destructive + valid proof → allowed (Mason is
     //    present; his in-chat OK is the gate — prose, the hook doesn't block).
     writeProof(stateDir, DESTRUCTIVE_SQL);
+    writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(!isDeny(r), "interactive session (no autopilot flag): destructive migration with proof is not hook-blocked");
 
@@ -249,6 +304,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 6. ARMED + benign + reviewer proof but NO Codex proof file → DENIED
     //    (the second-model gate must prove it actually ran).
     writeProof(stateDir, BENIGN_SQL);
+    writeMigrationFile(tmp, MIG, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "ARMED run: no Codex proof file → denied — the Codex gate is enforced");
     ok(/codex/i.test(r.stdout), "deny message names the Codex gate");
@@ -332,15 +388,27 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 7. EXPIRED arm flag + destructive + proof → STILL DENIED (Codex R2 P1:
     //    a run that outlives its arming window fails CLOSED — the flag file
     //    existing at all means hands-free context until explicitly disarmed).
+    //    The migration FILE must hold the destructive SQL too. Codex caught this
+    //    (2026-08-31, exact-SHA review of f498c473): with the file still holding
+    //    BENIGN_SQL, source provenance refused on content-mismatch BEFORE the
+    //    autopilot rule was ever reached — so both cases below passed for the
+    //    wrong reason and would have stayed green through an autopilot
+    //    regression. The deny reason is now asserted, not just the deny.
     armAutopilot(stateDir, -1);
+    writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     writeProof(stateDir, DESTRUCTIVE_SQL, { codexVerdict: "clean" });
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(isDeny(r), "EXPIRED autopilot flag: destructive apply still denied (fail closed)");
+    ok(/LAPSED/i.test(r.stdout),
+      "the EXPIRED-flag deny is the lapsed-authorization rule, not provenance short-circuiting it");
 
     // 7b. MALFORMED flag file → same fail-closed treatment.
     writeFileSync(path.join(stateDir, "AUTOPILOT.on"), "not json at all");
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(isDeny(r), "malformed autopilot flag: destructive apply denied (fail closed)");
+    ok(/LAPSED/i.test(r.stdout),
+      "the malformed-flag deny is also the lapsed-authorization rule");
+    writeMigrationFile(tmp, MIG, BENIGN_SQL);
 
     // 7b2. STALE flag blocks BENIGN applies too, even with a fully-bound proof
     //      (Codex R3 P1: a lapsed authorization must not keep authorizing).
@@ -353,12 +421,68 @@ function armAutopilot(stateDir, hoursFromNow) {
     //     interactive rules return.
     rmSync(path.join(stateDir, "AUTOPILOT.on"));
     writeProof(stateDir, DESTRUCTIVE_SQL);
+    writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(!isDeny(r), "flag deleted by explicit disarm → interactive rules apply again");
+    writeMigrationFile(tmp, MIG, BENIGN_SQL);
 
     // 8. Non-apply_migration tool → instant allow, no interference.
     r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "DROP TABLE customers;" } }, tmp);
     ok(!isDeny(r), "other tools pass through untouched");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── EVERY MCP apply spelling routes through the same gate ───────────────────
+// .claude/settings.json permits apply_migration under three distinct MCP server
+// names, and the hook is registered once against matcher "mcp__.*", filtering
+// in-script on a tool name CONTAINING "apply_migration". That is what makes the
+// three spellings equivalent — so it is asserted, not assumed. A per-spelling
+// registration would be the thing that lets one door drift open; if a fourth
+// server name is ever added to settings.json, it is covered automatically and
+// this case is what proves the mechanism still holds.
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-aliases-"));
+  const stateDir = path.join(tmp, ".claude", "session-state");
+  mkdirSync(stateDir, { recursive: true });
+  try {
+    writeAppliedSnapshot(stateDir);
+    // Deliberately NO migration file on disk: source provenance is the check
+    // being exercised through each spelling.
+    const PARKED = "CREATE TABLE public.parked_thing (id bigint primary key);";
+    writeProof(stateDir, PARKED);
+
+    const SPELLINGS = [
+      "mcp__supabase__apply_migration",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__apply_migration",
+    ];
+    for (const tool_name of SPELLINGS) {
+      const r = runHook({
+        tool_name,
+        tool_input: { project_id: CRX_PROJECT, name: MIG, query: PARKED },
+      }, tmp);
+      ok(isDeny(r), `${tool_name}: SQL with no repository migration file is denied`);
+      ok(/MIGRATION SOURCE GUARD/.test(r.stdout),
+        `${tool_name}: the denial is the source-provenance rule, identically to every other spelling`);
+    }
+
+    // The mirror: with the file present, every spelling reaches allow. Without
+    // this, a hook that denied everything would satisfy the loop above.
+    //
+    // The pending-set inputs are created HERE rather than at the top of the fixture:
+    // makePendingSetInputs writes a migration file, which would have satisfied source
+    // provenance and gutted the deny loop above. Order matters, so it is explicit.
+    makePendingSetInputs(tmp);
+    writeMigrationFile(tmp, MIG, PARKED);
+    for (const tool_name of SPELLINGS) {
+      const r = runHook({
+        tool_name,
+        tool_input: { project_id: CRX_PROJECT, name: MIG, query: PARKED },
+      }, tmp);
+      ok(!isDeny(r), `${tool_name}: a genuine repository migration is allowed through the same gate`);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -390,8 +514,21 @@ function armAutopilot(stateDir, hoursFromNow) {
     git(["config", "user.email", "test@example.com"], primary);
     git(["config", "user.name", "test"], primary);
     writeFileSync(path.join(primary, "seed.txt"), "seed\n");
-    git(["add", "seed.txt"], primary);
+    // The pending-set preflight reads the schema baseline and origin/main from
+    // CLAUDE_PROJECT_DIR, which stays pinned to `primary` throughout. Seed both
+    // there, or it blocks before the proof-scoping behaviour under test is reached.
+    mkdirSync(path.join(primary, "supabase", "baselines"), { recursive: true });
+    writeFileSync(
+      path.join(primary, "supabase", "baselines", "manifest.json"),
+      JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }));
+    mkdirSync(path.join(primary, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(primary, "supabase", "migrations", `${MIG}.sql`), BENIGN_SQL);
+    git(["add", "-A"], primary);
     git(["commit", "-qm", "seed"], primary);
+    const originRef = git(["update-ref", "refs/remotes/origin/main", "HEAD"], primary);
+    ok(originRef.status === 0, `fixture origin/main is created (git said: ${originRef.stderr})`);
+    // Stands in for a just-completed fetch; see makePendingSetInputs.
+    writeFileSync(path.join(primary, ".git", "FETCH_HEAD"), "fixture\n");
     const added = git(["worktree", "add", "-q", "-b", "wt", linked], primary);
     // Asserted, never skipped. An `if (added.status === 0)` guard here would let
     // the whole worktree regression disappear silently the day `git worktree add`
@@ -412,6 +549,13 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeAppliedSnapshot(path.join(primary, ".claude", "session-state"));
     // Proof exists ONLY in the linked worktree; the primary has none.
     writeProof(linkedState, BENIGN_SQL);
+    // The migration file exists in BOTH checkouts on purpose. Source provenance is
+    // satisfied either way, so the ONLY thing that can differ between the calls
+    // below is where the PROOF was minted — which is the behaviour under test.
+    // Seeding it in just one checkout would make a proof-scoping assertion pass on
+    // a provenance refusal instead.
+    writeMigrationFile(primary, MIG, BENIGN_SQL);
+    writeMigrationFile(linked, MIG, BENIGN_SQL);
     // CLAUDE_PROJECT_DIR stays pinned to `primary` in every call below — that is
     // what the real harness does. Only the session's reported cwd varies, which
     // is the whole behaviour under test.
@@ -447,11 +591,33 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isDeny(r), "a worktree nested inside the primary checkout resolves to itself, not to its parent");
     git(["worktree", "remove", "--force", nested], primary);
 
-    r = runHook(callFrom(linked, BENIGN_SQL + " -- edited after review"), primary);
+    // Both cases below must SEED THE MIGRATION FILE, or source provenance refuses
+    // first and neither test exercises the check it names. Codex caught this
+    // (minor, exact-SHA review of b7ac7a8f) — the second time in this PR that a
+    // newly-inserted early gate quietly disarmed downstream tests, which is why
+    // each one now asserts its intended denial REASON rather than just a denial.
+    const EDITED = BENIGN_SQL + " -- edited after review";
+    writeMigrationFile(linked, MIG, EDITED);
+    r = runHook(callFrom(linked, EDITED), primary);
     ok(isDeny(r), "the session's own worktree proof does NOT excuse a queryHash mismatch — content binding survives");
+    ok(r.stdout.includes("without subagent review proof"),
+      "the queryHash mismatch is refused by the proof gate, not by provenance short-circuiting it");
+    writeMigrationFile(linked, MIG, BENIGN_SQL);
 
-    r = runHook(callFrom(linked, BENIGN_SQL, "20990101000001_other_mig"), primary);
+    // MIG must read as APPLIED before this sub-case, or the merged pending-set guard
+    // legitimately refuses first: applying a 2099-dated migration while a tracked
+    // 2026 one is still unapplied would strand it. That is correct behaviour, but it
+    // is not the rule under test here — the third distinct gate to shadow these
+    // assertions, which is why each pins its reason.
+    const OTHER = "20990101000001_other_mig";
+    for (const s of [linkedState, path.join(primary, ".claude", "session-state")]) {
+      writeAppliedSnapshot(s, { applied: ["20260808150400_round_money_to_whole_cents", MIG] });
+    }
+    writeMigrationFile(linked, OTHER, BENIGN_SQL);
+    r = runHook(callFrom(linked, BENIGN_SQL, OTHER), primary);
     ok(isDeny(r), "the session's own worktree proof does NOT cover a different migration name");
+    ok(r.stdout.includes("without subagent review proof"),
+      "the wrong-name case is refused by the proof gate, not by provenance or the pending-set guard");
 
     // AUTOPILOT.on is narrower still — pinned to the primary checkout even when
     // the session's proofs are read from its worktree. It is authorization state
@@ -500,6 +666,11 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied"] });
 
     const attempt = (name) => {
+      // A real repository migration file under this exact name, so source
+      // provenance is satisfied and cannot mask the check under test. This is also
+      // the honest version of the attack: renaming the FILE is what a caller would
+      // actually do to defeat the ordering comparison.
+      writeMigrationFile(tmp, name, BENIGN_SQL);
       // A full, valid, hash-matching review proof for this exact name — so the
       // ONLY thing that can stop the apply is the ordering guard.
       writeFileSync(path.join(stateDir, `migration-review-${name}.json`), JSON.stringify({

@@ -69,7 +69,7 @@ These patterns avoid the drift the 2026-05-07 final-wave-review surfaced (3 coex
 
 **Error tokens (machine-readable):**
 - SQL raises `'TOKEN'` or `'TOKEN: human readable suffix'` — short SCREAMING_SNAKE codes, never freeform English-only messages.
-- Register every new token in the `RpcErrorCodes` const in [src/lib/db.ts](src/lib/db.ts). The `as const` + `RpcErrorCode` indexed-access type makes typos at callsites a compile error.
+- Register every new token in the `RpcErrorCodes` const in [src/lib/db.ts](../../src/lib/db.ts). The `as const` + `RpcErrorCode` indexed-access type makes typos at callsites a compile error.
 - TS callers detect with `hasRpcCode(err, RpcErrorCodes.X)` — NEVER `message.includes('TOKEN')` (substring matching false-positives if the token text appears in a user-supplied note).
 
 **Idempotency (helper-function pattern preferred):**
