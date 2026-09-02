@@ -41,6 +41,26 @@ outright.
 Tests: `.claude/hooks/pr-merge-guard.test.mjs`, 95 assertions, mutation-tested (neutering
 `pullRequestReviewBlocked` turns the suite red).
 
+## Codex review findings on this PR, both fixed
+
+The exact-SHA `gpt-5.6-sol` gate returned BLOCKED on the first candidate. Both findings were real.
+
+**High — `--auto` bypassed the objection check.** The first cut kept the inherited
+`!request.auto &&` guard on the `CHANGES_REQUESTED` denial. That exemption was only ever sound
+because GitHub held a queued auto-merge until its requirements were met — and the requirement
+covering this one was main's required review, which *this same change removes*. With no required
+review, GitHub completes a queued auto-merge over `CHANGES_REQUESTED`. The commit that removed the
+server-side floor would have opened the hole. The denial is now unconditional, pinned by a
+source-level assertion (Claude side) and a wired `--auto` case (Codex side), and mutation-tested:
+re-adding the exemption turns the suite red.
+
+**Medium — the Codex-side gate was not migrated.** `.codex/hooks/production-action-guard.mjs` still
+required `APPROVED` while the docs claimed both gates had moved. It now mirrors
+`pullRequestReviewBlocked`, and its tests were updated: a missing approval no longer blocks, an
+objection still does, and the MCP merge route is proven against an objection rather than an
+approval. `codexGuard` protected-source blobs re-pinned (non-identity transform, output taken from
+the producer's printed candidate).
+
 ## The protection API lies about this — verify behaviourally
 
 `DELETE .../branches/main/protection/required_pull_request_reviews` returns `204 No Content` and
