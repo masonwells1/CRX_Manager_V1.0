@@ -12,7 +12,7 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { sanitizeError, supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { parseLocalDate } from '../lib/dateUtils';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -436,7 +436,7 @@ export default function TeamBoard() {
         fetchNotes();
       } catch (err: unknown) {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'update_team_note' } });
-        toast('error', err instanceof Error ? err.message : 'Failed to update note');
+        toast('error', sanitizeError(err));
       }
     } else {
       const noteResult = await supabase.from('team_notes').insert({
@@ -485,7 +485,7 @@ export default function TeamBoard() {
       fetchNotes();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'delete_team_note' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to delete note');
+      toast('error', sanitizeError(err));
     }
     setDeleteConfirmId(null);
   };
@@ -531,7 +531,7 @@ export default function TeamBoard() {
       } else if (hasRpcCode(err, RpcErrorCodes.PROFILE_INACTIVE)) {
         toast('error', 'Your account is inactive. Ask an admin to reactivate it before completing tasks.');
       } else {
-        toast('error', err instanceof Error ? err.message : 'Failed to update note');
+        toast('error', sanitizeError(err));
       }
     } finally {
       setCompletingNote(null);
@@ -549,7 +549,7 @@ export default function TeamBoard() {
       fetchNotes();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'toggle_note_pin' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to update note');
+      toast('error', sanitizeError(err));
     }
   };
 

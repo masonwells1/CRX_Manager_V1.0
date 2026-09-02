@@ -100,7 +100,15 @@ function chainable(resolveWith: unknown) {
   return builder;
 }
 
-vi.mock('../lib/db', () => {
+vi.mock('../lib/db', async () => {
+  // Use the REAL sanitizeError. Stubbing it as `e instanceof Error ? e.message : …`
+  // would re-implement the very defect these screens were just fixed for: a
+  // non-throwing postgrest call resolves its error as a PLAIN OBJECT, so an
+  // `instanceof Error` stub silently reproduces the swallowed-message bug and the
+  // test would pass against a regressed product.
+  const { sanitizeError } = await vi.importActual<typeof import('../lib/errorSanitizer')>(
+    '../lib/errorSanitizer',
+  );
   const supabase = {
     from: vi.fn((table: string) => chainable(
       table === 'products'
@@ -116,7 +124,15 @@ vi.mock('../lib/db', () => {
     supabase,
     supabaseUntyped: supabase,
     assertRpcResult: vi.fn((value: unknown) => value),
-    checkMutationResult: vi.fn(),
+    // Faithful to the real helper: it RE-THROWS result.error, and that error is
+    // a plain PostgREST object. A `vi.fn()` no-op here silently deletes the
+    // error path, so any test aiming at a catch block would assert against a
+    // save that quietly "succeeded" — the same class of problem as stubbing
+    // sanitizeError.
+    checkMutationResult: vi.fn((result: { error: unknown; data: unknown }) => {
+      if (result.error) throw result.error;
+    }),
+    sanitizeError,
   };
 });
 
@@ -368,6 +384,47 @@ describe('ProductDetail governed pricing flow', () => {
       'Product details changed after this page loaded. Reload before saving.',
     ));
     expect(mockProductEq).toHaveBeenCalledWith('pricing_version', product.pricing_version);
+  });
+
+  // The catches on this page were converted to sanitizeError() in the 2026-09-02
+  // sweep. The error they receive is a PLAIN OBJECT (postgrest-js only builds a
+  // real PostgrestError under .throwOnError()), so this exercises the actual
+  // shape rather than an Error the product never sees — and asserts BOTH halves
+  // of the contract: a user-facing refusal survives intact, a raw Postgres
+  // identifier does not.
+  it('shows a plain-object server refusal verbatim but redacts raw identifiers', async () => {
+    const refusal = 'This Product is locked by an open pricing review. No changes were saved.';
+    productMutationResult = {
+      data: [],
+      error: { message: refusal, details: null, hint: null, code: 'P0001' },
+    };
+    expect(productMutationResult.error instanceof Error).toBe(false);
+
+    render(<ProductDetail />);
+    fireEvent.change(await screen.findByLabelText('Quoting Notes'), { target: { value: 'x' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', refusal));
+  });
+
+  it('redacts an unquoted Postgres permission error from a plain-object save failure', async () => {
+    productMutationResult = {
+      data: [],
+      // The UNQUOTED form Postgres actually emits — the form that used to pass
+      // through sanitizeError unredacted.
+      error: { message: 'permission denied for table products', details: null, hint: null, code: '42501' },
+    };
+
+    render(<ProductDetail />);
+    fireEvent.change(await screen.findByLabelText('Quoting Notes'), { target: { value: 'y' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'You do not have permission to perform this action',
+    ));
+    const shown = mockToast.mock.calls.map((c) => String(c[1])).join(' | ');
+    expect(shown).not.toContain('permission denied for table');
   });
 
   it('defaults supplier evidence selection to keeping sell prices with Product-detail provenance', async () => {

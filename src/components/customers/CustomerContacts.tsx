@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Edit3, MessageCircle, Phone, Plus, Star, UserX } from 'lucide-react';
-import { assertRpcResult, checkMutationResult, supabase } from '../../lib/db';
+import { sanitizeError, assertRpcResult, checkMutationResult, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { Sentry } from '../../lib/sentry';
 import type { CustomerContact, CustomerInteraction, InteractionOutcome, InteractionType, PreferredContactMethod } from '../../types';
@@ -156,7 +156,7 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
       toast('success', 'Contact deactivated');
       setContactToDeactivate(null);
       await loadContacts();
-    } catch (error: unknown) { toast('error', error instanceof Error ? error.message : 'Failed to deactivate contact'); }
+    } catch (error: unknown) { toast('error', sanitizeError(error)); }
     finally { setDeactivating(false); }
   };
 
