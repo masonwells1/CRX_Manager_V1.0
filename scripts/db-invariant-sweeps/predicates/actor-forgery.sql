@@ -130,7 +130,24 @@ WITH RECURSIVE cand AS (
            || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
            || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
            || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
-         ) AS has_bound_local_refusal
+         ) AS has_bound_local_refusal,
+         -- A PL/pgSQL IN parameter is an ordinary writable local, so the
+         -- canonical refusal proves nothing about the value that reached the
+         -- sinks: stash the caller value in a local, overwrite the parameter
+         -- with auth.uid(), raise a textually perfect ACTOR_MISMATCH that can
+         -- never fire, then use the stash.
+         --
+         -- Pinned to STATEMENT position, and that is load-bearing rather than
+         -- tidiness: PL/pgSQL named-argument syntax is lexically identical to
+         -- assignment, so an unpinned match also flags the safe
+         -- `PERFORM f(p_delivery_id := x, p_performed_by := v_actor)`. Live
+         -- batch_cancel_deliveries is exactly that shape and binds its actor
+         -- correctly. A named argument is always preceded by `(` or `,`; an
+         -- assignment statement follows a terminator or a block opener.
+         executable_src ~* (
+           '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
+           || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:='
+         ) AS has_actor_rebinding
   FROM lexed
 ), analyzed AS (
   SELECT guarded.*,
@@ -138,27 +155,14 @@ WITH RECURSIVE cand AS (
            -- A handler can catch a nested/outer refusal. Fail closed rather
            -- than trying to prove PL/pgSQL exception-block nesting in SQL.
            --
-           -- Also fail closed when the actor PARAMETER is assigned to anywhere
-           -- in the body. A PL/pgSQL parameter is an ordinary local, so
-           -- `p_performed_by := p_target_id;` AFTER a passing refusal re-forges
-           -- the actor, and truncating the scanned body at the refusal is
-           -- exactly what hides it. Proving which assignment reaches which
-           -- write needs real dataflow; the presence of any rebinding is enough
-           -- to stop trusting the refusal and scan the whole body.
-           --
-           -- The match is pinned to STATEMENT position, and that is load-bearing
-           -- rather than tidiness: PL/pgSQL named-argument syntax is lexically
-           -- identical to assignment, so a bare `<arg>\s*:=` also matches the
-           -- perfectly safe `PERFORM f(p_delivery_id := x, p_performed_by := v_actor)`.
-           -- Live `batch_cancel_deliveries` is exactly that shape and binds its
-           -- actor correctly; an unpinned match made it a false positive. A named
-           -- argument is always preceded by `(` or `,`; an assignment statement is
-           -- preceded by a terminator or a block opener.
+           -- Rebinding also stops the refusal being credited, so the whole body
+           -- is scanned rather than truncated at it. Note this is NOT on its own
+           -- enough to report the routine: when the sink uses the stashed local
+           -- instead of the parameter, no detection pattern below matches even
+           -- with the full body in scope. `has_actor_rebinding` is therefore ALSO
+           -- a reportable condition in its own right, in the final WHERE.
            WHEN lex_error OR NOT actor_is_uuid OR executable_src ~* '\mEXCEPTION\s+WHEN\M'
-                OR executable_src ~* (
-                     '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
-                     || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:='
-                   )
+                OR has_actor_rebinding
              THEN executable_src
            -- The refusal is credited only when it is UNCONDITIONAL. Two ways it
            -- can fail to be, and both used to truncate the whole scanned body:
@@ -222,7 +226,12 @@ WITH RECURSIVE cand AS (
 SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
 FROM analyzed
-WHERE lex_error OR
+-- has_actor_rebinding reports on its own: a SECURITY DEFINER routine that
+-- overwrites its own actor parameter cannot be cleared by reading the refusal,
+-- and the value that reaches the sink may be a local this predicate does not
+-- track. Over-broad by design, like every other arm here -- allowlist the ones
+-- verified safe against live pg_get_functiondef.
+WHERE lex_error OR has_actor_rebinding OR
       (pre_refusal_src ~* ('coalesce\s*\(\s*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
        OR pre_refusal_src ~* ('(\m' || argname_pattern || '\M|\$' || argument_position || '\M)\s*,\s*auth\.uid')
        OR pre_refusal_src ~* ('role[^;]{0,120}(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')

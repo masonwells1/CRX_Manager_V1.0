@@ -62,12 +62,33 @@ is lexically identical to assignment, so an unpinned match also flags
 that shape and binds its actor correctly — the first draft made it a false positive. A named argument
 is always preceded by `(` or `,`; an assignment statement is preceded by a terminator or block opener.
 
+**Widening the scan was NOT enough, and the first attempt at this fix proved it.** CodeRabbit's
+actual attack stashes the caller value in a local, overwrites the parameter with `auth.uid()` so the
+canonical refusal can never fire, and then uses the **stash** at the sink. Failing closed put the
+whole body in scope, but every detection pattern keys on the *parameter* — which by then holds a
+legitimate value — so the routine still went unreported. The fixture
+`actor_stash_then_rebind_forward` was added specifically to catch that, and it failed the first
+version of this fix. `has_actor_rebinding` is therefore **also a reportable condition in its own
+right** in both predicates' final `WHERE`, scoped in the financial-audit predicate to routines that
+actually write `financial_audit_log`. A `SECURITY DEFINER` routine that overwrites its own actor
+parameter cannot be cleared by reading its refusal.
+
 **Proof — real PostgreSQL 17, not a regex unit test.**
 `scripts/db-invariant-sweeps/actor-forgery-predicates.test.mjs` runs both predicates in a disposable
-container. Two new fixtures: `actor_rebound_param_forward` (must be detected) and
-`actor_named_argument_forward` (must NOT be). Mutation-tested in both directions — removing the
-rebinding clause makes the first go red; removing the pinning makes the second go red. Reverted, no
-residue, suite green.
+container. Four new fixtures: `actor_rebound_param_forward` and `actor_stash_then_rebind_forward`
+(must be detected), `actor_named_argument_forward` (must NOT be), and
+`actor_unbound_local_refusal_forward` (below). Mutation-tested in both directions — removing the
+rebinding clause makes the first go red; removing the pinning makes the named-argument one go red.
+Reverted, no residue, suite green.
+
+**Two more Codex P1s against the sweeps, checked rather than argued.** *"Reject guards nested in
+nonexecuting branches"* was already fixed and already pinned by `actor_unreachable_refusal_forward`.
+*"Require the complete auth binding in the sweep"* does not reproduce — the binding and the refusal
+are already one regex sequence, so `has_bound_local_refusal` is false without the `auth.uid()`
+assignment. Rather than assert that from reading the regex, `actor_unbound_local_refusal_forward`
+now pins it. The third, *"Trace aliases in the post-apply actor sweep"*, is genuine dataflow over a
+local alias and is dismissed as documented residual — not a spelling, and the cap says rebuild rather
+than re-harden.
 
 Live read-only check against the production catalog before and after: the unpinned form matched one
 authenticated-executable `SECURITY DEFINER` routine (`batch_cancel_deliveries`, verified safe — it

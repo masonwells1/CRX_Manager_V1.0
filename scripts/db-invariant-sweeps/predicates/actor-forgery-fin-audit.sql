@@ -143,22 +143,27 @@ WITH RECURSIVE cand AS (
            || '\mIF\M[^;]*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
            || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M[^;]*'
            || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
-         ) AS has_bound_local_refusal
+         ) AS has_bound_local_refusal,
+         -- Mirror of actor-forgery.sql. A PL/pgSQL IN parameter is a writable
+         -- local, so a stash-then-rebind makes the canonical refusal unfireable
+         -- while the stashed caller value reaches the audit sink. Pinned to
+         -- STATEMENT position because named-argument syntax is lexically
+         -- identical to assignment (live batch_cancel_deliveries is that shape
+         -- and is correctly bound).
+         executable_src ~* (
+           '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
+           || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:='
+         ) AS has_actor_rebinding
   FROM lexed
 ), analyzed AS (
   SELECT guarded.*,
          CASE
-           -- Fail closed when the actor PARAMETER is assigned to anywhere in the
-           -- body: a PL/pgSQL parameter is an ordinary local, so a rebinding
-           -- AFTER a passing refusal re-forges the actor, and truncating the
-           -- scanned body at the refusal is what hides it. Pinned to STATEMENT
-           -- position because named-argument syntax `f(p_performed_by := v)` is
-           -- lexically identical to assignment. Mirrors actor-forgery.sql.
+           -- Rebinding stops the refusal being credited, so the whole body is
+           -- scanned. That alone does not report the routine when the sink uses
+           -- a stashed local, so has_actor_rebinding is ALSO reportable on its
+           -- own in the final WHERE. Mirrors actor-forgery.sql.
            WHEN lex_error OR NOT actor_is_uuid OR executable_src ~* '\mEXCEPTION\s+WHEN\M'
-                OR executable_src ~* (
-                     '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
-                     || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:='
-                   )
+                OR has_actor_rebinding
              THEN executable_src
            -- The refusal is credited only when it is UNCONDITIONAL. Two ways it
            -- can fail to be, and both used to truncate the whole scanned body:
@@ -223,6 +228,11 @@ SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
 FROM analyzed
 WHERE lex_error OR
+      -- Reportable on its own, scoped to this predicate's audit-log remit: a
+      -- routine that writes financial_audit_log AND overwrites its own actor
+      -- parameter cannot be cleared by reading its refusal, and the value that
+      -- reaches the sink may be a local this predicate does not track.
+      (executable_src ~* 'financial_audit_log' AND has_actor_rebinding) OR
       pre_refusal_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)') OR
       (executable_src ~* 'financial_audit_log' AND
        pre_refusal_src ~* ('(?:(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\.\s*)*(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\([^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)'))
