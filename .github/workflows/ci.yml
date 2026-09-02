@@ -347,8 +347,19 @@ jobs:
         run: npm ci
 
       - name: Check for vulnerable dependencies
+        # 2026-09-02: raised critical -> high on Mason's approval. At `critical`
+        # a HIGH advisory passed the gate: browserslist GHSA-c83g-rgw3-j3cx was
+        # live on main that morning with CI green, and GitHub was reporting it on
+        # every push while this step said nothing. Dependabot security updates
+        # are enabled, so the fix PRs arrive on their own (#554 landed the
+        # browserslist bump); this makes the gate notice when one is outstanding
+        # instead of only mentioning it in push output nobody reads.
+        # Verified before the raise: with main's current lockfile only one
+        # MODERATE advisory remains (@humanfs/node), so this passes today.
+        # Do NOT lower it back to critical to get a red PR green — bump the
+        # dependency, or let the Dependabot PR land first.
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
-        run: npm audit --audit-level=critical
+        run: npm audit --audit-level=high
 
       - name: CI scope routing regression tests
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
