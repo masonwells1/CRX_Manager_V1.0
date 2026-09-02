@@ -610,7 +610,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   ok(projectEquals.status === 1, "--project=ref is refused too");
   const nameNoFile = spawnSync(process.execPath, [
     path.resolve(__scriptsDir, "apply-migration-file.mjs"), "--name", "whatever",
-  ], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: okRoot, SUPABASE_ACCESS_TOKEN: "" } });
+  ], { encoding: "utf8", env: cleanEnv({ CLAUDE_PROJECT_DIR: okRoot, SUPABASE_ACCESS_TOKEN: "" }) });
   ok(nameNoFile.stderr.includes("--name is not supported"),
     "the flag refusal fires BEFORE file resolution, not a path error");
 
@@ -629,7 +629,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       path.resolve(__scriptsDir, "apply-migration-file.mjs"),
       path.join(aliasRoot, "supabase", "migrations", `${aliasName}.sql`),
       "--confirm",
-    ], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: aliasRoot, SUPABASE_ACCESS_TOKEN: "" } });
+    ], { encoding: "utf8", env: cleanEnv({ CLAUDE_PROJECT_DIR: aliasRoot, SUPABASE_ACCESS_TOKEN: "" }) });
     ok(res.status === 1, `an aliased FILENAME is refused (got ${res.status})`);
     ok(res.stderr.includes("not a canonical migration name"), "the refusal names the canonical-name rule");
     ok(!res.stdout.includes("Transmitting"), "an aliased filename never transmits");
@@ -749,7 +749,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     writeFileSync(copy, SQL, "utf8");
     const res = spawnSync(process.execPath, [scriptPath, copy, "--confirm"], {
       encoding: "utf8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" },
+      env: cleanEnv({ CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" }),
     });
     ok(res.status === 2, `an identical-content copy outside the checkout is refused (got ${res.status})`);
     ok(res.stderr.includes("it is not that file"),
@@ -760,7 +760,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     const realFile = path.join(okRoot2, "supabase", "migrations", `${MIG}.sql`);
     const viaRepo = spawnSync(process.execPath, [scriptPath, realFile], {
       encoding: "utf8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" },
+      env: cleanEnv({ CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" }),
     });
     ok(viaRepo.status === 0, `the repository file itself still passes (got ${viaRepo.status}: ${viaRepo.stderr})`);
     ok(viaRepo.stdout.includes("APPLY GATE PASSED"), "the repository file reaches and passes the gate");
@@ -779,7 +779,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     writeFileSync(parkedFile, SQL, "utf8");
     const res = spawnSync(process.execPath, [scriptPath, parkedFile, "--confirm"], {
       encoding: "utf8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" },
+      env: cleanEnv({ CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" }),
     });
     ok(res.status === 2, `a parked migration file is refused (got ${res.status})`);
     ok(res.stderr.includes("NOT A PERMITTED MIGRATION SOURCE"),
@@ -796,7 +796,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     makeOriginMain(parkedRoot); // merged gate also runs the pending-set preflight
     const moved = spawnSync(process.execPath, [scriptPath, permittedFile], {
       encoding: "utf8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" },
+      env: cleanEnv({ CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" }),
     });
     ok(moved.status === 0, `the same migration under supabase/migrations/ passes (got ${moved.status}: ${moved.stderr})`);
     ok(moved.stdout.includes("APPLY GATE PASSED"), "the moved migration reaches the gate and passes it");
@@ -1302,7 +1302,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     path.resolve(__scriptsDir, "apply-migration-file.mjs"),
     path.join(wRoot, "supabase", "migrations", `${MIG}.sql`),
     "--confirm",
-  ], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: wRoot, SUPABASE_ACCESS_TOKEN: "" } });
+  ], { encoding: "utf8", env: cleanEnv({ CLAUDE_PROJECT_DIR: wRoot, SUPABASE_ACCESS_TOKEN: "" }) });
   ok(res.status === 2, `a transaction-managing migration is refused by the script (got ${res.status})`);
   ok(res.stderr.includes("NOT WRAPPABLE"), "the script names the wrappability precondition in its refusal");
   ok(!res.stdout.includes("Transmitting"), "a non-wrappable migration is never transmitted");
