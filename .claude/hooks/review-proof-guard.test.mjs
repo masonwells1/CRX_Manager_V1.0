@@ -521,6 +521,17 @@ for (const command of [
   "echo x > scripts//verify-deps.mjs",
   "cp /tmp/evil .husky//pre-push",
   "cp /tmp/evil .claude///hooks/sql-safety.mjs",
+  // (c) GIT AS AN EXECUTOR. A read-only git SUBCOMMAND does not make the command
+  // read-only: git runs whatever a config override or pager/diff helper names.
+  // Both of these were reproduced by the reviewer DELETING .husky/pre-push.
+  "git -c diff.external=rm diff --ext-diff -- .husky/pre-push",
+  "git grep --open-files-in-pager=rm pattern -- .husky/pre-push",
+  "git grep -O rm pattern -- .github/workflows/ci.yml",
+  "git -c core.pager=rm log .husky/pre-push",
+  "git --config-env=diff.external=EVIL diff .codex/hooks.json",
+  // The whole `-c` channel goes, not just the keys known to execute today. This
+  // spelling used to be an ALLOW case; vouching for it was the defect.
+  "git -c core.pager=cat log .husky/pre-push",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
@@ -544,7 +555,6 @@ for (const command of [
   // as the subcommand and fails closed on an ordinary stage — which this rule
   // actually did, blocking `git -C <worktree> add .claude/hooks/...`.
   "git -C /repo add .claude/hooks/review-proof-guard.mjs",
-  "git -c core.pager=cat log .husky/pre-push",
   "git --git-dir /repo/.git diff .husky/pre-push",
   // A VALUELESS flag followed by a positional path is a read, not a write. The
   // flag-value rule must not swallow these — `git diff --stat <hook>` is used

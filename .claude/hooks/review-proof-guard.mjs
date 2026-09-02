@@ -542,6 +542,23 @@ if (shellTool) {
     // meaningless without `--pre` and refusing it costs nothing.
     if (head === "rg" && /(?:^|\s)--(?:pre|pre-glob|hostname-bin)(?:[=\s]|$)/i.test(segment)) return false;
     if (head === "git") {
+      // GIT CAN BE TOLD TO RUN A PROGRAM, and a read-only SUBCOMMAND does not stop
+      // it. Seventh-round P1s, both reproduced by the reviewer deleting
+      // `.husky/pre-push`:
+      //   git -c diff.external=rm diff --ext-diff -- .husky/pre-push
+      //   git grep --open-files-in-pager=rm pattern -- .husky/pre-push
+      // `gitSubcommandOf` deliberately SKIPS `-c` and its value to find the real
+      // subcommand, which is correct for that job and left this channel invisible.
+      //
+      // Refuse the whole config-override channel rather than listing the keys that
+      // execute — `diff.external`, `core.pager`, `sequence.editor`, `core.editor`,
+      // `pager.*`, `alias.*` and whatever git adds next. Enumerating them is the
+      // blocklist mistake this file has already made twice. Reading a guarded file
+      // never needs `-c`. This deliberately flips `git -c core.pager=cat log
+      // <guarded>`, previously an ALLOW case, to a denial: that spelling is the
+      // vulnerable shape, and vouching for it was the bug.
+      if (/(?:^|\s)(?:-c|--config-env)(?:[=\s]|$)/.test(segment)) return false;
+      if (/(?:^|\s)(?:--ext-diff|--open-files-in-pager|-O)(?:[=\s]|$)/.test(segment)) return false;
       const sub = gitSubcommandOf(segment);
       if (!sub || !ENFORCEMENT_READ_ONLY_GIT.has(sub)) return false;
     }

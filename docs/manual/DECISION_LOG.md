@@ -15,11 +15,20 @@ gaps are recorded in `KNOWN_ISSUES.md` and in the round-6 changelog entry, and c
 what a command-text rule can do.
 
 **What the cap does and does not cover — read this before concluding the cap was broken.** It caps
-reviews *this project commissions*. It does not silence the repo's **automatic PR reviewer**, which
-fires on every push to an open PR by configuration and is not a commissioned round. That reviewer
-went on to report further real bypasses on PR #530 — `rg --pre` executing an arbitrary program
-against a protected file, and doubled path separators (`.github//workflows/…`) defeating the
-matcher — plus several defects in the guard-claim ratchet itself. Those were fixed, because
+reviews *this project commissions*. It does not silence the **Codex PR-review connector**
+(`chatgpt-codex-connector`), which the Codex cloud settings configure to review on PR open and on
+each push, and which is not a commissioned round.
+
+**That is Codex, NOT CodeRabbit — do not generalize this to CodeRabbit.** `.coderabbit.yaml` sets
+`reviews.auto_review.enabled: false` for both public repos, so CodeRabbit reviews only when someone
+posts an explicit `@coderabbitai review` after the candidate commit is frozen. Nothing here excuses
+skipping that trigger; expecting a CodeRabbit review to appear on its own is how a PR sits unreviewed.
+
+The Codex connector went on to report further real bypasses on PR #530 — `rg --pre`, and later
+`git -c diff.external=… --ext-diff` and `git grep --open-files-in-pager=…`, each executing an
+arbitrary program against a protected file (all three reproduced as real deletions), and doubled path
+separators (`.github//workflows/…`) defeating the matcher — plus several defects in the guard-claim
+ratchet itself. Those were fixed, because
 **fixing a finding that has already been delivered is not commissioning a round.** The changelog
 entries and the test comments number those findings by review round for traceability, which is why
 they say "seventh"; that numbering describes the reviews that happened, not a decision to reopen the

@@ -378,6 +378,28 @@ outright (`READ_ONLY_TOOL_NAMES`), so the lockout blast radius is smaller than i
 
 ---
 
+## OPEN 2026-09-02 — two known gaps in the guard-claim ratchet, left open deliberately
+
+Both reported by the Codex connector on PR #530 and **not fixed there**, because the PR had already
+absorbed eight rounds of findings and the cap on adversarial iteration (2026-09-01, `DECISION_LOG.md`)
+exists precisely to stop this. Neither is a production-safety issue: the ratchet governs whether guard
+COMMENTS overclaim, and its failure mode is a missed annotation, not a bypassed control.
+
+1. **Multiline template literals are not tracked.** `scanFile()` continues a wrapped claim only
+   through comment lines and lines starting with a quote. A raw multiline template —
+   `permissionDecisionReason: \`This cannot` / `be bypassed.\`` — has a continuation line beginning
+   with prose, so `isProseLine()` stops the window and the claim is never seen. A new **user-facing**
+   absolute claim can evade the ratchet this way. Fix shape: track template-literal state across
+   lines rather than testing each line's first character.
+
+2. **`guardSourceFiles()` scans only two directories.** It enumerates the immediate `.mjs` children
+   of `.claude/hooks` and `.codex/hooks`, plus a `guard-unlock` exception. Guard-adjacent runners
+   elsewhere — `scripts/apply-migration-file.mjs` is the named example — already contain
+   `fail-closed` and `guarantee` assertions that the audit never reads, so those claims can be added
+   or reworded with no annotation while `test:correction-guards` stays green. Fix shape: an explicit
+   manifest of guard/check runners, or a documented recursive scope. Expect a large one-time baseline
+   growth when this lands; do that as its own reviewed change, not as a rider.
+
 ## OPEN 2026-09-01 — three migration-apply protections live only on a closed PR's branch, not on `main`
 
 **Found by:** the disposition of PR #364, which was closed as superseded on 2026-09-01 with Mason's
