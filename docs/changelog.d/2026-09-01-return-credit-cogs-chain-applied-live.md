@@ -1,4 +1,4 @@
-## 2026-09-01 - Apply the return-credit COGS chain live and repair the migration proof gate
+## 2026-09-01 - Apply the return-credit COGS chain live and correct the records that said otherwise
 
 ### What shipped
 
@@ -33,8 +33,8 @@ Live ledger after the chain: 986 rows, `max(version)` `20260901184530`.
 
 ### Verification
 
-Each migration was applied behind a full migration-apply-guard proof — both reviewer charters
-returning CLEAN machine verdicts from `gpt-5.6-sol` at high reasoning — and each was verified
+Each migration was applied behind a migration-apply-guard proof — both reviewer charters returning
+CLEAN machine verdicts from `gpt-5.6-sol` at high reasoning — and each was verified
 afterwards by read-only live query rather than by the apply exit code: ledger row present, expected
 function bodies live, new CHECK constraints validated, grants unchanged
 (`anon`/`authenticated` cannot execute `_issue_return_credit_impl`; `service_role` can), and the
@@ -43,6 +43,13 @@ barrier state at each step.
 `20260826220000_quote_version_restore_trust_boundary` was already applied (ledger `version`
 `20260827113443`) before the chain, so the documented apply-order dependency was satisfied and
 nothing was wedged.
+
+**What those proofs do and do not establish.** Each proof records that both reviewer charters ran
+against the exact migration bytes and returned CLEAN. It does not establish that the evidence those
+reviewers received was complete: the exact-head review described below found that caller discovery
+missed unqualified calls and that the grants shown were the migration's own DDL rather than the
+effective live ACL. The independent post-apply live verification above is what carries the weight
+here, not the proof alone.
 
 ### Gate behavior worth recording
 

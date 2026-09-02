@@ -1,7 +1,13 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-01 (post return-credit chain) for the migration ledger; 2026-08-27 11:43:53
-UTC for schema shape.** A read-only read after the six-file return-credit chain applied on 2026-09-01
+**Last verified: 2026-09-01 (post return-credit chain) for both the migration ledger and schema
+shape.** Schema shape comes from the live introspection that regenerated
+`.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
+columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
+read of individual routine bodies or their grants beyond the functions this chain touched, which
+were verified separately and are recorded below; the superseded 2026-08-27 11:43:53 UTC capture
+remains the last full routine-body reading.
+A read-only read after the six-file return-credit chain applied on 2026-09-01
 records **986 ledger rows**, with `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover`
 as the latest applied authored name; the current effective ordering name high-water is therefore
 **`20260827041500`**, and live `max(version)` is **`20260901184530`**. Read ordering from the authored
