@@ -146,11 +146,18 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // pullRequestReviewBlocked (denies CHANGES_REQUESTED only) and reworded the
   // pullRequestApproved comment. Anchors unchanged; the transform is still
   // identity.
-  codexGuard: "1c921605467e613f820bc3413d5bff255296c4ec",
+  // codexGuard re-pinned 2026-09-02 (PR #559, Codex Medium): the Codex-side merge
+  // gate was migrated off pullRequestApproved onto pullRequestReviewBlocked so it
+  // matches the Claude side after main's required review was removed. The
+  // objection check is deliberately NOT exempt for --auto (Codex High, same run).
+  // codexGuard re-pinned again 2026-09-02 (PR #560, CodeRabbit): the guard now
+  // IMPORTS pullRequestReviewBlocked from .claude/hooks/codex-push-lib.mjs
+  // instead of mirroring it locally. Mirroring is what let the two sides drift.
+  codexGuard: "0fd170d5b972a2b5fc660136949df1bb48917f43",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "a9829ef4ae86d6c157c7409981fbf52a44ba7f0a",
+  codexGuard: "4ce9ecd68f006392df3291f1b0c3df40c8e5add3",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 
