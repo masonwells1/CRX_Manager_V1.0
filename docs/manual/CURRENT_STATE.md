@@ -44,12 +44,15 @@ draw-down rollout closed. Its full apply record — approval, proofs, postflight
 history row 891 and the `KNOWN_ISSUES.md` entry, both landed by PR #475 from the session that ran
 it. This document states only the ledger fact and defers to those.
 
-**The tracked registry was refreshed from live on 2026-09-01.** `.claude/schema-registry.json` now
-records `migrations_high_water` `20260901184530`, 157 tables, 322 CHECK constraints, and 978 distinct
-applied migration names (986 ledger rows, 978 distinct — the difference is duplicate names, verified
-by `count(distinct name)`, not truncation). The refresh was required mid-chain: migration
-`20260827041100` creates `return_items.restocked_quantity`, and the previous 2026-08-31 snapshot
-predated that apply, so the drift reviewer correctly refused a column check it could not perform.
+**The tracked registry was refreshed from live on 2026-09-01, twice.** `.claude/schema-registry.json`
+records `migrations_high_water` `20260901184530`, 157 tables, 322 CHECK constraints, and 979 distinct
+applied migration names (986 ledger rows, 979 distinct — the difference is duplicate names, verified
+by `count(distinct name)`, not truncation). The first refresh was required mid-chain: migration
+`20260827041100` creates `return_items.restocked_quantity`, and the 2026-08-31 snapshot predated that
+apply, so the drift reviewer correctly refused a column check it could not perform. **That first
+refresh ran before the final migration applied, so it stopped at `20260901183717` and omitted
+`20260827041500` — a stale registry contradicting this document's own live-apply record.** The
+exact-head Codex review of PR #544 caught it; the registry was regenerated after the chain closed.
 The earlier note that this branch's registry stayed at `20260825142708` and that its refresh belonged
 to a separate product-data worktree is superseded.
 
