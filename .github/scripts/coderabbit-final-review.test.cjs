@@ -1488,6 +1488,25 @@ test('removing the ready label during the quiet period cancels the review reques
   assert.match(harness.failures[0], /ready-for-coderabbit is no longer attached/);
 });
 
+// Regression: workflow runs QUEUE rather than cancel, so a maintainer removing
+// the requested marker to abort an in-flight request would still have had the
+// command posted before the queued reset ran — spending a review that was
+// deliberately cancelled. Both final validations now require the marker.
+test('removing the requested marker mid-flight cancels the request and posts no command', async () => {
+  const harness = makeHarness({
+    liveLabelSequence: [[READY_LABEL], [READY_LABEL], [READY_LABEL], [READY_LABEL]],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.match(harness.failures[0], /coderabbit-review-requested was removed while the request was in flight/);
+  // Must be caught by the FINAL validation, BEFORE the command is posted — not
+  // by the post-comment pass, which would mean the review was spent and the
+  // comment then deleted. That distinction is the whole point of the fix.
+  assert.doesNotMatch(harness.failures[0], /while the review command was being posted/);
+});
+
 test('a final snapshot API failure clears both workflow labels and posts no command', async () => {
   const harness = makeHarness({ pullFailuresAt: [3] });
   const result = await execute(harness);

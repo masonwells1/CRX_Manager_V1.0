@@ -90,6 +90,30 @@ Corrected in `AGENTS.md` and `.claude/skills/deploy-check/SKILL.md` (adapter reg
 since 2026-09-01 and that **no agent may act on that exemption**. Live state re-read before the edit:
 `enforce_admins=false approvals=1 dismiss_stale=true last_push=true strict=true`.
 
+### Cancelling a request could still spend the review (Codex CRX-002)
+
+Workflow runs **queue** rather than cancel. A maintainer who removed
+`coderabbit-review-requested` to abort an in-flight request would still have had the command posted,
+because both final validations required the *ready* label but never re-checked the marker — the
+queued reset ran afterwards. That spends a review that was deliberately cancelled, which matters more
+now that the org allowance is 2 reviews/hour. Both final validations now require the marker.
+
+Regression test pins the layer, not just the outcome: it asserts the block comes from the **final**
+validation and explicitly *not* from the post-comment pass, since the latter would mean the review was
+already spent and the comment merely deleted afterwards. Mutation-proved — removing the final check
+alone turns it red, which the first version of the test did not catch.
+
+### One Codex blocker was a stale-base artifact, verified and dismissed
+
+The same proof raised CRX-001, "approved split-billing protections are unintentionally reverted",
+claiming this candidate deletes `src/lib/deliverySplitBilling.ts`, its tests and its changelog. It does
+not. Verified three ways: the file is absent from this PR's GitHub file list entirely; it exists on
+`origin/main`; and it is absent from this branch **because the branch is behind `main`**, having been
+added to `main` after this branch's merge base. The proof wrapper snapshots `origin/main` as BASE and
+the branch tip as CANDIDATE, so anything landed on `main` since the fork reads as a deletion. Merging
+this PR removes nothing. The real remedy is the wrapper's own recommendation — bring the branch
+current and re-run — not a code change.
+
 ### The bootstrap escape hatch made this PR unmergeable by construction
 
 Found by bringing the branch up to date, not by reading. The workflow's

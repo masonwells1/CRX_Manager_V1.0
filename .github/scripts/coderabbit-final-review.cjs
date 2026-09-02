@@ -272,6 +272,14 @@ function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
   return reasons;
 }
 
+// Only meaningful AFTER the requested marker has been recorded — the two final
+// validations, which run between recording the marker and crediting the command.
+function requestedMarkerStillAttached(pullRequest) {
+  return pullRequestLabelNames(pullRequest).has(REQUESTED_LABEL)
+    ? []
+    : [`${REQUESTED_LABEL} was removed while the request was in flight`];
+}
+
 // The shared live-state gate. Every caller that must decide whether a pull
 // request is still a valid candidate reads it from here.
 function validateAuthorizationState(pullRequest, defaultBranch) {
@@ -787,6 +795,12 @@ async function runGate({ github, context, core, config, attemptState }) {
     context.payload.repository.default_branch,
     expectedHeadSha,
   );
+  // Workflow runs QUEUE rather than cancel, so a maintainer who removes the
+  // requested marker to abort an in-flight request would otherwise still get the
+  // command posted before the queued reset runs — spending a review that was
+  // deliberately cancelled. The marker must still be attached at both final
+  // validations, not just the ready label.
+  finalReasons.push(...requestedMarkerStillAttached(finalPullRequest));
   finalReasons.push(...finalCheckBlockers);
   if (finalReasons.length > 0) {
     await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
@@ -905,6 +919,7 @@ async function runGate({ github, context, core, config, attemptState }) {
     context.payload.repository.default_branch,
     expectedHeadSha,
   );
+  postCommentReasons.push(...requestedMarkerStillAttached(postCommentPullRequest));
   postCommentReasons.push(...postCommentCheckBlockers);
   if (postCommentReasons.length > 0) {
     try {
