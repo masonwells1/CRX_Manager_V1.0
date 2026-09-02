@@ -5,7 +5,7 @@
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
 **Live-ledger capture — 2026-09-01, after the six-file return-credit COGS chain. THIS IS THE CURRENT
-BOUNDARY.** A read-only read on project `rhyzpcqhnizqbxphqdkr` records **986 ledger rows** (978
+BOUNDARY.** A read-only read on project `rhyzpcqhnizqbxphqdkr` records **986 ledger rows** (979
 distinct names — the difference is duplicate names, confirmed by `count(distinct name)`, not
 truncation), with `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover` as the
 newest applied authored name; the current effective ordering high-water is therefore
