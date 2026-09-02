@@ -355,6 +355,22 @@ BEGIN
 END;
 $body$;
 
+-- A local refusal is only worth crediting when the local was bound from
+-- auth.uid(). Here v_actor is seeded from the forgeable parameter itself, so the
+-- comparison can never fire and the body below it must NOT be stripped.
+CREATE FUNCTION public.actor_unbound_local_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid;
+BEGIN
+  SELECT p_actor_source INTO v_actor;
+  IF p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
 CREATE FUNCTION public.actor_custom_local_refusal_forward(p_actor_source uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 DECLARE v_actor public.actor_token;
@@ -488,6 +504,7 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_out_before_positional',
     'actor_local_pre_refusal_forward',
     'actor_rebound_param_forward',
+    'actor_unbound_local_refusal_forward',
     'actor_custom_local_refusal_forward',
     'actor_custom_refusal_forward',
     'actor_dollar_guard_forward',
