@@ -44,11 +44,16 @@ list blocks that command form and the Codex production-action guard refuses forc
 verbal approval does not override a deny rule, and the correct response is not to find a spelling
 that gets past it.
 
-What ran instead: per branch, serially, read the current tip with `git ls-remote`, compare it to the
-ledger, and delete through the GitHub ref API only on an exact match — with the comparison enforced
-in the shell rather than left to a comment. That is a branch deletion rather than a history rewrite.
-It is **not atomic**: there is a sub-second window between check and delete, and the ledger says so
-rather than claiming compare-and-swap.
+What ran instead: per branch, serially, read the current tip with `git ls-remote origin`, compare it
+to the ledger, and delete through the GitHub ref API only on an exact match. That is a branch
+deletion rather than a history rewrite. It is **not atomic**: there is a sub-second window between
+check and delete, and the ledger says so rather than claiming compare-and-swap.
+
+The ledger records that read as executed and then supersedes it: reading through `origin` while
+deleting through a hardcoded repository path means a differently-configured `origin` could validate
+one repository's branch while the API deletes another's, and the comparison was a person reading two
+strings rather than a shell test that aborts. Copy the corrected form from the ledger, not this
+paragraph.
 
 A commit pushed inside that window **would be lost**. The tag was cut from the pre-read OID and
 nothing fetches the newer one locally, so there is no object to recover it from; an earlier draft

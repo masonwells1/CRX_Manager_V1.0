@@ -9,7 +9,7 @@ Remote branch count went from 58 to **44**.
 
 > **The pre-deletion gate was not met.** Codex's round-2 review required this ledger to be **landed
 > before any deletion**, not merely drafted. That is not what happened: the 14 branches were tagged
-> and deleted first, and this document was written and landed afterwards. For the interval between
+> and deleted first, and this document was written and landed afterward. For the interval between
 > the deletions and this file reaching `main`, the only record of which tag belonged to which branch
 > lived in one session's working tree. Nothing was lost, and the tags were pushed and verified on
 > `origin` before any branch was removed — but the sequencing gate itself was missed, and this
@@ -24,9 +24,20 @@ production-action guard refuses force-pushes. Mason's verbal approval does not a
 override a deny rule. **Do not go looking for a spelling that gets past it.** `--force-with-lease`
 is the **rejected plan**, recorded here only so the next person does not re-propose it.
 
-What ran instead, per branch and serially. Both the read and the delete are bound to the **same
-canonical repository** — reading through `git ls-remote origin` would let a differently-configured
-`origin` validate one repository's branch while the API deletes another's:
+**What actually ran**, per branch and serially: the tip was read with `git ls-remote origin
+"refs/heads/<branch>"`, compared by eye against this ledger's OID, and deleted with
+`gh api -X DELETE "repos/masonwells1/CRX_Manager_V1.0/git/refs/heads/<branch>"` only on a match.
+
+That is recorded as-is rather than tidied up, because two weaknesses in it are worth naming:
+
+- The read went through `origin` while the delete went through a hardcoded repository path. A
+  differently-configured `origin` would validate one repository's branch while the API deleted
+  another's. In this sweep `origin` did point at `masonwells1/CRX_Manager_V1.0`, so no mismatch
+  occurred — but nothing in the procedure checked that.
+- The comparison was a human reading two strings, not a shell test that aborts.
+
+**Use this form next time.** Both calls bind to the same canonical repository and the comparison is
+enforced:
 
 ```bash
 repo="masonwells1/CRX_Manager_V1.0"
@@ -80,18 +91,33 @@ non-fast-forward tag updates unless forced), so a stale local tag of the same na
 restore the wrong commit. These tags are never rewritten, but that is a convention, not something
 Git enforces, so check rather than assume:
 
+Fetch into a **scratch ref**, never over the tag name itself. A `--force` fetch onto
+`refs/tags/<tag-name>` would rewrite whatever that name currently points at, and if a local tag of
+that name is the only ref holding some local-only commit, forcing it makes that commit unreachable —
+the precise outcome this ledger exists to prevent:
+
 ```bash
 repo="masonwells1/CRX_Manager_V1.0"
+tag="<tag-name>"
 expected="<Tip OID from the table below>"
-remote=$(gh api "repos/$repo/git/ref/tags/<tag-name>" --jq .object.sha)
+
+remote=$(gh api "repos/$repo/git/ref/tags/$tag" --jq .object.sha)
 [ "$remote" = "$expected" ] || { printf 'remote tag %s != ledger %s\n' "$remote" "$expected" >&2; exit 1; }
 
-git fetch origin --force "refs/tags/<tag-name>:refs/tags/<tag-name>"
-local=$(git rev-parse "refs/tags/<tag-name>^{commit}")
-[ "$local" = "$expected" ] || { printf 'local tag %s != ledger %s\n' "$local" "$expected" >&2; exit 1; }
+# scratch ref: never touches refs/tags/$tag, so an existing local tag is left intact
+git fetch origin "+refs/tags/$tag:refs/crx-restore/$tag"
+got=$(git rev-parse "refs/crx-restore/$tag^{commit}")
+[ "$got" = "$expected" ] || { printf 'fetched %s != ledger %s\n' "$got" "$expected" >&2; exit 1; }
 
-git switch -c <branch-name> "refs/tags/<tag-name>"
+# pick a name that is free; several of these branches still exist locally (see row 8)
+name="restore/$tag"
+git show-ref --verify --quiet "refs/heads/$name" && { printf '%s already exists; choose another\n' "$name" >&2; exit 1; }
+git switch -c "$name" "refs/crx-restore/$tag"
 ```
+
+The recovery branch is deliberately **not** given the original branch name. Row 8 records a local
+branch that still exists and is one commit ahead of what was deleted; `git switch -c` would fail
+against it, and forcing the name would discard that local commit.
 
 **Republishing the branch is a separate, gated step.** Every branch in this ledger was deleted
 because it was superseded, contradicted by an owner decision, or broken, so recreating it on
