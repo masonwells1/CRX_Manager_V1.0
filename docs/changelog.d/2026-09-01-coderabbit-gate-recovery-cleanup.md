@@ -45,6 +45,33 @@ candidate the gate had just invalidated, which the outer recovery then *preserve
 now attempted, and a half-cleared reset throws rather than reporting a clean `reset`, so the caller
 cannot mistake stale gate state for a fresh candidate. Regression test, mutation-proved.
 
+### Duplicate-review risk, and two copies of the same rule that had diverged
+
+Three findings from the review of the frozen candidate. All three are the *same* underlying
+mistake — a rule written out more than once, where the copies stopped agreeing.
+
+**An unverifiable lookup cleared the dedupe marker (Codex P2 and CodeRabbit Major, found
+independently).** When `createComment` failed *and* the recovery `listComments` also failed, the gate
+could not know whether GitHub had accepted the command — yet it removed
+`coderabbit-review-requested` and invited a relabel, which would post a **second paid review** for the
+same head. A confirmed absence and an unverifiable lookup are different states and no longer share a
+branch; the marker is preserved when the lookup itself failed, matching what the outer recovery path
+already did. Neither reviewer found a test covering the double-failure path, correctly — there wasn't
+one. Added, and mutation-proved.
+
+**The `edited` branch had lost the confirmation re-read (CodeRabbit Major).** One reconciliation
+sequence was implemented three times, and the copies had diverged: the metadata-edit copy omitted the
+post-lookup re-read the others perform, so a head change or marker removal racing the command lookup
+was reported there as a confirmed **duplicate** while every other path **reset**. The branch now
+delegates to `reconcileLabelEvent` with only its reason prefix varying — about 55 lines of copy
+removed. Regression test asserts the edit path now emits `changed_live_state` on a raced head.
+
+**Two validators repeated six security conditions (CodeRabbit Major).** `validatePullRequest` is now
+derived from `validateAuthorizationState` and adds only the two checks specific to a ready-label
+candidate. A property test asserts every shared reason still surfaces, so a future re-duplication
+that drops or weakens a condition fails the suite rather than silently letting one path accept what
+the other rejects.
+
 ### Three stale claims about administrator enforcement
 
 Three, not two: `.claude/commands/ship.md` carried the same instruction and was missed on the first

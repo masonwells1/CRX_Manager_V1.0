@@ -255,26 +255,16 @@ async function blockCandidate({ github, owner, repo, pullNumber, core, reason })
   return { status: 'blocked', reason };
 }
 
+// Composed from validateAuthorizationState, deliberately: the two gate the same
+// security decision, and when the six shared conditions were written out twice
+// a change to either copy would silently let one path accept a candidate state
+// the other rejects. This adds ONLY the two checks specific to a ready-label
+// candidate — the label is still attached, and the head has not moved.
 function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
-  const reasons = [];
   const labels = pullRequestLabelNames(pullRequest);
+  const reasons = validateAuthorizationState(pullRequest, defaultBranch);
 
-  if (pullRequest.state !== 'open') reasons.push('pull request is not open');
-  if (pullRequest.draft) reasons.push('pull request is still a draft');
   if (!labels.has(READY_LABEL)) reasons.push(`${READY_LABEL} is no longer attached`);
-  if (pullRequest.base.ref !== defaultBranch) {
-    reasons.push(`base branch is ${pullRequest.base.ref}, not ${defaultBranch}`);
-  }
-  if (pullRequest.auto_merge) reasons.push('auto-merge is enabled');
-  if (pullRequest.mergeable !== true || pullRequest.mergeable_state === 'unknown') {
-    reasons.push('GitHub has not confirmed that the pull request is mergeable');
-  }
-  if (pullRequest.mergeable_state === 'dirty') {
-    reasons.push('pull request has merge conflicts');
-  }
-  if (pullRequest.mergeable_state === 'behind') {
-    reasons.push('pull request branch is behind the base branch');
-  }
   if (pullRequest.head.sha !== expectedHeadSha) {
     reasons.push('pull request head changed after the ready label was applied');
   }
@@ -282,6 +272,8 @@ function validatePullRequest(pullRequest, defaultBranch, expectedHeadSha) {
   return reasons;
 }
 
+// The shared live-state gate. Every caller that must decide whether a pull
+// request is still a valid candidate reads it from here.
 function validateAuthorizationState(pullRequest, defaultBranch) {
   const reasons = [];
 
@@ -378,10 +370,17 @@ async function requestedMarkerHasCommand({ github, owner, repo, pullNumber, head
   return comments.some((comment) => isActionsReviewComment(comment, headSha));
 }
 
+// The single reconciliation routine. Every event that must re-derive gate state
+// from the LIVE pull request goes through here — label events and metadata
+// edits alike. `reasonPrefix` is the only thing that varied between the former
+// copies, and the copies had already diverged: the `edited` one omitted the
+// post-lookup confirmation re-read below, so a head change or marker removal
+// racing the lookup was reported as a confirmed duplicate instead of a reset.
 async function reconcileLabelEvent({
-  github, owner, repo, pullNumber, core, defaultBranch, action, label,
+  github, owner, repo, pullNumber, core, defaultBranch, action, label, reasonPrefix: prefixOverride,
 }) {
-  const reasonPrefix = `pull_request_target.${action}.${normalize(label) || 'unknown_label'}`;
+  const reasonPrefix = prefixOverride
+    || `pull_request_target.${action}.${normalize(label) || 'unknown_label'}`;
   const pullRequest = (await github.rest.pulls.get({
     owner,
     repo,
@@ -536,70 +535,21 @@ async function runGate({ github, context, core, config, attemptState }) {
     // command lookup succeed, so recovery never clears a valid dedupe marker
     // based on the older event payload.
     attemptState.requestedMarkerPreexisted = true;
-    const editedPullRequest = (await github.rest.pulls.get({
+    // Delegate rather than re-implement. This branch used to carry its own copy
+    // of the reconciliation sequence and had already lost the confirmation
+    // re-read, so a head change or marker removal racing the command lookup was
+    // reported as a confirmed duplicate here and as a reset everywhere else.
+    return reconcileLabelEvent({
+      github,
       owner,
       repo,
-      pull_number: pullNumber,
-    })).data;
-    const editedHeadSha = editedPullRequest.head.sha;
-    const editedLabels = pullRequestLabelNames(editedPullRequest);
-
-    if (editedLabels.has(REQUESTED_LABEL)) {
-      const editedStateReasons = validateAuthorizationState(
-        editedPullRequest,
-        context.payload.repository.default_branch,
-      );
-      if (editedStateReasons.length > 0) {
-        return resetCandidate({
-          github,
-          owner,
-          repo,
-          pullNumber,
-          core,
-          reason: `pull_request_target.edited.invalid_live_state: ${editedStateReasons.join('; ')}`,
-        });
-      }
-      let markerConfirmed = false;
-      try {
-        markerConfirmed = await requestedMarkerHasCommand({
-          github,
-          owner,
-          repo,
-          pullNumber,
-          headSha: editedHeadSha,
-        });
-      } catch (error) {
-        await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-        core.setFailed(`Could not revalidate the requested marker after a PR edit (${error.message}); merge authorization was invalidated and the requested marker was preserved for deduplication.`);
-        return { status: 'blocked', headSha: editedHeadSha, reason: error.message };
-      }
-      if (markerConfirmed) {
-        await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-        core.notice(`Preserved the confirmed CodeRabbit request for ${editedHeadSha} after a metadata edit.`);
-        return { status: 'duplicate', headSha: editedHeadSha };
-      }
-      return resetCandidate({
-        github,
-        owner,
-        repo,
-        pullNumber,
-        core,
-        reason: 'pull_request_target.edited.stale_state',
-      });
-    }
-
-    if (editedLabels.has(READY_LABEL)) {
-      return resetCandidate({
-        github,
-        owner,
-        repo,
-        pullNumber,
-        core,
-        reason: 'pull_request_target.edited.unconfirmed_ready_state',
-      });
-    }
-
-    return { status: 'ignored', reason: 'pull_request_target.edited.no_gate_state' };
+      pullNumber,
+      core,
+      defaultBranch: context.payload.repository.default_branch,
+      action,
+      label: null,
+      reasonPrefix: 'pull_request_target.edited',
+    });
   }
 
   const eventLabel = normalize(context.payload.label?.name);
@@ -862,6 +812,12 @@ async function runGate({ github, context, core, config, attemptState }) {
     createdComment = commentResponse.data;
   } catch (commentError) {
     let recoveredComment = null;
+    // A CONFIRMED absence and an UNVERIFIABLE lookup are different states and
+    // must not share a branch. If the lookup itself failed we do not know
+    // whether GitHub accepted the command, so clearing the dedupe marker would
+    // invite a relabel that posts a SECOND paid review for the same head. The
+    // outer recovery path already draws this distinction; this one did not.
+    let verificationSucceeded = false;
     try {
       const comments = await github.paginate(
         github.rest.issues.listComments,
@@ -871,19 +827,24 @@ async function runGate({ github, context, core, config, attemptState }) {
         !preexistingCommentIds.has(comment.id)
         && isActionsReviewComment(comment, expectedHeadSha)
       )) || null;
+      verificationSucceeded = true;
     } catch (verificationError) {
       core.warning(`Could not verify the failed comment request: ${verificationError.message}`);
     }
 
     if (!recoveredComment) {
-      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+      if (verificationSucceeded) {
+        await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+      }
       return blockCandidate({
         github,
         owner,
         repo,
         pullNumber,
         core,
-        reason: `GitHub did not confirm the review comment (${commentError.message}); the requested marker was cleared for a deliberate retry`,
+        reason: verificationSucceeded
+          ? `GitHub did not confirm the review comment (${commentError.message}); the requested marker was cleared for a deliberate retry`
+          : `GitHub did not confirm the review comment (${commentError.message}) and the follow-up lookup also failed; the requested marker was preserved so a retry cannot buy a second review`,
       });
     }
 
@@ -1403,5 +1364,6 @@ module.exports = {
   reviewCommandBody,
   run,
   runReviewAuthorization,
+  validateAuthorizationState,
   validatePullRequest,
 };

@@ -13,6 +13,8 @@ const {
   evaluateChecks,
   reviewCommandBody,
   run,
+  validateAuthorizationState,
+  validatePullRequest,
 } = require('./coderabbit-final-review.cjs');
 
 const HEAD = '1111111111111111111111111111111111111111';
@@ -94,6 +96,39 @@ function executeTrustedGateDetection({
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+// Regression: the six shared live-state conditions were written out in BOTH
+// validators, which gate the same security decision. A change to one copy would
+// silently let one path accept a candidate the other rejects. validatePullRequest
+// is now derived from validateAuthorizationState; this pins the containment so a
+// future re-duplication that drops or weakens a condition fails here.
+test('validatePullRequest reports every validateAuthorizationState reason', () => {
+  const brokenStates = [
+    { state: 'closed' },
+    { draft: true },
+    { base: 'production' },
+    { autoMerge: { enabled_by: { login: 'someone' } } },
+    { mergeable: false },
+    { mergeableState: 'unknown' },
+    { mergeableState: 'dirty' },
+    { mergeableState: 'behind' },
+    { state: 'closed', draft: true, base: 'production', mergeableState: 'dirty' },
+  ];
+
+  for (const options of brokenStates) {
+    const pr = pullRequest(options);
+    const shared = validateAuthorizationState(pr, 'main');
+    const full = validatePullRequest(pr, 'main', pr.head.sha);
+
+    assert.ok(shared.length > 0, `fixture produced no shared reason: ${JSON.stringify(options)}`);
+    for (const reason of shared) {
+      assert.ok(
+        full.includes(reason),
+        `validatePullRequest dropped "${reason}" for ${JSON.stringify(options)}`,
+      );
+    }
+  }
+});
 
 test('the workflow no-ops only for the introducing-PR bootstrap identity', () => {
   const result = executeTrustedGateDetection({ pullNumber: 516, scriptExists: false });
@@ -1254,6 +1289,36 @@ test('a metadata edit that displaces a draft reset clears the old gate labels', 
   assert.match(result.reason, /still a draft/);
 });
 
+// Regression: the `edited` branch used to carry its own copy of the
+// reconciliation sequence and had lost the post-lookup confirmation re-read. A
+// head change racing the command lookup was therefore reported as a confirmed
+// duplicate here while every other event path reset. It now delegates.
+test('a metadata edit re-reads the pull request and resets when the head races the lookup', async () => {
+  const harness = makeHarness({
+    action: 'edited',
+    changes: { title: { from: 'Old title' } },
+    eventLabel: null,
+    eventPullRequest: pullRequest({ labels: [REQUESTED_LABEL] }),
+    pulls: [
+      pullRequest({ labels: [REQUESTED_LABEL] }),
+      pullRequest({ head: NEXT_HEAD, labels: [REQUESTED_LABEL] }),
+    ],
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'reset');
+  assert.match(result.reason, /^pull_request_target\.edited\.changed_live_state/);
+  assert.match(result.reason, /head changed during label-event reconciliation/);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+});
+
 test('ready-for-review and requested-marker removal both invalidate prior authorization', async () => {
   for (const event of [
     { action: 'ready_for_review', eventLabel: null },
@@ -1692,6 +1757,24 @@ test('an ambiguous comment failure preserves dedupe state when the command actua
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
   assert.deepEqual(harness.failures, []);
+});
+
+// Regression: when createComment fails AND the recovery lookup also fails, the
+// gate cannot know whether GitHub accepted the command. Clearing the dedupe
+// marker there invites a relabel that buys a SECOND paid review for the same
+// head. A confirmed absence and an unverifiable lookup are different states.
+test('an unverifiable recovery lookup preserves the dedupe marker', async () => {
+  const harness = makeHarness({
+    commentFailure: 'definite',
+    commentListFailuresAt: [2],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /follow-up lookup also failed/);
+  assert.match(harness.failures[0], /cannot buy a second review/);
 });
 
 test('an ambiguous failure never trusts the same command from another commenter', async () => {
