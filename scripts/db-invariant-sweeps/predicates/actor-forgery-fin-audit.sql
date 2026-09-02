@@ -52,13 +52,21 @@ WITH RECURSIVE cand AS (
     AND coalesce(p.proargmodes[a.ordinality], 'i'::"char") IN ('i', 'b', 'v')
     AND a.argname ~* '^p_\w*by$|^p_actor|^p_user'
     -- Mirror of actor-forgery.sql: the name pattern is not a definition of
-    -- "actor". uuid OR a user-defined type -- the latter keeps the composite
-    -- operator-overload class in scope and must not be simplified to `= uuid`.
-    -- Excludes only the remaining built-in scalars (p_group_by text, p_signed_by
-    -- text), which cannot carry an identity comparable to auth.uid().
+    -- "actor". uuid, OR a user-defined type (keeps the composite
+    -- operator-overload class in scope -- never simplify to `= uuid`), OR any
+    -- other type the body actually uses as an identity by casting it to uuid or
+    -- comparing it to auth.uid(). That third arm answers the Codex HIGH on
+    -- c1beab619: `p_user_id text` cast `p_user_id::uuid` into actor_user_id is a
+    -- real forgery shape, and a blanket type exclusion dropped it from scope.
+    -- What remains excluded is only a name ending in "by" that is never cast and
+    -- never compared to the caller.
     AND (a.argtype = 'pg_catalog.uuid'::regtype
          OR (SELECT t.typnamespace <> 'pg_catalog'::regnamespace
-             FROM pg_type t WHERE t.oid = a.argtype))
+             FROM pg_type t WHERE t.oid = a.argtype)
+         OR p.prosrc ~* ('\m' || regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g')
+                         || '\M\s*(?:\)\s*)*::\s*(?:pg_catalog\s*\.\s*)?uuid\M')
+         OR p.prosrc ~* ('\m' || regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g')
+                         || '\M[^;]{0,120}auth\s*\.\s*uid'))
 ), src_rows AS (
   -- Lex each routine ONCE. A routine with two actor-shaped parameters used to
   -- be lexed once per parameter, and the whole prosrc rode along in recursive
@@ -177,6 +185,15 @@ WITH RECURSIVE cand AS (
          AND regexp_instr(executable_src, shape.binding_re, 1, 1, 0, 'i') > 0
          AND regexp_instr(executable_src, shape.refusal_vactor, 1, 1, 0, 'i')
              > regexp_instr(executable_src, shape.binding_re, 1, 1, 0, 'i')
+         -- Mirror of actor-forgery.sql: no re-assignment of v_actor between its
+         -- auth.uid() binding and the refusal, or the refusal compares the actor
+         -- against a caller-poisoned local and proves nothing. Codex P1.
+         AND substr(
+               executable_src,
+               regexp_instr(executable_src, shape.binding_re, 1, 1, 1, 'i'),
+               greatest(regexp_instr(executable_src, shape.refusal_vactor, 1, 1, 0, 'i')
+                        - regexp_instr(executable_src, shape.binding_re, 1, 1, 1, 'i'), 0)
+             ) !~* '\mv_actor\M\s*:?='
            AS has_bound_local_refusal,
          -- Mirror of actor-forgery.sql. A PL/pgSQL IN parameter is a writable
          -- local, so a stash-then-rebind makes the canonical refusal unfireable
@@ -202,10 +219,17 @@ WITH RECURSIVE cand AS (
     -- `\s*\(*\s*`, both to avoid catastrophic backtracking once the trailing
     -- literal no longer anchors the match, and so the read guard's `identifier(`
     -- heuristic does not read a class member as a function name.
+    -- Mirror of actor-forgery.sql: `<>`/`!=` accepted ONLY behind an explicit
+    -- `<actor> IS NOT NULL AND` guard, because a bare `p_actor <> auth.uid()`
+    -- yields NULL for a NULL actor and the refusal never fires. `IS DISTINCT
+    -- FROM` is NULL-safe and stays acceptable on its own.
     SELECT '\mIF\M[(\s]*'
-           || '(?:' || ref.actor_ref || '\s+IS\s+NOT\s+NULL\s+AND[(\s]+)?'
-           || ref.actor_ref
-           || '(?:\s+IS\s+DISTINCT\s+FROM\s+|\s*(?:<>|!=)\s*)' AS refusal_head,
+           || '(?:'
+           ||   '(?:' || ref.actor_ref || '\s+IS\s+NOT\s+NULL\s+AND[(\s]+' || ref.actor_ref
+           ||     '(?:\s+IS\s+DISTINCT\s+FROM\s+|\s*(?:<>|!=)\s*))'
+           ||   '|'
+           ||   '(?:' || ref.actor_ref || '\s+IS\s+DISTINCT\s+FROM\s+)'
+           || ')' AS refusal_head,
            '[\s)]*\mTHEN\M\s*\mRAISE\s+EXCEPTION\M[^;]*;' AS refusal_tail
   ) frag
   CROSS JOIN LATERAL (
@@ -312,6 +336,45 @@ WHERE lex_error OR
       -- scope while its actor parameter stayed visible.
       (raw_src ~* 'financial_audit_log' AND has_actor_rebinding) OR
       pre_refusal_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)') OR
+      -- RAW-SOURCE correlation, restored from the base predicate (Codex HIGH,
+      -- exact-SHA review of c1beab619). The lexed arm above cannot see a DYNAMIC
+      -- audit write, because the whole statement lives inside a string literal
+      -- that the lexer masks:
+      --
+      --   EXECUTE 'INSERT INTO public.financial_audit_log(actor_user_id) VALUES ($1)'
+      --     USING p_performed_by;
+      --
+      -- `financial_audit_log` vanishes from executable_src, and `USING
+      -- p_performed_by` is not inside a callable expression, so neither the lexed
+      -- arm nor the forwarding arm below fires and the routine is cleared. The
+      -- base predicate on `main` reports it, because it correlates the table name
+      -- and the actor on RAW source within one statement. That coverage was lost
+      -- when the lexer arrived in PR #449 and is restored here rather than
+      -- documented as a residual -- forged authorship reaching the immutable
+      -- financial ledger is the exact class this predicate exists to catch.
+      --
+      -- Scoped to exactly that case: the sink is present in RAW source but absent
+      -- from the LEXED body, which is only true when the write is hidden inside a
+      -- masked literal. An ordinary `INSERT INTO financial_audit_log …` stays
+      -- visible in executable_src and is handled by the arm above, on the correct
+      -- side of the refusal.
+      --
+      -- Scoping matters and the first attempt got it wrong: an unconditional raw
+      -- correlation also reported actor_safe_refusal_forward, which stamps its
+      -- actor parameter AFTER a credited refusal that already proved the parameter
+      -- equals auth.uid(). That is a legitimate pattern, and reporting it would
+      -- have been a fresh false positive introduced while closing a false
+      -- negative. When the sink IS invisible we cannot tell whether it sits before
+      -- or after the refusal, so this arm fails closed and reports -- consistent
+      -- with the rest of this predicate.
+      --
+      -- Costs nothing against the live catalog: measured read-only 2026-09-02,
+      -- ZERO of the 131 candidate routines place an actor-shaped parameter inside
+      -- a financial_audit_log statement (27 touch the table; all stamp from a
+      -- bound local), and none writes the ledger dynamically.
+      (raw_src ~* 'financial_audit_log'
+       AND executable_src !~* 'financial_audit_log'
+       AND raw_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')) OR
       (raw_src ~* 'financial_audit_log' AND
        pre_refusal_src ~* ('(?:(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\.\s*)*(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\([^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)'))
 ORDER BY violation_key;

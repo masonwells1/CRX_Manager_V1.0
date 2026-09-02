@@ -645,6 +645,83 @@ BEGIN
   INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
 END;
 $body$;
+
+-- ---------------------------------------------------------------------------
+-- Fixtures from the exact-SHA Codex review of c1beab619.
+-- ---------------------------------------------------------------------------
+
+-- HIGH #1. An ISOLATED dynamic audit write: the whole INSERT lives inside a
+-- string literal, so the lexer masks financial_audit_log out of the analysed
+-- source, and the actor arrives via USING rather than inside a call.
+--
+-- This deliberately carries NO other statement. actor_dynamic_audit_sink_forward
+-- above also has a PERFORM public.forward_actor(p_actor_source) immediately
+-- before its EXECUTE, and that unrelated call satisfies the callable-forwarding
+-- arm -- so that fixture would keep passing even with the dynamic-sink arm
+-- removed, which is exactly how this gap survived review. Nothing here can
+-- satisfy any arm except raw-source correlation.
+CREATE FUNCTION public.actor_dynamic_audit_sink_only(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  EXECUTE 'INSERT INTO public.financial_audit_log(actor_user_id) VALUES ($1)' USING p_actor_source;
+END;
+$body$;
+
+-- HIGH #2. A TEXT actor cast to uuid on its way into the immutable ledger. The
+-- first draft of the type gate dropped every non-uuid built-in from candidacy,
+-- which removed this shape from the sweep entirely.
+CREATE FUNCTION public.actor_text_cast_audit_forward(p_performed_by text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_performed_by::uuid);
+END;
+$body$;
+
+-- P1. A BARE inequality refusal. Textually it looks like a correct guard, but
+-- p_actor_source <> auth.uid() evaluates to NULL when the actor argument is
+-- NULL, so the IF never fires and the refusal never raises. Accepting the
+-- inequality spelling without a null guard credits a guard that cannot refuse --
+-- same defect class as actor_selfbound_declare_init_forward. Must be REPORTED.
+CREATE FUNCTION public.actor_bare_inequality_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source <> auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- P1. The local is bound to auth.uid() and then OVERWRITTEN with a
+-- caller-controlled value before the refusal reads it, so the comparison proves
+-- nothing. Ordering alone would credit this. Must be REPORTED.
+CREATE FUNCTION public.actor_poisoned_local_before_refusal(p_actor_source uuid, p_target_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid;
+BEGIN
+  v_actor := auth.uid();
+  v_actor := p_target_id;
+  IF p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- The control that makes the type gate worth having: a text parameter whose name
+-- merely ends in "by", never cast and never compared to the caller. Modelled on
+-- live get_profitability_report.p_group_by. Must NOT be reported.
+CREATE FUNCTION public.actor_text_grouping_mode(p_group_by text) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_group_by NOT IN ('customer', 'product', 'month') THEN
+    RAISE EXCEPTION 'Invalid p_group_by: %', p_group_by;
+  END IF;
+  RETURN p_group_by;
+END;
+$body$;
 `);
 
   const forgedActor = '00000000-0000-0000-0000-000000000001';
@@ -710,6 +787,10 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_notice_not_exception_forward',
     'actor_selfbound_declare_init_forward',
     'actor_null_tolerant_wrong_identity_forward',
+    // Codex P1s on c1beab619: a guard that cannot fire, and a guard reading a
+    // local that was poisoned after it was bound.
+    'actor_bare_inequality_forward',
+    'actor_poisoned_local_before_refusal',
   ]) {
     assert.ok(
       generalRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
@@ -731,6 +812,9 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_null_tolerant_refusal_forward',
     'actor_prose_message_refusal_forward',
     'actor_prefixed_message_refusal_forward',
+    // Type-gate control: a text parameter that merely ends in "by", never cast to
+    // uuid and never compared to the caller, is not an actor and must stay out.
+    'actor_text_grouping_mode',
   ]) {
     assert.ok(
       !generalRows.some((row) => row.startsWith(`${routine}(`)),
@@ -741,6 +825,18 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
       `financial predicate must stop at the executable uncaught refusal in ${routine}: ${financialRows.join(', ')}`,
     );
   }
+  // ── Codex c1beab619 HIGH #1 and #2, asserted against the FINANCIAL predicate ──
+  // These two are audit-ledger shapes. The general predicate has no
+  // financial_audit_log arm and is not expected to report them, so asserting the
+  // must-report loop's both-predicates rule would be asserting the wrong thing.
+  for (const routine of ['actor_dynamic_audit_sink_only', 'actor_text_cast_audit_forward']) {
+    assert.ok(
+      financialRows.some((row) => row.startsWith(`${routine}(`)),
+      `financial predicate must catch ${routine} — forged authorship reaching the immutable ` +
+        `ledger is this predicate's whole remit: ${financialRows.join(', ')}`,
+    );
+  }
+
   console.log('ACTOR_FORGERY_PREDICATES_TEST_PASS');
 } finally {
   if (CONTAINER.startsWith(PREFIX)) {

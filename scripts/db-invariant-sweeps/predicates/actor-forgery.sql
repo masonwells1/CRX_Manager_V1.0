@@ -48,21 +48,36 @@ WITH RECURSIVE cand AS (
     -- returns uuid, so a parameter that cannot be compared to it cannot be the
     -- actor this predicate reasons about.
     --
-    -- uuid OR any user-defined type. The second half is load-bearing and must not
-    -- be simplified away to `= uuid`: the operator-overload attack class works by
-    -- giving the actor a COMPOSITE type whose `=` runs a mutating function, so
-    -- restricting candidacy to uuid would blind this predicate to exactly the
-    -- shape actor_overloaded_equality / actor_reverse_equality pin. What is
-    -- excluded is only the remaining built-in scalars -- text, integer, date --
-    -- which cannot carry an identity in this schema.
+    -- uuid, OR any user-defined type, OR a parameter of any other type that the
+    -- body actually USES as an identity.
     --
-    -- Trade-off, stated rather than hidden: a text-typed actor parameter written
-    -- straight into an attribution column is now out of scope for this sweep.
-    -- Actor columns in this schema are uuid foreign keys, so that shape does not
-    -- exist today; if one is ever introduced, this gate is where it goes blind.
+    -- The user-defined arm is load-bearing and must not be simplified away to
+    -- `= uuid`: the operator-overload attack class gives the actor a COMPOSITE
+    -- type whose `=` runs a mutating function, which is exactly what
+    -- actor_overloaded_equality / actor_reverse_equality pin.
+    --
+    -- The third arm exists because the first draft of this gate stopped at
+    -- "uuid or user-defined", and the exact-SHA Codex review of c1beab619 rejected
+    -- that as a HIGH: `p_user_id text` cast `p_user_id::uuid` into an attribution
+    -- column is a real forgery shape, and a blanket type exclusion removed it from
+    -- `cand` entirely -- a narrowing the base predicate never made. Documenting it
+    -- as a trade-off was not good enough; a documented residual is still a live
+    -- bypass. So a non-uuid built-in stays in scope whenever the body casts it to
+    -- uuid or compares it against auth.uid().
+    --
+    -- What is still excluded is only a parameter that does NEITHER -- a name that
+    -- merely ends in "by". `get_profitability_report.p_group_by` is a text
+    -- grouping mode checked against 'customer'/'product'/'month', and
+    -- `complete_delivery.p_signed_by` is a signature name. Neither is ever cast to
+    -- uuid nor compared to the caller, so neither can be the actor this predicate
+    -- reasons about.
     AND (a.argtype = 'pg_catalog.uuid'::regtype
          OR (SELECT t.typnamespace <> 'pg_catalog'::regnamespace
-             FROM pg_type t WHERE t.oid = a.argtype))
+             FROM pg_type t WHERE t.oid = a.argtype)
+         OR p.prosrc ~* ('\m' || regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g')
+                         || '\M\s*(?:\)\s*)*::\s*(?:pg_catalog\s*\.\s*)?uuid\M')
+         OR p.prosrc ~* ('\m' || regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g')
+                         || '\M[^;]{0,120}auth\s*\.\s*uid'))
 ), src_rows AS (
   -- Lex each routine ONCE. A routine with two actor-shaped parameters used to
   -- be lexed once per parameter, and the whole prosrc rode along in recursive
@@ -193,6 +208,26 @@ WITH RECURSIVE cand AS (
          AND regexp_instr(executable_src, shape.binding_re, 1, 1, 0, 'i') > 0
          AND regexp_instr(executable_src, shape.refusal_vactor, 1, 1, 0, 'i')
              > regexp_instr(executable_src, shape.binding_re, 1, 1, 0, 'i')
+         -- NO RE-ASSIGNMENT OF v_actor BETWEEN THE BINDING AND THE REFUSAL.
+         -- Ordering alone is not enough: bind the local to auth.uid(), overwrite
+         -- it with a caller-controlled value, then compare the actor parameter
+         -- against the poisoned local and the refusal proves nothing --
+         --
+         --   v_actor := auth.uid();
+         --   v_actor := p_target_id;                       -- poisons the check
+         --   IF p_performed_by IS DISTINCT FROM v_actor THEN RAISE …
+         --
+         -- The span examined runs from the END of the binding match to the START
+         -- of the refusal, so the binding's own `:=` is excluded and any further
+         -- assignment inside that window withdraws the credit. Raised as a P1 by
+         -- the exact-SHA Codex review; the `.*?` bridge this replaced had the same
+         -- blind spot, so it is fixed here rather than carried forward.
+         AND substr(
+               executable_src,
+               regexp_instr(executable_src, shape.binding_re, 1, 1, 1, 'i'),
+               greatest(regexp_instr(executable_src, shape.refusal_vactor, 1, 1, 0, 'i')
+                        - regexp_instr(executable_src, shape.binding_re, 1, 1, 1, 'i'), 0)
+             ) !~* '\mv_actor\M\s*:?='
            AS has_bound_local_refusal,
          -- A PL/pgSQL IN parameter is an ordinary writable local, so the
          -- canonical refusal proves nothing about the value that reached the
@@ -253,10 +288,28 @@ WITH RECURSIVE cand AS (
     -- `[(\s]` not `[\s(]`, purely so the read guard's `identifier(` heuristic
     -- does not read the class's own `s` as a function name and refuse the
     -- statement. Identical character class, different member order.
+    -- NULL-SAFETY IS PART OF THE SHAPE. `<>` and `!=` are only accepted BEHIND an
+    -- explicit `<actor> IS NOT NULL AND` guard; `IS DISTINCT FROM` is accepted
+    -- with or without one.
+    --
+    -- This is the first draft's own widening biting back, caught by the exact-SHA
+    -- Codex review. A bare `IF p_actor <> auth.uid() THEN RAISE …` evaluates to
+    -- NULL when the actor argument is NULL, so the IF does not fire and the
+    -- refusal never raises. Crediting that shape means crediting a guard that
+    -- cannot refuse — the same defect class as the initializer-bound-to-parameter
+    -- canary, and a false negative in a security control. `IS DISTINCT FROM` has
+    -- no such hole: NULL IS DISTINCT FROM <uuid> is TRUE, so it refuses.
+    --
+    -- Costs no live coverage: every live routine using `<>` already pairs it with
+    -- the null guard (e.g. _section9_cancel_purchase_order_serialized,
+    -- _create_direct_order_below_cost_impl_20260810).
     SELECT '\mIF\M[(\s]*'
-           || '(?:' || ref.actor_ref || '\s+IS\s+NOT\s+NULL\s+AND[(\s]+)?'
-           || ref.actor_ref
-           || '(?:\s+IS\s+DISTINCT\s+FROM\s+|\s*(?:<>|!=)\s*)' AS refusal_head,
+           || '(?:'
+           ||   '(?:' || ref.actor_ref || '\s+IS\s+NOT\s+NULL\s+AND[(\s]+' || ref.actor_ref
+           ||     '(?:\s+IS\s+DISTINCT\s+FROM\s+|\s*(?:<>|!=)\s*))'
+           ||   '|'
+           ||   '(?:' || ref.actor_ref || '\s+IS\s+DISTINCT\s+FROM\s+)'
+           || ')' AS refusal_head,
            '[\s)]*\mTHEN\M\s*\mRAISE\s+EXCEPTION\M[^;]*;' AS refusal_tail
   ) frag
   CROSS JOIN LATERAL (
