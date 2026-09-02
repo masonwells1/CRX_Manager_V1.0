@@ -27,8 +27,17 @@ const GENERAL = path.join(DIR, 'predicates', 'actor-forgery.sql');
 const FIN_AUDIT = path.join(DIR, 'predicates', 'actor-forgery-fin-audit.sql');
 const CONTAINER_PROOF = path.join(DIR, 'actor-forgery-predicates.test.mjs');
 
-const general = readFileSync(GENERAL, 'utf8');
-const finAudit = readFileSync(FIN_AUDIT, 'utf8');
+// COMMENTS ARE STRIPPED BEFORE EVERY STRUCTURAL ASSERTION, and that is the whole
+// point rather than tidiness. The first version of this guard tested the raw file
+// text, so an assertion kept passing by matching a SQL comment that described a
+// REJECTED earlier draft — the executable expression it claimed to pin no longer
+// existed anywhere. Codex found it: "one raw match and zero executable-code
+// matches". A guard that can be satisfied by its own documentation is worse than
+// no guard, because it reports coverage it does not have.
+const stripSqlComments = (text) => text.replace(/--[^\r\n]*/g, '');
+
+const general = stripSqlComments(readFileSync(GENERAL, 'utf8'));
+const finAudit = stripSqlComments(readFileSync(FIN_AUDIT, 'utf8'));
 const proof = readFileSync(CONTAINER_PROOF, 'utf8');
 
 // Each entry: [label, required regex, which files must contain it].
@@ -88,22 +97,21 @@ for (const [label, pattern, files] of REQUIRED) {
 // coverage the lexer removed in PR #449 — a masked `EXECUTE 'INSERT INTO
 // financial_audit_log …' USING p_performed_by` is invisible to every lexed arm.
 assert.ok(
-  /executable_src !~\* 'financial_audit_log'/.test(finAudit),
-  'financial predicate lost the dynamic-audit-sink arm (Codex HIGH #1): a masked EXECUTE write ' +
-    'into the immutable ledger would go unreported',
+  /pre_refusal_src IS NOT DISTINCT FROM executable_src\s*\n?\s*AND raw_src ~\* \('financial_audit_log/
+    .test(finAudit),
+  'financial predicate lost the dynamic-audit-sink arm: a masked EXECUTE write into the ' +
+    'immutable ledger would go unreported. NOTE the shape pinned here is the CURRENT one ' +
+    '(no-credited-refusal gate); the earlier global-absence spelling was itself rejected as a HIGH',
 );
 
 // The operator arms must not regress to the set-returning form: `EXISTS (SELECT 1
 // FROM regexp_matches(…, 'gi'))` enumerates every match before EXISTS can stop,
 // which is what timed the sweep out against the live catalog.
 //
-// Comments are stripped first. The first draft of this check did not, and it
-// failed on the SQL comment that explains why the set-returning form was
-// removed — a guard tripping over its own documentation.
-const stripSqlComments = (text) => text.replace(/--[^\r\n]*/g, '');
+// `general` and `finAudit` are already comment-stripped at read time.
 for (const [name, text] of [['general', general], ['fin-audit', finAudit]]) {
   assert.ok(
-    !/FROM regexp_matches\(/.test(stripSqlComments(text)),
+    !/FROM regexp_matches\(/.test(text),
     `${name} predicate reintroduced set-returning regexp_matches in a boolean test — use ~*`,
   );
 }
@@ -138,7 +146,7 @@ const REQUIRED_FIXTURES = [
 // stop, exactly as the base predicate defines it.
 for (const [name, text] of [['general', general], ['fin-audit', finAudit]]) {
   assert.ok(
-    !/argtype = 'pg_catalog\.uuid'::regtype\s*\n?\s*OR/.test(stripSqlComments(text)),
+    !/argtype = 'pg_catalog\.uuid'::regtype\s*\n?\s*OR/.test(text),
     `${name} predicate reintroduced a parameter-type gate on candidacy — every narrowing of ` +
       `this so far has been a HIGH false negative; suppress proven non-actors after sink ` +
       `analysis instead`,

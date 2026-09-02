@@ -247,10 +247,27 @@ WITH RECURSIVE cand AS (
          -- accepting `=` safe: a bare `=` at statement position is an
          -- assignment, whereas the comparison `IF p_x = y THEN` is preceded by
          -- `IF`, and the named-argument `f(p_x => v)` by `(` or `,`.
-         executable_src ~* (
+         (executable_src ~* (
            '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
            || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:?='
-         ) AS has_actor_rebinding
+         )
+         -- `INTO` is an assignment path too. `SELECT … INTO p_performed_by` and
+         -- `EXECUTE … INTO v_actor` overwrite the actor exactly as `:=` does, and
+         -- the rebinding rule read only the walrus/equals spellings. This was
+         -- recorded as an open residual in the 2026-09-01 cap entry ("the
+         -- INTO-target form is proven STILL OPEN … both sweeps miss it too") and
+         -- re-raised by the exact-SHA Codex review. Closed here for the sweeps.
+         --
+         -- Matches the actor as ANY target in the INTO list, since
+         -- `INTO v_other, p_performed_by` rebinds it just as well as a lone
+         -- target. Bounded to keep the scan cheap on a 21KB body.
+         OR executable_src ~* (
+           '\mINTO\M\s*(?:\mSTRICT\M\s*)?(?:[[:alpha:]_][[:alnum:]_$]*\s*,\s*){0,8}'
+           || '\m' || argname_pattern || '\M'
+         )
+         OR executable_src ~* (
+           '\mINTO\M\s*(?:\mSTRICT\M\s*)?(?:[[:alpha:]_][[:alnum:]_$]*\s*,\s*){0,8}\mv_actor\M'
+         )) AS has_actor_rebinding
   FROM lexed
   CROSS JOIN LATERAL (
     SELECT '(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)' AS actor_ref
@@ -394,15 +411,26 @@ WITH RECURSIVE cand AS (
            ) AS stmt
   ) refusal
   CROSS JOIN LATERAL (
-    SELECT array_length(regexp_split_to_array(upper(stripped.prefix), '\mIF\M'), 1) - 1 AS if_tokens,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mEND\s+IF\M'), 1) - 1 AS end_if,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mLOOP\M'), 1) - 1 AS loop_tokens,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mEND\s+LOOP\M'), 1) - 1 AS end_loop,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mCASE\M'), 1) - 1 AS case_tokens,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mEND\s+CASE\M'), 1) - 1 AS end_case,
-           array_length(regexp_split_to_array(upper(refusal.stmt), '\mIF\M'), 1) - 1 AS stmt_if,
-           array_length(regexp_split_to_array(upper(refusal.stmt), '\mLOOP\M'), 1) - 1 AS stmt_loop,
-           array_length(regexp_split_to_array(upper(refusal.stmt), '\mCASE\M'), 1) - 1 AS stmt_case
+    -- Quoted identifiers are BLANKED before the control-flow tokens are counted.
+    -- The lexer deliberately leaves double-quoted identifiers intact (it must —
+    -- `"public"."f"` is how a routine is named), but a quoted identifier may
+    -- legally contain control-flow keywords. `DECLARE "END IF" integer;` inside
+    -- `IF false THEN …` makes the prefix balance, credits an UNREACHABLE refusal,
+    -- and deletes everything after it from analysis. Raised on PR #449 and never
+    -- closed there; carried in until now.
+    SELECT array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mIF\M'), 1) - 1 AS if_tokens,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mEND\s+IF\M'), 1) - 1 AS end_if,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mLOOP\M'), 1) - 1 AS loop_tokens,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mEND\s+LOOP\M'), 1) - 1 AS end_loop,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mCASE\M'), 1) - 1 AS case_tokens,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mEND\s+CASE\M'), 1) - 1 AS end_case,
+           array_length(regexp_split_to_array(upper(blockscan.stmt_src), '\mIF\M'), 1) - 1 AS stmt_if,
+           array_length(regexp_split_to_array(upper(blockscan.stmt_src), '\mLOOP\M'), 1) - 1 AS stmt_loop,
+           array_length(regexp_split_to_array(upper(blockscan.stmt_src), '\mCASE\M'), 1) - 1 AS stmt_case
+    FROM (
+      SELECT regexp_replace(stripped.prefix, '"(?:[^"]|"")*"', ' ', 'g') AS prefix_src,
+             regexp_replace(refusal.stmt, '"(?:[^"]|"")*"', ' ', 'g') AS stmt_src
+    ) blockscan
   ) blocks
   -- OPTIMIZATION FENCE -- load-bearing, not leftover debris.
   --

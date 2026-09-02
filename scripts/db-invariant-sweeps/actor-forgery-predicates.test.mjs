@@ -746,6 +746,40 @@ BEGIN
 END;
 $body$;
 
+-- Round 3 P1. SELECT ... INTO is an assignment path the rebinding rule did not
+-- read: the canonical refusal passes, then the actor parameter is overwritten
+-- from a caller-controlled row before it reaches the sink. Recorded as an open
+-- residual in the 2026-09-01 cap entry. Must be REPORTED.
+CREATE FUNCTION public.actor_into_rebound_param_forward(p_actor_source uuid, p_target_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  SELECT p_target_id INTO p_actor_source;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- Round 3 P1. A legal quoted identifier containing a control-flow keyword. The
+-- refusal sits inside IF false THEN and can never run, but "END IF" as an
+-- identifier balances the block counts, so the unreachable refusal was credited
+-- and everything after it vanished from analysis. Must be REPORTED.
+CREATE FUNCTION public.actor_quoted_identifier_block_spoof(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE "END IF" integer := 1;
+BEGIN
+  IF false THEN
+    IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH';
+    END IF;
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
 -- HIGH. Authorization derived from a forgeable actor through DYNAMIC SQL. The
 -- lexer masks the string, so neither the role arm nor any other lexed arm sees
 -- it; the general predicate had no raw-source fallback at all.
@@ -826,6 +860,10 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     // local that was poisoned after it was bound.
     'actor_bare_inequality_forward',
     'actor_poisoned_local_before_refusal',
+    // Codex round 3: INTO as an assignment path, and a quoted identifier
+    // balancing the control-flow counts around an unreachable refusal.
+    'actor_into_rebound_param_forward',
+    'actor_quoted_identifier_block_spoof',
   ]) {
     assert.ok(
       generalRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
