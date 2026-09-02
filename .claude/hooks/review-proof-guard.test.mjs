@@ -262,7 +262,16 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm a*.log" } }).st
 assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/review-proof-guard.mjs", content: "// edit" } }).stdout, "");
 assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/settings.json", content: "{}" } }).stdout, "");
 assert.equal(run({ tool_name: "Edit", tool_input: { file_path: ".claude/hooks/stop-wrap.mjs" } }).stdout, "");
-assert.equal(run({ tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/hooks/a.mjs", destination: ".claude/hooks/b.mjs" } }).stdout, "");
+// DELIBERATELY REVERSED 2026-09-01. This line used to assert that an MCP move of
+// a hook file was ALLOWED — true when `guarded-surface-lock` existed to catch it.
+// With the lock deleted, that is exactly the "silently rewrite a guard, then run
+// the operation it gated" route, so a path-field tool aimed at a hook file now
+// denies. Native Write/Edit stay allowed (asserted just above and below) because
+// there is no unlock any more and they are the only way to maintain a hook.
+assert.match(
+  run({ tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/hooks/a.mjs", destination: ".claude/hooks/b.mjs" } }).stdout,
+  /"permissionDecision":"deny"/,
+);
 
 // Ack valve (stop-wrap-ack.json): the ONE session-state basename stop-wrap.mjs
 // tells the agent to write to acknowledge loose ends — must be ALLOWED again
@@ -358,5 +367,323 @@ for (const payload of [
   assert.equal(result.status, 0);
   assert.equal(result.stdout, "");
 }
+
+// ---------------------------------------------------------------------------
+// Enforcement surfaces outside `.claude`, absorbed here 2026-09-01 when
+// guarded-surface-lock was removed. These are the ONLY paths that lock covered
+// and this guard did not, so they are the whole replacement — if these stop
+// denying, the removal was a net loss of coverage and this suite must say so.
+// ---------------------------------------------------------------------------
+for (const command of [
+  "rm -f .husky/pre-push",
+  "rm -rf .husky",
+  "mv .husky/pre-commit /tmp/x",
+  "echo x > .husky/pre-push",
+  "printf 'exit 0' >> .husky/pre-commit",
+  "rm .github/workflows/ci.yml",
+  "echo broken > .github/workflows/ci.yml",
+  "rm -rf .codex/hooks",
+  "echo {} > .codex/hooks.json",
+  "rm .coderabbit.yaml",
+  "echo '' > .coderabbit.yml",
+  // Quote/backslash obfuscation must not help: the shell resolves these to the
+  // real path, and the guard tests every normalized view.
+  'r"m" -f .husky/pre-push',
+  "rm -f .hus\\ky/pre-push",
+  // Windows separators travel in the raw view.
+  "rm -f .github\\workflows\\ci.yml",
+  // Overwrite verbs whose CONTENT comes from git history or a patch file, so no
+  // redirect and no rm/mv ever appears in the command text. The removed lock
+  // caught these; dropping them would have been a silent loss of coverage.
+  "git checkout main -- .husky/pre-push",
+  "git restore --source=HEAD~5 .husky/",
+  "git checkout main -- .claude/hooks/sql-safety.mjs",
+  "git apply /tmp/disable-guards.patch .codex/hooks.json",
+  "patch -p1 .husky/pre-commit < /tmp/x.diff",
+  "git rm .github/workflows/ci.yml",
+  "git -C /repo checkout main -- .husky/pre-push",
+  // Every bypass the gpt-5.6-sol review confirmed against the FIRST cut of this
+  // rule, which enumerated destructive verbs instead of allowlisting read-only
+  // heads. Each one was parser-confirmed ALLOWED then; each must deny now. If a
+  // future edit turns this back into a verb blocklist, these go red.
+  "cp /tmp/evil .husky/pre-push",
+  "tee .husky/pre-push",
+  "sed -i s/exit/return/ .husky/pre-push",
+  "Set-Content .codex/hooks.json",
+  "Copy-Item /tmp/x .claude/hooks/sql-safety.mjs",
+  "echo x >| .husky/pre-push",
+  "Out-File -FilePath .husky/pre-push",
+  "Add-Content .coderabbit.yaml",
+  "install -m 755 /tmp/x .husky/pre-push",
+  "dd if=/tmp/x of=.husky/pre-push",
+  "python -c open('.husky/pre-push','w')",
+  "perl -i -pe s/a/b/ .husky/pre-push",
+  // An unrecognized head is a writer by construction — the whole point of the
+  // allowlist. No new verb has to be enumerated for this to hold.
+  "someNewTool --overwrite .husky/pre-push",
+  // SECOND gpt-5.6-sol round. Each of these wears a read-only head and still
+  // writes a NAMED file; each was probe-confirmed ALLOW before this fix. This is
+  // not the documented hidden-indirection residual — the target is right there in
+  // the command text.
+  "node -e require('fs').writeFileSync('.husky/pre-push','')",
+  "node --eval require('fs').writeFileSync('.husky/pre-push','')",
+  "sed -n w .husky/pre-push /dev/null",
+  "sort -o .husky/pre-push /dev/null",
+  "find . -name x -fprintf .husky/pre-push %p",
+  "awk -v p=.husky/pre-push END{print>p}",
+  // `..` traversal through an existing sibling directory resolves onto the real
+  // hook. Same round, HIGH, and a re-opened bypass the deleted lock had closed.
+  "cp /tmp/evil .claude/commands/../hooks/review-proof-guard.mjs",
+  "tee .claude/commands/../hooks/sql-safety.mjs",
+  "cp /tmp/evil .github/ISSUE_TEMPLATE/../workflows/ci.yml",
+  // THIRD gpt-5.6-sol round. A WRAPPER hides the real program from a head-only
+  // check: bare `cp` denied while `command cp` was ALLOW. Wrappers are refused by
+  // never being listed, so this block also pins the ones nobody has tried yet.
+  "command cp /tmp/evil .husky/pre-push",
+  "env cp /tmp/evil .husky/pre-push",
+  "exec cp /tmp/evil .husky/pre-push",
+  "timeout 5 cp /tmp/evil .husky/pre-push",
+  "sudo cp /tmp/evil .husky/pre-push",
+  "xargs cp .husky/pre-push",
+  // Utilities that take an OUTPUT operand or an in-place flag, all probe-confirmed
+  // ALLOW before removal from the allowlist.
+  "uniq /tmp/in .husky/pre-push",
+  "diff --output=.husky/pre-push a b",
+  "yq -i .a=1 .codex/hooks.json",
+  "xxd -r /tmp/x .husky/pre-push",
+  // A package runner executes an arbitrary program with the protected path as its
+  // argument. `node <script>` stays allowed; these do not.
+  "npx rimraf .husky",
+  "npm exec rimraf .husky/pre-push",
+  "yarn rimraf .claude/hooks/sql-safety.mjs",
+  // FOURTH gpt-5.6-sol round. The git SUBCOMMAND was validated but its FLAGS were
+  // not, so read-only subcommands wrote the very files this rule protects. Both
+  // probe-confirmed ALLOW before this fix.
+  "git diff --output=.husky/pre-push HEAD~1 HEAD",
+  "git show --output=.github/workflows/ci.yml HEAD:package.json",
+  "git diff --output .husky/pre-push HEAD~1 HEAD",
+  // The rule is on the SHAPE — a protected path as a flag's value — so it holds
+  // for heads and flags beyond git.
+  "grep --output=.husky/pre-push x /tmp/in",
+  // FIFTH gpt-5.6-sol round. A PATH-QUALIFIED head is not the program the
+  // allowlist vouched for — any file the agent can create, named `cat` or `git`,
+  // inherited the allowance. Both probe-confirmed ALLOW.
+  "scripts/cat .husky/pre-push",
+  "/tmp/git diff .github/workflows/ci.yml",
+  "./cat .husky/pre-push",
+  // Redefinition: the definition and the call sit in DIFFERENT segments, so a
+  // per-segment head check saw only the allowlisted name. Judged over the whole
+  // command instead.
+  'cat(){ cp /tmp/evil "$1"; }; cat .husky/pre-push',
+  "function cat { cp /tmp/evil .husky/pre-push; }; cat .husky/pre-push",
+  "alias cat=cp; cat /tmp/evil .husky/pre-push",
+  "eval cp /tmp/evil .husky/pre-push",
+  // SIXTH gpt-5.6-sol round. Only the OUTER head was inspected, so the real
+  // command hid inside a substitution, or the name was repointed at another
+  // binary. Both probe-confirmed ALLOW.
+  "echo $(rm -f .husky/pre-push)",
+  "echo `rm -f .husky/pre-push`",
+  "cat <(cp /tmp/evil .husky/pre-push)",
+  "PATH=/tmp:$PATH; cat .husky/pre-push",
+  "export PATH=/tmp:$PATH; cat .claude/hooks/sql-safety.mjs",
+  "NODE_OPTIONS=--require=/tmp/evil.js node .claude/hooks/sql-safety.mjs",
+  // The validation and PROOF-MINTING scripts, restored to the guarded set on
+  // 2026-09-01 to close CodeRabbit's outstanding finding on this PR, which named
+  // "validation/proof scripts" explicitly. `write-codex-push-proof.mjs` mints the
+  // Codex approval proof, `run-claude-review.mjs` the Claude one, and
+  // `remove-applied-ledger-entry.mjs` clears the C3 uncontained-apply alarm — a
+  // shell write to any of them lets the thing being certified rewrite its own
+  // certifier. CI runs the BRANCH's copies of the check/validate/verify scripts,
+  // so a rewritten validator passes CI too.
+  "cp /tmp/evil scripts/write-codex-push-proof.mjs",
+  "echo x > scripts/run-claude-review.mjs",
+  "tee scripts/remove-applied-ledger-entry.mjs",
+  "cp /tmp/evil scripts/check-ledger-update.mjs",
+  "echo x > scripts/validate-sql.mjs",
+  "cp /tmp/evil scripts/verify-deps.mjs",
+  "rm -f scripts/agent-manifest-parity.mjs",
+  "cp /tmp/evil scripts/sync-agent-workflows.mjs",
+  // SEVENTH gpt-5.6-sol round, both P1 and both reproduced by the reviewer.
+  //
+  // (a) `rg --pre CMD` runs CMD on every input path, so an allowlisted READER
+  // executes an arbitrary writer against the protected file. Same shape as
+  // `node -e` and `find -exec`, which were already denied.
+  "rg --pre rm pattern .github/workflows/ci.yml",
+  "rg --pre=rm pattern .claude/hooks/review-proof-guard.mjs",
+  "rg --hostname-bin rm pattern .husky/pre-push",
+  "rg --pre-glob '*' --pre rm x .codex/hooks.json",
+  // (b) A doubled separator is the same file to the OS and a different string to
+  // the matcher. Reported for the shell channel; the path-field channel had the
+  // identical early return and is pinned here too.
+  "rm -f .github//workflows/ci.yml",
+  "rm -f .codex//hooks/production-action-guard.mjs",
+  "cp /tmp/evil .claude//hooks/review-proof-guard.mjs",
+  "echo x > scripts//verify-deps.mjs",
+  "cp /tmp/evil .husky//pre-push",
+  "cp /tmp/evil .claude///hooks/sql-safety.mjs",
+  // (c) GIT AS AN EXECUTOR. A read-only git SUBCOMMAND does not make the command
+  // read-only: git runs whatever a config override or pager/diff helper names.
+  // Both of these were reproduced by the reviewer DELETING .husky/pre-push.
+  "git -c diff.external=rm diff --ext-diff -- .husky/pre-push",
+  "git grep --open-files-in-pager=rm pattern -- .husky/pre-push",
+  "git grep -O rm pattern -- .github/workflows/ci.yml",
+  "git -c core.pager=rm log .husky/pre-push",
+  "git --config-env=diff.external=EVIL diff .codex/hooks.json",
+  // The whole `-c` channel goes, not just the keys known to execute today. This
+  // spelling used to be an ALLOW case; vouching for it was the defect.
+  "git -c core.pager=cat log .husky/pre-push",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);
+}
+
+// Reading them stays allowed — that is the whole reason this is a destructive-verb
+// rule and not a deny-every-mention rule. Routine work reads these constantly.
+for (const command of [
+  "cat .husky/pre-push",
+  "grep -rn typecheck .husky/",
+  "ls -la .github/workflows",
+  "head -20 .coderabbit.yaml",
+  "git diff .codex/hooks.json",
+  "git log --oneline .husky/",
+  "git show HEAD:.husky/pre-push",
+  // `-am` must not read as the `am` subcommand — this is why GIT_OVERWRITE_RE
+  // requires whitespace immediately before the verb.
+  "git commit -am wired .husky/pre-push",
+  // `-C <dir>` takes a SEPARATE value. A naive flag-skipper reads the directory
+  // as the subcommand and fails closed on an ordinary stage — which this rule
+  // actually did, blocking `git -C <worktree> add .claude/hooks/...`.
+  "git -C /repo add .claude/hooks/review-proof-guard.mjs",
+  "git --git-dir /repo/.git diff .husky/pre-push",
+  // A VALUELESS flag followed by a positional path is a read, not a write. The
+  // flag-value rule must not swallow these — `git diff --stat <hook>` is used
+  // constantly, and an earlier draft of that rule denied it.
+  "git diff --stat .claude/hooks/review-proof-guard.mjs",
+  "git log --oneline -5 .husky/pre-push",
+  "grep -o typecheck .husky/pre-push",
+  "grep -rn --color .github/workflows",
+  // RUNNING a guarded script is not editing it, and this is how CI and the
+  // maintenance commands invoke them. Must stay allowed.
+  "node scripts/verify-deps.mjs",
+  "node scripts/agent-manifest-parity.mjs",
+  "node scripts/check-doc-drift.mjs",
+  "git add scripts/write-codex-push-proof.mjs",
+  "cat scripts/validate-sql.mjs",
+  // npm SCRIPT names that merely resemble a guarded path are not that path.
+  "npm run verify-deps",
+  // `node <script>` stays allowed — it is how these very suites run. Only the
+  // inline-code flags are refused (asserted in the deny block above).
+  "node .claude/hooks/review-proof-guard.test.mjs",
+  "node scripts/agent-health-check.mjs .husky",
+  "find .github/workflows -name *.yml",
+  "Get-Content .husky/pre-push",
+  "Select-String typecheck .husky/pre-push",
+  // A redirect that READS one of these and writes somewhere harmless is not a
+  // write INTO the surface; the old lock got this wrong and blocked diagnostics.
+  "cat .husky/pre-push > /tmp/out.txt",
+  // Plain ripgrep stays allowed — only the flags that make it EXECUTE a program are
+  // refused, so ordinary searching of a guarded file is unaffected.
+  "rg typecheck .husky/pre-push",
+  "rg --files-with-matches typecheck .github/workflows",
+  "rg -n --no-heading pattern .claude/hooks/review-proof-guard.mjs",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.equal(result.stdout, "", `must allow: ${command}`);
+}
+
+// Near-misses must NOT be swept up: the path components are whole words.
+for (const command of [
+  "rm -rf .husky-backup",
+  "rm -rf my.husky",
+  "rm -rf .github/ISSUE_TEMPLATE",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.equal(result.stdout, "", `must allow near-miss: ${command}`);
+}
+
+// Path-field writers (MCP filesystem tools, move/copy tools, patch destinations)
+// must deny too — Codex listed these alongside the shell bypasses.
+for (const payload of [
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".husky/pre-push" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/hooks/sql-safety.mjs" } },
+  { tool_name: "mcp__filesystem__edit_file", tool_input: { path: ".codex/hooks.json" } },
+  { tool_name: "apply_patch", tool_input: { patch: "*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n" } },
+  // Traversal through the path field — the MCP half of the same HIGH.
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/../hooks/review-proof-guard.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".github/ISSUE_TEMPLATE/../workflows/ci.yml" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude\\commands\\..\\hooks\\sql-safety.mjs" } },
+  // Doubled separators through the path field — the channel the reviewer did not
+  // test, which had the same early return as the shell resolver.
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude//hooks/review-proof-guard.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".github//workflows/ci.yml" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".husky//pre-push" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude\\\\hooks\\sql-safety.mjs" } },
+]) {
+  const result = run(payload);
+  assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `path-field writer must deny: ${payload.tool_name}`);
+}
+
+// Read-only built-ins must be allowed on protected paths — this guard's own
+// message promises reading is always fine, and it was denying Read/Grep/Glob.
+for (const payload of [
+  { tool_name: "Read", tool_input: { file_path: ".husky/pre-push" } },
+  { tool_name: "Grep", tool_input: { path: ".claude/hooks" } },
+  { tool_name: "Glob", tool_input: { path: ".github/workflows" } },
+  { tool_name: "NotebookRead", tool_input: { notebook_path: ".claude/hooks/x.ipynb" } },
+]) {
+  const result = run(payload);
+  assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+  assert.equal(result.stdout, "", `read-only tool must be allowed: ${payload.tool_name}`);
+}
+
+// Native Write/Edit are deliberately NOT denied here — there is no unlock any
+// more, so denying them would permanently strand hook maintenance. The `ask` tier
+// gates them instead. Pinned so the exemption stays a recorded choice.
+for (const payload of [
+  { tool_name: "Write", tool_input: { file_path: ".claude/hooks/sql-safety.mjs", content: "x" } },
+  { tool_name: "Edit", tool_input: { file_path: ".husky/pre-push" } },
+]) {
+  const result = run(payload);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "", `native editor stays with the ask tier: ${payload.tool_name}`);
+}
+
+// KNOWN OVER-BLOCK, pinned deliberately rather than papered over. A dotted
+// SUFFIX on the review config (`.coderabbit.yaml.bak`) is refused, because the
+// boundary after the path group is `(?![\w-])` and `.` is neither. Widening it to
+// `(?![\w.-])` would fix this and simultaneously stop `.codex/hooks.json` from
+// matching at all — trading a harmless refusal of a backup file for a real hole
+// in the hook-registration coverage. Refusing more is the correct side to err on;
+// this test exists so the behavior is a recorded choice, not a latent surprise.
+{
+  const result = run({ tool_name: "Bash", tool_input: { command: "rm -f .coderabbit.yaml.bak" } });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /"permissionDecision":"deny"/);
+}
+
+// SECOND KNOWN OVER-BLOCK, also pinned. Segment splitting is not quote-aware, so
+// a `|` inside a quoted regex splits the command and the fragment after it is
+// read as an unallowlisted command head. `grep -E "(a|b)" <protected>` is a plain
+// read and is refused. Left unfixed on purpose: a quote-aware splitter changes
+// what counts as a segment, and a mistake there converts denials into ALLOWs —
+// which is exactly how five review rounds' worth of bypasses got in. A false
+// refusal with a one-line workaround is the acceptable failure here.
+{
+  const result = run({ tool_name: "Bash", tool_input: { command: 'grep -E "(typecheck|build)" .husky/pre-push' } });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /"permissionDecision":"deny"/);
+}
+// …while the bracket-class form of the same read is allowed, which is the
+// documented workaround. CodeRabbit, PR #530: this assertion used to pass a plain
+// literal (`grep -E typecheck …`) that contains neither a bracket class nor the
+// quoting which triggers the over-block — so it proved the workaround "worked"
+// without ever exercising it, and would have stayed green if the workaround broke.
+// The pattern below is the real thing: quoted, bracket-classed, and free of the
+// `|` that splits the segment.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");
