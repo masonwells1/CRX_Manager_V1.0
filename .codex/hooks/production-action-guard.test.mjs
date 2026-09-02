@@ -319,6 +319,59 @@ try {
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");
   assert.equal(evaluatePush(ordinary.repo).blocked, false, "non-risky main push allowed without proof");
 
+  // ── codex-bot-review-lib is guard-critical: it is IMPORTED at startup ──────
+  // Codex HIGH on PR #563's own exact-head review: the module was reachable by
+  // apply_patch (blocked:false) while the identical patch against
+  // production-action-guard.mjs was blocked:true. Because it executes at import
+  // time, an allowed edit could keep its exports intact and still terminate or
+  // subvert the hook before it reads any input — and silent completion means
+  // ALLOW, so that bypasses every production-action restriction, not just the
+  // review check. Every write channel must refuse it.
+  for (const tool of ["Write", "Edit", "NotebookEdit", "apply_patch"]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: tool, toolInput: { file_path: ".claude/hooks/codex-bot-review-lib.mjs" } }).blocked,
+      true,
+      `${tool} against codex-bot-review-lib.mjs must be blocked — the guard imports it at startup`,
+    );
+  }
+  // Path spelling must not be an escape: separators, ./ prefix, and case.
+  for (const spelling of [
+    ".claude\\hooks\\codex-bot-review-lib.mjs",
+    "./.claude/hooks/codex-bot-review-lib.mjs",
+    ".CLAUDE/HOOKS/CODEX-BOT-REVIEW-LIB.MJS",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: spelling } }).blocked,
+      true,
+      `alternate spelling must still be blocked: ${spelling}`,
+    );
+  }
+  // ...and the shell path, not only the file tools.
+  for (const command of [
+    'echo x > .claude/hooks/codex-bot-review-lib.mjs',
+    'cp /tmp/evil.mjs .claude/hooks/codex-bot-review-lib.mjs',
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `shell write must be blocked: ${command}`,
+    );
+  }
+  // The test file itself is NOT guard-critical — nothing imports it at runtime —
+  // so protection must not have been widened into a blanket directory ban.
+  assert.equal(
+    evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".claude/hooks/codex-bot-review-lib.test.mjs" } }).blocked,
+    false,
+    "the test file stays editable; protection is scoped to the imported module, not the whole directory",
+  );
+
+  const botLibPush = makeRepo(".claude/hooks/codex-bot-review-lib.mjs", "export const ordinary = true;\n");
+  assert.equal(
+    evaluatePush(botLibPush.repo).blocked,
+    true,
+    "pushing a change to codex-bot-review-lib.mjs requires the Sol proof like any other guard source",
+  );
+
   const guardrailChange = makeRepo(".claude/hooks/codex-push-lib.mjs", "export const ordinary = true;\n");
   assert.equal(
     evaluatePush(guardrailChange.repo).blocked,

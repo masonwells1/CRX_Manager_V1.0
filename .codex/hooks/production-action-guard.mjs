@@ -66,7 +66,17 @@ const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 // (mcp__codex_apps__github_create_file) — Codex round-5.
 const GITHUB_TOOL = /(?:^|__)github_{1,2}/i;
 const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
-const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+// `codex-bot-review-lib` joined this list 2026-09-02 (PR #563, Codex HIGH on
+// that PR's own exact-head review). Both merge guards IMPORT it at startup, so
+// it is in the same trust class as codex-push-lib: code that runs before the
+// guard sees a single byte of input. Leaving it off the list meant an
+// apply_patch at that path returned blocked:false while the identical patch
+// against production-action-guard.mjs returned blocked:true — and because the
+// module executes at import time, an allowed edit could keep its exports intact
+// while terminating or subverting the hook at startup. Silent completion means
+// ALLOW, so that would bypass every production-action restriction, not merely
+// the Codex App review check this PR added.
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
 const MAINTENANCE_PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";

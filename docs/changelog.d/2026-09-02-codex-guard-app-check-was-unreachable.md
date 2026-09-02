@@ -31,25 +31,40 @@ Ordering is now **pinned by tests on both guards** — the check's source positi
 must precede the approval deny and the green-pipeline deny. Those assertions are
 the durable fix; moving the block back makes them fail.
 
-### Not adopted
+### Not adopted here — and an UNRESOLVED disagreement worth recording
 
-The same Codex comment also asserted that `/ship` should say formal approval "is
-no longer required". That was **not** adopted. Verified live the same day:
+The same Codex comment also wanted `/ship` rewritten to say formal approval "is
+no longer required". That edit was not made in this change, because two API
+routes disagree and this entry is not the place to settle it.
+
+Raw observations, 2026-09-02, stated as readings rather than as a verdict:
 
 ```
-GET .../branches/main/protection/required_pull_request_reviews  -> HTTP 200
-{"dismiss_stale_reviews":false,"require_last_push_approval":false,
- "required_approving_review_count":1}
+GET .../branches/main/protection
+  -> the object OMITS required_pull_request_reviews
+
+GET .../branches/main/protection/required_pull_request_reviews
+  -> HTTP 200
+     {"dismiss_stale_reviews":false,"require_last_push_approval":false,
+      "required_approving_review_count":1}
 ```
 
-The rule still exists (a removed rule 404s on that endpoint). What actually
-changed is that `enforce_admins` is off and every agent session runs on Mason's
-admin token, so the requirement binds nobody currently merging — bypassed, not
-deleted. Writing "no longer required" into `/ship` would be a false statement
-that becomes a live landmine the moment admin bypass changes or a non-admin
-merges. The top-level `/protection` object omits the key while the sub-resource
-returns it populated; two sessions have already been misled by reading only the
-former.
+Two readings fit. **Canonical `AGENTS.md` on main** treats the sub-resource as
+phantom state left behind by a DELETE that returned 204, i.e. the rule is gone.
+**The other reading** is that a removed rule 404s on that endpoint, so the rule
+exists and is merely unenforced. A third session reached a third answer via
+`mergeStateStatus`.
+
+`AGENTS.md` is canonical and this entry does not contradict it. What the readings
+agree on, and the only part that should drive behaviour: **no approval
+requirement binds anyone currently merging**, because `enforce_admins` is off and
+every agent session runs on Mason's admin token. Both accounts also agree that
+`CHANGES_REQUESTED` still blocks and that no agent may use the admin override.
+
+Recorded as unresolved rather than decided: three sessions, three routes, three
+answers is a withdraw-the-claim situation, not a pick-your-endpoint one. Anyone
+resolving it should test the one case that separates the readings — whether a
+**non-admin** merge is refused — rather than re-reading either endpoint.
 
 ### Verification
 

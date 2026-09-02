@@ -163,11 +163,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // the reachability bug cannot return. Anchors unchanged; transform identity.
   // Values below come from the producer test's printed candidate, never
   // hand-computed — that is the sanctioned re-pin procedure.
-  codexGuard: "6a5ce81ec4b0021f83b8f7096694461c66c4e150",
+  // codexGuard re-pinned again 2026-09-02 (PR #563, Codex HIGH on its own
+  // exact-head review): codex-bot-review-lib.mjs joined PROTECTED_HARNESS_SOURCE.
+  // Both merge guards import it at startup, so it is in codex-push-lib's trust
+  // class; leaving it off the list made it directly patchable while the guard
+  // that imports it was not.
+  codexGuard: "704308750fcdfbd0075b5de643bf2cae3d004dea",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "c1748ffa041f34267f2efa4a9d41ae2fe8c76485",
+  codexGuard: "ceb77bd084fab3399f0642d6c7c61e0042f353aa",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 
