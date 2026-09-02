@@ -316,8 +316,11 @@ GitHub requires a current formal approval, so a misleading green CodeRabbit stat
 the merge by itself: the missing approval keeps the PR blocked. Since 2026-08-30 the normal trigger
 is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
 accidental duplicate. If CodeRabbit itself confirms a delivery failure or rate limit on the same
-frozen head, deliberately remove `coderabbit-review-requested` and reapply `ready-for-coderabbit`;
-that is a paid retry, not the normal path. Never merge from the ordinary check row alone — require
+frozen head, deliberately remove `coderabbit-review-requested`, **wait for the resulting reset run to
+finish**, and only then reapply `ready-for-coderabbit`; that is a paid retry, not the normal path.
+The wait is load-bearing rather than politeness: removing the marker fires an asynchronous
+`unlabeled` run that clears **both** labels, so a ready label reapplied while that run is still
+queued is cleared by it and nothing is posted. Confirm both labels are gone before relabelling. Never merge from the ordinary check row alone — require
 the hidden marker SHA, authenticated `APPROVED` CodeRabbit review `commit_id`, and live PR head to
 match. The generic Actions-authored marker is dedupe evidence, not an independent trust identity.
 
