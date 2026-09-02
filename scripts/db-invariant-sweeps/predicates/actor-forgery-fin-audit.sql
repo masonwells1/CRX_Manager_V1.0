@@ -148,7 +148,17 @@ WITH RECURSIVE cand AS (
 ), analyzed AS (
   SELECT guarded.*,
          CASE
+           -- Fail closed when the actor PARAMETER is assigned to anywhere in the
+           -- body: a PL/pgSQL parameter is an ordinary local, so a rebinding
+           -- AFTER a passing refusal re-forges the actor, and truncating the
+           -- scanned body at the refusal is what hides it. Pinned to STATEMENT
+           -- position because named-argument syntax `f(p_performed_by := v)` is
+           -- lexically identical to assignment. Mirrors actor-forgery.sql.
            WHEN lex_error OR NOT actor_is_uuid OR executable_src ~* '\mEXCEPTION\s+WHEN\M'
+                OR executable_src ~* (
+                     '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
+                     || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:='
+                   )
              THEN executable_src
            -- The refusal is credited only when it is UNCONDITIONAL. Two ways it
            -- can fail to be, and both used to truncate the whole scanned body:

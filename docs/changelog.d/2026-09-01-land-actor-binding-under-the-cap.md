@@ -45,6 +45,35 @@ name-scope limit as out of scope. It now also names `EXECUTE … USING`,
 `INSERT … RETURNING … INTO`, and temp-table round trips, and states explicitly that the post-apply
 sweeps do **not** compensate for them.
 
+**Actor rebinding is now caught by the post-apply sweeps (CodeRabbit Major).** This one was fixed
+rather than dismissed, and the distinction matters: the cap closed pattern-hardening on the
+*write-time hook*, while naming the **sweep predicates as a load-bearing control**. Strengthening
+that control is not the capped activity.
+
+The gap: both predicates truncate the scanned body at the refusal, so
+`p_performed_by := p_target_id;` *after* a passing `ACTOR_MISMATCH` check was invisible — the very
+presence of the check it defeated is what hid it. `docs/manual/DECISION_LOG.md` records this as
+residual (2); it is now closed for the assignment form. Both predicates fail closed and scan the
+whole body when the actor parameter is assigned to at statement position.
+
+**The pinning to statement position is load-bearing, not tidiness.** PL/pgSQL named-argument syntax
+is lexically identical to assignment, so an unpinned match also flags
+`PERFORM f(p_delivery_id := x, p_performed_by := v_actor)`. Live `batch_cancel_deliveries` is exactly
+that shape and binds its actor correctly — the first draft made it a false positive. A named argument
+is always preceded by `(` or `,`; an assignment statement is preceded by a terminator or block opener.
+
+**Proof — real PostgreSQL 17, not a regex unit test.**
+`scripts/db-invariant-sweeps/actor-forgery-predicates.test.mjs` runs both predicates in a disposable
+container. Two new fixtures: `actor_rebound_param_forward` (must be detected) and
+`actor_named_argument_forward` (must NOT be). Mutation-tested in both directions — removing the
+rebinding clause makes the first go red; removing the pinning makes the second go red. Reverted, no
+residue, suite green.
+
+Live read-only check against the production catalog before and after: the unpinned form matched one
+authenticated-executable `SECURITY DEFINER` routine (`batch_cancel_deliveries`, verified safe — it
+binds `v_actor := auth.uid()`, refuses a mismatched `p_performed_by`, and role-checks); the shipped
+pinned form matches **zero**. The change therefore adds no sweep noise on live.
+
 ### Not changed
 
 No migration is applied and no live data is touched. The three files under

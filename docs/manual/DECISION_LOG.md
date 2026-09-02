@@ -104,11 +104,16 @@ compensating controls, and conflating them would overstate the defence:
    "an attacker must clear all three" — that is true only for the subset of shapes the predicates' sinks
    happen to cover, and asserting it flatly is the same overclaim this entry exists to remove.
 2. **Re-binding and laundering bypasses** — `p_performed_by := p_target_id;` after a passing check,
-   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips. **The post-apply sweeps do NOT
-   cover these, and it is not a near miss.** Both predicates select only rows where
-   `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that performs a legitimate-looking binding check and *then*
-   re-assigns the parameter is excluded from both sweeps outright — the very presence of the check it
-   defeated is what hides it. A temp-table round trip evades them for a second, independent reason:
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips.
+   **NARROWED 2026-09-01 when PR #449 landed: the direct-assignment form IS now covered by both
+   post-apply sweep predicates.** Each fails closed and scans the whole body — rather than truncating
+   at the refusal — when the actor parameter is assigned to at statement position, so a routine that
+   passes a binding check and then re-assigns the parameter is no longer excluded. The match is pinned
+   to statement position because PL/pgSQL named-argument syntax (`f(p_performed_by := v_actor)`) is
+   lexically identical to assignment; proved on real PostgreSQL 17 in both directions, and confirmed to
+   add zero findings against the live catalog. **The laundering forms below remain uncovered** —
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips are dataflow, not a
+   spelling, and no pattern reaches them. A temp-table round trip evades them for a second, independent reason:
    `actor-forgery.sql` requires the parameter to appear near `coalesce`/`auth.uid`/role text, and
    `actor-forgery-fin-audit.sql` requires it to appear after `financial_audit_log` **before the next
    semicolon**, so stashing the parameter in a temp table in one statement and inserting it into the audit

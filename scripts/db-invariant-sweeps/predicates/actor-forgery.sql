@@ -137,7 +137,28 @@ WITH RECURSIVE cand AS (
          CASE
            -- A handler can catch a nested/outer refusal. Fail closed rather
            -- than trying to prove PL/pgSQL exception-block nesting in SQL.
+           --
+           -- Also fail closed when the actor PARAMETER is assigned to anywhere
+           -- in the body. A PL/pgSQL parameter is an ordinary local, so
+           -- `p_performed_by := p_target_id;` AFTER a passing refusal re-forges
+           -- the actor, and truncating the scanned body at the refusal is
+           -- exactly what hides it. Proving which assignment reaches which
+           -- write needs real dataflow; the presence of any rebinding is enough
+           -- to stop trusting the refusal and scan the whole body.
+           --
+           -- The match is pinned to STATEMENT position, and that is load-bearing
+           -- rather than tidiness: PL/pgSQL named-argument syntax is lexically
+           -- identical to assignment, so a bare `<arg>\s*:=` also matches the
+           -- perfectly safe `PERFORM f(p_delivery_id := x, p_performed_by := v_actor)`.
+           -- Live `batch_cancel_deliveries` is exactly that shape and binds its
+           -- actor correctly; an unpinned match made it a false positive. A named
+           -- argument is always preceded by `(` or `,`; an assignment statement is
+           -- preceded by a terminator or a block opener.
            WHEN lex_error OR NOT actor_is_uuid OR executable_src ~* '\mEXCEPTION\s+WHEN\M'
+                OR executable_src ~* (
+                     '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
+                     || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:='
+                   )
              THEN executable_src
            -- The refusal is credited only when it is UNCONDITIONAL. Two ways it
            -- can fail to be, and both used to truncate the whole scanned body:

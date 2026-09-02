@@ -84,6 +84,9 @@ CREATE TABLE public.financial_audit_log (actor_user_id uuid);
 CREATE FUNCTION public.forward_actor(uuid) RETURNS uuid
 LANGUAGE sql AS 'SELECT $1';
 
+CREATE FUNCTION public.forward_actor_named(p_note text, p_actor_source uuid) RETURNS uuid
+LANGUAGE sql AS 'SELECT $2';
+
 CREATE FUNCTION public.actor_forward_named(p_actor$source uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 BEGIN
@@ -292,6 +295,37 @@ BEGIN
 END;
 $body$;
 
+-- Rebinding AFTER a passing refusal: a PL/pgSQL parameter is an ordinary local,
+-- so the refusal proves nothing about the value that reaches the sinks below it.
+-- Truncating the scanned body at the refusal is exactly what used to hide this.
+CREATE FUNCTION public.actor_rebound_param_forward(p_actor_source uuid, p_target_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  p_actor_source := p_target_id;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- The false positive the rebinding rule must NOT produce. PL/pgSQL named-argument
+-- syntax is lexically identical to assignment, so an unpinned arg-then-walrus
+-- match flags this correctly-bound routine. Modelled on live
+-- batch_cancel_deliveries, which passes its actor by named argument.
+CREATE FUNCTION public.actor_named_argument_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid;
+BEGIN
+  v_actor := auth.uid();
+  IF p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor_named(p_note := 'batch', p_actor_source := v_actor);
+END;
+$body$;
+
 CREATE FUNCTION public.actor_local_pre_refusal_forward(p_actor_source uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 DECLARE v_actor uuid;
@@ -453,6 +487,7 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_unicode_guard_forward',
     'actor_out_before_positional',
     'actor_local_pre_refusal_forward',
+    'actor_rebound_param_forward',
     'actor_custom_local_refusal_forward',
     'actor_custom_refusal_forward',
     'actor_dollar_guard_forward',
@@ -473,6 +508,7 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_safe_refusal_forward',
     'actor_safe_local_refusal_forward',
     'actor_closed_block_then_refusal',
+    'actor_named_argument_forward',
   ]) {
     assert.ok(
       !generalRows.some((row) => row.startsWith(`${routine}(`)),
