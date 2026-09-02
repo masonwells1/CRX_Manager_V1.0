@@ -7,6 +7,61 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-02 — the CodeRabbit gate is `pull_request_target`-ONLY; never add a review trigger
+
+**Source:** Mason's in-chat approval on 2026-09-02 ("yes remove it and take it through"), after the
+flaw was proven on PR #516 rather than argued. Shipped in #516 (`f2307fbf9`).
+
+**Decision.** `.github/workflows/coderabbit-final-review.yml` triggers on `pull_request_target`
+and nothing else. Do **not** add `pull_request_review`, or any other pull-request event, back to
+it — and do not re-litigate this as a missing feature.
+
+**Why.** The job holds `issues: write`. That is only defensible because `pull_request_target`
+selects the workflow YAML from the DEFAULT BRANCH, so a pull request cannot supply the steps that
+run. `pull_request_review` does not behave that way: it selects the YAML from the PULL REQUEST's
+own ref. Checking out the default branch inside the job does not rescue it, because the step doing
+that checkout would itself come from the PR. A PR editing the workflow could therefore run its own
+steps with the job's write token on any submitted review, bypassing the frozen-head, required-check
+and one-shot validations the gate exists to enforce.
+
+**The proof, because this is the part worth keeping.** The workflow file did not exist on `main`
+at all, and a run of it still appeared and succeeded:
+
+```
+event=pull_request_review
+head_sha=8ddcd9aeea...                              # the PR's commit
+head_branch=codex/coderabbit-ready-label-20260830   # the PR's branch
+path=.github/workflows/coderabbit-final-review.yml
+conclusion=success
+```
+
+A file absent from `main` cannot have come from `main`. To re-check this on any run:
+`gh api repos/<owner>/<repo>/actions/runs/<id> --jq '.event, .head_sha, .head_branch, .path'`.
+
+Two automated reviewers disagreed and the run settled it: the GitHub Codex connector rated it P1,
+while the `write-codex-push-proof.mjs` CLI review returned CLEAN — it verified the
+`pull_request_target` path ("executes only trusted default-branch code") and generalised to the
+whole workflow. When reviewers disagree about a trigger, go read a real run's `event` and
+`head_branch`.
+
+**Blast radius, stated honestly.** Limited here: only Mason and his agents can push branches to
+this repo, and anyone who can do that could already edit labels and comments directly. The fork
+case was not fully verified. This was "a gate whose stated guarantee is false on one path", not a
+live break-in route — which is why it was fixed before merge rather than handled as an incident.
+
+**What was given up.** The removed path re-validated gate state when a review was submitted,
+largely policing approvals — already near-vestigial after the required review was removed earlier
+the same day (see the entry below). `runReviewAuthorization()`,
+`blockCodeRabbitAuthorizationAndReconcile()`, `blockCodeRabbitAuthorizationAndReset()` and their 19
+tests were deleted with it (net −908/+65). Git history keeps them if the feature is ever rebuilt
+behind a default-branch-sourced mechanism.
+
+**Operative rule.** The trigger list is pinned by two mutation-tested guards, so this is enforced,
+not merely written down: `no pull-request event other than pull_request_target triggers this
+privileged workflow` parses the `on:` block, and `the gate refuses to run on any event other than
+pull_request_target` drives `run()`, which fails closed rather than silently reconciling. Re-adding
+the trigger alone does not revive the path — it turns both tests red.
+
 ## 2026-09-02 — The required review on `main` is removed; CI becomes the merge gate
 
 **Source:** Mason's in-chat request on 2026-09-02 ("we need to remove the requred review setting
