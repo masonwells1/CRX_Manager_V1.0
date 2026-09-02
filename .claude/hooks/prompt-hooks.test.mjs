@@ -285,6 +285,13 @@ rmSync(hbProj, { recursive: true, force: true });
     "investigate the overnight: flag behavior",
     "drop the word overnight from the freeze list",
     "overnight flag is broken again",
+    // Round 3 (CodeRabbit, PR #565): sentence-leading, so no determiner
+    // precedes it, and an ordinary preposition then carried it to a freeze.
+    // General-purpose prepositions introduce noun phrases at least as often as
+    // they continue a clause, so they are no longer accepted at all.
+    "overnight in the documentation is misspelled",
+    "the note about overnight on line 40 is wrong",
+    "grep for overnight to see where it fires",
   ]) {
     ok(!latches(naming).latched, `overnight as a noun modifier must not freeze: "${naming}"`);
   }

@@ -75,28 +75,38 @@ The single-lookahead design could not satisfy both — widening the follower set
 worsens the first. Adding the determiner signal resolves them together, and all six cases are now
 pinned.
 
+### Round 3
+
+A third round narrowed the follower set again and recorded a stopping point. Its own entry:
+`docs/changelog.d/2026-09-02-overnight-follower-set-is-not-a-preposition-list.md`. The verification
+below reflects the final state, after all three rounds.
+
 ## Verification
 
 **End to end, independent of this repo's test files.** The two real hook binaries chained as a live
 session runs them (`autopilot-intent-reminder.mjs` -> `unattended-autopilot.mjs`), against a real
 `npm run build` payload — the question asked is "would this Bash call actually have been frozen":
 
-```
+```text
 MUST NOT FREEZE — naming the feature:            MUST FREEZE — real hands-free requests:
   ok  "...i think the overnight flag is..."        ok  "run this overnight"
   ok  "yes drop the word overnight from..."        ok  "run this overnight without asking me again"
   ok  "investigate the overnight: flag behavior"   ok  "work overnight for me"
   ok  "overnight flag is broken again"             ok  "keep working overnight through the morning"
   ok  "why does the overnight flag keep firing"    ok  "keep going overnight, ill check in the morning"
-  ok  "run the overnight bug hunt report past..."  ok  "im going to bed, keep working"
-                                                   ok  "run this hands-free until morning"
-ALL 13 CASES CORRECT against the real hook chain.
+  ok  "run the overnight bug hunt report past..."  ok  "run it overnight and dont ask me"
+  ok  "explain the overnight handshake to me"      ok  "work on this overnight please"
+  ok  "overnight in the documentation is mis..."   ok  "im going to bed, keep working"
+  ok  "the note about overnight on line 40 ..."    ok  "run this hands-free until morning"
+  ok  "grep for overnight to see where it fires"   ok  "run it all night and dont stop"
+                                                   ok  "keep going while im asleep"
+ALL 21 CASES CORRECT against the real hook chain.
 ```
 
-`node .claude/hooks/prompt-hooks.test.mjs` — 195 assertions pass (was 169), including new ones that
+`node .claude/hooks/prompt-hooks.test.mjs` — 201 assertions pass (was 169), including new ones that
 run the real hook process against a throwaway `CLAUDE_PROJECT_DIR` and check the actual flag file on
 disk: the two verbatim freezing prompts, four real hands-free requests, seven adverbial `overnight`
-requests, and six noun-modifier mentions.
+requests, and nine noun-modifier mentions.
 
 Every added assertion was mutation-proved, and no single mutation can pass all of them:
 

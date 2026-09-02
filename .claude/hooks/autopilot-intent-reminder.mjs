@@ -89,19 +89,31 @@ if (!triggers.some((re) => re.test(prompt))) emit();
 // Neither alone is enough. A single lookahead let `investigate the overnight:
 // flag behavior` through, because `:` was read as a terminator when it was in
 // fact introducing a noun. A single lookbehind lets `overnight flag is broken`
-// through when the sentence opens with it. Each rule covers the other's gap,
-// which is also why the follower set can afford to be generous: over-matching
-// there is caught by the determiner rule.
+// through when the sentence opens with it. Each rule covers the other's gap.
 //
-// Where they still disagree, prefer MISSING a real request over freezing on a
-// mention — a miss degrades to the arm-autopilot reminder that `triggers` still
-// injects, while a false freeze can only be escaped by arming autopilot. Pinned
-// in prompt-hooks.test.mjs and hook-router.test.mjs.
+// The follower set is NOT a general list of adverbial words. Round 3 of review
+// (CodeRabbit, PR #565) showed why: `overnight in the documentation is
+// misspelled` opens the sentence, so no determiner precedes it, and a
+// general-purpose preposition then carried it straight to a freeze. Ordinary
+// prepositions — in, on, at, to, from, with, into, about — introduce noun
+// phrases at least as often as they continue a clause, so they are gone. What
+// remains either opens a new clause (`and`, `so`, `then`, a pronoun, `please`)
+// or is time/manner flavoured in a way that only follows an action verb
+// (`through`, `until`, `tonight`, `without`). `for` is admitted ONLY as `for
+// me`/`for us`: "work overnight for me" is a request, "overnight for the
+// documentation" is a topic.
+//
+// Where the rules disagree, prefer MISSING a real request over freezing on a
+// mention — but a miss is not free either (round 2 of the same review): the
+// unattended run then stalls for permission later, which is the complaint this
+// subsystem answers. A miss at least degrades to the arm-autopilot reminder
+// `triggers` still injects, while a false freeze can only be escaped by arming.
+// Pinned in prompt-hooks.test.mjs and hook-router.test.mjs.
 //
 // `this`/`that` are deliberately NOT determiners here: "run this overnight" is
 // the canonical request, and hook-router.test.mjs:53 pins it.
 const OVERNIGHT_REQUEST =
-  /(?<!\b(?:the|an?|its|their|our|your|any|each|every|word|term|about)\s+)\bovernight\b(?=\s*$|\s*[.!?]|\s*[,;:]?\s+(?:and|so|then|but|plus|also|too|while|if|unless|after|before|until|till|til|through|throughout|into|in|on|at|to|from|for|with|without|please|ok|okay|tonight|i|im|ill|ive|i'm|i'll|i've|we|you|my)\b)/;
+  /(?<!\b(?:the|an?|its|their|our|your|any|each|every|word|term|about)\s+)\bovernight\b(?=\s*$|\s*[.!?]|\s*[,;:]?\s+(?:(?:and|so|then|please|ok|okay|tonight|through|throughout|until|till|til|without|i|im|ill|ive|i'm|i'll|i've|we|you|my)\b|for\s+(?:me|us)\b))/;
 
 const strong = [
   /going\s+to\s+bed/,
