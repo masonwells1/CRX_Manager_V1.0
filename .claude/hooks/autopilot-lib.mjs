@@ -87,61 +87,46 @@ export function intentFresh(content, nowMs) {
 }
 
 // Which tool calls are blocked while intent-is-latched-but-unarmed. Reads, status
-// checks, session-state writes, the arm command itself, and clearing the intent
-// flag all pass; building/mutating waits for the arm.
+// checks, session-state writes and the arm command pass; building/mutating waits
+// for the arm.
 const INTENT_ALLOW_TOOL_RE = /^(Read|Glob|Grep|TaskList|TaskGet|TaskCreate|TaskUpdate|WebFetch|WebSearch|AskUserQuestion|Skill)$/i;
 const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|worktree\s+list)|ls|dir|cat|head|tail|grep|rg|find|echo|node\s+--version)\b/;
 
-// The ONLY sanctioned way out of a false-positive latch: scripts/clear-overnight-intent.mjs.
+// THERE IS DELIBERATELY NO SHELL ESCAPE HATCH HERE (Mason, 2026-09-01).
 //
-// The escape this hook's own deny message used to advertise — deleting the flag
-// from the shell — never worked: review-proof-guard.mjs (matcher "*") refuses every
-// destructive shell command touching .claude/session-state, and this gate blocks
-// Write/Edit, so a session latched by mistake had no unblocked path left except
-// arming autopilot — the exact failure the handshake exists to prevent. The old
-// `/OVERNIGHT-INTENT\.flag/` substring allowance below was pure false assurance: it
-// returned allow-through here while the real stack denied (proven live 2026-09-01,
-// and asserted green by autopilot-lib.test.mjs the whole time).
+// This gate used to allow any command containing `OVERNIGHT-INTENT.flag`, and the
+// deny message told agents to delete that file from the shell. The command never
+// worked: review-proof-guard.mjs (matcher "*") refuses every destructive shell
+// command touching .claude/session-state. Since this gate also blocks Write and
+// Edit, a session latched by MISTAKE — the latch fires on a prompt heuristic, so a
+// prompt that merely DISCUSSES autopilot trips it — had no unblocked path left
+// except arming autopilot, exactly the failure the handshake exists to prevent.
+// autopilot-lib.test.mjs asserted that command was allowed, and passed for months,
+// because it tested one hook of seven while the real chain denied it.
 //
-// An EXACT-STRING allowlist, not a regex grammar — the same shape
-// bash-safety-lib.mjs uses for MAINTENANCE_PRODUCER_ALLOWED_COMMANDS.
+// A sanctioned `node scripts/clear-overnight-intent.mjs` escape was built and then
+// REMOVED after two rounds of exact-SHA gpt-5.6-sol review found four HIGH
+// bypasses in it: the allowance matched only BASENAMES (any planted file with that
+// name ran), and then, once tightened to exact strings, it was still unbound to the
+// project root (a planted `scripts/…` under a different cwd ran instead), while the
+// helper itself could be edited locally before invocation. Every fix was a new
+// text-matching rule on a command string — the shape this repo has already proven
+// does not converge (the `git clean` carve-out closed after six rounds).
 //
-// The first draft of this allowance was an anchored regex over the command SHAPE:
-// `<node><ws><anything>clear-overnight-intent.mjs`. Codex (gpt-5.6-sol, exact-SHA
-// review 2026-09-01) proved it a HIGH bypass — it validated only the two BASENAMES,
-// never the script's identity, so both of these returned allow-through:
-//     node attacker/clear-overnight-intent.mjs --not-a-hands-free-run
-//     "C:\attacker\node.exe" "C:\attacker\clear-overnight-intent.mjs" --not-a-hands-free-run
-// Bash is globally allowed in settings.json and the other hooks inspect the visible
-// command, not the JavaScript it executes, so any pre-existing attacker-controlled
-// file with that basename became arbitrary code execution during the very pause the
-// latch exists to enforce. The comment claimed "the allowlist is ONE FILE, not a
-// command grammar" while the code implemented exactly such a grammar.
-//
-// A Set of exact strings has no slots to smuggle anything through: no directory
-// prefix, no alternate interpreter, no quoting variant, no traversal, no glob, no
-// chaining. Both canonical spellings of the one repo-root script are listed; the
-// argument-free form is allowed so the script itself can print its refusal and the
-// usage hint. Anything else waits for the arm. Deliberately NOT case-insensitive
-// and NOT whitespace-normalized: the sanctioned command is a fixed literal, and
-// every loosening is a slot.
-const CLEAR_INTENT_ALLOWED_COMMANDS = new Set([
-  "node scripts/clear-overnight-intent.mjs",
-  "node scripts/clear-overnight-intent.mjs --not-a-hands-free-run",
-  "node ./scripts/clear-overnight-intent.mjs",
-  "node ./scripts/clear-overnight-intent.mjs --not-a-hands-free-run",
-]);
-
-export function isSanctionedClearIntentCommand(command) {
-  return CLEAR_INTENT_ALLOWED_COMMANDS.has(String(command ?? "").trim());
-}
+// The trade was rejected on its merits: the disease is a session paused for at most
+// INTENT_FRESH_MS; the cure was a fresh way to EXECUTE CODE during precisely the
+// window when execution is meant to be paused. The residual is deliberate — wait
+// out the 45-minute expiry, or have Mason delete the flag himself (his shell is not
+// gated by these hooks). Do NOT arm autopilot to get unblocked, and do NOT
+// reintroduce a command allowance here without re-reading that review history.
+// overnight-intent-clear.test.mjs holds the deny message to this contract.
 
 export function overnightGateDecision(toolName, toolInput) {
   const name = String(toolName || "");
   if (INTENT_ALLOW_TOOL_RE.test(name)) return "allow-through";
   const input = toolInput || {};
   const cmd = typeof input.command === "string" ? input.command : "";
-  if (cmd && (/autopilot-arm\.mjs/.test(cmd) || isSanctionedClearIntentCommand(cmd))) return "allow-through";
+  if (cmd && /autopilot-arm\.mjs/.test(cmd)) return "allow-through";
   if (/^(Bash|PowerShell)$/i.test(name)) {
     // Read-only leading token AND no write redirect: `cat > file` / `echo .. >> f`
     // / `... | tee f` still mutate files (Codex 2026-07-05) — those wait for the arm.
@@ -171,4 +156,4 @@ export function flagActive(content, nowMs) {
   return { active: true, expires: data.expires };
 }
 
-export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, CLEAR_INTENT_ALLOWED_COMMANDS };
+export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, INTENT_FRESH_MS };

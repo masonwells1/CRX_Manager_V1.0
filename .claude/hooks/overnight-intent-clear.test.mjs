@@ -1,31 +1,45 @@
 #!/usr/bin/env node
-// END-TO-END proof that the sanctioned overnight-intent escape hatch actually works.
+// Holds the overnight handshake's deny message to remedies that ACTUALLY WORK,
+// against the real registered hook chain.
 //
-// WHY THIS FILE EXISTS. autopilot-lib.test.mjs asserted for months that
-// `rm .claude/session-state/OVERNIGHT-INTENT.flag` returned "allow-through", and it
-// passed — while the command was in fact refused by review-proof-guard.mjs, a
-// DIFFERENT hook registered on matcher "*". One hook returning allow proves nothing
-// about whether a command runs: a PreToolUse chain denies if ANY member denies.
-// Because Bash, Write and Edit are all gated during an unarmed latch, that left a
-// mis-latched session with no unblocked path except arming autopilot — the exact
-// failure the handshake exists to prevent (reproduced live 2026-09-01).
+// WHY THIS FILE EXISTS. For months `unattended-autopilot.mjs` told agents that if a
+// session was latched by mistake, the fix was to delete
+// .claude/session-state/OVERNIGHT-INTENT.flag from the shell. That command has never
+// worked: review-proof-guard.mjs (matcher "*") refuses every destructive shell
+// command touching that directory. autopilot-lib.test.mjs asserted the command was
+// allowed and passed the whole time — it tested ONE hook, and a PreToolUse chain
+// denies if ANY member denies. Since the handshake also gates Bash, Write and Edit,
+// a mis-latched session had no unblocked path left except arming autopilot: exactly
+// the failure the handshake exists to prevent (reproduced live 2026-09-01).
 //
-// So this test does not import the decision libraries at all. It reads the REAL
-// .claude/settings.json, spawns EVERY PreToolUse hook whose matcher matches Bash,
-// in the registered order, and fails if any one of them denies the sanctioned
-// command. Registering a new hook that blocks this escape hatch breaks this test.
+// A sanctioned `node scripts/clear-overnight-intent.mjs` escape was built to fix
+// that, and then REMOVED on Mason's decision (2026-09-01) after two rounds of
+// exact-SHA gpt-5.6-sol review found four HIGH bypasses in it — basename-only
+// matching, then an exact-string allowance still unbound to the project root, plus a
+// helper that could be edited locally before invocation. Each fix was another text
+// rule over a command string, the shape this repo has already proven does not
+// converge. The disease was a pause of at most 45 minutes; the cure was a fresh way
+// to EXECUTE CODE during precisely the window when execution is meant to be paused.
+//
+// So the contract this file enforces is now:
+//   1. the deny message advertises NO shell remedy that the real chain refuses;
+//   2. the two true remedies (45-minute expiry, Mason deleting the file) are stated;
+//   3. the removed script escape is not quietly reintroduced;
+//   4. the expiry actually releases the latch, and a fresh latch actually holds it.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { INTENT_FRESH_MS } from "./autopilot-lib.mjs";
+
 const hooksDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(hooksDir, "..", "..");
 const settingsPath = path.join(repoRoot, ".claude", "settings.json");
-const clearScript = path.join(repoRoot, "scripts", "clear-overnight-intent.mjs");
+const hookSource = readFileSync(path.join(hooksDir, "unattended-autopilot.mjs"), "utf8");
 
 let failures = 0;
 function check(name, fn) {
@@ -38,7 +52,7 @@ function check(name, fn) {
   }
 }
 
-// ── 1. Collect the real PreToolUse chain for a Bash call ────────────────────
+// ── The real PreToolUse chain for a Bash call ───────────────────────────────
 const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
 const preToolUse = settings?.hooks?.PreToolUse ?? [];
 
@@ -52,7 +66,6 @@ function matcherCoversBash(matcher) {
   }
 }
 
-// Hook commands look like: node "$CLAUDE_PROJECT_DIR/.claude/hooks/x.mjs"
 function hookScriptPath(command, projectDir) {
   const m = /"?\$(?:\{)?CLAUDE_PROJECT_DIR(?:\})?\/([^"]+)"?/.exec(String(command || ""));
   return m ? path.join(projectDir, m[1]) : null;
@@ -69,39 +82,28 @@ for (const group of preToolUse) {
 
 check("settings.json registers a non-trivial PreToolUse chain for Bash", () => {
   assert.ok(bashHooks.length >= 3, `expected >=3 Bash-matching hooks, found ${bashHooks.length}`);
-  // The two hooks at the heart of this deadlock must be in the chain we test,
-  // otherwise this test is proving nothing about the real failure.
   const names = bashHooks.map((h) => h.name);
-  assert.ok(names.includes("review-proof-guard.mjs"), `review-proof-guard.mjs missing from chain: ${names.join(", ")}`);
-  assert.ok(names.includes("unattended-autopilot.mjs"), `unattended-autopilot.mjs missing from chain: ${names.join(", ")}`);
+  // The two hooks at the heart of the original deadlock must be in the chain we
+  // test, or this file proves nothing about the real failure.
+  assert.ok(names.includes("review-proof-guard.mjs"), `review-proof-guard.mjs missing: ${names.join(", ")}`);
+  assert.ok(names.includes("unattended-autopilot.mjs"), `unattended-autopilot.mjs missing: ${names.join(", ")}`);
 });
 
-// ── 2. A fixture project whose latch is FRESH and whose autopilot is UNARMED ──
-const fixture = mkdtempSync(path.join(os.tmpdir(), "crx-intent-clear-"));
+// ── Fixture: a latch of a chosen age, autopilot never armed ─────────────────
+const fixture = mkdtempSync(path.join(os.tmpdir(), "crx-intent-latch-"));
 const fixtureState = path.join(fixture, ".claude", "session-state");
 
-function armLatch() {
+function armLatch(ageMs = 0) {
   mkdirSync(fixtureState, { recursive: true });
   writeFileSync(
     path.join(fixtureState, "OVERNIGHT-INTENT.flag"),
-    JSON.stringify({ created: new Date().toISOString(), source: "overnight-intent-clear.test" })
+    JSON.stringify({ created: new Date(Date.now() - ageMs).toISOString(), source: "overnight-intent-clear.test" })
   );
-  // Deliberately NO AUTOPILOT.on: unarmed is the wedged state we are testing.
   rmSync(path.join(fixtureState, "AUTOPILOT.on"), { force: true });
 }
 
-function latchExists() {
-  return existsSync(path.join(fixtureState, "OVERNIGHT-INTENT.flag"));
-}
-
-// Run the whole registered chain against one Bash command. Returns the list of
-// hooks that denied it.
 function denialsFor(command) {
-  const payload = JSON.stringify({
-    tool_name: "Bash",
-    cwd: fixture,
-    tool_input: { command },
-  });
+  const payload = JSON.stringify({ tool_name: "Bash", cwd: fixture, tool_input: { command } });
   const denied = [];
   for (const { script, name } of bashHooks) {
     const res = spawnSync(process.execPath, [script], {
@@ -111,8 +113,8 @@ function denialsFor(command) {
       env: { ...process.env, CLAUDE_PROJECT_DIR: fixture },
     });
     if (res.error?.code === "ETIMEDOUT" || res.signal) {
-      // Never treat "did not answer" as "allowed" — that is how a guard test
-      // silently stops testing anything.
+      // Never read "did not answer" as "allowed" — that is how a guard test stops
+      // testing anything without going red.
       throw new Error(`hook ${name} did not complete (signal=${res.signal}, err=${res.error?.message})`);
     }
     let decision = null;
@@ -124,129 +126,80 @@ function denialsFor(command) {
   return denied;
 }
 
-const SANCTIONED = "node scripts/clear-overnight-intent.mjs --not-a-hands-free-run";
+// ── 1. The deny message must not advertise a remedy the chain refuses ───────
+const denyMessage = (() => {
+  const m = /OVERNIGHT HANDSHAKE:[\s\S]*?this blocks\./.exec(hookSource);
+  assert.ok(m, "could not locate the OVERNIGHT HANDSHAKE deny message in unattended-autopilot.mjs");
+  return m[0];
+})();
 
-check("THE POINT: the sanctioned clear command survives the ENTIRE Bash hook chain", () => {
-  armLatch();
-  const denied = denialsFor(SANCTIONED);
-  assert.deepEqual(denied, [], `denied by: ${denied.join(", ")}`);
+check("THE POINT: the deny message advertises no shell delete of the flag", () => {
+  // This exact advice is what made the hatch a lie for months.
+  assert.ok(
+    !/\b(rm|del|Remove-Item|unlink)\b[^.]*OVERNIGHT-INTENT/i.test(denyMessage) &&
+    !/delete\s+\.?[\w/\\.-]*session-state[\w/\\.-]*OVERNIGHT-INTENT\.flag/i.test(denyMessage),
+    `deny message still tells the agent to delete the flag from the shell:\n${denyMessage}`
+  );
 });
 
-check("the sanctioned command is not blocked by an accidental cwd rule either", () => {
-  armLatch();
-  const denied = denialsFor("node ./scripts/clear-overnight-intent.mjs --not-a-hands-free-run");
-  assert.deepEqual(denied, [], `denied by: ${denied.join(", ")}`);
+check("the deny message states the two remedies that actually work", () => {
+  assert.match(denyMessage, /45 minutes|expires by itself/i, "must state the self-expiry");
+  assert.match(denyMessage, /Mason can delete/i, "must state that Mason can delete it himself");
+  assert.match(denyMessage, /worktree/i, "must point at the worktree copy, not the main checkout");
+  assert.match(denyMessage, /do NOT arm autopilot/i, "must forbid arming as an escape");
 });
 
-// Reality check: the escape the deny message USED to advertise really is refused.
-// If this ever stops denying, the guard changed and the docs should be revisited.
-check("the old `rm` escape is still refused by the real chain (documents why the script exists)", () => {
+check("every shell command the deny message advertises survives the real chain", () => {
+  armLatch();
+  // Pull `node ...` invocations out of the message and prove each one is runnable.
+  const commands = [...denyMessage.matchAll(/\bnode\s+[^\s,;)]+(?:\s+--[\w-]+(?:\s+\S+)?)*/g)]
+    .map((m) => m[0].replace(/[.,]$/, ""));
+  assert.ok(commands.length > 0, "expected the message to advertise at least the arm command");
+  for (const command of commands) {
+    const denied = denialsFor(command);
+    assert.deepEqual(denied, [], `advertised command "${command}" is denied by: ${denied.join(", ")}`);
+  }
+});
+
+// ── 2. Reality checks on what is and is not gated ───────────────────────────
+check("the `rm` form really is refused by the chain (why it is not advertised)", () => {
   armLatch();
   const denied = denialsFor("rm .claude/session-state/OVERNIGHT-INTENT.flag");
-  assert.ok(denied.length > 0, "expected at least one hook to deny the rm form");
-  assert.ok(
-    denied.includes("review-proof-guard.mjs"),
-    `expected review-proof-guard.mjs to deny it, got: ${denied.join(", ")}`
-  );
+  assert.ok(denied.includes("review-proof-guard.mjs"), `expected review-proof-guard to deny it, got: ${denied.join(", ")}`);
 });
 
-check("the latch still gates ordinary building commands (the handshake is not defeated)", () => {
+check("the removed clear-script escape is not quietly reintroduced", () => {
   armLatch();
-  const denied = denialsFor("npm run build");
-  assert.ok(
-    denied.includes("unattended-autopilot.mjs"),
-    `expected the handshake to still pause an ordinary build, got: ${denied.join(", ")}`
-  );
-});
-
-check("the allowance cannot be used as a prefix to smuggle a chained command", () => {
-  armLatch();
-  const denied = denialsFor(`${SANCTIONED} && npm run build`);
-  assert.ok(
-    denied.includes("unattended-autopilot.mjs"),
-    `chaining after the clear script must stay gated, got: ${denied.join(", ")}`
-  );
-});
-
-// Codex (gpt-5.6-sol, exact-SHA review 2026-09-01) proved that the first draft of
-// this allowance — an anchored regex over the command SHAPE — validated only the
-// executable and script BASENAMES. Since Bash is globally allowed and the other
-// hooks inspect the visible command rather than the JavaScript it runs, any
-// pre-existing attacker-controlled file named clear-overnight-intent.mjs became
-// arbitrary code execution during the very pause the latch enforces. The original
-// version of this test missed it entirely: it only ever tried sanctioned commands.
-// Every entry below is a command that must NOT reach the shell while latched.
-for (const [label, command] of [
-  ["alternate directory", "node attacker/clear-overnight-intent.mjs --not-a-hands-free-run"],
-  ["alternate interpreter + absolute path", '"C:\\attacker\\node.exe" "C:\\attacker\\clear-overnight-intent.mjs" --not-a-hands-free-run'],
-  ["parent-directory traversal", "node ../clear-overnight-intent.mjs --not-a-hands-free-run"],
-  ["UNC path", "node //server/share/clear-overnight-intent.mjs --not-a-hands-free-run"],
-  ["glob in the path", "node scripts/*/clear-overnight-intent.mjs --not-a-hands-free-run"],
-  ["shell expansion in the path", "node $DIR/clear-overnight-intent.mjs --not-a-hands-free-run"],
-  ["NODE_OPTIONS module injection", "NODE_OPTIONS=--require=./evil.js node scripts/clear-overnight-intent.mjs --not-a-hands-free-run"],
-]) {
-  check(`PROVEN BYPASS stays gated end-to-end: ${label}`, () => {
-    armLatch();
+  for (const command of [
+    "node scripts/clear-overnight-intent.mjs --not-a-hands-free-run",
+    "node attacker/clear-overnight-intent.mjs --not-a-hands-free-run",
+  ]) {
     const denied = denialsFor(command);
     assert.ok(
       denied.includes("unattended-autopilot.mjs"),
-      `expected the handshake to still pause this, got: ${denied.join(", ") || "(nothing denied)"}`
+      `"${command}" must stay gated, got: ${denied.join(", ") || "(nothing denied)"}`
     );
-  });
-}
-
-// ── 3. The script itself does what it claims ────────────────────────────────
-function runClear(args, cwd = fixture) {
-  return spawnSync(process.execPath, [clearScript, ...args], {
-    encoding: "utf8",
-    cwd,
-    timeout: 20000,
-  });
-}
-
-check("without the explicit assertion the script refuses and leaves the latch in place", () => {
-  armLatch();
-  const res = runClear([]);
-  assert.notEqual(res.status, 0, "expected a non-zero exit");
-  assert.match(res.stderr, /--not-a-hands-free-run/, "expected the usage hint");
-  assert.ok(latchExists(), "latch must NOT be removed without the assertion");
+  }
 });
 
-check("an unknown argument is refused and changes nothing", () => {
-  armLatch();
-  const res = runClear(["--not-a-hands-free-run", "--force"]);
-  assert.notEqual(res.status, 0, "expected a non-zero exit");
-  assert.match(res.stderr, /Unknown argument/i);
-  assert.ok(latchExists(), "latch must survive a rejected invocation");
+check("a FRESH latch really does pause ordinary building", () => {
+  armLatch(0);
+  const denied = denialsFor("npm run build");
+  assert.ok(denied.includes("unattended-autopilot.mjs"), `expected the handshake to pause a build, got: ${denied.join(", ")}`);
 });
 
-check("PROOF OF EFFECT: with the assertion the latch is actually gone", () => {
-  armLatch();
-  assert.ok(latchExists(), "precondition: latch present");
-  const res = runClear(["--not-a-hands-free-run"]);
-  assert.equal(res.status, 0, `expected success, stderr: ${res.stderr}`);
-  assert.ok(!latchExists(), "latch must be removed");
+// ── 3. The advertised remedy is real: expiry releases the latch ─────────────
+check("PROOF OF REMEDY: a latch older than the freshness window stops gating", () => {
+  armLatch(INTENT_FRESH_MS + 60_000);
+  const denied = denialsFor("npm run build");
+  assert.ok(
+    !denied.includes("unattended-autopilot.mjs"),
+    `an expired latch must release the session, but it was still denied by: ${denied.join(", ")}`
+  );
 });
 
-check("clearing again is idempotent and never errors", () => {
-  const res = runClear(["--not-a-hands-free-run"]);
-  assert.equal(res.status, 0, `expected success, stderr: ${res.stderr}`);
-  assert.match(res.stdout, /nothing to clear/i);
-});
-
-check("the script cannot be aimed at anything but the latch", () => {
-  armLatch();
-  const ledger = path.join(fixtureState, "applied-source-ledger.json");
-  writeFileSync(ledger, JSON.stringify([{ name: "probe_entry" }]));
-  // There is no argument that selects a target; a path argument must be rejected.
-  const res = runClear(["applied-source-ledger.json"]);
-  assert.notEqual(res.status, 0, "a path argument must be rejected");
-  assert.ok(existsSync(ledger), "the ledger must be untouched");
-  // And a successful clear must leave every other state file alone.
-  const ok = runClear(["--not-a-hands-free-run"]);
-  assert.equal(ok.status, 0, `expected success, stderr: ${ok.stderr}`);
-  assert.ok(existsSync(ledger), "the ledger must survive a successful latch clear");
-  assert.ok(!latchExists(), "only the latch is removed");
+check("the freshness window the message quotes matches the code", () => {
+  assert.equal(INTENT_FRESH_MS, 45 * 60 * 1000, "deny message says 45 minutes — keep INTENT_FRESH_MS in step with it");
 });
 
 rmSync(fixture, { recursive: true, force: true });

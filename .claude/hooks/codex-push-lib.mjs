@@ -379,12 +379,6 @@ const RISKY_PATH_RES = [
   /(^|\/)\.(?:gitattributes|gitmodules)$/i,
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
-  // Privileged: autopilot-lib.mjs allows this exact command through the overnight
-  // handshake while every other build/mutate call is paused, so an unreviewed edit
-  // to its BODY would turn the sanctioned command into arbitrary code execution
-  // during that pause (Codex gpt-5.6-sol exact-SHA review 2026-09-01, HIGH).
-  // Protected like the other proof/gate machinery: changing it needs the Codex gate.
-  /(^|\/)scripts\/clear-overnight-intent\.mjs$/i,
   /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
   /(^|\/)scripts\/apply-live-testdata-maintenance-20260812\.mjs$/i,
   // The ONE sanctioned path that mutates the C3 source-containment ledger. A PR

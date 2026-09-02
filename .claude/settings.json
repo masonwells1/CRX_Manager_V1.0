@@ -185,9 +185,7 @@
       "Edit(scripts/write-codex-push-proof.mjs)",
       "Write(scripts/write-codex-push-proof.mjs)",
       "Edit(scripts/run-claude-review.mjs)",
-      "Write(scripts/run-claude-review.mjs)",
-      "Edit(scripts/clear-overnight-intent.mjs)",
-      "Write(scripts/clear-overnight-intent.mjs)"
+      "Write(scripts/run-claude-review.mjs)"
     ],
     "deny": [
       "Bash(git push --force:*)",
