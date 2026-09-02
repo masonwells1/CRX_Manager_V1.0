@@ -126,11 +126,12 @@ the full green pipeline. Get Mason's explicit approval first, then push the **re
 an explicit refspec:
 
 ```bash
-# Source the IMMUTABLE ref written by the fetch above, not the working branch.
-# refs/heads/$name is a branch: anyone can commit onto it between validation and
-# this push, which would publish a commit the ledger never vouched for.
-# refs/crx-restore/$tag still holds exactly the OID checked against the table.
-git push origin "refs/crx-restore/$tag:refs/heads/<remote-branch-name>"
+# Source the validated OID LITERALLY. A SHA cannot move; every ref here can.
+# refs/heads/$name is a branch, so anyone can commit onto it after validation.
+# refs/crx-restore/$tag is an ordinary local ref -- the force-fetch above is
+# itself proof it can be rewritten -- so it is no safer as a source than $name.
+# Naming $expected binds the push to the exact commit checked against the table.
+git push origin "$expected:refs/heads/<remote-branch-name>"
 ```
 
 Do not substitute the original branch name as the source ref. It does not exist locally for most
