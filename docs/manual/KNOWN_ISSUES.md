@@ -46,11 +46,17 @@ operations, and recorded 978 ledger rows with ordering high-water `2026082622000
 the "re-read the ledger before any apply" instruction no longer apply — the apply has happened.** No
 unrelated issue entry was re-read; its own dated evidence remains authoritative.
 
-**OPEN — return credits do not reverse COGS until the PR 361 rebuild is applied.** Live
-`_issue_return_credit_impl` still creates only the credit-memo header and writes no
+**RESOLVED 2026-09-01 — return credits now reverse COGS; the PR 361 rebuild is applied live.**
+`_issue_return_credit_impl` builds negative credit-memo lines carrying `invoice_items.cost_cents`
+against the recognized source lots, and invoice-basis PNL and monthly reporting both recognize
+`posted`, `overdue`, and `paid`. Production had zero credited returns throughout, so the defect was
+latent and never produced a wrong report.
+
+The pre-apply description is retained below for provenance and **no longer describes live
+behavior**: _Live `_issue_return_credit_impl` still creates only the credit-memo header and writes no
 `invoice_items.cost_cents`; live PNL still recognizes only `posted`, and monthly reporting still
 omits `paid`. Production currently has zero credited returns, so the defect is real but latent rather
-than an existing wrong report. A 2026-08-27 read-only check found one open restock row: it is exactly
+than an existing wrong report._ A 2026-08-27 read-only check found one open restock row: it is exactly
 the pinned legacy `15 ea` RMA with the authoritative `2.5 Gal` conversion, leaving zero unhandled
 warehouse-unit mismatches. **RESOLVED 2026-09-01 — all six migrations are applied live.**
 `20260827041000`, `20260827041100`, `20260827041200`, `20260827041300`, `20260827041400`, and
