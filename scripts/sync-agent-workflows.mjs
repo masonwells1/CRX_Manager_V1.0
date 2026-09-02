@@ -121,6 +121,39 @@ export function writeExpected(expected, targetRoot = TARGET_ROOT) {
 // define "in sync" differently, so the same commit could FAIL one and PASS the
 // other. Keep the single definition in scripts/normalize-eol.mjs.
 
+// The Codex CLI's "Import from other apps" (`/import`) writes its own adapters
+// into .agents/skills/ as `source-command-<name>/SKILL.md`. They are NOT ours and
+// never can be: the importer rewrites the instruction text with a case-insensitive
+// claude -> Codex substitution, so the copies point at a `.Codex/hooks/` path that
+// does not exist. Nothing in this repo invokes them. There is no off-switch in the
+// binary, and .gitignore cannot help because the sweep below reads the directory
+// directly. Left unclassified they are 24 "not generated from .claude" failures
+// that block EVERY commit in the checkout they land in (C:\CRX_Manager, 2026-08-31
+// through 2026-09-02).
+//
+// Mason's 2026-09-02 decision: keep them VISIBLE, do not delete them. So they are
+// reported on every run and excluded from the pass/fail verdict — foreign litter,
+// not drift in a file we generate.
+//
+// Classify by REGION, not by an enumeration of the 24 names: any path under a
+// `skills/<importer-prefixed-dir>/` that this generator does not itself produce.
+// The `!expected.has()` filter upstream is what makes that safe — a path the
+// generator DOES emit stays in `expected` and is still held to the missing/stale
+// checks above, so this can never silently drop a real adapter, even one that
+// happens to be named `source-command-*`.
+const FOREIGN_SKILL_DIR_RE = /^skills\/(source-command-[^/]+)\//;
+
+export function classifyExtras(extraRelativePaths) {
+  const extras = [];
+  const foreignDirs = new Set();
+  for (const relative of extraRelativePaths) {
+    const foreign = FOREIGN_SKILL_DIR_RE.exec(relative);
+    if (foreign) foreignDirs.add(foreign[1]);
+    else extras.push(relative);
+  }
+  return { extras, foreignDirs: [...foreignDirs].sort() };
+}
+
 function checkExpected(expected) {
   const mismatches = [];
   for (const [relative, content] of expected) {
@@ -131,8 +164,18 @@ function checkExpected(expected) {
   const actualFiles = walkFiles(TARGET_ROOT)
     .map((file) => unix(path.relative(TARGET_ROOT, file)))
     .filter((relative) => !relative.startsWith("session-state/"));
-  for (const extra of actualFiles.filter((relative) => !expected.has(relative))) {
+  const { extras, foreignDirs } = classifyExtras(actualFiles.filter((relative) => !expected.has(relative)));
+  for (const extra of extras) {
     mismatches.push(`${extra} is not generated from .claude`);
+  }
+  // Report on stdout, ahead of the verdict. check-agent-workflows.mjs surfaces
+  // only the FIRST stdout line as its note, so leading with this is what keeps
+  // the litter visible through `npm run agent-health` too. Its PASS matcher is
+  // `/^PASS - \d+ .../m`, which still finds the verdict line below.
+  if (foreignDirs.length > 0) {
+    console.log(`WARNING: ignoring ${foreignDirs.length} foreign .agents/skills/source-command-*/ director${foreignDirs.length === 1 ? "y" : "ies"} written by the Codex CLI /import feature - not generated here, safe to delete by hand.`);
+    console.log(`  Their text is mangled (claude -> Codex), so references like .Codex/hooks/ are broken. They are neither checked nor synced.`);
+    for (const name of foreignDirs) console.log(`  - skills/${name}/`);
   }
   if (mismatches.length > 0) {
     for (const mismatch of mismatches) console.error(`FAIL ${mismatch}`);

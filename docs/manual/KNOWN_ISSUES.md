@@ -248,7 +248,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-09-02 (writer IDENTIFIED; opened 2026-08-31) — the Codex CLI `/import` writes 24 corrupted `source-command-*` adapters
+## OPEN 2026-09-02 (writer IDENTIFIED; commit blocker FIXED; opened 2026-08-31) — the Codex CLI `/import` writes 24 corrupted `source-command-*` adapters
 
 **Identified 2026-09-01.** Twenty-four untracked directories named
 `.agents/skills/source-command-<name>/SKILL.md` appeared in six worktrees under
@@ -330,20 +330,25 @@ into `codex.exe`. Evidence:
 (`skip_external_agent*`, `disable_external_agent*`, `*import*enabled/disabled/skip`); there is none.
 The trigger cannot be turned off from our side, so any durable fix must be ours.
 
-**Severity has increased since this entry was first written: it now BLOCKS COMMITS.**
-`sync-agent-workflows.mjs --check` rejects all 24 as "not generated from `.claude`", failing the
-pre-commit workflow-parity gate. Verified live 2026-09-02 — the check fails in `C:/CRX_Manager`, so
-every commit in the main checkout is blocked while the directories are present. **`.gitignore` does
-not help:** the checker walks the filesystem via `readdirSync`, not the git index. The candidate fix
-is therefore to make the parity checker treat `source-command-*` as foreign and ignore it, as its own
-reviewed change.
+**It blocked commits until 2026-09-02.** `sync-agent-workflows.mjs --check` rejected all 24 as "not
+generated from `.claude`", failing the pre-commit workflow-parity gate, so every commit in
+`C:/CRX_Manager` was blocked while the directories were present. **`.gitignore` does not help:** the
+checker walks the filesystem via `readdirSync`, not the git index.
 
-**Status:** quarantined (NOT deleted) out of
-`.claude/worktrees/permission-grants-claude-codex-9f7108` to the session scratchpad; still present
-in the other five worktrees. **Do not run `sync-agent-workflows.mjs --write` as a cleanup** — it
-would mutate tracked files repo-wide in an unreviewed change and destroy the evidence. Deleting the
-24 untracked duplicates is the candidate fix, as its own reviewed change, once someone identifies
-what invokes the migrator and stops it running again.
+**Resolved for the commit blocker (2026-09-02):** `checkExpected()` now classifies any
+`skills/source-command-<name>/…` path the generator does not itself emit as foreign — reported on
+every run, excluded from the verdict. Proven against all 24 real directories: `--check` prints the
+warning and PASSes, `npm run agent-health` surfaces the same line, and a stray file outside an
+importer directory still FAILs. See `docs/changelog.d/2026-09-02-quarantine-codex-import-adapters.md`.
+
+**Still open:** the importer keeps writing them. There is no off-switch, so the directories
+reappear after any future `/import`. They are inert (nothing invokes them) and now harmless to the
+toolchain, but the mangled text remains a hazard if a human or agent ever reads one as instructions.
+
+**Status:** present and VISIBLE in `C:/CRX_Manager` by Mason's 2026-09-02 decision — keep them
+visible rather than mute them; do not delete them. **Do not run `sync-agent-workflows.mjs --write`
+as a cleanup** — it would mutate tracked files repo-wide in an unreviewed change and destroy the
+evidence.
 
 ## OPEN 2026-08-31 — `git config core.hooksPath` disables EVERY husky gate in one allowlisted command
 

@@ -18,7 +18,7 @@ import path from "node:path";
 
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { isEntryPoint, writeExpected } from "./sync-agent-workflows.mjs";
+import { classifyExtras, isEntryPoint, writeExpected } from "./sync-agent-workflows.mjs";
 
 const targetRoot = mkdtempSync(path.join(os.tmpdir(), "crx-sync-write-"));
 
@@ -122,8 +122,62 @@ try {
       "drive-letter casing must not decide whether the CLI runs",
     );
   }
+  // ── foreign Codex-import directories ─────────────────────────────────────
+  // The Codex CLI's /import feature writes source-command-<name>/SKILL.md into
+  // .agents/skills/. Those are not generated here and blocked every commit in
+  // the checkout they landed in. classifyExtras() splits them out of the verdict
+  // WITHOUT widening the check for anything else.
+  //
+  // Every assertion below was mutation-proved load-bearing: dropping the `[^/]+`
+  // to `[^/]*` reddens the bare-prefix case; dropping the trailing `/` from the
+  // pattern reddens the sibling-file case; removing the classification entirely
+  // reddens the first case.
+  {
+    const foreign = classifyExtras([
+      "skills/source-command-ship/SKILL.md",
+      "skills/source-command-ship/extra.md",
+      "skills/source-command-parked/SKILL.md",
+    ]);
+    assert.deepEqual(foreign.extras, [], "importer directories must not count as drift");
+    assert.deepEqual(
+      foreign.foreignDirs,
+      ["source-command-parked", "source-command-ship"],
+      "each importer directory is reported ONCE, sorted, however many files it holds",
+    );
+
+    // The exemption must stay narrow. An ordinary stray file is still drift —
+    // this is the check that would have caught a blanket "ignore extras" fix.
+    const mixed = classifyExtras([
+      "skills/source-command-ship/SKILL.md",
+      "skills/NOT-OURS.md",
+      "README.stray",
+    ]);
+    assert.deepEqual(
+      mixed.extras,
+      ["skills/NOT-OURS.md", "README.stray"],
+      "a stray file outside an importer directory must still be reported as drift",
+    );
+    assert.deepEqual(mixed.foreignDirs, ["source-command-ship"]);
+
+    // Near-misses that must NOT be exempted: the prefix as a bare directory name
+    // with nothing after it, the prefix as a FILE rather than a directory, and
+    // the prefix appearing anywhere other than the first path segment under
+    // skills/. Each of these is a path the generator could legitimately own.
+    const nearMisses = classifyExtras([
+      "skills/source-command-/SKILL.md",
+      "skills/source-command-ship.md",
+      "skills/real/source-command-ship/SKILL.md",
+      "source-command-ship/SKILL.md",
+    ]);
+    assert.deepEqual(
+      nearMisses.foreignDirs,
+      [],
+      "only skills/source-command-<name>/... is foreign; near-miss shapes stay checked",
+    );
+    assert.equal(nearMisses.extras.length, 4, "every near-miss is still reported as drift");
+  }
 } finally {
   rmSync(targetRoot, { recursive: true, force: true });
 }
 
-console.log("OK - sync-agent-workflows --write repairs CRLF mirrors.");
+console.log("OK - sync-agent-workflows --write repairs CRLF mirrors; Codex-import dirs are quarantined, not ignored.");
