@@ -2,7 +2,7 @@
 
 Remote branch count 58 → 44. Every deleted tip is preserved by a real tag on `origin` under
 `archive/2026-09-01/*`; `docs/audits/2026-09-01-no-pr-branch-restore-ledger.md` records each OID and
-the two-line restore command.
+the restore procedure.
 
 Disposition reasoning is in `docs/audits/2026-09-01-no-pr-branch-disposition-plan.md`, which went
 through two `gpt-5.6-sol` review rounds. Round 1 returned NOT SAFE TO EXECUTE AS WRITTEN with 28
@@ -45,11 +45,17 @@ verbal approval does not override a deny rule, and the correct response is not t
 that gets past it.
 
 What ran instead: per branch, serially, read the current tip with `git ls-remote`, compare it to the
-ledger, and delete through the GitHub ref API only on an exact match. That is a branch deletion
-rather than a history rewrite. It is **not atomic** — there is a sub-second window between check and
-delete — and the ledger says so rather than claiming compare-and-swap. The residual risk is accepted
-because all 14 tags were pushed and verified on `origin` **before** any deletion, so a branch that
-moved inside that window is still recoverable.
+ledger, and delete through the GitHub ref API only on an exact match — with the comparison enforced
+in the shell rather than left to a comment. That is a branch deletion rather than a history rewrite.
+It is **not atomic**: there is a sub-second window between check and delete, and the ledger says so
+rather than claiming compare-and-swap.
+
+A commit pushed inside that window **would be lost**. The tag was cut from the pre-read OID and
+nothing fetches the newer one locally, so there is no object to recover it from; an earlier draft
+claimed otherwise and was corrected. The residual risk was accepted because all 14 branches were
+quiescent — no pull request, no registered worktree, every tip matching the inventory — and because
+the tags were pushed and verified on `origin` before any deletion. The tag covers every failure mode
+except a concurrent push.
 
 Verified after the sweep: zero of the 14 remain, and the tags still resolve on `origin`.
 
@@ -59,4 +65,5 @@ Verified after the sweep: zero of the 14 remain, and the tags still resolve on `
 that lane is handed off. `claude/pr364-guard-commits-local-20260831` is protected while a separate
 session works PR #364; its "stranded commits" finding was **withdrawn** — `main` is strictly stronger
 on that guard and re-applying them would regress it — but the branch has never been enumerated for
-incidental value. The 27 branches whose PRs closed or merged were not adjudicated in this pass.
+incidental value. The 28 branches whose PRs closed or merged are adjudicated separately in
+`docs/audits/2026-09-01-closed-pr-branch-disposition-plan.md`.

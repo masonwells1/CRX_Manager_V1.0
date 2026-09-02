@@ -1,34 +1,57 @@
 # Restore ledger — no-PR branch deletion sweep (2026-09-01)
 
 **Status: EXECUTED 2026-09-01, with Mason's explicit approval. All 14 tags are on `origin`; all 14
-branches are deleted. Every branch below is recoverable — see "Restoring a branch".**
+branches are deleted. Every branch below is recoverable from its tag — see "Restoring a branch",
+and read the race note there before assuming a tag captured the final tip.**
 
 Remote branch count went from 58 to **44**.
 
-> ### How the deletion was actually performed — read this before repeating it
->
-> The plan specified `git push --force-with-lease=<ref>:<oid> origin :<branch>` as a compare-and-swap
-> delete. **That command is refused by this repository's own guards**, and correctly so: the
-> `.claude/settings.json` deny list blocks `Bash(git push --force-with-lease:*)`, and the Codex
-> production-action guard refuses force-pushes outright. Mason's verbal approval does not and should
-> not override a deny rule. **Do not go looking for a spelling that gets past it.**
->
-> What ran instead, per branch and serially:
->
-> ```bash
-> cur=$(git ls-remote origin "refs/heads/<branch>" | cut -f1)
-> # delete ONLY on an exact match against this ledger's OID; otherwise abort
-> gh api -X DELETE "repos/masonwells1/CRX_Manager_V1.0/git/refs/heads/<branch>"
-> ```
->
-> This is a branch deletion rather than a history rewrite, which is why the ref API is the honest
-> expression of it. It is **not** atomic: there is a sub-second window between the check and the
-> delete. That residual risk is accepted because the tag was already pushed and verified on `origin`
-> **before** any deletion, so even a branch that moved inside the window is recoverable from the tag
-> plus the reflog. State the difference plainly rather than calling it compare-and-swap.
->
-> Verified after the sweep: zero of the 14 remain on `origin`, and the tags still resolve there —
-> e.g. `archive/2026-09-01/restrict-draw-down-owner` → `13e4c7b14f38…`.
+## How the deletion was actually performed — read this before repeating it
+
+The plan specified `git push --force-with-lease=<ref>:<oid> origin :<branch>` as a compare-and-swap
+delete. **That command is refused by this repository's own guards**, and correctly so: the
+`.claude/settings.json` deny list blocks `Bash(git push --force-with-lease:*)`, and the Codex
+production-action guard refuses force-pushes. Mason's verbal approval does not and should not
+override a deny rule. **Do not go looking for a spelling that gets past it.** `--force-with-lease`
+is the **rejected plan**, recorded here only so the next person does not re-propose it.
+
+What ran instead, per branch and serially — the comparison is enforced in the shell, not left to a
+comment:
+
+```bash
+expected="<ledger-oid-for-this-branch>"
+cur=$(git ls-remote origin "refs/heads/<branch>" | cut -f1)
+if [ "$cur" != "$expected" ]; then
+  printf 'tip moved (%s != %s); aborting\n' "$cur" "$expected" >&2
+  exit 1
+fi
+gh api -X DELETE "repos/masonwells1/CRX_Manager_V1.0/git/refs/heads/<branch>"
+```
+
+This is a branch deletion rather than a history rewrite, which is why the ref API is the honest
+expression of it.
+
+### The race this procedure does NOT close
+
+The check and the delete are two separate calls, so there is a sub-second window between them.
+**If another writer pushes inside that window, that commit is lost.** The tag was created from the
+pre-read OID and therefore does not contain the new commit, and nothing in this procedure fetches
+the new OID locally, so there is no local object and no durable server-side reflog entry to recover
+it from. An earlier draft of this ledger claimed the tag plus the reflog still made such a tip
+recoverable; **that claim was wrong and has been removed.**
+
+The residual risk was accepted because all 14 branches were quiescent — none had a pull request,
+none was checked out in a registered worktree, and all 14 tips matched the 2026-08-31 inventory
+immediately before deletion. The tag protects against every failure mode except a concurrent push
+inside the window.
+
+Anyone repeating this on a branch that is **not** quiescent should either quiesce it first or use
+an approved atomic expected-old-value deletion path, not this procedure.
+
+Verified after the sweep: zero of the 14 remain on `origin`, and the tags still resolve there —
+e.g. `archive/2026-09-01/restrict-draw-down-owner` → `13e4c7b14f38…`.
+
+## Purpose
 
 This is the safety net for the deletion sweep proposed in
 `docs/audits/2026-09-01-no-pr-branch-disposition-plan.md`. It follows the pattern established by
@@ -41,13 +64,24 @@ That is why it exists as its own change.
 
 ## Restoring a branch
 
+Recovery is **local by default.** These two commands inspect or resume the work without touching
+`origin`:
+
 ```bash
 git fetch origin --tags
 git switch -c <branch-name> refs/tags/<tag-name>
-git push -u origin <branch-name>
 ```
 
 The tag is an ordinary object on `origin`; nothing about the deletion is one-way while it exists.
+
+**Republishing the branch is a separate, gated step.** Every branch in this ledger was deleted
+because it was superseded, contradicted by an owner decision, or broken, so recreating it on
+`origin` is not a neutral act — and under `AGENTS.md` no branch may be pushed until it has passed
+the full green pipeline. Get Mason's explicit approval first, then:
+
+```bash
+git push -u origin <branch-name>
+```
 
 ## The 14 branches
 
@@ -86,25 +120,23 @@ Row numbering follows the disposition plan. **Row 11 is deliberately absent** �
 | `claude/offline-review-stale-snapshot` (row 11) | **HOLD.** Checked out at `C:\crx-wt\ledger-gitdir`. Hand the lane off before it becomes eligible. |
 | `claude/pr364-guard-commits-local-20260831` | **PROTECTED.** A separate session is working PR #364. Its F4 finding was withdrawn — `main` is strictly stronger and those commits must not be re-applied — but the branch has never been enumerated for incidental value. Enumerate, record anything real in `KNOWN_ISSUES.md`, then it may be considered. |
 
-## Deletion mechanism — compare-and-swap, not delete-by-name
+## Why an ordinary delete-by-name was not good enough
 
 Codex's round-2 review found the original plan's preservation step unsound: an ordinary remote delete
 removes a ref **by name** and nothing compares it to the OID that was tagged. A branch that moves
 between the final read and the delete loses its new commit despite the tag — the exact failure the
 tag exists to prevent.
 
-Each deletion is therefore conditional on the expected OID:
+The executed procedure above narrows that window to the gap between two calls and aborts on any
+mismatch it can see, but it does not eliminate the window. That is stated plainly rather than
+described as compare-and-swap, which it is not. Per branch, serially: read the tip → tag that exact
+OID → verify the remote tag's OID → confirm the ledger row → fresh PR and worktree check → compare
+and delete. Never batch the tags and then batch the deletes; the gap between them is where a moved
+tip is lost.
 
-```bash
-git push --force-with-lease=refs/heads/<branch>:<expectedOid> origin :<branch>
-```
-
-**This is a force-class operation** and needs Mason's explicit approval under `AGENTS.md`. It is not
-covered by the standing push policy, and this ledger does not assume that approval.
-
-Per branch, serially: read the tip → tag that exact OID → verify the remote tag's OID → confirm the
-ledger row → fresh PR and worktree check → delete that same OID. Never batch the tags and then batch
-the deletes; the gap between them is where a moved tip is lost.
+**Deleting remote branches is a force-class operation** and needs Mason's explicit approval under
+`AGENTS.md`. It is not covered by the standing push policy. Approval was given for this sweep on
+2026-09-01 and does not carry forward to any future one.
 
 ## Known local-only work — not at risk from this sweep, but recorded
 
