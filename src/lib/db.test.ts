@@ -118,6 +118,17 @@ describe('hasRpcCode', () => {
   it('does NOT false-positive on the token mid-message', () => {
     expect(hasRpcCode({ message: 'note: LICENSE_EXPIRED appears here' }, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
   });
+  // save_job raises the BARE token: `RAISE EXCEPTION 'SHARE_NOT_100' USING
+  // DETAIL = 'Field shares must total 100%; got ...'`. JobDetail detected it with
+  // `err instanceof Error && err.message.includes(...)`, which never matched a
+  // real refusal because the refusal is a plain object — the friendly "shares must
+  // total 100%" message was unreachable. This pins the object form so the guard
+  // cannot regress to an Error-only check.
+  it('matches save_job SHARE_NOT_100 in the plain-object form the RPC actually returns', () => {
+    const pgErr = { code: 'P0001', message: 'SHARE_NOT_100', details: 'Field shares must total 100%; got 100.009', hint: null };
+    expect(pgErr instanceof Error).toBe(false);
+    expect(hasRpcCode(pgErr, RpcErrorCodes.SHARE_NOT_100)).toBe(true);
+  });
   it('handles null/undefined/odd values without throwing', () => {
     expect(hasRpcCode(null, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
     expect(hasRpcCode(undefined, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);

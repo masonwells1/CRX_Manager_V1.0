@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { MessageCircle, Send, Reply, Edit2, Trash2, X } from 'lucide-react';
-import { supabase, checkMutationResult } from '../../lib/db';
+import { sanitizeError, supabase, checkMutationResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
@@ -176,7 +176,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       fetchComments();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'CommentsSection.handleEditComment' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to update comment');
+      toast('error', sanitizeError(err));
     }
     setSending(false);
   };
@@ -198,7 +198,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       fetchComments();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'CommentsSection.handleDeleteComment' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to delete comment');
+      toast('error', sanitizeError(err));
     }
   };
 

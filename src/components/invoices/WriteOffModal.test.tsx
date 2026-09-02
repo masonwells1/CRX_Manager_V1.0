@@ -16,7 +16,7 @@ const { mockRpc, mockToast } = vi.hoisted(() => {
   return { mockRpc, mockToast };
 });
 
-vi.mock('../../lib/db', () => ({
+vi.mock('../../lib/db', async () => ({
   supabase: { rpc: mockRpc },
   // Real shape: throws on null/undefined, returns the value otherwise.
   assertRpcResult: (data: unknown, rpcName: string) => {
@@ -25,6 +25,12 @@ vi.mock('../../lib/db', () => ({
     }
     return data;
   },
+  // The REAL sanitizeError, never a stub. A stub shaped
+  // `e instanceof Error ? e.message : …` would re-implement the defect this
+  // screen was fixed for and pass against a regressed product.
+  sanitizeError: (await vi.importActual<typeof import('../../lib/errorSanitizer')>(
+    '../../lib/errorSanitizer',
+  )).sanitizeError,
 }));
 
 vi.mock('../../hooks/useIdempotencyKey', () => ({
@@ -142,8 +148,20 @@ describe('WriteOffModal', () => {
     });
   });
 
-  it('shows error toast on RPC failure', async () => {
-    mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'RPC failed' } });
+  // ASSERTION DELIBERATELY CHANGED (H5 follow-up). This test previously asserted
+  // `stringContaining('Failed')`, which passed only because the screen was showing
+  // its canned literal 'Failed to apply write-off' INSTEAD of the server's reason —
+  // the test agreed with the bug, so it could never catch it. postgrest-js resolves
+  // a non-throwing rpc error as a PLAIN OBJECT (PostgrestError is constructed only
+  // under .throwOnError()), so `err instanceof Error` was false and the old ternary
+  // discarded a refusal the database had already explained. Pin the real behaviour:
+  // the server's message reaches the operator, and the literal does not.
+  it('surfaces the server refusal verbatim on RPC failure, not a canned literal', async () => {
+    const refusal = 'Write-off exceeds the remaining balance on this invoice. No changes were saved.';
+    mockRpc.mockResolvedValueOnce({
+      data: null,
+      error: { message: refusal, details: null, hint: null, code: 'P0001' },
+    });
     render(<WriteOffModal {...defaultProps} />);
     const inputs = screen.getAllByRole('spinbutton');
     fireEvent.change(inputs[0], { target: { value: '50' } });
@@ -152,8 +170,34 @@ describe('WriteOffModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /apply write-off/i }));
 
     await waitFor(() => {
-      expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Failed'));
+      expect(mockToast).toHaveBeenCalledWith('error', refusal);
     });
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'Failed to apply write-off');
+  });
+
+  // The fix must not trade a swallowed message for a schema leak: raw PostgreSQL
+  // constraint text is still redacted on its way to the operator.
+  it('redacts raw constraint text instead of leaking schema identifiers', async () => {
+    mockRpc.mockResolvedValueOnce({
+      data: null,
+      error: {
+        message: 'new row for relation "invoices" violates check constraint "invoices_balance_chk"',
+        details: null,
+        hint: null,
+        code: '23514',
+      },
+    });
+    render(<WriteOffModal {...defaultProps} />);
+    fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '50' } });
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Reason' } });
+    fireEvent.click(screen.getByRole('button', { name: /apply write-off/i }));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith('error', 'The provided value is not valid');
+    });
+    const shown = mockToast.mock.calls.map((c) => String(c[1])).join(' | ');
+    expect(shown).not.toContain('invoices_balance_chk');
+    expect(shown).not.toContain('relation');
   });
 
   it('calls onClose when Cancel clicked', () => {

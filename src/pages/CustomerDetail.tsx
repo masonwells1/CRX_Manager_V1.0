@@ -871,7 +871,7 @@ export default function CustomerDetail() {
     } catch (error: unknown) {
       setCrops(previousCrops);
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'CustomerDetail.toggleCrop' } });
-      toast('error', error instanceof Error ? error.message : 'Failed to update crops');
+      toast('error', sanitizeError(error));
     } finally {
       setCropSaving(null);
     }
