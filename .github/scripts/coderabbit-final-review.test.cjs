@@ -631,7 +631,12 @@ test('a metadata edit clears stale requested state after replacing a queued sync
   assert.equal(result.status, 'reset');
   assert.equal(result.reason, 'pull_request_target.edited.stale_state');
   assert.equal(harness.liveLabels.size, 0);
-  assert.equal(harness.comments.length, 1);
+  // Changed from 1 to 0 deliberately, 2026-09-02. This asserted that the reset
+  // left the old-head command in place. That was the defect: the candidate is
+  // invalid (live head is NEXT_HEAD, the command is for HEAD), so leaving the
+  // command lets CodeRabbit spend a review on a superseded candidate. A reset
+  // now deletes it.
+  assert.equal(harness.comments.length, 0);
 });
 
 test('a metadata edit preserves a confirmed current-head request and removes stray ready state', async () => {
@@ -1512,23 +1517,60 @@ test('a push reset deletes the superseded old-head command', async () => {
   assert.equal(harness.liveLabels.size, 0);
 });
 
-test('a push reset never deletes a command for the CURRENT head', async () => {
+// Regression, and a correction of this test's first version. It originally
+// asserted that a current-head command SURVIVES a reset, which was wrong: a base
+// edit, draft conversion, reopen or auto-merge change invalidates the candidate
+// with the head UNCHANGED. Preserving the command there is exactly the failure —
+// a relabel posts a second paid command while the first can still be reviewed.
+// A reset means the candidate is invalid, so the command goes regardless of head.
+for (const [name, event] of [
+  ['a base edit', { action: 'edited', changes: { base: { ref: { from: 'main' } } } }],
+  ['a draft conversion', { action: 'converted_to_draft' }],
+  ['a reopen', { action: 'reopened' }],
+  ['an auto-merge change', { action: 'auto_merge_enabled' }],
+]) {
+  test(`${name} deletes the posted command even though the head did not move`, async () => {
+    const harness = makeHarness({
+      ...event,
+      eventLabel: null,
+      pulls: [pullRequest({ labels: [REQUESTED_LABEL] })],
+      eventPullRequest: pullRequest({ labels: [REQUESTED_LABEL] }),
+      existingComments: [{
+        id: 99,
+        body: reviewCommandBody(HEAD),
+        created_at: new Date().toISOString(),
+        user: { login: 'github-actions[bot]' },
+      }],
+    });
+    const result = await execute(harness);
+
+    assert.equal(result.status, 'reset');
+    assert.deepEqual(
+      harness.comments, [],
+      'an invalidated candidate must not keep its command just because the head is unchanged',
+    );
+  });
+}
+
+test('a reset leaves comments that are not Actions-authored review commands alone', async () => {
   const harness = makeHarness({
     action: 'synchronize',
     eventLabel: null,
-    pulls: [pullRequest({ labels: [REQUESTED_LABEL] })],
-    eventPullRequest: pullRequest({ labels: [REQUESTED_LABEL] }),
-    existingComments: [{
-      id: 99,
-      body: reviewCommandBody(HEAD),
-      created_at: new Date().toISOString(),
-      user: { login: 'github-actions[bot]' },
-    }],
+    pulls: [pullRequest({ head: NEXT_HEAD, labels: [REQUESTED_LABEL] })],
+    eventPullRequest: pullRequest({ head: NEXT_HEAD, labels: [REQUESTED_LABEL] }),
+    existingComments: [
+      { id: 98, body: 'a human note', created_at: new Date().toISOString(), user: { login: 'masonwells1' } },
+      { id: 99, body: reviewCommandBody(HEAD), created_at: new Date().toISOString(), user: { login: 'github-actions[bot]' } },
+      { id: 100, body: REVIEW_COMMAND, created_at: new Date().toISOString(), user: { login: 'masonwells1' } },
+    ],
   });
   const result = await execute(harness);
 
   assert.equal(result.status, 'reset');
-  assert.equal(harness.comments.length, 1, 'a current-head command must survive the reset');
+  assert.deepEqual(
+    harness.comments.map((comment) => comment.id), [98, 100],
+    'only the Actions-authored marked command may be deleted',
+  );
 });
 
 // Regression: workflow runs QUEUE rather than cancel, so a maintainer removing

@@ -103,14 +103,28 @@ since 2026-09-01 and that **no agent may act on that exemption**. Live state re-
 A `synchronize` queued behind a **finished** request run reaches the reset after that run's
 post-comment cleanup window has closed. Clearing the labels was therefore not enough: the command
 posted for the old head stayed on the pull request, and CodeRabbit could still spend a review on the
-candidate the push had already invalidated. The reset now deletes any Actions-authored command whose
-embedded head is not the current one — and only those, so a still-valid candidate's command survives.
+candidate the push had already invalidated. A reset now deletes the posted command.
+
+**The first version of this fix was wrong, and Codex caught it in the next round.** It deleted only
+commands whose embedded head differed from the current one, reasoning that a still-valid candidate's
+command should survive. But a **base edit, draft conversion, reopen, or auto-merge change invalidates
+the candidate with the head UNCHANGED** — so that guard preserved exactly the commands it most needed
+to remove, and a relabel would then post a second paid command while the first could still be
+reviewed. Reaching the reset at all means the candidate is invalid; a confirmed duplicate returns
+`duplicate` from `reconcileLabelEvent` and never resets. Deletion is now unconditional, and scoped by
+authorship instead: only Actions-authored comments whose body exactly equals the canonical command
+body are removed, so human comments and a human-typed `@coderabbitai review` are untouched.
 
 Ordering is deliberate: the deletion runs BEFORE the labels are cleared, so a failed deletion leaves
 the marker intact (stale command, deduped) rather than cleared (stale command, re-reviewable). The
 deletion is best-effort and warns rather than throwing, because a reset that cannot delete the comment
-must still clear the labels. Two regression tests — one that the old-head command is deleted, one that
-a current-head command is not — each mutation-proved separately.
+must still clear the labels.
+
+Six regression tests, mutation-proved together: one per reset kind that invalidates without a head
+change, one for the push case, and one asserting non-Actions comments survive. **One pre-existing
+test's expectation was deliberately changed** — `a metadata edit clears stale requested state after
+replacing a queued synchronize reset` asserted the old-head command survived the reset; that was the
+defect, and the assertion now expects it gone, with the reason recorded inline.
 
 ### Cancelling a request could still spend the review (Codex CRX-002)
 

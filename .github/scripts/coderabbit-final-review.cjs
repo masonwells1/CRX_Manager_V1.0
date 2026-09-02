@@ -244,17 +244,16 @@ async function resetLabels({ github, owner, repo, pullNumber, core, reason }) {
 }
 
 async function resetCandidate({
-  github, owner, repo, pullNumber, core, reason, currentHeadSha,
+  github, owner, repo, pullNumber, core, reason,
 }) {
-  // Clear the superseded command BEFORE the labels. If the deletion is going to
+  // Delete the posted command BEFORE the labels. If the deletion is going to
   // fail it fails while the gate state still says "requested", which is the
   // safer order: a stale command with its marker intact is deduped, a stale
   // command with the marker already cleared can be re-reviewed.
-  if (currentHeadSha) {
-    await deleteSupersededCommands({
-      github, owner, repo, pullNumber, currentHeadSha, core,
-    });
-  }
+  //
+  // Unconditional — a reset means the candidate is invalid, whether or not the
+  // head moved. See deleteReviewCommands for why gating on the head was wrong.
+  await deleteReviewCommands({ github, owner, repo, pullNumber, core });
   return resetLabels({ github, owner, repo, pullNumber, core, reason });
 }
 
@@ -395,12 +394,19 @@ function actionsReviewCommandHead(comment) {
 // head stays on the PR and CodeRabbit can still spend a review on it. Clearing
 // the labels is not enough — the superseded command has to go too.
 //
+// EVERY Actions-authored command is deleted, not only ones for a superseded
+// head. The first version of this gated on `head !== currentHeadSha`, which was
+// wrong: a base edit, draft conversion, reopen, or auto-merge change invalidates
+// the candidate with the head UNCHANGED, so that guard preserved exactly the
+// commands it most needed to remove — and a relabel then posted a second paid
+// command while the first could still spend a review on the invalidated
+// candidate. Reaching this function means the candidate is invalid; a confirmed
+// duplicate returns `duplicate` from reconcileLabelEvent and never resets.
+//
 // Deliberately best-effort: a reset that cannot delete the comment must still
-// clear the labels, so failures warn rather than throw. Only commands for a head
-// that is NOT the current one are deleted, so a reset can never remove the
-// command belonging to a still-valid candidate.
-async function deleteSupersededCommands({
-  github, owner, repo, pullNumber, currentHeadSha, core,
+// clear the labels, so failures warn rather than throw.
+async function deleteReviewCommands({
+  github, owner, repo, pullNumber, core,
 }) {
   let comments;
   try {
@@ -409,20 +415,20 @@ async function deleteSupersededCommands({
       { owner, repo, issue_number: pullNumber, per_page: 100 },
     );
   } catch (error) {
-    core.warning(`Could not look for superseded review commands: ${error.message}`);
+    core.warning(`Could not look for posted review commands: ${error.message}`);
     return 0;
   }
 
   let deleted = 0;
   for (const comment of comments) {
     const head = actionsReviewCommandHead(comment);
-    if (!head || head === currentHeadSha) continue;
+    if (!head) continue;
     try {
       await github.rest.issues.deleteComment({ owner, repo, comment_id: comment.id });
       deleted += 1;
-      core.notice(`Deleted a superseded CodeRabbit review command for ${head}.`);
+      core.notice(`Deleted the posted CodeRabbit review command for ${head}.`);
     } catch (error) {
-      core.warning(`Could not delete the superseded review command for ${head}: ${error.message}`);
+      core.warning(`Could not delete the posted review command for ${head}: ${error.message}`);
     }
   }
   return deleted;
@@ -592,11 +598,6 @@ async function runGate({ github, context, core, config, attemptState }) {
         : requestedLabelRemoved
           ? 'pull_request_target.unlabeled.requested_marker'
           : `pull_request_target.${action}`,
-      // The push path. A `synchronize` queued behind a finished request run
-      // reaches here AFTER that run's post-comment cleanup window has closed, so
-      // this is the only place left that can remove the old-head command the
-      // push invalidated.
-      currentHeadSha: context.payload.pull_request.head.sha,
     });
   }
 
