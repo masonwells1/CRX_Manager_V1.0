@@ -2137,21 +2137,42 @@ export function pullRequestChecksGreen(pullRequest) {
 }
 
 // GitHub's own review verdict for a pull request, from
-// `gh pr view --json reviewDecision`. Until 2026-09-01 nothing could merge into
-// main without an approval, so the CLEAN-mergeStateStatus check above stood in
-// for "somebody approved this". Turning "Include administrators" OFF on main's
-// branch protection gave Mason a manual override — and that override travels
-// with the same admin token every agent session already holds. The merge gates
-// therefore read the approval directly instead of inferring it from mergeState.
+// `gh pr view --json reviewDecision`.
 //
-// APPROVED is head-bound only because main's protection sets
-// dismiss_stale_reviews AND require_last_push_approval (both verified live on
-// 2026-09-01): GitHub dismisses every approval when a new commit is pushed, so
-// APPROVED cannot be describing an older head. If stale-review dismissal is
-// ever turned off, this is no longer sufficient alone and the gates must also
-// check that an APPROVED review's commit_id equals headRefOid.
+// `pullRequestApproved` reports whether a CURRENT approval exists. It is
+// head-bound only while main's protection sets dismiss_stale_reviews (verified
+// live 2026-09-02, and re-verify before relying on it): GitHub dismisses every
+// approval when a new commit is pushed, so APPROVED cannot be describing an
+// older head. Since 2026-09-02 the merge gates use this only to decide whether
+// to PRINT A NOTICE, never to deny — see `pullRequestReviewBlocked`.
 export function pullRequestApproved(pullRequest) {
   return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
+}
+
+// The merge-blocking half of the review verdict (Mason, 2026-09-02).
+//
+// Until 2026-09-02 the gates denied any merge whose reviewDecision was not
+// APPROVED. GitHub itself required an approval then, so the gate matched the
+// server. Mason removed that requirement from main's classic branch protection
+// on 2026-09-02 because a stuck or un-run CodeRabbit review blocked landings
+// that were otherwise green, and the only way past it was his manual
+// administrator override — a control no agent may use.
+//
+// What survives is the property that actually mattered: never merge over an
+// unresolved objection. CHANGES_REQUESTED means a reviewer looked and said no,
+// so it still hard-denies. Every other verdict — APPROVED, REVIEW_REQUIRED, and
+// the null GitHub now returns when no review is required — allows the merge,
+// because "nobody has reviewed this yet" is no longer a server-side blocker.
+//
+// This deliberately does NOT fail closed on a missing field: after the
+// protection change, `null` is the ordinary verdict for an unreviewed PR and
+// treating it as a block would restore exactly the deadlock this removed. The
+// fail-closed floor lives upstream instead — gateRequest() denies outright if
+// the PR's JSON cannot be fetched at all, so this predicate is never reached
+// with an unknown verdict. The green-pipeline check remains a hard deny, so
+// CI, not a review, is what gates a landing now.
+export function pullRequestReviewBlocked(pullRequest) {
+  return String(pullRequest?.reviewDecision || "").toUpperCase() === "CHANGES_REQUESTED";
 }
 
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };
