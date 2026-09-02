@@ -126,12 +126,16 @@ the full green pipeline. Get Mason's explicit approval first, then push the **re
 an explicit refspec:
 
 ```bash
-# $name is the restore/<tag-name> branch created above -- the validated archive tip.
-# Naming the source ref explicitly matters: the original branch name does not exist
-# locally for most rows, and for row 8 it names a DIFFERENT commit (one ahead of what
-# was archived) that has not been through the pipeline.
-git push origin "refs/heads/$name:refs/heads/<remote-branch-name>"
+# Source the IMMUTABLE ref written by the fetch above, not the working branch.
+# refs/heads/$name is a branch: anyone can commit onto it between validation and
+# this push, which would publish a commit the ledger never vouched for.
+# refs/crx-restore/$tag still holds exactly the OID checked against the table.
+git push origin "refs/crx-restore/$tag:refs/heads/<remote-branch-name>"
 ```
+
+Do not substitute the original branch name as the source ref. It does not exist locally for most
+rows, and for row 8 it names a **different** commit — one ahead of what was archived, and never
+through the pipeline.
 
 ## The 14 branches
 
