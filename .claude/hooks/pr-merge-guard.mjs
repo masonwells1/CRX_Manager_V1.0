@@ -129,8 +129,10 @@ if (requests.some((request) => request?.admin)) {
   deny(
     "PR MERGE GATE: `--admin` merges with administrator privileges, skipping main's required review. " +
     "That override exists for Mason to use by hand on the PR page — an agent may never use it, whatever " +
-    "the diff or the deadline. Get a real approval instead (post `@coderabbitai review`, fix what it " +
-    "finds, and merge once it approves this head), or hand the PR to Mason and say why it is stuck."
+    "the diff or the deadline. Get a real approval instead: apply the `ready-for-coderabbit` label and " +
+    "let the default-branch workflow post the review command once, fix what it finds, and merge only " +
+    "after it approves this head. Do not post `@coderabbitai review` by hand — that routes around the " +
+    "label gate. If the review is stuck, hand the PR to Mason and say why."
   );
 }
 
@@ -197,8 +199,10 @@ function gateRequest(request) {
     deny(
       `PR MERGE GATE: GitHub reports reviewDecision=${String(pr.reviewDecision || "").toUpperCase() || "<none>"} ` +
       "— this pull request has no current approval, and main requires one. The administrator override that " +
-      "could skip it is Mason's to use by hand, not an agent's. Post `@coderabbitai review`, fix every real " +
-      "finding, and merge only after it approves; if the review is stuck, hand the PR to Mason and say so."
+      "could skip it is Mason's to use by hand, not an agent's. Apply the `ready-for-coderabbit` label — the " +
+      "default-branch workflow revalidates this exact head and posts the review command once. Do not post " +
+      "`@coderabbitai review` by hand; that routes around the label gate. Fix every real finding and merge " +
+      "only after it approves this head; if the review is stuck, hand the PR to Mason and say so."
     );
   }
 

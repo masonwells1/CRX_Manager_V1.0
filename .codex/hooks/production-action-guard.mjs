@@ -652,8 +652,10 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     return denied(
       `CODEX PRODUCTION GATE: GitHub reports reviewDecision=${String(pullRequest.reviewDecision || "").toUpperCase() || "<none>"} — ` +
       "this pull request has no current approval and main requires one. Since 2026-09-01 the administrator " +
-      "override that could skip the review is Mason's to use by hand, not an agent's. Get a real approval " +
-      "(`@coderabbitai review`, fix its findings, merge once it approves), or hand the PR to Mason and say why."
+      "override that could skip the review is Mason's to use by hand, not an agent's. Get a real approval: " +
+      "apply the `ready-for-coderabbit` label and let the default-branch workflow post the review command " +
+      "once — posting `@coderabbitai review` by hand routes around that gate — then fix its findings and " +
+      "merge only after it approves this head. Or hand the PR to Mason and say why."
     );
   }
   if (!pullRequestChecksGreen(pullRequest)) {
