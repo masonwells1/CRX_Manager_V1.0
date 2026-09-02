@@ -317,4 +317,31 @@ eq(
   "the Codex guard prints all three non-blocking notices, matching the Claude guard",
 );
 
+// ── gate ORDERING, pinned on both guards ─────────────────────────────────────
+// A check placed after a deny that fires first is dead code, and the tests above
+// (which only assert the code EXISTS) all stay green while it never runs. That
+// is not hypothetical: the first cut of this change sat after the Codex guard's
+// approval deny, so it was unreachable for any PR without a formal approval —
+// caught by review, not by this suite, which is why the ordering is pinned here.
+const codexCheckAt = codexGuardSource.indexOf("the Codex GitHub App's own review");
+const codexApprovalAt = codexGuardSource.indexOf("if (!pullRequestApproved(pullRequest))");
+const codexGreenAt = codexGuardSource.indexOf("if (!pullRequestChecksGreen(pullRequest))");
+ok(codexCheckAt > 0 && codexApprovalAt > 0 && codexGreenAt > 0, "all three Codex-guard gates are present to order");
+ok(
+  codexCheckAt < codexApprovalAt,
+  "MUST RUN FIRST: the Codex guard's App-review check precedes its approval deny, or it is unreachable for unapproved PRs",
+);
+ok(
+  codexCheckAt < codexGreenAt,
+  "MUST RUN FIRST: the Codex guard's App-review check precedes its green-pipeline deny",
+);
+
+const claudeCheckAt = guardSource.indexOf("the Codex GitHub App's review");
+const claudeGreenAt = guardSource.indexOf("green-pipeline requirement");
+ok(claudeCheckAt > 0 && claudeGreenAt > 0, "both Claude-guard gates are present to order");
+ok(
+  claudeCheckAt < claudeGreenAt,
+  "MUST RUN FIRST: the Claude guard's App-review check precedes the green-pipeline deny, so an unanswered review comment is the message the reader gets",
+);
+
 console.log(`codex-bot-review-lib: ${pass} assertions passed`);

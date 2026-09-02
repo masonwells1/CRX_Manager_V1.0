@@ -655,14 +655,6 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "so the merge cannot be bound to the base it will actually land on and is denied (fail closed)."
     );
   }
-  if (!pullRequestApproved(pullRequest)) {
-    return denied(
-      `CODEX PRODUCTION GATE: GitHub reports reviewDecision=${String(pullRequest.reviewDecision || "").toUpperCase() || "<none>"} — ` +
-      "this pull request has no current approval and main requires one. Since 2026-09-01 the administrator " +
-      "override that could skip the review is Mason's to use by hand, not an agent's. Get a real approval " +
-      "(`@coderabbitai review`, fix its findings, merge once it approves), or hand the PR to Mason and say why."
-    );
-  }
   // ── the Codex GitHub App's own review — mirror of pr-merge-guard.mjs ───────
   // Added 2026-09-02 alongside the Claude-side check. Wiring it on only one side
   // would mean a merge driven from Codex skips a gate a merge driven from Claude
@@ -726,6 +718,14 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     );
   }
 
+  if (!pullRequestApproved(pullRequest)) {
+    return denied(
+      `CODEX PRODUCTION GATE: GitHub reports reviewDecision=${String(pullRequest.reviewDecision || "").toUpperCase() || "<none>"} — ` +
+      "this pull request has no current approval and main requires one. Since 2026-09-01 the administrator " +
+      "override that could skip the review is Mason's to use by hand, not an agent's. Get a real approval " +
+      "(`@coderabbitai review`, fix its findings, merge once it approves), or hand the PR to Mason and say why."
+    );
+  }
   if (!pullRequestChecksGreen(pullRequest)) {
     return denied(
       "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."

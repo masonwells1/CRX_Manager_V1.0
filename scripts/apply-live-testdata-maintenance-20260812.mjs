@@ -150,11 +150,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // App review check (unresolved App comments on the exact head block a merge),
   // mirroring the same check added to pr-merge-guard.mjs. Anchors unchanged; the
   // transform is still identity.
-  codexGuard: "1811502577afdcb5c1dd1bedfca3db7a04bc6f9d",
+  codexGuard: "fc7e744f3a07fdd984ffdca7696d13c739b684ad",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "762c4de5994f63fad7341e6a4d87e7b02429cfa0",
+  codexGuard: "c003879a0d3cd213a6aeb51146d63c740b9d31c7",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 
