@@ -39,9 +39,13 @@ import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
 // inherited GIT_DIR makes both halves target the real repository instead of the
 // fixture: the fixture's `git config core.hooksPath` writes there, and
 // agent-health-check.mjs reads core.hooksPath from there. Standalone runs and CI
-// have no GIT_DIR and pass; the pre-commit hook path fails at the first PASS
-// assertion and blocks EVERY commit in EVERY worktree. It also leaves the real
-// repo marked core.bare=true. Scrub before the first call rather than passing
+// have no GIT_DIR and pass; the bug exists only on the git-hook path, which CI
+// does not exercise. Scope, precisely: main's own .husky/pre-commit does NOT run
+// this test, so it never blocked commits here. It blocked worktrees whose
+// core.hooksPath pointed at the abandoned PR #432 Codex checkout, whose older
+// pre-commit runs `npm run test:agent-workflows` unconditionally; those runs
+// failed at the first PASS assertion. It also leaves the real repo marked
+// core.bare=true. Scrub before the first call rather than passing
 // `env` per child, because the in-process reader has no child to scrub.
 // See KNOWN_ISSUES and .claude/hooks/git-test-env.mjs (7 other test files use
 // scratchHookEnvironment() for the spawned-child form of this same bug).
