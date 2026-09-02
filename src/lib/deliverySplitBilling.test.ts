@@ -103,22 +103,69 @@ describe('the client predicate still matches the shipped server guard', () => {
     expect(emitters).toContain('20260721145936_require_money_lifecycle_idempotency_keys.sql');
   });
 
+  /**
+   * Split a migration into one segment per CREATE FUNCTION definition.
+   *
+   * Codex round 4 (PR #550, P2): asserting against the WHOLE file accepted guard
+   * text from a definition nobody calls. Codex reproduced the shape — a guarded
+   * legacy implementation followed by an unguarded replacement that the wrapper
+   * actually invokes — and all 17 tests still passed. Scoping to the matching
+   * definitions closes that.
+   */
+  function functionDefinitions(sql: string): { name: string; body: string }[] {
+    const DEF = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z0-9_]+)\s*\(/gi;
+    const heads = [...sql.matchAll(DEF)];
+    return heads.map((m, i) => ({
+      name: m[1],
+      body: sql.slice(m.index ?? 0, i + 1 < heads.length ? heads[i + 1].index ?? sql.length : sql.length),
+    }));
+  }
+
   it('the NEWEST function emitter still ORs the orders flag with an allocation EXISTS', () => {
     // If this fails, the SERVER rule moved and orderRequiresSplitBilling is stale.
     const newest = emitters[emitters.length - 1];
     const sql = readFileSync(join(MIGRATIONS_DIR, newest), 'utf8');
 
-    // Assert presence FIRST: a re-emission that dropped the guard leaves no
-    // token to slice around, and indexOf(-1) would otherwise silently produce a
-    // window over unrelated SQL.
-    expect(sql, `newest function emitter: ${newest}`).toContain('ORDER_NEEDS_SPLIT_BILLING');
+    // Only the definitions of THIS function family. A migration may legitimately
+    // redefine unrelated functions alongside it — 20260827041200 also re-emits
+    // _complete_delivery_authorized_impl — so requiring the guard in every
+    // definition in the file would false-alarm.
+    const targets = functionDefinitions(sql)
+      .filter((d) => /create_invoice_for_unbilled_delivery/i.test(d.name));
 
-    const guardIndex = sql.indexOf('ORDER_NEEDS_SPLIT_BILLING');
-    const guardBlock = sql.slice(Math.max(0, guardIndex - 1200), guardIndex);
+    expect(targets.length, `newest function emitter: ${newest}`).toBeGreaterThan(0);
 
-    expect(guardBlock, `newest function emitter: ${newest}`).toMatch(/COALESCE\(needs_split_billing,\s*false\)/);
-    expect(guardBlock, `newest function emitter: ${newest}`).toMatch(/OR EXISTS/);
-    expect(guardBlock, `newest function emitter: ${newest}`).toMatch(/FROM order_item_field_allocations/);
+    // EVERY matching definition must carry the guard, not merely one of them.
+    // Deliberately strict: a re-emission that adds a thin unguarded delegate
+    // trips this. Loud beats silent for a rule whose absence mis-attributes AR.
+    for (const def of targets) {
+      const where = `${newest} → ${def.name}`;
+
+      // Assert presence FIRST: with the guard dropped, indexOf returns -1 and a
+      // slice would silently produce a window over unrelated SQL.
+      expect(def.body, where).toContain('ORDER_NEEDS_SPLIT_BILLING');
+
+      const guardIndex = def.body.indexOf('ORDER_NEEDS_SPLIT_BILLING');
+      const guardBlock = def.body.slice(Math.max(0, guardIndex - 1200), guardIndex);
+
+      expect(guardBlock, where).toMatch(/COALESCE\(needs_split_billing,\s*false\)/);
+      expect(guardBlock, where).toMatch(/OR EXISTS/);
+      expect(guardBlock, where).toMatch(/FROM order_item_field_allocations/);
+    }
+  });
+
+  it('LEGACY whole-file assertion is gone (scoped to matching definitions)', () => {
+    // Pins the round-4 fix: the guard check must run per-definition. If someone
+    // reverts to scanning the whole file, an unguarded replacement sitting beside
+    // a guarded legacy definition passes again.
+    const newest = emitters[emitters.length - 1];
+    const sql = readFileSync(join(MIGRATIONS_DIR, newest), 'utf8');
+    const defs = functionDefinitions(sql);
+
+    // The newest emitter genuinely contains unrelated definitions; if this ever
+    // becomes 1, the scoping above stops being exercised by real data.
+    expect(defs.length, `definitions in ${newest}`).toBeGreaterThan(1);
+    expect(defs.some((d) => !/create_invoice_for_unbilled_delivery/i.test(d.name))).toBe(true);
   });
 });
 
