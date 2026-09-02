@@ -1,11 +1,54 @@
 # Decision Log
 
-Last verified: 2026-08-31
+Last verified: 2026-09-02
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-02 — The required review on `main` is removed; CI becomes the merge gate
+
+**Source:** Mason's in-chat request on 2026-09-02 ("we need to remove the requred review setting
+for a pr merge on github"), and his choice, when the scope question was put to him, to keep running
+CodeRabbit but stop letting it block a merge.
+
+**Decision.** `required_pull_request_reviews` was deleted from classic branch protection on `main`.
+A pull request now merges with no approving review. Verified live immediately after the change:
+`reviews_required: false`, while `SQL Migration Validation` and `Lint, Type Check, Test, Build`
+remain required, `strict` (branch up to date) stays on, and force-push and deletion stay blocked.
+The `protect-main` ruleset was not touched and its bypass list is still empty.
+
+**Why.** The approval requirement was the only merge gate that could wedge with nothing green to do
+about it. CodeRabbit is a shared, rate-limited fleet allowance; when it was down, throttled, or
+stuck, `main` became unmergeable, and the only escape was the 2026-09-01 administrator override —
+a control reserved to Mason by hand and forbidden to every agent. That made routine landings depend
+on Mason being at a keyboard. Removing the requirement moves the gate to the checks that actually
+run on every commit.
+
+**What replaced it.** CI. `Removing the review did not remove the tests` is the operative sentence:
+the required status checks, the up-to-date requirement, and the force-push/deletion blocks all
+still bind everyone, including Mason. Policy that CodeRabbit reviews each frozen candidate and its
+real findings get fixed is unchanged — it is now held by convention and by the merge gates rather
+than by GitHub.
+
+**The half that stayed hard.** Both merge gates (`pr-merge-guard.mjs` via `pullRequestReviewBlocked`
+in `codex-push-lib.mjs`) deny any merge whose `reviewDecision` is `CHANGES_REQUESTED`. **Operative
+rule: a missing review no longer blocks a merge, but an unresolved objection still does.** Merging
+without an approval emits a stderr notice instead of a denial. The predicate deliberately does not
+fail closed on a null verdict — `null` is now what GitHub returns for an unreviewed PR, so treating
+it as a block would rebuild the deadlock; the fail-closed floor lives upstream in `gateRequest`,
+which denies outright when the PR's JSON cannot be fetched at all.
+
+**Supersedes the 2026-09-01 entry below.** The manual override existed only to escape a stuck
+review; with no required review there is nothing to escape. `enforce_admins` remains off, and both
+gates still hard-deny `gh pr merge --admin` — an override path no agent takes regardless of what it
+currently buys.
+
+**Residual, stated because it is load-bearing.** The ruleset still sets
+`require_extra_approval_for_unattributed_changes: true`, so a PR whose commits GitHub cannot
+attribute to a known account can still demand an approval. That is a narrow path, not the general
+rule, and clearing it is Mason's by hand.
 
 ## 2026-09-01 (end of day) — SIX adversarial rounds on the enforcement-surface rule, then a deliberate stop
 
@@ -241,6 +284,7 @@ proof guard.
 
 Source: PR #530, `docs/changelog.d/2026-08-31-guarded-surface-lock.md`, and the two superseded
 entries in `docs/changelog.d/` from the same day.
+
 ## 2026-09-01 — Mason gets a manual review override on `main`; agents are locked out of it
 
 **Source:** Mason's in-chat request on 2026-09-01 ("add manual override as option in my github
