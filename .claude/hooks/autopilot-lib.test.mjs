@@ -66,7 +66,15 @@ eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mj
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.5" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "fractional --hours is a documented value");
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.25" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "the CLI's minimum --hours passes");
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --status && npm run build" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "--status still cannot carry a chained command");
-eq(overnightGateDecision("PowerShell", { command: "node .claude\\hooks\\autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "Windows path separator passes");
+// Forward slashes are the ONLY accepted spelling. CI (Linux) caught the earlier
+// backslash support as a real cross-platform bug: `\` is not a separator there, so
+// `.claude\hooks\autopilot-arm.mjs` is one filename that never resolves to the
+// trusted path. Normalizing would be worse — on Linux that literal filename is
+// creatable, so normalizing would match it against the trusted path while Node ran
+// the wrong file. Node accepts forward slashes on Windows, and that is the spelling
+// the deny message and autopilot-arm.mjs's own header document.
+eq(overnightGateDecision("PowerShell", { command: "node .claude\\hooks\\autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "the Windows backslash spelling is not accepted (one canonical shape)");
+eq(overnightGateDecision("PowerShell", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "PowerShell uses the same forward-slash spelling");
 // CodeRabbit (PR #548): a bare substring test let the arm allowance ride on a
 // chained command, so the OTHER half ran during the pause. Anchored now.
 eq(overnightGateDecision("Bash", { command: "npm run build && node .claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "PROVEN BYPASS: a build BEFORE the arm command must not ride it");

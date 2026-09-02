@@ -129,8 +129,18 @@ const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|work
 // .claude/hooks/autopilot-arm.mjs --hours 8` returned allow-through, so the BUILD
 // ran during the pause and the arm was merely along for the ride (CodeRabbit,
 // PR #548). Anchored start-to-end with no shell metacharacters admitted, so a
-// prefix, a suffix, or a chain cannot ride it. Either path separator is allowed
-// because PowerShell spells it with a backslash.
+// prefix, a suffix, or a chain cannot ride it.
+//
+// FORWARD SLASHES ONLY. An earlier revision also accepted the Windows backslash
+// spelling, which CI caught as a genuine cross-platform bug: on Linux `\` is not a
+// separator, so `.claude\hooks\autopilot-arm.mjs` is ONE filename and never
+// resolves to the trusted path. Normalizing backslashes would be worse than
+// rejecting them — on Linux a file literally named `.claude\hooks\autopilot-arm.mjs`
+// is creatable, and normalizing would match it against the trusted path while Node
+// executed the literal-backslash file instead. Node accepts forward slashes on
+// Windows, and forward slashes are the spelling both the deny message and
+// autopilot-arm.mjs's own header document, so this costs nothing: one canonical
+// shape, one slot to reason about.
 //
 // The accepted arguments are exactly what autopilot-arm.mjs documents at its head:
 // a bare invocation, `--hours <n>`, `--off`, and `--status`. A first draft of this
@@ -142,7 +152,7 @@ const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|work
 // a working command is a regression, not a win. `--hours` is clamped to
 // [0.25, 24] in the CLI, so fractional values are legitimate.
 const ARM_CMD_RE =
-  /^\s*node\s+(?:\.[\\/])?\.claude[\\/]hooks[\\/]autopilot-arm\.mjs(?:\s+--hours\s+\d{1,4}(?:\.\d{1,4})?|\s+--off|\s+--status)?\s*$/;
+  /^\s*node\s+(?:\.\/)?\.claude\/hooks\/autopilot-arm\.mjs(?:\s+--hours\s+\d{1,4}(?:\.\d{1,4})?|\s+--off|\s+--status)?\s*$/;
 
 // The relative path in ARM_CMD_RE resolves against the SHELL'S working directory,
 // not the repo. Matching the text alone therefore proves nothing about WHICH file
