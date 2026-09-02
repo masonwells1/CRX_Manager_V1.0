@@ -25,7 +25,8 @@ row, and raised three new issues — one of them a defect introduced by the corr
 ### The two rows worth naming
 
 `claude/restrict-draw-down-owner` was deleted because it is **contradicted by an owner decision**
-(`docs/manual/DECISION_LOG.md:1556`, 2026-08-16, "Any rep"), not merely superseded. Its owner-gate
+(`docs/manual/DECISION_LOG.md`, heading `## 2026-08-16 — Any sales rep may draw down any customer's
+booking`, "Any rep"), not merely superseded. Its owner-gate
 predicate would reverse a settled call. The check that cleared it was semantic rather than a string
 match: the live `draw_down_quote` chain has exactly one overload per function, correct ACLs, and **no
 `created_by` or assignment predicate anywhere**. Every other protection that migration carried —

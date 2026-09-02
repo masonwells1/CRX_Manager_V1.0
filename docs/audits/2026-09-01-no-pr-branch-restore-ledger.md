@@ -36,8 +36,8 @@ That is recorded as-is rather than tidied up, because two weaknesses in it are w
   occurred — but nothing in the procedure checked that.
 - The comparison was a human reading two strings, not a shell test that aborts.
 
-**Use this form next time.** Both calls bind to the same canonical repository and the comparison is
-enforced:
+**Use this form next time — from a Claude session only.** Both calls bind to the same canonical
+repository and the comparison is enforced:
 
 ```bash
 repo="masonwells1/CRX_Manager_V1.0"
@@ -52,6 +52,22 @@ gh api -X DELETE "repos/$repo/git/refs/heads/<branch>"
 
 This is a branch deletion rather than a history rewrite, which is why the ref API is the honest
 expression of it.
+
+> **A Codex session cannot run the block above, and must not try.**
+> `.codex/hooks/production-action-guard.mjs` classifies any `gh api` call carrying `-X`/`--method
+> DELETE` as mutating (`ghApiMutates()`, and the caller that rejects it) and refuses it as an
+> unrecognized mutating `gh api` call. Mason's approval does not create an exception. The 2026-09-01
+> sweep ran from a **Claude** session, where `.codex/hooks/` does not apply, which is why it
+> executed at all.
+>
+> There is **no purpose-built guarded branch-deletion helper in this repository** — I checked
+> `scripts/` rather than assuming one exists. So a Codex session's only correct moves are to hand
+> the deletion to a Claude session or to Mason, or to have the guard deliberately extended first.
+> Do not reach for an alternate spelling; that is the same mistake the top of this document records.
+>
+> Noting this because the alternative is a runbook that dead-ends: an operator follows the
+> "corrected" procedure, is refused, and concludes the tooling is broken rather than that the
+> document is addressed to a different session type.
 
 ### The race this procedure does NOT close
 
@@ -151,7 +167,7 @@ Every row was re-verified on 2026-09-01 immediately before deletion:
 
 | # | Branch | Tip OID | Last commit | Tag | Why it goes |
 |---|---|---|---|---|---|
-| 1 | `claude/restrict-draw-down-owner` | `13e4c7b14f38f31dc550e09f55ebe111fbf1cbc0` | 2026-08-14 | `archive/2026-09-01/restrict-draw-down-owner` | Contradicted by owner decision `DECISION_LOG.md:1556` |
+| 1 | `claude/restrict-draw-down-owner` | `13e4c7b14f38f31dc550e09f55ebe111fbf1cbc0` | 2026-08-14 | `archive/2026-09-01/restrict-draw-down-owner` | Contradicted by the owner decision `## 2026-08-16 — Any sales rep may draw down any customer's booking` in `DECISION_LOG.md` |
 | 2 | `claude/pr401-proof` | `9b2d86a5401af8e869b6f8bd10cd3d4a433eb458` | 2026-08-25 | `archive/2026-09-01/pr401-proof` | Superseded by `20260826220000`, applied live |
 | 3 | `claude/pr401-quote-version-trust-8e3db6` | `510a16121e6cb5f44128669d827a989edc0305ea` | 2026-08-26 | `archive/2026-09-01/pr401-quote-version-trust` | Same successor; descendant of row 2 |
 | 4 | `claude/wave-a-migrations-857dcd` | `3bfd6271caae17a28b82647d3f34bf6c52964eb5` | 2026-08-12 | `archive/2026-09-01/wave-a-migrations` | All 4 authored migrations have staged successors on `main` |
