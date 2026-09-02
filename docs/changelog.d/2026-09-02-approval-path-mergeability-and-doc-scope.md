@@ -2,6 +2,17 @@
 
 Two Codex findings on the synced head, both real, both inside this PR's own surface.
 
+> **Superseded later in this same PR (2026-09-02).** The approval path described below no longer
+> exists. `pull_request_review` was removed as a trigger because it sources the workflow YAML from
+> the pull request rather than the default branch, and the unreachable handler
+> (`runReviewAuthorization()`, `blockCodeRabbitAuthorizationAndReconcile()`,
+> `blockCodeRabbitAuthorizationAndReset()`) plus its 19 tests were deleted — see
+> `2026-09-02-keep-review-events-out-of-the-privileged-gate.md`. The named regression test
+> `a transient unknown mergeability does not destroy an exact-head approval` went with it. The
+> **label** path's `getPullRequestWithResolvedMergeability()` polling, which this entry compares
+> against, is still live and still correct. This entry is kept as the record of why the fix was
+> made, not as a description of current code.
+
 ### A transient mergeability state could destroy an exact-head approval (P2)
 
 The label path resolves mergeability through `getPullRequestWithResolvedMergeability()`, which polls

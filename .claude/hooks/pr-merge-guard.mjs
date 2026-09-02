@@ -128,12 +128,14 @@ if (requests.length === 0) passthrough();
 // no diff for which an agent asking GitHub to skip review is the right move.
 if (requests.some((request) => request?.admin)) {
   deny(
-    "PR MERGE GATE: `--admin` merges with administrator privileges, skipping main's required review. " +
+    "PR MERGE GATE: `--admin` merges with administrator privileges, overriding branch protection. " +
     "That override exists for Mason to use by hand on the PR page — an agent may never use it, whatever " +
-    "the diff or the deadline. Get a real approval instead: apply the `ready-for-coderabbit` label and " +
-    "let the default-branch workflow post the review command once, fix what it finds, and merge only " +
-    "after it approves this head. Do not post `@coderabbitai review` by hand — that routes around the " +
-    "label gate. If the review is stuck, hand the PR to Mason and say why."
+    "the diff or the deadline. Use the ordinary merge instead: an approving review is NOT required " +
+    "(removed 2026-09-02), so a green, up-to-date candidate with no `CHANGES_REQUESTED` verdict merges " +
+    "without `--admin`. If a review did ask for changes, resolve it first — apply the " +
+    "`ready-for-coderabbit` label and let the default-branch workflow post the review command once, " +
+    "then fix what it finds. Do not post `@coderabbitai review` by hand — that routes around the label " +
+    "gate. If the merge is still blocked, hand the PR to Mason and say why."
   );
 }
 

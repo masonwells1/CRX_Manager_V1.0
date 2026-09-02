@@ -15,7 +15,9 @@ name: CodeRabbit final review gate
 # all, a `pull_request_review` event still produced a successful run of it —
 # event=pull_request_review, head_sha=8ddcd9aee…, head_branch=codex/coderabbit-
 # ready-label-20260830. A file absent from `main` can only have come from the PR.
-# `no review event triggers this privileged workflow` in the test suite pins this.
+# Two tests pin this: `no pull-request event other than pull_request_target
+# triggers this privileged workflow` (parses this `on:` block) and `the gate
+# refuses to run on any event other than pull_request_target` (drives run()).
 on:
   pull_request_target:
     types: [labeled, unlabeled, synchronize, closed, reopened, converted_to_draft, ready_for_review, auto_merge_enabled, auto_merge_disabled, edited]

@@ -16,9 +16,12 @@ three outcomes explicitly.
 
 **2. `AGENTS.md`, `.claude/commands/ship.md`, `.claude/skills/deploy-check/SKILL.md` — a reset now
 does more than clear labels.** All three said a new commit "clears both labels" / "clears both state
-labels". Since the superseded-command fix a reset also **deletes the command already posted for the
-superseded head**, and deliberately leaves a command for the still-current head alone. That is
-visible to an operator watching the PR — a comment disappears — so it belongs in the description.
+labels". Since the superseded-command fix a reset also **deletes every Actions-authored canonical
+review command, whether or not the head moved** — `deleteReviewCommands()` scopes deletion by
+authorship, not by head, because a base edit, draft conversion, reopen or auto-merge change
+invalidates the candidate with the head UNCHANGED. Human comments, and any human-typed
+`@coderabbitai review`, are left alone. That is visible to an operator watching the PR — a comment
+disappears — so it belongs in the description.
 
 **3. `AGENTS.md` — cancelling a request was undocumented.** Removing `coderabbit-review-requested`
 while a request is in flight now cancels it, because both final validations require the marker.

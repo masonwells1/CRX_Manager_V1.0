@@ -165,5 +165,5 @@ If blocked: List every issue that needs fixing first.
 - NEVER merge with unapplied migrations pending without surfacing them (warn — Mason decides the ordering)
 - NEVER attempt to push directly to `main`; the ruleset blocks it and the attempt is a bug in the plan
 - NEVER trigger CodeRabbit while implementation or Codex review is still changing the branch
-- NEVER merge without a CodeRabbit approval bound to the current candidate commit
+- NEVER merge over a `CHANGES_REQUESTED` verdict; an approving CodeRabbit review is not required (removed 2026-09-02), but when one exists it must be bound to the current candidate commit
 - Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the regular push-to-`main` path is covered by the standing authorization. Live migration applies need his in-chat OK in an interactive session — the one exception is a pre-authorized armed hands-free run passing migration-apply-guard's full proof + Codex gate (destructive migrations: never autonomous)

@@ -322,9 +322,12 @@ frozen head, deliberately remove `coderabbit-review-requested`, **wait for the r
 finish**, and only then reapply `ready-for-coderabbit`; that is a paid retry, not the normal path.
 The wait is load-bearing rather than politeness: removing the marker fires an asynchronous
 `unlabeled` run that clears **both** labels, so a ready label reapplied while that run is still
-queued is cleared by it and nothing is posted. Confirm both labels are gone before relabelling. Never merge from the ordinary check row alone — require
-the hidden marker SHA, authenticated `APPROVED` CodeRabbit review `commit_id`, and live PR head to
-match. The generic Actions-authored marker is dedupe evidence, not an independent trust identity.
+queued is cleared by it and nothing is posted. Confirm both labels are gone before relabelling. Never merge from the ordinary check row alone —
+confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
+`CHANGES_REQUESTED` verdict. An approving review is not required (removed 2026-09-02); when one
+*does* exist, require the hidden marker SHA, that authenticated `APPROVED` review's `commit_id`, and
+the live PR head to match. The generic Actions-authored marker is dedupe evidence, not an
+independent trust identity.
 
 ---
 

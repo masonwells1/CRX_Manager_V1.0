@@ -712,12 +712,6 @@ test('a metadata edit with no workflow state is ignored', async () => {
   assert.deepEqual(harness.comments, []);
 });
 
-// Regression: the approval path took a BARE pulls.get while the label path
-// polled for resolved mergeability. Catching GitHub mid-recalculation
-// (mergeable: null / 'unknown') made validateAuthorizationState report a
-// blocker, and on this path a blocker DELETES the posted command and both
-// labels — destroying a valid exact-head approval and forcing a second paid
-// review. Both paths must agree about what a live snapshot is.
 test('an unrelated label event that displaces a queued synchronize reset clears stale gate state', async () => {
   const changed = pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] });
   const harness = makeHarness({
