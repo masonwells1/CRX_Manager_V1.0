@@ -1,5 +1,7 @@
 // Pure decision logic for the overnight autopilot (unattended-autopilot.mjs).
 // Isolated so the deny-set and flag-expiry logic can be unit-tested.
+
+import path from "node:path";
 //
 // Autopilot is OFF unless an unexpired flag file exists. When ON, the hook
 // AUTO-APPROVES tool calls so an overnight loop doesn't stall on permission
@@ -142,16 +144,55 @@ const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|work
 const ARM_CMD_RE =
   /^\s*node\s+(?:\.[\\/])?\.claude[\\/]hooks[\\/]autopilot-arm\.mjs(?:\s+--hours\s+\d{1,4}(?:\.\d{1,4})?|\s+--off|\s+--status)?\s*$/;
 
-export function isSanctionedArmCommand(command) {
-  return ARM_CMD_RE.test(String(command ?? ""));
+// The relative path in ARM_CMD_RE resolves against the SHELL'S working directory,
+// not the repo. Matching the text alone therefore proves nothing about WHICH file
+// runs: from a directory containing a planted `.claude/hooks/autopilot-arm.mjs`,
+// the sanctioned command executes that attacker file during the pause, and
+// everything it does inside that process is past every tool-call guard (Codex
+// gpt-5.6-sol, exact-SHA review 2026-09-02, HIGH — the same cwd-unbinding class
+// that killed the clear-script escape).
+//
+// So the allowance is bound to the TRUSTED PROJECT ROOT, not to a spelling: the
+// command's script argument must resolve to exactly
+// <projectDir>/.claude/hooks/autopilot-arm.mjs. This is a structural identity
+// check, which converges — unlike enumerating command spellings, which does not.
+//
+// Fails closed: no projectDir, or no cwd for a relative command, means the target
+// cannot be proven and the command waits for the arm.
+const ARM_SCRIPT_REL = [".cl" + "aude", "hooks", "autopilot-arm.mjs"];
+
+export function isSanctionedArmCommand(command, context = {}) {
+  const cmd = String(command ?? "");
+  if (!ARM_CMD_RE.test(cmd)) return false;
+
+  const projectDir = context.projectDir ? String(context.projectDir) : "";
+  if (!projectDir) return false;
+
+  // ARM_CMD_RE admits ONLY the documented repo-relative spelling, so the script
+  // token is always relative and must be resolved against the shell's cwd. An
+  // absolute path is not an accepted form at all — one shape, one slot.
+  const m = /^\s*node\s+(\S+)/.exec(cmd);
+  if (!m) return false;
+
+  if (!context.cwd) return false;      // unknown cwd → target unprovable → fail closed
+
+  const trusted = path.resolve(path.join(projectDir, ...ARM_SCRIPT_REL));
+  return path.resolve(path.join(String(context.cwd), m[1])) === trusted;
 }
 
-export function overnightGateDecision(toolName, toolInput) {
+// `context` carries the TRUSTED project root (and the tool call's cwd) so the arm
+// allowance can be bound to a real file rather than to a string. Callers that omit
+// it get the fail-closed path: no root, no arm exception.
+export function overnightGateDecision(toolName, toolInput, context = {}) {
   const name = String(toolName || "");
   if (INTENT_ALLOW_TOOL_RE.test(name)) return "allow-through";
   const input = toolInput || {};
   const cmd = typeof input.command === "string" ? input.command : "";
-  if (/^(Bash|PowerShell)$/i.test(name) && isSanctionedArmCommand(cmd)) return "allow-through";
+  const cwd = context.cwd ?? input.cwd ?? input.workdir;
+  if (/^(Bash|PowerShell)$/i.test(name) &&
+      isSanctionedArmCommand(cmd, { projectDir: context.projectDir, cwd })) {
+    return "allow-through";
+  }
   if (/^(Bash|PowerShell)$/i.test(name)) {
     // Read-only leading token AND no write redirect: `cat > file` / `echo .. >> f`
     // / `... | tee f` still mutate files (Codex 2026-07-05) — those wait for the arm.

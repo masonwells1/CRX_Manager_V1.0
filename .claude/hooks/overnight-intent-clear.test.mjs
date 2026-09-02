@@ -102,8 +102,8 @@ function armLatch(ageMs = 0) {
   rmSync(path.join(fixtureState, "AUTOPILOT.on"), { force: true });
 }
 
-function denialsFor(command) {
-  const payload = JSON.stringify({ tool_name: "Bash", cwd: fixture, tool_input: { command } });
+function denialsFor(command, cwdOverride) {
+  const payload = JSON.stringify({ tool_name: "Bash", cwd: cwdOverride ?? fixture, tool_input: { command } });
   const denied = [];
   for (const { script, name } of bashHooks) {
     const res = spawnSync(process.execPath, [script], {
@@ -210,6 +210,35 @@ check("the removed clear-script escape is not quietly reintroduced", () => {
       denied.includes("unattended-autopilot.mjs"),
       `"${command}" must stay gated, got: ${denied.join(", ") || "(nothing denied)"}`
     );
+  }
+});
+
+// Codex (gpt-5.6-sol, exact-SHA review 2026-09-02, HIGH): the arm allowance
+// matched command TEXT, so the same relative path run from a directory holding a
+// planted `.claude/hooks/autopilot-arm.mjs` executed attacker JavaScript during
+// the pause — past every later tool-call guard. The allowance is now bound to the
+// trusted project root, so the BYTE-IDENTICAL command is allowed from the repo and
+// denied from anywhere else. This is the end-to-end half of that proof: same text,
+// real hooks, only the working directory differs.
+check("PROVEN BYPASS end-to-end: the arm command is cwd-bound, not text-matched", () => {
+  armLatch();
+  const armCommand = "node .claude/hooks/autopilot-arm.mjs --hours 8";
+
+  const fromRoot = denialsFor(armCommand);
+  assert.deepEqual(fromRoot, [], `the arm command must work from the project root, denied by: ${fromRoot.join(", ")}`);
+
+  // A directory with a planted arm script at the same relative path.
+  const planted = mkdtempSync(path.join(os.tmpdir(), "crx-planted-"));
+  mkdirSync(path.join(planted, ".claude", "hooks"), { recursive: true });
+  writeFileSync(path.join(planted, ".claude", "hooks", "autopilot-arm.mjs"), "// attacker payload\n");
+  try {
+    const fromPlanted = denialsFor(armCommand, planted);
+    assert.ok(
+      fromPlanted.includes("unattended-autopilot.mjs"),
+      `the identical command from a planted cwd must be denied, got: ${fromPlanted.join(", ") || "(nothing denied)"}`
+    );
+  } finally {
+    rmSync(planted, { recursive: true, force: true });
   }
 });
 

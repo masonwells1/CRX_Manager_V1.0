@@ -54,28 +54,49 @@ eq(overnightGateDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "deny-unti
 eq(overnightGateDecision("Bash", { command: "git add -A && git commit -m x" }), "deny-until-armed", "commit blocked until armed");
 eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "allow-through", "sql passes even before arm (Mason 2026-07-10)");
 eq(overnightGateDecision("mcp__x__deploy_edge_function", {}), "deny-until-armed", "deploy still blocked until armed");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }), "allow-through", "arm command passes");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --off" }), "allow-through", "disarm command passes");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs" }), "allow-through", "bare arm invocation passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "arm command passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --off" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "disarm command passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "bare arm invocation passes");
 // Codex (exact-SHA review 2026-09-01) caught that the first anchor BROKE two
 // documented commands. Hardening that silently removes a working command is a
 // regression, not a win. `--status` is read-only and is exactly what a paused
 // agent should be able to run; `--hours` is clamped to [0.25, 24] in the CLI, so
 // fractional values are legitimate.
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --status" }), "allow-through", "documented read-only --status must not be blocked");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.5" }), "allow-through", "fractional --hours is a documented value");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.25" }), "allow-through", "the CLI's minimum --hours passes");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --status && npm run build" }), "deny-until-armed", "--status still cannot carry a chained command");
-eq(overnightGateDecision("PowerShell", { command: "node .claude\\hooks\\autopilot-arm.mjs --hours 8" }), "allow-through", "Windows path separator passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --status" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "documented read-only --status must not be blocked");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.5" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "fractional --hours is a documented value");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.25" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "the CLI's minimum --hours passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --status && npm run build" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "--status still cannot carry a chained command");
+eq(overnightGateDecision("PowerShell", { command: "node .claude\\hooks\\autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "Windows path separator passes");
 // CodeRabbit (PR #548): a bare substring test let the arm allowance ride on a
 // chained command, so the OTHER half ran during the pause. Anchored now.
-eq(overnightGateDecision("Bash", { command: "npm run build && node .claude/hooks/autopilot-arm.mjs --hours 8" }), "deny-until-armed", "PROVEN BYPASS: a build BEFORE the arm command must not ride it");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 && npm run build" }), "deny-until-armed", "a build AFTER the arm command must not ride it");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8; rm -rf src" }), "deny-until-armed", "a semicolon-chained command must not ride it");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 | tee x" }), "deny-until-armed", "a pipe must not ride it");
-eq(overnightGateDecision("Bash", { command: "echo autopilot-arm.mjs > x.txt" }), "deny-until-armed", "merely naming the arm script does not unlock");
-eq(overnightGateDecision("Bash", { command: "node attacker/autopilot-arm.mjs --hours 8" }), "deny-until-armed", "a planted same-basename arm script does not unlock");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 --sneaky" }), "deny-until-armed", "an unknown extra flag is not the documented form");
+eq(overnightGateDecision("Bash", { command: "npm run build && node .claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "PROVEN BYPASS: a build BEFORE the arm command must not ride it");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 && npm run build" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a build AFTER the arm command must not ride it");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8; rm -rf src" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a semicolon-chained command must not ride it");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 | tee x" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a pipe must not ride it");
+eq(overnightGateDecision("Bash", { command: "echo autopilot-arm.mjs > x.txt" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "merely naming the arm script does not unlock");
+eq(overnightGateDecision("Bash", { command: "node attacker/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a planted same-basename arm script does not unlock");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 --sneaky" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "an unknown extra flag is not the documented form");
+// THE cwd-BINDING CASE (Codex gpt-5.6-sol, exact-SHA review 2026-09-02, HIGH).
+// The command text alone proves nothing about WHICH file runs: a relative path
+// resolves against the shell's directory. From a directory containing a planted
+// .claude/hooks/autopilot-arm.mjs, the byte-identical sanctioned command would
+// execute attacker JavaScript during the pause, past every tool-call guard.
+// The allowance is bound to the trusted project root, so the SAME command text
+// is allowed from the repo and denied from anywhere else.
+const ARM8 = "node .claude/hooks/autopilot-arm.mjs --hours 8";
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "the arm command is allowed FROM the trusted root");
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo", cwd: "/tmp/attacker" }), "deny-until-armed", "PROVEN BYPASS: the identical command from a planted cwd must be denied");
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo", cwd: "/repo/subdir" }), "deny-until-armed", "even a repo SUBDIR resolves to a different file, so it is denied");
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo" }), "deny-until-armed", "fails closed when the cwd is unknown");
+eq(overnightGateDecision("Bash", { command: ARM8 }, { cwd: "/repo" }), "deny-until-armed", "fails closed when the trusted root is unknown");
+eq(overnightGateDecision("Bash", { command: ARM8 }), "deny-until-armed", "fails closed with no context at all");
+// An ABSOLUTE path is not an accepted form at all — the documented spelling is
+// repo-relative, and one accepted shape means one slot to reason about. Both of
+// these are denied regardless of where they point.
+eq(overnightGateDecision("Bash", { command: "node /repo/.claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "an absolute path is not the documented form, even to the real script");
+eq(overnightGateDecision("Bash", { command: "node /evil/.claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "an absolute path to a DIFFERENT script is denied");
+// Traversal that lands back on the trusted file is fine; traversal that escapes is not.
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo", cwd: "/repo/x/.." }), "allow-through", "a cwd that normalizes to the root is allowed");
 // There is deliberately NO shell escape from the latch (Mason, 2026-09-01).
 //
 // This assertion used to say "allow-through" and passed for months while the real

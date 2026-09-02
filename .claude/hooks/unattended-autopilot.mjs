@@ -57,7 +57,14 @@ if (!armed) {
   // before any building/mutating call proceeds. (Fail-open on any error.)
   try {
     if (existsSync(intentPath) && intentFresh(readFileSync(intentPath, "utf8"), Date.now())) {
-      const gate = overnightGateDecision(payload?.tool_name, payload?.tool_input);
+      // Pass the TRUSTED project root and the call's cwd so the arm allowance can
+      // be bound to the real script rather than to its spelling (Codex HIGH,
+      // 2026-09-02): a relative path resolves against the shell's directory, so
+      // matching the text alone would run a planted file during the pause.
+      const gate = overnightGateDecision(payload?.tool_name, payload?.tool_input, {
+        projectDir,
+        cwd: payload?.cwd,
+      });
       if (gate === "deny-until-armed") denyUnarmed(payload?.tool_name || "(tool)");
     }
   } catch { /* fail open */ }
