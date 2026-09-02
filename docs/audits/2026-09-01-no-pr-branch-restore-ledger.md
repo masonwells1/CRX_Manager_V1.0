@@ -95,7 +95,14 @@ such a tip stayed recoverable; that was wrong and has been removed.
 
 The risk was accepted because all 14 branches were quiescent: none had a pull request, none was
 checked out in a registered worktree, and all 14 tips matched the 2026-08-31 inventory immediately
-before deletion. The tag covers every failure mode except a concurrent push.
+before deletion.
+
+**What the tag does and does not cover.** It preserves the tip that was *read and recorded* for the
+run it matched — nothing more. It does **not** cover the two procedure weaknesses named above: if the
+read and the delete had addressed different repositories, or if the person comparing the two strings
+had misread them, the tag would faithfully preserve the wrong commit or the wrong branch's commit.
+Nor does it cover a commit pushed inside the check-to-delete window. Those three are the exclusions;
+the guarantee is bounded to the recorded pre-delete tip.
 
 Anyone repeating this on a branch that is **not** quiescent should quiesce it first.
 

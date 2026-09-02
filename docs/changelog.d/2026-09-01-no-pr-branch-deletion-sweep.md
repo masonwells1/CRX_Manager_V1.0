@@ -64,18 +64,31 @@ A commit pushed inside that window **would be lost**. The tag was cut from the p
 nothing fetches the newer one locally, so there is no object to recover it from; an earlier draft
 claimed otherwise and was corrected. The residual risk was accepted because all 14 branches were
 quiescent — no pull request, no registered worktree, every tip matching the inventory — and because
-the tags were pushed and verified on `origin` before any deletion. The tag covers every failure mode
-except a concurrent push.
+the tags were pushed and verified on `origin` before any deletion.
+
+**The tag's guarantee is bounded to the recorded pre-delete tip.** It does not cover the two
+procedure weaknesses named above — a read and a delete addressing different repositories, or a person
+misreading the two strings they were comparing — because in either case the tag would faithfully
+preserve the wrong commit. Nor does it cover a commit pushed inside the check-to-delete window. Those
+three are the exclusions.
 
 Verified after the sweep: zero of the 14 remain, and the tags still resolve on `origin`.
 
 ### Still standing, deliberately
 
 `claude/offline-review-stale-snapshot` is checked out at `C:\crx-wt\ledger-gitdir` and is held until
-that lane is handed off. `claude/pr364-guard-commits-local-20260831` is protected while a separate
-session works PR #364; its "stranded commits" finding was **withdrawn** — `main` is strictly stronger
-on that guard and re-applying them would regress it — but the branch has never been enumerated for
-incidental value.
+that lane is handed off.
+
+`claude/pr364-guard-commits-local-20260831` **must never be deleted, and not because a session is
+using it.** PR #364 is closed (2026-09-01). The branch is the sole remaining home for three
+protections `main` lacks — roughly 8 files and +9,250 lines, dominated by
+`.claude/hooks/apply-time-dml-lib.mjs` at 2,612 lines — scoped in
+`docs/audits/2026-09-01-pr364-guard-extraction-scope.md` and tracked in
+`docs/manual/KNOWN_ISSUES.md`, and **scoped but not approved to build**, so it will sit indefinitely
+and that is expected rather than forgotten. Its separate "stranded commits" finding was **withdrawn**
+— `main` is strictly stronger on *that* guard and those commits must not be re-applied — which says
+nothing about the three unextracted protections. Neither a closed PR nor an idle session makes it
+disposable.
 
 The 28 branches whose PRs closed or merged were inventoried separately and then **left in place**:
 Mason declined further deletions on 2026-09-02 after review found five of them holding commits that
