@@ -100,13 +100,58 @@ function isUserFacing(line) {
   return /permissionDecisionReason|process\.stdout|process\.stderr|console\.(?:log|error)|^\s*["'`]|fail\(/.test(line);
 }
 
+/**
+ * Reduce a source line to the prose it carries, so a phrase that WRAPPED across
+ * two lines reads as one phrase. Leading comment markers go, the trailing `+` of
+ * a concatenated refusal string goes, and quote characters become gaps — that is
+ * what turns `"… fails " +` / `"closed."` into `… fails closed.`
+ */
+export function stripCommentSyntax(s) {
+  return String(s)
+    .replace(/^\s*(?:\/\/+|\/\*|\*\/|\*|#)\s?/, "")
+    .replace(/\s*\+\s*$/, "")
+    .replace(/["'`]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// How far BEFORE a matched claim a negation may sit and still be read as
+// negating it. English puts the negation first ("does not fail closed", "is not
+// a human-only gate"), so the window runs backwards from the match and includes
+// the match itself.
+const NEGATION_WINDOW = 30;
+
 export function scanFile(filePath, text) {
   const lines = text.split(/\r?\n/);
+  const flat = lines.map(stripCommentSyntax);
   const found = [];
   lines.forEach((line, i) => {
+    const single = flat[i];
+    // WRAPPED CLAIMS. Reviewer P2: guard comments in this repo routinely break a
+    // phrase across lines (`fails` / `closed`, `cannot be` / `bypassed`), and
+    // scanning each line alone found nothing at all. The two-line join is checked
+    // only when the single line does not already match.
+    const pair = i + 1 < flat.length ? `${single} ${flat[i + 1]}`.trim() : single;
     for (const [re, kind] of CLAIM_PATTERNS) {
-      if (!re.test(line)) continue;
-      if (NEGATION_RE.test(line)) continue;   // a denial of the property, not a claim to it
+      let m = re.exec(single);
+      if (!m && pair !== single) {
+        const p = re.exec(pair);
+        // Only a match that STARTS on this line is this line's finding. `pair`
+        // begins with `single` verbatim, so a match the single-line pass missed
+        // either spans the seam (report it here) or lies wholly in the next line
+        // (that line reports it itself). Without this, every claim preceded by a
+        // bare `//` was counted twice, the second copy carrying `//` as its text.
+        if (p && p.index < single.length) m = p;
+      }
+      if (!m) continue;
+      // NEGATION BOUND TO THE CLAIM. Reviewer P2: testing the whole line let any
+      // unrelated disclaimer suppress a real claim — `FAIL-CLOSED … deliberately
+      // NOT a destructive-verb list` reported zero, because the `NOT` belonged to
+      // a different clause. Only a negation just before (or inside) the matched
+      // phrase counts now.
+      const subject = m.input;
+      const window = subject.slice(Math.max(0, m.index - NEGATION_WINDOW), m.index + m[0].length);
+      if (NEGATION_RE.test(window)) continue;
       const from = Math.max(0, i - NEIGHBOURHOOD);
       const to = Math.min(lines.length, i + NEIGHBOURHOOD + 1);
       const annotated = lines.slice(from, to).some((l) => ANNOTATION_RE.test(l));
@@ -116,7 +161,9 @@ export function scanFile(filePath, text) {
         kind,
         annotated,
         userFacing: isUserFacing(line),
+        // Display is truncated; IDENTITY is not — see claimKey.
         text: line.trim().slice(0, 160),
+        claim: subject,
       });
       break;   // one finding per line; the first pattern is enough
     }
@@ -124,9 +171,19 @@ export function scanFile(filePath, text) {
   return found;
 }
 
-/** Baseline identity deliberately omits the line number, so moving code is not a new claim. */
+/**
+ * Baseline identity deliberately omits the line number, so moving code is not a
+ * new claim.
+ *
+ * It uses the COMPLETE normalized claim text. Reviewer P2: the old key truncated
+ * at 80 characters, so a grandfathered claim longer than that could be reworded
+ * past character 80 and keep its key — the reworded claim then matched the
+ * baseline and passed the ratchet, which directly contradicts the invariant that
+ * rewording is new. `c.text` stays truncated for DISPLAY; identity never is.
+ */
 export function claimKey(c) {
-  return `${c.file}::${c.kind}::${c.text.replace(/\s+/g, " ").slice(0, 80)}`;
+  const full = (c.claim ?? c.text).replace(/\s+/g, " ").trim();
+  return `${c.file}::${c.kind}::${full}`;
 }
 
 export function auditAll(root = ROOT) {
@@ -147,7 +204,7 @@ if (invokedDirectly) {
   if (update) {
     const keys = [...new Set(claims.map(claimKey))].sort();
     writeFileSync(BASELINE, `${JSON.stringify({
-      note: "Grandfathered guard claims as of the ratchet's introduction. A NEW claim must carry @proven-by, @unproven, or @speed-bump. Shrinking this list is the point; do not grow it without a reason.",
+      note: "Grandfathered guard claims as of the ratchet's introduction. A NEW claim must carry @proven-by, @unproven, or @speed-bump. Shrinking this list is the point; do not grow it without a reason. Re-baselined 2026-09-01 after three reviewer-reported scanner defects were fixed (truncated identity, whole-line negation, single-line-only scanning): the identity now uses the complete claim text, so every key changed. Six entries are newly DETECTED rather than newly written — pre-existing claims in codex-push-lib, idempotency-body-check, migration-apply-lib, and production-action-guard that the old scanner could not see. The three the fixes surfaced in review-proof-guard.mjs were annotated instead of grandfathered.",
       claims: keys,
     }, null, 2)}\n`, "utf8");
     process.stdout.write(`Baseline written: ${keys.length} grandfathered claim(s).\n`);

@@ -272,7 +272,8 @@ function scanCdInvocations(scan) {
     // argument run empty, so inspect the character right after the token
     // (round 2 — a proven bypass). This is a self-certification gate, so fail
     // closed whenever such a target appears in a command that also mentions
-    // the state directory.
+    // the state directory. @proven-by review-proof-guard.test.mjs (the
+    // session-state deny cases cover the expansion, glob, and glued-verb forms).
     const afterToken = scan.charAt(match.index + match[0].length - match[1].length);
     // Statically unreadable: an expansion/glob IN the target, an expansion glued
     // to the verb (`cd$IFS.claude/...` leaves the run empty), OR NO readable
@@ -406,6 +407,9 @@ if (shellTool) {
   const ENFORCEMENT_SURFACE_RE =
     /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\](?:hooks|config\.toml)|\.claude[/\\](?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts[/\\](?:(?:check|validate|verify)-[^\s"']*|write-codex-push-proof\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
   // FAIL-CLOSED READ-ONLY ALLOWLIST — deliberately NOT a destructive-verb list.
+  // @proven-by review-proof-guard.test.mjs (the deny block asserts that heads
+  // absent from this set — cp, tee, rm, Set-Content, command, npx — are refused,
+  // and the allow block asserts the listed readers still work).
   //
   // The first cut of this rule (2026-09-01, same day) reused the `.claude`
   // state-dir approach above and enumerated WRITERS. An exact-SHA `gpt-5.6-sol`

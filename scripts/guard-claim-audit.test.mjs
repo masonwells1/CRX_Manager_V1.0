@@ -91,4 +91,54 @@ ok(CLAIM_PATTERNS.length >= 10, "claim vocabulary must not be silently emptied")
 ok(guardSourceFiles().length > 20, "the audit must actually find this repo's guard sources");
 ok(guardSourceFiles().every((f) => !f.includes(".test.")), "test files are proof, never claims — they must be excluded");
 
+// ---------------------------------------------------------------------------
+// 7. The three scanner defects the PR #530 reviewer reported (all P2)
+// ---------------------------------------------------------------------------
+
+// (a) IDENTITY MUST NOT TRUNCATE. The old key kept 80 characters, so a long
+// grandfathered claim could be reworded past that point and keep matching the
+// baseline — a reworded safety claim sailing through the ratchet.
+{
+  const pad = "x".repeat(90);
+  const a = scanFile("/repo/.claude/hooks/x.mjs", `// This cannot be bypassed. ${pad} original tail.`)[0];
+  const b = scanFile("/repo/.claude/hooks/x.mjs", `// This cannot be bypassed. ${pad} REWORDED tail.`)[0];
+  ok(a && b, "both long claims must still be found");
+  ok(claimKey(a) !== claimKey(b), "rewording BEYOND character 80 must still read as a new claim");
+}
+
+// (b) NEGATION MUST BIND TO THE CLAIM. An unrelated disclaimer anywhere on the
+// line used to suppress the whole line. The reviewer's own example was
+// `FAIL-CLOSED … deliberately NOT a destructive-verb list`, which reported zero.
+{
+  const sneaky = scanFile("/repo/.claude/hooks/x.mjs",
+    "// FAIL-CLOSED READ-ONLY ALLOWLIST — deliberately NOT a destructive-verb list.");
+  ok(sneaky.length === 1, "an unrelated negation elsewhere on the line must NOT suppress the claim");
+  // …while a negation that really does modify the claim still discharges it,
+  // which is the behaviour the negation rule exists for.
+  ok(scanFile("/repo/.claude/hooks/x.mjs", "// This is not a fail-closed guard.").length === 0,
+    "a negation directly before the claim must still suppress it");
+  ok(scanFile("/repo/.claude/hooks/x.mjs", "// The hook does not guarantee anything.").length === 0,
+    "a negation spanning into the claim word must still suppress it");
+}
+
+// (c) WRAPPED CLAIMS. Guard comments and concatenated refusal strings routinely
+// break a phrase over two lines; scanning lines independently found nothing.
+{
+  ok(scanFile("/repo/.claude/hooks/x.mjs", "// the operation is denied (fail\n// closed).").length === 1,
+    "a claim wrapped across two comment lines must be found");
+  ok(scanFile("/repo/.claude/hooks/x.mjs", '  "… so the merge fails " +\n  "closed."').length === 1,
+    "a claim split across a string concatenation must be found");
+  ok(scanFile("/repo/.claude/hooks/x.mjs", "// this cannot be\n// bypassed by any agent.").length === 1,
+    "`cannot be` / `bypassed` split across lines must be found");
+}
+
+// …and the two-line join must not DOUBLE-count. A bare `//` before a claim line
+// joins into a match that starts on the next line; only the line the match
+// starts on may report it.
+{
+  const found = scanFile("/repo/.claude/hooks/x.mjs", "//\n// FAIL-OPEN: any error → allow.");
+  ok(found.length === 1, "a claim preceded by a bare comment line must be counted once");
+  ok(found[0].line === 2, "the finding must sit on the line the claim actually starts on");
+}
+
 console.log(`guard-claim-audit: ${pass} assertions passed`);
