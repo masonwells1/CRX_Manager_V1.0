@@ -50,11 +50,15 @@ to the ledger, and delete through the GitHub ref API only on an exact match. Tha
 deletion rather than a history rewrite. It is **not atomic**: there is a sub-second window between
 check and delete, and the ledger says so rather than claiming compare-and-swap.
 
-The ledger records that read as executed and then supersedes it: reading through `origin` while
-deleting through a hardcoded repository path means a differently-configured `origin` could validate
-one repository's branch while the API deletes another's, and the comparison was a person reading two
-strings rather than a shell test that aborts. Copy the corrected form from the ledger, not this
-paragraph.
+Two weaknesses in that are recorded rather than hidden: reading through `origin` while deleting
+through a hardcoded repository path means a differently-configured `origin` could validate one
+repository's branch while the API deletes another's, and the comparison was a person reading two
+strings rather than a test that aborts.
+
+**There is no corrected script to copy — from the ledger or from here.** The ledger is a prose
+record and deliberately carries no copy-paste procedure. Repeating a sweep like this is a deliberate
+Claude-session-or-Mason-run operation planned at the time, not a paste; a Codex session cannot run
+the deletion at all, because its production-action guard refuses `gh api -X DELETE`.
 
 A commit pushed inside that window **would be lost**. The tag was cut from the pre-read OID and
 nothing fetches the newer one locally, so there is no object to recover it from; an earlier draft

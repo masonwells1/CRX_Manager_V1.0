@@ -15,19 +15,23 @@ Remote branch count went from 58 to **44**.
 
 ## Why this document contains no copy-paste recovery script
 
-It used to. Across five review rounds, every single defect found in this file was a bug in shell
-commands written into the Markdown — never in the record itself. The worst of them: the republish
-step read a commit ID from a variable assigned in an *earlier* block that the document told you to
-run later, in what would normally be a different shell. Left empty, the command collapsed into
-Git's spelling for **delete that remote branch**. The step meant to restore a branch would have
-destroyed it, and that defect was introduced by the previous round's fix.
+It used to. Across five review rounds, **every defect found in the recovery procedure was a bug in
+shell commands written into the Markdown.** (The rounds also raised two ordinary
+documentation-hygiene items — a heading level and a `docs/manual/DECISION_LOG.md` path shortened
+inconsistently — so the claim is about the procedure, not about the whole file.) The worst of the
+shell defects: the republish step read a commit ID from a variable assigned in an *earlier* block
+that the document told you to run later, in what would normally be a different shell. Left empty,
+the command collapsed into Git's spelling for **delete that remote branch**. The step meant to
+restore a branch would have destroyed it, and that defect was introduced by the previous round's fix.
 
 A shell procedure embedded in a document is untested code that reads like prose. It gets no
 typecheck, no test, and no execution until the one moment someone is recovering something that
 matters. The table below has been correct since the first draft and no reviewer has ever faulted it.
 
-So the procedure is gone and the record stays. Recovery here is a deliberate act by a person who is
-paying attention, not a paste.
+**So this document is a prose record. It deliberately contains no copy-paste command or procedure —
+not for recovery, and not for repeating the sweep.** Recovering a branch here is a deliberate act by
+someone reading the table and checking their work, and there is no corrected script to copy from
+anywhere in this file.
 
 ## Restoring a branch
 
