@@ -49,28 +49,54 @@ describe('the client predicate still matches the shipped server guard', () => {
   //
   // Track the NEWEST emitter instead: any future re-emission automatically
   // becomes the file under test.
+  //
+  // Codex round 2 (PR #550, P2): selecting on the GUARD TOKEN was still blind in
+  // the one direction that matters most. A forward migration that re-emits the
+  // function while REMOVING or renaming `ORDER_NEEDS_SPLIT_BILLING` would be
+  // filtered out entirely, leaving an older file as the "newest emitter" and
+  // passing every assertion against stale SQL — a silent green for exactly the
+  // regression this is here to catch.
+  //
+  // Select on the FUNCTION instead, then assert the guard is present in it. The
+  // substring match covers the public wrapper AND the versioned impl
+  // (`_create_invoice_for_unbilled_delivery_impl_20260718`, which is where the
+  // guard actually lives per live `pg_proc`), so renaming the impl in a future
+  // migration cannot slip past the selector either.
+  //
+  // Deliberately biased toward FAILING: a migration that re-emits only the
+  // wrapper would trip this even though the guard is untouched. That is the
+  // right direction for a guard mirror — a loud false alarm gets a human to
+  // look, whereas a silent pass ships the dead-end button back to admins.
   const MIGRATIONS_DIR = join(process.cwd(), 'supabase/migrations');
+
+  const FUNCTION_EMITTER = /CREATE\s+OR\s+REPLACE\s+FUNCTION[^;]*create_invoice_for_unbilled_delivery/i;
 
   const emitters = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
-    .filter((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8').includes('ORDER_NEEDS_SPLIT_BILLING'))
+    .filter((f) => FUNCTION_EMITTER.test(readFileSync(join(MIGRATIONS_DIR, f), 'utf8')))
     .sort(); // migration filenames are timestamp-prefixed, so last === newest
 
-  it('at least one migration still emits the guard', () => {
+  it('at least one migration still emits create_invoice_for_unbilled_delivery', () => {
     // A zero-length list would make every assertion below vacuously pass.
     expect(emitters.length).toBeGreaterThan(0);
   });
 
-  it('the NEWEST emitter still ORs the orders flag with an allocation EXISTS', () => {
+  it('the NEWEST function emitter still ORs the orders flag with an allocation EXISTS', () => {
     // If this fails, the SERVER rule moved and orderRequiresSplitBilling is stale.
     const newest = emitters[emitters.length - 1];
     const sql = readFileSync(join(MIGRATIONS_DIR, newest), 'utf8');
+
+    // Assert presence FIRST: a re-emission that dropped the guard leaves no
+    // token to slice around, and indexOf(-1) would otherwise silently produce a
+    // window over unrelated SQL.
+    expect(sql, `newest function emitter: ${newest}`).toContain('ORDER_NEEDS_SPLIT_BILLING');
+
     const guardIndex = sql.indexOf('ORDER_NEEDS_SPLIT_BILLING');
     const guardBlock = sql.slice(Math.max(0, guardIndex - 1200), guardIndex);
 
-    expect(guardBlock, `newest emitter: ${newest}`).toMatch(/COALESCE\(needs_split_billing,\s*false\)/);
-    expect(guardBlock, `newest emitter: ${newest}`).toMatch(/OR EXISTS/);
-    expect(guardBlock, `newest emitter: ${newest}`).toMatch(/FROM order_item_field_allocations/);
+    expect(guardBlock, `newest function emitter: ${newest}`).toMatch(/COALESCE\(needs_split_billing,\s*false\)/);
+    expect(guardBlock, `newest function emitter: ${newest}`).toMatch(/OR EXISTS/);
+    expect(guardBlock, `newest function emitter: ${newest}`).toMatch(/FROM order_item_field_allocations/);
   });
 });
 
