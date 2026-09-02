@@ -48,36 +48,29 @@ WITH RECURSIVE cand AS (
     -- returns uuid, so a parameter that cannot be compared to it cannot be the
     -- actor this predicate reasons about.
     --
-    -- uuid, OR any user-defined type, OR a parameter of any other type that the
-    -- body actually USES as an identity.
+    -- NO TYPE GATE. Every actor-shaped parameter stays a candidate, exactly as the
+    -- base predicate on `main` does.
     --
-    -- The user-defined arm is load-bearing and must not be simplified away to
-    -- `= uuid`: the operator-overload attack class gives the actor a COMPOSITE
-    -- type whose `=` runs a mutating function, which is exactly what
-    -- actor_overloaded_equality / actor_reverse_equality pin.
+    -- Two drafts tried to narrow this and BOTH were rejected as HIGH false
+    -- negatives by the exact-SHA Codex reviews. Draft 1 kept only uuid and
+    -- user-defined types; draft 2 added "or the body casts it to uuid or compares
+    -- it to auth.uid()". Draft 2 still missed `CAST(p_user_id AS uuid)`, a text
+    -- actor forwarded to a text-accepting helper, a cast performed inside dynamic
+    -- SQL, and a plain `role … p_user_id` lookup — each of which the base
+    -- predicate reports.
     --
-    -- The third arm exists because the first draft of this gate stopped at
-    -- "uuid or user-defined", and the exact-SHA Codex review of c1beab619 rejected
-    -- that as a HIGH: `p_user_id text` cast `p_user_id::uuid` into an attribution
-    -- column is a real forgery shape, and a blanket type exclusion removed it from
-    -- `cand` entirely -- a narrowing the base predicate never made. Documenting it
-    -- as a trade-off was not good enough; a documented residual is still a live
-    -- bypass. So a non-uuid built-in stays in scope whenever the body casts it to
-    -- uuid or compares it against auth.uid().
+    -- The lesson is the one this repo already learned about blocklists: a gate
+    -- built by ENUMERATING the spellings of "is really an identity" reopens on
+    -- every spelling not yet enumerated, and each patch looks locally reasonable.
+    -- Two rounds of that is enough. Candidacy is now the region base defined —
+    -- the name pattern — and nothing narrows it.
     --
-    -- What is still excluded is only a parameter that does NEITHER -- a name that
-    -- merely ends in "by". `get_profitability_report.p_group_by` is a text
-    -- grouping mode checked against 'customer'/'product'/'month', and
-    -- `complete_delivery.p_signed_by` is a signature name. Neither is ever cast to
-    -- uuid nor compared to the caller, so neither can be the actor this predicate
-    -- reasons about.
-    AND (a.argtype = 'pg_catalog.uuid'::regtype
-         OR (SELECT t.typnamespace <> 'pg_catalog'::regnamespace
-             FROM pg_type t WHERE t.oid = a.argtype)
-         OR p.prosrc ~* ('\m' || regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g')
-                         || '\M\s*(?:\)\s*)*::\s*(?:pg_catalog\s*\.\s*)?uuid\M')
-         OR p.prosrc ~* ('\m' || regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g')
-                         || '\M[^;]{0,120}auth\s*\.\s*uid'))
+    -- The cost is honest and small: `p_group_by` (a text grouping mode in two
+    -- reports) and `complete_delivery.p_signed_by` (a signature name) are
+    -- name-pattern collisions and come back as reported rows, taking the live
+    -- count from 18 to 21. They are NOT allowlisted — Mason's 2026-09-02 call was
+    -- to fix the checker rather than add exceptions, and three rows of honest
+    -- noise beats a blind spot in a security control.
 ), src_rows AS (
   -- Lex each routine ONCE. A routine with two actor-shaped parameters used to
   -- be lexed once per parameter, and the whole prosrc rode along in recursive
@@ -174,6 +167,11 @@ WITH RECURSIVE cand AS (
   SELECT cand.oid, cand.proname, cand.args, cand.argname, cand.argname_pattern,
          cand.argument_position, cand.actor_is_uuid,
          regexp_replace(l.executable_src, '\s+', ' ', 'g') AS executable_src,
+         -- Raw, unlexed source, carried for the uncredited-routine fallback in the
+         -- final WHERE. The lexer masks dynamic SQL, so an actor forwarded through
+         -- `EXECUTE … USING` disappears from every lexed arm; the base predicate
+         -- reads raw prosrc and reports it. Used ONLY when nothing was credited.
+         regexp_replace(cand.prosrc, '\s+', ' ', 'g') AS raw_src,
          l.lex_error
   FROM lexer l
   JOIN cand ON cand.oid = l.oid
@@ -453,5 +451,39 @@ WHERE lex_error OR has_actor_rebinding OR
        -- live catalog timed the sweep out.
        OR pre_refusal_src ~* ('(\m' || argname_pattern || '\M|\$' || argument_position || '\M)(?:\s*\)|\s*::\s*[[:alpha:]_"][[:alnum:]_$".]*|\s*\.\s*[[:alpha:]_"][[:alnum:]_$"]*|\s*\[[^;\]]*\]|\s+AS\s+[[:alpha:]_"][[:alnum:]_$".]*\s*\))*\s*([-+*/\\<>=~!@#%^&|`?]+)')
        OR pre_refusal_src ~* ('([-+*/\\<>=~!@#%^&|`?]+)\s*(?:(?:CAST\s*)?\(\s*)*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
+       -- RAW-SOURCE FALLBACK for a routine with NO credited refusal.
+       --
+       -- The lexer masks dynamic SQL, so this shape satisfies none of the lexed
+       -- arms above even though it authorizes off a forgeable actor:
+       --
+       --   EXECUTE 'SELECT role FROM profiles WHERE id = $1' INTO v_role
+       --     USING p_actor_source;
+       --
+       -- `role` and the actor both vanish into the masked literal / USING clause.
+       -- The base predicate on `main` reads raw prosrc and reports it; that
+       -- coverage was lost when the lexer arrived in PR #449. Raised as a HIGH by
+       -- the exact-SHA Codex review of 39a3d817f.
+       --
+       -- Gated on `pre_refusal_src IS NOT DISTINCT FROM executable_src`, i.e.
+       -- nothing was credited, so a routine that proved its actor equals
+       -- auth.uid() is not re-reported for mentioning the parameter afterwards.
+       -- Within that gate this restores the base arms on raw source and adds the
+       -- EXECUTE … USING correlation the base form could not express.
+       -- ONE bounded arm rather than raw copies of every lexed arm. The lexed arms
+       -- above already scan the whole body when nothing was credited, so the only
+       -- thing raw source adds is what the lexer MASKED — which is dynamic SQL.
+       -- Correlating the actor with an `EXECUTE` statement therefore covers both
+       -- the `USING <actor>` form and the actor named inside the dynamic string,
+       -- in a single scan.
+       --
+       -- Anchored on `USING` rather than on `EXECUTE`, and bounded. Anchoring on
+       -- EXECUTE needs a span wide enough to clear the whole dynamic string, and
+       -- PostgreSQL caps a bounded repetition at 255 — `{0,800}` is rejected
+       -- outright as "invalid repetition count(s)". `USING` sits immediately
+       -- before its arguments, so a short bound is sufficient AND precise. The
+       -- bound itself is not optional: four unbounded raw arms timed the sweep out
+       -- against the live catalog, where save_job carries 69KB of raw source.
+       OR (pre_refusal_src IS NOT DISTINCT FROM executable_src
+           AND raw_src ~* ('\mUSING\M[^;]{0,120}(\m' || argname_pattern || '\M|\$' || argument_position || '\M)'))
   )
 ORDER BY violation_key;

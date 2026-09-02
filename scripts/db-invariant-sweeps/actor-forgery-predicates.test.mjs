@@ -710,16 +710,51 @@ BEGIN
 END;
 $body$;
 
--- The control that makes the type gate worth having: a text parameter whose name
--- merely ends in "by", never cast and never compared to the caller. Modelled on
--- live get_profitability_report.p_group_by. Must NOT be reported.
-CREATE FUNCTION public.actor_text_grouping_mode(p_group_by text) RETURNS text
+CREATE FUNCTION public.financial_audit_log_probe() RETURNS void
+LANGUAGE plpgsql AS $body$
+BEGIN
+  PERFORM 1;
+END;
+$body$;
+
+-- ---------------------------------------------------------------------------
+-- Round 2 of the exact-SHA Codex review, on 39a3d817f. All three are shapes the
+-- BASE predicate reports and the rewrite had stopped reporting.
+-- ---------------------------------------------------------------------------
+
+-- HIGH. A TEXT actor used in a role lookup, never cast to uuid and never compared
+-- to auth.uid(). The type gate accepted only uuid, user-defined types, or a
+-- parameter the body visibly casts — so this left candidacy entirely. The gate is
+-- now gone; base reports this and so must we.
+CREATE FUNCTION public.actor_text_role_lookup(p_user_id text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_role text;
+BEGIN
+  SELECT role INTO v_role FROM public.profiles WHERE id::text = p_user_id;
+  RETURN v_role = 'admin';
+END;
+$body$;
+
+-- HIGH. A benign VISIBLE mention of the ledger beside a MASKED dynamic write.
+-- The previous gate required financial_audit_log to be absent from the entire
+-- lexed body, so this one harmless probe call switched detection off completely.
+CREATE FUNCTION public.actor_visible_probe_plus_dynamic_write(p_actor_source uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER AS $body$
 BEGIN
-  IF p_group_by NOT IN ('customer', 'product', 'month') THEN
-    RAISE EXCEPTION 'Invalid p_group_by: %', p_group_by;
-  END IF;
-  RETURN p_group_by;
+  PERFORM public.financial_audit_log_probe();
+  EXECUTE 'INSERT INTO public.financial_audit_log(actor_user_id) VALUES ($1)' USING p_actor_source;
+END;
+$body$;
+
+-- HIGH. Authorization derived from a forgeable actor through DYNAMIC SQL. The
+-- lexer masks the string, so neither the role arm nor any other lexed arm sees
+-- it; the general predicate had no raw-source fallback at all.
+CREATE FUNCTION public.actor_dynamic_role_authorization(p_actor_source uuid) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_role text;
+BEGIN
+  EXECUTE 'SELECT role FROM public.profiles WHERE id = $1' INTO v_role USING p_actor_source;
+  RETURN v_role = 'admin';
 END;
 $body$;
 `);
@@ -812,9 +847,6 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_null_tolerant_refusal_forward',
     'actor_prose_message_refusal_forward',
     'actor_prefixed_message_refusal_forward',
-    // Type-gate control: a text parameter that merely ends in "by", never cast to
-    // uuid and never compared to the caller, is not an actor and must stay out.
-    'actor_text_grouping_mode',
   ]) {
     assert.ok(
       !generalRows.some((row) => row.startsWith(`${routine}(`)),
@@ -829,11 +861,28 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
   // These two are audit-ledger shapes. The general predicate has no
   // financial_audit_log arm and is not expected to report them, so asserting the
   // must-report loop's both-predicates rule would be asserting the wrong thing.
-  for (const routine of ['actor_dynamic_audit_sink_only', 'actor_text_cast_audit_forward']) {
+  for (const routine of [
+    'actor_dynamic_audit_sink_only',
+    'actor_text_cast_audit_forward',
+    // Codex round 2: one benign VISIBLE ledger reference must not switch dynamic
+    // detection off for the masked write beside it.
+    'actor_visible_probe_plus_dynamic_write',
+  ]) {
     assert.ok(
       financialRows.some((row) => row.startsWith(`${routine}(`)),
       `financial predicate must catch ${routine} — forged authorship reaching the immutable ` +
         `ledger is this predicate's whole remit: ${financialRows.join(', ')}`,
+    );
+  }
+
+  // Codex round 2, general predicate: base coverage that the lexer removed.
+  // A text actor in a role lookup (no cast anywhere) and authorization derived
+  // from a forgeable actor through dynamic SQL.
+  for (const routine of ['actor_text_role_lookup', 'actor_dynamic_role_authorization']) {
+    assert.ok(
+      generalRows.some((row) => row.startsWith(`${routine}(`)),
+      `general predicate must catch ${routine} — the base predicate reports it and the ` +
+        `rewrite must not lose that: ${generalRows.join(', ')}`,
     );
   }
 

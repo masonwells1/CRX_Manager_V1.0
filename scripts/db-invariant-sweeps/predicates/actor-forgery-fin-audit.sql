@@ -51,22 +51,12 @@ WITH RECURSIVE cand AS (
     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
     AND coalesce(p.proargmodes[a.ordinality], 'i'::"char") IN ('i', 'b', 'v')
     AND a.argname ~* '^p_\w*by$|^p_actor|^p_user'
-    -- Mirror of actor-forgery.sql: the name pattern is not a definition of
-    -- "actor". uuid, OR a user-defined type (keeps the composite
-    -- operator-overload class in scope -- never simplify to `= uuid`), OR any
-    -- other type the body actually uses as an identity by casting it to uuid or
-    -- comparing it to auth.uid(). That third arm answers the Codex HIGH on
-    -- c1beab619: `p_user_id text` cast `p_user_id::uuid` into actor_user_id is a
-    -- real forgery shape, and a blanket type exclusion dropped it from scope.
-    -- What remains excluded is only a name ending in "by" that is never cast and
-    -- never compared to the caller.
-    AND (a.argtype = 'pg_catalog.uuid'::regtype
-         OR (SELECT t.typnamespace <> 'pg_catalog'::regnamespace
-             FROM pg_type t WHERE t.oid = a.argtype)
-         OR p.prosrc ~* ('\m' || regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g')
-                         || '\M\s*(?:\)\s*)*::\s*(?:pg_catalog\s*\.\s*)?uuid\M')
-         OR p.prosrc ~* ('\m' || regexp_replace(a.argname, '([][(){}.*+?^$|\\])', '\\\1', 'g')
-                         || '\M[^;]{0,120}auth\s*\.\s*uid'))
+    -- NO TYPE GATE, mirroring actor-forgery.sql. Two attempts to narrow candidacy
+    -- by parameter type were both rejected as HIGH false negatives by the
+    -- exact-SHA Codex reviews; the second still missed `CAST(x AS uuid)`, a text
+    -- actor forwarded to a text-accepting helper, and casts performed inside
+    -- dynamic SQL. Candidacy is the region the base predicate defined — the name
+    -- pattern — and nothing narrows it.
 ), src_rows AS (
   -- Lex each routine ONCE. A routine with two actor-shaped parameters used to
   -- be lexed once per parameter, and the whole prosrc rode along in recursive
@@ -353,27 +343,26 @@ WHERE lex_error OR
       -- documented as a residual -- forged authorship reaching the immutable
       -- financial ledger is the exact class this predicate exists to catch.
       --
-      -- Scoped to exactly that case: the sink is present in RAW source but absent
-      -- from the LEXED body, which is only true when the write is hidden inside a
-      -- masked literal. An ordinary `INSERT INTO financial_audit_log …` stays
-      -- visible in executable_src and is handled by the arm above, on the correct
-      -- side of the refusal.
+      -- Gated on NO CREDITED REFUSAL, not on the sink being globally invisible.
       --
-      -- Scoping matters and the first attempt got it wrong: an unconditional raw
-      -- correlation also reported actor_safe_refusal_forward, which stamps its
-      -- actor parameter AFTER a credited refusal that already proved the parameter
-      -- equals auth.uid(). That is a legitimate pattern, and reporting it would
-      -- have been a fresh false positive introduced while closing a false
-      -- negative. When the sink IS invisible we cannot tell whether it sits before
-      -- or after the refusal, so this arm fails closed and reports -- consistent
-      -- with the rest of this predicate.
+      -- Draft 1 was an unconditional raw correlation and reported
+      -- actor_safe_refusal_forward, which legitimately stamps its actor parameter
+      -- AFTER a credited refusal that already proved it equals auth.uid().
       --
-      -- Costs nothing against the live catalog: measured read-only 2026-09-02,
-      -- ZERO of the 131 candidate routines place an actor-shaped parameter inside
-      -- a financial_audit_log statement (27 touch the table; all stamp from a
-      -- bound local), and none writes the ledger dynamically.
-      (raw_src ~* 'financial_audit_log'
-       AND executable_src !~* 'financial_audit_log'
+      -- Draft 2 fixed that by requiring `executable_src !~* 'financial_audit_log'`
+      -- — sink absent from the whole lexed body — and the Codex review rejected it
+      -- as a HIGH: ANY unrelated visible mention switches the arm off. A single
+      -- `PERFORM public.financial_audit_log_probe();` beside a masked
+      -- `EXECUTE 'INSERT INTO financial_audit_log …' USING p_actor` restores the
+      -- blind spot, and nothing else reports that shape.
+      --
+      -- A global-absence test is the wrong shape of question. What actually makes
+      -- the raw correlation safe is that the routine has no credited refusal to
+      -- clear it: `pre_refusal_src` is only left equal to the full body when
+      -- nothing was credited (or the analysis failed closed). That holds
+      -- regardless of how many benign references the body carries, and it still
+      -- exempts a routine whose refusal was credited.
+      (pre_refusal_src IS NOT DISTINCT FROM executable_src
        AND raw_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')) OR
       (raw_src ~* 'financial_audit_log' AND
        pre_refusal_src ~* ('(?:(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\.\s*)*(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\([^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)'))

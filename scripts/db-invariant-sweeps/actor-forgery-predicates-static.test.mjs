@@ -56,19 +56,15 @@ const REQUIRED = [
     [general, finAudit],
   ],
   [
-    'candidacy keeps user-defined types — dropping this blinds the composite operator-overload class',
-    /typnamespace <> 'pg_catalog'::regnamespace/,
+    'raw-source fallback for a routine with no credited refusal — the lexer masks dynamic SQL, ' +
+      'so EXECUTE … USING <actor> is invisible to every lexed arm',
+    /pre_refusal_src IS NOT DISTINCT FROM executable_src/,
     [general, finAudit],
   ],
   [
-    'candidacy keeps a non-uuid parameter cast to uuid (Codex HIGH #2: p_user_id::uuid forgery)',
-    /::\\s\*\(\?:pg_catalog\\s\*\\\.\\s\*\)\?uuid\\M/,
-    [general, finAudit],
-  ],
-  [
-    'candidacy keeps a non-uuid parameter compared against auth.uid()',
-    /\{0,120\}auth\\s\*\\\.\\s\*uid/,
-    [general, finAudit],
+    'USING correlation on raw source (Codex round 2: dynamic actor-dependent authorization)',
+    /\\mUSING\\M\[\^;\]\{0,120\}/,
+    [general],
   ],
   [
     'OFFSET 0 optimization fences — without them pre_refusal_src is recomputed per WHERE arm and the sweep times out on live',
@@ -121,7 +117,6 @@ const REQUIRED_FIXTURES = [
   'actor_null_tolerant_refusal_forward',
   'actor_prose_message_refusal_forward',
   'actor_prefixed_message_refusal_forward',
-  'actor_text_grouping_mode',
   // Deny canaries for the loosening — must STILL be reported.
   'actor_notice_not_exception_forward',
   'actor_selfbound_declare_init_forward',
@@ -131,7 +126,24 @@ const REQUIRED_FIXTURES = [
   'actor_text_cast_audit_forward',
   'actor_bare_inequality_forward',
   'actor_poisoned_local_before_refusal',
+  // Codex round 2 on 39a3d817f: base coverage the rewrite had lost.
+  'actor_text_role_lookup',
+  'actor_visible_probe_plus_dynamic_write',
+  'actor_dynamic_role_authorization',
 ];
+
+// No type gate on candidacy. Two drafts narrowed it and both were rejected as
+// HIGH false negatives; a gate built by enumerating the spellings of "is really
+// an identity" reopens on the next spelling. Candidacy is the name pattern, full
+// stop, exactly as the base predicate defines it.
+for (const [name, text] of [['general', general], ['fin-audit', finAudit]]) {
+  assert.ok(
+    !/argtype = 'pg_catalog\.uuid'::regtype\s*\n?\s*OR/.test(stripSqlComments(text)),
+    `${name} predicate reintroduced a parameter-type gate on candidacy — every narrowing of ` +
+      `this so far has been a HIGH false negative; suppress proven non-actors after sink ` +
+      `analysis instead`,
+  );
+}
 
 for (const fixture of REQUIRED_FIXTURES) {
   assert.ok(
