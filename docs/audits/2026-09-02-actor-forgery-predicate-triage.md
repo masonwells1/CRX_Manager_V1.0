@@ -14,7 +14,7 @@ live routine was changed.
 **All 56 rows the PR #449 predicate reported are false positives. Zero real actor-forgery holes.**
 The predicate was not surfacing a security backlog — it demanded one house style that live code does
 not follow. Per Mason's 2026-09-02 decision ("fix checker, don't add exceptions") the predicate was
-fixed rather than allowlisted. **Live rows: 56 → 18.**
+fixed rather than allowlisted. **Live rows: 56 → 21.**
 
 ## Measured baseline
 
@@ -22,7 +22,7 @@ fixed rather than allowlisted. **Live rows: 56 → 18.**
 |---|---|---|---|
 | `main` (`ac71d1c2b…`) | 1 | 1 (`cancel_delivery`, allowlisted) | GREEN, but see caveat |
 | PR #449 (`a8e192daa…`) | 56 | 55 | RED — 53 unallowlisted |
-| This branch | 18 | 18 | 17 unallowlisted |
+| This branch | 21 | 21 | 20 unallowlisted |
 
 Population: 131 authenticated-executable `SECURITY DEFINER` routines carry an actor-shaped
 parameter; 96 mention `ACTOR_MISMATCH`. `allowlist.json` holds 2 actor-forgery entries.
@@ -57,7 +57,14 @@ carries the canonical guard, before the impl runs.
 
 ## What changed in the checker
 
-Three shape fixes plus a candidacy gate, applied to both predicates:
+Three shape fixes, applied to both predicates. **Candidacy is unchanged from `main` — there is no
+type gate.** Two drafts added one (uuid + user-defined types; then "…or the body casts it to uuid or
+compares it to `auth.uid()`") and BOTH were rejected as HIGH false negatives by the exact-SHA Codex
+reviews: the second still missed `CAST(x AS uuid)`, a text actor forwarded to a text-accepting
+helper, a cast inside dynamic SQL, and a plain `role … p_user_id` lookup. A gate built by
+enumerating the spellings of "is really an identity" reopens on the next spelling, so candidacy stays
+the region `main` defines and a static CI assertion now fails if anyone reintroduces one. The cost is
+the three name-pattern collisions (`p_group_by` ×2, `p_signed_by`) reported below.
 
 1. **Refusal credited by shape, not message text.** `RAISE EXCEPTION` + any message, instead of the
    bare `'ACTOR_MISMATCH'` literal. Safe because the lexer masks string literals first, so a
@@ -66,9 +73,11 @@ Three shape fixes plus a candidacy gate, applied to both predicates:
    enforced (binding must precede the refusal) by comparing match positions.
 3. **Null-tolerant refusals and `<>`/`!=` accepted.** On a `NOT NULL`-guarded operand these are
    equivalent to `IS DISTINCT FROM`.
-4. **Candidacy gate:** the actor parameter must be `uuid` **or a user-defined type**. The second half
-   is load-bearing — the operator-overload attack class gives the actor a composite type — and only
-   the remaining built-in scalars (`p_group_by text`, `p_signed_by text`) are excluded.
+4. **Coverage restored where the lexer had removed it**, after Codex rounds 2 and 3: a raw-source
+   fallback for routines with no credited refusal (a masked `EXECUTE … USING <actor>` is invisible to
+   every lexed arm), the financial predicate's dynamic-ledger-write arm, `INTO` treated as an
+   assignment path, and quoted identifiers blanked before the control-flow balance is counted — the
+   last being the one review thread that was still open on PR #449 itself.
 
 Four performance changes were required to keep the sweep runnable at all; each is commented at its
 site. Removing the fixed literal removed the anchor that made most match attempts fail immediately,
@@ -89,23 +98,40 @@ and the predicate went from completing to timing out against the live catalog:
 
 - **Four ALLOW fixtures**, one per live guard style, pinned so a future tightening cannot silently
   retake the sweep from 1 row to 56.
-- **Three DENY canaries** for the loosening itself, each a near-miss of a style now accepted:
-  `actor_notice_not_exception_forward` (compares correctly but only `RAISE NOTICE`, so execution
-  continues), `actor_selfbound_declare_init_forward` (initializer binds the local to the *parameter*,
-  so the refusal can never fire), and `actor_null_tolerant_wrong_identity_forward` (null-tolerant
-  shape compared against a fresh random uuid rather than the caller).
+- **Twelve must-report fixtures added across the three review rounds.** The ones that matter most are
+  the near-misses of rules this change newly accepts — a guard that *cannot fire*:
+  `actor_notice_not_exception_forward` (compares correctly but only `RAISE NOTICE`),
+  `actor_selfbound_declare_init_forward` (initializer bound to the *parameter*),
+  `actor_bare_inequality_forward` (`<>` against a NULL actor yields NULL, so the `IF` never fires),
+  `actor_poisoned_local_before_refusal` (local overwritten after binding),
+  `actor_null_tolerant_wrong_identity_forward` (compared against a random uuid),
+  `actor_into_rebound_param_forward` (`INTO` as an assignment path), and
+  `actor_quoted_identifier_block_spoof` (`"END IF"` balancing the control-flow counts).
+  Plus five restoring base coverage the lexer had removed: `actor_dynamic_audit_sink_only`,
+  `actor_visible_probe_plus_dynamic_write`, `actor_text_cast_audit_forward`,
+  `actor_text_role_lookup`, `actor_dynamic_role_authorization`.
 - The pre-existing 22 must-report fixtures still report.
 
-Both directions were **mutation-tested**: reverting the message-agnostic tail turns the
-null-tolerant, prose and prefixed fixtures red; reverting the DECLARE-initializer branch turns that
-fixture red. The fixes are load-bearing, not decorative.
+**Every fix was mutation-tested individually** — disabling it turns its own canary red and nothing
+else. That includes the static CI guard, which is itself mutation-tested: adding a forwarding call to
+the isolated dynamic-sink fixture fails it by name.
 
-## What still reports — 18 rows, three classes, none a forgery
+### A CI guard that passed on its own comment
+
+Worth stating separately, because it is the failure mode this whole change exists to remove. The
+first version of the static guard asserted an expression that, after a later revision, existed **only
+inside a comment describing the rejected draft** — one raw match, zero executable-code matches. It
+would have passed forever while pinning nothing. Comments are now stripped before every structural
+assertion, and the suite still passes, which is what confirms the remaining assertions match real
+code rather than prose about it.
+
+## What still reports — 21 rows, four classes, none a forgery
 
 | n | Class | Why it still fires |
 |---|---|---|
 | 13 | Thin dispatch wrappers | The guard is one call hop away. Clearing these needs the predicate to follow a call into a non-`authenticated`-executable callee and verify the callee's own refusal. That is a real extension, not a regex tweak. |
 | 3 | `EXCEPTION WHEN OTHERS` later in the body (`complete_job`, `create_application_record_from_blend_ticket`, `unapply_credit_memo`) | The **pre-existing** fail-closed rule: a handler can catch a refusal, and PR #449 deliberately declined to prove PL/pgSQL block nesting in SQL. All three are correctly guarded at the top of the body. |
+| 3 | **Name-pattern collisions** — `get_profitability_report.p_group_by`, `get_sales_summary_report.p_group_by` (text grouping modes checked against `'customer'`/`'product'`/`'month'`), `complete_delivery.p_signed_by` (a signature name) | Not identities at all. They return because removing the type gate was forced by two HIGH false negatives; three rows of honest noise beat a blind spot. |
 | 1 | `get_receiving_log.p_received_by` | A uuid read filter in a routine that writes nothing. Needs a "no write sink" rule to clear. |
 | 1 | `cancel_delivery` | Already allowlisted; unchanged. |
 
@@ -132,7 +158,7 @@ actor parameter reaching a sink.
 
 ## Residual, stated plainly
 
-This triage confirms the 56 reported rows are safe and the 18 that remain are safe. It does **not**
+This triage confirms the 56 reported rows are safe and the 21 that remain are safe. It does **not**
 re-audit the routines the predicates never report. The 2026-09-01 cap entry's residuals stand
 unchanged, the `INTO`-target rebinding form remains open and uncovered, and the three classes in the
 table above remain reported rather than resolved.
