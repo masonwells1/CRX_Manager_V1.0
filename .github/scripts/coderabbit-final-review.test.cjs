@@ -527,6 +527,26 @@ test('a new commit resets both workflow labels', async () => {
   assert.deepEqual(harness.comments, []);
 });
 
+// Regression: the reset removed the two labels with bare sequential awaits, so a
+// transient failure on the first skipped the second — leaving a stale
+// `coderabbit-review-requested` marker on a candidate the gate had just
+// invalidated, which the outer recovery then preserves.
+test('a reset attempts the second label removal even when the first fails', async () => {
+  const harness = makeHarness({
+    action: 'synchronize',
+    eventLabel: null,
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
+    eventPullRequest: pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] }),
+    removeLabelFailures: [READY_LABEL],
+  });
+  const result = await execute(harness);
+
+  // The requested marker MUST come off even though the ready removal threw first.
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.notEqual(result.status, 'reset');
+  assert.deepEqual(harness.comments, []);
+});
+
 test('changing the pull request base resets both workflow labels', async () => {
   const harness = makeHarness({
     action: 'edited',

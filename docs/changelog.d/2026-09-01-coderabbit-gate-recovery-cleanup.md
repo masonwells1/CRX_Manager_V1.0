@@ -36,7 +36,21 @@ A recovered command is a **posted** command, so it now falls through to the same
 raced comment is deleted like any other. The `recovered` flag is preserved on the success return.
 Regression test added and mutation-proved: restoring the early return turns it red.
 
-### Two stale claims about administrator enforcement
+### The same sequential-await defect in `resetLabels` (Codex P2)
+
+Fixing the recovery path left the identical shape in `resetLabels`, which is the hotter path — every
+push, reopen, draft conversion, base edit and auto-merge change goes through it. A transient failure
+on the first removal skipped the second, leaving a stale `coderabbit-review-requested` marker on a
+candidate the gate had just invalidated, which the outer recovery then *preserves*. Both removals are
+now attempted, and a half-cleared reset throws rather than reporting a clean `reset`, so the caller
+cannot mistake stale gate state for a fresh candidate. Regression test, mutation-proved.
+
+### Three stale claims about administrator enforcement
+
+Three, not two: `.claude/commands/ship.md` carried the same instruction and was missed on the first
+sweep. It is the worst place for it — every `/ship` run reaching the merge step would verify a rule
+that is deliberately off, so a policy-compliant agent would block **every** otherwise-ready landing.
+Corrected, adapter regenerated. (Found by Codex, correctly, as a P1.)
 
 This branch froze on 2026-08-30. On 2026-09-01 Mason took the manual review override, which set
 `enforce_admins: false` on `main`'s classic protection. Two of this branch's own sentences instructed

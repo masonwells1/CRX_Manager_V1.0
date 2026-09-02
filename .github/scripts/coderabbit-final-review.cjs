@@ -225,8 +225,20 @@ async function removeLabelsIndependently(github, owner, repo, issueNumber, label
 }
 
 async function resetLabels({ github, owner, repo, pullNumber, core, reason }) {
-  await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-  await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+  // Same rule as the recovery path: a reset must ATTEMPT both removals. A
+  // transient failure on the first used to skip the second, so a push, reopen,
+  // draft conversion, base edit or auto-merge change could leave a stale
+  // `coderabbit-review-requested` marker attached to a candidate the gate had
+  // just invalidated — and the outer recovery then preserves that marker.
+  const failures = await removeLabelsIndependently(
+    github, owner, repo, pullNumber, [READY_LABEL, REQUESTED_LABEL],
+  );
+  if (failures.length > 0) {
+    // Surface it and re-throw: a half-cleared reset is stale gate state, and the
+    // caller's recovery path must not treat it as a clean reset.
+    core.warning(`CodeRabbit final-review state reset could not clear ${failures.join('; ')}`);
+    throw new Error(`workflow label reset failed for ${failures.join('; ')}`);
+  }
   core.notice(`CodeRabbit final-review state reset: ${reason}`);
   return { status: 'reset', reason };
 }
