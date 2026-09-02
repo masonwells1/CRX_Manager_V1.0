@@ -112,10 +112,20 @@ function denialsFor(command) {
       timeout: 20000,
       env: { ...process.env, CLAUDE_PROJECT_DIR: fixture },
     });
-    if (res.error?.code === "ETIMEDOUT" || res.signal) {
-      // Never read "did not answer" as "allowed" — that is how a guard test stops
-      // testing anything without going red.
-      throw new Error(`hook ${name} did not complete (signal=${res.signal}, err=${res.error?.message})`);
+    // FAIL CLOSED on anything that is not a clean, completed run. Reading "the
+    // hook did not answer" as "the hook allowed it" is precisely how a guard test
+    // stops testing anything while staying green — the failure this whole file
+    // exists to prevent. An earlier revision only caught timeouts and signals, so
+    // a spawn failure (ENOENT, EACCES) or a hook that crashed with a nonzero exit
+    // silently counted as "no denial" (Codex gpt-5.6-sol review, 2026-09-01).
+    if (res.error) {
+      throw new Error(`hook ${name} failed to run (${res.error.code || ""} ${res.error.message})`);
+    }
+    if (res.signal) {
+      throw new Error(`hook ${name} was killed by signal ${res.signal}`);
+    }
+    if (res.status !== 0) {
+      throw new Error(`hook ${name} exited ${res.status} — a crashed hook must not read as "allowed"\n${res.stderr || ""}`);
     }
     let decision = null;
     try {
