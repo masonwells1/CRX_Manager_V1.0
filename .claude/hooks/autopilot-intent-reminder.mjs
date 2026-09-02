@@ -48,12 +48,44 @@ if (!triggers.some((re) => re.test(prompt))) emit();
 // Strong, unambiguous hands-free signals additionally latch the deterministic
 // handshake: unattended-autopilot.mjs blocks build tools until autopilot is
 // actually armed (or the flag is deliberately cleared). Weak signals only remind.
+//
+// ADMISSION RULE: a pattern belongs here only if it is a phrase Mason can be
+// USING but not NAMING. Every entry below is first-person or imperative, so it
+// cannot appear in a question ABOUT autopilot. A bare topic word can, and the
+// cost of that false positive is severe: the latch blocks Bash/Write/Edit for 45
+// minutes, review-proof-guard.mjs refuses every command that would clear the
+// flag, and the only unblocked path left is arming autopilot — exactly what this
+// handshake exists to prevent. PR #548 built a sanctioned clear-the-flag script
+// for this; two `gpt-5.6-sol` reviews returned BLOCKERS and Mason removed it,
+// because the cure was a new way to execute code during the pause.
+//
+// A bare `/overnight/` was such a word and is deliberately gone (Mason,
+// 2026-09-02). It froze one session twice inside ten minutes: once on "i think
+// the overnight flag is getting worked on you might investigate", and again on
+// the approval to make this very change. Same defect, same word, already judged
+// once — the Governed Autonomous Software Factory was removed on 2026-08-07
+// partly because "casual words like 'factory' or 'overnight' flipped governed
+// state" (docs/manual/DECISION_LOG.md).
+//
+// It is REPLACED below rather than deleted, because "run this overnight" is a
+// real hands-free request and latching it is a property worth keeping. The split
+// is grammatical, not a list of banned phrasings: `overnight` freezes only when
+// it ENDS its phrase, which is the adverbial use ("run this overnight"; "keep
+// going overnight, I'll check in the morning"). When another word follows, it is
+// modifying a noun — naming a thing rather than asking for one ("the overnight
+// flag", "the overnight bug hunt", "the word overnight from the list").
+//
+// The lookahead's continuation set errs toward MISSING a real request, never
+// toward freezing on a mention, because the two failures are not symmetric: a
+// miss degrades to the arm-autopilot reminder that `triggers` still injects,
+// while a false freeze can only be escaped by arming autopilot. Pinned in
+// prompt-hooks.test.mjs and hook-router.test.mjs.
 const strong = [
   /going\s+to\s+bed/,
   /hands.?free/,
-  /overnight/,
   /run\s+(it|this)\s+(all\s+)?night/,
   /while\s+i('?m| am)\s+(asleep|sleeping|away|gone)/,
+  /\bovernight\b(?=\s*$|\s*[.,;:!?]|\s+(?:and|so|then|while|if|please|ok|okay|too|tonight|til|till|until)\b)/,
 ];
 if (strong.some((re) => re.test(prompt))) {
   try {

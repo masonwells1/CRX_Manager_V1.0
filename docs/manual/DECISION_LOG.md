@@ -7,6 +7,41 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-02 — `overnight` is a topic word, not a freeze signal
+
+**Source:** Mason's in-chat approval on 2026-09-02 ("yes drop the word overnight from the freeze
+list"), after the defect froze the same session twice inside ten minutes.
+
+**Decision.** The bare `/overnight/` is removed from the `strong` list in
+`.claude/hooks/autopilot-intent-reminder.mjs` and replaced with a lookahead that fires only on the
+adverbial use — `overnight` ending its phrase, as in "run this overnight". A plain deletion was
+implemented first and rejected by `hook-router.test.mjs:53`, which already pinned "run this
+overnight" as a latching request: dropping the word wholesale would have dropped that coverage too.
+
+**Why.** The latch writes `OVERNIGHT-INTENT.flag`, and `unattended-autopilot.mjs` then blocks
+Bash/Write/Edit for 45 minutes. `review-proof-guard.mjs` refuses every command that would clear the
+flag — PR #548 established that this has no shell escape *by design*, after two `gpt-5.6-sol`
+reviews returned BLOCKERS on a sanctioned clear-script and Mason removed it. So a false latch leaves
+arming autopilot as the only unblocked path, which is precisely the failure the handshake exists to
+prevent. #548 corrected the misleading deny message but did not touch the word list that causes the
+false latch.
+
+A bare noun is the one shape that can appear in a question *about* the feature. It fired on "i
+think the overnight flag is gettign worked on you might investigate" and again on the approval to
+make this very change. This is also not a new observation: the Governed Autonomous Software Factory
+was removed on 2026-08-07 partly because "casual words like 'factory' or 'overnight' flipped
+governed state".
+
+**Operative rule.** A pattern is admitted to `strong` only if it is a phrase Mason can be USING but
+not NAMING — first-person, imperative, or (for `overnight`) grammatically adverbial, so it cannot
+occur in a question about autopilot. Split by grammar, never by a list of banned phrasings, and when
+the two directions conflict prefer MISSING a real request: a miss degrades to the arm-autopilot
+reminder `triggers` still injects, while a false freeze can only be escaped by arming autopilot. Do
+not restore a bare `/overnight/`, and do not "simplify" the lookahead away — `prompt-hooks.test.mjs`
+pins all three halves (the two verbatim freezing prompts must not latch; four real hands-free
+requests and four adverbial `overnight` requests must; three noun-modifier mentions must not), and
+`hook-router.test.mjs:53` independently pins "run this overnight".
+
 ## 2026-09-02 — The required review on `main` is removed; CI becomes the merge gate
 
 **Source:** Mason's in-chat request on 2026-09-02 ("we need to remove the requred review setting

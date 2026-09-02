@@ -193,6 +193,86 @@ ok(existsSync(path.join(hbProj, ".claude", "session-state", "hold.json")),
   "the same wording TYPED by Mason still latches the hold");
 rmSync(hbProj, { recursive: true, force: true });
 
+// ── 2026-09-02: naming autopilot must not FREEZE the session ─────────────
+// autopilot-intent-reminder.mjs latches OVERNIGHT-INTENT.flag on a "strong"
+// phrase, and unattended-autopilot.mjs then blocks Bash/Write/Edit for 45
+// minutes. review-proof-guard.mjs refuses every command that would clear the
+// flag (PR #548 confirmed there is deliberately no shell escape), so a false
+// latch leaves arming autopilot as the only unblocked path — the exact failure
+// the handshake exists to prevent.
+//
+// `/overnight/` was a bare topic word in that list. It froze a session twice in
+// ten minutes: on a request to INVESTIGATE the flag, and on the approval to
+// remove it. Both verbatim prompts are pinned below.
+//
+// The negative controls are what make this a guard rather than a deletion: put
+// /overnight/ back and case 1 goes red; delete the `strong` list entirely and
+// cases 2-4 go red. Neither mutation can pass both halves.
+{
+  const flagOf = (dir) => path.join(dir, ".claude", "session-state", "OVERNIGHT-INTENT.flag");
+  const latches = (prompt) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "crx-intent-"));
+    const r = spawnSync(process.execPath, [path.join(__dirname, "autopilot-intent-reminder.mjs")], {
+      input: JSON.stringify({ prompt }),
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+    });
+    eq(r.status, 0, `autopilot-intent-reminder exits 0 on: ${prompt.slice(0, 40)}`);
+    const latched = existsSync(flagOf(dir));
+    const reminded = r.stdout.includes("autopilot-arm.mjs");
+    rmSync(dir, { recursive: true, force: true });
+    return { latched, reminded };
+  };
+
+  // 1. Mason NAMING the feature — the two verbatim prompts that froze the
+  //    session on 2026-09-02. Must not latch, and must still remind: the topic
+  //    is autopilot, so surfacing the arm instructions is still correct.
+  for (const naming of [
+    "yes fix codex folder , and i think the overnight flag is gettign worked on you might investigate",
+    "yes drop the word overnight from the freeze list",
+  ]) {
+    const got = latches(naming);
+    ok(!got.latched, `naming the feature must not FREEZE the session: "${naming.slice(0, 45)}..."`);
+    ok(got.reminded, "...but the arm-autopilot reminder still fires");
+  }
+
+  // 2. Negative controls: Mason USING the feature must still latch. These are
+  //    first-person/imperative phrases that cannot appear in a question ABOUT
+  //    autopilot, which is the admission rule the `strong` list documents.
+  for (const using of [
+    "im going to bed, keep working",
+    "run this hands-free until morning",
+    "run it all night and dont stop",
+    "keep going while im asleep",
+  ]) {
+    ok(latches(using).latched, `a real hands-free request must still latch: "${using}"`);
+  }
+
+  // 3. The word itself is not banned — it is split by grammar. Adverbial
+  //    `overnight` (ending its phrase) is a real request and MUST still latch;
+  //    hook-router.test.mjs pins the first of these end to end. Deleting the
+  //    replacement pattern instead of narrowing it turns this block red, which
+  //    is what stops "drop the word" being implemented as "drop the coverage".
+  for (const adverbial of [
+    "run this overnight",
+    "keep going overnight, ill check in the morning",
+    "run it overnight and dont ask me",
+    "work on this overnight please",
+  ]) {
+    ok(latches(adverbial).latched, `adverbial overnight is a real request: "${adverbial}"`);
+  }
+
+  // 4. ...while `overnight` modifying a noun is naming a thing, and must not
+  //    freeze. These are the shapes that appear in questions about the feature.
+  for (const naming of [
+    "why does the overnight flag keep firing",
+    "explain the overnight handshake to me",
+    "run the overnight bug hunt report past me first",
+  ]) {
+    ok(!latches(naming).latched, `overnight as a noun modifier must not freeze: "${naming}"`);
+  }
+}
+
 // ── 2026-08-26: the REAL cross-session payloads, end to end ──────────────
 // The unit assertions above prove the predicate; this runs the ACTUAL hook
 // process against the verbatim shapes from the incident and checks the real
