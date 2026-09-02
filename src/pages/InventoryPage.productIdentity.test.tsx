@@ -51,10 +51,19 @@ function query(data: unknown) {
   return builder;
 }
 
-vi.mock('../lib/db', () => ({
+vi.mock('../lib/db', async () => ({
   supabase: { from: mocks.from, rpc: mocks.rpc },
   checkMutationResult: vi.fn(),
-  sanitizeError: (_error: unknown, fallback = 'error') => fallback,
+  // The REAL sanitizeError, never a stub. This mock previously declared a
+  // second `fallback` parameter the real one-argument function does not have,
+  // so it ignored the error and returned a constant -- any assertion about
+  // displayed error text here was vacuous. A stub shaped
+  // `e instanceof Error ? e.message : <literal>` is no better: it re-implements
+  // the plain-object defect fixed in the 2026-09-02 swallowed-server-errors
+  // sweep and stays green against a regressed product.
+  sanitizeError: (await vi.importActual<typeof import('../lib/errorSanitizer')>(
+    '../lib/errorSanitizer',
+  )).sanitizeError,
   assertRpcResult: (value: unknown) => value,
   hasRpcCode: () => false,
   RpcErrorCodes: {},
