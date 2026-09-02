@@ -50,6 +50,241 @@ currently buys.
 attribute to a known account can still demand an approval. That is a narrow path, not the general
 rule, and clearing it is Mason's by hand.
 
+## 2026-09-01 (end of day) — SIX adversarial rounds on the enforcement-surface rule, then a deliberate stop
+
+**Mason's decision, 2026-09-01, after the sixth round: fix what that round found, then stop
+commissioning rounds.** Do not reopen this by running more adversarial reviews at it; the remaining
+gaps are recorded in `KNOWN_ISSUES.md` and in the round-6 changelog entry, and closing them is not
+what a command-text rule can do.
+
+**What the cap does and does not cover — read this before concluding the cap was broken.** It caps
+reviews *this project commissions*. It does not silence the **Codex PR-review connector**
+(`chatgpt-codex-connector`), which the Codex cloud settings configure to review on PR open and on
+each push, and which is not a commissioned round.
+
+**That is Codex, NOT CodeRabbit — do not generalize this to CodeRabbit.** `.coderabbit.yaml` sets
+`reviews.auto_review.enabled: false` for both public repos, so CodeRabbit reviews only when someone
+posts an explicit `@coderabbitai review` after the candidate commit is frozen. Nothing here excuses
+skipping that trigger; expecting a CodeRabbit review to appear on its own is how a PR sits unreviewed.
+
+The Codex connector went on to report further real bypasses on PR #530 — `rg --pre`, and later
+`git -c diff.external=… --ext-diff` and `git grep --open-files-in-pager=…`, each executing an
+arbitrary program against a protected file (all three reproduced as real deletions), and doubled path
+separators (`.github//workflows/…`) defeating the matcher — plus several defects in the guard-claim
+ratchet itself. Those were fixed, because
+**fixing a finding that has already been delivered is not commissioning a round.** The changelog
+entries and the test comments number those findings by review round for traceability, which is why
+they say "seventh"; that numbering describes the reviews that happened, not a decision to reopen the
+cap. The cap stands: do not commission an eighth.
+
+Each of six independent exact-SHA `gpt-5.6-sol` reviews found a REAL bypass in the rule that replaced
+the deleted lock. In order: a destructive-verb blocklist that `cp`/`tee`/`sed -i` walked past; `..`
+traversal (a bypass the deleted lock had already closed once, lost in the port); read-only heads that
+write a named file (`node -e`, `sed 'w'`, `sort -o`, `find -fprintf`, `awk '>p'`); command wrappers
+and output-operand utilities (`command cp`, `uniq in out`, `yq -i`, `npx rimraf`); a protected path
+as a flag's VALUE (`git diff --output=`); a forged command name (`scripts/cat`, and a shell function
+shadowing `cat`); and finally nested execution (`echo $(rm …)`, `PATH=/tmp:$PATH`).
+
+**The lesson is the pattern, not any single finding.** A guard that inspects shell command text can
+always be fooled by a shell that rewrites its own commands, so this class of rule converges slowly
+and never finishes. Three of the seven defects were things the DELETED lock had already solved and
+this rewrite dropped — porting a guard is where its hard-won cases get lost, and a diff of what the
+old one handled would have caught all three cheaper than review did.
+
+**Operative rules:**
+
+- This rule is a speed bump. The boundary is GitHub branch protection, required checks, and review.
+  Do not describe it otherwise, and do not remove an `ask` entry on its strength.
+- Adding a verb, flag, or head to it is almost always the wrong instinct. Ask instead whether the
+  SHAPE is wrong — positional-versus-flag-value, bare-versus-path-qualified head, and outer-versus-
+  nested execution each closed a whole class where an enumeration would have closed one case.
+- Six rounds is the recorded ceiling for adversarial iteration on a guard of this kind. If a future
+  guard needs more than that, the design is wrong, not the implementation.
+
+## 2026-09-01 (later the same day) — the guarded-surface lock is DELETED; `review-proof-guard` absorbs its real coverage
+
+**Closes the open question in the two entries below, and supersedes both.** `guarded-surface-lock.mjs`,
+`guarded-surface-lib.mjs`, its test, and `scripts/guard-unlock.mjs` are removed. There is no unlock
+protocol any more; do not reintroduce one. The 2026-08-25 `ask` tier stays exactly as it is — it was
+always the real gate, and nothing here weakens it.
+
+**Mason's decision, 2026-09-01, after being shown the evidence below.**
+
+**Why.** Three independent lines of evidence pointed the same way.
+
+1. **It was never a boundary.** Proven 2026-08-31 by direct reproduction: with the surface LOCKED, a
+   five-line script writing through node's `fs` created a file inside `.claude/hooks/` and the hook
+   never fired. It inspects the arguments of tool calls; code an agent writes and then runs does its
+   writing inside its own process, where no tool call exists to inspect.
+2. **It failed OPEN exactly when it mattered.** A `SyntaxError` in its rule book killed the hook
+   process before `deny()` existed, so it emitted nothing — and a PreToolUse hook that emits no
+   decision is not a denial. Reproduced in isolation (exit 1, empty stdout). Its disabled state was
+   indistinguishable, from the agent's side, from its working state.
+3. **It failed CLOSED catastrophically the rest of the time.** Registered under `matcher: "*"`, a
+   runtime error in the rule book denied EVERY tool call in the session, including the ones needed to
+   repair it. That happened twice in fifteen minutes during ordinary two-step edits, and each recovery
+   required Mason to run a shell command outside the agent. A safety control whose normal failure mode
+   is a total outage costs more than the speed bump it buys.
+
+An exact-SHA `gpt-5.6-sol` review of the narrowed lock returned BLOCKERS with three HIGH findings —
+the read-only allowlist permitting `node -e` writes, uninspected process-input channels, and the
+module-load fail-open — and recommended, unprompted, that "command-text filtering can remain only as
+defense in depth." It reached the same conclusion from a cold read.
+
+**What replaced it, so this is not a net loss of coverage.** `review-proof-guard.mjs` already blocked
+destructive shell writes everywhere under `.claude/` — verified live: `echo test > .claude/hooks/x`
+was refused by the *proof guard*, not by the lock. So the lock's genuinely unique reach was four
+paths, now denied by the same proven machinery: `.husky/**`, `.github/workflows/**`, `.codex/hooks*`,
+`.coderabbit.yaml`. `.claude/hooks` is listed with them as well, because the lock also caught the
+overwrite verbs that carry content from history or a patch file — `git checkout|restore|apply|am|rm|mv`
+and `patch` — which the older `.claude` state-dir rule does not. Missing that would have been a silent
+loss; it is covered and mutation-tested.
+
+**Operative rules:**
+
+- Enforcement files are gated by TWO things and no third: the `ask` tier for native `Edit`/`Write`,
+  and `review-proof-guard.mjs` for destructive/overwriting shell and MCP routes. Reads are always
+  allowed on both.
+- Do not build another self-protecting hook over these files. The pattern was tried, hardened across
+  five adversarial rounds, and removed. If a gap needs closing, extend `review-proof-guard.mjs`.
+- **A `matcher: "*"` hook is a session-wide single point of failure.** Any hook registered that
+  broadly must be trivially simple, or a bug in it takes down every tool call. That is the general
+  lesson, independent of this lock.
+- The durable boundary is unchanged and is not in this repository: GitHub `protect-main` branch
+  protection, required checks, and formal review. Repository hooks are defense in depth.
+
+## 2026-09-01 — the guarded surface is NARROWED to hook/registration files; whether the lock survives at all is an open owner decision
+
+**SUPERSEDED the same day by the entry above — the lock was deleted rather than kept narrowed.**
+Retained because the narrowing rationale explains what is and is not worth guarding.
+
+
+**Amends the 2026-08-31 entry below.** That entry's "operative rules" list a guarded set including
+`package.json`, `package-lock.json`, `scripts/(check|validate|verify)-*`, and the proof/review
+runners. Those are **no longer guarded**. The rest of that entry — especially the CORRECTION that
+this is a speed bump and that the `ask` tier stays — is unchanged and still governs.
+
+**What was removed, and why.** Each dropped path was reachable a second way (`npm pkg set`, a
+swapped dependency, a rewritten validator), so guarding the *file* was never a boundary — it was a
+speed bump layered on a speed bump. Meanwhile they are the files ordinary work touches most, and the
+cost was concrete: `npm install` died, and a `package.json` merge conflict could not be resolved at
+all, because git's `>>>>>>>` markers parse as a shell redirect *into* the guarded file. The `ask`
+tier still gates native `Edit`/`Write` on `package.json`. What remains guarded is the set with no
+second path: hook files, hook registration and the permission manifests, `.husky/`, CI workflows,
+`.coderabbit.yaml`, and the lock's own unlock switch and unlock record.
+
+**Also fixed:** reading a guarded file through `Read`/`Glob`/`Grep`/`NotebookRead` is now allowed
+outright (`READ_ONLY_TOOL_NAMES`). The path scan had been judging any tool carrying a `file_path`,
+so a plain `Read` of a hook was denied by a guard whose own refusal text promised that reading was
+always fine. The refusal text also claimed "an agent shell cannot run" the unlock; that was
+disproved on 2026-08-31 and now reads as friction, not a boundary.
+
+**The finding that reframes the whole thing.** The lock **fails open** on a `SyntaxError` in its own
+rule book — the static `import` precedes the `try`/`catch`, so the process dies before `deny()`
+exists, emits nothing, and a PreToolUse hook that emits no decision is not a denial. Reproduced in
+isolation: exit 1, empty stdout. It fails *closed* on a runtime error, which is worse in a different
+way — it denies **every** tool call in the session, including the ones needed to repair it, and
+recovery took a shell command from Mason outside the agent. That happened twice in fifteen minutes
+during ordinary two-step edits. Full detail in `KNOWN_ISSUES.md` (2026-09-01).
+
+So the lock is strictest when healthy and silently inert when its rule book is malformed — which is
+the state tampering produces. Routing the load-time case into the `try` via dynamic `import()` only
+converts it into the lockout case.
+
+**OPEN — needs Mason's decision. Recommendation on the table: delete the lock.** Its only coverage
+the `ask` tier never had is shell/MCP writes to enforcement paths. But `review-proof-guard.mjs`
+already denies destructive shell writes anywhere under `.claude/` — verified live on 2026-09-01,
+where `echo test > .claude/hooks/zz-live-probe.tmp` was refused by the *proof guard*, not by this
+lock. The genuine residual is therefore only `.husky/`, `.github/workflows/`, `.codex/hooks/`, and
+`.coderabbit.yaml`, which could be added to an existing guard's deny list in a few lines — with no
+unlock ceremony, no self-protecting rule book, no fail-open surface, and no way to brick a session.
+Until Mason rules, the lock stays as narrowed and the `ask` tier remains the real gate.
+
+## 2026-08-31 — control files are LOCKED by a hook, superseding the 2026-08-25 `ask` tier
+
+**Supersedes item 3 of the 2026-08-25 entry below** ("Control-file edits move to the `ask` tier").
+That entry's protected set and its `Edit`/`Write` `ask` rules are replaced by a deterministic
+PreToolUse lock; do not restore them.
+
+Mason asked to stop being prompted for approval on file edits. Investigating that produced three
+findings, in order, and the third is the one that mattered:
+
+1. **The `ask` tier only ever covered `Edit` and `Write`.** `.claude/settings.json` also grants a
+   blanket `"Bash"`, so `sed -i` on a hook file, a `>` redirect over a manifest, or
+   `git checkout <rev> -- .claude/hooks/…` was never gated at all. CodeRabbit raised this as a
+   Major Security finding on PR #530 ("Gate Bash writes to enforcement paths"), and it is a real
+   PRE-EXISTING gap that PR #530 surfaced rather than introduced.
+2. **Removing the `ask` entries opened a two-step silent path.** Live `execute_sql`, live
+   `apply_migration`, and pushes are auto-allowed, so the hooks are their only protection — and
+   `review-proof-guard.mjs` deliberately permits ordinary hook/settings edits. An exact-SHA
+   `gpt-5.6-sol` review blocked PR #530's first commit HIGH for exactly this: weaken a guard, then
+   run the operation it gated, with no approval at either step. Keeping approval on the final
+   deploy/merge tools does not close it, because the guard can be weakened first.
+3. **`ask` semantics are mode-dependent, and one mode ignored them entirely.** As the 2026-08-25
+   entry records, under `defaultMode: "dontAsk"` an `ask` rule is an auto-DENY. But a session
+   running in bypass-permissions mode honours neither — during PR #530 the authoring agent edited
+   `.claude/settings.json` freely. A protection that evaporates in one mode is not a boundary.
+
+**Mason's decision, 2026-08-31 (revised the same evening — read the correction below before
+citing this entry).** Add `.claude/hooks/guarded-surface-lock.mjs` (rule book in
+`guarded-surface-lib.mjs`), which denies WRITES on every channel — Bash, native `Write`/`Edit`, MCP
+path fields, `apply_patch` destinations — in every permission mode including bypass mode. **Reads
+stay allowed**, unlike `review-proof-guard.mjs`'s deny-every-mention, because agents inspect hooks
+constantly during normal work.
+
+**CORRECTION, same evening: this is a speed bump, NOT a boundary — and the `ask` entries stay.**
+The lock was first built to replace the `ask` tier, on the premise that it could not be
+circumvented. Three rounds of exact-SHA `gpt-5.6-sol` review dismantled that premise, and the
+decisive one was reproduced directly rather than accepted on the reviewer's word: with the surface
+**locked**, a five-line script writing through node's `fs` created a file inside `.claude/hooks/`
+and the hook never fired. It inspects the ARGUMENTS OF TOOL CALLS; code that an agent writes and
+then runs performs its writes inside its own process, where no tool call exists to inspect. The TTY
+unlock is no stronger — a reviewer with PTY allocation can satisfy `isTTY`, and the confirmation
+phrase is a literal in the source.
+
+This is the same residual gap `review-proof-guard.mjs` already documents about itself: a
+string-matching guard over tool commands stops named and accidental writes, not a determined agent
+that hides the target from the command text.
+
+**Operative consequence:** the `ask` entries for these paths REMAIN. Removing them in favour of the
+lock would have been a net weakening, because under `dontAsk` an `ask` rule is a real denial for
+`Edit`/`Write` while the lock is bypassable. The lock is kept as defense in depth — it closes the
+CodeRabbit Major finding that blanket `Bash` was never gated on these paths at all, which no `ask`
+rule ever covered. Do not describe it as a boundary, and do not remove the `ask` tier on its
+strength. The durable boundary remains GitHub branch protection plus review, exactly as for the
+proof guard.
+
+**Operative rules:**
+
+- The guarded set is everything that can stop a guard running or change what it concludes — the
+  2026-08-25 list minus `AGENTS.md` and `CLAUDE.md` (prose advises, it does not enforce), plus
+  `package-lock.json`, `scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, and
+  the lock's own `guarded-surface-lib.mjs` and `scripts/guard-unlock.mjs` — without which the lock
+  would be decorative.
+- `node scripts/guard-unlock.mjs --minutes N` opens the lock for tool-call writes. It needs an
+  interactive TTY and a typed phrase, auto-expires (4h cap), reports `--status`, and closes early
+  with `--lock`. Treat it as a deliberate speed bump for the ordinary path, **not** proof that only
+  a human can open it: a PTY-capable agent can satisfy both conditions, and the phrase is a literal
+  in the source. Because the `ask` tier stays, this is not the only thing standing between an agent
+  and these files.
+- Shell read/write is split by a fail-closed allowlist of read-only command heads. An unlisted head
+  is a writer, so new verbs are denied without being enumerated — a blocklist reopens every time
+  someone learns one.
+- **This did not solve the complaint that prompted it.** The `ask` entries were never the source of
+  Mason's prompts (in his normal `dontAsk` sessions they were silent denials), so what is actually
+  prompting him remains unidentified — most likely individual hooks returning `ask`. Tracked as
+  open; do not assume PR #530 addressed it.
+- Known cost, accepted: changing a guard, a CI workflow, or a dependency now needs a deliberate
+  unlock first, on top of the `ask` tier that already applied.
+- **Do not treat a passing lock test suite as proof the lock holds.** It carried 166 green
+  assertions, had been observed blocking its own author mid-task, and still had a fatal hole; the
+  next review round found three more, and the round after that three more again. Self-written tests
+  encode the author's model of the threat. Guard work gets an independent adversarial pass before
+  anyone relies on it.
+
+Source: PR #530, `docs/changelog.d/2026-08-31-guarded-surface-lock.md`, and the two superseded
+entries in `docs/changelog.d/` from the same day.
+
 ## 2026-09-01 — Mason gets a manual review override on `main`; agents are locked out of it
 
 **Source:** Mason's in-chat request on 2026-09-01 ("add manual override as option in my github
