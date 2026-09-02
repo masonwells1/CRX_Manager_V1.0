@@ -110,7 +110,15 @@ function buildUpdateChain(
   return self;
 }
 
-vi.mock('../lib/db', () => {
+vi.mock('../lib/db', async () => {
+  // Use the REAL sanitizeError. A hand-written stub shaped
+  // `e instanceof Error ? e.message : …` re-implements the defect this PR fixes
+  // and would stay green against a fully regressed screen; a stub that just
+  // reads `.message` skips the redaction entirely, so schema-identifier leaks
+  // could not be caught here either.
+  const { sanitizeError } = await vi.importActual<typeof import('../lib/errorSanitizer')>(
+    '../lib/errorSanitizer',
+  );
   const hasRpcCode = (error: { message?: string }, code: string) => (
     error.message === code
     || error.message?.startsWith(`${code}:`) === true
@@ -138,7 +146,7 @@ vi.mock('../lib/db', () => {
         ? 'Your sign-in could not be verified. Refresh the page and try again.'
         : null
     ),
-    sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+    sanitizeError,
   };
 });
 
@@ -1250,6 +1258,10 @@ describe('QuoteBuilder', () => {
     // waits on the reason the server actually gave.
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'network response lost'));
     expect(mockSendEmail).not.toHaveBeenCalled();
+    // The message reaching the operator went through the REAL sanitizer, so a
+    // raw schema identifier could never have been passed along with it.
+    const shownHere = mockToast.mock.calls.map((c) => String(c[1])).join(' | ');
+    expect(shownHere).not.toMatch(/permission denied for|schema cache|relation "/i);
 
     fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
     await waitFor(() => expect(mockSendEmail).toHaveBeenCalledTimes(1));

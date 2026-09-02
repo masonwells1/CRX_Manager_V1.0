@@ -2607,7 +2607,11 @@ export default function JobDetail() {
         } else {
           toast('error', "This applicator's license has expired — an admin can override if needed.");
         }
-      } else if (err instanceof Error && err.message.includes('SHARE_NOT_100')) {
+      // `err instanceof Error && err.message.includes('SHARE_NOT_100')` was dead
+      // on arrival here: save_job's refusal arrives as a plain PostgREST object,
+      // so the guard never matched a real refusal and this friendly message never
+      // fired. hasRpcCode() reads object-shaped errors, so it now does.
+      } else if (hasRpcCode(err, RpcErrorCodes.SHARE_NOT_100)) {
         toast('error', "Each field's customer shares must total 100%.");
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_job' } });
