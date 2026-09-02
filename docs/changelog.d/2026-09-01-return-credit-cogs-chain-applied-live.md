@@ -35,7 +35,7 @@ Live ledger after the chain: 986 rows, `max(version)` `20260901184530`.
 
 Each migration was applied behind a migration-apply-guard proof — both reviewer charters returning
 CLEAN machine verdicts from `gpt-5.6-sol` at high reasoning — and each was verified
-afterwards by read-only live query rather than by the apply exit code: ledger row present, expected
+afterward by read-only live query rather than by the apply exit code: ledger row present, expected
 function bodies live, new CHECK constraints validated, grants unchanged
 (`anon`/`authenticated` cannot execute `_issue_return_credit_impl`; `service_role` can), and the
 barrier state at each step.

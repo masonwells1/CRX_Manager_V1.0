@@ -99,9 +99,11 @@ applied live in order. See the next paragraph for the current state.
 
 **PR #361 return-credit chain — APPLIED LIVE 2026-09-01.** All six migrations
 (`20260827041000` through `20260827041500`) are in the live ledger on `rhyzpcqhnizqbxphqdkr`,
-applied in order with Mason's in-chat approval. Each passed a full migration-apply-guard proof (both
-reviewer charters CLEAN from `gpt-5.6-sol`/high) and was verified afterwards by read-only live query,
-not by the apply exit code. The `aa_crx_block_return_credit_during_cogs_cutover` barrier installed by
+applied in order with Mason's in-chat approval. Each passed a migration-apply-guard proof (both
+reviewer charters CLEAN from `gpt-5.6-sol`/high) and was verified afterward by read-only live query,
+not by the apply exit code. The proofs record that both charters ran against the exact migration
+bytes; they do not establish that the evidence those reviewers received was complete, so the
+independent live verification is what carries the weight here. The `aa_crx_block_return_credit_during_cogs_cutover` barrier installed by
 the first migration was removed by the last (verified: trigger `0`, function `0`), so return-credit
 issuance is open again. `20260826220000_quote_version_restore_trust_boundary` was already applied
 (ledger `version` `20260827113443`) before the chain, so nothing was wedged. Live ledger: 986 rows,

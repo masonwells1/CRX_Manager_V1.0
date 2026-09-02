@@ -57,7 +57,7 @@ warehouse-unit mismatches. **RESOLVED 2026-09-01 — all six migrations are appl
 `20260827041500` contain the durable repair and fail closed if the zero-credit/zero-legacy-restock
 assumptions or either delivery-invoice implementation contract stop being true. Mason reopened the
 2026-08-31 deferral in-chat on 2026-09-01; the chain was applied in order, each behind a full
-migration-apply-guard proof, and each verified afterwards by read-only live query. The cutover
+migration-apply-guard proof, and each verified afterward by read-only live query. The cutover
 barrier installed by the first migration was removed by the last (verified: trigger `0`, function
 `0`). Do NOT restamp, re-review, or re-apply this chain — it is spent. Live ledger rows and
 per-migration apply versions are recorded in `docs/reference/migration-history.md`. What follows

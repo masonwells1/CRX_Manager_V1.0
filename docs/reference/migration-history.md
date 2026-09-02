@@ -47,7 +47,7 @@ from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`: **976 le
 **APPLIED LIVE — 2026-09-01. The 2026-08-31 owner deferral below is CLOSED, not pending.** All six
 migrations were applied in order to `rhyzpcqhnizqbxphqdkr` on 2026-09-01 with Mason's in-chat
 approval, each behind a full migration-apply-guard proof (both reviewer charters returning CLEAN
-machine verdicts from `gpt-5.6-sol`/high) and each verified afterwards by read-only live query
+machine verdicts from `gpt-5.6-sol`/high) and each verified afterward by read-only live query
 rather than by the apply exit code. Live ledger after the chain: **986 rows**, `max(version)`
 `20260901184530`.
 
