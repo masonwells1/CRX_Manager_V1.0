@@ -176,3 +176,47 @@ A null-tolerant refusal still truncates the body. Round 4 closed the one exploit
 that (a null actor backfilled from another caller-controlled parameter); the truncation itself is an
 accepted limit, because the form is the house pattern and refusing to credit it would return the
 sweep to ~31 rows. These predicates are over-broad heuristics, not proofs of safety.
+
+## Status: PARKED at round 5 — not merged
+
+PR #564 is pushed, green, and **left open**. Mason capped the review loop at one final round
+(2026-09-02); the round-5 exact-SHA `gpt-5.6-sol` proof on `b4f2b567a` returned **BLOCKERS**, so the
+branch parks rather than merges. Do not open a round 6 without a fresh decision from Mason.
+
+### Round-5 findings, and their disposition
+
+**HIGH — the null-tolerant truncation has more spellings than round 4 closed.** Round 4 added a
+whole-body arm for `coalesce(<actor>, p_*)`. Codex correctly notes that
+`CASE WHEN p_actor IS NULL THEN p_target_id ELSE p_actor END`, a quoted parameter, and a positional
+`$2` fallback all reach the same place and none is detected. **Real, and not fixed here.** It is also
+the shape of problem this repo has settled twice: enumerating spellings of a hazard reopens on the
+next spelling. Closing it properly means not truncating at a null-tolerant guard at all, which
+returns the sweep to ~31 rows, or real PL/pgSQL dataflow analysis, which the 2026-09-01 cap entry
+declined to fund. That is a scoping decision for Mason, not something to improvise.
+
+**HIGH — a credited refusal disables the raw dynamic-SQL arm.** Both raw-source arms are gated on
+*no* credited refusal, so `EXECUTE … set_config(…) USING <actor>` before an otherwise-sound
+`auth.uid()` comparison is invisible. **Real, and not fixed here.** The gate exists because an
+ungated raw arm reported `actor_safe_refusal_forward` — closing the false negative reopened a false
+positive. A correct fix needs the raw scan restricted to the pre-refusal region of the *raw* source,
+which the lexer's offsets do not currently carry across.
+
+**HIGH — "deletes approved money-risk tracking" is a FALSE POSITIVE.** `TODO.md` and
+`docs/changelog.d/2026-09-02-todo-pricing-preseason-test-deadline.md` were **added to `main` by
+PR #566 after this branch's last sync**; this branch never touched either file
+(`git log HEAD..origin/main` showed exactly that one commit). The stale base has since been merged
+in, so the finding cannot recur. This is the recurring "main moved" artifact, not a regression.
+
+### What this branch is worth as it stands
+
+Measured, not asserted. Against `main` it closes three inherited bypasses — including the one review
+thread PR #449 left open — and adds a real-PostgreSQL regression suite plus a Docker-free CI guard
+where there was none. It reports strictly *more* than `main` on the live catalog (21 rows vs 1,
+`cancel_delivery` included in both), so no routine `main` reports is cleared by it. The theoretical
+regression Codex raises against the base financial predicate — that accepting a prose refusal message
+could clear something the literal-matching version caught — does not appear on live code.
+
+### Recommended next step
+
+Merge or discard is Mason's call. If it merges, the two open findings above should be logged as
+tracked residuals rather than silently inherited.
