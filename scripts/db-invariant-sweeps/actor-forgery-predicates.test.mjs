@@ -746,6 +746,41 @@ BEGIN
 END;
 $body$;
 
+-- Round 4 HIGH. The null-tolerant guard passes trivially when the caller sends
+-- NULL, and the identity then falls through to p_target_id, which the caller also
+-- controls and which does NOT match the actor name pattern -- so it is not a
+-- candidate in its own right and nothing else reports it.
+--
+-- This is the canary for a finding that was DECLINED once, on the reasoning that
+-- the fallback value "would be its own candidate row". It would not. Must be
+-- REPORTED.
+CREATE FUNCTION public.actor_null_fallback_to_other_param(p_actor_source uuid, p_target_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid := auth.uid();
+BEGIN
+  IF p_actor_source IS NOT NULL AND p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id)
+  VALUES (coalesce(p_actor_source, p_target_id));
+END;
+$body$;
+
+-- The control that keeps the arm narrow: the SAFE house pattern, where the
+-- fallback is the caller identity rather than another parameter. Four live
+-- routines look like this. Must NOT be reported.
+CREATE FUNCTION public.actor_null_fallback_to_auth_uid(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid := auth.uid();
+BEGIN
+  IF p_actor_source IS NOT NULL AND p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id)
+  VALUES (coalesce(p_actor_source, auth.uid()));
+END;
+$body$;
+
 -- Round 3 P1. SELECT ... INTO is an assignment path the rebinding rule did not
 -- read: the canonical refusal passes, then the actor parameter is overwritten
 -- from a caller-controlled row before it reaches the sink. Recorded as an open
@@ -864,6 +899,9 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     // balancing the control-flow counts around an unreachable refusal.
     'actor_into_rebound_param_forward',
     'actor_quoted_identifier_block_spoof',
+    // Codex round 4: a null actor falling through to another caller-controlled
+    // parameter. Declined once, wrongly.
+    'actor_null_fallback_to_other_param',
   ]) {
     assert.ok(
       generalRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
@@ -885,6 +923,9 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_null_tolerant_refusal_forward',
     'actor_prose_message_refusal_forward',
     'actor_prefixed_message_refusal_forward',
+    // Keeps the round-4 arm narrow: falling back to the CALLER identity is the
+    // safe house pattern and must stay clear.
+    'actor_null_fallback_to_auth_uid',
   ]) {
     assert.ok(
       !generalRows.some((row) => row.startsWith(`${routine}(`)),

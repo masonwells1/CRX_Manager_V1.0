@@ -336,6 +336,17 @@ SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
 FROM analyzed
 WHERE lex_error OR
+      -- NULL-ACTOR FALLBACK TO ANOTHER CALLER-CONTROLLED PARAMETER (mirror of
+      -- actor-forgery.sql). Scanned over the WHOLE body, since the danger sits
+      -- after the credited guard. A null-tolerant refusal proves nothing when the
+      -- caller passes NULL, and `coalesce(p_user_id, p_target_id)` then stamps the
+      -- ledger from a parameter the caller also controls — one that does not match
+      -- the actor name pattern, so it is not a candidate in its own right.
+      -- Raised by the exact-SHA Codex review, declined once on reasoning that was
+      -- wrong, fixed here. Narrow by design: a fallback to another PARAMETER, not
+      -- every coalesce; `coalesce(p_performed_by, auth.uid())` stays clear.
+      executable_src ~* ('coalesce\s*\(\s*(\m' || argname_pattern || '\M|\$' || argument_position
+                         || '\M)\s*,\s*\mp_[[:alnum:]_$]') OR
       -- Reportable on its own, scoped to this predicate's audit-log remit: a
       -- routine that writes financial_audit_log AND overwrites its own actor
       -- parameter cannot be cleared by reading its refusal, and the value that

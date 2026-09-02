@@ -78,6 +78,12 @@ the three name-pattern collisions (`p_group_by` ×2, `p_signed_by`) reported bel
    every lexed arm), the financial predicate's dynamic-ledger-write arm, `INTO` treated as an
    assignment path, and quoted identifiers blanked before the control-flow balance is counted — the
    last being the one review thread that was still open on PR #449 itself.
+5. **A null actor backfilled from another parameter is reported**, after Codex round 4. Crediting a
+   null-tolerant refusal truncates the body, which is sound only while a NULL actor is harmless;
+   `coalesce(p_actor_source, p_target_id)` makes it harmful, and the fallback parameter does not
+   match the actor name pattern, so nothing else reports the routine. Narrow by design — the safe
+   house form `coalesce(p_performed_by, auth.uid())` stays clear, and zero live routines match, so
+   the live count is unchanged.
 
 Four performance changes were required to keep the sweep runnable at all; each is commented at its
 site. Removing the fixed literal removed the anchor that made most match attempts fail immediately,
@@ -98,7 +104,7 @@ and the predicate went from completing to timing out against the live catalog:
 
 - **Four ALLOW fixtures**, one per live guard style, pinned so a future tightening cannot silently
   retake the sweep from 1 row to 56.
-- **Twelve must-report fixtures added across the three review rounds.** The ones that matter most are
+- **Thirteen must-report fixtures added across the four review rounds.** The ones that matter most are
   the near-misses of rules this change newly accepts — a guard that *cannot fire*:
   `actor_notice_not_exception_forward` (compares correctly but only `RAISE NOTICE`),
   `actor_selfbound_declare_init_forward` (initializer bound to the *parameter*),
@@ -106,7 +112,10 @@ and the predicate went from completing to timing out against the live catalog:
   `actor_poisoned_local_before_refusal` (local overwritten after binding),
   `actor_null_tolerant_wrong_identity_forward` (compared against a random uuid),
   `actor_into_rebound_param_forward` (`INTO` as an assignment path), and
-  `actor_quoted_identifier_block_spoof` (`"END IF"` balancing the control-flow counts).
+  `actor_quoted_identifier_block_spoof` (`"END IF"` balancing the control-flow counts), and
+  `actor_null_fallback_to_other_param` (a NULL actor backfilled from another caller-controlled
+  parameter after a credited null-tolerant guard — declined in round 3 on reasoning that was wrong,
+  and fixed in round 4).
   Plus five restoring base coverage the lexer had removed: `actor_dynamic_audit_sink_only`,
   `actor_visible_probe_plus_dynamic_write`, `actor_text_cast_audit_forward`,
   `actor_text_role_lookup`, `actor_dynamic_role_authorization`.
@@ -160,5 +169,10 @@ actor parameter reaching a sink.
 
 This triage confirms the 56 reported rows are safe and the 21 that remain are safe. It does **not**
 re-audit the routines the predicates never report. The 2026-09-01 cap entry's residuals stand
-unchanged, the `INTO`-target rebinding form remains open and uncovered, and the three classes in the
-table above remain reported rather than resolved.
+unchanged except for the `INTO`-target rebinding form, which this change closes, and the three
+classes in the table above remain reported rather than resolved.
+
+A null-tolerant refusal still truncates the body. Round 4 closed the one exploitable consequence of
+that (a null actor backfilled from another caller-controlled parameter); the truncation itself is an
+accepted limit, because the form is the house pattern and refusing to credit it would return the
+sweep to ~31 rows. These predicates are over-broad heuristics, not proofs of safety.

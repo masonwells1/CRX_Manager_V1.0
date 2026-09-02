@@ -458,6 +458,34 @@ FROM analyzed
 -- track. Over-broad by design, like every other arm here -- allowlist the ones
 -- verified safe against live pg_get_functiondef.
 WHERE lex_error OR has_actor_rebinding OR
+      -- NULL-ACTOR FALLBACK TO ANOTHER CALLER-CONTROLLED PARAMETER.
+      --
+      -- Reportable on its own, and scanned over the WHOLE body rather than the
+      -- pre-refusal prefix, because the danger sits AFTER the guard.
+      --
+      -- A null-tolerant refusal (`p_x IS NOT NULL AND p_x IS DISTINCT FROM
+      -- v_actor`) is credited, and the body is then truncated at it. That is
+      -- sound only while a NULL actor is harmless. It is not harmless here:
+      --
+      --   coalesce(p_user_id, p_target_id)
+      --
+      -- With `p_user_id => NULL` the guard passes without proving anything and
+      -- the identity falls through to `p_target_id`, which the caller also
+      -- controls and which does NOT match the actor name pattern — so it is not
+      -- a candidate in its own right and nothing else reports it.
+      --
+      -- This was raised by the exact-SHA Codex review, DECLINED once on the
+      -- reasoning that such a value "would be its own candidate row", and that
+      -- reasoning was wrong: the fallback parameter is invisible to the name
+      -- pattern. Fixed rather than re-argued.
+      --
+      -- Deliberately narrow: it fires on a fallback to another PARAMETER, not on
+      -- every coalesce. `coalesce(p_performed_by, auth.uid())` is the safe house
+      -- pattern and stays clear. Measured live 2026-09-02 — ZERO routines
+      -- coalesce an actor with another parameter; FOUR use the auth.uid() form —
+      -- so this costs nothing today and exists to catch the shape if written.
+      executable_src ~* ('coalesce\s*\(\s*(\m' || argname_pattern || '\M|\$' || argument_position
+                         || '\M)\s*,\s*\mp_[[:alnum:]_$]') OR
       (pre_refusal_src ~* ('coalesce\s*\(\s*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
        OR pre_refusal_src ~* ('(\m' || argname_pattern || '\M|\$' || argument_position || '\M)\s*,\s*auth\.uid')
        OR pre_refusal_src ~* ('role[^;]{0,120}(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')
