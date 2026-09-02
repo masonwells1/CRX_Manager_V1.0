@@ -122,10 +122,15 @@ against it, and forcing the name would discard that local commit.
 **Republishing the branch is a separate, gated step.** Every branch in this ledger was deleted
 because it was superseded, contradicted by an owner decision, or broken, so recreating it on
 `origin` is not a neutral act — and under `AGENTS.md` no branch may be pushed until it has passed
-the full green pipeline. Get Mason's explicit approval first, then:
+the full green pipeline. Get Mason's explicit approval first, then push the **recovered** ref with
+an explicit refspec:
 
 ```bash
-git push -u origin <branch-name>
+# $name is the restore/<tag-name> branch created above -- the validated archive tip.
+# Naming the source ref explicitly matters: the original branch name does not exist
+# locally for most rows, and for row 8 it names a DIFFERENT commit (one ahead of what
+# was archived) that has not been through the pipeline.
+git push origin "refs/heads/$name:refs/heads/<remote-branch-name>"
 ```
 
 ## The 14 branches
