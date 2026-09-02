@@ -1552,6 +1552,27 @@ for (const [name, event] of [
   });
 }
 
+// Regression: an UNVERIFIABLE cleanup is not a clean one. If the lookup that
+// finds the posted command fails, a command may still be live; clearing the
+// dedupe marker there lets the next ready label post a SECOND paid command
+// beside it. Same distinction the comment-post recovery path draws.
+test('a reset whose command lookup fails preserves the dedupe marker', async () => {
+  const harness = makeHarness({
+    action: 'synchronize',
+    eventLabel: null,
+    pulls: [pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] })],
+    eventPullRequest: pullRequest({ head: NEXT_HEAD, labels: [READY_LABEL, REQUESTED_LABEL] }),
+    commentListFailuresAt: [1],
+  });
+  const result = await execute(harness);
+
+  assert.notEqual(result.status, 'reset', 'an unverified cleanup must not report a clean reset');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true, 'the dedupe marker must survive');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false, 'the ready label must still come off');
+  assert.match(harness.failures[0], /could not be fully reset/);
+  assert.match(harness.failures[0], /cannot buy a second review/);
+});
+
 test('a reset leaves comments that are not Actions-authored review commands alone', async () => {
   const harness = makeHarness({
     action: 'synchronize',

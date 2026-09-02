@@ -253,7 +253,19 @@ async function resetCandidate({
   //
   // Unconditional — a reset means the candidate is invalid, whether or not the
   // head moved. See deleteReviewCommands for why gating on the head was wrong.
-  await deleteReviewCommands({ github, owner, repo, pullNumber, core });
+  const cleanup = await deleteReviewCommands({ github, owner, repo, pullNumber, core });
+  if (!cleanup.verified) {
+    // A command may still be live and we cannot prove otherwise. Clearing the
+    // dedupe marker here would let the next ready label post a SECOND paid
+    // command beside it. Drop only the ready label, keep the marker, and fail
+    // loudly so an operator resolves it rather than a queued run papering over it.
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    core.setFailed(
+      `CodeRabbit final-review state could not be fully reset (${reason}): ${cleanup.reason}; `
+      + `${REQUESTED_LABEL} was preserved so a relabel cannot buy a second review.`,
+    );
+    return { status: 'blocked', reason: `${reason}; ${cleanup.reason}` };
+  }
   return resetLabels({ github, owner, repo, pullNumber, core, reason });
 }
 
@@ -403,8 +415,11 @@ function actionsReviewCommandHead(comment) {
 // candidate. Reaching this function means the candidate is invalid; a confirmed
 // duplicate returns `duplicate` from reconcileLabelEvent and never resets.
 //
-// Deliberately best-effort: a reset that cannot delete the comment must still
-// clear the labels, so failures warn rather than throw.
+// Reports `verified` so the caller can tell "there was nothing to delete" from
+// "I could not find out". Those are different states and must not share a
+// branch — the same distinction the comment-post recovery path draws. An
+// unverified cleanup that then cleared the dedupe marker would let the next
+// relabel post a SECOND paid command alongside a command that may still be live.
 async function deleteReviewCommands({
   github, owner, repo, pullNumber, core,
 }) {
@@ -416,10 +431,11 @@ async function deleteReviewCommands({
     );
   } catch (error) {
     core.warning(`Could not look for posted review commands: ${error.message}`);
-    return 0;
+    return { verified: false, deleted: 0, reason: `command lookup failed (${error.message})` };
   }
 
   let deleted = 0;
+  let failed = null;
   for (const comment of comments) {
     const head = actionsReviewCommandHead(comment);
     if (!head) continue;
@@ -428,10 +444,16 @@ async function deleteReviewCommands({
       deleted += 1;
       core.notice(`Deleted the posted CodeRabbit review command for ${head}.`);
     } catch (error) {
-      core.warning(`Could not delete the posted review command for ${head}: ${error.message}`);
+      // A command we found but could not remove is exactly as dangerous as one
+      // we never saw: it survives, and clearing the marker would let a relabel
+      // add a second one beside it.
+      failed = `could not delete the posted review command for ${head} (${error.message})`;
+      core.warning(failed);
     }
   }
-  return deleted;
+  return failed
+    ? { verified: false, deleted, reason: failed }
+    : { verified: true, deleted };
 }
 
 async function requestedMarkerHasCommand({ github, owner, repo, pullNumber, headSha }) {

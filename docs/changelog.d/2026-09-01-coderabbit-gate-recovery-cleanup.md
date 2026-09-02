@@ -116,9 +116,15 @@ authorship instead: only Actions-authored comments whose body exactly equals the
 body are removed, so human comments and a human-typed `@coderabbitai review` are untouched.
 
 Ordering is deliberate: the deletion runs BEFORE the labels are cleared, so a failed deletion leaves
-the marker intact (stale command, deduped) rather than cleared (stale command, re-reviewable). The
-deletion is best-effort and warns rather than throwing, because a reset that cannot delete the comment
-must still clear the labels.
+the marker intact (stale command, deduped) rather than cleared (stale command, re-reviewable).
+
+**An UNVERIFIABLE cleanup is not a clean one, and treating it as one was a third bug in this same
+fix.** If the lookup that finds the posted command fails — or a command is found but cannot be
+deleted — a command may still be live and the reset cannot prove otherwise. Clearing the dedupe
+marker there lets the next ready label post a **second** paid command beside it. `deleteReviewCommands`
+now reports `verified`, and an unverified cleanup drops only the ready label, **keeps the marker**,
+and fails loudly rather than reporting a clean `reset`. This is the same distinction the comment-post
+recovery path draws; it should have been applied here the first time.
 
 Six regression tests, mutation-proved together: one per reset kind that invalidates without a head
 change, one for the push case, and one asserting non-Actions comments survive. **One pre-existing
