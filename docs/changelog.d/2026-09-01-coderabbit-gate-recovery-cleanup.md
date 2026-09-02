@@ -38,6 +38,19 @@ Corrected in `AGENTS.md` and `.claude/skills/deploy-check/SKILL.md` (adapter reg
 since 2026-09-01 and that **no agent may act on that exemption**. Live state re-read before the edit:
 `enforce_admins=false approvals=1 dismiss_stale=true last_push=true strict=true`.
 
+### The bootstrap escape hatch made this PR unmergeable by construction
+
+Found by bringing the branch up to date, not by reading. The workflow's
+"the trusted script is legitimately absent from `main`" arm was pinned to a hardcoded
+`github.event.pull_request.base.sha`. `main` requires a pull request to be **up to date** before it
+can merge — so the base SHA necessarily changes before the merge, the pin necessarily stops matching,
+and `final-review-gate` fails closed. The PR could satisfy the review gate or the branch-currency
+gate, never both.
+
+Re-pinned to PR number + head ref + base ref, all stable for the life of this pull request. The arm
+is unreachable after the merge — the script is then on the default branch and the first test wins —
+and its failure mode is a no-op, never a privilege gain.
+
 ### Merge conflict
 
 `docs/manual/DECISION_LOG.md` conflicted on the newest-first prepend. Resolved by keeping both sides

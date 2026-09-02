@@ -57,7 +57,11 @@ function trustedGateDetectionScript() {
     .join('\n');
 }
 
-function executeTrustedGateDetection({ pullNumber, baseSha, scriptExists }) {
+const BOOTSTRAP_HEAD_REF = 'codex/coderabbit-ready-label-20260830';
+
+function executeTrustedGateDetection({
+  pullNumber, headRef = BOOTSTRAP_HEAD_REF, baseRef = 'main', scriptExists,
+}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'coderabbit-final-bootstrap-'));
   const output = path.join(root, 'github-output.txt');
   if (scriptExists) {
@@ -77,7 +81,8 @@ function executeTrustedGateDetection({ pullNumber, baseSha, scriptExists }) {
       env: {
         ...process.env,
         BOOTSTRAP_PR_NUMBER: String(pullNumber),
-        BOOTSTRAP_BASE_SHA: baseSha,
+        BOOTSTRAP_HEAD_REF: headRef,
+        BOOTSTRAP_BASE_REF: baseRef,
         GITHUB_OUTPUT: output,
       },
     });
@@ -90,27 +95,44 @@ function executeTrustedGateDetection({ pullNumber, baseSha, scriptExists }) {
   }
 }
 
-test('the workflow no-ops only for the immutable introducing-PR bootstrap', () => {
-  const result = executeTrustedGateDetection({
-    pullNumber: 516,
-    baseSha: '9c9d6d96ec3586eada89e6ab7fd3eba71109712d',
-    scriptExists: false,
-  });
+test('the workflow no-ops only for the introducing-PR bootstrap identity', () => {
+  const result = executeTrustedGateDetection({ pullNumber: 516, scriptExists: false });
 
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.gateOutput, /^available=false$/m);
+});
+
+// Regression: the identity was pinned to `github.event.pull_request.base.sha`.
+// `main` requires a PR to be up to date before it can merge, so that SHA MUST
+// change before the merge — the pin made this PR unmergeable by construction.
+// The bootstrap identity must not reference any base SHA at all.
+test('the bootstrap identity survives the base moving, and names no base SHA', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+  const job = workflow.slice(workflow.indexOf('  final-review-gate:'));
+  assert.doesNotMatch(job, /BOOTSTRAP_BASE_SHA/);
+  assert.doesNotMatch(job, /pull_request\.base\.sha/);
+  assert.doesNotMatch(job, /\b[0-9a-f]{40}\b/);
+
+  // The detection script reads only these, so a moved base cannot change it.
+  const result = executeTrustedGateDetection({ pullNumber: 516, scriptExists: false });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.gateOutput, /^available=false$/m);
 });
 
 test('the workflow fails closed if the trusted script is later absent', () => {
   const mismatchedIdentities = [
-    { pullNumber: 517, baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
-    { pullNumber: 516, baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
-    { pullNumber: 517, baseSha: '9c9d6d96ec3586eada89e6ab7fd3eba71109712d' },
+    { pullNumber: 517 },
+    { pullNumber: 516, headRef: 'codex/some-other-branch' },
+    { pullNumber: 516, baseRef: 'production' },
+    { pullNumber: 517, headRef: 'codex/some-other-branch', baseRef: 'production' },
   ];
 
   for (const identity of mismatchedIdentities) {
     const result = executeTrustedGateDetection({ ...identity, scriptExists: false });
-    assert.notEqual(result.status, 0);
+    assert.notEqual(result.status, 0, JSON.stringify(identity));
     assert.doesNotMatch(result.gateOutput, /^available=false$/m);
   }
 });
@@ -118,7 +140,7 @@ test('the workflow fails closed if the trusted script is later absent', () => {
 test('the workflow enforces the trusted script after it exists on the default branch', () => {
   const result = executeTrustedGateDetection({
     pullNumber: 517,
-    baseSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    headRef: 'codex/some-other-branch',
     scriptExists: true,
   });
 

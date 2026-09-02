@@ -37,13 +37,26 @@ jobs:
         shell: bash
         env:
           BOOTSTRAP_PR_NUMBER: ${{ github.event.pull_request.number }}
-          BOOTSTRAP_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BOOTSTRAP_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BOOTSTRAP_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
+          # The bootstrap identity must NOT be pinned to a base SHA. `main`
+          # requires a pull request to be up to date before it can merge, so the
+          # base SHA changes every time `main` moves — pinning it made this
+          # introducing PR unmergeable by construction, which is how the pin was
+          # found. PR number, head ref and base ref are all stable for the life
+          # of this pull request.
+          #
+          # This arm is unreachable after the merge: the script is then present
+          # on the default branch and the first test wins. Its failure mode is a
+          # no-op — no review requested — never a privilege gain.
           if [[ -f .github/scripts/coderabbit-final-review.cjs ]]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$BOOTSTRAP_PR_NUMBER" == "516" && "$BOOTSTRAP_BASE_SHA" == "9c9d6d96ec3586eada89e6ab7fd3eba71109712d" ]]; then
+          elif [[ "$BOOTSTRAP_PR_NUMBER" == "516" \
+                  && "$BOOTSTRAP_HEAD_REF" == "codex/coderabbit-ready-label-20260830" \
+                  && "$BOOTSTRAP_BASE_REF" == "main" ]]; then
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "Trusted gate script is absent only for the immutable PR #516 bootstrap; event is a no-op."
+            echo "Trusted gate script is absent only for the PR #516 bootstrap; event is a no-op."
           else
             echo "::error::Trusted default-branch gate script is missing outside the authorized bootstrap identity."
             exit 1
