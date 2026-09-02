@@ -441,7 +441,17 @@ comments. Surfaced by the 2026-08-31 documentation sweep (#529). Verified agains
 
 ---
 
-## OPEN 2026-09-01 — H5: a dead-end "Create invoice" button on split-billing orders, and one surface swallows the reason
+## RESOLVED 2026-09-02 — H5: a dead-end "Create invoice" button on split-billing orders, and one surface swallows the reason
+
+**Fixed 2026-09-02.** Both parts landed as a frontend-only change; no migration was needed. Part 1:
+all four `IntegrityCleanupPanel` catch blocks now use `sanitizeError()`, so the server's sentence
+reaches the operator instead of the literal `Backfill failed`. Part 2: the new shared predicate in
+`src/lib/deliverySplitBilling.ts` mirrors the server guard's OR (flag OR allocation rows) and both
+surfaces consume it, rendering the button disabled with the reason. `src/lib/deliverySplitBilling.test.ts`
+fails if either surface re-derives the rule locally. Details and the observed browser proof are in
+`docs/changelog.d/2026-09-02-h5-split-billing-invoice-button.md`. The diagnosis below is retained
+because it documents the postgrest-js error-shape trap, which applies to any non-throwing Supabase
+call.
 
 **Plain English.** An admin is offered a "Create invoice" button on a delivery whose order needs
 **split billing**, where it can never succeed. Nothing wrong is written — the database refuses
