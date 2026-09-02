@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { orderRequiresSplitBilling, SPLIT_BILLING_BLOCK_REASON } from './deliverySplitBilling';
 
@@ -40,22 +40,37 @@ describe('orderRequiresSplitBilling — mirrors ORDER_NEEDS_SPLIT_BILLING', () =
 });
 
 describe('the client predicate still matches the shipped server guard', () => {
-  const migration = readFileSync(
-    join(
-      process.cwd(),
-      'supabase/migrations/20260719024641_lock_backfill_split_allocation_rows.sql',
-    ),
-    'utf8',
-  );
+  // Codex review on PR #549 (P2): pinning to the immutable July migration made
+  // this test unfalsifiable. `create_invoice_for_unbilled_delivery` has been
+  // re-emitted at least twice since (20260817120000, 20260827041200), and an
+  // applied migration can never be edited — so a FORWARD migration could change
+  // the real guard while a test reading the old file stayed green, letting the
+  // client predicate drift and the dead-end button come back.
+  //
+  // Track the NEWEST emitter instead: any future re-emission automatically
+  // becomes the file under test.
+  const MIGRATIONS_DIR = join(process.cwd(), 'supabase/migrations');
 
-  it('the guard is an OR of the orders flag and an allocation EXISTS', () => {
-    // If this fails, the SERVER rule moved and the client mirror above is stale.
-    const guardIndex = migration.indexOf('ORDER_NEEDS_SPLIT_BILLING');
-    expect(guardIndex).toBeGreaterThan(-1);
-    const guardBlock = migration.slice(Math.max(0, guardIndex - 1200), guardIndex);
-    expect(guardBlock).toMatch(/COALESCE\(needs_split_billing,\s*false\)/);
-    expect(guardBlock).toMatch(/OR EXISTS/);
-    expect(guardBlock).toMatch(/FROM order_item_field_allocations/);
+  const emitters = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8').includes('ORDER_NEEDS_SPLIT_BILLING'))
+    .sort(); // migration filenames are timestamp-prefixed, so last === newest
+
+  it('at least one migration still emits the guard', () => {
+    // A zero-length list would make every assertion below vacuously pass.
+    expect(emitters.length).toBeGreaterThan(0);
+  });
+
+  it('the NEWEST emitter still ORs the orders flag with an allocation EXISTS', () => {
+    // If this fails, the SERVER rule moved and orderRequiresSplitBilling is stale.
+    const newest = emitters[emitters.length - 1];
+    const sql = readFileSync(join(MIGRATIONS_DIR, newest), 'utf8');
+    const guardIndex = sql.indexOf('ORDER_NEEDS_SPLIT_BILLING');
+    const guardBlock = sql.slice(Math.max(0, guardIndex - 1200), guardIndex);
+
+    expect(guardBlock, `newest emitter: ${newest}`).toMatch(/COALESCE\(needs_split_billing,\s*false\)/);
+    expect(guardBlock, `newest emitter: ${newest}`).toMatch(/OR EXISTS/);
+    expect(guardBlock, `newest emitter: ${newest}`).toMatch(/FROM order_item_field_allocations/);
   });
 });
 
