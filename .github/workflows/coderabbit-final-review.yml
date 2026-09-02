@@ -25,6 +25,19 @@ on:
 permissions:
   # Required by actions.getWorkflowRun to bind required checks to their trusted workflow.
   actions: read
+  # Required by repos.getCollaboratorPermissionLevel, which this gate calls to
+  # verify the actor who applied `ready-for-coderabbit` actually has write or
+  # admin on the repo. Without this scope that call 403s with "Resource not
+  # accessible by integration", the gate fails BEFORE it does anything, and it
+  # then cannot even clean up its own labels — so every PR in the repo shows a
+  # red final-review-gate and no review is ever requested (observed on #563 and
+  # #561, 2026-09-02, the hour after this workflow landed).
+  #
+  # Safe to grant here: read-only, and although pull_request_target is the
+  # privileged trigger, this job checks out ONLY the default branch with
+  # persist-credentials:false and never fetches or executes the pull request's
+  # code, so no untrusted code runs with this token.
+  administration: read
   checks: read
   contents: read
   issues: write
