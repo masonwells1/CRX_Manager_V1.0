@@ -324,12 +324,21 @@ eq(
 // approval deny, so it was unreachable for any PR without a formal approval —
 // caught by review, not by this suite, which is why the ordering is pinned here.
 const codexCheckAt = codexGuardSource.indexOf("the Codex GitHub App's own review");
-const codexApprovalAt = codexGuardSource.indexOf("if (!pullRequestApproved(pullRequest))");
+// The review-verdict deny is matched by EITHER predicate name. main's PR #560
+// migrated this gate from `!pullRequestApproved` to `pullRequestReviewBlocked`
+// while this branch was open; pinning one spelling would make the ordering test
+// silently stop testing ordering the next time the predicate is renamed, which
+// is the same class of decorative check this file exists to prevent.
+const codexVerdictMatch = codexGuardSource.match(
+  /if \((?:!pullRequestApproved\(pullRequest\)|pullRequestReviewBlocked\(pullRequest\))\)/,
+);
+ok(codexVerdictMatch, "the Codex guard still has a review-verdict deny to order against");
+const codexApprovalAt = codexVerdictMatch.index;
 const codexGreenAt = codexGuardSource.indexOf("if (!pullRequestChecksGreen(pullRequest))");
 ok(codexCheckAt > 0 && codexApprovalAt > 0 && codexGreenAt > 0, "all three Codex-guard gates are present to order");
 ok(
   codexCheckAt < codexApprovalAt,
-  "MUST RUN FIRST: the Codex guard's App-review check precedes its approval deny, or it is unreachable for unapproved PRs",
+  "MUST RUN FIRST: the Codex guard's App-review check precedes its review-verdict deny, or it is unreachable whenever that deny fires",
 );
 ok(
   codexCheckAt < codexGreenAt,

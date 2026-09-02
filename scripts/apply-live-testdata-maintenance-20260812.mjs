@@ -146,15 +146,28 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // pullRequestReviewBlocked (denies CHANGES_REQUESTED only) and reworded the
   // pullRequestApproved comment. Anchors unchanged; the transform is still
   // identity.
-  // codexGuard re-pinned 2026-09-02: the merge route gained the Codex GitHub
-  // App review check (unresolved App comments on the exact head block a merge),
-  // mirroring the same check added to pr-merge-guard.mjs. Anchors unchanged; the
-  // transform is still identity.
-  codexGuard: "fc7e744f3a07fdd984ffdca7696d13c739b684ad",
+  // codexGuard re-pinned 2026-09-02 (PR #559, Codex Medium): the Codex-side merge
+  // gate was migrated off pullRequestApproved onto pullRequestReviewBlocked so it
+  // matches the Claude side after main's required review was removed. The
+  // objection check is deliberately NOT exempt for --auto (Codex High, same run).
+  // codexGuard re-pinned again 2026-09-02 (PR #560, CodeRabbit): the guard now
+  // IMPORTS pullRequestReviewBlocked from .claude/hooks/codex-push-lib.mjs
+  // instead of mirroring it locally. Mirroring is what let the two sides drift.
+  // codexGuard re-pinned again 2026-09-02 (PR #563, merge of origin/main): BOTH
+  // sides moved this file and neither pin survives. This branch added the Codex
+  // GitHub App review check to the merge route; main (#560) migrated the
+  // objection predicate underneath it. The reconciliation keeps both — the App
+  // check runs FIRST (it was unreachable behind the old approval deny, which is
+  // what this branch's third commit fixed) and main's pullRequestReviewBlocked
+  // follows it. Ordering is pinned by tests in codex-bot-review-lib.test.mjs so
+  // the reachability bug cannot return. Anchors unchanged; transform identity.
+  // Values below come from the producer test's printed candidate, never
+  // hand-computed — that is the sanctioned re-pin procedure.
+  codexGuard: "6a5ce81ec4b0021f83b8f7096694461c66c4e150",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "c003879a0d3cd213a6aeb51146d63c740b9d31c7",
+  codexGuard: "c1748ffa041f34267f2efa4a9d41ae2fe8c76485",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

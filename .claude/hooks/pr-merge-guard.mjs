@@ -197,9 +197,14 @@ function gateRequest(request) {
   // Mason removed main's required-approval rule on 2026-09-02, so a MISSING
   // approval is no longer a blocker here. An ACTIVE objection still is: merging
   // over CHANGES_REQUESTED throws away a review that already found something.
-  // `--auto` is exempt because GitHub holds an auto-merge until its own
-  // requirements are satisfied.
-  if (!request.auto && pullRequestReviewBlocked(pr)) {
+  // **This check must NEVER be exempt for `--auto`** (Codex High, 2026-09-02).
+  // Every other gate here exempts auto-merge because GitHub holds the merge until
+  // its own requirements are met — but the requirement that used to cover this one
+  // was main's required review, and THIS CHANGE removed it. With no required
+  // review, GitHub will happily complete a queued auto-merge on a PR carrying
+  // CHANGES_REQUESTED, so an auto exemption here would be a live hole opened by
+  // the very commit that removed the server-side floor. Deny regardless of auto.
+  if (pullRequestReviewBlocked(pr)) {
     deny(
       "PR MERGE GATE: GitHub reports reviewDecision=CHANGES_REQUESTED — a reviewer has open objections on " +
       "this pull request. Removing main's required-approval rule did not authorize merging over a review " +

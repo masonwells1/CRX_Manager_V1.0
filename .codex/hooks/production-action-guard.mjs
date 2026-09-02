@@ -13,6 +13,7 @@ import {
   mainPushSource,
   proofSearchDirs,
   proofValid,
+  pullRequestReviewBlocked,
   pushContextIsAmbiguous,
   pushIsForced,
   pushTargetsCurrentHead,
@@ -718,12 +719,18 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     );
   }
 
-  if (!pullRequestApproved(pullRequest)) {
+  // Main's PR #560 migrated this gate from "no approval" to "an active
+  // objection", matching the Claude side. Taking main's predicate: the denial
+  // text below already describes CHANGES_REQUESTED, so keeping !approved here
+  // would guard a message that does not match its condition. The App-review
+  // block above stays ahead of it — that ordering is the point of this PR, and
+  // it is pinned by tests in codex-bot-review-lib.test.mjs.
+  if (pullRequestReviewBlocked(pullRequest)) {
     return denied(
-      `CODEX PRODUCTION GATE: GitHub reports reviewDecision=${String(pullRequest.reviewDecision || "").toUpperCase() || "<none>"} — ` +
-      "this pull request has no current approval and main requires one. Since 2026-09-01 the administrator " +
-      "override that could skip the review is Mason's to use by hand, not an agent's. Get a real approval " +
-      "(`@coderabbitai review`, fix its findings, merge once it approves), or hand the PR to Mason and say why."
+      "CODEX PRODUCTION GATE: GitHub reports reviewDecision=CHANGES_REQUESTED — a reviewer has open " +
+      "objections on this pull request. Mason removed main's required-approval rule on 2026-09-02, which " +
+      "did not authorize merging over a review that asked for changes. Fix every real finding and push it; " +
+      "a genuine nitpick may be dismissed with a one-line reason in the thread. Merge only after that."
     );
   }
   if (!pullRequestChecksGreen(pullRequest)) {
