@@ -46,20 +46,28 @@ operations, and recorded 978 ledger rows with ordering high-water `2026082622000
 the "re-read the ledger before any apply" instruction no longer apply — the apply has happened.** No
 unrelated issue entry was re-read; its own dated evidence remains authoritative.
 
-**OPEN — return credits do not reverse COGS until the PR 361 rebuild is applied.** Live
-`_issue_return_credit_impl` still creates only the credit-memo header and writes no
+**RESOLVED 2026-09-01 — return credits now reverse COGS; the PR 361 rebuild is applied live.**
+`_issue_return_credit_impl` builds negative credit-memo lines carrying `invoice_items.cost_cents`
+against the recognized source lots, and invoice-basis PNL and monthly reporting both recognize
+`posted`, `overdue`, and `paid`. Production had zero credited returns throughout, so the defect was
+latent and never produced a wrong report.
+
+The pre-apply description is retained below for provenance and **no longer describes live
+behavior**: _Live `_issue_return_credit_impl` still creates only the credit-memo header and writes no
 `invoice_items.cost_cents`; live PNL still recognizes only `posted`, and monthly reporting still
 omits `paid`. Production currently has zero credited returns, so the defect is real but latent rather
-than an existing wrong report. A 2026-08-27 read-only check found one open restock row: it is exactly
+than an existing wrong report._ A 2026-08-27 read-only check found one open restock row: it is exactly
 the pinned legacy `15 ea` RMA with the authoritative `2.5 Gal` conversion, leaving zero unhandled
-warehouse-unit mismatches. Pre-apply candidates `20260827041000`, `20260827041100`,
-`20260827041200`, `20260827041300`, `20260827041400`, and `20260827041500` contain the durable
-repair and fail closed if the zero-credit/zero-legacy-restock assumptions or either delivery-invoice
-implementation contract stop being true. Do not call this resolved: all six migrations remain
-unapplied and have not been verified live. Mason deferred their production rollout on 2026-08-31: the
-source files remain unchanged under `supabase/migrations/`, but they still need a separately
-authorized future push/apply. Rerun the then-current safety gates; if newer migrations have overtaken
-their timestamps, restamp and re-review the full pinned chain before applying all six files in order
+warehouse-unit mismatches. **RESOLVED 2026-09-01 — all six migrations are applied live.**
+`20260827041000`, `20260827041100`, `20260827041200`, `20260827041300`, `20260827041400`, and
+`20260827041500` contain the durable repair and fail closed if the zero-credit/zero-legacy-restock
+assumptions or either delivery-invoice implementation contract stop being true. Mason reopened the
+2026-08-31 deferral in-chat on 2026-09-01; the chain was applied in order, each behind a full
+migration-apply-guard proof, and each verified afterward by read-only live query. The cutover
+barrier installed by the first migration was removed by the last (verified: trigger `0`, function
+`0`). Do NOT restamp, re-review, or re-apply this chain — it is spent. Live ledger rows and
+per-migration apply versions are recorded in `docs/reference/migration-history.md`. What follows
+described the pre-apply state and is kept for provenance
 through the repository's guarded migration runner or the Supabase migration operation, never through
 the ad-hoc SQL channel.
 The first migration blocks new return-credit issuance until the second migration's postflight succeeds,
@@ -433,7 +441,17 @@ comments. Surfaced by the 2026-08-31 documentation sweep (#529). Verified agains
 
 ---
 
-## OPEN 2026-09-01 — H5: a dead-end "Create invoice" button on split-billing orders, and one surface swallows the reason
+## RESOLVED 2026-09-02 — H5: a dead-end "Create invoice" button on split-billing orders, and one surface swallows the reason
+
+**Fixed 2026-09-02.** Both parts landed as a frontend-only change; no migration was needed. Part 1:
+all four `IntegrityCleanupPanel` catch blocks now use `sanitizeError()`, so the server's sentence
+reaches the operator instead of the literal `Backfill failed`. Part 2: the new shared predicate in
+`src/lib/deliverySplitBilling.ts` mirrors the server guard's OR (flag OR allocation rows) and both
+surfaces consume it, rendering the button disabled with the reason. `src/lib/deliverySplitBilling.test.ts`
+fails if either surface re-derives the rule locally. Details and the observed browser proof are in
+`docs/changelog.d/2026-09-02-h5-split-billing-invoice-button.md`. The diagnosis below is retained
+because it documents the postgrest-js error-shape trap, which applies to any non-throwing Supabase
+call.
 
 **Plain English.** An admin is offered a "Create invoice" button on a delivery whose order needs
 **split billing**, where it can never succeed. Nothing wrong is written — the database refuses
@@ -483,11 +501,18 @@ by the 2026-08-31 documentation sweep (#529). Verified against `main` at `85266c
 
 ## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
 
-**Apply-order dependency with the PR #361 successor:** the merged-but-unapplied
-`20260826220000_quote_version_restore_trust_boundary.sql` must apply before the six pending
-`20260827041000`–`20260827041500` return-credit migrations. Reversing that order would move the
-high-water past the quote security migration and wedge it again. If the quote migration cannot apply
-first, it must be renumbered above the new high-water before either chain is released.
+**Apply-order dependency with the PR #361 successor — SATISFIED, nothing wedged.**
+`20260826220000_quote_version_restore_trust_boundary` was already applied (ledger `version`
+`20260827113443`) before any of the `20260827041000`–`20260827041500` return-credit migrations went
+in on 2026-09-01, confirmed by read-only live query that day. The required order was preserved, the
+pending-set guard permitted each apply correctly, and no renumbering was needed. The original warning
+below described the state as of 2026-08-25 and no longer applies:
+
+> the merged-but-unapplied `20260826220000_quote_version_restore_trust_boundary.sql` must apply
+> before the six pending `20260827041000`–`20260827041500` return-credit migrations. Reversing that
+> order would move the high-water past the quote security migration and wedge it again. If the quote
+> migration cannot apply first, it must be renumbered above the new high-water before either chain is
+> released.
 
 **Non-restocked return policy:** damaged or otherwise non-restocked returns still refund the customer,
 but intentionally reverse zero COGS because no saleable inventory value returned to Crop RX. This is
