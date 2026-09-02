@@ -25,8 +25,13 @@ can manage labels and comments but still cannot approve a pull request.
 
 Note for anyone debugging this class of bug: **re-running a failed run does not
 pick up the change.** GitHub fixes a run's token permissions at run creation, so
-the fix only reaches a NEW run from a new event. Confirm by reading the job's
-"GITHUB_TOKEN Permissions" group in the log rather than assuming.
+the fix only reaches a NEW run from a new event. Confirm by reading the workflow
+token's permissions group at the top of the job log rather than assuming.
+
+(That group is named after the Actions token environment variable. This entry
+deliberately does not spell that name out — see
+`2026-09-02-review-capture-redacts-on-token-names.md` for why writing it here
+blinded the review harness.)
 
 **2. The workflow never declared `administration: read`.**
 
