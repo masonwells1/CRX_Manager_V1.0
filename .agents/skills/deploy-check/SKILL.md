@@ -140,12 +140,14 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    restart required checks,
    rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy, freeze and record the
    new SHA, and apply the ready label for one follow-up review. Never use `@coderabbitai resume`, and reserve
-   `@coderabbitai full review` for a deliberately justified complete reread. GitHub requires one
-   current formal approval and dismisses it after a new commit. Before merge, verify live `main`
-   protection still requires a current branch, current approval with stale-review dismissal, and
-   last-push approval; administrators are deliberately exempt since 2026-09-01 and no agent may act
-   on that exemption. Require the marker SHA, authenticated CodeRabbit approval
-   `commit_id`, and final `headRefOid` to match; recheck every reported check and auto-merge OFF.
+   `@coderabbitai full review` for a deliberately justified complete reread. An approving GitHub
+   review is **NOT** required to merge: Mason removed `required_pull_request_reviews` from `main`
+   on 2026-09-02, so CI is the merge gate. A `CHANGES_REQUESTED` verdict still blocks, and both
+   agent merge gates refuse to merge over one. Before merge, verify live `main` protection still
+   requires a current branch and every required check green; `enforce_admins` is off and no agent
+   may act on that exemption. Confirm CodeRabbit actually reviewed the frozen candidate, and when
+   it HAS approved, require the marker SHA, that authenticated approval's `commit_id`, and the
+   final `headRefOid` to match; recheck every reported check and auto-merge OFF.
    Ordinary green CodeRabbit or generic Actions status rows are insufficient. A separate exact-SHA
    `gpt-5.6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration
    diffs — both run, neither replaces the other.
