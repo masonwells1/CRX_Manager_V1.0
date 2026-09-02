@@ -128,7 +128,10 @@ got=$(git rev-parse "refs/crx-restore/$tag^{commit}")
 # pick a name that is free; several of these branches still exist locally (see row 8)
 name="restore/$tag"
 git show-ref --verify --quiet "refs/heads/$name" && { printf '%s already exists; choose another\n' "$name" >&2; exit 1; }
-git switch -c "$name" "refs/crx-restore/$tag"
+
+# create from the VALIDATED OID, not from refs/crx-restore/$tag. That scratch ref is an
+# ordinary local ref and can be moved between the check above and this line; $expected cannot.
+git switch -c "$name" "$expected"
 ```
 
 The recovery branch is deliberately **not** given the original branch name. Row 8 records a local
@@ -141,18 +144,42 @@ because it was superseded, contradicted by an owner decision, or broken, so recr
 the full green pipeline. Get Mason's explicit approval first, then push the **recovered** ref with
 an explicit refspec:
 
+**This block re-declares `expected` on purpose. Do not delete those two lines.** It runs after an
+approval wait, so it is normally a *different shell* from the restore block above, where `expected`
+was set. If it is empty here, `"$expected:refs/heads/<name>"` expands to `":refs/heads/<name>"` —
+and an empty source refspec is how Git spells **delete that remote branch**. The step meant to
+restore a branch would destroy it instead. The guard below makes that unrepresentable.
+
 ```bash
-# Source the validated OID LITERALLY. A SHA cannot move; every ref here can.
-# refs/heads/$name is a branch, so anyone can commit onto it after validation.
-# refs/crx-restore/$tag is an ordinary local ref -- the force-fetch above is
-# itself proof it can be rewritten -- so it is no safer as a source than $name.
-# Naming $expected binds the push to the exact commit checked against the table.
-git push origin "$expected:refs/heads/<remote-branch-name>"
+repo="masonwells1/CRX_Manager_V1.0"
+expected="<Tip OID from the table below>"   # re-enter it here; do not rely on the earlier shell
+branch="<remote-branch-name>"
+
+# fail closed on an unset/short/non-hex value rather than pushing an empty refspec
+case "$expected" in
+  *[!0-9a-f]* | "") printf 'expected is not a hex OID: %s\n' "$expected" >&2; exit 1 ;;
+esac
+[ "${#expected}" -eq 40 ] || { printf 'expected is not a full 40-char OID\n' >&2; exit 1; }
+
+# the destination must NOT already exist -- these branches were deleted
+if gh api "repos/$repo/git/ref/heads/$branch" >/dev/null 2>&1; then
+  printf '%s already exists on origin; stop and re-read the ledger\n' "$branch" >&2; exit 1
+fi
+
+git push origin "$expected:refs/heads/$branch"
 ```
 
 Do not substitute the original branch name as the source ref. It does not exist locally for most
 rows, and for row 8 it names a **different** commit — one ahead of what was archived, and never
 through the pipeline.
+
+**The destination check is not atomic, and this is the same limitation as the deletion step.** If
+another actor recreates `$branch` between the existence check and the push, Git will fast-forward it
+to `$expected` rather than refusing. A `--force-with-lease` expected-old-value lease would close
+that, and **this repository's guards refuse that command** — the same refusal recorded at the top of
+this document. So the honest position is: the window exists, it is small, and the correct response to
+a surprise is to stop, not to reach for the denied command. Say what the procedure does not
+guarantee rather than implying a lease it cannot take.
 
 ## The 14 branches
 
@@ -167,7 +194,7 @@ Every row was re-verified on 2026-09-01 immediately before deletion:
 
 | # | Branch | Tip OID | Last commit | Tag | Why it goes |
 |---|---|---|---|---|---|
-| 1 | `claude/restrict-draw-down-owner` | `13e4c7b14f38f31dc550e09f55ebe111fbf1cbc0` | 2026-08-14 | `archive/2026-09-01/restrict-draw-down-owner` | Contradicted by the owner decision `## 2026-08-16 — Any sales rep may draw down any customer's booking` in `DECISION_LOG.md` |
+| 1 | `claude/restrict-draw-down-owner` | `13e4c7b14f38f31dc550e09f55ebe111fbf1cbc0` | 2026-08-14 | `archive/2026-09-01/restrict-draw-down-owner` | Contradicted by the owner decision `## 2026-08-16 — Any sales rep may draw down any customer's booking` in `docs/manual/DECISION_LOG.md` |
 | 2 | `claude/pr401-proof` | `9b2d86a5401af8e869b6f8bd10cd3d4a433eb458` | 2026-08-25 | `archive/2026-09-01/pr401-proof` | Superseded by `20260826220000`, applied live |
 | 3 | `claude/pr401-quote-version-trust-8e3db6` | `510a16121e6cb5f44128669d827a989edc0305ea` | 2026-08-26 | `archive/2026-09-01/pr401-quote-version-trust` | Same successor; descendant of row 2 |
 | 4 | `claude/wave-a-migrations-857dcd` | `3bfd6271caae17a28b82647d3f34bf6c52964eb5` | 2026-08-12 | `archive/2026-09-01/wave-a-migrations` | All 4 authored migrations have staged successors on `main` |
@@ -191,9 +218,14 @@ Row numbering follows the disposition plan. **Row 11 is deliberately absent** �
 > not as pending work. After Codex reviewed the follow-up plan for the 28 closed/merged-PR branches
 > and found that five of them held commits existing **only** in local checkouts — which tagging a
 > remote tip does not preserve — Mason declined the remaining deletions: the upside was tidiness and
-> the downside was losing work. The remaining branches stay. The inventory in
-> `docs/audits/2026-09-01-closed-pr-branch-disposition-plan.md` and the rescue of orphaned documents
-> to `main` were the parts worth keeping. **Do not reopen the deletion plan without a new reason.**
+> the downside was losing work. The remaining branches stay. The inventory of those 28 branches and
+> the rescue of orphaned documents to `main` were the parts worth keeping.
+> **Do not reopen the deletion plan without a new reason.**
+>
+> That inventory is **not on `main`**: it is `docs/audits/2026-09-01-closed-pr-branch-disposition-plan.md`
+> on the unmerged branch `claude/closed-pr-branch-disposition`, and it is not cited as a landed
+> artifact here because a reader on `main` cannot open it. Its own proposal section is superseded by
+> the decision recorded above.
 
 | Branch | Why it is excluded |
 |---|---|

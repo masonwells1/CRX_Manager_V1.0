@@ -71,5 +71,11 @@ Verified after the sweep: zero of the 14 remain, and the tags still resolve on `
 that lane is handed off. `claude/pr364-guard-commits-local-20260831` is protected while a separate
 session works PR #364; its "stranded commits" finding was **withdrawn** — `main` is strictly stronger
 on that guard and re-applying them would regress it — but the branch has never been enumerated for
-incidental value. The 28 branches whose PRs closed or merged are adjudicated separately in
-`docs/audits/2026-09-01-closed-pr-branch-disposition-plan.md`.
+incidental value.
+
+The 28 branches whose PRs closed or merged were inventoried separately and then **left in place**:
+Mason declined further deletions on 2026-09-02 after review found five of them holding commits that
+exist only in local checkouts, which tagging a remote tip does not preserve. That inventory is not on
+`main` — it is `docs/audits/2026-09-01-closed-pr-branch-disposition-plan.md` on the unmerged branch
+`claude/closed-pr-branch-disposition` — so it is named here as a pointer, not cited as a landed
+record.
