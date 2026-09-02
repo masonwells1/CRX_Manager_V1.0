@@ -149,9 +149,13 @@ Row numbering follows the disposition plan. **Row 11 is deliberately absent** �
 
 ## Not in this sweep
 
-> **No further deletion pass is planned (Mason, 2026-09-02).** Read the "becomes eligible" and "may
-> be considered" wording below as describing the conditions that *were* attached to these two rows,
-> not as pending work. After Codex reviewed the follow-up plan for the 28 closed/merged-PR branches
+> **No further deletion pass is planned (Mason, 2026-09-02).** Earlier revisions of the two rows
+> below carried conditional wording — one said to hand its lane off "before it becomes eligible", the
+> other that the branch "may be considered" once enumerated — which read as deletion pending a
+> trigger. **Both conditions are void**, and the rows now state their real status directly: `HOLD`
+> and `NEVER DELETE`. Nothing below is waiting on a trigger.
+>
+> After Codex reviewed the follow-up plan for the 28 closed/merged-PR branches
 > and found that five of them held commits existing **only** in local checkouts — which tagging a
 > remote tip does not preserve — Mason declined the remaining deletions: the upside was tidiness and
 > the downside was losing work. The remaining branches stay. The inventory of those 28 branches and

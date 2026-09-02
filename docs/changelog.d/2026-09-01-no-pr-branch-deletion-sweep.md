@@ -47,8 +47,11 @@ that gets past it.
 
 What ran instead: per branch, serially, read the current tip with `git ls-remote origin`, compare it
 to the ledger, and delete through the GitHub ref API only on an exact match. That is a branch
-deletion rather than a history rewrite. It is **not atomic**: there is a sub-second window between
-check and delete, and the ledger says so rather than claiming compare-and-swap.
+deletion rather than a history rewrite. It is **not atomic**, and the gap is **not bounded**: a person
+read the two OIDs and compared them by eye before issuing a separate API call, so the interval
+between check and delete is however long that took. An earlier draft called it sub-second, which
+understated the exposure and contradicted the very next paragraph. The ledger says so rather than
+claiming compare-and-swap.
 
 Two weaknesses in that are recorded rather than hidden: reading through `origin` while deleting
 through a hardcoded repository path means a differently-configured `origin` could validate one
