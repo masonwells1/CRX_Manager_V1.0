@@ -69,7 +69,20 @@ describe('the client predicate still matches the shipped server guard', () => {
   // look, whereas a silent pass ships the dead-end button back to admins.
   const MIGRATIONS_DIR = join(process.cwd(), 'supabase/migrations');
 
-  const FUNCTION_EMITTER = /CREATE\s+OR\s+REPLACE\s+FUNCTION[^;]*create_invoice_for_unbilled_delivery/i;
+  // Codex round 3 (PR #550, P2): requiring `OR REPLACE` missed an ESTABLISHED
+  // repo pattern — 20260721014858_20260721010000_govern_invoice_order_money_lifecycle.sql
+  // and 20260721145936_require_money_lifecycle_idempotency_keys.sql both DROP and
+  // recreate this function with a plain `CREATE FUNCTION`. A future migration doing
+  // the same would be skipped, and the selector would validate stale SQL again.
+  //
+  // `OR REPLACE` is optional, the schema qualifier is optional, and the identifier
+  // is anchored directly after FUNCTION (not `[^;]*`, which could stray across an
+  // unrelated definition) with prefix/suffix wildcards so both the public wrapper
+  // and any versioned impl — today `_create_invoice_for_unbilled_delivery_impl_20260718`,
+  // tomorrow a renamed one — are matched. The trailing `(` keeps this to real
+  // definitions rather than GRANT/COMMENT/DROP lines naming the same function.
+  const FUNCTION_EMITTER =
+    /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?[a-z0-9_]*create_invoice_for_unbilled_delivery[a-z0-9_]*\s*\(/i;
 
   const emitters = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
@@ -79,6 +92,15 @@ describe('the client predicate still matches the shipped server guard', () => {
   it('at least one migration still emits create_invoice_for_unbilled_delivery', () => {
     // A zero-length list would make every assertion below vacuously pass.
     expect(emitters.length).toBeGreaterThan(0);
+  });
+
+  it('picks up BOTH declaration forms, not just CREATE OR REPLACE', () => {
+    // Regression guard for Codex round 3: these two migrations DROP and recreate
+    // the function with a plain `CREATE FUNCTION`. If someone re-tightens the
+    // selector to require `OR REPLACE`, these drop out of the emitter list and a
+    // future plain re-creation could once again go unnoticed.
+    expect(emitters).toContain('20260721014858_20260721010000_govern_invoice_order_money_lifecycle.sql');
+    expect(emitters).toContain('20260721145936_require_money_lifecycle_idempotency_keys.sql');
   });
 
   it('the NEWEST function emitter still ORs the orders flag with an allocation EXISTS', () => {
