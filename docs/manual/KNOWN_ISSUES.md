@@ -52,14 +52,16 @@ unrelated issue entry was re-read; its own dated evidence remains authoritative.
 omits `paid`. Production currently has zero credited returns, so the defect is real but latent rather
 than an existing wrong report. A 2026-08-27 read-only check found one open restock row: it is exactly
 the pinned legacy `15 ea` RMA with the authoritative `2.5 Gal` conversion, leaving zero unhandled
-warehouse-unit mismatches. Pre-apply candidates `20260827041000`, `20260827041100`,
-`20260827041200`, `20260827041300`, `20260827041400`, and `20260827041500` contain the durable
-repair and fail closed if the zero-credit/zero-legacy-restock assumptions or either delivery-invoice
-implementation contract stop being true. Do not call this resolved: all six migrations remain
-unapplied and have not been verified live. Mason deferred their production rollout on 2026-08-31: the
-source files remain unchanged under `supabase/migrations/`, but they still need a separately
-authorized future push/apply. Rerun the then-current safety gates; if newer migrations have overtaken
-their timestamps, restamp and re-review the full pinned chain before applying all six files in order
+warehouse-unit mismatches. **RESOLVED 2026-09-01 — all six migrations are applied live.**
+`20260827041000`, `20260827041100`, `20260827041200`, `20260827041300`, `20260827041400`, and
+`20260827041500` contain the durable repair and fail closed if the zero-credit/zero-legacy-restock
+assumptions or either delivery-invoice implementation contract stop being true. Mason reopened the
+2026-08-31 deferral in-chat on 2026-09-01; the chain was applied in order, each behind a full
+migration-apply-guard proof, and each verified afterwards by read-only live query. The cutover
+barrier installed by the first migration was removed by the last (verified: trigger `0`, function
+`0`). Do NOT restamp, re-review, or re-apply this chain — it is spent. Live ledger rows and
+per-migration apply versions are recorded in `docs/reference/migration-history.md`. What follows
+described the pre-apply state and is kept for provenance
 through the repository's guarded migration runner or the Supabase migration operation, never through
 the ad-hoc SQL channel.
 The first migration blocks new return-credit issuance until the second migration's postflight succeeds,
@@ -450,11 +452,18 @@ by the 2026-08-31 documentation sweep (#529). Verified against `main` at `85266c
 
 ## OPEN 2026-08-26 — the quote-version trust chain is whole-body hash-pinned in THREE files; any re-emission must update every pin site in the same change
 
-**Apply-order dependency with the PR #361 successor:** the merged-but-unapplied
-`20260826220000_quote_version_restore_trust_boundary.sql` must apply before the six pending
-`20260827041000`–`20260827041500` return-credit migrations. Reversing that order would move the
-high-water past the quote security migration and wedge it again. If the quote migration cannot apply
-first, it must be renumbered above the new high-water before either chain is released.
+**Apply-order dependency with the PR #361 successor — SATISFIED, nothing wedged.**
+`20260826220000_quote_version_restore_trust_boundary` was already applied (ledger `version`
+`20260827113443`) before any of the `20260827041000`–`20260827041500` return-credit migrations went
+in on 2026-09-01, confirmed by read-only live query that day. The required order was preserved, the
+pending-set guard permitted each apply correctly, and no renumbering was needed. The original warning
+below described the state as of 2026-08-25 and no longer applies:
+
+> the merged-but-unapplied `20260826220000_quote_version_restore_trust_boundary.sql` must apply
+> before the six pending `20260827041000`–`20260827041500` return-credit migrations. Reversing that
+> order would move the high-water past the quote security migration and wedge it again. If the quote
+> migration cannot apply first, it must be renumbered above the new high-water before either chain is
+> released.
 
 **Non-restocked return policy:** damaged or otherwise non-restocked returns still refund the customer,
 but intentionally reverse zero COGS because no saleable inventory value returned to Crop RX. This is
