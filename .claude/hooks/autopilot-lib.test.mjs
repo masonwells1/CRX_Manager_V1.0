@@ -57,6 +57,15 @@ eq(overnightGateDecision("mcp__x__deploy_edge_function", {}), "deny-until-armed"
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }), "allow-through", "arm command passes");
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --off" }), "allow-through", "disarm command passes");
 eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs" }), "allow-through", "bare arm invocation passes");
+// Codex (exact-SHA review 2026-09-01) caught that the first anchor BROKE two
+// documented commands. Hardening that silently removes a working command is a
+// regression, not a win. `--status` is read-only and is exactly what a paused
+// agent should be able to run; `--hours` is clamped to [0.25, 24] in the CLI, so
+// fractional values are legitimate.
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --status" }), "allow-through", "documented read-only --status must not be blocked");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.5" }), "allow-through", "fractional --hours is a documented value");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.25" }), "allow-through", "the CLI's minimum --hours passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --status && npm run build" }), "deny-until-armed", "--status still cannot carry a chained command");
 eq(overnightGateDecision("PowerShell", { command: "node .claude\\hooks\\autopilot-arm.mjs --hours 8" }), "allow-through", "Windows path separator passes");
 // CodeRabbit (PR #548): a bare substring test let the arm allowance ride on a
 // chained command, so the OTHER half ran during the pause. Anchored now.

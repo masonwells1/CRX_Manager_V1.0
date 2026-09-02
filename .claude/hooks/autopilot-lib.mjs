@@ -127,11 +127,20 @@ const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|work
 // .claude/hooks/autopilot-arm.mjs --hours 8` returned allow-through, so the BUILD
 // ran during the pause and the arm was merely along for the ride (CodeRabbit,
 // PR #548). Anchored start-to-end with no shell metacharacters admitted, so a
-// prefix, a suffix, or a chain cannot ride it. Only the two documented forms —
-// `--hours <n>` and `--off` — and the bare invocation are accepted; either path
-// separator is allowed because PowerShell spells it with a backslash.
+// prefix, a suffix, or a chain cannot ride it. Either path separator is allowed
+// because PowerShell spells it with a backslash.
+//
+// The accepted arguments are exactly what autopilot-arm.mjs documents at its head:
+// a bare invocation, `--hours <n>`, `--off`, and `--status`. A first draft of this
+// anchor admitted only integer `--hours` and omitted `--status` entirely, which
+// BROKE two documented commands — `--status` is read-only and is precisely what a
+// paused agent should be able to run to see whether autopilot is armed (Codex
+// gpt-5.6-sol, exact-SHA review 2026-09-01: "blocks the CLI's documented read-only
+// --status command and fractional --hours values"). Hardening that quietly removes
+// a working command is a regression, not a win. `--hours` is clamped to
+// [0.25, 24] in the CLI, so fractional values are legitimate.
 const ARM_CMD_RE =
-  /^\s*node\s+(?:\.[\\/])?\.claude[\\/]hooks[\\/]autopilot-arm\.mjs(?:\s+--hours\s+\d{1,4}|\s+--off)?\s*$/;
+  /^\s*node\s+(?:\.[\\/])?\.claude[\\/]hooks[\\/]autopilot-arm\.mjs(?:\s+--hours\s+\d{1,4}(?:\.\d{1,4})?|\s+--off|\s+--status)?\s*$/;
 
 export function isSanctionedArmCommand(command) {
   return ARM_CMD_RE.test(String(command ?? ""));
