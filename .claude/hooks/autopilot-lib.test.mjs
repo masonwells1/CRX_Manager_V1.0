@@ -75,6 +75,13 @@ eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mj
 // the deny message and autopilot-arm.mjs's own header document.
 eq(overnightGateDecision("PowerShell", { command: "node .claude\\hooks\\autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "the Windows backslash spelling is not accepted (one canonical shape)");
 eq(overnightGateDecision("PowerShell", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "PowerShell uses the same forward-slash spelling");
+// Horizontal whitespace only: `\s` matches CR/LF, which are shell separators.
+// Not exploitable here (the end anchor blocks an appended command), but the same
+// mistake produced a real bypass in review-proof-guard's cd scanner (Codex, Low).
+eq(overnightGateDecision("Bash", { command: "node\n.claude/hooks/autopilot-arm.mjs --off" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a newline between tokens is not the documented command");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs\n--off" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a newline before the flag is not the documented command");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --off\nnpm run build" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a newline-appended second command is refused");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --off\r\nnpm run build" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "CRLF-appended second command is refused");
 // CodeRabbit (PR #548): a bare substring test let the arm allowance ride on a
 // chained command, so the OTHER half ran during the pause. Anchored now.
 eq(overnightGateDecision("Bash", { command: "npm run build && node .claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "PROVEN BYPASS: a build BEFORE the arm command must not ride it");

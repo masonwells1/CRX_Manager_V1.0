@@ -142,6 +142,15 @@ const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|work
 // autopilot-arm.mjs's own header document, so this costs nothing: one canonical
 // shape, one slot to reason about.
 //
+// HORIZONTAL whitespace only (`[^\S\r\n]`, not `\s`). `\s` matches CR and LF,
+// which are shell command separators, so the anchor accepted multiline commands
+// (Codex gpt-5.6-sol, 2026-09-02, Low). The end anchor stops a second command from
+// being appended — `--off\nnpm run build` fails `[^\S\r\n]*$` — so this was not
+// exploitable, but the same `\s`-swallows-newlines mistake DID produce a real
+// bypass in review-proof-guard's cd scanner, where two invocations merged into
+// one. That guard uses `[^\S\r\n]` for exactly this reason; match it here rather
+// than rely on the anchors holding forever.
+//
 // The accepted arguments are exactly what autopilot-arm.mjs documents at its head:
 // a bare invocation, `--hours <n>`, `--off`, and `--status`. A first draft of this
 // anchor admitted only integer `--hours` and omitted `--status` entirely, which
@@ -152,7 +161,7 @@ const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|work
 // a working command is a regression, not a win. `--hours` is clamped to
 // [0.25, 24] in the CLI, so fractional values are legitimate.
 const ARM_CMD_RE =
-  /^\s*node\s+(?:\.\/)?\.claude\/hooks\/autopilot-arm\.mjs(?:\s+--hours\s+\d{1,4}(?:\.\d{1,4})?|\s+--off|\s+--status)?\s*$/;
+  /^[^\S\r\n]*node[^\S\r\n]+(?:\.\/)?\.claude\/hooks\/autopilot-arm\.mjs(?:[^\S\r\n]+--hours[^\S\r\n]+\d{1,4}(?:\.\d{1,4})?|[^\S\r\n]+--off|[^\S\r\n]+--status)?[^\S\r\n]*$/;
 
 // The relative path in ARM_CMD_RE resolves against the SHELL'S working directory,
 // not the repo. Matching the text alone therefore proves nothing about WHICH file
