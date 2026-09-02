@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PhoneCall } from 'lucide-react';
-import { assertRpcResult, hasRpcCode, RpcErrorCodes, supabase } from '../../lib/db';
+import { sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
@@ -94,7 +94,7 @@ export default function LogInteractionModal({ open, onClose, customerId, userId,
         return;
       }
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'LogInteractionModal.save' } });
-      toast('error', error instanceof Error ? error.message : 'Failed to log interaction');
+      toast('error', sanitizeError(error));
     } finally { setSaving(false); }
   };
   const chips = <T extends string>(options: T[], value: T | null, onChange: (item: T) => void) => <div className="flex flex-wrap gap-2">{options.map((item) => <button type="button" key={item} onClick={() => onChange(item)} className={`min-h-11 rounded-lg px-3 text-sm capitalize ${value === item ? 'bg-crx-green text-white' : 'border border-gray-200 text-secondary'}`}>{item.replace(/_/g, ' ')}</button>)}</div>;
