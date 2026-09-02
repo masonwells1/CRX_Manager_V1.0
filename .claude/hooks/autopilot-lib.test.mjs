@@ -54,8 +54,82 @@ eq(overnightGateDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "deny-unti
 eq(overnightGateDecision("Bash", { command: "git add -A && git commit -m x" }), "deny-until-armed", "commit blocked until armed");
 eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "allow-through", "sql passes even before arm (Mason 2026-07-10)");
 eq(overnightGateDecision("mcp__x__deploy_edge_function", {}), "deny-until-armed", "deploy still blocked until armed");
-eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }), "allow-through", "arm command passes");
-eq(overnightGateDecision("Bash", { command: "rm .claude/session-state/OVERNIGHT-INTENT.flag" }), "allow-through", "clearing intent flag passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "arm command passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --off" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "disarm command passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "bare arm invocation passes");
+// Codex (exact-SHA review 2026-09-01) caught that the first anchor BROKE two
+// documented commands. Hardening that silently removes a working command is a
+// regression, not a win. `--status` is read-only and is exactly what a paused
+// agent should be able to run; `--hours` is clamped to [0.25, 24] in the CLI, so
+// fractional values are legitimate.
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --status" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "documented read-only --status must not be blocked");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.5" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "fractional --hours is a documented value");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 0.25" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "the CLI's minimum --hours passes");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --status && npm run build" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "--status still cannot carry a chained command");
+// Forward slashes are the ONLY accepted spelling. CI (Linux) caught the earlier
+// backslash support as a real cross-platform bug: `\` is not a separator there, so
+// `.claude\hooks\autopilot-arm.mjs` is one filename that never resolves to the
+// trusted path. Normalizing would be worse — on Linux that literal filename is
+// creatable, so normalizing would match it against the trusted path while Node ran
+// the wrong file. Node accepts forward slashes on Windows, and that is the spelling
+// the deny message and autopilot-arm.mjs's own header document.
+eq(overnightGateDecision("PowerShell", { command: "node .claude\\hooks\\autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "the Windows backslash spelling is not accepted (one canonical shape)");
+eq(overnightGateDecision("PowerShell", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "PowerShell uses the same forward-slash spelling");
+// Horizontal whitespace only: `\s` matches CR/LF, which are shell separators.
+// Not exploitable here (the end anchor blocks an appended command), but the same
+// mistake produced a real bypass in review-proof-guard's cd scanner (Codex, Low).
+eq(overnightGateDecision("Bash", { command: "node\n.claude/hooks/autopilot-arm.mjs --off" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a newline between tokens is not the documented command");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs\n--off" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a newline before the flag is not the documented command");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --off\nnpm run build" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a newline-appended second command is refused");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --off\r\nnpm run build" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "CRLF-appended second command is refused");
+// CodeRabbit (PR #548): a bare substring test let the arm allowance ride on a
+// chained command, so the OTHER half ran during the pause. Anchored now.
+eq(overnightGateDecision("Bash", { command: "npm run build && node .claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "PROVEN BYPASS: a build BEFORE the arm command must not ride it");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 && npm run build" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a build AFTER the arm command must not ride it");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8; rm -rf src" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a semicolon-chained command must not ride it");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 | tee x" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a pipe must not ride it");
+eq(overnightGateDecision("Bash", { command: "echo autopilot-arm.mjs > x.txt" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "merely naming the arm script does not unlock");
+eq(overnightGateDecision("Bash", { command: "node attacker/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "a planted same-basename arm script does not unlock");
+eq(overnightGateDecision("Bash", { command: "node .claude/hooks/autopilot-arm.mjs --hours 8 --sneaky" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "an unknown extra flag is not the documented form");
+// THE cwd-BINDING CASE (Codex gpt-5.6-sol, exact-SHA review 2026-09-02, HIGH).
+// The command text alone proves nothing about WHICH file runs: a relative path
+// resolves against the shell's directory. From a directory containing a planted
+// .claude/hooks/autopilot-arm.mjs, the byte-identical sanctioned command would
+// execute attacker JavaScript during the pause, past every tool-call guard.
+// The allowance is bound to the trusted project root, so the SAME command text
+// is allowed from the repo and denied from anywhere else.
+const ARM8 = "node .claude/hooks/autopilot-arm.mjs --hours 8";
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo", cwd: "/repo" }), "allow-through", "the arm command is allowed FROM the trusted root");
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo", cwd: "/tmp/attacker" }), "deny-until-armed", "PROVEN BYPASS: the identical command from a planted cwd must be denied");
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo", cwd: "/repo/subdir" }), "deny-until-armed", "even a repo SUBDIR resolves to a different file, so it is denied");
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo" }), "deny-until-armed", "fails closed when the cwd is unknown");
+eq(overnightGateDecision("Bash", { command: ARM8 }, { cwd: "/repo" }), "deny-until-armed", "fails closed when the trusted root is unknown");
+eq(overnightGateDecision("Bash", { command: ARM8 }), "deny-until-armed", "fails closed with no context at all");
+// An ABSOLUTE path is not an accepted form at all — the documented spelling is
+// repo-relative, and one accepted shape means one slot to reason about. Both of
+// these are denied regardless of where they point.
+eq(overnightGateDecision("Bash", { command: "node /repo/.claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "an absolute path is not the documented form, even to the real script");
+eq(overnightGateDecision("Bash", { command: "node /evil/.claude/hooks/autopilot-arm.mjs --hours 8" }, { projectDir: "/repo", cwd: "/repo" }), "deny-until-armed", "an absolute path to a DIFFERENT script is denied");
+// Traversal that lands back on the trusted file is fine; traversal that escapes is not.
+eq(overnightGateDecision("Bash", { command: ARM8 }, { projectDir: "/repo", cwd: "/repo/x/.." }), "allow-through", "a cwd that normalizes to the root is allowed");
+// There is deliberately NO shell escape from the latch (Mason, 2026-09-01).
+//
+// This assertion used to say "allow-through" and passed for months while the real
+// stack denied the command: this gate is one of seven PreToolUse hooks, and
+// review-proof-guard (matcher "*") refuses any destructive shell command touching
+// .claude/session-state. That false green is why the deny message advertised a
+// remedy nobody could run. A sanctioned `node scripts/clear-overnight-intent.mjs`
+// escape was then built and REMOVED: two rounds of exact-SHA gpt-5.6-sol review
+// found four HIGH bypasses (basename-only matching, then an exact-string allowance
+// still unbound to the project root, plus a helper editable before invocation).
+// Every fix was another text rule over a command string — the shape this repo has
+// proven does not converge. The 45-minute expiry is the remedy; see
+// overnight-intent-clear.test.mjs, which holds the deny message to that contract.
+eq(overnightGateDecision("Bash", { command: "rm .claude/session-state/OVERNIGHT-INTENT.flag" }), "deny-until-armed", "rm form is NOT an escape hatch (review-proof-guard denies it downstream too)");
+eq(overnightGateDecision("Bash", { command: "node scripts/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "the removed clear-script escape must NOT be reintroduced");
+eq(overnightGateDecision("Bash", { command: "node attacker/clear-overnight-intent.mjs --not-a-hands-free-run" }), "deny-until-armed", "a planted same-basename script is gated like anything else");
+// The arm command stays the one command allowance, and it is the ONLY one.
+eq(overnightGateDecision("Bash", { command: "npm run build" }), "deny-until-armed", "ordinary building still waits for the arm");
 eq(overnightGateDecision("Bash", { command: "git status" }), "allow-through", "git status passes");
 // Codex 2026-07-05 P2: read-only leading token + write redirect must NOT pass
 eq(overnightGateDecision("Bash", { command: "cat src/a.ts > src/b.ts" }), "deny-until-armed", "cat with redirect blocked until armed");
