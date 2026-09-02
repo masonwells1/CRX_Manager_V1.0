@@ -244,8 +244,17 @@ async function resetLabels({ github, owner, repo, pullNumber, core, reason }) {
 }
 
 async function resetCandidate({
-  github, owner, repo, pullNumber, core, reason,
+  github, owner, repo, pullNumber, core, reason, currentHeadSha,
 }) {
+  // Clear the superseded command BEFORE the labels. If the deletion is going to
+  // fail it fails while the gate state still says "requested", which is the
+  // safer order: a stale command with its marker intact is deduped, a stale
+  // command with the marker already cleared can be re-reviewed.
+  if (currentHeadSha) {
+    await deleteSupersededCommands({
+      github, owner, repo, pullNumber, currentHeadSha, core,
+    });
+  }
   return resetLabels({ github, owner, repo, pullNumber, core, reason });
 }
 
@@ -368,6 +377,55 @@ function reviewCommandBody(headSha) {
 function isActionsReviewComment(comment, headSha) {
   return normalize(comment.user?.login) === normalize(ACTIONS_BOT_LOGIN)
     && String(comment.body || '').trim() === reviewCommandBody(headSha);
+}
+
+// An Actions-authored review command for ANY head, not one specific head. Used
+// only to find SUPERSEDED commands during a reset — never to credit one.
+function actionsReviewCommandHead(comment) {
+  if (normalize(comment.user?.login) !== normalize(ACTIONS_BOT_LOGIN)) return null;
+  const body = String(comment.body || '').trim();
+  const match = body.match(/<!-- coderabbit-final-review-head:([0-9a-f]{40}) -->$/i);
+  if (!match) return null;
+  // Exact-equality re-check against the canonical body: the marker alone must
+  // never be enough to identify a command we will delete.
+  return body === reviewCommandBody(match[1]) ? match[1] : null;
+}
+
+// A reset invalidates the candidate, but a command already posted for the OLD
+// head stays on the PR and CodeRabbit can still spend a review on it. Clearing
+// the labels is not enough — the superseded command has to go too.
+//
+// Deliberately best-effort: a reset that cannot delete the comment must still
+// clear the labels, so failures warn rather than throw. Only commands for a head
+// that is NOT the current one are deleted, so a reset can never remove the
+// command belonging to a still-valid candidate.
+async function deleteSupersededCommands({
+  github, owner, repo, pullNumber, currentHeadSha, core,
+}) {
+  let comments;
+  try {
+    comments = await github.paginate(
+      github.rest.issues.listComments,
+      { owner, repo, issue_number: pullNumber, per_page: 100 },
+    );
+  } catch (error) {
+    core.warning(`Could not look for superseded review commands: ${error.message}`);
+    return 0;
+  }
+
+  let deleted = 0;
+  for (const comment of comments) {
+    const head = actionsReviewCommandHead(comment);
+    if (!head || head === currentHeadSha) continue;
+    try {
+      await github.rest.issues.deleteComment({ owner, repo, comment_id: comment.id });
+      deleted += 1;
+      core.notice(`Deleted a superseded CodeRabbit review command for ${head}.`);
+    } catch (error) {
+      core.warning(`Could not delete the superseded review command for ${head}: ${error.message}`);
+    }
+  }
+  return deleted;
 }
 
 async function requestedMarkerHasCommand({ github, owner, repo, pullNumber, headSha }) {
@@ -534,6 +592,11 @@ async function runGate({ github, context, core, config, attemptState }) {
         : requestedLabelRemoved
           ? 'pull_request_target.unlabeled.requested_marker'
           : `pull_request_target.${action}`,
+      // The push path. A `synchronize` queued behind a finished request run
+      // reaches here AFTER that run's post-comment cleanup window has closed, so
+      // this is the only place left that can remove the old-head command the
+      // push invalidated.
+      currentHeadSha: context.payload.pull_request.head.sha,
     });
   }
 

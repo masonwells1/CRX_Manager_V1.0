@@ -72,12 +72,20 @@ candidate. A property test asserts every shared reason still surfaces, so a futu
 that drops or weakens a condition fails the suite rather than silently letting one path accept what
 the other rejects.
 
-### Three stale claims about administrator enforcement
+### Three administrator-enforcement checks THIS BRANCH introduced, now removed
 
-Three, not two: `.claude/commands/ship.md` carried the same instruction and was missed on the first
-sweep. It is the worst place for it — every `/ship` run reaching the merge step would verify a rule
-that is deliberately off, so a policy-compliant agent would block **every** otherwise-ready landing.
-Corrected, adapter regenerated. (Found by Codex, correctly, as a P1.)
+**Corrected 2026-09-02.** An earlier draft called these "stale claims" that went stale while the
+branch sat. They are not on `main` and were not at the merge base — this PR introduced all three in
+`9ad9e128`, and `4eb7cfdd` removed them. Verified with `git show origin/main:<path>` for each file.
+See `2026-09-01-unblock-ship-administrator-check.md` for the full correction; the short version is
+that this PR prevents a regression it created rather than fixing a live one, and nothing on `main` is
+affected.
+
+Three files, not two: `.claude/commands/ship.md` carried the same instruction and was missed on the
+first sweep. It was the worst place for it — every `/ship` run reaching the merge step would have
+verified a rule that is deliberately off, so once this PR merged a policy-compliant agent would have
+blocked **every** otherwise-ready landing. Corrected, adapter regenerated. (Found by Codex,
+correctly, as a P1.)
 
 This branch froze on 2026-08-30. On 2026-09-01 Mason took the manual review override, which set
 `enforce_admins: false` on `main`'s classic protection. Two of this branch's own sentences instructed
@@ -89,6 +97,20 @@ Corrected in `AGENTS.md` and `.claude/skills/deploy-check/SKILL.md` (adapter reg
 `node scripts/sync-agent-workflows.mjs --write`) to state that administrators are deliberately exempt
 since 2026-09-01 and that **no agent may act on that exemption**. Live state re-read before the edit:
 `enforce_admins=false approvals=1 dismiss_stale=true last_push=true strict=true`.
+
+### A push reset left the superseded command on the PR (Codex P2)
+
+A `synchronize` queued behind a **finished** request run reaches the reset after that run's
+post-comment cleanup window has closed. Clearing the labels was therefore not enough: the command
+posted for the old head stayed on the pull request, and CodeRabbit could still spend a review on the
+candidate the push had already invalidated. The reset now deletes any Actions-authored command whose
+embedded head is not the current one — and only those, so a still-valid candidate's command survives.
+
+Ordering is deliberate: the deletion runs BEFORE the labels are cleared, so a failed deletion leaves
+the marker intact (stale command, deduped) rather than cleared (stale command, re-reviewable). The
+deletion is best-effort and warns rather than throwing, because a reset that cannot delete the comment
+must still clear the labels. Two regression tests — one that the old-head command is deleted, one that
+a current-head command is not — each mutation-proved separately.
 
 ### Cancelling a request could still spend the review (Codex CRX-002)
 

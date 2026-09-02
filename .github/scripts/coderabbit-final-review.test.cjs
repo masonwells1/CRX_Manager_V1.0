@@ -1488,6 +1488,49 @@ test('removing the ready label during the quiet period cancels the review reques
   assert.match(harness.failures[0], /ready-for-coderabbit is no longer attached/);
 });
 
+// Regression: a `synchronize` queued behind a FINISHED request run reaches the
+// reset after that run's post-comment cleanup window has closed, so clearing the
+// labels was not enough — the command posted for the old head stayed on the PR
+// and CodeRabbit could still spend a review on the invalidated candidate.
+test('a push reset deletes the superseded old-head command', async () => {
+  const harness = makeHarness({
+    action: 'synchronize',
+    eventLabel: null,
+    pulls: [pullRequest({ head: NEXT_HEAD, labels: [REQUESTED_LABEL] })],
+    eventPullRequest: pullRequest({ head: NEXT_HEAD, labels: [REQUESTED_LABEL] }),
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'reset');
+  assert.deepEqual(harness.comments, [], 'the old-head command must be deleted, not just unlabelled');
+  assert.equal(harness.liveLabels.size, 0);
+});
+
+test('a push reset never deletes a command for the CURRENT head', async () => {
+  const harness = makeHarness({
+    action: 'synchronize',
+    eventLabel: null,
+    pulls: [pullRequest({ labels: [REQUESTED_LABEL] })],
+    eventPullRequest: pullRequest({ labels: [REQUESTED_LABEL] }),
+    existingComments: [{
+      id: 99,
+      body: reviewCommandBody(HEAD),
+      created_at: new Date().toISOString(),
+      user: { login: 'github-actions[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'reset');
+  assert.equal(harness.comments.length, 1, 'a current-head command must survive the reset');
+});
+
 // Regression: workflow runs QUEUE rather than cancel, so a maintainer removing
 // the requested marker to abort an in-flight request would still have had the
 // command posted before the queued reset ran — spending a review that was
