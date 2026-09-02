@@ -91,8 +91,56 @@ function normalize(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
 }
 
+// Resolve `.` and `..` segments and unify separators WITHOUT touching disk, so
+// a protected path cannot be spelled around.
+//
+// Codex HIGH, PR #563 round 2: `.claude/hooks/codex-bot-review-lib.mjs` was
+// blocked while `.claude/hooks/../hooks/codex-bot-review-lib.mjs` — the same
+// file, confirmed with Resolve-Path — was ALLOWED, through Write, a realistic
+// apply_patch payload, and PowerShell. The matcher compared raw strings, so any
+// dot-segment detour defeated it. This was never specific to the module that
+// review was about: every entry in PROTECTED_HARNESS_SOURCE had the same hole.
+//
+// Purely textual on purpose. The guard must reach the same verdict whether or
+// not the path exists yet, and a filesystem resolve would also follow symlinks
+// into a different answer than the one the tool will actually write to.
+export function canonicalizeGuardPath(value) {
+  const raw = String(value || "").trim().replace(/\\/g, "/");
+  if (!raw) return "";
+  const drive = /^[A-Za-z]:\//.exec(raw)?.[0] || "";
+  const rooted = drive !== "" || raw.startsWith("/");
+  const segments = [];
+  for (const segment of (drive ? raw.slice(drive.length) : raw).split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      // Above a rooted path there is nowhere to go, so drop it. In a relative
+      // path a leading `..` is meaningful and is kept.
+      if (segments.length > 0 && segments[segments.length - 1] !== "..") segments.pop();
+      else if (!rooted) segments.push("..");
+      continue;
+    }
+    segments.push(segment);
+  }
+  return (drive || (rooted ? "/" : "")) + segments.join("/");
+}
+
 function protectedHarnessPathMentioned(value) {
-  return PROTECTED_HARNESS_PATH_RE.test(String(value || "").trim());
+  const raw = String(value || "").trim();
+  // Test the raw spelling first so behaviour is unchanged for ordinary paths,
+  // then the canonical one so detours cannot buy a different answer.
+  return PROTECTED_HARNESS_PATH_RE.test(raw) || PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(raw));
+}
+
+// A shell command is not one path, so it cannot simply be canonicalized. When a
+// mutating command carries a dot-segment AND names a protected file's basename,
+// what it will actually write is not statically knowable — so it is refused
+// rather than gated. Same stance the guard already takes on interpreter
+// arguments built by shell expansion.
+const PROTECTED_BASENAME_RE = /(?<![\w.-])(?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib|production-action-guard|codex-hook-adapter|run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs(?![\w.-])/i;
+export function commandHidesProtectedPathBehindDotSegments(command) {
+  const text = String(command || "").replace(/\\/g, "/");
+  if (!/(?:^|[\s"'`(=/])\.\.\//.test(text)) return false;
+  return PROTECTED_BASENAME_RE.test(text);
 }
 
 // scripts/apply-migration-file.mjs mutates the LIVE database. It was added
@@ -880,6 +928,18 @@ export function evaluateProductionAction({
   const shellMutatesPath = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|remove-item|move-item|copy-item|rename-item|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i.test(command);
   if (shellMutatesPath && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
     return denied("CODEX PRODUCTION GATE: direct shell mutation of the production/review harness is blocked. Use the reviewed maintenance workflow with Mason's approval.");
+  }
+  // The fragment match above compares raw text, so `.claude/hooks/../hooks/<f>`
+  // reaches the same file without ever spelling the protected path (Codex HIGH,
+  // PR #563 round 2). A command is not one path and cannot simply be
+  // canonicalized, so a mutating command that carries a dot-segment AND names a
+  // protected file is refused rather than gated.
+  if (shellMutatesPath && commandHidesProtectedPathBehindDotSegments(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: this mutating command reaches a protected harness file through a `../` " +
+      "path detour, so what it will actually write is not statically knowable. Spell the destination " +
+      "as a direct repository-relative path, or use the reviewed maintenance workflow with Mason's approval."
+    );
   }
   if (isGitPush(command) && pushContextIsAmbiguous(command)) {
     return denied("CODEX PRODUCTION GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");

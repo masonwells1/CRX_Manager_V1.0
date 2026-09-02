@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
+import { canonicalizeGuardPath, evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
 
 const projectRoot = process.cwd();
 // Git exports repository selectors while running hooks. This test creates
@@ -363,6 +363,67 @@ try {
     evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".claude/hooks/codex-bot-review-lib.test.mjs" } }).blocked,
     false,
     "the test file stays editable; protection is scoped to the imported module, not the whole directory",
+  );
+
+  // ── dot-segment detours must not buy a different verdict ──────────────────
+  // Codex HIGH, PR #563 round 2: the matcher compared raw strings, so
+  // `.claude/hooks/../hooks/<file>` — the same file, confirmed with
+  // Resolve-Path — was ALLOWED through Write, apply_patch and PowerShell while
+  // the direct spelling was blocked. This was never specific to one module:
+  // every protected entry had the hole.
+  for (const alias of [
+    ".claude/hooks/../hooks/codex-bot-review-lib.mjs",
+    ".claude/hooks/./codex-bot-review-lib.mjs",
+    ".claude/./hooks/../hooks/codex-bot-review-lib.mjs",
+    ".claude\\hooks\\..\\hooks\\codex-bot-review-lib.mjs",
+    "./.claude/hooks/../../.claude/hooks/codex-bot-review-lib.mjs",
+    ".codex/hooks/../../.claude/hooks/codex-push-lib.mjs",
+    "scripts/../scripts/write-codex-push-proof.mjs",
+  ]) {
+    for (const tool of ["Write", "Edit", "apply_patch"]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: tool, toolInput: { file_path: alias } }).blocked,
+        true,
+        `${tool} must resolve the detour and block: ${alias}`,
+      );
+    }
+  }
+  // Canonicalization must not over-block: a genuinely different file that merely
+  // sits near a protected one stays editable.
+  for (const innocent of [
+    ".claude/hooks/../hooks/some-other-lib.mjs",
+    ".claude/hooks/../../src/components/Label.tsx",
+    "docs/../docs/manual/DECISION_LOG.md",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: innocent } }).blocked,
+      false,
+      `canonicalization must not over-block an unrelated path: ${innocent}`,
+    );
+  }
+  assert.equal(canonicalizeGuardPath(".claude/hooks/../hooks/x.mjs"), ".claude/hooks/x.mjs", "dot-segments resolve");
+  assert.equal(canonicalizeGuardPath(".claude\\hooks\\x.mjs"), ".claude/hooks/x.mjs", "separators unify");
+  assert.equal(canonicalizeGuardPath("./a/./b/../c"), "a/c", "leading ./ and interior .. resolve");
+  assert.equal(canonicalizeGuardPath("../outside/x.mjs"), "../outside/x.mjs", "a leading .. stays meaningful in a relative path");
+  assert.equal(canonicalizeGuardPath("/a/../../b"), "/b", "cannot escape above a rooted path");
+  assert.equal(canonicalizeGuardPath(""), "", "empty stays empty");
+  // ...and the shell channel, which cannot be canonicalized as a single path.
+  for (const command of [
+    'echo x > .claude/hooks/../hooks/codex-bot-review-lib.mjs',
+    'cp /tmp/evil.mjs .claude/hooks/../hooks/codex-push-lib.mjs',
+    'Set-Content -Path .codex/hooks/../hooks/production-action-guard.mjs -Value ""',
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `shell dot-segment detour must be refused: ${command}`,
+    );
+  }
+  // A read through a dot-segment is still fine — only MUTATING commands are refused.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "cat .claude/hooks/../hooks/codex-bot-review-lib.mjs" } }).blocked,
+    false,
+    "reading through a detour stays allowed; only mutation is refused",
   );
 
   const botLibPush = makeRepo(".claude/hooks/codex-bot-review-lib.mjs", "export const ordinary = true;\n");

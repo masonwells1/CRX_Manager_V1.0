@@ -168,11 +168,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Both merge guards import it at startup, so it is in codex-push-lib's trust
   // class; leaving it off the list made it directly patchable while the guard
   // that imports it was not.
-  codexGuard: "704308750fcdfbd0075b5de643bf2cae3d004dea",
+  // codexGuard re-pinned again 2026-09-02 (PR #563, Codex HIGH round 2):
+  // protected-path matching now canonicalizes `.`/`..` segments, and a mutating
+  // shell command that reaches a protected file through a `../` detour is
+  // refused. The raw-string matcher let `.claude/hooks/../hooks/<file>` through
+  // on every protected entry, not just the module that review was about.
+  codexGuard: "ed54ad39316af81a012fa8fefea3680e1858f7b0",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "ceb77bd084fab3399f0642d6c7c61e0042f353aa",
+  codexGuard: "f61ab8e00f3f38ffeee1b58a9f8637f465101760",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 
