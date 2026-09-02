@@ -65,9 +65,3 @@ Verified — the guard was proven by running it, not only by the suite:
 `'malformed ref update'` appeared only in the source — and all 24 pre-push cases used a
 fully-qualified `refs/heads/packet`, which is why neither gap was caught. The new cases cover
 `HEAD`, `HEAD~1`, `(delete)`, an unqualified remote ref, and a short line.
-
-Unrelated but found while verifying: this worktree's `core.hooksPath` was pinned by
-**worktree-scoped** config to a foreign checkout
-(`C:\Users\mason\.codex\worktrees\pr432-multitarget-20260825\CRX_Manager\.husky`), overriding the
-correct local value. Git hooks here were running a different checkout's copy of this very script.
-Reset to the canonical `.husky`; the recurrence is tracked separately.
