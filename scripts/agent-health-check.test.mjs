@@ -7,6 +7,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { normalizeEol } from "./normalize-eol.mjs";
+// Every `git` and guard child process below MUST get this scrubbed environment.
+// A git hook exports the repository-local GIT_* variables (GIT_DIR, GIT_INDEX_FILE,
+// GIT_CONFIG_*, ...) pointing at the REAL repository, and GIT_DIR outranks both cwd
+// and `-C <dir>`. Unscrubbed, this file's fixture setup lands on C:/CRX_Manager
+// itself: `git init` marks the shared checkout core.bare=true (breaking every linked
+// worktree with "must be run in a work tree"), `git config core.hooksPath` writes the
+// real repo so the fixture read below returns FAIL instead of PASS, and the
+// installRepo block's `git config user.email/user.name` silently overwrites the
+// repository's commit identity. It passes standalone AND in CI because neither sets
+// GIT_DIR — only the pre-commit path is destructive, so a green CI proves nothing here.
+// Reproduce with: GIT_DIR=$(git rev-parse --absolute-git-dir) node <this file>
+// (a relative GIT_DIR=.git re-resolves against the child's cwd and falsely passes).
+import { scratchHookEnvironment } from "../.claude/hooks/git-test-env.mjs";
 
 import {
   checkClaudeAuth,
@@ -19,6 +32,27 @@ import {
   summarizeChecks,
 } from "./agent-health-check.mjs";
 import { clearWorktreeOverride } from "./install-git-hooks.mjs";
+import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
+
+// Git exports GIT_DIR (and friends) to hook child processes. This file builds
+// throwaway repositories and calls checkGitHooksInstalled() IN-PROCESS, so an
+// inherited GIT_DIR makes both halves target the real repository instead of the
+// fixture: the fixture's `git config core.hooksPath` writes there, and
+// agent-health-check.mjs reads core.hooksPath from there. Standalone runs and CI
+// have no GIT_DIR and pass; the bug exists only on the git-hook path, which CI
+// does not exercise. Scope, precisely: main's own .husky/pre-commit does NOT run
+// this test, so it never blocked commits here. It blocked worktrees whose
+// core.hooksPath pointed at the abandoned PR #432 Codex checkout, whose older
+// pre-commit runs `npm run test:agent-workflows` unconditionally; those runs
+// failed at the first PASS assertion. It also leaves the real repo marked
+// core.bare=true. Scrub before the first call rather than passing
+// `env` per child, because the in-process reader has no child to scrub.
+// See KNOWN_ISSUES and .claude/hooks/git-test-env.mjs (7 other test files use
+// scratchHookEnvironment() for the spawned-child form of this same bug).
+for (const name of gitLocalEnvironmentNames()) delete process.env[name];
+for (const name of Object.keys(process.env)) {
+  if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) delete process.env[name];
+}
 
 const root = mkdtempSync(path.join(os.tmpdir(), "crx-agent-health-"));
 
@@ -182,7 +216,11 @@ try {
   // these states, all reporting perfectly normal `git commit` output.
   const hooksRepo = mkdtempSync(path.join(os.tmpdir(), "crx-hooks-"));
   try {
-    const git = (...args) => execFileSync("git", ["-C", hooksRepo, ...args], { stdio: "ignore" });
+    const git = (...args) =>
+      execFileSync("git", ["-C", hooksRepo, ...args], {
+        stdio: "ignore",
+        env: scratchHookEnvironment(hooksRepo),
+      });
     git("init");
     // Unset → git falls back to .git/hooks, where this repo installs nothing.
     assert.equal(checkGitHooksInstalled(hooksRepo).status, "FAIL");
@@ -262,7 +300,8 @@ try {
       // rather than assert a false pass.
       const linkedRepo = mkdtempSync(path.join(os.tmpdir(), "crx-linked-husky-"));
       try {
-        execFileSync("git", ["-C", linkedRepo, "init"], { stdio: "ignore" });
+        const linkedEnv = scratchHookEnvironment(linkedRepo);
+        execFileSync("git", ["-C", linkedRepo, "init"], { stdio: "ignore", env: linkedEnv });
         let linked = true;
         try {
           symlinkSync(path.join(foreign, ".husky"), path.join(linkedRepo, ".husky"), "junction");
@@ -270,7 +309,10 @@ try {
           linked = false;
         }
         if (linked) {
-          execFileSync("git", ["-C", linkedRepo, "config", "core.hooksPath", ".husky"], { stdio: "ignore" });
+          execFileSync("git", ["-C", linkedRepo, "config", "core.hooksPath", ".husky"], {
+            stdio: "ignore",
+            env: linkedEnv,
+          });
           const viaLink = checkGitHooksInstalled(linkedRepo);
           assert.equal(viaLink.status, "FAIL", "a .husky linked into another checkout is not this worktree's .husky");
           assert.match(viaLink.note, /tracked \.husky/);
@@ -297,7 +339,11 @@ try {
   const trackedHooks = execFileSync(
     "git",
     ["-C", repoRoot, "ls-files", "--stage", ".husky/pre-commit", ".husky/pre-push", ".husky/commit-msg"],
-    { encoding: "utf8" },
+    // Read-only, and repoRoot IS the real repository — but scrub anyway so `-C repoRoot`
+    // decides which index is read. Under a hook, an inherited GIT_DIR/GIT_INDEX_FILE
+    // points at the *calling worktree*, so this would silently assert against that
+    // worktree's index instead of the one it names.
+    { encoding: "utf8", env: scratchHookEnvironment(repoRoot) },
   ).trim();
   const trackedLines = trackedHooks.split(/\r?\n/).filter(Boolean);
   assert.equal(trackedLines.length, 3, `expected three tracked hooks, got: ${trackedHooks}`);
@@ -313,9 +359,17 @@ try {
   const installRepo = mkdtempSync(path.join(os.tmpdir(), "crx-install-hooks-"));
   const installWorktree = mkdtempSync(path.join(os.tmpdir(), "crx-install-wt-"));
   try {
-    const g = (dir, ...args) => execFileSync("git", ["-C", dir, ...args], { stdio: "ignore" });
+    // Scrubbed per-call, keyed to the directory being acted on: this block spans two
+    // fixture repositories, and the `git config user.email/user.name` calls just below
+    // are the ones that silently rewrote the real repository's commit identity on
+    // 2026-08-26 when GIT_DIR leaked in.
+    const g = (dir, ...args) =>
+      execFileSync("git", ["-C", dir, ...args], { stdio: "ignore", env: scratchHookEnvironment(dir) });
     const effective = (dir) =>
-      execFileSync("git", ["-C", dir, "config", "--get", "core.hooksPath"], { encoding: "utf8" }).trim();
+      execFileSync("git", ["-C", dir, "config", "--get", "core.hooksPath"], {
+        encoding: "utf8",
+        env: scratchHookEnvironment(dir),
+      }).trim();
 
     g(installRepo, "init");
     g(installRepo, "config", "user.email", "hooks-test@example.invalid");
@@ -338,9 +392,15 @@ try {
     g(installWorktree, "config", "--worktree", "core.hooksPath", path.join(installRepo, "..", "elsewhere"));
     assert.notEqual(effective(installWorktree), ".husky", "precondition: the override is in effect");
 
+    // The guard UNDER TEST, and the scrub that is easiest to omit. The git helpers
+    // above fail loudly when GIT_DIR leaks; this one fails *silently* — the spawned
+    // script would inspect and repair the real repository, and the assertion below
+    // could then pass for entirely the wrong reason. scratchHookEnvironment also sets
+    // CLAUDE_PROJECT_DIR, which is what points install-git-hooks.mjs at the fixture.
     execFileSync(process.execPath, [path.join(repoRoot, "scripts", "install-git-hooks.mjs")], {
       cwd: installWorktree,
       stdio: "ignore",
+      env: scratchHookEnvironment(installWorktree),
     });
     assert.equal(effective(installWorktree), ".husky", "prepare must clear the worktree override, not just set the shared value");
     assert.equal(checkGitHooksInstalled(installWorktree).status, "PASS");
@@ -356,12 +416,18 @@ try {
       assert.equal(viaNested.status, "FAIL", "a nested worktree's .husky is another checkout's hooks");
       assert.match(viaNested.note, /tracked \.husky/);
     } finally {
-      execFileSync("git", ["-C", installRepo, "worktree", "remove", "--force", nested], { stdio: "ignore" });
+      execFileSync("git", ["-C", installRepo, "worktree", "remove", "--force", nested], {
+        stdio: "ignore",
+        env: scratchHookEnvironment(installRepo),
+      });
       g(installRepo, "config", "core.hooksPath", ".husky");
     }
   } finally {
     try {
-      execFileSync("git", ["-C", installRepo, "worktree", "remove", "--force", installWorktree], { stdio: "ignore" });
+      execFileSync("git", ["-C", installRepo, "worktree", "remove", "--force", installWorktree], {
+        stdio: "ignore",
+        env: scratchHookEnvironment(installRepo),
+      });
     } catch {
       /* best effort — the directory removal below is what matters */
     }

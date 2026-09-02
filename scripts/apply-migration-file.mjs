@@ -48,12 +48,14 @@
 //   the per-migration ask (settled 2026-07-13), and destructive migrations never
 //   apply autonomously at all. That policy is enforced inside the rule book.
 
-import { readFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, rmSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   evaluateMigrationApply,
+  resolveMigrationSource,
+  MIGRATION_SOURCE_SUBDIR,
   CRX_PRODUCTION_REF,
 } from "../.claude/hooks/migration-apply-lib.mjs";
 import { assertWrappable } from "../.claude/hooks/migration-wrappability-lib.mjs";
@@ -180,6 +182,100 @@ if (!CANONICAL_MIGRATION_NAME.test(migName) || stampCount !== 1) {
     `matched by substring) while presenting its own leading timestamp to the ordering gate — which is how ` +
     `stale SQL gets replayed as the newest migration. Apply the migration under its real filename.`);
 }
+// ── SOURCE PROVENANCE ──────────────────────────────────────────────────────
+// The canonical-name rule above constrains what the file is CALLED. It says
+// nothing about WHERE it lives, so this door would happily read a parked or
+// REJECTED draft out of scripts/.staging-migrations/ — or anywhere else on disk —
+// as long as its filename looked right.
+//
+// The gate below refuses that on its own (the rule lives in the shared rule book,
+// so both doors inherit it and neither can drift laxer). This check is the same
+// rule asked EARLY, through the SAME exported function, purely so the operator
+// gets a refusal that names the file they passed instead of one that talks about
+// a name lookup. It is not a second implementation.
+{
+  const source = resolveMigrationSource({
+    name: migName,
+    query: sql,
+    projectDir,
+    cwd: process.cwd(),
+  });
+  if (!source.ok) {
+    die(2,
+      `NOT A PERMITTED MIGRATION SOURCE: ${absFile}\n\n` +
+      `A live apply may only transmit the content of a migration this repository holds at\n` +
+      (source.searched.length
+        ? source.searched.map((f) => `  ${f}\n`).join("")
+        : `  <checkout>/${MIGRATION_SOURCE_SUBDIR}/${migName}.sql\n`) +
+      `\nThis is an allowlist: one permitted directory, one filename inside it derived from the ` +
+      `migration name.\nParked, superseded and REJECTED drafts under scripts/.staging-migrations/ are ` +
+      `deliberately outside it — that is what parking a migration means — and so is anything in a temp or ` +
+      `scratch directory.\n\n` +
+      (source.code === "content-differs"
+        ? `A file with this name exists in the permitted directory, but its content differs from the file ` +
+          `you passed. Apply the repository file, not a copy.\n`
+        : source.code === "escapes-dir"
+        ? `The permitted path resolves outside the permitted directory (a link pointing elsewhere).\n`
+        : `To ship this migration, move it into supabase/migrations/ as a tracked change and take it ` +
+          `through review.\n`));
+  }
+
+  // THE FILE YOU PASSED MUST BE THE FILE THAT WAS APPROVED — not merely a file
+  // with the same bytes. (CodeRabbit, PR #533.)
+  //
+  // resolveMigrationSource() answers "does the repository hold this content under
+  // this name", which is content-bound and therefore cannot transmit anything the
+  // repository has not approved: an out-of-tree copy whose content DIFFERS is
+  // already refused. So this is hardening, not a demonstrated bypass — the bytes
+  // that would run were identical either way.
+  //
+  // It is still worth closing. Accepting any path on disk means the operator's
+  // intent ("apply THIS file") and the guarantee ("the repository's file with this
+  // content") are two different statements that happen to coincide, and a rule
+  // whose safety depends on a coincidence is the kind this file keeps having to
+  // re-close. The allowlist story is "one permitted directory"; the argument
+  // should have to be in it.
+  // Compare against EVERY permitted location, not just the first match.
+  //
+  // Codex (low, fail-closed, exact-SHA review of 5eaa78e8) found that comparing to
+  // `source.file` alone blocks a legitimate apply: when the primary checkout and the
+  // session's worktree both hold the migration, the resolver returns the PRIMARY
+  // one, and passing the worktree's own file — the normal thing to do — was then
+  // refused for "not being the approved artifact". It could never authorize unsafe
+  // SQL, but it would block real work in the layout this repo actually uses, where
+  // dozens of worktrees run at once.
+  //
+  // The rule was always meant to be "the argument must BE one of the permitted
+  // files", and every permitted location is equally approved: `ok: true` already
+  // guarantees the content matched a permitted file, and each candidate lives in a
+  // session-scoped checkout the proof lookup already trusts.
+  // `approved` is EXACTLY the resolver's validated list — never a re-derived set of
+  // candidate paths. The previous version rebuilt it from `source.dirs`, which
+  // includes roots the resolver never validated; CodeRabbit showed a same-named
+  // symlink to an external file in a second checkout would then resolve to the same
+  // target and be accepted, even though the resolver itself rejects it as
+  // `escapes-dir`. Deciding the authorized set anywhere other than where the
+  // validation happens is what made this line wrong in both directions at once.
+  const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+  const key = (p) => (process.platform === "win32" ? real(p).toLowerCase() : real(p));
+  const realPassed = real(absFile);
+  const approved = Array.isArray(source.files) && source.files.length
+    ? source.files
+    : [source.file];
+  const samePath = approved.some((c) => key(c) === key(absFile));
+  const realApproved = real(source.file);
+  if (!samePath) {
+    die(2,
+      `NOT A PERMITTED MIGRATION SOURCE: ${absFile}\n\n` +
+      `Its content matches a migration this repository holds, but it is not that file:\n` +
+      `  you passed : ${realPassed}\n` +
+      `  approved   : ${realApproved}\n\n` +
+      `Apply the repository file itself. A copy with identical bytes is not the approved artifact, ` +
+      `and accepting one would make "apply this file" and "apply the reviewed migration" two different ` +
+      `statements that only happen to agree.\n`);
+  }
+}
+
 const queryHash = createHash("sha256").update(sql).digest("hex");
 
 console.log(`migration : ${migName}`);
