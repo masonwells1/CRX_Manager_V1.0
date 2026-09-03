@@ -177,11 +177,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // canonicalizer now drops a Windows drive-relative prefix, and the shell check
   // canonicalizes every argument token instead of sniffing for `../` — Codex
   // escaped the previous fix with an interior `./` and with `C:.claude/...`.
-  codexGuard: "a7571cf1d61593795b7e9503278ea8d0821aa2d1",
+  // Re-pinned again 2026-09-03 (Codex round 4): the shell check now examines a
+  // second, DE-QUOTED view of the command. Quotes and backticks are characters
+  // the shell deletes while building a word, not ones it splits on, so treating
+  // them as separators let an intra-word splice break a protected path into two
+  // harmless tokens.
+  codexGuard: "0d15dec22f8c137e90831268dd8df2425369299f",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "0f59b25eab12dafd08b2cb6fff8b902e38019441",
+  codexGuard: "03a8cc11d2bf5d05268795d606b4d9c236ea73cf",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

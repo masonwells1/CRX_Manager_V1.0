@@ -153,15 +153,33 @@ function protectedHarnessPathMentioned(value) {
 // matcher. `./`, `../`, `C:`-relative, backslashes, and any combination all
 // collapse to the same canonical string, so one rule covers spellings nobody has
 // thought of yet.
+// Characters the shell DELETES while building a word — it does not break the
+// word at them. Round 3 treated them as separators, which is the same class of
+// error as the earlier spelling checks: a quote or backtick dropped into the
+// middle of a path split one protected token into two harmless ones, while
+// PowerShell rejoined them and wrote the protected file. Codex round 4 proved
+// it with Resolve-Path on two forms, both allowed at the time — a backtick
+// escape and an empty double-quoted string, each spliced into the middle of
+// `.claude/hooks/codex-push-lib.mjs`.
+const SHELL_WORD_NOOP_RE = /[`"']/g;
+
 function commandPathTokens(command) {
-  // Shell/PowerShell argument separators, plus the quote characters themselves
-  // so a quoted path is examined rather than skipped.
-  return String(command || "")
-    .split(/[\s"'`,;()|&<>]+/)
-    .filter(Boolean)
-    // `-Path=x`, `--file=x`, `Path:x` — keep the value, drop the flag name.
-    .map((token) => token.replace(/^[-/]{1,2}[A-Za-z][\w-]*[:=]/, ""))
-    .filter(Boolean);
+  const raw = String(command || "");
+  // Two views of the same command. The first splits on quotes so a quoted path
+  // is examined rather than skipped; the second REMOVES them so an intra-word
+  // splice collapses back to the path the shell will actually open. Both are
+  // needed: neither view alone covers the other's case.
+  const views = [raw, raw.replace(SHELL_WORD_NOOP_RE, "")];
+  const tokens = [];
+  for (const view of views) {
+    for (const token of view.split(/[\s"'`,;()|&<>]+/)) {
+      if (!token) continue;
+      // `-Path=x`, `--file=x`, `Path:x` — keep the value, drop the flag name.
+      const value = token.replace(/^[-/]{1,2}[A-Za-z][\w-]*[:=]/, "");
+      if (value) tokens.push(value);
+    }
+  }
+  return tokens;
 }
 export function commandTouchesProtectedHarnessPath(command) {
   return commandPathTokens(command).some((token) =>

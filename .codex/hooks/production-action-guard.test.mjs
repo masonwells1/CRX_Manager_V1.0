@@ -452,6 +452,53 @@ try {
     "reading through a detour stays allowed; only mutation is refused",
   );
 
+  // ── round 4: characters the shell DELETES, not ones it splits on ───────────
+  // Codex HIGH, PR #563 round 4. Round 3 treated quotes and the backtick as
+  // argument SEPARATORS. PowerShell treats them as no-ops inside a word: it
+  // removes them and joins what remains. So splicing one into the middle of a
+  // protected path split one blocked token into two harmless ones, and the
+  // write went through. Codex confirmed with PowerShell's own parser that both
+  // of these resolve to `.claude/hooks/codex-push-lib.mjs`, and measured
+  // `blocked:false` on each.
+  //
+  // The backtick is built from a char code so this fixture cannot be broken by
+  // an editor or a template-literal escape silently eating it.
+  const BACKTICK = String.fromCharCode(96);
+  for (const command of [
+    `Set-Content .claude/hooks/codex-push-${BACKTICK}lib.mjs -Value ""`,
+    'Set-Content .claude/hooks/codex-push-""lib.mjs -Value ""',
+    `Set-Content .claude/hooks/codex-bot-review-${BACKTICK}lib.mjs -Value ""`,
+    "Set-Content .claude/hooks/codex-bot-review-''lib.mjs -Value \"\"",
+    // The splice can land anywhere in the path, including the directory part.
+    `Set-Content .claude/${BACKTICK}hooks/codex-push-lib.mjs -Value ""`,
+    'rm .codex/""hooks.json',
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `an intra-word quote/escape splice must be refused: ${command}`,
+    );
+  }
+  // Still a read, still allowed — the splice must not turn reads into denials.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: `cat .claude/hooks/codex-push-${BACKTICK}lib.mjs` } }).blocked,
+    false,
+    "a spliced READ stays allowed; only mutation is refused",
+  );
+  // NEAR-MISS CANARY for the de-quoted view. Quoted fragments separated by real
+  // whitespace are two arguments, not concatenation — removing the quotes must
+  // not fuse them into a protected path. Without this, "strip all quotes and
+  // look for the path anywhere" would pass the tests above while blocking
+  // ordinary commands that merely mention the directory and the file apart.
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: 'Set-Content out.txt -Value ".claude/hooks/" "codex-push-lib.mjs"' },
+    }).blocked,
+    false,
+    "whitespace-separated quoted fragments are NOT concatenation and must stay allowed",
+  );
+
   const botLibPush = makeRepo(".claude/hooks/codex-bot-review-lib.mjs", "export const ordinary = true;\n");
   assert.equal(
     evaluatePush(botLibPush.repo).blocked,

@@ -763,9 +763,22 @@ export function buildCodexExecArgs({ root, prompt, platform = process.platform }
 // private-key headers, `github_pat_…`, `ghp_/gho_/ghu_/ghs_/ghr_…`, `sk-…`,
 // JWTs, `AKIA…`, `AIza…`, Slack `xox…`, and live Stripe keys. A real leaked
 // value carries one of those shapes; it does not arrive as a bare variable name.
-const SECRET_NAME_WITH_VALUE = String.raw`(?:SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|GITHUB_TOKEN|password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*\S+`;
+// Codex round 4 (PR #563) found the narrowing left a gap: the separator had to
+// touch the name directly, so a serialized object — the name in quotes, the
+// quote, then a colon, then the credential — kept its value verbatim, because
+// the closing quote interrupted the match. Machine-readable output is exactly
+// where a real key would appear, so the name and the value may now each carry a
+// surrounding quote. The value still has to EXIST: one character that is not
+// whitespace, a quote, or a closing delimiter. A bare name remains documentation.
+const SECRET_NAME = String.raw`(?:SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|GITHUB_TOKEN|password|passwd|secret|api[_-]?key|access[_-]?token)`;
+const SECRET_NAME_WITH_VALUE = String.raw`${SECRET_NAME}["']?\s*[:=]\s*["']?[^\s"',;)\]}]`;
+// Supabase's current secret key shape. It is a credential on sight, like the
+// other entries here, and the round-4 finding surfaced it: the old pattern
+// recognised no Supabase key form at all, so a leaked one only ever redacted
+// via the variable name beside it.
+const SUPABASE_SECRET_KEY = String.raw`sb_secret_[A-Za-z0-9_-]{16,}`;
 const REVIEW_CAPTURE_SECRET_RE = new RegExp(
-  `(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}|${SECRET_NAME_WITH_VALUE})`,
+  `(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}|${SUPABASE_SECRET_KEY}|${SECRET_NAME_WITH_VALUE})`,
   "i",
 );
 

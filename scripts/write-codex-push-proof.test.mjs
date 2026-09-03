@@ -206,6 +206,46 @@ for (const assigned of [
   );
 }
 
+// Codex round 4 (PR #563): the separator had to touch the name directly, so a
+// SERIALIZED credential kept its value verbatim — the closing quote after the
+// key interrupted the match. Machine-readable output is exactly where a real key
+// would show up, so a quote either side of the separator must not defeat this.
+// Supabase's own secret-key shape is also recognized on sight now; before round
+// 4 the pattern knew no Supabase key form at all, so a leaked one only redacted
+// when a variable name happened to sit beside it.
+for (const serialized of [
+  `{"SUPABASE_SERVICE_ROLE_KEY":"sb_secret_abcdefghijklmnopqrst"}`,
+  `{"GITHUB_TOKEN": "ghs_serializedvalue"}`,
+  `{'password':'hunter2'}`,
+  `"api_key": "abcdef123456"`,
+  `<secret>"access_token"='zzz'</secret>`,
+  // …and the bare Supabase key shape, with no name anywhere near it.
+  `the log line was sb_secret_abcdefghijklmnopqrst and nothing else`,
+]) {
+  assert.equal(
+    safeReviewCaptureText(`x ${serialized}`, "STDOUT").includes(serialized),
+    false,
+    `a serialized credential must be redacted: ${serialized.slice(0, 40)}`,
+  );
+}
+
+// NEAR-MISS CANARY for the quote relaxation. The value must still EXIST: a name
+// followed by a separator and nothing usable is documentation, not a leak. If
+// this starts failing, the pattern has drifted back toward matching bare names
+// and every review of a permissions change will come back as an empty capture.
+for (const valueless of [
+  `"GITHUB_TOKEN":`,
+  `SUPABASE_SERVICE_ROLE_KEY = `,
+  `"api_key": ""`,
+  `password: '`,
+]) {
+  assert.match(
+    safeReviewCaptureText(valueless, "STDOUT"),
+    new RegExp(valueless.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    `a separator with no value is not a leak: ${valueless}`,
+  );
+}
+
 // ...but a bare NAME in prose is documentation and must survive, or reviewing
 // any workflow-permissions change is impossible.
 for (const prose of [
