@@ -13,6 +13,14 @@
 -- have no posted/voided commission payment, no payment item, no paid commission,
 -- and exactly the two known legacy cancellations. If that changes, this migration
 -- aborts so an incomplete history is never presented as exact.
+-- The eight current SEED-* headers have no items and were already unpostable under
+-- the existing private post implementation's empty-batch guard; they are retained
+-- unchanged and are not evidence of settlement history.
+--
+-- Operator boundary: the partial Chicago cutover day is intentionally unavailable
+-- in the aggregate report. Reports begins on the next complete Chicago day. New
+-- or revised commissions must have order_date, and payout item insertion rejects
+-- non-positive amounts or a payment_date earlier than the commission order_date.
 --
 -- Money: existing dollar columns remain exact PostgreSQL numeric. This migration
 -- adds their now-safe finite whole-cent constraints and stores the new cancellation
@@ -40,6 +48,7 @@ DECLARE
   v_legacy_identity_digest text;
   v_report_body_md5 text;
   v_void_body_md5 text;
+  v_post_body_md5 text;
 BEGIN
   SELECT count(*)
     INTO v_history_columns
@@ -120,7 +129,8 @@ BEGIN
           ) privilege
          WHERE p.oid = ANY (ARRAY[
            'public.get_commission_balance_report(date)'::regprocedure::oid,
-           'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure::oid
+           'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure::oid,
+           'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)'::regprocedure::oid
          ])
            AND privilege.grantee <> p.proowner
       ) actual
@@ -132,7 +142,7 @@ BEGIN
      WHERE actual.actual_present IS NULL
         OR expected.expected_present IS NULL
   ) THEN
-    RAISE EXCEPTION 'COMMISSION_HISTORY_FRESH_ACL_DRIFT: existing report or void implementation ACL differs';
+    RAISE EXCEPTION 'COMMISSION_HISTORY_FRESH_ACL_DRIFT: existing report or payout implementation ACL differs';
   END IF;
 
   -- Zero NULL-history cancellations are accepted only while the complete
@@ -205,6 +215,22 @@ BEGIN
     RAISE EXCEPTION 'COMMISSION_HISTORY_VOID_TRUST_DRIFT: existing void implementation owner or security contract is not the reviewed one';
   END IF;
 
+  IF (SELECT count(*) FROM pg_proc
+       WHERE pronamespace = 'public'::regnamespace
+         AND proname = '_post_commission_payment_intent_impl_20260809') <> 1 THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_OVERLOAD_DRIFT: post implementation must have exactly one overload';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc
+     WHERE oid = 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)'::regprocedure
+       AND proowner = 'postgres'::regrole
+       AND prosecdef
+       AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+  ) THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_POST_TRUST_DRIFT: existing post implementation owner or security contract is not the reviewed one';
+  END IF;
+
   SELECT md5(prosrc)
     INTO v_report_body_md5
     FROM pg_proc
@@ -213,6 +239,10 @@ BEGIN
     INTO v_void_body_md5
     FROM pg_proc
    WHERE oid = 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure;
+  SELECT md5(prosrc)
+    INTO v_post_body_md5
+    FROM pg_proc
+   WHERE oid = 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)'::regprocedure;
 
   IF v_history_columns = 0 THEN
     -- Populated fresh apply: only the exact live functions reviewed on
@@ -229,10 +259,20 @@ BEGIN
            '0ea6b39cc91141362461598e3ab91294',
            'db37145a51829352d4178bba5da6a1c3'
          )
-       ) OR v_void_body_md5 <> '60246ff3ed8168f8b69bfc201de6ccbb' THEN
+       ) OR v_void_body_md5 <> '60246ff3ed8168f8b69bfc201de6ccbb'
+         OR (
+           EXISTS (SELECT 1 FROM public.commissions)
+           AND v_post_body_md5 <> '7bbf107055396b788b5aaefec8c2e195'
+         ) OR (
+           NOT EXISTS (SELECT 1 FROM public.commissions)
+           AND v_post_body_md5 NOT IN (
+             '7bbf107055396b788b5aaefec8c2e195',
+             '240fd81fd597136c195a62e7f60f3fbc'
+           )
+         ) THEN
       RAISE EXCEPTION
-        'COMMISSION_HISTORY_PREIMAGE_DRIFT: report md5 %, void md5 %',
-        v_report_body_md5, v_void_body_md5;
+        'COMMISSION_HISTORY_PREIMAGE_DRIFT: report md5 %, void md5 %, post md5 %',
+        v_report_body_md5, v_void_body_md5, v_post_body_md5;
     END IF;
 
     IF EXISTS (
@@ -241,6 +281,7 @@ BEGIN
         AND proname IN (
           'get_commission_payment_detail_report', 'stamp_commission_cancellation_history',
           'record_commission_earned_state', 'record_commission_settlement_event',
+          'validate_commission_payment_item_history',
           'prevent_commission_history_ledger_mutation', 'prevent_commission_history_ledger_truncate'
         )
     ) OR to_regclass('public.commission_earned_state_ledger') IS NOT NULL
@@ -250,6 +291,11 @@ BEGIN
       SELECT 1 FROM pg_trigger
        WHERE tgrelid = 'public.commissions'::regclass
          AND tgname = 'trg_commissions_stamp_cancellation_history'
+         AND NOT tgisinternal
+    ) OR EXISTS (
+      SELECT 1 FROM pg_trigger
+       WHERE tgrelid = 'public.commission_payment_items'::regclass
+         AND tgname = 'trg_commission_payment_items_validate_history'
          AND NOT tgisinternal
     ) OR EXISTS (
       SELECT 1 FROM pg_constraint
@@ -274,6 +320,10 @@ BEGIN
     -- Replay is allowed only over this exact candidate. Merely finding four
     -- same-named columns is not proof that history was installed safely.
     IF v_void_body_md5 <> '985fb1a42ab3b4d911c68898c14ce637'
+       OR v_post_body_md5 NOT IN (
+         '7bbf107055396b788b5aaefec8c2e195',
+         '240fd81fd597136c195a62e7f60f3fbc'
+       )
        OR NOT EXISTS (
          SELECT 1 FROM pg_proc
           WHERE oid = 'public.get_commission_payment_detail_report(date)'::regprocedure
@@ -388,9 +438,15 @@ BEGIN
        OR has_function_privilege('anon', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
        OR has_function_privilege('authenticated', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
        OR has_function_privilege('service_role', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
+       OR has_function_privilege('anon', 'public.validate_commission_payment_item_history()', 'EXECUTE')
+       OR has_function_privilege('authenticated', 'public.validate_commission_payment_item_history()', 'EXECUTE')
+       OR has_function_privilege('service_role', 'public.validate_commission_payment_item_history()', 'EXECUTE')
        OR has_function_privilege('anon', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
        OR has_function_privilege('authenticated', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
        OR has_function_privilege('service_role', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
+       OR has_function_privilege('anon', 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)', 'EXECUTE')
+       OR has_function_privilege('authenticated', 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)', 'EXECUTE')
+       OR has_function_privilege('service_role', 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)', 'EXECUTE')
        OR EXISTS (
          SELECT 1
            FROM (
@@ -407,7 +463,9 @@ BEGIN
                 'public.get_commission_balance_report(date)'::regprocedure::oid,
                 'public.get_commission_payment_detail_report(date)'::regprocedure::oid,
                 'public.stamp_commission_cancellation_history()'::regprocedure::oid,
-                'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure::oid
+                'public.validate_commission_payment_item_history()'::regprocedure::oid,
+                'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure::oid,
+                'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)'::regprocedure::oid
               ])
                 AND privilege.grantee <> p.proowner
            ) actual
@@ -543,10 +601,11 @@ BEGIN
 
   IF EXISTS (
     SELECT 1
-      FROM pg_proc p
+     FROM pg_proc p
      WHERE p.oid = ANY (ARRAY[
        'public.record_commission_earned_state()'::regprocedure::oid,
-       'public.record_commission_settlement_event()'::regprocedure::oid
+       'public.record_commission_settlement_event()'::regprocedure::oid,
+       'public.validate_commission_payment_item_history()'::regprocedure::oid
      ])
        AND (p.proowner <> 'postgres'::regrole OR NOT p.prosecdef
          OR NOT p.proconfig @> ARRAY['search_path=public, pg_temp']::text[])
@@ -566,6 +625,7 @@ BEGIN
      WHERE p.oid = ANY (ARRAY[
        'public.record_commission_earned_state()'::regprocedure::oid,
        'public.record_commission_settlement_event()'::regprocedure::oid,
+       'public.validate_commission_payment_item_history()'::regprocedure::oid,
        'public.prevent_commission_history_ledger_mutation()'::regprocedure::oid,
        'public.prevent_commission_history_ledger_truncate()'::regprocedure::oid
      ])
@@ -580,6 +640,12 @@ BEGIN
      WHERE oid = 'public.record_commission_settlement_event()'::regprocedure
        AND md5(prosrc) = '2d4d8f2df557f125415e208a7e198ded'
        AND prosrc LIKE '%NEW.posted_at := v_event_at%'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc
+     WHERE oid = 'public.validate_commission_payment_item_history()'::regprocedure
+       AND md5(prosrc) = '96a462eda38977ccb123938c46d0c73a'
+       AND prosrc LIKE '%COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT%'
+       AND prosrc LIKE '%COMMISSION_SETTLEMENT_PAYMENT_DATE_BEFORE_ORDER%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.prevent_commission_history_ledger_mutation()'::regprocedure
@@ -604,7 +670,8 @@ BEGIN
         (v_cutover, 'trg_commission_history_cutover_immutable', 27::smallint, 'public.prevent_commission_history_ledger_mutation()'::regprocedure),
         (v_cutover, 'trg_commission_history_cutover_no_truncate', 34::smallint, 'public.prevent_commission_history_ledger_truncate()'::regprocedure),
         ('public.commissions'::regclass, 'trg_commissions_record_earned_state', 21::smallint, 'public.record_commission_earned_state()'::regprocedure),
-        ('public.commission_payments'::regclass, 'trg_commission_payments_record_settlement_event', 19::smallint, 'public.record_commission_settlement_event()'::regprocedure)
+        ('public.commission_payments'::regclass, 'trg_commission_payments_record_settlement_event', 19::smallint, 'public.record_commission_settlement_event()'::regprocedure),
+        ('public.commission_payment_items'::regclass, 'trg_commission_payment_items_validate_history', 23::smallint, 'public.validate_commission_payment_item_history()'::regprocedure)
       ) expected(table_oid, trigger_name, trigger_type, function_oid)
       LEFT JOIN pg_trigger t
         ON t.tgrelid = expected.table_oid
@@ -1208,6 +1275,65 @@ CROSS JOIN public.commission_history_cutover m
 WHERE m.cutover_at = transaction_timestamp()
   AND NOT EXISTS (SELECT 1 FROM public.commission_earned_state_ledger);
 
+-- Reject a payout that is already impossible to post while it is still being
+-- created. The mature create RPC inserts the header and its immutable items in
+-- one transaction, so a trigger exception rolls back the whole batch and lets
+-- the operator correct the date or selection without leaving a doomed header.
+CREATE OR REPLACE FUNCTION public.validate_commission_payment_item_history()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_payment_date date;
+  v_commission_order_date date;
+BEGIN
+  IF NEW.amount IS NULL OR round(NEW.amount, 2) <= 0 THEN
+    RAISE EXCEPTION 'COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT: commission payment items must be positive';
+  END IF;
+
+  SELECT p.payment_date
+    INTO v_payment_date
+    FROM public.commission_payments p
+   WHERE p.id = NEW.commission_payment_id;
+  IF NOT FOUND OR v_payment_date IS NULL THEN
+    RAISE EXCEPTION 'COMMISSION_SETTLEMENT_PAYMENT_DATE_REQUIRED: commission payment must have a payment_date';
+  END IF;
+
+  SELECT c.order_date
+    INTO v_commission_order_date
+    FROM public.commissions c
+   WHERE c.id = NEW.commission_id;
+  IF NOT FOUND OR v_commission_order_date IS NULL THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_ORDER_DATE_REQUIRED: commission must have order_date before payment creation';
+  END IF;
+
+  IF v_payment_date < v_commission_order_date THEN
+    RAISE EXCEPTION 'COMMISSION_SETTLEMENT_PAYMENT_DATE_BEFORE_ORDER: payment_date cannot precede commission order_date';
+  END IF;
+
+  RETURN NEW;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.validate_commission_payment_item_history()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DO $payment_item_history_trigger$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+     WHERE tgrelid = 'public.commission_payment_items'::regclass
+       AND tgname = 'trg_commission_payment_items_validate_history'
+       AND NOT tgisinternal
+  ) THEN
+    CREATE TRIGGER trg_commission_payment_items_validate_history
+      BEFORE INSERT OR UPDATE ON public.commission_payment_items
+      FOR EACH ROW EXECUTE FUNCTION public.validate_commission_payment_item_history();
+  END IF;
+END
+$payment_item_history_trigger$;
+
 CREATE OR REPLACE FUNCTION public.record_commission_settlement_event()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1805,9 +1931,10 @@ BEGIN
        WHERE pronamespace = 'public'::regnamespace
          AND proname IN (
            'stamp_commission_cancellation_history', 'record_commission_earned_state',
-           'record_commission_settlement_event', 'prevent_commission_history_ledger_mutation',
+           'record_commission_settlement_event', 'validate_commission_payment_item_history',
+           'prevent_commission_history_ledger_mutation',
            'prevent_commission_history_ledger_truncate'
-         )) <> 5 THEN
+         )) <> 6 THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: function overload drift';
   END IF;
 
@@ -1820,9 +1947,15 @@ BEGIN
      OR has_function_privilege('anon', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
      OR has_function_privilege('service_role', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.validate_commission_payment_item_history()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.validate_commission_payment_item_history()', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.validate_commission_payment_item_history()', 'EXECUTE')
      OR has_function_privilege('anon', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
      OR has_function_privilege('service_role', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)', 'EXECUTE')
      OR EXISTS (
        SELECT 1
          FROM (
@@ -1841,9 +1974,11 @@ BEGIN
               'public.stamp_commission_cancellation_history()'::regprocedure::oid,
               'public.record_commission_earned_state()'::regprocedure::oid,
               'public.record_commission_settlement_event()'::regprocedure::oid,
+              'public.validate_commission_payment_item_history()'::regprocedure::oid,
               'public.prevent_commission_history_ledger_mutation()'::regprocedure::oid,
               'public.prevent_commission_history_ledger_truncate()'::regprocedure::oid,
-              'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure::oid
+              'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure::oid,
+              'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)'::regprocedure::oid
             ])
               AND privilege.grantee <> p.proowner
          ) actual
@@ -1922,6 +2057,15 @@ BEGIN
        AND prosrc LIKE '%VOIDED_ACTOR_MISMATCH%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
+     WHERE oid = 'public.validate_commission_payment_item_history()'::regprocedure
+       AND proowner = 'postgres'::regrole
+       AND prosecdef
+       AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+       AND md5(prosrc) = '96a462eda38977ccb123938c46d0c73a'
+       AND prosrc LIKE '%COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT%'
+       AND prosrc LIKE '%COMMISSION_SETTLEMENT_PAYMENT_DATE_BEFORE_ORDER%'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc
      WHERE oid = 'public.prevent_commission_history_ledger_mutation()'::regprocedure
        AND proowner = 'postgres'::regrole
        AND NOT prosecdef
@@ -1943,6 +2087,18 @@ BEGIN
        AND md5(prosrc) = '985fb1a42ab3b4d911c68898c14ce637'
        AND prosrc LIKE '%voided_at = transaction_timestamp()%'
        AND prosrc LIKE '%voided_by = v_actor%'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_proc
+     WHERE oid = 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)'::regprocedure
+       AND proowner = 'postgres'::regrole
+       AND prosecdef
+       AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+       AND md5(prosrc) IN (
+         '7bbf107055396b788b5aaefec8c2e195',
+         '240fd81fd597136c195a62e7f60f3fbc'
+       )
+       AND prosrc LIKE '%posted_by = v_actor%'
+       AND prosrc LIKE '%posted_at = now()%'
   ) THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: reviewed function body or security contract drift';
   END IF;
@@ -2175,7 +2331,8 @@ BEGIN
       ('public.commission_settlement_events'::regclass, 'trg_commission_settlement_events_immutable', 'public.prevent_commission_history_ledger_mutation()'::regprocedure),
       ('public.commission_settlement_events'::regclass, 'trg_commission_settlement_events_no_truncate', 'public.prevent_commission_history_ledger_truncate()'::regprocedure),
       ('public.commissions'::regclass, 'trg_commissions_record_earned_state', 'public.record_commission_earned_state()'::regprocedure),
-      ('public.commission_payments'::regclass, 'trg_commission_payments_record_settlement_event', 'public.record_commission_settlement_event()'::regprocedure)
+      ('public.commission_payments'::regclass, 'trg_commission_payments_record_settlement_event', 'public.record_commission_settlement_event()'::regprocedure),
+      ('public.commission_payment_items'::regclass, 'trg_commission_payment_items_validate_history', 'public.validate_commission_payment_item_history()'::regprocedure)
     ) expected(table_oid, trigger_name, function_oid)
     LEFT JOIN pg_trigger t
       ON t.tgrelid = expected.table_oid

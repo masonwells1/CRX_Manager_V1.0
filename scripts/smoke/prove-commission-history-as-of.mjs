@@ -270,12 +270,15 @@ INSERT INTO public.commissions (
 
 function bindPopulatedCandidate(candidateSource, legacyDigest) {
   const reportMd5 = scalar(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.get_commission_balance_report(date)'::regprocedure;`);
+  const postMd5 = scalar(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)'::regprocedure;`);
   assert.match(reportMd5, /^[a-f0-9]{32}$/, 'could not read preimage report body md5');
+  assert.match(postMd5, /^[a-f0-9]{32}$/, 'could not read preimage post body md5');
   const bound = candidateSource
     .replaceAll('d2111549f1dc613edf9a31e4d152b096', legacyDigest)
-    .replaceAll('0ea6b39cc91141362461598e3ab91294', reportMd5);
+    .replaceAll('0ea6b39cc91141362461598e3ab91294', reportMd5)
+    .replaceAll('7bbf107055396b788b5aaefec8c2e195', postMd5);
   assert.notEqual(bound, candidateSource, 'test-bound candidate did not substitute live-bound preimage literals');
-  return { bound, reportMd5 };
+  return { bound, reportMd5, postMd5 };
 }
 
 function proveCutoverOpening(preimage) {
@@ -476,12 +479,16 @@ try {
       cutoverPreimage = seedCutoverPreimage();
       const binding = bindPopulatedCandidate(candidateSource, cutoverPreimage.legacyDigest);
       candidate = binding.bound;
-      console.log(`COMMISSION_HISTORY_TEST_BOUND_PREIMAGE legacy_digest=${cutoverPreimage.legacyDigest} report_md5=${binding.reportMd5}`);
+      console.log(`COMMISSION_HISTORY_TEST_BOUND_PREIMAGE legacy_digest=${cutoverPreimage.legacyDigest} report_md5=${binding.reportMd5} post_md5=${binding.postMd5}`);
       for (const [label, signature] of [
         ['fresh_anonymous_report_grant', 'public.get_commission_balance_report(date)'],
         [
           'fresh_anonymous_private_void_grant',
           'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)',
+        ],
+        [
+          'fresh_anonymous_private_post_grant',
+          'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)',
         ],
       ]) {
         const freshAclMutation = candidate.replace(
@@ -491,10 +498,20 @@ try {
         assert.notEqual(freshAclMutation, candidate, `${label} did not change the candidate`);
         expectCandidateFailure(
           freshAclMutation,
-          'COMMISSION_HISTORY_FRESH_ACL_DRIFT: existing report or void implementation ACL differs',
+          'COMMISSION_HISTORY_FRESH_ACL_DRIFT: existing report or payout implementation ACL differs',
           label,
         );
       }
+      const postBodyMutation = candidate.replaceAll(
+        binding.postMd5,
+        '00000000000000000000000000000000',
+      );
+      assert.notEqual(postBodyMutation, candidate, 'fresh post-body pin mutation did not change the candidate');
+      expectCandidateFailure(
+        postBodyMutation,
+        'COMMISSION_HISTORY_PREIMAGE_DRIFT:',
+        'fresh_private_post_body_drift',
+      );
     }
     if (path.resolve(local) === path.resolve(MIGRATION_PATH)) {
       applySql(candidate.replace(/\r\n/g, '\n'));
@@ -511,6 +528,7 @@ try {
     'get_commission_payment_detail_report',
     'stamp_commission_cancellation_history',
     'record_commission_earned_state',
+    'validate_commission_payment_item_history',
     'record_commission_settlement_event',
     'prevent_commission_history_ledger_mutation',
     'prevent_commission_history_ledger_truncate',
@@ -675,12 +693,17 @@ COMMIT;
   for (const [label, signature] of [
     ['anonymous_cancellation_helper_grant', 'public.stamp_commission_cancellation_history()'],
     ['anonymous_earned_recorder_grant', 'public.record_commission_earned_state()'],
+    ['anonymous_payment_item_validator_grant', 'public.validate_commission_payment_item_history()'],
     ['anonymous_settlement_recorder_grant', 'public.record_commission_settlement_event()'],
     ['anonymous_ledger_mutation_guard_grant', 'public.prevent_commission_history_ledger_mutation()'],
     ['anonymous_ledger_truncate_guard_grant', 'public.prevent_commission_history_ledger_truncate()'],
     [
       'anonymous_private_void_helper_grant',
       'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)',
+    ],
+    [
+      'anonymous_private_post_helper_grant',
+      'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)',
     ],
   ]) {
     expectCandidateFailure(
@@ -805,6 +828,38 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
     'backdated_runtime_history',
   );
   applySql(extractFunctionStatement(candidate, 'record_commission_earned_state'));
+
+  const missingPositivePaymentItemGuard = candidate.replace(
+    '  IF NEW.amount IS NULL OR round(NEW.amount, 2) <= 0 THEN',
+    '  IF FALSE THEN',
+  );
+  assert.notEqual(
+    missingPositivePaymentItemGuard,
+    candidate,
+    'positive payment-item guard mutation did not change the candidate',
+  );
+  applySql(extractFunctionStatement(missingPositivePaymentItemGuard, 'validate_commission_payment_item_history'));
+  expectSmokeFailure(
+    'SMOKE_FAIL: zero-dollar payout was created',
+    'missing_create_time_positive_amount_guard',
+  );
+  applySql(extractFunctionStatement(candidate, 'validate_commission_payment_item_history'));
+
+  const missingCreateTimeDateGuard = candidate.replace(
+    '  IF v_payment_date < v_commission_order_date THEN',
+    '  IF FALSE THEN',
+  );
+  assert.notEqual(
+    missingCreateTimeDateGuard,
+    candidate,
+    'create-time payment-date guard mutation did not change the candidate',
+  );
+  applySql(extractFunctionStatement(missingCreateTimeDateGuard, 'validate_commission_payment_item_history'));
+  expectSmokeFailure(
+    'SMOKE_FAIL: payout before commission order_date was created',
+    'missing_create_time_payment_date_guard',
+  );
+  applySql(extractFunctionStatement(candidate, 'validate_commission_payment_item_history'));
 
   const transactionTimestampSettlement = candidate.replaceAll(
     'v_event_at := clock_timestamp();',

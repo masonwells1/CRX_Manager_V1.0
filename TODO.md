@@ -122,7 +122,11 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > cutover record, and two append-only bigint-cent event ledgers. Runtime events use wall-clock
 > transition time; the report exposes aggregate and per-payment detail from the ledgers only. The
 > first supported cutoff is the first complete Chicago day after cutover. Earlier dates fail closed,
-> and the 2 existing cancelled rows enter the opening observation as excluded legacy states.
+> and the 2 existing cancelled rows enter the opening observation as excluded legacy states. The
+> apply day itself is deliberately unavailable in Reports until the next Chicago day. The 8 empty
+> `SEED-*` payment headers were already unpostable under the live posting function's empty-batch
+> guard; this migration leaves them unchanged. New payout creation fails immediately for a
+> non-positive item or a payment date before its commission's order date.
 >
 > **Proof/status 2026-09-03:** the first candidate's PostgreSQL 17 proof passed, but exact-SHA and
 > Claude reviews correctly rejected its backdated opening state. The corrected candidate uses a real

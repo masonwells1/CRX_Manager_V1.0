@@ -4,7 +4,7 @@
 return-credit chain).** A read-only 2026-09-03 query records **993 ledger rows**, 986 distinct
 names, `max(version)` `20260903153402`, and effective authored-name high-water
 `20260903150000_job_chemicals_persist_driver`. F06 is applied live under that server-assigned
-version, so the prerequisite immediately below the higher-stamped commission migration is satisfied.
+version, so F06 is applied and this commission migration's ordering prerequisite is met.
 Schema shape still comes from the live introspection that regenerated
 `.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
 columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
@@ -57,7 +57,12 @@ candidate was rejected for backdating mutable current state. It adds
 signed posted/voided settlement ledger. The aggregate and detail reports read only those immutable
 events, including paid-only negative balances after a later cancellation or soft delete. Exact
 cutoffs begin on the first complete Chicago day after the real database cutover; every earlier date
-fails closed because pre-cutover earned-state versions do not exist. The two existing zero-dollar
+fails closed because pre-cutover earned-state versions do not exist. On the apply date itself, the
+Commission Balance screen will therefore show the refusal instead of a number; the first supported
+date will be the next Chicago calendar day. The aggregate RPC is already used by Reports; the new
+payment-detail RPC is backend-only until a later frontend change. New and revised commissions must
+carry an `order_date`, and payout creation now rejects non-positive items or a payment date before
+the commission's order date. The two existing zero-dollar
 cancellations enter the opening observation as excluded legacy states. Mason authorized the guarded
 live apply only after clean exact-artifact and Claude review; live `[E2E]` fixtures and merge remain separate.
 

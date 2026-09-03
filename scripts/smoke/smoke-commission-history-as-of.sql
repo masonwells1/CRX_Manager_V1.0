@@ -12,6 +12,7 @@ DECLARE
   v_order uuid;
   v_commission uuid;
   v_commission_two uuid;
+  v_zero_commission uuid;
   v_cancel_order uuid;
   v_cancel_commission uuid;
   v_payment uuid;
@@ -172,6 +173,38 @@ BEGIN
      OR v_balance.paid_count IS DISTINCT FROM 0::bigint THEN
     RAISE EXCEPTION 'SMOKE_FAIL: opening current balance is wrong: %', row_to_json(v_balance);
   END IF;
+
+  INSERT INTO public.commissions (
+    order_id, customer_id, recipient, recipient_user_id, split_percentage,
+    commission_amount, order_profit, order_date, status
+  ) VALUES (
+    v_order, v_customer, '[E2E] Commission History Admin Two', v_admin_two,
+    100, 0.00, 0.00, v_today - 3, 'pending'
+  ) RETURNING id INTO v_zero_commission;
+
+  v_failed := false;
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_zero_commission], 'check', 'E2E-COMM-HIST-ZERO-' || v_suffix,
+      v_today, '[E2E] reject zero commission payout', v_admin,
+      'e2e-commission-history-zero-' || v_suffix
+    );
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT:%' THEN v_failed := true; ELSE RAISE; END IF;
+  END;
+  IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_FAIL: zero-dollar payout was created'; END IF;
+
+  v_failed := false;
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_commission], 'check', 'E2E-COMM-HIST-BACKDATE-' || v_suffix,
+      v_today - 4, '[E2E] reject payment before commission order', v_admin,
+      'e2e-commission-history-backdate-' || v_suffix
+    );
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'COMMISSION_SETTLEMENT_PAYMENT_DATE_BEFORE_ORDER:%' THEN v_failed := true; ELSE RAISE; END IF;
+  END;
+  IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_FAIL: payout before commission order_date was created'; END IF;
 
   v_payment := public.create_commission_payment(
     ARRAY[v_commission], 'check', 'E2E-COMM-HIST-' || v_suffix,
