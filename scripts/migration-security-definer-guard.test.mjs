@@ -92,6 +92,10 @@ test('fails closed for ACL suffixes, quoted semicolons, and routine ownership ch
   assert.deepEqual(securityDefinerMissingAnonRevokes(`${safe}\nGRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon GRANTED BY CURRENT_USER;`), ['unparseable-security-definer-sql']);
   assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.quoted_return() RETURNS public."text;shadow" LANGUAGE sql SECURITY DEFINER AS $$ SELECT NULL; $$;'), ['quoted_return']);
   assert.deepEqual(securityDefinerMissingAnonRevokes(`${safe}\nALTER FUNCTION public.post_return_credit(uuid) OWNER TO anon;`), ['unparseable-security-definer-sql']);
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\nALTER FUNCTION public.post_return_credit(uuid) RENAME TO exposed;\nGRANT EXECUTE ON FUNCTION public.exposed(uuid) TO PUBLIC, anon;`),
+    ['exposed'],
+  );
 });
 
 test('does not demand an anon revoke for invoker-security functions', () => {

@@ -164,6 +164,35 @@ function dropRoutineEvents(sql) {
   return events;
 }
 
+function renameRoutineEvents(sql) {
+  const events = [];
+  const headers = /\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b/gi;
+  const target = /^ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)(?:"((?:""|[^"])*?)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/i;
+  for (const header of sql.matchAll(headers)) {
+    const end = statementEnd(sql, header.index);
+    if (end === null) return null;
+    const statement = sql.slice(header.index, end);
+    if (!/\bRENAME\s+TO\b/i.test(statement)) continue;
+    const match = target.exec(statement);
+    if (!match) return null;
+    const open = match[0].length - 1;
+    const args = balanced(statement, open);
+    if (!args) return null;
+    const renamed = /^\s+RENAME\s+TO\s+(?:"((?:""|[^"])*?)"|([A-Za-z_][A-Za-z0-9_$]*))\s*$/i.exec(statement.slice(args.end));
+    if (!renamed) return null;
+    const signature = canonicalSignature(match[1] || match[2], args.text, false, Boolean(match[1]));
+    const renamedSignature = canonicalSignature(renamed[1] || renamed[2], args.text, false, Boolean(renamed[1]));
+    if (!signature || !renamedSignature) return null;
+    events.push({
+      index: header.index,
+      signature,
+      renamedSignature,
+      name: (renamed[1] || renamed[2]).replaceAll('""', '"'),
+    });
+  }
+  return events;
+}
+
 export function securityDefinerMissingAnonRevokes(sql) {
   const executable = executableSql(sql);
   if (executable === null) return ['unparseable-security-definer-sql'];
@@ -200,13 +229,25 @@ export function securityDefinerMissingAnonRevokes(sql) {
   }
   const acl = aclEvents(executable);
   const drops = dropRoutineEvents(executable);
-  if (acl === null || drops === null) return ['unparseable-security-definer-sql'];
-  lifecycle.push(...acl.map(({ action, ...event }) => ({ ...event, action: 'acl', aclAction: action })), ...drops.map((event) => ({ ...event, action: 'drop' })));
+  const renames = renameRoutineEvents(executable);
+  if (acl === null || drops === null || renames === null) return ['unparseable-security-definer-sql'];
+  lifecycle.push(
+    ...acl.map(({ action, ...event }) => ({ ...event, action: 'acl', aclAction: action })),
+    ...drops.map((event) => ({ ...event, action: 'drop' })),
+    ...renames.map((event) => ({ ...event, action: 'rename' })),
+  );
   lifecycle.sort((a, b) => a.index - b.index);
   const state = new Map();
   for (const event of lifecycle) {
     if (event.action === 'declare') state.set(event.signature, { name: event.name, roles: new Map() });
     else if (event.action === 'drop') state.delete(event.signature);
+    else if (event.action === 'rename') {
+      const routine = state.get(event.signature);
+      if (!routine) continue;
+      if (state.has(event.renamedSignature)) return ['unparseable-security-definer-sql'];
+      state.delete(event.signature);
+      state.set(event.renamedSignature, { ...routine, name: event.name });
+    }
     else {
       const routine = state.get(event.signature);
       if (!routine) continue;
