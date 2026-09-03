@@ -12,7 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { getIdempotencyBindingRejection } from '../lib/idempotency';
+import { fingerprintIntentPayload, getIdempotencyBindingRejection } from '../lib/idempotency';
 import {
   UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
@@ -619,21 +619,31 @@ export default function PurchaseOrderDetail() {
     if (!po || !profile) return;
     setSaving(true);
 
+    // Assigned inside the try so the catch can retire the exact scope it used.
+    let saveScope = '';
     try {
       // Keep received lines in-place and preserve the exact selected Product UUID
       // for editable lines when the RPC updates this PO atomically.
       const itemsPayload = buildPurchaseOrderEditItemsPayload(editItems);
 
-      const savePOKey = savePOIdem.getKey();
+      const poPayload = {
+        vendor: editForm.vendor,
+        status: editForm.status,
+        submitted_date: editForm.submitted_date || null,
+        expected_delivery_date: editForm.expected_delivery_date || null,
+        notes: editForm.notes || null,
+      };
+      // save_purchase_order only checks that a cached receipt belongs to the same
+      // PO id — it binds neither the actor nor the edited payload (verified
+      // against the live catalog; no 20260831 migration adds that binding). A
+      // key retained across a reopened edit modal would therefore let an EDITED
+      // retry replay the earlier receipt and report a save that never happened.
+      // Scope the key to the exact edit so changed content mints a fresh one.
+      saveScope = `save-po:${id}:${fingerprintIntentPayload([poPayload, itemsPayload])}`;
+      const savePOKey = savePOIdem.getKeyFor(saveScope);
       const { data, error } = await supabase.rpc('save_purchase_order', {
         p_po_id: id!,
-        p_po_payload: {
-          vendor: editForm.vendor,
-          status: editForm.status,
-          submitted_date: editForm.submitted_date || null,
-          expected_delivery_date: editForm.expected_delivery_date || null,
-          notes: editForm.notes || null,
-        },
+        p_po_payload: poPayload,
         p_items: itemsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: savePOKey,
@@ -641,14 +651,14 @@ export default function PurchaseOrderDetail() {
 
       if (error) throw error;
       assertRpcResult(data, 'save_purchase_order');
-      savePOIdem.resetKey();
+      savePOIdem.resetKeyFor(saveScope);
 
       toast('success', 'Purchase order updated');
       setEditOpen(false);
       fetchPO();
     } catch (err: unknown) {
       if (getIdempotencyBindingRejection(err)) {
-        savePOIdem.resetKey();
+        if (saveScope) savePOIdem.resetKeyFor(saveScope);
         toast('warning', 'That retry belongs to a different purchase-order edit. Nothing was changed; retry with a fresh key.');
       } else {
         toast('error', sanitizeError(err));
@@ -694,8 +704,14 @@ export default function PurchaseOrderDetail() {
     if (!po || !profile) return;
     setSaving(true);
 
+    // cancel_purchase_order replays on the KEY ALONE — it checks neither the PO
+    // id nor the reason (verified against the live catalog; no 20260831
+    // migration adds that binding). A key retained across a reopened dialog on a
+    // DIFFERENT purchase order would replay this receipt and report that order
+    // cancelled when nothing happened. Scope the key to the exact cancellation.
+    const cancelScope = `cancel-po:${id}:${fingerprintIntentPayload([cancelReason || 'Cancelled'])}`;
     try {
-      const cancelKey = cancelPOIdem.getKey();
+      const cancelKey = cancelPOIdem.getKeyFor(cancelScope);
       const { data, error } = await supabase.rpc('cancel_purchase_order', {
         p_po_id: id!,
         p_reason: cancelReason || 'Cancelled',
@@ -705,7 +721,7 @@ export default function PurchaseOrderDetail() {
 
       if (error) throw error;
       assertRpcResult(data, 'cancel_purchase_order');
-      cancelPOIdem.resetKey();
+      cancelPOIdem.resetKeyFor(cancelScope);
 
       toast('success', 'Purchase order cancelled');
       setCancelOpen(false);
@@ -713,7 +729,7 @@ export default function PurchaseOrderDetail() {
       fetchPO();
     } catch (err: unknown) {
       if (getIdempotencyBindingRejection(err)) {
-        cancelPOIdem.resetKey();
+        cancelPOIdem.resetKeyFor(cancelScope);
         toast('warning', 'That retry belongs to a different cancellation. The purchase order was not changed; retry with a fresh key.');
       } else {
         toast('error', sanitizeError(err));

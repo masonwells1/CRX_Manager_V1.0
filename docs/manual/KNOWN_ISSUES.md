@@ -249,6 +249,45 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## RESOLVED 2026-09-02 — PR #535 removed six per-open `resetKey()` calls whose server-side replacement does not exist
+
+**What happened.** The gauntlet-s9 branch replaced six per-open `resetKey()` calls in
+`src/pages/InventoryPage.tsx` and `src/pages/PurchaseOrderDetail.tsx` with retained keys, on
+the stated assumption that a changed intent would come back as `IDEMPOTENCY_INTENT_MISMATCH`.
+One of the removed calls was the 2026-05-16 PR #59 fix that existed specifically so two
+products could not share a hold intent. The exact-SHA `gpt-5.6-sol` high-effort review of
+`ef82064a` returned BLOCKERS on the assumption, and the live catalog confirmed it.
+
+**Why it was real.** `create_inventory_hold`, `adjust_inventory`, `retire_inventory_item`,
+`save_purchase_order` and `cancel_purchase_order` carry no `request_actor_id` /
+`request_fingerprint` and never call `check_idempotency_intent`; `save_purchase_order` checks
+only that a cached receipt belongs to the same PO id. **None of the six `20260831` migrations
+adds that binding** — verified by searching all six for those five names (zero hits), so the
+gap would have survived the whole rollout. A lost response followed by the same dialog
+reopened on a different target would replay the earlier receipt, and the UI would report a
+hold, adjustment, retirement, PO edit or PO cancellation that PostgreSQL never performed.
+
+**Fix.** Each of the five derives its key from a payload fingerprint
+(`fingerprintIntentPayload` in `src/lib/idempotency.ts`) through `getKeyFor`/`resetKeyFor`, so
+an unchanged retry still replays while a changed target or value mints a fresh key.
+`reverse_receiving_record` deliberately keeps its retained key: migration `20260831160000`
+gives it genuine `check_idempotency_intent` actor+fingerprint binding — which is also why the
+database must roll out before that frontend merges.
+
+**The transferable lesson.** A diff that DELETES a guard reads like ordinary cleanup. This was
+caught only because the review compared against `main` rather than reading the new code alone;
+see the standing rule in `docs/reference/gotchas.md` about comparing guard behavior against
+`main`. Pinned by `src/lib/gauntletFrontendSafetyGuards.test.ts` ("scopes retained keys for the
+RPCs that replay on the key alone"), which was mutation-tested — reverting any of the five to a
+bare `getKey()` turns it red.
+
+**Second-order finding.** The two `*.productIdentity.test.tsx` suites mocked
+`useIdempotencyKey` with only `getKey`/`resetKey`. Once a component scoped its key, the
+undefined `getKeyFor` threw inside the click handler and the RPC never fired, so the test
+failed for a reason unrelated to its assertion. Both mocks now mirror the hook's full surface.
+
+---
+
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
 The gate landed on `main` as `f2307fbf9` with these four items knowingly open. They were recorded

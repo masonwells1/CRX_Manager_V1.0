@@ -148,8 +148,12 @@ describe('Section 9 actor-and-intent replay binding', () => {
     expect(vendorBill).toContain('paymentIntent.resolveIntent()');
 
     expect(purchaseOrder).toContain('reverseIdem.resetKey()');
-    expect(inventoryPage).toContain('if (getIdempotencyBindingRejection(error)) adjustIdem.resetKey();');
-    expect(inventoryPage).toContain('if (getIdempotencyBindingRejection(error)) retireIdem.resetKey();');
+    // adjust_inventory and retire_inventory_item replay on the key alone — the
+    // live catalog shows no actor/payload binding and no 20260831 migration adds
+    // one — so these two retire a PAYLOAD-SCOPED key, not a page-scoped one.
+    // See the Sol BLOCKERS verdict on ef82064a.
+    expect(inventoryPage).toContain('if (getIdempotencyBindingRejection(error)) adjustIdem.resetKeyFor(scope);');
+    expect(inventoryPage).toContain('if (getIdempotencyBindingRejection(error)) retireIdem.resetKeyFor(scope);');
     expect(vendorBill).toContain('editIdem.resetKey();');
     expect(vendorBill).toContain('voidIdem.resetKeyFor(voidBillScope);');
   });
