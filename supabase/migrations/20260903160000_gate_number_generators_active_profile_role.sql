@@ -23,10 +23,17 @@
 -- in src/lib/pagePermissions.ts and (b) the roles admitted by every live
 -- SECURITY DEFINER RPC that calls the generator internally, so no existing
 -- successful path regresses. Verified live 2026-09-03 read-only:
---   * 18 internal RPCs call these generators; `_complete_delivery_authorized_impl`
---     checks auth but not role and the deliveries surface admits `driver`, so a
---     driver completing a delivery reaches next_invoice_number via auto-invoice.
---     `driver` is therefore in the invoice and delivery sets.
+--   * 18 internal RPCs call these generators. `_complete_delivery_authorized_impl`
+--     admits admin, sales_rep, or the delivery's OWN assigned driver, and it
+--     already requires `is_active = true`. A driver completing their assigned
+--     delivery reaches next_invoice_number via auto-invoice, so `driver` belongs
+--     in the invoice and delivery sets. CORRECTED 2026-09-03 against LIVE prosrc
+--     after adversarial review: an earlier draft of this comment said that
+--     function "checks auth but not role", which is false. The conclusion did
+--     not change, but the reason is load-bearing -- this derivation is exactly
+--     what anyone widening or narrowing these sets is told to re-run below, and
+--     the real path is TIGHTER than the wrong reason implied (assigned driver
+--     only, active only), not looser.
 --   * `complete_job` admits applicator, but its invoice branch goes through
 --     `transfer_job_to_invoice`, which already requires admin/sales_rep -- so
 --     applicator is NOT added to the invoice set and nothing regresses.
@@ -67,7 +74,129 @@
 -- absent from `main`; all six are carried by PR #535's branch
 -- codex/gauntlet-s9-safety-20260831, so merging it closes the gap. Until then
 -- `main` alone cannot show the state these bodies were read from, which is
--- exactly why the pins above are taken from live rather than from disk.
+-- exactly why the pins in the PREFLIGHT below are taken from live rather than
+-- from disk.
+--
+-- SEARCH_PATH IS PRESERVED, NOT CHANGED. The pins hash `prosrc` only, and
+-- `proconfig` is not part of `prosrc`, so a settings change would be invisible
+-- to them. Adversarial review flagged this on 2026-09-03, reading the on-disk
+-- ancestors, where seven of the eight declare `SET search_path = public` and
+-- next_commission_payment_number declares `SET search_path = ''` -- which would
+-- have made the `public, pg_temp` below an undisclosed posture change. Checked
+-- against LIVE `pg_proc.proconfig` the same day: all eight already carry
+-- exactly `search_path=public, pg_temp`, so this migration reproduces the live
+-- setting and changes nothing. The finding was a false positive caused by
+-- reading disk instead of live -- which is precisely the hazard described
+-- above, arriving from the other direction.
+
+-- ---------------------------------------------------------------------------
+-- PREFLIGHT -- refuse to overwrite a body that is not the one that was reviewed.
+--
+-- Every CREATE OR REPLACE below is unconditional. The md5 pins proving these are
+-- the bodies this migration was written against previously lived ONLY in
+-- scripts/smoke/prove-number-generator-gates.mjs -- an offline container proof
+-- that never touches production -- so nothing verified the live bodies at APPLY
+-- time. If any lane re-emitted one of the eight between the 2026-09-03 read and
+-- this apply, the replacement would silently erase that change, and the
+-- postflight would still pass, because it asserts generic markers (gate text,
+-- advisory lock, ACL, search_path) and not the prior semantics. Six 20260831*
+-- migrations are applied live with no file on `main`, so drift here is a
+-- demonstrated condition in this repository, not a hypothetical. The window is
+-- real and open: this migration waits for an explicit approval, so an arbitrary
+-- amount of time can pass between the read and the apply.
+--
+-- For each generator this requires the current normalized prosrc md5 to be
+-- EITHER the reviewed pre-image, OR the exact body this migration installs (so a
+-- re-apply is a no-op rather than fatal). Anything else aborts the transaction
+-- and names the function. The second case is an EXACT hash comparison and NOT a
+-- "looks gated" token test -- a token test would accept a later migration's
+-- improved body and silently revert it; see the comment on that branch.
+--
+-- KNOWN AND ACCEPTED: this makes the file un-appliable to a database rebuilt
+-- from this repository's migrations, because the on-disk ancestors of these
+-- bodies differ from live. That rebuild is already impossible for an unrelated
+-- reason -- six 20260831* migrations are applied live with no file on `main` --
+-- and production, the only target this file is written for, matches the pins.
+-- Raised as HIGH by adversarial review 2026-09-03 and accepted deliberately:
+-- refusing to silently overwrite production is worth more than a replay path
+-- that does not currently work.
+--
+-- Hashes are md5 over prosrc with per-line trailing whitespace stripped:
+-- next_cycle_count_number carries 9 characters of trailing whitespace live that
+-- a checked-in .sql cannot reproduce; the other seven are unaffected by it.
+-- ---------------------------------------------------------------------------
+DO $preflight$
+DECLARE
+  v_expected CONSTANT jsonb := jsonb_build_object(
+    'next_application_record_number', 'f5ebf20dc5f4982097e4dfb226156ea8',
+    'next_commission_payment_number', 'd614a9489826c8b4837a466f884b022b',
+    'next_cycle_count_number',        'b8d37b2ba9ef790eaa8fca8bacdb9f5f',
+    'next_delivery_number',           'd13c37ceaea3c2f00293bfb2b1a2a215',
+    'next_invoice_number',            '871a39420353d23f3064261231c95531',
+    'next_job_number',                'a8249edef5733015f6d8e8c669caf55e',
+    'next_po_number',                 'c077318f1748f1d42c56c49439bfe985',
+    'next_return_number',             'b02f5a71f91148152c0cb67ab5ba5d0a'
+  );
+  -- The bodies this migration itself installs, hashed the same way. Used for
+  -- the re-apply case: see the comment on the second branch below.
+  v_applied CONSTANT jsonb := jsonb_build_object(
+    'next_application_record_number', '4d26d0ee0176d8e6b630314c34b1cc4e',
+    'next_commission_payment_number', '6d4208fe79a2b021fd9752e862266f45',
+    'next_cycle_count_number',        '2bce8cb943a36951bc605ed55f2636df',
+    'next_delivery_number',           'ae70da873eeea640e59876fe1a169eed',
+    'next_invoice_number',            'b53499d077bd84b78a6f8fec142741bc',
+    'next_job_number',                '183721b3349f15162c068f58e2877b5d',
+    'next_po_number',                 '448fc5d0dbfbba0a8ae11b96e4ee9fcb',
+    'next_return_number',             '8e8acd85a14248cfeccfd7cc5a047c29'
+  );
+  v_name text;
+  v_pin  text;
+  v_count int;
+  v_src  text;
+  v_md5  text;
+BEGIN
+  FOR v_name, v_pin IN SELECT key, value FROM jsonb_each_text(v_expected) LOOP
+    SELECT count(*) INTO v_count
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = v_name;
+
+    IF v_count = 0 THEN
+      RAISE EXCEPTION 'PREFLIGHT: public.% does not exist; refusing to create a gated generator where none was reviewed', v_name;
+    END IF;
+    IF v_count > 1 THEN
+      RAISE EXCEPTION 'PREFLIGHT: public.% has % overloads; the reviewed state had exactly one', v_name, v_count;
+    END IF;
+
+    SELECT p.prosrc INTO v_src
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = v_name;
+
+    v_md5 := md5(regexp_replace(v_src, '[ \t]+$', '', 'gn'));
+
+    IF v_md5 = v_pin THEN
+      CONTINUE;
+    END IF;
+
+    -- Re-apply case. This deliberately requires the EXACT body this migration
+    -- installs, not merely a body that looks gated. An earlier revision tested
+    -- for the presence of AUTH_REQUIRED / INSUFFICIENT_ROLE / is_active, which
+    -- accepted an unbounded set of bodies: a LATER migration that widened a role
+    -- set or fixed a lpad width would still contain all three tokens, so
+    -- re-running this file would have silently reverted that work while printing
+    -- a reassuring NOTICE. That is the same "generic markers, not semantics"
+    -- weakness this preflight exists to close, so it must not be reintroduced
+    -- here. Raised by adversarial review 2026-09-03.
+    IF v_md5 = v_applied ->> v_name THEN
+      RAISE NOTICE 'PREFLIGHT: public.% already carries exactly this migration body; re-apply is a no-op.', v_name;
+      CONTINUE;
+    END IF;
+
+    RAISE EXCEPTION 'PREFLIGHT: public.% is neither the reviewed pre-image (md5 %) nor the body this migration installs (md5 %); found %. Refusing to overwrite it -- a later change may be sitting here. Re-read the live body, re-review, and re-pin before applying.', v_name, v_pin, v_applied ->> v_name, v_md5;
+  END LOOP;
+
+  RAISE NOTICE 'PREFLIGHT: all eight generators match the reviewed pre-image or are already gated.';
+END
+$preflight$;
 
 CREATE OR REPLACE FUNCTION public.next_application_record_number()
 RETURNS text

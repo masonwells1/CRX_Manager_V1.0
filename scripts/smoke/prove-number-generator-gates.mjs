@@ -238,129 +238,89 @@ ${Object.entries(PRINCIPALS)
 }
 
 /**
- * The eight generators exactly as they exist live TODAY -- no gate -- carrying
- * the live ACL. CREATE OR REPLACE in the migration must preserve that ACL.
+ * The eight generators exactly as they exist live TODAY -- no gate.
+ *
+ * These bodies are DERIVED from the migration under test, not hand-written:
+ * each of its gated bodies has the gate stripped back out, and the remainder
+ * must hash to the pinned live prosrc md5 BEFORE it is installed.
+ *
+ * An earlier revision hand-wrote them in a compressed style
+ * (`DECLARE v_year text; v_max_num int;` collapsed onto one line). That was
+ * semantically equivalent to live but NOT byte-identical, so this phase never
+ * installed the live prosrc it claimed to -- the header above said "exactly as
+ * they exist live TODAY" and the fixture said otherwise. Nothing caught it,
+ * because the only md5 comparison ran on the POST-migration body (phase C2),
+ * never on the fixture. It surfaced when the migration grew a preflight that
+ * hashes the live body and the proof failed against its own fixture:
+ * next_po_number found dccf50db155954f09f2c8b50851c2638, expected
+ * c077318f1748f1d42c56c49439bfe985. Deriving removes the transcription, and
+ * the assertion below is what makes the "identical to live" claim checkable
+ * rather than merely stated.
+ */
+function preGateStatements() {
+  const migration = readFileSync(MIGRATION, 'utf8');
+  const statements = [];
+  const failures = [];
+
+  for (const name of GENERATORS) {
+    const matches = migration.match(
+      new RegExp(`CREATE OR REPLACE FUNCTION public\\.${name}\\([\\s\\S]*?\\$function\\$;`, 'g'),
+    );
+    if (!matches || matches.length !== 1) {
+      failures.push(
+        `${name}: expected exactly 1 CREATE OR REPLACE in the migration, found ${matches ? matches.length : 0}`,
+      );
+      continue;
+    }
+
+    const ungated = matches[0].replace(GATE_RE, '').replace('  v_actor uuid;\n', '');
+    if (ungated === matches[0]) {
+      failures.push(`${name}: gate block not found, so the pre-gate body would still carry the gate`);
+      continue;
+    }
+
+    const body = ungated.match(/AS \$function\$([\s\S]*)\$function\$;$/);
+    if (!body) {
+      failures.push(`${name}: could not extract the body from its CREATE statement`);
+      continue;
+    }
+
+    // psql stores this text as prosrc verbatim, so trailing whitespace here
+    // would put the installed body out of step with the normalized pin.
+    const normalized = body[1].replace(/[ \t]+$/gm, '');
+    if (normalized !== body[1]) {
+      failures.push(`${name}: the migration's body carries trailing whitespace`);
+      continue;
+    }
+
+    const md5 = createHash('md5').update(normalized, 'utf8').digest('hex');
+    if (md5 !== LIVE_BODY_MD5[name]) {
+      failures.push(`${name}: gate-stripped migration body md5 ${md5} != live ${LIVE_BODY_MD5[name]}`);
+      continue;
+    }
+
+    statements.push(ungated);
+  }
+
+  assert.equal(
+    failures.length,
+    0,
+    `could not derive the pre-gate bodies from the migration:\n${failures.join('\n')}`,
+  );
+  assert.equal(
+    statements.length,
+    GENERATORS.length,
+    `derived ${statements.length} pre-gate bodies, expected ${GENERATORS.length}`,
+  );
+  return statements.join('\n\n');
+}
+
+/**
+ * Installs those bodies with the live ACL. CREATE OR REPLACE in the migration
+ * must preserve that ACL.
  */
 function installPreGateGenerators() {
-  psql(`
-CREATE OR REPLACE FUNCTION public.next_application_record_number()
-RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
-AS $fn$
-DECLARE v_year text; v_max_num int; v_next text;
-BEGIN
-  v_year := extract(year FROM current_date)::text;
-  PERFORM pg_advisory_xact_lock(hashtext('next_application_record_number'));
-  SELECT COALESCE(MAX(CASE WHEN record_number ~ ('^APP-' || v_year || '-\\d+$')
-    THEN CAST(split_part(record_number, '-', 3) AS int) ELSE 0 END), 0)
-  INTO v_max_num FROM application_records;
-  v_next := 'APP-' || v_year || '-' || lpad((v_max_num + 1)::text, 4, '0');
-  RETURN v_next;
-END; $fn$;
-
-CREATE OR REPLACE FUNCTION public.next_commission_payment_number()
-RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
-AS $fn$
-DECLARE v_year text; v_seq integer; v_num text;
-BEGIN
-  PERFORM pg_advisory_xact_lock(hashtext('commission_payment_number'));
-  v_year := to_char(CURRENT_DATE, 'YYYY');
-  SELECT COALESCE(MAX(regexp_replace(payment_number, '^CP-' || v_year || '-', '')::integer), 0) + 1
-    INTO v_seq FROM public.commission_payments
-   WHERE payment_number LIKE 'CP-' || v_year || '-%';
-  v_num := 'CP-' || v_year || '-' || lpad(v_seq::text, 4, '0');
-  RETURN v_num;
-END; $fn$;
-
-CREATE OR REPLACE FUNCTION public.next_cycle_count_number()
-RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
-AS $fn$
-DECLARE v_year text; v_max_num integer; v_next_num integer;
-BEGIN
-  v_year := EXTRACT(YEAR FROM CURRENT_DATE)::text;
-  PERFORM pg_advisory_xact_lock(8675309);
-  SELECT COALESCE(MAX(CASE WHEN count_number ~ ('^CC-' || v_year || '-\\d+$')
-    THEN (regexp_replace(count_number, '^CC-' || v_year || '-', ''))::integer ELSE 0 END), 0)
-  INTO v_max_num FROM cycle_counts WHERE count_number LIKE 'CC-' || v_year || '-%';
-  v_next_num := v_max_num + 1;
-  RETURN 'CC-' || v_year || '-' || LPAD(v_next_num::text, 5, '0');
-END; $fn$;
-
-CREATE OR REPLACE FUNCTION public.next_delivery_number()
-RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
-AS $fn$
-DECLARE v_max_num int; v_next text;
-BEGIN
-  PERFORM pg_advisory_xact_lock(hashtext('next_delivery_number'));
-  SELECT COALESCE(MAX(CASE WHEN delivery_number ~ '^DEL-\\d+$'
-    THEN CAST(split_part(delivery_number, '-', 2) AS int) ELSE 0 END), 0)
-  INTO v_max_num FROM deliveries;
-  v_next := 'DEL-' || lpad((v_max_num + 1)::text, 5, '0');
-  RETURN v_next;
-END; $fn$;
-
-CREATE OR REPLACE FUNCTION public.next_invoice_number(p_invoice_type text DEFAULT 'field_application'::text)
-RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
-AS $fn$
-DECLARE v_year text := extract(year FROM now())::text; v_seq int; v_max int;
-        v_prefix text; v_sequence regclass;
-BEGIN
-  CASE p_invoice_type
-    WHEN 'chemical_sale' THEN v_prefix := 'CS'; v_sequence := 'public.cs_invoice_number_seq'::regclass;
-    WHEN 'misc_charge'   THEN v_prefix := 'MC'; v_sequence := 'public.mc_invoice_number_seq'::regclass;
-    WHEN 'credit_memo'   THEN v_prefix := 'CM'; v_sequence := 'public.cm_invoice_number_seq'::regclass;
-    ELSE v_prefix := 'INV'; v_sequence := 'public.invoice_number_seq'::regclass;
-  END CASE;
-  PERFORM pg_advisory_xact_lock(hashtext('invoice_number:' || v_prefix || ':' || v_year));
-  SELECT COALESCE(MAX(regexp_replace(invoice_number, '^' || v_prefix || '-[0-9]{4}-', '')::integer), 0)
-    INTO v_max FROM public.invoices
-   WHERE invoice_number ~ ('^' || v_prefix || '-' || v_year || '-[0-9]+$');
-  v_seq := nextval(v_sequence);
-  IF v_seq <= v_max THEN PERFORM setval(v_sequence, v_max, true); v_seq := nextval(v_sequence); END IF;
-  RETURN v_prefix || '-' || v_year || '-' || lpad(v_seq::text, 4, '0');
-END; $fn$;
-
-CREATE OR REPLACE FUNCTION public.next_job_number()
-RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
-AS $fn$
-DECLARE v_year text; v_max_num int; v_next text;
-BEGIN
-  v_year := extract(year FROM current_date)::text;
-  PERFORM pg_advisory_xact_lock(hashtext('next_job_number'));
-  SELECT COALESCE(MAX(CASE WHEN job_number ~ ('^JOB-' || v_year || '-\\d+$')
-    THEN CAST(split_part(job_number, '-', 3) AS int) ELSE 0 END), 0)
-  INTO v_max_num FROM jobs;
-  v_next := 'JOB-' || v_year || '-' || lpad((v_max_num + 1)::text, 4, '0');
-  RETURN v_next;
-END; $fn$;
-
-CREATE OR REPLACE FUNCTION public.next_po_number()
-RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
-AS $fn$
-DECLARE v_year text; v_max_num int; v_next text;
-BEGIN
-  v_year := extract(year FROM current_date)::text;
-  PERFORM pg_advisory_xact_lock(hashtext('next_po_number'));
-  SELECT COALESCE(MAX(CASE WHEN po_number ~ ('^PO-' || v_year || '-\\d+$')
-    THEN CAST(split_part(po_number, '-', 3) AS int) ELSE 0 END), 0)
-  INTO v_max_num FROM purchase_orders;
-  v_next := 'PO-' || v_year || '-' || lpad((v_max_num + 1)::text, 4, '0');
-  RETURN v_next;
-END; $fn$;
-
-CREATE OR REPLACE FUNCTION public.next_return_number()
-RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
-AS $fn$
-DECLARE v_year text; v_max_num int; v_next text;
-BEGIN
-  v_year := extract(year FROM current_date)::text;
-  PERFORM pg_advisory_xact_lock(hashtext('next_return_number'));
-  SELECT COALESCE(MAX(CASE WHEN return_number ~ ('^RMA-' || v_year || '-\\d+$')
-    THEN CAST(split_part(return_number, '-', 3) AS int) ELSE 0 END), 0)
-  INTO v_max_num FROM returns;
-  v_next := 'RMA-' || v_year || '-' || lpad((v_max_num + 1)::text, 4, '0');
-  RETURN v_next;
-END; $fn$;
-`);
+  psql(preGateStatements());
 
   // Reproduce the live ACL: EXECUTE to authenticated + service_role only.
   // `anon` is named explicitly -- REVOKE FROM PUBLIC alone does not clear an
@@ -371,6 +331,22 @@ END; $fn$;
 GRANT EXECUTE ON FUNCTION public.${sig} TO authenticated, service_role;`;
   }).join('\n');
   psql(revokes);
+}
+
+/**
+ * Put the database back into the true post-migration state after a mutation.
+ *
+ * Re-applying the migration alone no longer suffices. Its preflight refuses to
+ * overwrite a body that is neither the reviewed pre-image nor already gated,
+ * and several mutations leave exactly such a body behind -- one with the
+ * `is_active` check dropped, one with a deliberately drifted regex. That
+ * refusal is the preflight working, not a defect, so the restore resets each
+ * generator to the verified pre-image FIRST and then applies the migration for
+ * real, rather than routing around the check being proved.
+ */
+function restoreMigratedState() {
+  psql(preGateStatements());
+  psql(readFileSync(MIGRATION, 'utf8'));
 }
 
 function captureAcls() {
@@ -530,10 +506,29 @@ try {
   }
   assert.equal(failures.length, 0, `allow-matrix mismatches:\n${failures.join('\n')}`);
 
-  // A refused caller must not have advanced the invoice sequence.
+  // A refused caller must not have advanced the invoice sequence. ASSERT it.
+  // An earlier revision only console.log'd these numbers, so the claim "the
+  // sequence advanced for exactly the admitted callers" rested on a human
+  // reading a log line rather than on an enforced check -- the documentation
+  // outclaimed the test. Caught by adversarial review 2026-09-03.
   const seqAfterRefusals = query(`SELECT last_value FROM public.invoice_number_seq`);
   const admitted = after.filter((r) => r.fnName === 'next_invoice_number' && r.result.startsWith('OK:')).length;
+  const seqDelta = Number(seqAfterRefusals) - Number(seqBefore);
   console.log(`\n--- invoice_number_seq: ${seqBefore} before -> ${seqAfterRefusals} after (${admitted} admitted callers) ---`);
+  assert.ok(
+    Number.isFinite(seqDelta),
+    `invoice_number_seq did not read as a number: ${seqBefore} -> ${seqAfterRefusals}`,
+  );
+  // Guards against a vacuous pass: 0 admitted and 0 delta would otherwise agree.
+  assert.ok(
+    admitted > 0,
+    'no caller was admitted to next_invoice_number, so the sequence assertion would prove nothing',
+  );
+  assert.equal(
+    seqDelta,
+    admitted,
+    `invoice_number_seq advanced by ${seqDelta} but exactly ${admitted} callers were admitted — a refused caller advanced live invoice numbering`,
+  );
 
   // ---- E. The real `authenticated` role can still execute -----------------
   const execCheck = query(`
@@ -666,7 +661,7 @@ $probe$;`, { allowFailure: true });
     assert.match(text, m.expect, `MUTATION "${m.name}" caught, but by the wrong assertion:\n${text}`);
     console.log(`  caught: ${m.name}`);
     if (m.undo) psql(m.undo);
-    else psql(migration); // re-apply to restore the true bodies
+    else restoreMigratedState();
   }
 
   // The advisory lock disappearing entirely must be caught by its own check,
@@ -690,7 +685,7 @@ $probe$;`, { allowFailure: true });
     'lock-removal was caught by the wrong assertion',
   );
   console.log('  caught: the advisory lock is removed entirely');
-  psql(migration);
+  restoreMigratedState();
 
   // The fidelity pin must be able to fail. Change one regex inside a body and
   // require checkFidelity() to name that function -- otherwise the pin is
@@ -726,7 +721,93 @@ END $m$;`);
     `MUTATION NOT CAUGHT: a changed body passed the fidelity pin. Reported: ${JSON.stringify(drifted)}`,
   );
   console.log('  caught: a body silently drifting from the live definition');
-  psql(migration);
+  restoreMigratedState();
+
+  // The PREFLIGHT must be able to REFUSE. Drift a body away from its pin and
+  // require the migration itself to abort. Without this the preflight is
+  // decorative -- it would report "all eight match" forever and nobody would
+  // know, which is precisely the failure it was added to prevent. The mutated
+  // body deliberately carries none of AUTH_REQUIRED / INSUFFICIENT_ROLE /
+  // is_active, so it cannot slip through the already-gated branch instead.
+  psql(`CREATE OR REPLACE FUNCTION public.next_return_number() RETURNS text
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $m$
+        DECLARE v_year text; v_max_num int; v_next text;
+        BEGIN
+          v_year := extract(year FROM current_date)::text;
+          PERFORM pg_advisory_xact_lock(hashtext('next_return_number'));
+          SELECT 0 INTO v_max_num;
+          v_next := 'RMA-' || v_year || '-' || lpad((v_max_num + 7)::text, 4, '0');
+          RETURN v_next;
+        END $m$;`);
+  const refused = psql(readFileSync(MIGRATION, 'utf8'), { allowFailure: true });
+  assert.notEqual(
+    refused.status,
+    0,
+    'MUTATION NOT CAUGHT: the migration overwrote a body that had drifted from its pin',
+  );
+  assert.match(
+    `${refused.stdout || ''}\n${refused.stderr || ''}`,
+    /PREFLIGHT: public\.next_return_number is neither the reviewed pre-image/,
+    'the drifted body was refused, but not by the preflight',
+  );
+  console.log('  caught: the preflight refuses to overwrite a drifted body');
+  restoreMigratedState();
+
+  // The preflight's re-apply branch must NOT be satisfiable by a body that
+  // merely LOOKS gated. This body carries AUTH_REQUIRED, INSUFFICIENT_ROLE and
+  // `is_active = true` -- it would have passed the original token test -- but it
+  // is a DIFFERENT gate (admits applicator on next_po_number). If the preflight
+  // accepted it, re-running this migration would silently revert a later
+  // deliberate widening, which is the exact regression the exact-hash branch
+  // was introduced to prevent.
+  psql(`CREATE OR REPLACE FUNCTION public.next_po_number() RETURNS text
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $m$
+        DECLARE v_actor uuid; v_year text; v_next text;
+        BEGIN
+          v_actor := auth.uid();
+          IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+          IF NOT EXISTS (SELECT 1 FROM public.profiles
+             WHERE id = v_actor AND is_active = true
+               AND role IN ('admin','sales_rep','applicator')) THEN
+            RAISE EXCEPTION 'INSUFFICIENT_ROLE'; END IF;
+          PERFORM pg_advisory_xact_lock(hashtext('next_po_number'));
+          v_year := extract(year FROM current_date)::text;
+          v_next := 'PO-' || v_year || '-9999';
+          RETURN v_next;
+        END $m$;`);
+  const lookalike = psql(readFileSync(MIGRATION, 'utf8'), { allowFailure: true });
+  assert.notEqual(
+    lookalike.status,
+    0,
+    'MUTATION NOT CAUGHT: the preflight accepted a different gate as "already gated" and would have reverted it',
+  );
+  assert.match(
+    `${lookalike.stdout || ''}\n${lookalike.stderr || ''}`,
+    /PREFLIGHT: public\.next_po_number is neither the reviewed pre-image/,
+    'the look-alike gated body was refused, but not by the preflight',
+  );
+  console.log('  caught: a DIFFERENT gate is not accepted as "already applied"');
+  restoreMigratedState();
+
+  // The re-apply branch must actually ACCEPT the body this migration installs.
+  // Without this the post-image pins could be wrong in the safe direction and
+  // nothing would say so: every apply would abort with "neither the reviewed
+  // pre-image nor the body this migration installs", and the failure would only
+  // ever be discovered by an operator mid-apply. Bodies are post-image here
+  // because restoreMigratedState() just applied the migration.
+  const reapply = psql(readFileSync(MIGRATION, 'utf8'), { allowFailure: true });
+  assert.equal(
+    reapply.status,
+    0,
+    `re-applying the migration over its own output failed -- the post-image pins are wrong:\n${reapply.stdout || ''}\n${reapply.stderr || ''}`,
+  );
+  assert.match(
+    `${reapply.stdout || ''}\n${reapply.stderr || ''}`,
+    /already carries exactly this migration body/,
+    'the re-apply succeeded but not through the exact-post-image branch',
+  );
+  console.log('  verified: re-applying over this migration own output is a no-op');
+  assert.deepEqual(checkFidelity(), [], 'fidelity must still be clean after a re-apply');
 
   // Clean state must still pass, so the mutations above are not a false green.
   psql(postflight);
