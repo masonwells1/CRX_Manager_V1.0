@@ -67,12 +67,16 @@ function collectPaths(root, stateDir) {
     'scripts/write-codex-push-proof.mjs',
     'scripts/migration-security-definer-guard.mjs',
     'scripts/migration-proof-evidence-hash.mjs',
+    'scripts/migration-proof-reviewer-launch.mjs',
     normal(path.join(relativeStateDir, 'applied-migrations.json')),
   ]);
   for (const file of safeWalk(rootReal, path.join(root, 'supabase', 'migrations'), (name) => name.endsWith('.sql'))) {
     inputs.add(normal(path.relative(root, file)));
   }
   for (const file of safeWalk(rootReal, path.join(root, 'src'), (name) => /\.(?:ts|tsx)$/.test(name) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(name))) {
+    inputs.add(normal(path.relative(root, file)));
+  }
+  for (const file of safeWalk(rootReal, path.join(root, 'supabase', 'functions'), (name) => /\.(?:ts|tsx)$/.test(name) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(name))) {
     inputs.add(normal(path.relative(root, file)));
   }
   return { rootReal, paths: [...inputs].sort() };

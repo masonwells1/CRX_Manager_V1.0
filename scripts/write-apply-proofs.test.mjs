@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
+import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
 import './migration-security-definer-guard.test.mjs';
 
 function printedEvidence(migration) {
@@ -25,8 +26,17 @@ test('evidence preserves unqualified functions and their frontend RPC callers', 
   const evidence = printedEvidence('20260430250000_field_app_workflow_phase13');
 
   assert.match(evidence, /PRIOR DECLARATIONS of [^\n]*receive_po_items/);
-  assert.match(evidence, /FRONTEND RPC CALL SITES of receive_po_items in src\//);
+  assert.match(evidence, /APPLICATION RPC CALL SITES of receive_po_items in src\/ and supabase\/functions\//);
   assert.match(evidence, /frontend RPC: src\/components\/receiving\/QuickReceivePanel\.tsx/);
+});
+
+test('evidence includes edge-function callers and review launch permits its Git-free packet', () => {
+  const evidence = printedEvidence('20260714230100_blend_ticket_access_and_atomicity');
+  assert.match(evidence, /edge-function RPC: supabase\/functions\/process-blend-ticket\/index\.ts:1168/);
+  const args = buildMigrationReviewerExecArgs({ reviewCwd: 'C:/tmp/review', model: 'gpt-5.6-sol', effort: 'high' });
+  assert.equal(args[0], 'exec');
+  assert.ok(args.includes('--skip-git-repo-check'));
+  assert.equal(args[args.indexOf('-C') + 1], 'C:/tmp/review');
 });
 
 test('evidence fails closed rather than treating raw SQL text as executable callers', () => {

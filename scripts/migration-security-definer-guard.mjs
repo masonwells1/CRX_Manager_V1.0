@@ -47,6 +47,14 @@ function executableSql(sql) {
         const close = src.indexOf(tag[0], i + tag[0].length);
         if (close === -1) return null;
         const end = close + tag[0].length;
+        // Dynamic SQL in a DO block can alter ACLs without leaving an
+        // analyzable GRANT/REVOKE statement. Lex its body recursively so an
+        // EXECUTE keyword inside a quoted diagnostic string is inert, while a
+        // real PL/pgSQL EXECUTE fails this static proof closed.
+        if (/\bDO\s*$/i.test(out)) {
+          const doBody = executableSql(src.slice(i + tag[0].length, close));
+          if (doBody === null || /\bEXECUTE\b/i.test(doBody)) return null;
+        }
         out = blank(out, end - i); i = end; continue;
       }
     }
@@ -61,7 +69,7 @@ function executableSql(sql) {
       // A quoted identifier is executable syntax, but its contents are not SQL
       // keywords. Break action words without losing deterministic identity for a
       // matching quoted routine declaration and ACL target.
-      out += src.slice(i, end + 1).replace(/\b(?:REVOKE|GRANT|CREATE|ALTER|DROP|SECURITY)\b/gi, (word) => `\u0001${word.slice(1)}`);
+      out += src.slice(i, end + 1).replace(/\b(?:REVOKE|GRANT|CREATE|ALTER|DROP|SECURITY|DO)\b/gi, (word) => `\u0001${word.slice(1)}`);
       i = end + 1; continue;
     }
     out += ch; i++;
@@ -107,8 +115,9 @@ function aclEvents(sql) {
     if (!args) return null;
     const roles = /^\s+(?:FROM|TO)\s+([^;]+);/i.exec(sql.slice(args.end));
     if (!roles || /\b(?:WITH|GROUP|ROLE)\b/i.test(roles[1])) return null;
-    events.push({ index: match.index, action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2])), roles: roles[1].split(',').map((role) => {
-      const value = role.trim();
+    const roleNames = roles[1].split(',').map((role) => role.trim());
+    if (roleNames.some((role) => role.includes('"'))) return null;
+    events.push({ index: match.index, action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2])), roles: roleNames.map((value) => {
       if (/^public$/i.test(value)) return 'public';
       if (/^anon$/i.test(value)) return 'anon';
       return null;

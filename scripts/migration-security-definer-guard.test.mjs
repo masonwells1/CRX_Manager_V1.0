@@ -54,7 +54,7 @@ test('fails closed for search-path-sensitive targets and quoted role lookalikes'
   const unqualifiedAcl = `${definition()}\nSET search_path = private, public;\nREVOKE ALL ON FUNCTION post_return_credit(uuid) FROM PUBLIC, anon;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(unqualifiedAcl), ['unparseable-security-definer-sql']);
   const quotedRoles = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM "PUBLIC", "anon";');
-  assert.deepEqual(securityDefinerMissingAnonRevokes(quotedRoles), ['post_return_credit']);
+  assert.deepEqual(securityDefinerMissingAnonRevokes(quotedRoles), ['unparseable-security-definer-sql']);
 });
 
 test('does not treat quoted SQL identifiers as executable ACL commands', () => {
@@ -68,6 +68,14 @@ test('resets ACL state after DROP and tracks SECURITY DEFINER procedures', () =>
   const procedure = 'CREATE PROCEDURE public.escalate_proc(p_id uuid) LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN NULL; END; $$;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(procedure), ['escalate_proc']);
   assert.deepEqual(securityDefinerMissingAnonRevokes(`${procedure}\nREVOKE ALL ON PROCEDURE public.escalate_proc(uuid) FROM PUBLIC, anon;`), []);
+});
+
+test('fails closed for quoted grant recipients and dynamic DO-block ACL changes', () => {
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  const quotedGrant = `${safe}\nGRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO "anon";`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(quotedGrant), ['unparseable-security-definer-sql']);
+  const dynamicGrant = `${safe}\nDO $$ BEGIN EXECUTE 'GRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon'; END; $$;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(dynamicGrant), ['unparseable-security-definer-sql']);
 });
 
 test('does not demand an anon revoke for invoker-security functions', () => {

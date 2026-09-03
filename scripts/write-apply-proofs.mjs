@@ -39,6 +39,7 @@ import {
 } from './write-codex-push-proof.mjs';
 import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.mjs';
 import { CREATE_FN_ANY, securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
+import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
 
 const rawArgs = process.argv.slice(2);
 
@@ -199,8 +200,11 @@ for (const name of names) {
   }
 }
 
-function frontendRpcCallSites(name, snapshot) {
-  const files = snapshot.paths('src/', (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative));
+function applicationRpcCallSites(name, snapshot) {
+  const files = [
+    ...snapshot.paths('src/', (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative)),
+    ...snapshot.paths('supabase/functions/', (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative)),
+  ];
   const rpc = new RegExp(`\\.rpc\\(\\s*(['"])${name}\\1`, 'g');
   const sites = [];
   for (const file of files) {
@@ -208,7 +212,8 @@ function frontendRpcCallSites(name, snapshot) {
     for (const match of text.matchAll(rpc)) {
       const line = text.slice(0, match.index).split(/\r?\n/).length;
       const excerpt = text.split(/\r?\n/)[line - 1]?.trim() || '(call spans lines)';
-      sites.push(`  frontend RPC: ${file}:${line}\n    ${excerpt}`);
+      const source = file.startsWith('supabase/functions/') ? 'edge-function' : 'frontend';
+      sites.push(`  ${source} RPC: ${file}:${line}\n    ${excerpt}`);
     }
   }
   return sites;
@@ -336,9 +341,9 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
       // of a safe authenticated wrapper.
       lines.push(`CALL SITES of ${name} across migrations:`);
       lines.push('  (intentionally unavailable — raw SQL text cannot prove executable caller bodies; treat exposure as unverified)');
-      const frontendSites = frontendRpcCallSites(name, snapshot);
-      lines.push(`FRONTEND RPC CALL SITES of ${name} in src/:`);
-      lines.push(frontendSites.length ? frontendSites.join('\n') : '  (no frontend RPC call found)');
+      const applicationSites = applicationRpcCallSites(name, snapshot);
+      lines.push(`APPLICATION RPC CALL SITES of ${name} in src/ and supabase/functions/:`);
+      lines.push(applicationSites.length ? applicationSites.join('\n') : '  (no application RPC call found)');
       sections.push(lines.join('\n'));
     }
     parts.push(
@@ -503,12 +508,9 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, cha
   const reviewCwd = mkdtempSync(path.join(tmpdir(), 'crx-migration-review-'));
   let result;
   try {
-    result = spawnSync(codexBin, [
-      'exec', '--ephemeral', '--ignore-user-config',
-      '--model', CODEX_REVIEW_MODEL, '-c', `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
-      '--sandbox', 'read-only', '-C', reviewCwd, '-c', 'approval_policy=never',
-      '--disable', 'hooks',
-    ], {
+    result = spawnSync(codexBin, buildMigrationReviewerExecArgs({
+      reviewCwd, model: CODEX_REVIEW_MODEL, effort: CODEX_REVIEW_EFFORT,
+    }), {
       cwd: reviewCwd,
       encoding: 'utf8', input: prompt, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
       timeout: 540_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true,
