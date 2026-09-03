@@ -7,6 +7,22 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — authorize one non-first-INTO repair in PR #449; keep the broader cap
+
+**Source:** Mason's in-chat direction on 2026-09-03: "Authorize the one bounded non-first-INTO
+repair; keep the broader cap."
+
+**Decision.** PR #449 may make one narrow repair to the capped write-time actor-binding guard:
+for the already-recognized PL/pgSQL `SELECT`, `RETURNING`, `FETCH`, and dynamic `EXECUTE` `INTO`
+forms, inspect every assignment target rather than only the first. The repair applies both to a
+guarded actor parameter and to a trusted local initialized from `auth.uid()`.
+
+**Boundary.** The 2026-09-01 best-effort cap below remains operative. This exception does not
+authorize another general pattern-hardening round, a new SQL parser, wider actor-name discovery,
+cross-routine dataflow, incremental-edit reconstruction, changes to the post-apply predicates, or
+claims that the hook is a security boundary. Future residuals return to the capped posture unless
+Mason separately authorizes them.
+
 ## 2026-09-03 — the risky-content gate stays loud; the parked prose exemption is retired
 
 **Source:** Mason's in-chat answer on 2026-09-03 ("yes to all three") to the question "leave the
@@ -472,7 +488,7 @@ compensating controls, and conflating them would overstate the defence:
    semicolon**, so stashing the parameter in a temp table in one statement and inserting it into the audit
    log in another satisfies neither. Only the Codex proof and the CodeRabbit review stand here.
 
-   **Proven still open, 2026-09-02 — rebinding through a NON-FIRST `INTO` target.** The exact-SHA
+   **Bounded repair authorized 2026-09-03 — rebinding through a NON-FIRST `INTO` target.** The exact-SHA
    `gpt-5.6-sol` proof on PR #449 head `4976ed08` returned **BLOCKERS** on this, and it did not
    theorise: it ran the payload through the real hook with an authenticated grant and observed
    `allow`. `SELECT 1, p_target_id INTO v_dummy, p_performed_by` re-forges the actor after a passing
@@ -480,10 +496,11 @@ compensating controls, and conflating them would overstate the defence:
    overwrite of a trusted `v_actor := auth.uid()` local also returns `allow`. **Both sweep predicates
    miss it too** — their rebinding rule recognises assignment syntax (`:=` / `=`) and not `INTO`
    target lists — so the 2026-09-01 narrowing above covers the *assignment* form ONLY. Do not read it
-   more broadly. Closing this properly means inspecting every `INTO` target in the hook and mirroring
-   that in both predicates; **the hook half is exactly what this entry caps**, which is why PR #449
-   cannot reach a clean Codex proof without reopening the capped surface. That deadlock is an owner
-   decision, not an agent one — see the 2026-09-02 note in `docs/manual/KNOWN_ISSUES.md`.
+   more broadly. Mason authorized PR #449 to inspect every target in the hook's already-recognized
+   `SELECT`/`RETURNING`/`FETCH`/`EXECUTE INTO` forms. That one exception does not reopen the broader
+   pattern-hardening programme or change the hook's best-effort status. The predicates remain
+   unchanged: they still do not model `INTO` target lists, so the exact-SHA proof and CodeRabbit
+   remain the load-bearing review controls for this shape until the candidate lands.
 3. **The naming-scope gap** — actor-shaped parameters that do not match `^p_\w*by$|^p_actor|^p_user`, e.g.
    `p_target_id` or `p_acting_user_id`. **The live sweep predicates share this exact name pattern, so the
    sweep does NOT cover this path either.** Do not claim the sweep as the compensating control for it. The

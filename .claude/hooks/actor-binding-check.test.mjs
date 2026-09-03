@@ -3296,6 +3296,8 @@ ok(isDeny(r), 'a local laundered into UPDATE"table" is still a mutation');
 for (const [label, overwrite] of [
   ['SELECT ... INTO"v_actor"', '  SELECT p_target_id INTO"v_actor";'],
   ['SELECT ... INTO STRICT"v_actor"', '  SELECT p_target_id INTO STRICT"v_actor";'],
+  ['SELECT ... INTO a second v_actor target',
+    '  SELECT p_target_id, p_target_id INTO p_target_id, v_actor;'],
   ['FOR"v_actor" IN ... LOOP', '  FOR"v_actor" IN SELECT p_target_id LOOP NULL; END LOOP;'],
 ]) {
   r = runHook(fn(
@@ -3316,6 +3318,15 @@ for (const [label, rebind] of [
   [":= assignment", "  p_performed_by := p_target_id;"],
   ["= assignment", "  p_performed_by = p_target_id;"],
   ["SELECT ... INTO the parameter", "  SELECT p_target_id INTO p_performed_by;"],
+  ["SELECT ... INTO a second target", "  SELECT p_target_id, p_target_id INTO p_target_id, p_performed_by;"],
+  ["SELECT ... INTO the second positional actor target",
+    "  SELECT p_target_id, p_target_id INTO p_target_id, $1;"],
+  ["RETURNING ... INTO a second target",
+    "  UPDATE financial_audit_log SET actor_user_id = p_target_id WHERE false " +
+      "RETURNING actor_user_id, actor_user_id INTO p_target_id, p_performed_by;"],
+  ["FETCH ... INTO a second target", "  FETCH p_cursor INTO p_target_id, p_performed_by;"],
+  ["EXECUTE ... INTO a second target",
+    "  EXECUTE 'SELECT $1, $1' INTO p_target_id, p_performed_by USING p_target_id;"],
   ["a FOR loop target", "  FOR p_performed_by IN SELECT p_target_id LOOP NULL; END LOOP;"],
   ["a quoted target", '  "p_performed_by" := p_target_id;'],
   ["a block-qualified target", "  test_fn.p_performed_by := p_target_id;"],
@@ -3324,7 +3335,7 @@ for (const [label, rebind] of [
   r = runHook(fn(
     "BEGIN\n" + GUARD_LINE + "\n" + rebind + "\n" +
     "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;",
-    "p_performed_by uuid, p_target_id uuid"
+    "p_performed_by uuid, p_target_id uuid, p_cursor refcursor"
   ));
   ok(isDeny(r), `a refusal followed by ${label} of the actor parameter is BLOCKED`);
 }
@@ -3332,6 +3343,16 @@ for (const [label, rebind] of [
 r = runHook(fn("BEGIN\n" + GUARD_LINE + "\n" +
   "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;"));
 ok(!isDeny(r), "the canonical direct-parameter refusal is still ALLOWED");
+
+// A non-first INTO target is not suspicious by itself. The actor may appear in
+// the output list while the guarded actor parameter remains untouched.
+r = runHook(fn(
+  "BEGIN\n" + GUARD_LINE + "\n" +
+  "  SELECT p_performed_by, p_target_id INTO p_target_id, p_spare_id;\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;",
+  "p_performed_by uuid, p_target_id uuid, p_spare_id uuid"
+));
+ok(!isDeny(r), "an actor source with only non-actor INTO targets is still ALLOWED");
 
 // ── ROUND 2: operator resolution and file scope ────────────────────────────
 // `SET search_path TO 'evil', 'pg_catalog'` is the spelling every CRX migration

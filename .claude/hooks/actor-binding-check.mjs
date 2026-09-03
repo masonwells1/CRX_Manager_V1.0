@@ -1407,6 +1407,54 @@ function actorReferencePattern(reference) {
   return identifierReferencePattern(value);
 }
 
+/** Read only PL/pgSQL's query/cursor INTO assignment lists. This deliberately
+ * stays inside the capped guard's existing target grammar: it does not attempt
+ * general SQL parsing or follow values through locals. The bounded repair is
+ * that every target in a recognized SELECT/RETURNING/FETCH/EXECUTE list is
+ * inspected instead of only the first one. */
+function intoAssignmentTargetLists(structuralBody) {
+  const targetLists = [];
+  // A PL/pgSQL parameter may also be assigned through its positional alias
+  // (`$1`). Keep that spelling local to this rebinding check: the broader
+  // laundering analysis intentionally retains its pre-existing identifier-only
+  // target grammar under the best-effort cap.
+  const rebindingTarget = `(?:${SQL_QUALIFIED_IDENTIFIER_PATTERN}|\\$\\d+)`;
+  const rebindingTargetList = `${rebindingTarget}(?:\\s*,\\s*${rebindingTarget})*`;
+  const patterns = [
+    new RegExp(
+      `\\b(?:SELECT|RETURNING)\\b[^;]*?\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}` +
+        `(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?(${rebindingTargetList})`,
+      "gi"
+    ),
+    new RegExp(
+      `\\bFETCH\\b[^;]*?\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}` +
+        `(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?(${rebindingTargetList})`,
+      "gi"
+    ),
+    new RegExp(
+      `\\bEXECUTE\\b[^;]*?\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}` +
+        `(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?(${rebindingTargetList})`,
+      "gi"
+    ),
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(structuralBody)) !== null) targetLists.push(match[1]);
+  }
+  return targetLists;
+}
+
+function hasIntoAssignmentTarget(structuralBody, targetPattern) {
+  const exactTarget = new RegExp(`^\\s*${targetPattern}\\s*$`, "i");
+  return intoAssignmentTargetLists(structuralBody).some((rawList) => {
+    const targets = splitTopLevelCommaList(rawList);
+    // The recognized target grammar should always balance. If a future change
+    // breaks that invariant, refuse rather than silently restoring first-only
+    // coverage.
+    return targets === null || targets.some((target) => exactTarget.test(target));
+  });
+}
+
 /** A legacy guard may compare the actor parameter to a local v_actor-style
  * binding, but only when that local is initialized unconditionally from
  * auth.uid() exactly once and is not overwritten through assignment,
@@ -1460,10 +1508,7 @@ function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid
         `${optionalBlockQualifier}${ref}\\s*=(?!=)`,
       "i"
     );
-    const intoRe = new RegExp(
-      `\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?${ref}(?![\\w$])`,
-      "i"
-    );
+    const intoTarget = `${optionalBlockQualifier}${ref}`;
     const loopTargetRe = new RegExp(
       `\\b(?:FOR|FOREACH)\\b${SQL_KEYWORD_IDENTIFIER_GAP}[^;]*?${ref}[^;]*?\\bIN\\b`,
       "i"
@@ -1489,10 +1534,6 @@ function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid
         `${opaqueUnicodeTarget}(?:\\s+[^;\\n:=]+?)?\\s*(?::=|=(?!=))`,
       "i"
     );
-    const opaqueUnicodeIntoRe = new RegExp(
-      `\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?${opaqueUnicodeTarget}`,
-      "i"
-    );
     const opaqueUnicodeLoopTargetRe = new RegExp(
       `\\b(?:FOR|FOREACH)\\b${SQL_KEYWORD_IDENTIFIER_GAP}${opaqueUnicodeTarget}[^;]*?\\bIN\\b`,
       "i"
@@ -1504,11 +1545,11 @@ function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid
     );
     if (assignments.length === 1 &&
         !equalsAssignmentRe.test(structuralBody) &&
-        !intoRe.test(structuralBody) &&
+        !hasIntoAssignmentTarget(structuralBody, intoTarget) &&
         !loopTargetRe.test(structuralBody) &&
         !diagnosticsTargetRe.test(structuralBody) &&
         !opaqueUnicodeAssignmentRe.test(structuralBody) &&
-        !opaqueUnicodeIntoRe.test(structuralBody) &&
+        !hasIntoAssignmentTarget(structuralBody, opaqueUnicodeTarget) &&
         !opaqueUnicodeLoopTargetRe.test(structuralBody) &&
         !opaqueUnicodeDiagnosticsTargetRe.test(structuralBody)) {
       bindings.add(name);
@@ -1676,15 +1717,11 @@ function hasActorReferenceRebinding(structuralBody, actorReferences) {
   const blockQualifier = `(?:${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*)?`;
   for (const reference of actorReferences) {
     const ref = actorReferencePattern(reference);
+    if (hasIntoAssignmentTarget(structuralBody, `${blockQualifier}${ref}`)) return true;
     const rebindings = [
       new RegExp(
         `(?:^|[;\\n]|\\bDECLARE\\b|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b|\\bLOOP\\b)\\s*` +
           `${blockQualifier}${ref}(?:\\s+[^;\\n:=]+?)?\\s*(?::=|=(?!=))`,
-        "i"
-      ),
-      new RegExp(
-        `\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?` +
-          `${blockQualifier}${ref}(?![\\w$])`,
         "i"
       ),
       new RegExp(
@@ -2259,10 +2296,6 @@ function hasOpaqueUnicodeActorLaundering(structuralBody, actorParams) {
         `${target}(?:\\s+[^;\\n:=]+?)?\\s*(?::=|=(?!=))`,
       "i"
     ),
-    new RegExp(
-      `\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?${target}`,
-      "i"
-    ),
     new RegExp(`\\b(?:FOR|FOREACH)\\b${SQL_KEYWORD_IDENTIFIER_GAP}${target}[^;]*?\\bIN\\b`, "i"),
     new RegExp(
       `\\bGET\\s+(?:(?:CURRENT|STACKED)\\s+)?DIAGNOSTICS\\b[^;]*?${target}\\s*(?::=|=(?!=))`,
@@ -2271,7 +2304,8 @@ function hasOpaqueUnicodeActorLaundering(structuralBody, actorParams) {
   ];
   const actorRes = actorParams.map((p) => new RegExp(actorReferencePattern(p), "i"));
   for (const statement of structuralBody.split(";")) {
-    if (!writes.some((write) => write.test(statement))) continue;
+    if (!hasIntoAssignmentTarget(statement, target) &&
+        !writes.some((write) => write.test(statement))) continue;
     if (actorRes.some((actor) => actor.test(statement))) return true;
   }
   return false;
