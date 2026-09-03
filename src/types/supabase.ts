@@ -5071,6 +5071,7 @@ export type Database = {
           cost_per_unit_cents: number | null
           customer_supplied: boolean
           diluent_rate: number | null
+          driver: string | null
           id: string
           job_id: string
           phi_days: number | null
@@ -5089,6 +5090,7 @@ export type Database = {
           cost_per_unit_cents?: number | null
           customer_supplied?: boolean
           diluent_rate?: number | null
+          driver?: string | null
           id?: string
           job_id: string
           phi_days?: number | null
@@ -5107,6 +5109,7 @@ export type Database = {
           cost_per_unit_cents?: number | null
           customer_supplied?: boolean
           diluent_rate?: number | null
+          driver?: string | null
           id?: string
           job_id?: string
           phi_days?: number | null

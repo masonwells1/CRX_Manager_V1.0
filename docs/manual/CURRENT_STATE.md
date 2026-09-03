@@ -1,7 +1,14 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-01 (post return-credit chain) for both the migration ledger and schema
-shape.** Schema shape comes from the live introspection that regenerated
+**Last verified: 2026-09-03 for the migration ledger (F06 authoring read); 2026-09-01 (post
+return-credit chain) for schema shape.** A read-only read on 2026-09-03 records **990 ledger rows**,
+live `max(version)` **`20260903025854`**, latest applied authored name
+`20260831212415_guard_cycle_count_completion_revision`. The F06 migration
+`20260903150000_job_chemicals_persist_driver` (nullable `job_chemicals.driver` + `save_job`
+re-emission, marker `chem_unit_invariant_v3`) is authored on its branch and **NOT applied**: live
+`job_chemicals` still has no `driver` column and `save_job` is the 20260820120000 body (md5
+`227ab7b6bc2023724adf6952a221d2a8`, single overload). The schema-shape statement that follows is
+unchanged by that read. Schema shape comes from the live introspection that regenerated
 `.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
 columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
 read of individual routine bodies or their grants beyond the functions this chain touched, which

@@ -17,7 +17,12 @@ export type ChemDriver = 'rate' | 'qty';
 export interface ChemCalcRow {
   quantity: string;
   rate_per_acre: string;
-  /** UI-only (NOT persisted): which field the user last drove. */
+  /**
+   * Which field the user last drove. Since F06 (2026-09-03) this is PERSISTED on
+   * job_chemicals.driver, so a reloaded line carries it back; undefined = unknown (a line
+   * saved before the column existed, or written by the close-quote / recipe paths), and an
+   * unknown line is left exactly as saved on an acreage change.
+   */
   driver?: ChemDriver;
 }
 
@@ -68,8 +73,10 @@ export function applyChemEdit<T extends ChemCalcRow>(
  *                    a stale billable quantity for 0 acres. (Codex r16)
  *  • driver 'qty'  → HOLD the user's typed total; refigure the rate only when acres > 0
  *                    (never silently rewrite a hand-entered total, and never divide by 0).
- *  • no driver     → an untouched / RELOADED line is left exactly as saved (an acreage
+ *  • no driver     → a line whose origin is UNKNOWN is left exactly as saved (an acreage
  *                    change must not rewrite a persisted quantity whose origin is unknown).
+ *                    Since F06 the driver is persisted, so this is now only a line saved
+ *                    before the column existed or written by a path that never sends it.
  * Returns a NEW row when it changes, otherwise the same row reference.
  */
 export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: number): T {
@@ -94,7 +101,82 @@ export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: n
 // HAND-ENTERED total satisfies the same equality by construction. Acting on it would rewrite
 // an operator's typed chemical amount whenever the acreage changed. Do not reintroduce a
 // heuristic here — the driver must be PERSISTED on job_chemicals to be trustworthy.
-// (Codex P1, 2026-08-20)
+// (Codex P1, 2026-08-20.) F06 (2026-09-03) did exactly that: job_chemicals.driver, written
+// by save_job from the payload and read back on reload. Lines with no stored driver stay
+// untouched, and chemQuantityDisagreesWithRate (below) shows the disagreement on screen.
+
+// ── F06: on-screen mirror of save_job's CHEM_QUANTITY_NOT_DERIVED (units-EQUAL path) ──
+
+/**
+ * The server's tolerance for |quantity − rate × acres|, copied from save_job
+ * (20260820120000, rounds 23-24): GREATEST(0.0001, LEAST(0.00005 × acres, 0.1)).
+ * 0.0001 is the quantity's own 4-dp storage precision; 0.00005 × acres is the error a
+ * 4-decimal RATE introduces when the line was driven by total; 0.1 caps the acreage term so
+ * it is never sized by the acreage figure itself. No term scales with the quantity.
+ */
+export function chemQuantityTolerance(acres: number): number {
+  return Math.max(0.0001, Math.min(0.00005 * acres, 0.1));
+}
+
+/**
+ * Mirror of save_job's CHEM_QUANTITY_NOT_DERIVED refusal for one line, on the path where
+ * the rate's base unit and the stock unit are the SAME unit. Returns the quantity the
+ * server would expect (rate × acres) when the row's quantity disagrees with it by more than
+ * chemQuantityTolerance, else null.
+ *
+ * WHY THIS EXISTS. A line whose driver is unknown is deliberately left as saved when the
+ * acreage changes (see recomputeChemRowForAcres), so its rate and quantity stop agreeing,
+ * and save_job then refuses the WHOLE job save with no on-screen warning. This puts the
+ * disagreement on the row instead, where re-typing either field re-derives the other and
+ * re-establishes the driver.
+ *
+ * SCOPE, stated exactly so the mirror is never MORE lenient than the SQL where it speaks:
+ *  • Null when either unit is blank or unrecognised — CHEM_UNIT_UNSPECIFIED's mirror
+ *    (chemUnitUnspecifiedSides) owns that shape.
+ *  • Null when the two units DIFFER — chemLineBillingHazard already applies the same
+ *    tolerance through the unit converter on that path and flags a stale row there.
+ *  • Null when there is no usable rate or acreage — the server has nothing to derive from
+ *    and takes a different exit (CHEM_QUANTITY_UNVERIFIABLE, priced lines only).
+ *  • Null for a zero quantity — that is CHEM_QUANTITY_ZERO_BUT_EXPECTED's shape, which the
+ *    caller mirrors separately with chemQuantityExpectedButZero.
+ * On the equal-unit path the server checks EVERY line with a usable rate, priced or not,
+ * customer-supplied or not, so this does not gate on price either.
+ */
+export function chemQuantityDisagreesWithRate(
+  row: { quantity: string; rate_per_acre: string; rate_unit?: string | null; unit?: string | null },
+  acres: number,
+): number | null {
+  const quantityUnit = normalizeRateUnit(baseUnitOfRate(row.rate_unit));
+  const priceUnit = normalizeRateUnit(row.unit);
+  if (quantityUnit == null || priceUnit == null || quantityUnit !== priceUnit) return null;
+  const rate = parseFloat(row.rate_per_acre);
+  const qty = parseFloat(row.quantity);
+  if (!(rate > 0) || !Number.isFinite(rate)) return null;
+  if (!(acres > 0) || !Number.isFinite(acres)) return null;
+  if (!Number.isFinite(qty) || qty === 0) return null;
+  const expected = rate * acres;
+  return Math.abs(qty - expected) <= chemQuantityTolerance(acres) ? null : expected;
+}
+
+/**
+ * Mirror of save_job's CHEM_QUANTITY_ZERO_BUT_EXPECTED: a PRICED, not customer-supplied
+ * line recording quantity 0 while a positive quantity was derivable (usable rate AND
+ * acreage). Returns the expected quantity, else null. Unit-independent, as on the server
+ * (it runs before the unit checks). Mason's 2026-08-24 rule keeps the mid-entry shape —
+ * priced, acreage, NO rate yet, quantity 0 — accepted, and so does this.
+ */
+export function chemQuantityExpectedButZero(
+  row: { quantity: string; rate_per_acre: string; price_per_unit_cents: string; customer_supplied?: boolean },
+  acres: number,
+): number | null {
+  if (row.customer_supplied ?? false) return null;
+  if ((parseInt(row.price_per_unit_cents) || 0) === 0) return null;
+  if (parseFloat(row.quantity) !== 0) return null;
+  const rate = parseFloat(row.rate_per_acre);
+  if (!(rate > 0) || !Number.isFinite(rate)) return null;
+  if (!(acres > 0) || !Number.isFinite(acres)) return null;
+  return rate * acres;
+}
 
 // ── Total Applied + gallon/lb-equivalent conversion (ChemMan parity #1) ──────
 //
@@ -537,8 +619,9 @@ const NO_HAZARD: ChemBillingHazard = { hazard: false, quantityUnit: '', priceUni
  * `billedRatio` is derived from the QUANTITY, not from rate × acres, so it stays truthful on
  * a stale row where the acreage has since moved.
  *
- * Driver-independent on purpose: `driver` is UI-only and is NOT persisted, so every
- * reloaded row has driver === undefined and a driver-gated check would miss them all.
+ * Driver-independent on purpose: even now that F06 persists `driver`, every line saved
+ * before that column existed (and every line the close-quote and recipe paths write)
+ * reloads with driver === undefined, so a driver-gated check would miss them all.
  */
 export function chemLineBillingHazard(
   row: { quantity: string; rate_per_acre: string; rate_unit?: string | null; unit?: string | null },
