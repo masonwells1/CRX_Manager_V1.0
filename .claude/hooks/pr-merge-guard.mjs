@@ -40,6 +40,13 @@ import {
   pullRequestReviewBlocked,
   riskyFiles,
 } from "./codex-push-lib.mjs";
+import {
+  CODEX_THREADS_QUERY,
+  CODEX_THREAD_PAGE_SIZE,
+  codexBotFindingsDenial,
+  collectCodexThreads,
+  evaluateCodexBotReview,
+} from "./codex-bot-review-lib.mjs";
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 
@@ -162,6 +169,106 @@ function listWorktreesFromProjectDir() {
     stdio: ["ignore", "pipe", "ignore"],
   });
 }
+// ── the Codex GitHub App's review — read it instead of ignoring it ───────────
+// Added 2026-09-02. The App has reviewed every PR in this repo since it was
+// enabled, and until now nothing here read a word of it: a grep for
+// `chatgpt-codex-connector` across hooks, skills, commands, scripts and docs
+// returned zero hits. With the approval gate downgraded to a notice on the same
+// day, an unread automated review is the largest remaining hole.
+//
+// Deliberately a SEPARATE gh call rather than extra fields on the shared PR
+// resolve: `gh pr view` has no reviewThreads field at all (verified — "Unknown
+// JSON field"), so thread resolution state only comes from GraphQL. Keeping this
+// self-contained also keeps the shared resolve line conflict-free for the other
+// in-flight guard work.
+//
+// Fail-OPEN by design: any failure here leaves codexVerdict null, which prints a
+// notice and merges. See the header of codex-bot-review-lib.mjs for why this one
+// predicate does not fail closed like its neighbours.
+//
+// RUNS LAST, AND THAT IS THE POINT (Codex round 6). This hook gets 30 seconds
+// (.claude/settings.json). Each gh call is capped at 10s, and this lookup makes
+// up to four of them, so it can alone outlive the hook. A PreToolUse hook killed
+// mid-call emits nothing, and a hook that emits nothing does NOT deny — so
+// running an advisory, fail-open lookup BEFORE the green-pipeline, risky-diff and
+// exact-SHA-proof denials could let a merge through that those gates would have
+// refused. Every caller therefore invokes this only after its hard denials have
+// had their chance, at a point where the alternative is returning ALLOW anyway.
+// Do not move it earlier "so the reader sees it first".
+const CODEX_ADVISORY_BUDGET_MS = 12_000;
+
+// DEFERRED PAST EVERY MERGE IN THE COMMAND (Codex round 8, SEC-001). Running
+// last within ONE merge was not enough: `gh pr merge 1 && gh pr merge 2` gates
+// each request in turn, so an advisory for #1 that ran before #2's hard checks
+// could still exhaust the hook budget before those checks — and a killed hook
+// denies nothing. gateRequest() therefore only QUEUES a request that cleared
+// its hard gates; the queue is drained after the loop, and every lookup shares
+// the one `deadlineMs` the caller computed, so N merges spend one budget.
+function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS) {
+  let codexVerdict = null;
+  try {
+    const metaArgs = ["pr", "view"];
+    if (request.selector) metaArgs.push(String(request.selector));
+    metaArgs.push("--json", "number,url");
+    if (request.repo) metaArgs.push("--repo", request.repo);
+    const meta = JSON.parse(gh(metaArgs));
+    const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
+    if (slug && Number.isInteger(meta?.number)) {
+      const node = collectCodexThreads((cursor) => {
+        const args = [
+          "api", "graphql",
+          "-f", `query=${CODEX_THREADS_QUERY}`,
+          "-F", `owner=${slug[1]}`,
+          "-F", `name=${slug[2]}`,
+          "-F", `number=${meta.number}`,
+          "-F", `first=${CODEX_THREAD_PAGE_SIZE}`,
+        ];
+        // Omit `after` entirely on the first page: -F after= would send the
+        // empty string, which GraphQL treats as a cursor rather than as null.
+        if (cursor) args.push("-F", `after=${cursor}`);
+        return JSON.parse(gh(args))?.data?.repository?.pullRequest;
+      }, { deadlineMs });
+      if (node.headRefOid) codexVerdict = evaluateCodexBotReview(node);
+    }
+  } catch {
+    codexVerdict = null; // notice below; never a deny
+  }
+
+  // The one blocking case: it flagged THIS commit and nobody answered. Not
+  // exempted by --auto — queueing a merge does not answer a review comment, and
+  // the exit (fix it, or resolve the thread with a reason) is available either
+  // way.
+  if (codexVerdict?.status === "findings-at-head") {
+    deny(codexBotFindingsDenial("PR MERGE GATE", request.selector, codexVerdict.unresolvedAtHead));
+  }
+  if (!codexVerdict) {
+    process.stderr.write(
+      "CODEX REVIEW NOTICE: could not read the Codex GitHub App's review threads for this PR, so its " +
+      "findings were NOT checked. Merging anyway (this gate fails open by design). Read them by hand: " +
+      `gh pr view ${request.selector || "<number>"} --comments\n`,
+    );
+  } else if (codexVerdict.status === "stale") {
+    process.stderr.write(
+      `CODEX REVIEW NOTICE: the Codex GitHub App has ${codexVerdict.codexThreads} comment thread(s) on this ` +
+      "PR, none of them unresolved against the exact commit being merged. Nothing blocks, but if you have " +
+      "not read them, do: " +
+      `gh pr view ${request.selector || "<number>"} --comments\n`,
+    );
+  } else if (codexVerdict.status === "none") {
+    process.stderr.write(
+      "CODEX REVIEW NOTICE: the Codex GitHub App has left no review comments on this PR. If it never ran, " +
+      "comment `@codex review` and read the result before merging anything non-trivial.\n",
+    );
+  } else if (codexVerdict.status === "incomplete") {
+    process.stderr.write(
+      `CODEX REVIEW NOTICE: the Codex GitHub App's review threads could only be PARTLY read (${codexVerdict.codexThreads} ` +
+      "seen; a later page failed, the cursor was unusable, or the page cap was reached). Nothing standing was seen " +
+      "in what was read, but an unread page could still hold one, so this is NOT a clean reading. Merging anyway " +
+      `(this gate fails open by design). Read them by hand: gh pr view ${request.selector || "<number>"} --comments\n`,
+    );
+  }
+}
+
 // Gate ONE merge request. Either returns (this request is allowed) or calls
 // deny() (which exits). The caller loops over every collected request — a
 // harmless merge earlier in a chain must never exempt a later one.
@@ -209,6 +316,12 @@ function gateRequest(request) {
       "a one-line reason in the thread. Merge only after that."
     );
   }
+
+  // The Codex GitHub App's review is read at the ALLOW points below, not here.
+  // It is advisory and fail-open, and it costs up to four gh calls against a
+  // 30-second hook budget — running it ahead of the hard denials would let a
+  // slow GitHub kill this hook before they ran, which does not deny. See
+  // codexAdvisory() above.
 
   // An unreviewed PR may now land, but say so out loud — the standing policy is
   // still that CodeRabbit reviews the frozen candidate and its real findings get
@@ -261,7 +374,13 @@ function gateRequest(request) {
       deny(`PR MERGE GATE: could not inspect this pull request's full diff for money/security risk, so the merge is denied (fail closed). ${error?.message || error}`);
     }
   }
-  if (risky.length === 0 && !contentFlagged) return;
+  // ALLOW point 1 — nothing risky. Every hard denial above has had its chance
+  // for THIS request; the advisory lookup is queued, not run, so a later merge
+  // in the same command still reaches its own hard denials first.
+  if (risky.length === 0 && !contentFlagged) {
+    advisoryQueue.push(request);
+    return;
+  }
 
   // ── risky merge: --auto is denied outright ─────────────────────────────────
   // Auto-merge defers the landing until GitHub's checks pass — AFTER this hook
@@ -297,7 +416,12 @@ function gateRequest(request) {
       }
     } catch { /* unreadable directory means no proof HERE — keep looking */ }
   }
-  if (valid) return;
+  // ALLOW point 2 — risky, but the exact-SHA proof validated. Same reasoning as
+  // ALLOW point 1: queued, drained only after every request has been gated.
+  if (valid) {
+    advisoryQueue.push(request);
+    return;
+  }
 
   const riskyDescription = risky.length > 0
     ? `changes ${risky.length} risky file(s) that need an independent Codex verdict FIRST:\n` +
@@ -317,5 +441,13 @@ function gateRequest(request) {
   );
 }
 
+// Requests that cleared every hard gate. Drained only after the loop below has
+// gated EVERY request — see codexAdvisory() for why (Codex round 8, SEC-001).
+const advisoryQueue = [];
 for (const request of requests) gateRequest(request);
+// ALLOW point for the whole command: every merge has cleared its hard denials,
+// so the advisory lookups can spend what is left of the hook budget here. One
+// deadline is shared across the queue so N merges cannot multiply the budget.
+const advisoryDeadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS;
+for (const request of advisoryQueue) codexAdvisory(request, advisoryDeadlineMs);
 passthrough();
