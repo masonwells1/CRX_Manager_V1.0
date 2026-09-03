@@ -122,9 +122,9 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 >
 > **Proof/status 2026-09-03:** full schema plus 72 selected migrations replayed on a
 > network-isolated PostgreSQL 17 container; the real create → post → report before/after → void →
-> report chain passed and rolled back; four weakened variants were rejected. Remaining gates are
-> specialist migration/RLS review, exact-SHA Sol review, PR/CI/CodeRabbit, then Mason's separate
-> approvals for live apply, live `[E2E]` proof, and merge.
+> report chain passed and rolled back; seven weakened variants were rejected. Remaining gates are
+> exact-SHA Sol review, PR/CI/CodeRabbit, then Mason's separate approvals for live apply, live
+> `[E2E]` proof, and merge.
 >
 > Full spec, acceptance criteria, and the fallback if the window has closed:
 > `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md`.

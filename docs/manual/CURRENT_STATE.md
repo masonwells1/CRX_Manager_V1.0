@@ -3,8 +3,10 @@
 **Last verified: 2026-09-03 for the migration ledger; 2026-09-01 for full schema shape (post
 return-credit chain).** A read-only 2026-09-03 query records **992 ledger rows**, 985 distinct
 names, `max(version)` `20260903124741`, and effective authored-name high-water
-`20260831235900_serialize_gauntlet_write_boundaries`. Schema shape still comes from the live
-introspection that regenerated
+`20260831235900_serialize_gauntlet_write_boundaries`. The F06 source migration
+`20260903150000_job_chemicals_persist_driver` is now on `main`; its earlier 2026-09-03 read found
+it not yet applied, so live state must be refreshed before either pending migration is applied.
+Schema shape still comes from the live introspection that regenerated
 `.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
 columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
 read of individual routine bodies or their grants beyond the functions this chain touched, which
