@@ -378,6 +378,19 @@ function checkExpected(expected) {
     if (!existsSync(target)) mismatches.push(`${relative} is missing`);
     else if (normalizeEol(readFileSync(target, "utf8")) !== normalizeEol(content)) mismatches.push(`${relative} is stale`);
   }
+  // KNOWINGLY GIVEN UP (Mason's call, 2026-09-03, round 11): this sweep enumerates the
+  // DISK, so a file that exists only in the index is never examined. Stage an imported
+  // adapter, delete its working-tree copy WITHOUT staging that deletion, and commit: the
+  // candidate tree carries the adapter, but it is absent from `actualFiles`, so --check
+  // never classifies it and the parity gate passes (Codex, PR #565).
+  //
+  // Not fixed, deliberately. The cost is one stale mangled instruction file under
+  // .agents/ - the same consequence class as the accepted gap pinned by test case (d),
+  // not wrong behavior in the app. Unioning in the index would need to exclude staged
+  // DELETIONS specifically, or a legitimate `git rm` of a non-generated file starts
+  // reporting as drift and blocks the commit - trading a contrived hole for a false
+  // positive on an ordinary action. Ten rounds of findings in this function preceded the
+  // decision to stop; see docs/manual/KNOWN_ISSUES.md.
   const actualFiles = walkFiles(TARGET_ROOT)
     .map((file) => unix(path.relative(TARGET_ROOT, file)))
     .filter((relative) => !relative.startsWith("session-state/"));

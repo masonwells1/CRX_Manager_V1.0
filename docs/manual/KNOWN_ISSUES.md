@@ -289,6 +289,47 @@ inside one PR is the known non-terminating pattern, and each round costs another
 shared ~2/hour allowance. The hard gate defined in `AGENTS.md` — the exact-SHA `gpt-5.6-sol`
 high-effort proof — returned CLEAN on the merged head with "Nothing required remains".
 
+## OPEN (ACCEPTED — WONTFIX by decision) 2026-09-03 — the `.agents/` drift sweep reads the DISK, so an index-only adapter is never examined
+
+**Mason's call, in chat, 2026-09-03.** Round 11 of findings in
+`scripts/sync-agent-workflows.mjs` on PR #565. Real, reproduced by the reviewer, and
+deliberately not fixed.
+
+**The gap.** `checkExpected()` builds its candidate list with `walkFiles(TARGET_ROOT)` — the
+working tree. A file that exists only in the git index is therefore never classified. Sequence:
+the Codex CLI `/import` writes `.agents/skills/source-command-<name>/SKILL.md`; someone stages
+it; the working-tree copy is then deleted WITHOUT staging that deletion; `git commit` runs. The
+candidate tree carries the adapter, but it is absent from `actualFiles`, so `--check` never sees
+it and the parity gate passes. A mangled adapter lands in the repository.
+
+**Why it is accepted, not fixed.**
+
+1. **The consequence is one already accepted knowingly.** The cost is a stale, mangled
+   instruction file sitting unreferenced under `.agents/` — the same consequence class as the
+   gap pinned on purpose by test case (d) when the durable ownership layer was cut on
+   2026-09-03. It is not wrong behavior in the app, and nothing reads those files automatically.
+2. **The obvious fix trades a contrived hole for a false positive on an ordinary action.**
+   Unioning `gitKnownTargetPaths()` into the sweep would also pull in staged DELETIONS, because
+   `git diff --cached --name-only` reports them. A legitimate `git rm` of a non-generated file
+   under `.agents/` would then be reported as drift and block the commit. A correct fix needs a
+   `--diff-filter` that excludes deletions specifically — another subtlety in the exact function
+   that had already produced ten rounds of findings, each one narrow and each one shipping a new
+   edge.
+3. **The trigger is contrived.** It needs a partial commit that stages an import and then
+   removes the file from disk without staging the removal.
+
+**What still holds — do not read this as "staged adapters ride in free."** An adapter that is
+staged AND present on disk is caught: `classifyExtras()` condition (3) refuses the importer
+exemption for any tracked-or-staged path, and that check fails closed when git cannot be
+consulted. The candidate index is also honored — `gitEnvironment()` preserves a
+repository-local `GIT_INDEX_FILE`, so `git commit <paths>` is inspected against the temporary
+index git actually built. Only the index-only-and-absent-from-disk case is uncovered.
+
+**Operative rule.** Do not reopen this as a narrow patch. If it is ever reopened, it needs the
+staged-deletion filter and a test that proves a legitimate `git rm` still passes — not just a
+test that the adapter is caught. The comment at the `actualFiles` sweep in
+`scripts/sync-agent-workflows.mjs` records the same decision at the point of the gap.
+
 ## OPEN 2026-09-02 (writer IDENTIFIED; commit blocker FIXED; opened 2026-08-31) — the Codex CLI `/import` writes 24 corrupted `source-command-*` adapters
 
 **Identified 2026-09-01.** Twenty-four untracked directories named
