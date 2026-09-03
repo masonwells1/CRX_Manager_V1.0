@@ -166,6 +166,10 @@ const ALLOWED_REASONS: Record<string, Reason[]> = {
   'src/pages/Fields.tsx': ['throw-on-error'],
   'src/pages/VendorBillDetail.tsx': ['throw-on-error'],
   'src/pages/SupplierPricing.tsx': ['intent-rotation'],
+  // JobDetail is pinned as known-unfixed AND declares intent-rotation: two of its
+  // scanner hits are modal-opening buttons (Save as Recipe, Complete Job) that
+  // deliberately rotate intent, and were being counted as defects (Codex round-5).
+  'src/pages/JobDetail.tsx': ['intent-rotation'],
 };
 
 /**
@@ -205,15 +209,22 @@ const ALLOWED_REASONS: Record<string, Reason[]> = {
  * them would still pass. Narrowing that further needs an AST, not a line scan.
  */
 const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
-  // JobDetail shows SIX, not the five round 3 pinned. The sixth was being dropped by
-  // the old filter, which excused any classified hit even when the file declares no
-  // allowed reason — exactly the hole round 4 found.
+  // JobDetail went 5 -> 6 -> 3 across rounds 3, 4 and 5. Round 4 corrected the filter
+  // and surfaced a sixth; round 5 showed that TWO of the six were never defects
+  // (Save as Recipe and Complete Job are modal openers that deliberately rotate
+  // intent), and that a third hit existed only because a COMMENT mentioning `.update(`
+  // fooled the scanner into thinking a call preceded it.
+  //
+  // THE SCANNER UNDERCOUNTS THIS FILE. Two real defects are invisible to it because
+  // they are a DIFFERENT SHAPE — a reset placed BEFORE the call that uses the key,
+  // rather than before the assert: `runJobSave` (`saveJobIdem.resetKey()` on its first
+  // line) and `assignWithOverride` (`assignIdem.resetKey()` on its first line). Both
+  // hand an exact retry a brand-new key. This guard only reports reset-before-assert,
+  // so neither appears below. Do not read this list as the file's defect count
+  // (Codex round-5 MEDIUM).
   'src/pages/JobDetail.tsx': [
-    'assignIdem.resetKey',
-    'completeJobIdem.resetKey',
     'completeJobIdem.resetKey',
     'saveJobIdem.resetKey',
-    'saveRecipeIdem.resetKey',
     'transferJobIdem.resetKey',
   ],
   'src/pages/QuoteBuilder.tsx': [
@@ -288,7 +299,6 @@ function classify(lines: string[], lineNo: number): Reason | null {
   const self = lines[lineNo - 1] ?? '';
   const above = lines.slice(Math.max(0, lineNo - 9), lineNo - 1).join('\n');
   const callWindow = lines.slice(Math.max(0, lineNo - 16), lineNo - 1).join('\n');
-  const handlerWindow = lines.slice(Math.max(0, lineNo - 4), lineNo).join('\n');
 
   if (/^\s*(\*|\/\/)/.test(self)) return 'doc-comment';
 
@@ -325,7 +335,25 @@ function classify(lines: string[], lineNo: number): Reason | null {
   const throwIdx = lastIndexMatching(callLines, /\.throwOnError\(\)/);
   if (throwIdx >= 0 && !exitsBranch(callLines, throwIdx)) return 'throw-on-error';
 
-  if (/onClick=|onChange=/.test(handlerWindow)) return 'intent-rotation';
+  // INTENT ROTATION — a reset inside a JSX handler that OPENS a dialog, deliberately
+  // minting a new key because the payload varies with what the user is about to type.
+  //
+  // The window was four lines, which missed a handler whose body carries a comment or
+  // an early-return guard: JobDetail's Complete Job button opens its onClick eight
+  // lines above the reset and was therefore pinned as a defect it is not (Codex
+  // round-5 MEDIUM). Widened to 14 — but widening alone would let a reset that
+  // genuinely follows a mutating call be excused just because a handler opened
+  // earlier, so the window must ALSO be free of a mutating call between the handler
+  // and the reset.
+  const rotationLines = lines.slice(Math.max(0, lineNo - 15), lineNo);
+  const handlerIdx = lastIndexMatching(rotationLines, /onClick=|onChange=/);
+  if (handlerIdx >= 0) {
+    const between = rotationLines.slice(handlerIdx + 1);
+    const mutatesBetween = between.some((l) =>
+      /\.rpc\(|functions\.invoke\(|\.update\(|\.delete\(/.test(stripNoise(l)),
+    );
+    if (!mutatesBetween) return 'intent-rotation';
+  }
   return null;
 }
 
@@ -341,6 +369,27 @@ function walk(dir: string, out: string[] = []): string[] {
 const TOKEN = /resetKey\(\)|resetKeyFor\(|assertRpcResult|checkMutationResult|\.rpc\(|\.update\(|\.delete\(|functions\.invoke\(/;
 const RESET = /resetKey\(\)|resetKeyFor\(/;
 const ASSERT = /assertRpcResult|checkMutationResult/;
+
+/**
+ * Remove line comments and string/template literals before token matching.
+ *
+ * The scan read RAW lines, so any COMMENT or STRING containing `assertRpcResult`
+ * between a real RPC call and an early reset flipped the scanner's state to ASSERT and
+ * the reset went unreported — hiding a genuine defect in an unpinned file entirely, and
+ * doing it in the one place a developer is most likely to write that word: a comment
+ * explaining the assert (Codex round-5 MEDIUM).
+ *
+ * Block comments spanning lines are not handled; a `/* ... assertRpcResult ... *\/`
+ * block between a call and a reset can still mask it. Stated, not fixed — closing it
+ * needs a real tokenizer.
+ */
+function stripNoise(line: string): string {
+  return line
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``')
+    .replace(/\/\/.*$/, '');
+}
 
 /**
  * Reports every reset that follows a mutating call with NO assert in between.
@@ -391,18 +440,23 @@ function aliasResetPattern(source: string): RegExp | null {
  * (Codex round-4 MEDIUM). The identifier is stable under reformatting and line moves,
  * unlike a line number, and changes when a DIFFERENT key's reset appears.
  */
-function siteIdentifier(line: string, names: string[]): string {
-  const member = line.match(/([A-Za-z_$][\w$]*)\s*\.\s*(resetKeyFor|resetKey)\s*\(/);
-  if (member) return `${member[1]}.${member[2]}`;
+function siteIdentifiers(line: string, names: string[]): string[] {
+  const clean = stripNoise(line);
+  // EVERY reset on the line, not just the first. findResetBeforeAssert records one hit
+  // per LINE, so returning a single identifier let a second, different reset be added
+  // to an already-pinned line — real executable behaviour, no new hit, no new
+  // identifier, list unchanged (Codex round-5 MEDIUM).
+  const found = [...clean.matchAll(/([A-Za-z_$][\w$]*)\s*\.\s*(resetKeyFor|resetKey)\s*\(/g)]
+    .map((m) => `${m[1]}.${m[2]}`);
   for (const name of names) {
-    if (new RegExp(`\\b${name}\\s*\\(`).test(line)) return name;
+    for (const _ of clean.matchAll(new RegExp(`\\b${name}\\s*\\(`, 'g'))) found.push(name);
   }
-  return line.trim().slice(0, 60);
+  return found.length > 0 ? found : [clean.trim().slice(0, 60)];
 }
 
 function findResetBeforeAssert(file: string): number[] {
   const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
-  const lines = source.split('\n');
+  const lines = source.split('\n').map(stripNoise);
   const alias = aliasResetPattern(source);
   const isReset = (l: string) => RESET.test(l) || (alias !== null && alias.test(l));
   const hits: number[] = [];
@@ -476,7 +530,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
           const reason = classify(lines, n);
           return !(reason && allowed.includes(reason));
         })
-        .map((n) => siteIdentifier(lines[n - 1] ?? '', names))
+        .flatMap((n) => siteIdentifiers(lines[n - 1] ?? '', names))
         .sort();
     }
     expect(actual).toEqual(KNOWN_UNFIXED_SITES);

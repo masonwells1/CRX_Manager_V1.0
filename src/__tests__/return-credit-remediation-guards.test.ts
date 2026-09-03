@@ -65,7 +65,16 @@ function assertFrontendGuards(returnsText: string, invoiceText: string) {
   expect(returnsText).toContain('createIdem.resetKey();\n              setUnresolvedCreateIntent(null);');
   expect(returnsText).toContain('createIdem.resetKey();\n        setUnresolvedCreateIntent(null);');
   expect(returnsText).toContain('cancelIdem.getKeyFor(cancelScope)');
-  expect(returnsText).toContain('JSON.stringify([activeReturn.id, reason.trim()])');
+  // STRENGTHENED (Codex round-5 MEDIUM, F1). This used to pin only the SCOPE literal
+  // `JSON.stringify([activeReturn.id, reason.trim()])` — which the defect satisfied:
+  // the scope trimmed the reason while the request sent `p_reason: reason` raw, and the
+  // server fingerprints the raw value, so two different server intents shared one client
+  // key. A guard that pins one half of a pairing cannot see the halves disagree. All
+  // three lines below are now pinned, so the scope, the request and the audit line must
+  // keep using the SAME value.
+  expect(returnsText).toContain('const cancelReason = reason.trim();');
+  expect(returnsText).toContain('JSON.stringify([activeReturn.id, cancelReason])');
+  expect(returnsText).toContain('p_reason: cancelReason,');
   expect(returnsText).toContain('onClose={closeCreate}');
   expect(returnsText).toContain('onClick={closeCreate} disabled={creating}>Cancel</Button>');
   expect(invoiceText).toContain('Number.isInteger(applyCreditAmountCents) ? applyCreditAmountCents : null');

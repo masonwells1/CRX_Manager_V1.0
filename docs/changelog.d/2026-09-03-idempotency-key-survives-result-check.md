@@ -45,7 +45,12 @@ payload while the screen reports the edited one. Every site below clears that ba
   every edit retiring its key on an empty reply and reporting "saved". Plus transfer to
   scheduling.
 - **`FieldApplicationInvoice`** — delete invoices, transfer to scheduling.
-- **`Returns`**, **`PrepaymentManagerPanel`**, **`MonthEndClose`**. The individual
+- **`Returns`** — the cancel key's scope and its request now use ONE value. The scope
+  trimmed the reason while the request sent it raw, and the server fingerprints the raw
+  reason, so `"Damaged "` and `"Damaged"` shared a client key but were two different
+  server intents: after a lost response, a whitespace-only edit produced an
+  intent-mismatch rejection the handler threw without reconciling or retiring the key.
+- **`PrepaymentManagerPanel`**, **`MonthEndClose`**. The individual
   prepayment apply is additionally scoped **by customer** via `getKeyFor`: the panel
   lists every customer, so an unscoped retained key would hand customer A's receipt to
   customer B.
@@ -106,8 +111,10 @@ duplicate recovery.
   and an unscoped retained key on a page that can switch records. Guards mutation-tested
   — each defect reintroduced, confirmed red at the exact line, restored. The known-broken
   files are **identity-pinned**, not count-pinned: round 4 showed a count alone lets a new
-  defect be swapped in as an old one is removed. Correcting the pin's filter also revealed
-  a sixth `JobDetail` site that the previous version had been dropping.
+  defect be swapped in as an old one is removed, and it records EVERY reset on a line, not
+  just the first. Comments and string literals are stripped before matching — a comment
+  mentioning `assertRpcResult` used to hide a real reset, and one mentioning `.update(` used
+  to invent a site that was not there.
 - **Real-browser proof** on the running `OrderDetail`: with an ambiguous reply, the retry
   reused the key; with the pre-fix behavior restored, the same flow sent two different
   keys. For the record scoping: A(ambiguous) → B → back to A produced key1, key2, key1
@@ -118,5 +125,8 @@ duplicate recovery.
   by the first version of this fix*. Round 2 (6 HIGH) found the whole generalisation
   unsafe, which is why twelve pages were reverted. Round 3 (3 HIGH) rejected `FieldStop`
   and `void_order`. Round 4 (1 HIGH) rejected three of the four `DeliveryDetail` actions
-  and found three defects in the guard itself. The narrowness of this change is the
-  review's doing, not the plan's.
+  and found three defects in the guard itself. Round 5 (0 HIGH, 5 MEDIUM) audited every
+  retained site against its RPC's full parameter list from the migration source: ten of
+  eleven cleared, and the eleventh — `cancel_return`'s trimmed-scope/raw-request mismatch
+  — is fixed above. It also showed the guard was both over- and under-counting
+  `JobDetail`. The narrowness of this change is the review's doing, not the plan's.

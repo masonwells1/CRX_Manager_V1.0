@@ -826,8 +826,8 @@ where batch B receives batch A's receipt, reports success, and clears B's staged
 without applying them. Open: `QuoteBuilder`, `BlendTicketDetail`, `PrepayWorkspacePanel`,
 `Deliveries` (batch cancel), `Invoices` (batch void/delete), `PaymentAllocation`,
 `FinanceChargePreviewModal`, `Quotes`, `DeliveryRemainders`, `NewOrder`, `QuickDeliveryModal`,
-`FieldSetup`, plus `JobDetail` (6 sites, owned by a concurrent session — five were pinned until
-round 4 corrected the guard's filter, which had been dropping the sixth), plus `FieldStop` and
+`FieldSetup`, plus `JobDetail` (owned by a concurrent session; see the count caveat below), plus
+`FieldStop` and
 three of the four `DeliveryDetail` actions (see round 3 / round 4 below). **Fix shape:** bind the
 key to the REQUEST PAYLOAD — the `fingerprintIntentPayload` approach from PR #535 — not to the
 route. Enumerated in `src/__tests__/idempotency-reset-order.test.ts` (`KNOWN_UNFIXED_SITES`), which
@@ -880,6 +880,17 @@ another's fails while the count stays at 2. Round 4 also found the pin was excus
 classifier labelled at all, even a reason the file never declared; it now excuses only reasons
 declared in `ALLOWED_REASONS`, which is how the sixth `JobDetail` site appeared.
 
+**JobDetail's count is NOT the scanner's number — do not quote the pin as a defect count.**
+It read 5, then 6, then 3 across rounds 3–5, and every move was the guard being wrong rather than
+the file changing. Round 5 established: two of the six were never defects (`Save as Recipe` and
+`Complete Job` are modal-opening buttons that deliberately rotate intent, missed only because the
+classifier's window was four lines and their handlers open eight lines up), and a third existed
+only because a COMMENT containing `.update(` convinced the scanner a call had preceded it.
+**Meanwhile the scanner UNDERCOUNTS the same file**: `runJobSave` and `assignWithOverride` each
+retire the key on their FIRST line, before the call that uses it, so an exact retry gets a brand-new
+key. That is a real defect of a DIFFERENT SHAPE — reset-before-**call**, not reset-before-assert —
+and this guard does not look for it. Three pinned, two invisible, both kinds real.
+
 **Residuals, stated rather than assumed away.** (a) The scanner matches LINE ORDER; `exitsBranch` is
 a textual heuristic that reads only lines starting with `throw`/`return`, so it can still launder
 across sibling branches and can wrongly flag a safe reset after an early-exit error branch. (b)
@@ -887,8 +898,13 @@ Alias resolution handles only a DIRECT `{ resetKey: name }` destructure in the s
 rename, a wrapper function, a cross-file alias, an optional call or computed member access stays
 invisible. (c) The identity pin uses the key's own name, so two sites calling the SAME key's reset
 are not told apart. (d) The record-scoping check proves a declaration contains a route-id scope, not
-that the RPC sends that id or that the payload carries nothing else. Closing (a) and (b) needs an
-AST, not a line scan.
+that the RPC sends that id or that the payload carries nothing else. (e) The scanner detects only
+reset-before-**assert**; a reset placed before the CALL that uses the key is a real defect of the
+same consequence and is not looked for at all — two live instances in `JobDetail`. (f) Line
+comments and string literals are stripped before matching (round 5: a comment mentioning
+`assertRpcResult` between a call and an early reset used to hide the reset entirely, and a comment
+mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is still not handled.
+Closing (a), (b) and (f) needs a real tokenizer, not a line scan.
 
 **Historical note on the original attempt:** 39 call sites
 across 20 files were reordered, plus two click-level repairs in
@@ -902,7 +918,7 @@ were NOT changed — a `resetKey()` inside an `if (error)` recovery branch in
 `QuickDeliveryModal.tsx`, `InvoiceDetail.tsx` and `Returns.tsx` is intended, and "fixing" them
 breaks duplicate recovery. (Line numbers are deliberately omitted: earlier revisions of this entry
 pinned line numbers that went stale within the same PR.) **Two follow-ups remain open:**
-(a) `JobDetail.tsx` carries 6 sites of the same class,
+(a) `JobDetail.tsx` carries several sites of the same class (see the count caveat above),
 excluded because a concurrent session owned the file; (b) the `voidOrderIdem` / `updateOrderIdem`
 click resets need a scoped key rather than deletion, because `void_order` takes a free-text
 `p_reason` and `update_order_items` takes `p_items` — real intent rotation, same shape as
