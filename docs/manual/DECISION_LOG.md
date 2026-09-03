@@ -1,11 +1,29 @@
 # Decision Log
 
-Last verified: 2026-09-02
+Last verified: 2026-09-03
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-03 — the risky-content gate stays loud; the parked prose exemption is retired
+
+**Source:** Mason's in-chat answer on 2026-09-03 ("yes to all three") to the question "leave the
+gate strict?", from `docs/audits/2026-09-02-github-branch-cleanup-audit.md` §1 item 8 (K2).
+
+**Decision.** The `codex-push-lib` risky-content scan keeps flagging money/security words in
+prose. The parked "content-gate prose exemption" (`claude/guard-content-scan-and-savegate-flake`,
+tip `480dc106e`, refused twice by `gpt-5.6-sol`) is retired; the branch is deleted and its tip
+preserved as `archive/2026-09-03/guard-content-scan-and-savegate-flake`.
+
+**Why.** Two designs for the exemption were each found to reopen a real bypass; the only safe
+alternative on record is an explicit allowlist built on PR #463's stateful parser, never a suffix
+rule. A gate that occasionally flags a docs PR costs one Codex proof; a gate with a hole costs a
+money regression. Mason chose the loud gate.
+
+**What this forbids/implies:** do not revive the suffix-based exemption or re-open it as "just
+skip `.md`". A docs-only PR the gate flags is merged by Mason on green CI or waits for a proof.
 
 ## 2026-09-02 — the CodeRabbit gate is `pull_request_target`-ONLY; never add a review trigger
 
