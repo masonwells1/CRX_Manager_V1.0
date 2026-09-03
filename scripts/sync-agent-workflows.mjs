@@ -130,16 +130,62 @@ function previousManagedFiles(targetRoot = TARGET_ROOT) {
   return previousManifest(targetRoot).managed;
 }
 
-// git, with any inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE stripped. This
-// check runs inside the pre-commit hook, where those variables are set and point
-// at the hook's own view - inheriting them makes `-C ROOT` a lie and has already
-// broken fixture tests in this repo.
-function git(args) {
+// This check runs inside the pre-commit hook, where git exports its own
+// repository redirects. They are NOT interchangeable, and the difference is a
+// bug this file already shipped:
+//
+//   GIT_DIR / GIT_WORK_TREE are absolute and OUTRANK `-C ROOT`, so inheriting
+//   them makes this helper inspect the hook's view instead of ROOT. Strip them.
+//
+//   GIT_INDEX_FILE is the opposite. It names the index git wants this hook to
+//   inspect, and `git commit <paths>` / `git commit --only <paths>` build a
+//   TEMPORARY index holding exactly the candidate tree and point it there.
+//   Deleting it sent gitKnownTargetPaths() to the default index, so an importer
+//   adapter staged by a partial commit was invisible to the staged-path guard
+//   and rode into the candidate tree - reproduced by Codex on PR #565 with an
+//   alternate index holding `skills/source-command-alt/SKILL.md`.
+//
+// Keep the candidate index, but only when it belongs to THIS repository. A
+// foreign checkout's hooks can run against our worktree (core.hooksPath has
+// pointed at another checkout on this machine), and honoring a stray
+// GIT_INDEX_FILE would then have us read an unrelated repository's index.
+// Anything outside our own git dir is discarded rather than trusted.
+export function gitEnvironment(baseEnv = process.env, options = {}) {
+  const { commonDir = null, cwd = process.cwd() } = options;
+  const env = { ...baseEnv };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  env.MSYS_NO_PATHCONV = "1";
+  if (!env.GIT_INDEX_FILE) return env;
+  // `-C ROOT` would re-root a relative value against ROOT; git set it relative
+  // to the cwd it invoked the hook from, so resolve it there first.
+  const resolved = path.resolve(cwd, env.GIT_INDEX_FILE);
+  const within =
+    commonDir && !unix(path.relative(commonDir, resolved)).startsWith("..");
+  if (within) env.GIT_INDEX_FILE = resolved;
+  else delete env.GIT_INDEX_FILE;
+  return env;
+}
+
+let cachedGitDir;
+function ownGitDir() {
+  if (cachedGitDir !== undefined) return cachedGitDir;
   const env = { ...process.env };
   delete env.GIT_DIR;
   delete env.GIT_WORK_TREE;
   delete env.GIT_INDEX_FILE;
   env.MSYS_NO_PATHCONV = "1";
+  const result = spawnSync("git", ["-C", ROOT, "rev-parse", "--absolute-git-dir"], {
+    encoding: "utf8",
+    env,
+  });
+  cachedGitDir =
+    result.status === 0 && result.stdout ? path.resolve(result.stdout.trim()) : null;
+  return cachedGitDir;
+}
+
+function git(args) {
+  const env = gitEnvironment(process.env, { commonDir: ownGitDir() });
   return spawnSync("git", ["-C", ROOT, ...args], { encoding: "utf8", env });
 }
 
@@ -158,12 +204,41 @@ function git(args) {
 // `expected`, the working-tree manifest no longer matches, and --check reports
 // `generated-manifest.json is stale` - a loud failure with a one-command remedy
 // instead of a quiet loss of coverage.
+//
+// The index and HEAD are not the whole ancestry. During an unfinished merge the
+// INCOMING side's ownership lives only in MERGE_HEAD: resolve the manifest
+// conflict in favor of the current branch and every name the other branch
+// recorded is gone for good, silently, exactly when a directory is most likely
+// to have lost its canonical source (Codex P2, PR #565). Read the merge parents
+// too. MERGE_HEAD holds one SHA per line, so an octopus merge contributes all of
+// its parents rather than just the first, which `git show MERGE_HEAD:` would.
+export function mergeParentRevisions() {
+  const located = git(["rev-parse", "--git-path", "MERGE_HEAD"]);
+  if (located.status !== 0 || !located.stdout) return [];
+  const file = path.resolve(ROOT, located.stdout.trim());
+  if (!existsSync(file)) return [];
+  try {
+    return readFileSync(file, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// Ownership sources, in the order they are consulted. Pure so the merge-parent
+// contribution can be asserted without staging a real conflicted merge.
+export function ownershipRevisions(mergeHeads = []) {
+  return [":", "HEAD:", ...mergeHeads.map((sha) => `${sha}:`)];
+}
+
 function gitManifestOwnedDirs(targetRoot = TARGET_ROOT) {
   const rel = unix(
     path.join(path.relative(ROOT, targetRoot) || ".agents", "generated-manifest.json"),
   );
   const out = new Set();
-  for (const rev of [":", "HEAD:"]) {
+  for (const rev of ownershipRevisions(mergeParentRevisions())) {
     const result = git(["show", `${rev}${rel}`]);
     if (result.status !== 0 || !result.stdout) continue;
     try {

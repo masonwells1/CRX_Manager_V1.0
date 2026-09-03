@@ -18,7 +18,13 @@ import path from "node:path";
 
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { classifyExtras, isEntryPoint, writeExpected } from "./sync-agent-workflows.mjs";
+import {
+  classifyExtras,
+  gitEnvironment,
+  isEntryPoint,
+  ownershipRevisions,
+  writeExpected,
+} from "./sync-agent-workflows.mjs";
 
 const targetRoot = mkdtempSync(path.join(os.tmpdir(), "crx-sync-write-"));
 
@@ -282,6 +288,80 @@ try {
     const untracked = classifyExtras(["skills/source-command-ship/SKILL.md"]);
     assert.deepEqual(untracked.foreignDirs, ["source-command-ship"]);
     assert.deepEqual(untracked.extras, [], "untracked importer litter is still exempt");
+  }
+
+  // (g) The staged-path guard has to read the index git is actually committing.
+  //     `git commit <paths>` hands its hooks a TEMPORARY index holding exactly
+  //     the candidate tree via GIT_INDEX_FILE; this helper used to delete that
+  //     variable along with the repository redirects, so the guard inspected the
+  //     default index and a partial commit could carry an imported adapter in
+  //     unseen (Codex P2, PR #565). The redirects still have to go - they are
+  //     absolute and outrank `-C ROOT`.
+  {
+    const commonDir = path.join(targetRoot, ".git");
+    const candidateIndex = path.join(commonDir, "index.tmp-abc123");
+    const kept = gitEnvironment(
+      {
+        GIT_DIR: "/elsewhere/.git",
+        GIT_WORK_TREE: "/elsewhere",
+        GIT_INDEX_FILE: candidateIndex,
+      },
+      { commonDir },
+    );
+    assert.equal(kept.GIT_DIR, undefined, "GIT_DIR outranks -C ROOT and must be stripped");
+    assert.equal(kept.GIT_WORK_TREE, undefined, "GIT_WORK_TREE must be stripped");
+    assert.equal(
+      kept.GIT_INDEX_FILE,
+      candidateIndex,
+      "the candidate index for THIS repository must survive, or a partial commit is inspected against the wrong index",
+    );
+
+    // A relative value is resolved against the cwd git invoked the hook from,
+    // not against ROOT, which is where `-C ROOT` would otherwise re-root it.
+    const relative = gitEnvironment(
+      { GIT_INDEX_FILE: "index.tmp-rel" },
+      { commonDir, cwd: commonDir },
+    );
+    assert.equal(relative.GIT_INDEX_FILE, path.join(commonDir, "index.tmp-rel"));
+
+    // ...but only for THIS repository. core.hooksPath has pointed at a foreign
+    // checkout on this machine, and honoring its index would have us report on
+    // an unrelated repository's staged files.
+    const foreign = gitEnvironment(
+      { GIT_INDEX_FILE: path.join(targetRoot, "other-repo", ".git", "index") },
+      { commonDir },
+    );
+    assert.equal(
+      foreign.GIT_INDEX_FILE,
+      undefined,
+      "an index belonging to another repository is discarded, not trusted",
+    );
+
+    // With no git dir resolvable there is nothing to validate against, so the
+    // stray value is dropped rather than honored.
+    const unresolvable = gitEnvironment({ GIT_INDEX_FILE: candidateIndex }, { commonDir: null });
+    assert.equal(unresolvable.GIT_INDEX_FILE, undefined);
+  }
+
+  // (h) Durable ownership must survive a merge that resolves the manifest to the
+  //     current branch. The incoming side's `ownedImporterDirs` exists only in
+  //     MERGE_HEAD at that moment; consulting just the index and HEAD discards it
+  //     permanently and re-classifies the orphaned directory as importer litter
+  //     (Codex P2, PR #565). MERGE_HEAD holds one SHA per line, so an octopus
+  //     merge contributes every parent - `git show MERGE_HEAD:` would take only
+  //     the first.
+  {
+    assert.deepEqual(
+      ownershipRevisions([]),
+      [":", "HEAD:"],
+      "with no merge in progress the index and HEAD are the whole ancestry",
+    );
+    assert.deepEqual(ownershipRevisions(["aaa111", "bbb222"]), [
+      ":",
+      "HEAD:",
+      "aaa111:",
+      "bbb222:",
+    ], "every merge parent contributes ownership, not just the first");
   }
 } finally {
   rmSync(targetRoot, { recursive: true, force: true });
