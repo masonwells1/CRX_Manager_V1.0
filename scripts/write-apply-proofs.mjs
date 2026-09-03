@@ -35,7 +35,9 @@ import {
   codexExecutable,
   codexReviewProofVerdict,
   CODEX_VERDICT_TOKEN,
+  codexReviewerEnvironment,
   fixedGitExecutable,
+  safeReviewCaptureText,
 } from './write-codex-push-proof.mjs';
 import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.mjs';
 import { CREATE_FN_ANY, securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
@@ -514,12 +516,17 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, cha
       cwd: reviewCwd,
       encoding: 'utf8', input: prompt, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
       timeout: 540_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true,
+      env: codexReviewerEnvironment(process.env, reviewCwd),
     });
   } finally {
     rmSync(reviewCwd, { recursive: true, force: true });
   }
   const capturePath = path.join(stateDir, `codex-review-mig-${safe}-${reviewerName}-capture.txt`);
-  writeFileSync(capturePath, `exit=${result.status}\n\nSTDOUT\n${result.stdout || ''}\n\nSTDERR\n${result.stderr || ''}\n`, 'utf8');
+  writeFileSync(
+    capturePath,
+    `exit=${result.status}\n\nSTDOUT\n${safeReviewCaptureText(result.stdout, 'STDOUT')}\n\nSTDERR\n${safeReviewCaptureText(result.stderr, 'STDERR')}\n`,
+    'utf8',
+  );
   console.log(`  → captured to ${capturePath}`);
   return { verdict: codexReviewProofVerdict({ status: result.status, stdout: result.stdout }), error: null };
 }

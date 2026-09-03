@@ -1,11 +1,14 @@
+import { buildCodexExecArgs } from './write-codex-push-proof.mjs';
+
 // The migration reviewer runs in a deliberately Git-free temporary directory.
-// Keep its launch contract separate and testable so a missing CLI flag cannot
-// silently make governed migration reviews impossible to start.
-export function buildMigrationReviewerExecArgs({ reviewCwd, model, effort }) {
-  return [
-    'exec', '--skip-git-repo-check', '--ephemeral', '--ignore-user-config',
-    '--model', model, '-c', `model_reasoning_effort="${effort}"`,
-    '--sandbox', 'read-only', '-C', reviewCwd, '-c', 'approval_policy=never',
-    '--disable', 'hooks',
-  ];
+// Reuse the push-proof packet profile exactly: a merely read-only sandbox can
+// still expose unrelated local files to a prompt-injected reviewer.
+export function buildMigrationReviewerExecArgs({ reviewCwd, model, effort, platform = process.platform }) {
+  return buildCodexExecArgs({
+    root: reviewCwd,
+    prompt: '',
+    model,
+    effort,
+    platform,
+  });
 }

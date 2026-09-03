@@ -706,7 +706,13 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
   ].join("\n");
 }
 
-export function buildCodexExecArgs({ root, prompt, platform = process.platform }) {
+export function buildCodexExecArgs({
+  root,
+  prompt,
+  platform = process.platform,
+  model = CODEX_REVIEW_MODEL,
+  effort = CODEX_REVIEW_EFFORT,
+}) {
   // `exec` runs the fixed review prompt with a packet-only permission profile
   // (no reads outside the sanitized packet/minimal runtime, no writes, no network)
   // even if the workstation default is danger-full-access, and with no
@@ -719,9 +725,9 @@ export function buildCodexExecArgs({ root, prompt, platform = process.platform }
     "--ephemeral",
     "--ignore-user-config",
     "--model",
-    CODEX_REVIEW_MODEL,
+    model,
     "-c",
-    `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
+    `model_reasoning_effort="${effort}"`,
     "-C",
     root,
     "-c",
