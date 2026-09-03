@@ -92,11 +92,16 @@ async function switchToMonth(monthIndex: number) {
   });
 }
 
-vi.mock('../lib/db', () => ({
+vi.mock('../lib/db', async () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
-  sanitizeError: vi.fn((e: unknown) => `Safe: ${(e as Error)?.message || 'Error'}`),
+  // The REAL sanitizeError, never a stub. The previous stub invented a `Safe: `
+  // prefix the real function never emits, and the assertion below was written
+  // against that fiction rather than against what an operator actually sees.
+  sanitizeError: (await vi.importActual<typeof import('../lib/errorSanitizer')>(
+    '../lib/errorSanitizer',
+  )).sanitizeError,
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -230,7 +235,16 @@ describe('MonthEndClose', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Run year-end test' }));
 
     await waitFor(() => {
-      expect(mockToast).toHaveBeenCalledWith('error', 'Safe: CUSTOMER_SCOPE_DENIED');
+      // The RPC resolves a PLAIN OBJECT error ({ message: ... }), not an Error --
+      // the exact shape postgrest-js returns without `.throwOnError()`. The real
+      // sanitizeError reads object-shaped errors and MAPS this guard token to a
+      // sentence (errorSanitizer.ts:8). The old stub asserted
+      // `Safe: CUSTOMER_SCOPE_DENIED`, which claimed the raw token reached the
+      // operator -- the opposite of what this test is named for.
+      expect(mockToast).toHaveBeenCalledWith(
+        'error',
+        'You can only work with customers assigned to you',
+      );
     });
   });
 

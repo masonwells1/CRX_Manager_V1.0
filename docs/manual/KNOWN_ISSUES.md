@@ -644,6 +644,51 @@ home for these three. Extraction onto current `main` is roughly 8 files and +9,2
 by `.claude/hooks/apply-time-dml-lib.mjs` (2,612 lines); it is scoped but **not approved to build**.
 Do not bring the `patrol` system across — `main` removed it deliberately in #512.
 
+## OPEN 2026-09-03 — three fixes exist only on stale, unmergeable branches (branch cleanup audit F1–F3)
+
+**Found by:** `docs/audits/2026-09-02-github-branch-cleanup-audit.md` (Codex `gpt-5.6-sol` reviewed),
+re-confirming findings F1–F3 of `docs/audits/2026-09-01-no-pr-branch-disposition-plan.md`. None of
+the three was tracked here before; each lived only on a branch 150–690 commits behind `main`. The
+branches are references, not merge candidates — every fix must be re-derived on current `main`.
+
+**F1 — idempotency key discarded before the RPC result is checked (money paths).** On `main`,
+`src/pages/OrderDetail.tsx` calls `resetKey()` at lines 596, 698, 891 and 906 **before**
+`assertRpcResult(...)`; the 2026-08-02 branch `codex/idempotency-reset-order-hardening-20260802`
+found the same shape across ~22 files (cancel/void order, split invoicing, invoice creation,
+deliveries, prepayments, returns, month-end close, vendor bills). Transport errors are caught earlier
+and a SQL error rolls back, so the exposure is an **ambiguous reply** — a null or malformed success
+payload after the server may have committed — where the user's retry travels under a fresh key and
+can double-apply. Codex (2026-09-01) added that the reorder is necessary but not sufficient:
+`onCreateInvoiceClick` (`OrderDetail.tsx:938`) resets per attempt by design and needs a click-level
+repair too. Open PR #535's `fingerprintIntentPayload` solves a different problem and does not touch
+these call sites. **Fix shape:** reorder every post-RPC reset after `assertRpcResult`, repair the
+click-level reset, tests for transport failure / failure envelope / lost-response replay / success /
+changed intent. Money path → exact-SHA `gpt-5.6-sol` proof, then CodeRabbit.
+
+**F2 — `next_*_number` generators callable by any authenticated session with no active-profile or
+role gate.** Eight `SECURITY DEFINER` generators (`next_application_record_number`,
+`next_commission_payment_number`, `next_cycle_count_number`, `next_delivery_number`,
+`next_invoice_number`, `next_job_number`, `next_po_number`, `next_return_number`) grant `EXECUTE` to
+`authenticated` and check nothing (live, read-only, 2026-09-01). `anon` has no grant; they insert
+nothing; exposure is sequence-number disclosure and advisory-lock contention by any logged-in
+principal including a deactivated one. Severity MEDIUM (Codex). The branch
+`codex/section1-security-hardening-20260725` carries migration
+`20260725234503_harden_section1_number_and_field_actor.sql`, **not applied and not on `main`**, and
+covers only six of the eight; its other half (`bind_save_field_actor`) is live via PR #285. A plain
+`REVOKE` is wrong — `CycleCounts.tsx:155` and `JobDetail.tsx:1838` call two of them directly.
+**Fix shape:** new migration, all eight, in-body active-profile + role gates, grants preserved,
+through `migration-review`.
+
+**F3 — nine enforcement-file patterns missing from the `.claude/settings.json` `ask` list.**
+`scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, `scripts/normalize-eol.mjs`,
+`scripts/post-agent-review-to-pr.mjs`, `scripts/agent-health-check.mjs`, `.claude/commands/**`,
+`.claude/skills/**`, `.claude/agents/**`, `.agents/skills/**` — 18 `Edit()`/`Write()` entries in
+commit `b985e919b` on `claude/control-file-coverage-a41c`, a single additive hunk. PR #530 covers 2
+of the 9 at a different layer (Bash guard). **Fix shape:** land the 18 entries as a one-file change;
+the branch stays until then.
+
+**Branch retention:** the three branches above stay until each fix lands on `main`.
+
 ## OPEN 2026-09-01 — agents share Mason's admin identity, so the manual merge override can only be fenced off by command matching, never truly withheld
 
 **Found by:** the exact-SHA Codex proof on PR #541, which refused the candidate until the raw
