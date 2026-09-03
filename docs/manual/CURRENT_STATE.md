@@ -49,16 +49,17 @@ intent binding (`20260825034622`). The authoritative rollout record — per-migr
 proofs, and postflight — is the block at the top of `docs/reference/migration-history.md`; the
 matching issue entries are in `docs/manual/KNOWN_ISSUES.md`.
 
-**Commission history is a local candidate, not a live capability yet.** Migration
-`20260903150100_ledger_backed_commission_history` is proven in a network-isolated PostgreSQL 17
-full-schema replay and has a registered rollback-only create/post/report/void chain. It adds
+**Commission history is a corrected local candidate, not a live capability yet.** Migration
+`20260903150100_ledger_backed_commission_history` is under renewed proof and review after the first
+candidate was rejected for backdating mutable current state. It adds
 `commission_payments.voided_at`/`voided_by`, `commissions.cancelled_at` plus immutable
-`cancelled_amount_cents`, an append-only earned-state ledger, and a signed posted/voided settlement
-ledger. The aggregate and detail reports read only those immutable events, including paid-only
-negative balances after a later cancellation or soft delete. Supported cutoffs begin 2026-03-09; the two existing
-zero-dollar cancellations remain unstamped and are excluded from inception. Production continues
-to refuse non-current cutoffs until Mason separately approves the guarded migration apply. The
-live `[E2E]` rollback proof and merge are also not approved yet.
+`cancelled_amount_cents`, one immutable cutover record, an append-only earned-state ledger, and a
+signed posted/voided settlement ledger. The aggregate and detail reports read only those immutable
+events, including paid-only negative balances after a later cancellation or soft delete. Exact
+cutoffs begin on the first complete Chicago day after the real database cutover; every earlier date
+fails closed because pre-cutover earned-state versions do not exist. The two existing zero-dollar
+cancellations enter the opening observation as excluded legacy states. Mason authorized the guarded
+live apply only after clean exact-artifact and Claude review; live `[E2E]` fixtures and merge remain separate.
 
 **The 976th row is not part of the draw-down chain.** `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`
 (history row 891) applied live on 2026-08-25 as ledger version `20260825142708`, after the
@@ -202,7 +203,8 @@ part of the stored ledger name); `docs/reference/migration-history.md` uses the 
 
 **Superseded 2026-08-17 header, kept for provenance — ledger re-read only.** The live ledger has **971 rows** and ends at **`20260816174353`**, carrying submitted migration name `20260813080000_lock_quote_versions_writes_to_rpc`. Nine migrations landed between the previous stamp and this one, applied by concurrent sessions: `20260812010000_blend_ticket_order_header_runtime_assert`, `20260812011000_restore_quote_version_whole_cent_money`, `20260812115235_snapshot_cost_reporting`, `20260812115236_quote_items_cost_at_quote_snapshot`, `20260812115237_enforce_below_cost_admin_approval`, `20260812115238_repair_historical_order_line_cents`, `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`, `20260813070000_pin_return_idempotency_helper_contract`, `20260813080000_lock_quote_versions_writes_to_rpc`.
 
-**Scope of this pass.** It re-read the live ledger only, to correct a high-water this document was stating wrongly. It did **not** re-verify the narrative below, and it did **not** refresh the schema registry — the registry is still stamped to the 962-row high-water and is now nine migrations behind. Treat every substantive claim in this document as carrying its own older date, not this one. The paragraph that follows is the 2026-08-12 evidence, retained verbatim. **Corrected by the 2026-08-19 read above:** the registry was regenerated from live introspection on 2026-08-16 and records the same `20260816174353` high-water, so it was not nine migrations behind.
+**Scope of this pass.** It re-read the live ledger only, to correct a high-water this document was stating wrongly. It did **not** re-verify the narrative below, and it did **not** refresh the schema registry — the registry is still stamped to the 962-row high-water and is now nine migrations behind. Treat every substantive claim in this document as carrying its own older date, not this one. The paragraph that follows is the 2026-08-12 evidence, retained verbatim.
+ **Corrected by the 2026-08-19 read above:** the registry was regenerated from live introspection on 2026-08-16 and records the same `20260816174353` high-water, so it was not nine migrations behind.
 
 
 **Superseded 2026-08-12 header, kept for provenance:** the ledger then had 962 rows and ended at `20260812003315`, carrying submitted migration name `20260811230423_log_customer_sales_rep_assignment`. It re-emits the approved Customer 360 assignment RPC to advance `customers.updated_at` and write one customer-scoped activity row in the same atomic transaction. Live catalog proof found one overload, `SECURITY DEFINER`, `search_path=public, pg_temp`, `postgres` ownership, no PUBLIC/anon EXECUTE, and authenticated/service access; the active-admin, target-lock, exact-set, audit-count, and payload-bound replay guards are present in the stored body. The schema registry was genuinely refreshed from all six live introspection queries through this 962-row high-water. No table, column, enum, generated column, function signature, or public-function-name count changed, so generated Supabase types and the 566-name `pg_proc` fixture remain structurally current and only their verification stamp advances. Team Board deployment details below remain current. (That paragraph's closing claim that the operational counts were a 2026-07-18 snapshot is superseded — see the 2026-08-18 header above and the restamped table in section 2.)

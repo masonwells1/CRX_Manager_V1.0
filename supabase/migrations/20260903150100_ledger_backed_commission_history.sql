@@ -2,10 +2,12 @@
 -- ============================================================================
 -- Restore stable, ledger-backed commission history and reconciliation detail.
 --
--- Historical boundary: 2026-03-09 is the first commission order_date in the
--- verified pre-payout dataset. Two older-model cancelled rows have no recoverable
--- cancellation timestamp or pre-cancellation amount; they remain NULL-stamped and
--- are treated as cancelled from inception.
+-- Historical boundary: pre-cutover earned-state versions were never recorded and
+-- cannot be reconstructed honestly. The migration captures one immutable opening
+-- observation at its real database transaction time; exact date-only reporting
+-- begins on the first complete Chicago day after that cutover. Two older-model
+-- cancelled rows have no recoverable cancellation timestamp or amount and enter
+-- the opening observation as excluded legacy states.
 --
 -- Safety window: when these columns are first installed, production must still
 -- have no posted/voided commission payment, no payment item, no paid commission,
@@ -69,7 +71,12 @@ BEGIN
        )
        OR EXISTS (
          SELECT 1 FROM public.commissions
-          WHERE deleted_at IS NOT NULL OR order_date IS NULL
+          WHERE deleted_at IS NOT NULL
+             OR order_date IS NULL
+             OR commission_amount IS NULL
+             OR commission_amount <> round(commission_amount, 2)
+             OR commission_amount <= '-Infinity'::numeric
+             OR commission_amount >= 'Infinity'::numeric
        ) THEN
       RAISE EXCEPTION
         'COMMISSION_HISTORY_CHEAP_WINDOW_CLOSED: payout activity, soft deletion, or undated commission exists; reconstruct history before applying';
@@ -89,7 +96,6 @@ BEGIN
             AND (
               order_date IS DISTINCT FROM DATE '2026-03-16'
               OR commission_amount IS DISTINCT FROM 0::numeric
-              OR deleted_at IS NOT NULL
             )
        ) THEN
       RAISE EXCEPTION
@@ -159,7 +165,6 @@ BEGIN
             AND (
               order_date IS DISTINCT FROM DATE '2026-03-16'
               OR commission_amount IS DISTINCT FROM 0::numeric
-              OR deleted_at IS NOT NULL
             )
        ) THEN
       RAISE EXCEPTION
@@ -240,6 +245,7 @@ BEGIN
         )
     ) OR to_regclass('public.commission_earned_state_ledger') IS NOT NULL
       OR to_regclass('public.commission_settlement_events') IS NOT NULL
+      OR to_regclass('public.commission_history_cutover') IS NOT NULL
       OR EXISTS (
       SELECT 1 FROM pg_trigger
        WHERE tgrelid = 'public.commissions'::regclass
@@ -274,7 +280,7 @@ BEGIN
             AND proowner = 'postgres'::regrole
             AND prosecdef
             AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-            AND md5(prosrc) = '550c26f88f977d1cb91fe2c015630a75'
+            AND md5(prosrc) = '304e4e87fb9d7b9426ea57ca59aad9a2'
             AND prosrc LIKE '%commission_settlement_events%'
        ) OR NOT EXISTS (
          SELECT 1 FROM pg_proc
@@ -282,6 +288,7 @@ BEGIN
             AND proowner = 'postgres'::regrole
             AND NOT prosecdef
             AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+            AND md5(prosrc) = '44fc20fd4b84be893460cab96fe0eb7d'
             AND prosrc LIKE '%cancelled commissions cannot be reopened%'
        ) OR NOT EXISTS (
          SELECT 1 FROM pg_proc
@@ -289,7 +296,7 @@ BEGIN
             AND proowner = 'postgres'::regrole
             AND prosecdef
             AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-            AND md5(prosrc) = '3428946dca7400eb52efecc04583fdf6'
+            AND md5(prosrc) = '97fa0f552420f6918bf02a55d95b6a54'
             AND prosrc LIKE '%commission_earned_state_ledger%'
             AND prosrc LIKE '%commission_settlement_events%'
        ) OR to_regclass('public.commission_earned_state_ledger') IS NULL
@@ -426,9 +433,11 @@ DO $ledger_replay_guard$
 DECLARE
   v_earned regclass := to_regclass('public.commission_earned_state_ledger');
   v_settlement regclass := to_regclass('public.commission_settlement_events');
+  v_cutover regclass := to_regclass('public.commission_history_cutover');
 BEGIN
-  IF (v_earned IS NULL) <> (v_settlement IS NULL) THEN
-    RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: partial ledger table set';
+  IF (v_earned IS NULL) <> (v_settlement IS NULL)
+     OR (v_earned IS NULL) <> (v_cutover IS NULL) THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: partial ledger or cutover table set';
   END IF;
   IF v_earned IS NULL THEN
     RETURN;
@@ -436,13 +445,13 @@ BEGIN
 
   IF EXISTS (
     SELECT 1 FROM pg_class c
-     WHERE c.oid IN (v_earned, v_settlement)
+     WHERE c.oid IN (v_earned, v_settlement, v_cutover)
        AND (c.relowner <> 'postgres'::regrole OR NOT c.relrowsecurity OR c.relforcerowsecurity)
   ) OR EXISTS (
     SELECT 1
       FROM pg_class c
       CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
-     WHERE c.oid IN (v_earned, v_settlement)
+     WHERE c.oid IN (v_earned, v_settlement, v_cutover)
        AND a.grantee <> c.relowner
   ) OR EXISTS (
     SELECT 1
@@ -455,6 +464,81 @@ BEGIN
        AND a.grantee <> c.relowner
   ) THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: ledger RLS, owner, or ACL boundary differs';
+  END IF;
+
+  IF (SELECT count(*) FROM public.commission_history_cutover) <> 1
+     OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'commission_history_cutover') <> 6
+     OR EXISTS (
+       SELECT 1 FROM (VALUES
+         ('singleton', 'boolean'), ('cutover_at', 'timestamp with time zone'),
+         ('first_supported_date', 'date'), ('opening_commission_count', 'bigint'),
+         ('opening_commission_digest', 'text'), ('created_at', 'timestamp with time zone')
+       ) expected(column_name, data_type)
+       LEFT JOIN information_schema.columns c
+         ON c.table_schema = 'public' AND c.table_name = 'commission_history_cutover'
+        AND c.column_name = expected.column_name AND c.data_type = expected.data_type
+       WHERE c.column_name IS NULL
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM public.commission_history_cutover
+       WHERE singleton
+         AND first_supported_date = ((cutover_at AT TIME ZONE 'America/Chicago')::date + 1)
+         AND opening_commission_count >= 0
+         AND opening_commission_digest ~ '^[0-9a-f]{32}$'
+         AND created_at = cutover_at
+     )
+     OR EXISTS (
+       SELECT 1
+       FROM (VALUES
+         ('commission_history_cutover_singleton_chk'),
+         ('commission_history_cutover_first_complete_day_chk'),
+         ('commission_history_cutover_opening_count_non_negative_chk'),
+         ('commission_history_cutover_opening_digest_chk'),
+         ('commission_history_cutover_created_at_chk')
+       ) expected(constraint_name)
+       LEFT JOIN pg_constraint c
+         ON c.conrelid = v_cutover
+        AND c.conname = expected.constraint_name
+        AND c.contype = 'c'
+        AND c.convalidated
+       WHERE c.oid IS NULL
+     ) THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: immutable cutover metadata differs';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_class i
+    JOIN pg_index x ON x.indexrelid = i.oid
+    WHERE x.indrelid = v_earned
+      AND i.relname = 'commission_earned_state_ledger_one_opening_idx'
+      AND x.indisunique AND x.indisvalid AND x.indisready
+      AND x.indnkeyatts = 1 AND x.indnatts = 1
+      AND pg_get_indexdef(i.oid) LIKE '%(commission_id)%'
+      AND pg_get_expr(x.indpred, x.indrelid) LIKE '%event_kind%baseline%legacy_excluded%'
+  ) OR EXISTS (
+    SELECT 1 FROM public.commission_earned_state_ledger
+    WHERE event_kind IN ('baseline', 'legacy_excluded')
+    GROUP BY commission_id HAVING count(*) <> 1
+  ) OR EXISTS (
+    SELECT 1
+    FROM public.commission_earned_state_ledger s
+    CROSS JOIN public.commission_history_cutover m
+    WHERE s.event_kind IN ('baseline', 'legacy_excluded')
+      AND (s.effective_at IS DISTINCT FROM m.cutover_at OR s.recorded_by IS NOT NULL)
+  ) OR (SELECT count(*) FROM public.commission_earned_state_ledger WHERE event_kind IN ('baseline', 'legacy_excluded'))
+       <> (SELECT opening_commission_count FROM public.commission_history_cutover)
+    OR (SELECT COALESCE(md5(string_agg(commission_id::text, ',' ORDER BY commission_id)), md5(''))
+          FROM public.commission_earned_state_ledger
+         WHERE event_kind IN ('baseline', 'legacy_excluded'))
+       <> (SELECT opening_commission_digest FROM public.commission_history_cutover)
+    OR EXISTS (
+      SELECT 1 FROM public.commissions c
+      WHERE NOT EXISTS (
+        SELECT 1 FROM public.commission_earned_state_ledger s WHERE s.commission_id = c.id
+      )
+    ) THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: opening observation or ledger coverage differs';
   END IF;
 
   IF EXISTS (
@@ -489,19 +573,23 @@ BEGIN
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.record_commission_earned_state()'::regprocedure
-       AND md5(prosrc) = '230b4adcd9d1f08a49f48277a2b386a0'
+       AND md5(prosrc) = 'dc0577e8e694773e75a1c8099819ba6c'
+       AND prosrc LIKE '%clock_timestamp()%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.record_commission_settlement_event()'::regprocedure
-       AND md5(prosrc) = '135910af9a0a79966ce6eb4726ebc77c'
+       AND md5(prosrc) = '2d4d8f2df557f125415e208a7e198ded'
+       AND prosrc LIKE '%NEW.posted_at := v_event_at%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.prevent_commission_history_ledger_mutation()'::regprocedure
        AND md5(prosrc) = 'f31a41a2b139f101074f95d2e361308f'
+       AND prosrc LIKE '%IMMUTABLE%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.prevent_commission_history_ledger_truncate()'::regprocedure
        AND md5(prosrc) = 'add7928abcb610caedb7cfbea52b8602'
+       AND prosrc LIKE '%cannot be truncated%'
   ) THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: private ledger function trust or ACL differs';
   END IF;
@@ -513,8 +601,10 @@ BEGIN
         (v_earned, 'trg_commission_earned_state_ledger_no_truncate', 34::smallint, 'public.prevent_commission_history_ledger_truncate()'::regprocedure),
         (v_settlement, 'trg_commission_settlement_events_immutable', 27::smallint, 'public.prevent_commission_history_ledger_mutation()'::regprocedure),
         (v_settlement, 'trg_commission_settlement_events_no_truncate', 34::smallint, 'public.prevent_commission_history_ledger_truncate()'::regprocedure),
+        (v_cutover, 'trg_commission_history_cutover_immutable', 27::smallint, 'public.prevent_commission_history_ledger_mutation()'::regprocedure),
+        (v_cutover, 'trg_commission_history_cutover_no_truncate', 34::smallint, 'public.prevent_commission_history_ledger_truncate()'::regprocedure),
         ('public.commissions'::regclass, 'trg_commissions_record_earned_state', 21::smallint, 'public.record_commission_earned_state()'::regprocedure),
-        ('public.commission_payments'::regclass, 'trg_commission_payments_record_settlement_event', 17::smallint, 'public.record_commission_settlement_event()'::regprocedure)
+        ('public.commission_payments'::regclass, 'trg_commission_payments_record_settlement_event', 19::smallint, 'public.record_commission_settlement_event()'::regprocedure)
       ) expected(table_oid, trigger_name, trigger_type, function_oid)
       LEFT JOIN pg_trigger t
         ON t.tgrelid = expected.table_oid
@@ -531,12 +621,35 @@ BEGIN
     RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: ledger trigger catalog differs';
   END IF;
 
-  IF (SELECT count(*) FROM pg_policy WHERE polrelid IN (v_earned, v_settlement)) <> 2
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = 'public.commission_payments'::regclass
+      AND t.tgname = 'trg_commission_payments_record_settlement_event'
+      AND t.tgattr::text = (SELECT attnum::text FROM pg_attribute WHERE attrelid = 'public.commission_payments'::regclass AND attname = 'status' AND NOT attisdropped)
+  ) THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: settlement trigger must pin UPDATE OF status';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = 'public.commissions'::regclass
+      AND t.tgname = 'trg_commissions_record_earned_state'
+      AND t.tgattr::text = ''
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = 'public.commissions'::regclass
+      AND t.tgname = 'trg_commissions_stamp_cancellation_history'
+      AND t.tgattr::text = ''
+  ) THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: broad commission history trigger catalog differs';
+  END IF;
+
+  IF (SELECT count(*) FROM pg_policy WHERE polrelid IN (v_earned, v_settlement, v_cutover)) <> 3
      OR EXISTS (
        SELECT 1
          FROM (VALUES
            (v_earned, 'commission_earned_state_ledger_admin_select'),
-           (v_settlement, 'commission_settlement_events_admin_select')
+           (v_settlement, 'commission_settlement_events_admin_select'),
+           (v_cutover, 'commission_history_cutover_admin_select')
          ) expected(table_oid, policy_name)
          LEFT JOIN pg_policy p
            ON p.polrelid = expected.table_oid
@@ -662,6 +775,14 @@ SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $function$
 BEGIN
+  -- Check the caller's proposed values before any convenience backfill can
+  -- hide a label rewrite attempt.
+  IF TG_OP = 'UPDATE' AND OLD.order_number IS NOT NULL AND NEW.order_number IS DISTINCT FROM OLD.order_number THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_ORDER_LABEL_IMMUTABLE: order_number cannot change after it is frozen';
+  END IF;
+  IF TG_OP = 'UPDATE' AND OLD.customer_name IS NOT NULL AND NEW.customer_name IS DISTINCT FROM OLD.customer_name THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_CUSTOMER_LABEL_IMMUTABLE: customer_name cannot change after it is frozen';
+  END IF;
   -- The order commission helper intentionally stores IDs, not display fields.
   -- Fill those existing snapshot columns before the first payout, then keep a
   -- populated snapshot immutable so later order/customer renames cannot rewrite
@@ -676,18 +797,15 @@ BEGIN
       FROM public.customers c
      WHERE c.id = NEW.customer_id;
   END IF;
-  IF TG_OP = 'UPDATE' THEN
-    IF OLD.order_number IS NOT NULL THEN
-      NEW.order_number := OLD.order_number;
-    END IF;
-    IF OLD.customer_name IS NOT NULL THEN
-      NEW.customer_name := OLD.customer_name;
-    END IF;
-  END IF;
-
   IF TG_OP = 'INSERT' THEN
     IF NEW.status = 'cancelled' THEN
-      NEW.cancelled_at := transaction_timestamp();
+      IF NEW.commission_amount IS NULL
+         OR NEW.commission_amount <> round(NEW.commission_amount, 2)
+         OR NEW.commission_amount <= '-Infinity'::numeric
+         OR NEW.commission_amount >= 'Infinity'::numeric THEN
+        RAISE EXCEPTION 'COMMISSION_HISTORY_CANCELLATION_AMOUNT_INVALID: cancelled commission % requires a finite whole-cent amount', NEW.id;
+      END IF;
+      NEW.cancelled_at := clock_timestamp();
       NEW.cancelled_amount_cents := (ROUND(NEW.commission_amount, 2) * 100)::bigint;
     ELSE
       NEW.cancelled_at := NULL;
@@ -706,7 +824,13 @@ BEGIN
   END IF;
 
   IF NEW.status = 'cancelled' THEN
-    NEW.cancelled_at := transaction_timestamp();
+    IF OLD.commission_amount IS NULL
+       OR OLD.commission_amount <> round(OLD.commission_amount, 2)
+       OR OLD.commission_amount <= '-Infinity'::numeric
+       OR OLD.commission_amount >= 'Infinity'::numeric THEN
+      RAISE EXCEPTION 'COMMISSION_HISTORY_CANCELLATION_AMOUNT_INVALID: commission % requires a finite whole-cent pre-cancellation amount', NEW.id;
+    END IF;
+    NEW.cancelled_at := clock_timestamp();
     NEW.cancelled_amount_cents := (ROUND(OLD.commission_amount, 2) * 100)::bigint;
   ELSE
     NEW.cancelled_at := NULL;
@@ -726,12 +850,69 @@ CREATE TRIGGER trg_commissions_stamp_cancellation_history
   FOR EACH ROW
   EXECUTE FUNCTION public.stamp_commission_cancellation_history();
 
--- These are append-only reporting ledgers, not mutable caches.  The opening
--- rows are a reviewed restatement of the pre-payout population: they are
--- deliberately effective at Chicago midnight on each order date.  Every later
--- state transition is effective at its actual transaction timestamp.  Thus a
--- report re-run for a past date selects the same state even after a later edit,
--- deletion, cancellation, posting, or void.
+-- One immutable cutover record defines the first complete reportable Chicago
+-- day.  Opening rows are observations at this real database transaction time,
+-- never invented back at an order date that predates the ledger.
+CREATE TABLE IF NOT EXISTS public.commission_history_cutover (
+  singleton boolean PRIMARY KEY DEFAULT true,
+  cutover_at timestamptz NOT NULL,
+  first_supported_date date NOT NULL,
+  opening_commission_count bigint NOT NULL,
+  opening_commission_digest text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+  CONSTRAINT commission_history_cutover_singleton_chk CHECK (singleton),
+  CONSTRAINT commission_history_cutover_first_complete_day_chk
+    CHECK (first_supported_date = ((cutover_at AT TIME ZONE 'America/Chicago')::date + 1)),
+  CONSTRAINT commission_history_cutover_opening_count_non_negative_chk
+    CHECK (opening_commission_count >= 0),
+  CONSTRAINT commission_history_cutover_opening_digest_chk
+    CHECK (opening_commission_digest ~ '^[0-9a-f]{32}$'),
+  CONSTRAINT commission_history_cutover_created_at_chk CHECK (created_at = cutover_at)
+);
+
+ALTER TABLE public.commission_history_cutover OWNER TO postgres;
+ALTER TABLE public.commission_history_cutover ENABLE ROW LEVEL SECURITY;
+DO $cutover_policy$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'public.commission_history_cutover'::regclass AND polname = 'commission_history_cutover_admin_select') THEN
+    CREATE POLICY commission_history_cutover_admin_select ON public.commission_history_cutover FOR SELECT TO authenticated USING (public.is_admin());
+  END IF;
+END
+$cutover_policy$;
+REVOKE ALL ON TABLE public.commission_history_cutover FROM PUBLIC, anon, authenticated, service_role, metabase_ro;
+
+DO $cutover_seed$
+DECLARE
+  v_cutover_at timestamptz := transaction_timestamp();
+  v_count bigint;
+  v_digest text;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.commission_history_cutover) THEN
+    IF to_regclass('public.commission_earned_state_ledger') IS NOT NULL THEN
+      RAISE EXCEPTION 'COMMISSION_HISTORY_CUTOVER_DRIFT: an event ledger exists without immutable cutover metadata';
+    END IF;
+    SELECT count(*), COALESCE(md5(string_agg(id::text, ',' ORDER BY id)), md5(''))
+      INTO v_count, v_digest
+      FROM public.commissions;
+    INSERT INTO public.commission_history_cutover (
+      singleton, cutover_at, first_supported_date,
+      opening_commission_count, opening_commission_digest
+    ) VALUES (
+      true, v_cutover_at,
+      ((v_cutover_at AT TIME ZONE 'America/Chicago')::date + 1),
+      v_count, v_digest
+    );
+  ELSIF (SELECT count(*) FROM public.commission_history_cutover) <> 1 THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_CUTOVER_DRIFT: expected exactly one cutover row';
+  END IF;
+END
+$cutover_seed$;
+
+-- These are append-only reporting ledgers, not mutable caches. Opening rows are
+-- observations of the pre-payout population at the immutable cutover timestamp;
+-- they are never backdated to an order date. Every later state transition is
+-- effective at its actual wall-clock mutation time. Exact date-only reporting
+-- starts with the first complete Chicago day after cutover.
 -- `updated_at` is intentionally absent: both ledgers reject every UPDATE, so
 -- an automatically-mutated timestamp would contradict their audit contract.
 CREATE TABLE IF NOT EXISTS public.commission_earned_state_ledger (
@@ -763,6 +944,9 @@ CREATE INDEX IF NOT EXISTS commission_earned_state_ledger_as_of_idx
   ON public.commission_earned_state_ledger (commission_id, effective_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS commission_earned_state_ledger_recipient_as_of_idx
   ON public.commission_earned_state_ledger (recipient_group_key, effective_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS commission_earned_state_ledger_one_opening_idx
+  ON public.commission_earned_state_ledger (commission_id)
+  WHERE event_kind IN ('baseline', 'legacy_excluded');
 
 ALTER TABLE public.commission_earned_state_ledger ENABLE ROW LEVEL SECURITY;
 DO $earned_policy$
@@ -835,6 +1019,9 @@ $settlement_policy$;
 
 -- The report functions own all application access.  Do not hand users direct
 -- table or sequence privileges merely because the tables carry a SELECT policy.
+-- The postgres owner deliberately bypasses RLS so SECURITY DEFINER report and
+-- recorder functions can work; a database superuser is outside application
+-- immutability controls and remains an operational trust boundary.
 REVOKE ALL ON TABLE public.commission_earned_state_ledger FROM PUBLIC, anon, authenticated, service_role, metabase_ro;
 REVOKE ALL ON TABLE public.commission_settlement_events FROM PUBLIC, anon, authenticated, service_role, metabase_ro;
 REVOKE ALL ON SEQUENCE public.commission_earned_state_ledger_id_seq FROM PUBLIC, anon, authenticated, service_role, metabase_ro;
@@ -871,6 +1058,12 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.commission_earned_state_ledger'::regclass AND tgname = 'trg_commission_earned_state_ledger_immutable' AND NOT tgisinternal) THEN
     CREATE TRIGGER trg_commission_earned_state_ledger_immutable BEFORE UPDATE OR DELETE ON public.commission_earned_state_ledger FOR EACH ROW EXECUTE FUNCTION public.prevent_commission_history_ledger_mutation();
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.commission_history_cutover'::regclass AND tgname = 'trg_commission_history_cutover_immutable' AND NOT tgisinternal) THEN
+    CREATE TRIGGER trg_commission_history_cutover_immutable BEFORE UPDATE OR DELETE ON public.commission_history_cutover FOR EACH ROW EXECUTE FUNCTION public.prevent_commission_history_ledger_mutation();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.commission_history_cutover'::regclass AND tgname = 'trg_commission_history_cutover_no_truncate' AND NOT tgisinternal) THEN
+    CREATE TRIGGER trg_commission_history_cutover_no_truncate BEFORE TRUNCATE ON public.commission_history_cutover FOR EACH STATEMENT EXECUTE FUNCTION public.prevent_commission_history_ledger_truncate();
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.commission_earned_state_ledger'::regclass AND tgname = 'trg_commission_earned_state_ledger_no_truncate' AND NOT tgisinternal) THEN
     CREATE TRIGGER trg_commission_earned_state_ledger_no_truncate BEFORE TRUNCATE ON public.commission_earned_state_ledger FOR EACH STATEMENT EXECUTE FUNCTION public.prevent_commission_history_ledger_truncate();
   END IF;
@@ -892,8 +1085,18 @@ AS $function$
 DECLARE
   v_recipient_name text;
   v_group_key text;
+  v_old_group_key text;
   v_event_kind text;
 BEGIN
+  IF NEW.order_date IS NULL THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_ORDER_DATE_REQUIRED: commission % must have order_date before history is recorded', NEW.id;
+  END IF;
+  IF NEW.commission_amount IS NULL
+     OR NEW.commission_amount <> round(NEW.commission_amount, 2)
+     OR NEW.commission_amount <= '-Infinity'::numeric
+     OR NEW.commission_amount >= 'Infinity'::numeric THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_AMOUNT_INVALID: commission % must have a finite whole-cent commission_amount', NEW.id;
+  END IF;
   IF TG_OP = 'UPDATE'
      AND NEW.commission_amount IS NOT DISTINCT FROM OLD.commission_amount
      AND NEW.status IS NOT DISTINCT FROM OLD.status
@@ -917,6 +1120,18 @@ BEGIN
     'commission:' || NEW.id::text
   );
 
+  IF TG_OP = 'UPDATE' THEN
+    v_old_group_key := COALESCE(
+      'user:' || OLD.recipient_user_id::text,
+      NULLIF('name:' || lower(btrim(OLD.recipient)), 'name:'),
+      'commission:' || OLD.id::text
+    );
+    IF v_group_key IS DISTINCT FROM v_old_group_key
+       AND EXISTS (SELECT 1 FROM public.commission_settlement_events WHERE commission_id = NEW.id) THEN
+      RAISE EXCEPTION 'COMMISSION_HISTORY_RECIPIENT_GROUP_IMMUTABLE_AFTER_SETTLEMENT: commission % already has settlement history', NEW.id;
+    END IF;
+  END IF;
+
   v_event_kind := CASE
     WHEN TG_OP = 'INSERT' THEN 'inserted'
     WHEN NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL THEN 'soft_deleted'
@@ -932,7 +1147,7 @@ BEGIN
   ) VALUES (
     NEW.id,
     v_event_kind,
-    transaction_timestamp(),
+    clock_timestamp(),
     auth.uid(),
     NEW.recipient_user_id,
     v_group_key,
@@ -972,7 +1187,7 @@ INSERT INTO public.commission_earned_state_ledger (
 SELECT
   c.id,
   CASE WHEN c.status = 'cancelled' THEN 'legacy_excluded' ELSE 'baseline' END,
-  (c.order_date::timestamp AT TIME ZONE 'America/Chicago'),
+  m.cutover_at,
   NULL::uuid,
   c.recipient_user_id,
   COALESCE('user:' || c.recipient_user_id::text,
@@ -989,9 +1204,9 @@ SELECT
   (round(c.commission_amount, 2) * 100)::bigint,
   c.status <> 'cancelled' AND c.deleted_at IS NULL
 FROM public.commissions c
-WHERE NOT EXISTS (
-  SELECT 1 FROM public.commission_earned_state_ledger s WHERE s.commission_id = c.id
-);
+CROSS JOIN public.commission_history_cutover m
+WHERE m.cutover_at = transaction_timestamp()
+  AND NOT EXISTS (SELECT 1 FROM public.commission_earned_state_ledger);
 
 CREATE OR REPLACE FUNCTION public.record_commission_settlement_event()
 RETURNS trigger
@@ -1002,14 +1217,14 @@ AS $function$
 DECLARE
   v_expected_count bigint;
   v_written_count bigint;
+  v_event_at timestamptz;
 BEGIN
   IF OLD.status <> 'posted' AND NEW.status = 'posted' THEN
-    IF NEW.posted_at IS NULL THEN
-      RAISE EXCEPTION 'COMMISSION_SETTLEMENT_POSTED_AT_REQUIRED';
+    IF auth.uid() IS NULL OR NEW.posted_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'COMMISSION_SETTLEMENT_POSTED_ACTOR_MISMATCH';
     END IF;
-    IF NEW.posted_at IS DISTINCT FROM transaction_timestamp() THEN
-      RAISE EXCEPTION 'COMMISSION_SETTLEMENT_POSTED_AT_MUST_BE_SERVER_NOW';
-    END IF;
+    v_event_at := clock_timestamp();
+    NEW.posted_at := v_event_at;
     IF EXISTS (
       SELECT 1 FROM public.commission_payment_items i
       WHERE i.commission_payment_id = NEW.id
@@ -1022,6 +1237,23 @@ BEGIN
      WHERE i.commission_payment_id = NEW.id;
     IF v_expected_count = 0 THEN
       RAISE EXCEPTION 'COMMISSION_SETTLEMENT_ITEMS_REQUIRED';
+    END IF;
+    IF EXISTS (
+      SELECT 1
+      FROM public.commission_payment_items i
+      CROSS JOIN LATERAL (
+        SELECT s.order_date
+        FROM public.commission_earned_state_ledger s
+        WHERE s.commission_id = i.commission_id
+          AND s.recipient_id IS NOT DISTINCT FROM NEW.recipient_id
+          AND s.effective_at <= v_event_at
+        ORDER BY s.effective_at DESC, s.id DESC
+        LIMIT 1
+      ) e
+      WHERE i.commission_payment_id = NEW.id
+        AND NEW.payment_date < e.order_date
+    ) THEN
+      RAISE EXCEPTION 'COMMISSION_SETTLEMENT_PAYMENT_DATE_BEFORE_ORDER: payment_date cannot precede snapshotted commission order_date';
     END IF;
     INSERT INTO public.commission_settlement_events (
       commission_payment_id, commission_payment_item_id, commission_id, event_kind,
@@ -1041,7 +1273,7 @@ BEGIN
       FROM public.commission_earned_state_ledger s
       WHERE s.commission_id = i.commission_id
         AND s.recipient_id IS NOT DISTINCT FROM NEW.recipient_id
-        AND s.effective_at <= NEW.posted_at
+        AND s.effective_at <= v_event_at
       ORDER BY s.effective_at DESC, s.id DESC
       LIMIT 1
     ) e
@@ -1053,12 +1285,11 @@ BEGIN
         v_expected_count, v_written_count;
     END IF;
   ELSIF OLD.status = 'posted' AND NEW.status = 'voided' THEN
-    IF NEW.voided_at IS NULL THEN
-      RAISE EXCEPTION 'COMMISSION_SETTLEMENT_VOIDED_AT_REQUIRED';
+    IF auth.uid() IS NULL OR NEW.voided_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'COMMISSION_SETTLEMENT_VOIDED_ACTOR_MISMATCH';
     END IF;
-    IF NEW.voided_at IS DISTINCT FROM transaction_timestamp() THEN
-      RAISE EXCEPTION 'COMMISSION_SETTLEMENT_VOIDED_AT_MUST_BE_SERVER_NOW';
-    END IF;
+    v_event_at := clock_timestamp();
+    NEW.voided_at := v_event_at;
     INSERT INTO public.commission_settlement_events (
       commission_payment_id, commission_payment_item_id, commission_id, event_kind,
       effective_at, payment_number, payment_date, recipient_id, recipient_group_key,
@@ -1067,7 +1298,7 @@ BEGIN
     )
     SELECT
       p.commission_payment_id, p.commission_payment_item_id, p.commission_id, 'voided',
-      NEW.voided_at, p.payment_number, p.payment_date, p.recipient_id,
+      v_event_at, p.payment_number, p.payment_date, p.recipient_id,
       p.recipient_group_key, p.recipient_name, p.source_type, p.source_number,
       p.customer_name, p.commission_order_date, -p.amount_cents
     FROM public.commission_settlement_events p
@@ -1093,7 +1324,7 @@ REVOKE ALL ON FUNCTION public.record_commission_settlement_event()
 DO $settlement_recorder_trigger$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.commission_payments'::regclass AND tgname = 'trg_commission_payments_record_settlement_event' AND NOT tgisinternal) THEN
-    CREATE TRIGGER trg_commission_payments_record_settlement_event AFTER UPDATE OF status ON public.commission_payments FOR EACH ROW EXECUTE FUNCTION public.record_commission_settlement_event();
+    CREATE TRIGGER trg_commission_payments_record_settlement_event BEFORE UPDATE OF status ON public.commission_payments FOR EACH ROW EXECUTE FUNCTION public.record_commission_settlement_event();
   END IF;
 END
 $settlement_recorder_trigger$;
@@ -1261,9 +1492,14 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_today date := (transaction_timestamp() AT TIME ZONE 'America/Chicago')::date;
-  v_history_start_date constant date := DATE '2026-03-09';
+  v_history_start_date date;
 BEGIN
   PERFORM public.require_admin();
+  SELECT first_supported_date INTO v_history_start_date
+  FROM public.commission_history_cutover WHERE singleton;
+  IF v_history_start_date IS NULL THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_CUTOVER_UNAVAILABLE';
+  END IF;
 
   IF p_as_of_date IS NULL THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_DATE_REQUIRED: p_as_of_date is required';
@@ -1321,7 +1557,16 @@ BEGIN
       MIN(p.recipient_id::text)::uuid AS recipient_id,
       MIN(p.recipient_name) AS recipient_name,
       SUM(p.paid_cents) AS paid_cents,
-      COUNT(*) FILTER (WHERE p.paid_cents > 0) AS paid_count
+      COUNT(*) FILTER (
+        WHERE p.paid_cents > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM latest_state s
+            WHERE s.commission_id = p.commission_id
+              AND s.recipient_group_key = p.recipient_group_key
+              AND s.is_earned
+              AND s.order_date <= p_as_of_date
+          )
+      ) AS paid_only_count
     FROM settlement_by_commission_recipient p
     GROUP BY p.recipient_group_key
   )
@@ -1332,7 +1577,7 @@ BEGIN
     COALESCE(p.paid_cents, 0)::numeric / 100::numeric,
     (COALESCE(e.earned_cents, 0) - COALESCE(p.paid_cents, 0))::numeric / 100::numeric,
     COALESCE(e.pending_count, 0),
-    COALESCE(e.paid_count, p.paid_count, 0)
+    COALESCE(e.paid_count, 0) + COALESCE(p.paid_only_count, 0)
   FROM earned_by_recipient e
   FULL OUTER JOIN paid_by_recipient p
     ON p.recipient_group_key = e.recipient_group_key
@@ -1368,9 +1613,14 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_today date := (transaction_timestamp() AT TIME ZONE 'America/Chicago')::date;
-  v_history_start_date constant date := DATE '2026-03-09';
+  v_history_start_date date;
 BEGIN
   PERFORM public.require_admin();
+  SELECT first_supported_date INTO v_history_start_date
+  FROM public.commission_history_cutover WHERE singleton;
+  IF v_history_start_date IS NULL THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_CUTOVER_UNAVAILABLE';
+  END IF;
 
   IF p_as_of_date IS NULL THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_DATE_REQUIRED: p_as_of_date is required';
@@ -1436,10 +1686,10 @@ GRANT EXECUTE ON FUNCTION public.get_commission_payment_detail_report(date)
   TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.get_commission_balance_report(date) IS
-  'Admin-only exact commission earned, paid, and outstanding balances from 2026-03-09 through Chicago-today. Two pre-ledger cancellations are excluded from inception.';
+  'Admin-only exact commission earned, paid, and outstanding balances from the immutable cutover''s first complete Chicago day through Chicago-today; earlier dates fail closed because pre-cutover earned-state history is unavailable.';
 
 COMMENT ON FUNCTION public.get_commission_payment_detail_report(date) IS
-  'Admin-only payment and settled-commission reconciliation detail as of a supported historical date.';
+  'Admin-only payment and settled-commission reconciliation detail from the immutable cutover''s first complete Chicago day through Chicago-today.';
 
 DO $postcondition$
 DECLARE
@@ -1495,7 +1745,6 @@ BEGIN
           AND (
             order_date IS DISTINCT FROM DATE '2026-03-16'
             OR commission_amount IS DISTINCT FROM 0::numeric
-            OR deleted_at IS NOT NULL
           )
      ) THEN
     RAISE EXCEPTION
@@ -1617,10 +1866,11 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-       AND md5(prosrc) = '3428946dca7400eb52efecc04583fdf6'
+       AND md5(prosrc) = '97fa0f552420f6918bf02a55d95b6a54'
        AND prosrc LIKE '%PERFORM public.require_admin()%'
        AND prosrc LIKE '%commission_earned_state_ledger%'
        AND prosrc LIKE '%commission_settlement_events%'
+       AND prosrc LIKE '%commission_history_cutover%'
        AND prosrc LIKE '%FULL OUTER JOIN%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
@@ -1628,9 +1878,10 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-       AND md5(prosrc) = '550c26f88f977d1cb91fe2c015630a75'
+       AND md5(prosrc) = '304e4e87fb9d7b9426ea57ca59aad9a2'
        AND prosrc LIKE '%PERFORM public.require_admin()%'
        AND prosrc LIKE '%commission_settlement_events%'
+       AND prosrc LIKE '%commission_history_cutover%'
        AND prosrc LIKE '%HAVING SUM(se.amount_cents) <> 0%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
@@ -1638,6 +1889,7 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND NOT prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+       AND md5(prosrc) = '44fc20fd4b84be893460cab96fe0eb7d'
        AND prosrc LIKE '%ROUND(OLD.commission_amount, 2) * 100%'
        AND prosrc LIKE '%NEW.order_number%'
        AND prosrc LIKE '%NEW.customer_name%'
@@ -1648,19 +1900,26 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-       AND md5(prosrc) = '230b4adcd9d1f08a49f48277a2b386a0'
+       AND md5(prosrc) = 'dc0577e8e694773e75a1c8099819ba6c'
        AND prosrc LIKE '%commission_earned_state_ledger%'
-       AND prosrc LIKE '%transaction_timestamp()%'
+       AND prosrc LIKE '%clock_timestamp()%'
+       AND prosrc LIKE '%RECIPIENT_GROUP_IMMUTABLE_AFTER_SETTLEMENT%'
+       AND prosrc LIKE '%ORDER_DATE_REQUIRED%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.record_commission_settlement_event()'::regprocedure
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-       AND md5(prosrc) = '135910af9a0a79966ce6eb4726ebc77c'
+       AND md5(prosrc) = '2d4d8f2df557f125415e208a7e198ded'
        AND prosrc LIKE '%commission_settlement_events%'
        AND prosrc LIKE '%OLD.status <> ''posted''%'
        AND prosrc LIKE '%OLD.status = ''posted''%'
+       AND prosrc LIKE '%NEW.posted_at := v_event_at%'
+       AND prosrc LIKE '%NEW.voided_at := v_event_at%'
+       AND prosrc LIKE '%PAYMENT_DATE_BEFORE_ORDER%'
+       AND prosrc LIKE '%POSTED_ACTOR_MISMATCH%'
+       AND prosrc LIKE '%VOIDED_ACTOR_MISMATCH%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.prevent_commission_history_ledger_mutation()'::regprocedure
@@ -1723,11 +1982,27 @@ BEGIN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: ledger sequence ACL drift';
   END IF;
 
-  IF (SELECT count(*) FROM public.commission_earned_state_ledger) <> (SELECT count(*) FROM public.commissions)
+  IF (SELECT count(*) FROM public.commission_earned_state_ledger WHERE event_kind IN ('baseline','legacy_excluded'))
+       <> (SELECT opening_commission_count FROM public.commission_history_cutover)
+     OR (SELECT COALESCE(md5(string_agg(commission_id::text, ',' ORDER BY commission_id)), md5(''))
+           FROM public.commission_earned_state_ledger
+          WHERE event_kind IN ('baseline','legacy_excluded'))
+       <> (SELECT opening_commission_digest FROM public.commission_history_cutover)
      OR EXISTS (
+      SELECT 1 FROM public.commission_earned_state_ledger
+      WHERE event_kind IN ('baseline','legacy_excluded')
+      GROUP BY commission_id HAVING count(*) <> 1
+    ) OR EXISTS (
+      SELECT 1
+      FROM public.commission_earned_state_ledger s
+      CROSS JOIN public.commission_history_cutover m
+      WHERE s.event_kind IN ('baseline', 'legacy_excluded')
+        AND (s.effective_at IS DISTINCT FROM m.cutover_at OR s.recorded_by IS NOT NULL)
+    ) OR EXISTS (
       SELECT 1 FROM public.commissions c
-      LEFT JOIN public.commission_earned_state_ledger s ON s.commission_id = c.id
-      GROUP BY c.id HAVING count(s.id) <> 1
+      WHERE NOT EXISTS (
+        SELECT 1 FROM public.commission_earned_state_ledger s WHERE s.commission_id = c.id
+      )
     ) THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: opening baseline drift';
   END IF;
@@ -1759,6 +2034,57 @@ $postcondition$;
 -- proving that the older cancellation columns survived.
 DO $ledger_postcondition$
 BEGIN
+  IF (SELECT count(*) FROM public.commission_history_cutover) <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM public.commission_history_cutover
+       WHERE singleton
+         AND first_supported_date = ((cutover_at AT TIME ZONE 'America/Chicago')::date + 1)
+         AND opening_commission_count >= 0
+         AND opening_commission_digest ~ '^[0-9a-f]{32}$'
+         AND created_at = cutover_at
+     ) OR EXISTS (
+       SELECT 1
+       FROM (VALUES
+         ('commission_history_cutover_singleton_chk'),
+         ('commission_history_cutover_first_complete_day_chk'),
+         ('commission_history_cutover_opening_count_non_negative_chk'),
+         ('commission_history_cutover_opening_digest_chk'),
+         ('commission_history_cutover_created_at_chk')
+       ) expected(constraint_name)
+       LEFT JOIN pg_constraint c
+         ON c.conrelid = 'public.commission_history_cutover'::regclass
+        AND c.conname = expected.constraint_name
+        AND c.contype = 'c'
+        AND c.convalidated
+       WHERE c.oid IS NULL
+     ) OR NOT EXISTS (
+       SELECT 1 FROM pg_policy p
+       WHERE p.polrelid = 'public.commission_history_cutover'::regclass
+         AND p.polname = 'commission_history_cutover_admin_select'
+         AND p.polcmd = 'r'
+         AND p.polroles = ARRAY['authenticated'::regrole::oid]
+         AND pg_get_expr(p.polqual, p.polrelid) = 'is_admin()'
+     ) OR EXISTS (
+       SELECT 1 FROM pg_class c
+       CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
+       WHERE c.oid = 'public.commission_history_cutover'::regclass
+         AND (c.relowner <> 'postgres'::regrole OR NOT c.relrowsecurity OR c.relforcerowsecurity OR a.grantee <> c.relowner)
+     ) OR NOT EXISTS (
+       SELECT 1 FROM pg_trigger t
+       WHERE t.tgrelid = 'public.commission_history_cutover'::regclass
+         AND t.tgname = 'trg_commission_history_cutover_immutable'
+         AND t.tgtype = 27 AND t.tgenabled = 'O' AND NOT t.tgisinternal
+         AND t.tgfoid = 'public.prevent_commission_history_ledger_mutation()'::regprocedure
+     ) OR NOT EXISTS (
+       SELECT 1 FROM pg_trigger t
+       WHERE t.tgrelid = 'public.commission_history_cutover'::regclass
+         AND t.tgname = 'trg_commission_history_cutover_no_truncate'
+         AND t.tgtype = 34 AND t.tgenabled = 'O' AND NOT t.tgisinternal
+         AND t.tgfoid = 'public.prevent_commission_history_ledger_truncate()'::regprocedure
+     ) THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_LEDGER_POSTCOND: immutable cutover metadata contract drift';
+  END IF;
+
   IF EXISTS (
     SELECT 1
     FROM (VALUES
@@ -1807,6 +2133,16 @@ BEGIN
     OR (SELECT count(*) FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = 'commission_settlement_events') <> 17
     OR NOT EXISTS (
+      SELECT 1
+      FROM pg_class i
+      JOIN pg_index x ON x.indexrelid = i.oid
+      WHERE x.indrelid = 'public.commission_earned_state_ledger'::regclass
+        AND i.relname = 'commission_earned_state_ledger_one_opening_idx'
+        AND x.indisunique AND x.indisvalid AND x.indisready
+        AND x.indnkeyatts = 1 AND x.indnatts = 1
+        AND pg_get_indexdef(i.oid) LIKE '%(commission_id)%'
+        AND pg_get_expr(x.indpred, x.indrelid) LIKE '%event_kind%baseline%legacy_excluded%'
+    ) OR NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'public.commission_earned_state_ledger'::regclass
       AND conname = 'commission_earned_state_ledger_amount_cents_non_negative_chk'

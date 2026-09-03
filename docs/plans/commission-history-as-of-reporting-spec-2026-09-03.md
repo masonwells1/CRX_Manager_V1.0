@@ -1,6 +1,6 @@
 # Commission "as of a past date" reporting — deferred build spec
 
-**Status:** LOCAL CANDIDATE PROVEN — not applied live, live-tested, merged, or deployed.
+**Status:** CORRECTED LOCAL CANDIDATE UNDER RE-REVIEW — not applied live, live-tested, merged, or deployed.
 **Deadline driver:** must land **before the first commission payout of the season**, which Mason
 put at *"probably a few months out"* (so roughly 2026-11 → 2026-12; confirm with him, don't
 assume the date).
@@ -47,12 +47,13 @@ Verified live 2026-09-03 against project `rhyzpcqhnizqbxphqdkr`.
 Consequences:
 
 - **No commission has ever been paid.** No `paid_date` is populated anywhere.
-- Therefore the pre-migration report was *accidentally* correct for past dates, except that the
-  2 `cancelled` commissions still counted toward `total_earned`. There is no meaningful history
-  being lost by shipping the refusal today.
-- Therefore **there is no back-history to reconstruct.** Build this before the first payout and
-  the ledger is correct from row one. Build it after a season of payouts and everything before
-  that point is unrecoverable — the data to reconstruct it will never have existed.
+- Therefore there is no payout-event history to reconstruct. The 2 `cancelled` commissions still
+  demonstrate why current rows are not historical facts, and earlier changes to amount, recipient,
+  order date, status, or deletion were never recorded.
+- Therefore **pre-cutover earned-state history remains unrecoverable.** The correct opening is an
+  observation at the real database cutover, never a backdated claim. Build this before the first
+  payout and future payout history is complete from row one; wait until after payouts and that
+  missing interval becomes unrecoverable too.
 
 **Re-verify these counts before starting.** If `commission_payment_items` is no longer 0, the
 cheap window has closed and the spec's scope changes (see §6).
@@ -86,7 +87,7 @@ commission fields cannot by themselves reproduce a past answer.
 
 ## 4. The four real gaps
 
-Both are small, and both must be closed **before** the first payout or the gap becomes permanent.
+All four must be closed **before** the first payout or the payout-history gap becomes permanent.
 
 ### Gap 1 — voids are not dated
 
@@ -105,18 +106,19 @@ currently-cancelled rows have `deleted_at` NULL, so their cancellation date is a
 unrecoverable. Going forward this must be stamped, or "cancelled as of D" stays unanswerable.
 
 **Fix:** add `cancelled_at timestamptz` to `commissions`, stamped wherever status moves to
-`cancelled`. Accept the 2 existing rows as unknown — do **not** invent a date for them; treat
-them as cancelled-from-inception and say so in the report footnote.
+`cancelled`. Accept the 2 existing rows as unknown — do **not** invent a date for them. Capture
+them as excluded legacy states in the real cutover observation and refuse every pre-cutover date.
 
 ### Gap 3 — earned liability is mutable
 
 `commission_amount`, recipient assignment, order date, status, and `deleted_at` can all change.
 Reading the current commission row therefore rewrites earlier reports after a later correction.
 
-**Fix:** add `commission_earned_state_ledger`, an append-only bigint-cent snapshot ledger. The
-pre-payout active population becomes an explicitly reviewed opening restatement effective at each
-order date; the two unrecoverable legacy cancellations enter as excluded states. Every future
-insert or report-relevant update records its real database transaction time.
+**Fix:** add `commission_history_cutover` plus `commission_earned_state_ledger`. The immutable
+cutover records the real database observation time and the first complete reportable Chicago day.
+Opening rows are effective at that cutover, not at historical order dates; the two unrecoverable
+legacy cancellations enter as excluded states. Every later insert or report-relevant update records
+its actual wall-clock transition time.
 
 ### Gap 4 — payout state is mutable
 
@@ -142,6 +144,8 @@ event ledgers rather than from current status:
 - **Outstanding as of D** — earned minus paid, both as computed above.
 - Preserve a negative outstanding balance when paid cash survives a later cancellation/deletion;
   that is an exception signal, not a value to hide or clamp.
+- Begin exact date-only reporting on the first complete Chicago day after the immutable cutover.
+  The partial cutover day and all earlier dates must fail closed.
 - Remove the `HISTORICAL_COMMISSION_BALANCE_UNAVAILABLE` raise **only once the above is proven**.
   Keep refusing dates earlier than the ledger's own start (see §7), and keep refusing future
   dates — a future as-of date has no legitimate meaning here.
@@ -172,8 +176,9 @@ Done means all of these, not "the tests pass":
 1. `voided_at` / `voided_by` on `commission_payments`, stamped by `void_commission_payment`.
 2. `cancelled_at` on `commissions`, stamped on every path that sets `status = 'cancelled'`
    (check `cancel_order` and the order-void paths — they zero pending commissions).
-3. Append-only earned-state and signed settlement ledgers have RLS, no direct non-owner grants,
-   RESTRICT foreign keys, and UPDATE/DELETE/TRUNCATE refusal triggers.
+3. One immutable cutover record defines the real observation time and first complete reportable
+   Chicago day. It and the append-only earned-state/signed-settlement ledgers have RLS, no direct
+   non-owner grants, RESTRICT foreign keys where applicable, and UPDATE/DELETE/TRUNCATE refusal triggers.
 4. `get_commission_balance_report` computes earned and paid independently from those ledgers;
    detail reads frozen settlement snapshots and never current commission/profile/customer labels.
 5. A refusal path remains for dates the ledger genuinely cannot answer (before ledger start, or
@@ -222,8 +227,9 @@ Design consequences:
 `create_commission_payment` writes the immutable `commission_payment_items` snapshots. The post and
 void wrappers delegate to `_post_commission_payment_intent_impl_20260809` and
 `_void_commission_payment_intent_impl_20260809`, which consume those rows and maintain
-`commissions.paid_date`; they do not create the item rows themselves. The build therefore remains a
-reporting rewrite over data the existing lifecycle records, plus dated void/cancellation evidence.
+`commissions.paid_date`; they do not create the item rows themselves. The build reuses those
+operational facts but adds the immutable cutover and event ledgers required for stable reporting,
+plus dated void/cancellation evidence.
 
 ---
 

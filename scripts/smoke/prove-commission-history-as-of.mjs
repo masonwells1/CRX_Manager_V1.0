@@ -227,6 +227,110 @@ function applyMigration(local, index) {
   }
 }
 
+function scalar(sql) {
+  const result = psql(`\\pset format unaligned\n\\pset tuples_only on\n${sql}`);
+  return result.stdout.trim();
+}
+
+function seedCutoverPreimage() {
+  // These rows intentionally exist before the candidate is applied.  They
+  // exercise the populated first-apply path without carrying any live IDs.
+  const admin = 'c011ec70-0000-4000-8000-000000000099';
+  const customer = 'c011ec70-0000-4000-8000-000000000111';
+  const order = 'c011ec70-0000-4000-8000-000000000112';
+  const legacyIds = [
+    'c011ec70-0000-4000-8000-000000000121',
+    'c011ec70-0000-4000-8000-000000000122',
+  ];
+  const activeId = 'c011ec70-0000-4000-8000-000000000123';
+  psql(`
+INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at)
+VALUES ('${admin}', 'commission-history-prover@example.test', jsonb_build_object('full_name', 'Commission History Prover', 'role', 'admin'), now(), now())
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO public.profiles (id, email, full_name, role, is_active)
+VALUES ('${admin}', 'commission-history-prover@example.test', 'Commission History Prover', 'admin', true)
+ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, is_active = true;
+INSERT INTO public.customers (id, farm_name, assigned_sales_rep)
+VALUES ('${customer}', '[PROVER] Commission History Cutover Farm', '${admin}')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO public.orders (id, order_number, customer_id, order_date, status)
+VALUES ('${order}', 'PROVER-COMMISSION-CUTOVER', '${customer}', DATE '2026-03-16', 'confirmed')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO public.commissions (
+  id, order_id, customer_id, recipient, recipient_user_id, split_percentage,
+  commission_amount, order_profit, order_date, status
+) VALUES
+  ('${legacyIds[0]}', '${order}', '${customer}', 'Legacy Cancelled', '${admin}', 100, 0, 0, DATE '2026-03-16', 'cancelled'),
+  ('${legacyIds[1]}', '${order}', '${customer}', 'Legacy Cancelled', '${admin}', 100, 0, 0, DATE '2026-03-16', 'cancelled'),
+  ('${activeId}', '${order}', '${customer}', 'Commission History Prover', '${admin}', 100, 10, 10, DATE '2026-03-16', 'pending');
+`);
+  const legacyDigest = createHash('md5').update([...legacyIds].sort().join(',')).digest('hex');
+  return { admin, customer, order, activeId, legacyDigest };
+}
+
+function bindPopulatedCandidate(candidateSource, legacyDigest) {
+  const reportMd5 = scalar(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.get_commission_balance_report(date)'::regprocedure;`);
+  assert.match(reportMd5, /^[a-f0-9]{32}$/, 'could not read preimage report body md5');
+  const bound = candidateSource
+    .replaceAll('d2111549f1dc613edf9a31e4d152b096', legacyDigest)
+    .replaceAll('0ea6b39cc91141362461598e3ab91294', reportMd5);
+  assert.notEqual(bound, candidateSource, 'test-bound candidate did not substitute live-bound preimage literals');
+  return { bound, reportMd5 };
+}
+
+function proveCutoverOpening(preimage) {
+  const row = scalar(`
+SELECT opening_commission_count || '|' || opening_commission_digest || '|' ||
+       (cutover_at = (SELECT min(effective_at) FROM public.commission_earned_state_ledger))::text || '|' ||
+       (first_supported_date = ((cutover_at AT TIME ZONE 'America/Chicago')::date + 1))::text
+  FROM public.commission_history_cutover WHERE singleton;
+`);
+  const [count, digest, sameTime, nextDay] = row.split('|');
+  assert.equal(count, '3', 'cutover opening count must pin all deterministic preimage commissions');
+  assert.equal(digest, createHash('md5').update([
+    'c011ec70-0000-4000-8000-000000000121',
+    'c011ec70-0000-4000-8000-000000000122',
+    preimage.activeId,
+  ].sort().join(',')).digest('hex'), 'cutover opening digest drifted');
+  assert.equal(sameTime, 'true', 'opening events must be effective at cutover, never order_date');
+  assert.equal(nextDay, 'true', 'first supported date must be the first complete Chicago day after cutover');
+  assert.equal(scalar(`SELECT count(*) FROM public.commission_earned_state_ledger WHERE event_kind = 'baseline';`), '1');
+  assert.equal(scalar(`SELECT count(*) FROM public.commission_earned_state_ledger WHERE event_kind = 'legacy_excluded';`), '2');
+  const firstSupported = scalar(`SELECT first_supported_date FROM public.commission_history_cutover WHERE singleton;`);
+  const rejected = psql(`
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '${preimage.admin}', true);
+SELECT * FROM public.get_commission_balance_report((DATE '${firstSupported}') - 1);
+ROLLBACK;
+`, { allowFailure: true });
+  assert.match(`${rejected.stdout}\n${rejected.stderr}`, /COMMISSION_HISTORY_BEFORE_LEDGER_START/, 'pre-boundary report was not refused');
+  console.log('COMMISSION_HISTORY_CUTOVER_OPENING_PASS count=3 baseline=1 legacy=2 boundary=next_chicago_day');
+}
+
+function commitRuntimeLedgerActivity(preimage) {
+  psql(`
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '${preimage.admin}', true);
+INSERT INTO public.commissions (
+  order_id, customer_id, recipient, recipient_user_id, split_percentage,
+  commission_amount, order_profit, order_date, status
+) VALUES ('${preimage.order}', '${preimage.customer}', 'Commission History Prover', '${preimage.admin}', 100, 25, 25, CURRENT_DATE, 'pending')
+RETURNING id \\gset comm_
+INSERT INTO public.commission_payments (payment_number, recipient_id, total_amount, status, payment_date)
+VALUES ('PROVER-REPLAY-' || :'comm_id', '${preimage.admin}', 25, 'unposted', CURRENT_DATE)
+RETURNING id \\gset pay_
+INSERT INTO public.commission_payment_items (commission_payment_id, commission_id, amount)
+VALUES (:'pay_id', :'comm_id', 25);
+UPDATE public.commission_payments SET status = 'posted', posted_by = '${preimage.admin}' WHERE id = :'pay_id';
+UPDATE public.commissions SET deleted_at = clock_timestamp() WHERE id = :'comm_id';
+UPDATE public.commissions SET deleted_at = NULL WHERE id = :'comm_id';
+UPDATE public.commission_payments SET status = 'voided', voided_by = '${preimage.admin}' WHERE id = :'pay_id';
+UPDATE public.commissions SET commission_amount = 30 WHERE id = :'comm_id';
+COMMIT;
+`);
+  console.log('COMMISSION_HISTORY_COMMITTED_RUNTIME_ACTIVITY create=1 post=1 soft_delete=1 restore=1 void=1 amount_revision=1');
+}
+
 function restoreLiveCrLfCloseRemainder() {
   const definingPath = path.join(
     ROOT,
@@ -362,11 +466,17 @@ try {
   restoreBaseline();
   const migrations = selectedMigrationsThroughCandidate();
   const candidateSource = readFileSync(MIGRATION_PATH, 'utf8');
+  let candidate = candidateSource;
+  let cutoverPreimage;
   migrations.forEach((local, index) => {
     if (path.basename(local) === '20260817120000_carry_allocated_line_cents_through_lifecycle.sql') {
       restoreLiveCrLfCloseRemainder();
     }
     if (path.resolve(local) === path.resolve(MIGRATION_PATH)) {
+      cutoverPreimage = seedCutoverPreimage();
+      const binding = bindPopulatedCandidate(candidateSource, cutoverPreimage.legacyDigest);
+      candidate = binding.bound;
+      console.log(`COMMISSION_HISTORY_TEST_BOUND_PREIMAGE legacy_digest=${cutoverPreimage.legacyDigest} report_md5=${binding.reportMd5}`);
       for (const [label, signature] of [
         ['fresh_anonymous_report_grant', 'public.get_commission_balance_report(date)'],
         [
@@ -374,11 +484,11 @@ try {
           'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)',
         ],
       ]) {
-        const freshAclMutation = candidateSource.replace(
+        const freshAclMutation = candidate.replace(
           'DO $precondition$',
           `GRANT EXECUTE ON FUNCTION ${signature} TO anon;\n\nDO $precondition$`,
         );
-        assert.notEqual(freshAclMutation, candidateSource, `${label} did not change the candidate`);
+        assert.notEqual(freshAclMutation, candidate, `${label} did not change the candidate`);
         expectCandidateFailure(
           freshAclMutation,
           'COMMISSION_HISTORY_FRESH_ACL_DRIFT: existing report or void implementation ACL differs',
@@ -386,7 +496,13 @@ try {
         );
       }
     }
-    applyMigration(local, index);
+    if (path.resolve(local) === path.resolve(MIGRATION_PATH)) {
+      applySql(candidate.replace(/\r\n/g, '\n'));
+      console.log(`COMMISSION_HISTORY_REPLAY_PROGRESS ${index + 1} ${path.basename(local)}`);
+      proveCutoverOpening(cutoverPreimage);
+    } else {
+      applyMigration(local, index);
+    }
   });
 
   for (const functionName of [
@@ -399,7 +515,7 @@ try {
     'prevent_commission_history_ledger_mutation',
     'prevent_commission_history_ledger_truncate',
   ]) {
-    const body = extractFunctionBody(candidateSource, functionName);
+    const body = extractFunctionBody(candidate, functionName);
     console.log(
       `COMMISSION_HISTORY_CANDIDATE_BODY ${functionName} bytes=${Buffer.byteLength(body)} md5=${createHash('md5').update(body).digest('hex')}`,
     );
@@ -431,7 +547,7 @@ SELECT conname || '=' || pg_get_constraintdef(oid)
   );
   console.log('COMMISSION_HISTORY_REAL_PATH_PASS create_post_report_void_report rollback=true');
 
-  const candidate = candidateSource;
+  assert.ok(cutoverPreimage, 'populated candidate preimage was not seeded');
   const lockIndex = candidate.indexOf('LOCK TABLE public.commission_payments,');
   const preconditionIndex = candidate.indexOf('DO $precondition$');
   assert.ok(lockIndex >= 0, 'candidate is missing the cheap-window writer lock');
@@ -463,8 +579,18 @@ SELECT conname || '=' || pg_get_constraintdef(oid)
   await proveWriterLockConflict(weakenedLock, false);
   console.log('COMMISSION_HISTORY_MUTATION_REJECTED non_conflicting_lock_mode writers_were_not_blocked');
 
+  const cutoverBeforeReplay = scalar(`
+SELECT cutover_at || '|' || first_supported_date || '|' || opening_commission_count || '|' || opening_commission_digest
+  FROM public.commission_history_cutover WHERE singleton;
+`);
+  commitRuntimeLedgerActivity(cutoverPreimage);
   applySql(candidate);
-  console.log('COMMISSION_HISTORY_IDEMPOTENT_REAPPLY_PASS');
+  assert.equal(
+    scalar(`SELECT cutover_at || '|' || first_supported_date || '|' || opening_commission_count || '|' || opening_commission_digest FROM public.commission_history_cutover WHERE singleton;`),
+    cutoverBeforeReplay,
+    'candidate replay rewrote immutable cutover/opening metadata after committed runtime activity',
+  );
+  console.log('COMMISSION_HISTORY_IDEMPOTENT_REAPPLY_PASS runtime_events_preserved=true cutover_unchanged=true');
 
   const hotfixedVoid = extractFunctionStatement(
     candidate.replace(
@@ -657,13 +783,13 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
   );
   applySql(extractFunctionStatement(missingDeletedCapture, 'record_commission_earned_state'));
   expectSmokeFailure(
-    'SMOKE_FAIL: paid-only negative balance was hidden',
+    'SMOKE_FAIL: mixed pending plus paid-only counts are wrong',
     'missing_soft_delete_history_capture',
   );
   applySql(extractFunctionStatement(candidate, 'record_commission_earned_state'));
 
   const backdatedRuntimeState = candidate.replace(
-    `    transaction_timestamp(),
+    `    clock_timestamp(),
     auth.uid(),`,
     `    (NEW.order_date::timestamp AT TIME ZONE 'America/Chicago'),
     auth.uid(),`,
@@ -675,10 +801,22 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
   );
   applySql(extractFunctionStatement(backdatedRuntimeState, 'record_commission_earned_state'));
   expectSmokeFailure(
-    'SMOKE_FAIL: paid-only negative balance was hidden',
+    'SMOKE_FAIL: commission insert did not append a wall-clock earned-state snapshot',
     'backdated_runtime_history',
   );
   applySql(extractFunctionStatement(candidate, 'record_commission_earned_state'));
+
+  const transactionTimestampSettlement = candidate.replaceAll(
+    'v_event_at := clock_timestamp();',
+    'v_event_at := transaction_timestamp();',
+  );
+  assert.notEqual(transactionTimestampSettlement, candidate, 'settlement clock-timestamp mutation did not change the candidate');
+  applySql(extractFunctionStatement(transactionTimestampSettlement, 'record_commission_settlement_event'));
+  expectSmokeFailure(
+    'SMOKE_FAIL: post RPC did not stamp one exact wall-clock settlement event',
+    'transaction_timestamp_settlement_event',
+  );
+  applySql(extractFunctionStatement(candidate, 'record_commission_settlement_event'));
 
   const earnedAnchoredReport = candidate.replace(
     '  FULL OUTER JOIN paid_by_recipient p',
@@ -691,7 +829,7 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
   );
   applySql(extractFunctionStatement(earnedAnchoredReport, 'get_commission_balance_report'));
   expectSmokeFailure(
-    'SMOKE_FAIL: controlled opening baseline is wrong',
+    'SMOKE_FAIL: controlled prior-day snapshot is wrong',
     'earned_anchored_paid_report',
   );
   applySql(extractFunctionStatement(candidate, 'get_commission_balance_report'));
@@ -703,10 +841,62 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
   assert.notEqual(missingSettlementPost, candidate, 'settlement-post mutation did not change the candidate');
   applySql(extractFunctionStatement(missingSettlementPost, 'record_commission_settlement_event'));
   expectSmokeFailure(
-    'SMOKE_FAIL: post RPC did not append the exact settlement event',
+    'SMOKE_FAIL: post RPC did not stamp one exact wall-clock settlement event',
     'missing_posted_settlement_event',
   );
   applySql(extractFunctionStatement(candidate, 'record_commission_settlement_event'));
+
+  const missingRecipientSettlementGuard = candidate.replace(
+    "       AND EXISTS (SELECT 1 FROM public.commission_settlement_events WHERE commission_id = NEW.id) THEN",
+    "       AND FALSE THEN",
+  );
+  assert.notEqual(missingRecipientSettlementGuard, candidate, 'recipient settlement guard mutation did not change the candidate');
+  applySql(extractFunctionStatement(missingRecipientSettlementGuard, 'record_commission_earned_state'));
+  expectSmokeFailure(
+    'SMOKE_FAIL: recipient group changed after settlement history existed',
+    'missing_recipient_group_settlement_guard',
+  );
+  applySql(extractFunctionStatement(candidate, 'record_commission_earned_state'));
+
+  const transactionTimestampRuntime = candidate.replace(
+    '    clock_timestamp(),\n    auth.uid(),',
+    '    transaction_timestamp(),\n    auth.uid(),',
+  );
+  assert.notEqual(transactionTimestampRuntime, candidate, 'clock-timestamp mutation did not change the candidate');
+  applySql(extractFunctionStatement(transactionTimestampRuntime, 'record_commission_earned_state'));
+  expectSmokeFailure(
+    'SMOKE_FAIL: commission insert did not append a wall-clock earned-state snapshot',
+    'transaction_timestamp_runtime_event',
+  );
+  applySql(extractFunctionStatement(candidate, 'record_commission_earned_state'));
+
+  expectCandidateFailure(
+    `
+BEGIN;
+ALTER TABLE public.commission_earned_state_ledger
+  DISABLE TRIGGER trg_commission_earned_state_ledger_immutable;
+UPDATE public.commission_earned_state_ledger
+   SET effective_at = (order_date::timestamp AT TIME ZONE 'America/Chicago')
+ WHERE event_kind IN ('baseline', 'legacy_excluded');
+ALTER TABLE public.commission_earned_state_ledger
+  ENABLE TRIGGER trg_commission_earned_state_ledger_immutable;
+${candidate}
+COMMIT;
+`,
+    'COMMISSION_HISTORY_REPLAY_DRIFT: opening observation or ledger coverage differs',
+    'opening_baseline_backdated_to_order_date',
+  );
+
+  const corruptedOpeningDigestPostcondition = candidate.replace(
+    '<> (SELECT opening_commission_digest FROM public.commission_history_cutover)',
+    '= (SELECT opening_commission_digest FROM public.commission_history_cutover)',
+  );
+  assert.notEqual(corruptedOpeningDigestPostcondition, candidate, 'opening digest replay mutation did not change the candidate');
+  expectCandidateFailure(
+    corruptedOpeningDigestPostcondition,
+    'COMMISSION_HISTORY_REPLAY_DRIFT: opening observation or ledger coverage differs',
+    'corrupted_opening_digest_replay_postcondition',
+  );
 
   for (const [label, mutation, token] of [
     [
@@ -723,6 +913,21 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
       'anonymous_earned_ledger_select',
       'GRANT SELECT ON public.commission_earned_state_ledger TO anon;',
       'COMMISSION_HISTORY_REPLAY_DRIFT: ledger RLS, owner, or ACL boundary differs',
+    ],
+    [
+      'cutover_rls_disabled',
+      'ALTER TABLE public.commission_history_cutover DISABLE ROW LEVEL SECURITY;',
+      'COMMISSION_HISTORY_REPLAY_DRIFT: ledger RLS, owner, or ACL boundary differs',
+    ],
+    [
+      'anonymous_cutover_select',
+      'GRANT SELECT ON public.commission_history_cutover TO anon;',
+      'COMMISSION_HISTORY_REPLAY_DRIFT: ledger RLS, owner, or ACL boundary differs',
+    ],
+    [
+      'cutover_immutable_trigger_disabled',
+      'ALTER TABLE public.commission_history_cutover DISABLE TRIGGER trg_commission_history_cutover_immutable;',
+      'COMMISSION_HISTORY_REPLAY_DRIFT: ledger trigger catalog differs',
     ],
   ]) {
     expectCandidateFailure(`BEGIN;\n${mutation}\n${candidate}\nCOMMIT;`, token, label);

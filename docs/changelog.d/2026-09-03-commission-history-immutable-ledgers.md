@@ -5,8 +5,9 @@
   bigint cents with frozen reconciliation labels.
 - Preserved paid cash independently from current earned state, including an explicit negative
   outstanding balance when a later cancellation or soft deletion removes the earning.
-- Added RLS, private database-owned recorders, RESTRICT lineage, immutable update/delete/truncate
-  guards, exact replay checks, and fail-closed ACL/policy/trigger postconditions for both ledgers.
+- Added one immutable cutover record, RLS, private database-owned recorders, RESTRICT lineage,
+  immutable update/delete/truncate guards, exact replay checks, and fail-closed ACL/policy/trigger
+  postconditions for the cutover and both ledgers.
 - Strengthened the rollback proof to verify the real post RPC stamps its fields before any fixture
   manipulation, prove prior-date stability across later changes, and mutation-test the defects
   found by Claude review.
