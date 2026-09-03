@@ -7,4 +7,5 @@
 - The candidate records dated void/cancellation evidence, stable reporting labels, admin-only
   aggregate/detail RPCs, a writer-locked cheap-window precondition, and create-time rejection of
   negative or pre-order-date payout items. Canonical zero-dollar commissions remain settleable and
-  are counted paid only when a signed settlement event exists.
+  are counted paid only when a signed settlement event exists, including after the source commission
+  is later deleted or otherwise becomes unearned.

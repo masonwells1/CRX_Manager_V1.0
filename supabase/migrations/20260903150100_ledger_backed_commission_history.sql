@@ -348,7 +348,7 @@ BEGIN
             AND proowner = 'postgres'::regrole
             AND prosecdef
             AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-            AND md5(prosrc) = '86002663bd124a9bce3e97f4419807e9'
+            AND md5(prosrc) = '3edbcba030a9d5d0a106eeb9bf5a6635'
             AND prosrc LIKE '%commission_earned_state_ledger%'
             AND prosrc LIKE '%commission_settlement_events%'
        ) OR to_regclass('public.commission_earned_state_ledger') IS NULL
@@ -1693,8 +1693,9 @@ BEGIN
       MIN(p.recipient_id::text)::uuid AS recipient_id,
       MIN(p.recipient_name) AS recipient_name,
       SUM(p.paid_cents) AS paid_cents,
+      SUM(p.active_settlement_count) AS active_settlement_count,
       COUNT(*) FILTER (
-        WHERE p.paid_cents > 0
+        WHERE p.active_settlement_count > 0
           AND NOT EXISTS (
             SELECT 1 FROM latest_state s
             WHERE s.commission_id = p.commission_id
@@ -1717,7 +1718,7 @@ BEGIN
   FROM earned_by_recipient e
   FULL OUTER JOIN paid_by_recipient p
     ON p.recipient_group_key = e.recipient_group_key
-  WHERE e.recipient_group_key IS NOT NULL OR p.paid_cents <> 0
+  WHERE e.recipient_group_key IS NOT NULL OR p.active_settlement_count > 0
   ORDER BY (COALESCE(e.earned_cents, 0) - COALESCE(p.paid_cents, 0)) DESC,
            COALESCE(e.recipient_name, p.recipient_name);
 END;
@@ -2011,7 +2012,7 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-       AND md5(prosrc) = '86002663bd124a9bce3e97f4419807e9'
+       AND md5(prosrc) = '3edbcba030a9d5d0a106eeb9bf5a6635'
        AND prosrc LIKE '%PERFORM public.require_admin()%'
        AND prosrc LIKE '%commission_earned_state_ledger%'
        AND prosrc LIKE '%commission_settlement_events%'

@@ -222,6 +222,30 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: active zero-dollar settlement detail is missing';
   END IF;
 
+  UPDATE public.commissions
+     SET deleted_at = clock_timestamp()
+   WHERE id = v_zero_commission;
+  SELECT * INTO v_balance
+    FROM public.get_commission_balance_report(v_today)
+   WHERE recipient_id = v_admin_two;
+  IF v_balance.total_earned IS DISTINCT FROM 0.00::numeric
+     OR v_balance.total_paid IS DISTINCT FROM 0.00::numeric
+     OR v_balance.outstanding_balance IS DISTINCT FROM 0.00::numeric
+     OR v_balance.pending_count IS DISTINCT FROM 0::bigint
+     OR v_balance.paid_count IS DISTINCT FROM 1::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: paid-only zero-dollar commission disappeared: %', row_to_json(v_balance);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.get_commission_payment_detail_report(v_today)
+     WHERE payment_id = v_zero_payment AND commission_id = v_zero_commission
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: paid-only zero-dollar settlement detail disappeared';
+  END IF;
+
+  UPDATE public.commissions
+     SET deleted_at = NULL
+   WHERE id = v_zero_commission;
+
   PERFORM public.void_commission_payment(
     v_zero_payment, '[E2E] prove zero settlement reversal', v_admin,
     'e2e-commission-history-zero-void-' || v_suffix
@@ -260,14 +284,22 @@ BEGIN
 
   v_failed := false;
   BEGIN
-    UPDATE public.commission_payment_items
-       SET amount = -1.00
-     WHERE commission_payment_id = v_payment
-       AND commission_id = v_commission;
+    INSERT INTO public.commission_payment_items (
+      commission_payment_id, commission_id, amount
+    ) VALUES (
+      v_payment, v_zero_commission, -1.00
+    );
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT:%' THEN v_failed := true; ELSE RAISE; END IF;
   END;
   IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_FAIL: negative-dollar payment item was accepted'; END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.commission_payment_items
+     WHERE commission_payment_id = v_payment
+       AND commission_id = v_zero_commission
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected negative-dollar payment item leaked a row';
+  END IF;
 
   IF (SELECT count(*) FROM public.commission_payment_items
        WHERE commission_payment_id = v_payment
