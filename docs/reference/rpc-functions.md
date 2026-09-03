@@ -196,7 +196,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `generate_quote_number()` — auto-generate quote number
 - `generate_ticket_number()` — auto-generate blend ticket number
 
-## Reporting (14 RPCs)
+## Reporting (13 live RPCs + 1 local candidate)
 - `get_logbook_by_customer()`, `get_logbook_by_applicator()`, `get_logbook_by_field()`, `get_logbook_faa()`
 - `get_bottom_line_pnl()`, `get_gross_sales_report()`, `get_customer_balance_listing(p_as_of_date)` — cutoff-aware customer balance listing; current-date admin/sales-rep access, historical cutoffs admin-only; deliberately fails closed when later mutable balance activity prevents reconstruction. Cumulative invoice totals include fully paid invoices; only Outstanding Balance and Oldest Unpaid are open-only. **Applied live 2026-09-01 (`20260827041000`):** bottom-line PNL, monthly summary, and customer year-end reporting recognize `posted`, `overdue`, and `paid` invoices without widening the open AR balance definition.
 - `get_chemical_history()`, `get_inventory_cost_report()`

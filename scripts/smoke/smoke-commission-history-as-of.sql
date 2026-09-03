@@ -16,6 +16,7 @@ DECLARE
   v_cancel_order uuid;
   v_cancel_commission uuid;
   v_payment uuid;
+  v_zero_payment uuid;
   v_today date := (transaction_timestamp() AT TIME ZONE 'America/Chicago')::date;
   v_before date := (transaction_timestamp() AT TIME ZONE 'America/Chicago')::date - 1;
   v_first_supported date;
@@ -182,17 +183,62 @@ BEGIN
     100, 0.00, 0.00, v_today - 3, 'pending'
   ) RETURNING id INTO v_zero_commission;
 
-  v_failed := false;
-  BEGIN
-    PERFORM public.create_commission_payment(
-      ARRAY[v_zero_commission], 'check', 'E2E-COMM-HIST-ZERO-' || v_suffix,
-      v_today, '[E2E] reject zero commission payout', v_admin,
-      'e2e-commission-history-zero-' || v_suffix
-    );
-  EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM LIKE 'COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT:%' THEN v_failed := true; ELSE RAISE; END IF;
-  END;
-  IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_FAIL: zero-dollar payout was created'; END IF;
+  SELECT * INTO v_balance
+    FROM public.get_commission_balance_report(v_today)
+   WHERE recipient_id = v_admin_two;
+  IF v_balance.total_earned IS DISTINCT FROM 0.00::numeric
+     OR v_balance.total_paid IS DISTINCT FROM 0.00::numeric
+     OR v_balance.outstanding_balance IS DISTINCT FROM 0.00::numeric
+     OR v_balance.pending_count IS DISTINCT FROM 1::bigint
+     OR v_balance.paid_count IS DISTINCT FROM 0::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unpaid zero-dollar commission count is wrong: %', row_to_json(v_balance);
+  END IF;
+
+  v_zero_payment := public.create_commission_payment(
+    ARRAY[v_zero_commission], 'check', 'E2E-COMM-HIST-ZERO-' || v_suffix,
+    v_today, '[E2E] settle zero commission payout', v_admin,
+    'e2e-commission-history-zero-' || v_suffix
+  );
+  PERFORM public.post_commission_payment(
+    v_zero_payment, v_admin, 'e2e-commission-history-zero-post-' || v_suffix
+  );
+
+  SELECT * INTO v_balance
+    FROM public.get_commission_balance_report(v_today)
+   WHERE recipient_id = v_admin_two;
+  IF v_balance.total_earned IS DISTINCT FROM 0.00::numeric
+     OR v_balance.total_paid IS DISTINCT FROM 0.00::numeric
+     OR v_balance.outstanding_balance IS DISTINCT FROM 0.00::numeric
+     OR v_balance.pending_count IS DISTINCT FROM 0::bigint
+     OR v_balance.paid_count IS DISTINCT FROM 1::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: settled zero-dollar commission count is wrong: %', row_to_json(v_balance);
+  END IF;
+
+  SELECT count(*), COALESCE(sum(settled_amount), 0)
+    INTO v_detail_count, v_detail_amount
+    FROM public.get_commission_payment_detail_report(v_today)
+   WHERE payment_id = v_zero_payment AND commission_id = v_zero_commission;
+  IF v_detail_count <> 1 OR v_detail_amount IS DISTINCT FROM 0.00::numeric THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: active zero-dollar settlement detail is missing';
+  END IF;
+
+  PERFORM public.void_commission_payment(
+    v_zero_payment, '[E2E] prove zero settlement reversal', v_admin,
+    'e2e-commission-history-zero-void-' || v_suffix
+  );
+  SELECT * INTO v_balance
+    FROM public.get_commission_balance_report(v_today)
+   WHERE recipient_id = v_admin_two;
+  IF v_balance.pending_count IS DISTINCT FROM 1::bigint
+     OR v_balance.paid_count IS DISTINCT FROM 0::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: voided zero-dollar commission count is wrong: %', row_to_json(v_balance);
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.get_commission_payment_detail_report(v_today)
+     WHERE payment_id = v_zero_payment AND commission_id = v_zero_commission
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: voided zero-dollar settlement remained in detail';
+  END IF;
 
   v_failed := false;
   BEGIN
@@ -211,6 +257,18 @@ BEGIN
     v_today, '[E2E] historical commission report proof', v_admin,
     'e2e-commission-history-create-' || v_suffix
   );
+
+  v_failed := false;
+  BEGIN
+    UPDATE public.commission_payment_items
+       SET amount = -1.00
+     WHERE commission_payment_id = v_payment
+       AND commission_id = v_commission;
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT:%' THEN v_failed := true; ELSE RAISE; END IF;
+  END;
+  IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_FAIL: negative-dollar payment item was accepted'; END IF;
+
   IF (SELECT count(*) FROM public.commission_payment_items
        WHERE commission_payment_id = v_payment
          AND commission_id = v_commission

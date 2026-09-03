@@ -18,7 +18,7 @@ import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
 import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
-import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
+import { localToday, formatLocalDate, parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 import {
   getAssignedRecognizedInvoiceCustomerIds,
@@ -322,7 +322,9 @@ export default function Reports() {
   }, [endDate, toast]);
 
   const fetchCommissionBalance = useCallback(async () => {
-    const asOf = endDate || localToday();
+    // The RPC's cutoff and future-date guard are Chicago-business-day based.
+    // A viewer in another timezone must not accidentally ask for Chicago tomorrow.
+    const asOf = endDate || todayInBusinessTz();
     const { data, error } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
     if (error) { toast('error', `Commission balance failed: ${error.message}`); return; }
     setCommBalanceData(assertRpcResult<CommissionBalanceRow[]>(data, 'get_commission_balance_report'));

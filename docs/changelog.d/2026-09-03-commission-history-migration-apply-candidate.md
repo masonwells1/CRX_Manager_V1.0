@@ -6,4 +6,5 @@
   payment-detail RPC is backend-only in this candidate and has no frontend caller yet.
 - The candidate records dated void/cancellation evidence, stable reporting labels, admin-only
   aggregate/detail RPCs, a writer-locked cheap-window precondition, and create-time rejection of
-  zero-dollar or pre-order-date payout items.
+  negative or pre-order-date payout items. Canonical zero-dollar commissions remain settleable and
+  are counted paid only when a signed settlement event exists.

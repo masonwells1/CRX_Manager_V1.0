@@ -61,8 +61,9 @@ fails closed because pre-cutover earned-state versions do not exist. On the appl
 Commission Balance screen will therefore show the refusal instead of a number; the first supported
 date will be the next Chicago calendar day. The aggregate RPC is already used by Reports; the new
 payment-detail RPC is backend-only until a later frontend change. New and revised commissions must
-carry an `order_date`, and payout creation now rejects non-positive items or a payment date before
-the commission's order date. The two existing zero-dollar
+carry an `order_date`, and payout creation now rejects negative items or a payment date before
+the commission's order date. Canonical zero-dollar commissions remain settleable; the report
+counts them pending until a signed post event exists and returns them to pending after void. The two existing zero-dollar
 cancellations enter the opening observation as excluded legacy states. Mason authorized the guarded
 live apply only after clean exact-artifact and Claude review; live `[E2E]` fixtures and merge remain separate.
 

@@ -126,7 +126,9 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > apply day itself is deliberately unavailable in Reports until the next Chicago day. The 8 empty
 > `SEED-*` payment headers were already unpostable under the live posting function's empty-batch
 > guard; this migration leaves them unchanged. New payout creation fails immediately for a
-> non-positive item or a payment date before its commission's order date.
+> negative item or a payment date before its commission's order date. Canonical zero-dollar
+> commissions remain settleable and change from pending to paid only when a signed settlement
+> event exists.
 >
 > **Proof/status 2026-09-03:** the first candidate's PostgreSQL 17 proof passed, but exact-SHA and
 > Claude reviews correctly rejected its backdated opening state. The corrected candidate uses a real

@@ -549,7 +549,8 @@ SELECT conname || '=' || pg_get_constraintdef(oid)
    'commission_payments_void_history_chk',
    'commissions_commission_amount_whole_cents_chk',
    'commission_payments_total_amount_whole_cents_chk',
-   'commission_payment_items_amount_whole_cents_chk'
+   'commission_payment_items_amount_whole_cents_chk',
+   'commission_settlement_events_event_amount_direction_chk'
  )
  ORDER BY conname;
 `);
@@ -829,19 +830,19 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
   );
   applySql(extractFunctionStatement(candidate, 'record_commission_earned_state'));
 
-  const missingPositivePaymentItemGuard = candidate.replace(
-    '  IF NEW.amount IS NULL OR round(NEW.amount, 2) <= 0 THEN',
+  const missingNegativePaymentItemGuard = candidate.replace(
+    '  IF NEW.amount IS NULL OR round(NEW.amount, 2) < 0 THEN',
     '  IF FALSE THEN',
   );
   assert.notEqual(
-    missingPositivePaymentItemGuard,
+    missingNegativePaymentItemGuard,
     candidate,
-    'positive payment-item guard mutation did not change the candidate',
+    'negative payment-item guard mutation did not change the candidate',
   );
-  applySql(extractFunctionStatement(missingPositivePaymentItemGuard, 'validate_commission_payment_item_history'));
+  applySql(extractFunctionStatement(missingNegativePaymentItemGuard, 'validate_commission_payment_item_history'));
   expectSmokeFailure(
-    'SMOKE_FAIL: zero-dollar payout was created',
-    'missing_create_time_positive_amount_guard',
+    'SMOKE_FAIL: negative-dollar payment item was accepted',
+    'missing_create_time_negative_amount_guard',
   );
   applySql(extractFunctionStatement(candidate, 'validate_commission_payment_item_history'));
 
@@ -868,7 +869,7 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
   assert.notEqual(transactionTimestampSettlement, candidate, 'settlement clock-timestamp mutation did not change the candidate');
   applySql(extractFunctionStatement(transactionTimestampSettlement, 'record_commission_settlement_event'));
   expectSmokeFailure(
-    'SMOKE_FAIL: post RPC did not stamp one exact wall-clock settlement event',
+    'COMMISSION_SETTLEMENT_HISTORY_MISMATCH:',
     'transaction_timestamp_settlement_event',
   );
   applySql(extractFunctionStatement(candidate, 'record_commission_settlement_event'));
@@ -896,7 +897,7 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
   assert.notEqual(missingSettlementPost, candidate, 'settlement-post mutation did not change the candidate');
   applySql(extractFunctionStatement(missingSettlementPost, 'record_commission_settlement_event'));
   expectSmokeFailure(
-    'SMOKE_FAIL: post RPC did not stamp one exact wall-clock settlement event',
+    'SMOKE_FAIL: settled zero-dollar commission count is wrong',
     'missing_posted_settlement_event',
   );
   applySql(extractFunctionStatement(candidate, 'record_commission_settlement_event'));

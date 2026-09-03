@@ -20,7 +20,9 @@
 -- Operator boundary: the partial Chicago cutover day is intentionally unavailable
 -- in the aggregate report. Reports begins on the next complete Chicago day. New
 -- or revised commissions must have order_date, and payout item insertion rejects
--- non-positive amounts or a payment_date earlier than the commission order_date.
+-- negative amounts or a payment_date earlier than the commission order_date.
+-- Zero-dollar commissions are valid canonical outputs and remain settleable;
+-- their paid/pending count is keyed to signed settlement-event existence.
 --
 -- Money: existing dollar columns remain exact PostgreSQL numeric. This migration
 -- adds their now-safe finite whole-cent constraints and stores the new cancellation
@@ -330,7 +332,7 @@ BEGIN
             AND proowner = 'postgres'::regrole
             AND prosecdef
             AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-            AND md5(prosrc) = '304e4e87fb9d7b9426ea57ca59aad9a2'
+            AND md5(prosrc) = 'c81b83a9175cc2398f348761d72929af'
             AND prosrc LIKE '%commission_settlement_events%'
        ) OR NOT EXISTS (
          SELECT 1 FROM pg_proc
@@ -346,7 +348,7 @@ BEGIN
             AND proowner = 'postgres'::regrole
             AND prosecdef
             AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-            AND md5(prosrc) = '97fa0f552420f6918bf02a55d95b6a54'
+            AND md5(prosrc) = '86002663bd124a9bce3e97f4419807e9'
             AND prosrc LIKE '%commission_earned_state_ledger%'
             AND prosrc LIKE '%commission_settlement_events%'
        ) OR to_regclass('public.commission_earned_state_ledger') IS NULL
@@ -392,7 +394,8 @@ BEGIN
           ('public.commission_payments'::regclass, 'commission_payments_void_history_chk', 'CHECK ((((status = ''voided''::text) AND (voided_at IS NOT NULL) AND (voided_by IS NOT NULL)) OR ((status <> ''voided''::text) AND (voided_at IS NULL) AND (voided_by IS NULL))))'),
           ('public.commissions'::regclass, 'commissions_commission_amount_whole_cents_chk', 'CHECK (((commission_amount IS NULL) OR ((commission_amount = round(commission_amount, 2)) AND (commission_amount > ''-Infinity''::numeric) AND (commission_amount < ''Infinity''::numeric))))'),
           ('public.commission_payments'::regclass, 'commission_payments_total_amount_whole_cents_chk', 'CHECK (((total_amount IS NULL) OR ((total_amount = round(total_amount, 2)) AND (total_amount > ''-Infinity''::numeric) AND (total_amount < ''Infinity''::numeric))))'),
-          ('public.commission_payment_items'::regclass, 'commission_payment_items_amount_whole_cents_chk', 'CHECK (((amount IS NULL) OR ((amount = round(amount, 2)) AND (amount > ''-Infinity''::numeric) AND (amount < ''Infinity''::numeric))))')
+          ('public.commission_payment_items'::regclass, 'commission_payment_items_amount_whole_cents_chk', 'CHECK (((amount IS NULL) OR ((amount = round(amount, 2)) AND (amount > ''-Infinity''::numeric) AND (amount < ''Infinity''::numeric))))'),
+          ('public.commission_settlement_events'::regclass, 'commission_settlement_events_event_amount_direction_chk', 'CHECK ((((event_kind = ''posted''::text) AND (amount_cents >= 0)) OR ((event_kind = ''voided''::text) AND (amount_cents <= 0))))')
         ) expected(table_oid, constraint_name, definition)
         LEFT JOIN pg_constraint c
           ON c.conrelid = expected.table_oid
@@ -638,12 +641,12 @@ BEGIN
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.record_commission_settlement_event()'::regprocedure
-       AND md5(prosrc) = '2d4d8f2df557f125415e208a7e198ded'
+       AND md5(prosrc) = 'feb0f260fd2ad9e2945f761e93e9a3dc'
        AND prosrc LIKE '%NEW.posted_at := v_event_at%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.validate_commission_payment_item_history()'::regprocedure
-       AND md5(prosrc) = '96a462eda38977ccb123938c46d0c73a'
+       AND md5(prosrc) = '00e7e4f430c164be5d5e02757e22ff10'
        AND prosrc LIKE '%COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT%'
        AND prosrc LIKE '%COMMISSION_SETTLEMENT_PAYMENT_DATE_BEFORE_ORDER%'
   ) OR NOT EXISTS (
@@ -1052,8 +1055,8 @@ CREATE TABLE IF NOT EXISTS public.commission_settlement_events (
   CONSTRAINT commission_settlement_events_event_kind_chk
     CHECK (event_kind IN ('posted', 'voided')),
   CONSTRAINT commission_settlement_events_event_amount_direction_chk
-    CHECK ((event_kind = 'posted' AND amount_cents > 0)
-        OR (event_kind = 'voided' AND amount_cents < 0)),
+    CHECK ((event_kind = 'posted' AND amount_cents >= 0)
+        OR (event_kind = 'voided' AND amount_cents <= 0)),
   CONSTRAINT commission_settlement_events_item_event_kind_key
     UNIQUE (commission_payment_item_id, event_kind)
 );
@@ -1289,8 +1292,8 @@ DECLARE
   v_payment_date date;
   v_commission_order_date date;
 BEGIN
-  IF NEW.amount IS NULL OR round(NEW.amount, 2) <= 0 THEN
-    RAISE EXCEPTION 'COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT: commission payment items must be positive';
+  IF NEW.amount IS NULL OR round(NEW.amount, 2) < 0 THEN
+    RAISE EXCEPTION 'COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT: commission payment items cannot be negative';
   END IF;
 
   SELECT p.payment_date
@@ -1354,7 +1357,7 @@ BEGIN
     IF EXISTS (
       SELECT 1 FROM public.commission_payment_items i
       WHERE i.commission_payment_id = NEW.id
-        AND (i.amount IS NULL OR round(i.amount, 2) <= 0)
+        AND (i.amount IS NULL OR round(i.amount, 2) < 0)
     ) THEN
       RAISE EXCEPTION 'COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT';
     END IF;
@@ -1656,7 +1659,8 @@ BEGIN
       se.recipient_group_key,
       MIN(se.recipient_id::text)::uuid AS recipient_id,
       MIN(se.recipient_name) AS recipient_name,
-      SUM(se.amount_cents) AS paid_cents
+      SUM(se.amount_cents) AS paid_cents,
+      SUM(CASE WHEN se.event_kind = 'posted' THEN 1 ELSE -1 END) AS active_settlement_count
     FROM public.commission_settlement_events se
     CROSS JOIN cutoff c
     WHERE se.effective_at < c.at
@@ -1668,8 +1672,14 @@ BEGIN
       MIN(s.recipient_id::text)::uuid AS recipient_id,
       MIN(s.recipient_name) AS recipient_name,
       SUM(s.amount_cents) AS earned_cents,
-      COUNT(*) FILTER (WHERE COALESCE(p.paid_cents, 0) < s.amount_cents) AS pending_count,
-      COUNT(*) FILTER (WHERE COALESCE(p.paid_cents, 0) >= s.amount_cents) AS paid_count
+      COUNT(*) FILTER (
+        WHERE COALESCE(p.active_settlement_count, 0) <= 0
+           OR COALESCE(p.paid_cents, 0) < s.amount_cents
+      ) AS pending_count,
+      COUNT(*) FILTER (
+        WHERE p.active_settlement_count > 0
+          AND p.paid_cents >= s.amount_cents
+      ) AS paid_count
     FROM latest_state s
     LEFT JOIN settlement_by_commission_recipient p
       ON p.commission_id = s.commission_id
@@ -1787,7 +1797,7 @@ BEGIN
              se.payment_number, se.payment_date, se.recipient_id,
              se.recipient_name, se.commission_id, se.source_type,
              se.source_number, se.customer_name, se.commission_order_date
-    HAVING SUM(se.amount_cents) <> 0
+    HAVING SUM(CASE WHEN se.event_kind = 'posted' THEN 1 ELSE -1 END) > 0
   )
   SELECT
     si.commission_payment_id,
@@ -2001,7 +2011,7 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-       AND md5(prosrc) = '97fa0f552420f6918bf02a55d95b6a54'
+       AND md5(prosrc) = '86002663bd124a9bce3e97f4419807e9'
        AND prosrc LIKE '%PERFORM public.require_admin()%'
        AND prosrc LIKE '%commission_earned_state_ledger%'
        AND prosrc LIKE '%commission_settlement_events%'
@@ -2013,11 +2023,11 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-       AND md5(prosrc) = '304e4e87fb9d7b9426ea57ca59aad9a2'
+       AND md5(prosrc) = 'c81b83a9175cc2398f348761d72929af'
        AND prosrc LIKE '%PERFORM public.require_admin()%'
        AND prosrc LIKE '%commission_settlement_events%'
        AND prosrc LIKE '%commission_history_cutover%'
-       AND prosrc LIKE '%HAVING SUM(se.amount_cents) <> 0%'
+       AND prosrc LIKE '%HAVING SUM(CASE WHEN se.event_kind = ''posted'' THEN 1 ELSE -1 END) > 0%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.stamp_commission_cancellation_history()'::regprocedure
@@ -2046,7 +2056,7 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-       AND md5(prosrc) = '2d4d8f2df557f125415e208a7e198ded'
+       AND md5(prosrc) = 'feb0f260fd2ad9e2945f761e93e9a3dc'
        AND prosrc LIKE '%commission_settlement_events%'
        AND prosrc LIKE '%OLD.status <> ''posted''%'
        AND prosrc LIKE '%OLD.status = ''posted''%'
@@ -2061,7 +2071,7 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-       AND md5(prosrc) = '96a462eda38977ccb123938c46d0c73a'
+       AND md5(prosrc) = '00e7e4f430c164be5d5e02757e22ff10'
        AND prosrc LIKE '%COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT%'
        AND prosrc LIKE '%COMMISSION_SETTLEMENT_PAYMENT_DATE_BEFORE_ORDER%'
   ) OR NOT EXISTS (
@@ -2171,7 +2181,8 @@ BEGIN
         ('public.commissions'::regclass, 'commissions_commission_amount_whole_cents_chk', 'CHECK (((commission_amount IS NULL) OR ((commission_amount = round(commission_amount, 2)) AND (commission_amount > ''-Infinity''::numeric) AND (commission_amount < ''Infinity''::numeric))))'),
         ('public.commission_payments'::regclass, 'commission_payments_void_history_chk', 'CHECK ((((status = ''voided''::text) AND (voided_at IS NOT NULL) AND (voided_by IS NOT NULL)) OR ((status <> ''voided''::text) AND (voided_at IS NULL) AND (voided_by IS NULL))))'),
         ('public.commission_payments'::regclass, 'commission_payments_total_amount_whole_cents_chk', 'CHECK (((total_amount IS NULL) OR ((total_amount = round(total_amount, 2)) AND (total_amount > ''-Infinity''::numeric) AND (total_amount < ''Infinity''::numeric))))'),
-        ('public.commission_payment_items'::regclass, 'commission_payment_items_amount_whole_cents_chk', 'CHECK (((amount IS NULL) OR ((amount = round(amount, 2)) AND (amount > ''-Infinity''::numeric) AND (amount < ''Infinity''::numeric))))')
+        ('public.commission_payment_items'::regclass, 'commission_payment_items_amount_whole_cents_chk', 'CHECK (((amount IS NULL) OR ((amount = round(amount, 2)) AND (amount > ''-Infinity''::numeric) AND (amount < ''Infinity''::numeric))))'),
+        ('public.commission_settlement_events'::regclass, 'commission_settlement_events_event_amount_direction_chk', 'CHECK ((((event_kind = ''posted''::text) AND (amount_cents >= 0)) OR ((event_kind = ''voided''::text) AND (amount_cents <= 0))))')
       ) expected(table_oid, constraint_name, definition)
       LEFT JOIN pg_constraint c
         ON c.conrelid = expected.table_oid
@@ -2181,7 +2192,7 @@ BEGIN
        AND pg_get_constraintdef(c.oid) = expected.definition
      WHERE c.oid IS NULL
   ) THEN
-    RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: required validated money constraint missing';
+    RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: required validated history constraint missing';
   END IF;
 END
 $postcondition$;
