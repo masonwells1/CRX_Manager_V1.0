@@ -394,6 +394,10 @@ try {
     'get_commission_balance_report',
     'get_commission_payment_detail_report',
     'stamp_commission_cancellation_history',
+    'record_commission_earned_state',
+    'record_commission_settlement_event',
+    'prevent_commission_history_ledger_mutation',
+    'prevent_commission_history_ledger_truncate',
   ]) {
     const body = extractFunctionBody(candidateSource, functionName);
     console.log(
@@ -542,91 +546,12 @@ COMMIT;
     'missed_cancellation_history_row',
   );
 
-  const syntheticLegacyIds = [
-    '00000000-0000-0000-0000-0000000000a1',
-    '00000000-0000-0000-0000-0000000000b2',
-  ];
-  const syntheticLegacyDigest = createHash('md5')
-    .update([...syntheticLegacyIds].sort().join(','))
-    .digest('hex');
-  const syntheticLineageCandidate = candidate.replaceAll(
-    'd2111549f1dc613edf9a31e4d152b096',
-    syntheticLegacyDigest,
-  );
-  assert.notEqual(
-    syntheticLineageCandidate,
-    candidate,
-    'synthetic legacy-identity candidate did not replace the reviewed digest',
-  );
-  const seedSyntheticLegacyRows = () => psql(`
-SET session_replication_role = replica;
-INSERT INTO public.commissions (
-  id, order_id, customer_id, order_date, status, commission_amount
-) VALUES
-  ('${syntheticLegacyIds[0]}', gen_random_uuid(), gen_random_uuid(), DATE '2026-03-16', 'cancelled', 0),
-  ('${syntheticLegacyIds[1]}', gen_random_uuid(), gen_random_uuid(), DATE '2026-03-16', 'cancelled', 0);
-SET session_replication_role = origin;
-`);
-  const clearSyntheticLegacyRows = () => psql(`
-SET session_replication_role = replica;
-DELETE FROM public.commissions WHERE id IN ('${syntheticLegacyIds[0]}', '${syntheticLegacyIds[1]}');
-SET session_replication_role = origin;
-`);
-
-  seedSyntheticLegacyRows();
-  try {
-    applySql(syntheticLineageCandidate);
-    console.log('COMMISSION_HISTORY_SYNTHETIC_LEGACY_IDENTITY_BASELINE_PASS rows=2');
-  } finally {
-    clearSyntheticLegacyRows();
-  }
-
-  for (const [label, mutation] of [
-    [
-      'removed_legacy_identity',
-      `DELETE FROM public.commissions WHERE id = '${syntheticLegacyIds[0]}'`,
-    ],
-    [
-      'dated_legacy_identity',
-      `UPDATE public.commissions
-          SET cancelled_at = transaction_timestamp(), cancelled_amount_cents = 0
-        WHERE id = '${syntheticLegacyIds[0]}'`,
-    ],
-    [
-      'replaced_legacy_identity',
-      `UPDATE public.commissions
-          SET id = '00000000-0000-0000-0000-0000000000c3'
-        WHERE id = '${syntheticLegacyIds[0]}'`,
-    ],
-  ]) {
-    seedSyntheticLegacyRows();
-    try {
-      psql(`
-SET session_replication_role = replica;
-${mutation};
-SET session_replication_role = origin;
-`);
-      expectCandidateFailure(
-        syntheticLineageCandidate,
-        'COMMISSION_HISTORY_REPLAY_DRIFT: NULL-history cancellations differ from the exact reviewed identity set',
-        label,
-      );
-    } finally {
-      psql(`
-SET session_replication_role = replica;
-DELETE FROM public.commissions
- WHERE id IN (
-   '${syntheticLegacyIds[0]}',
-   '${syntheticLegacyIds[1]}',
-   '00000000-0000-0000-0000-0000000000c3'
- );
-SET session_replication_role = origin;
-`);
-    }
-  }
-
   for (const [label, signature] of [
     ['anonymous_cancellation_helper_grant', 'public.stamp_commission_cancellation_history()'],
+    ['anonymous_earned_recorder_grant', 'public.record_commission_earned_state()'],
+    ['anonymous_settlement_recorder_grant', 'public.record_commission_settlement_event()'],
+    ['anonymous_ledger_mutation_guard_grant', 'public.prevent_commission_history_ledger_mutation()'],
+    ['anonymous_ledger_truncate_guard_grant', 'public.prevent_commission_history_ledger_truncate()'],
     [
       'anonymous_private_void_helper_grant',
       'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)',
@@ -639,7 +564,7 @@ GRANT EXECUTE ON FUNCTION ${signature} TO anon;
 ${candidate}
 COMMIT;
 `,
-      'COMMISSION_HISTORY_REPLAY_DRIFT: FK, trigger, or grant boundary differs',
+      'COMMISSION_HISTORY_REPLAY_DRIFT:',
       label,
     );
   }
@@ -710,17 +635,6 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
   expectCandidateFailure(candidate, 'COMMISSION_HISTORY_OVERLOAD_DRIFT', 'decoy_overload');
   psql('DROP FUNCTION public.get_commission_balance_report(text);');
 
-  const weakenedCutoff = candidate.replace(
-    "AND (cp.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date",
-    'AND TRUE -- MUTATION: removed posted-at historical cutoff',
-  );
-  assert.notEqual(weakenedCutoff, candidate, 'posted-at mutation did not change the candidate');
-  expectCandidateFailure(
-    weakenedCutoff,
-    'COMMISSION_HISTORY_POSTCOND: reviewed function body or security contract drift',
-    'missing_posted_at_cutoff',
-  );
-
   const weakenedSnapshot = candidate.replace(
     'NEW.cancelled_amount_cents := (ROUND(OLD.commission_amount, 2) * 100)::bigint;',
     'NEW.cancelled_amount_cents := (ROUND(NEW.commission_amount, 2) * 100)::bigint;',
@@ -732,63 +646,87 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
     'post_zero_cancellation_snapshot',
   );
 
-  const mutableRecipientName = candidate.replaceAll(
-    "COALESCE(NULLIF(cm.recipient, ''), p.full_name, '[Unknown recipient]'::text)",
-    "COALESCE(p.full_name, NULLIF(cm.recipient, ''), '[Unknown recipient]'::text)",
+  const missingDeletedCapture = candidate.replace(
+    '     AND NEW.deleted_at IS NOT DISTINCT FROM OLD.deleted_at\n',
+    '',
   );
   assert.notEqual(
-    mutableRecipientName,
+    missingDeletedCapture,
     candidate,
-    'recipient-name mutation did not change the candidate',
+    'deleted-at capture mutation did not change the candidate',
   );
-  applySql([
-    extractFunctionStatement(mutableRecipientName, 'get_commission_balance_report'),
-    extractFunctionStatement(mutableRecipientName, 'get_commission_payment_detail_report'),
-  ].join('\n'));
+  applySql(extractFunctionStatement(missingDeletedCapture, 'record_commission_earned_state'));
   expectSmokeFailure(
-    'SMOKE_FAIL: mutable profile name rewrote aggregate history',
-    'mutable_recipient_name_history',
+    'SMOKE_FAIL: paid-only negative balance was hidden',
+    'missing_soft_delete_history_capture',
   );
-  applySql([
-    extractFunctionStatement(candidate, 'get_commission_balance_report'),
-    extractFunctionStatement(candidate, 'get_commission_payment_detail_report'),
-  ].join('\n'));
+  applySql(extractFunctionStatement(candidate, 'record_commission_earned_state'));
 
-  const splitRecipientAggregate = candidate.replace(
-    `GROUP BY e.recipient_user_id,
-           CASE
-             WHEN e.recipient_user_id IS NULL THEN e.resolved_recipient_name
-             ELSE NULL::text
-           END`,
-    'GROUP BY e.recipient_user_id, e.resolved_recipient_name',
+  const backdatedRuntimeState = candidate.replace(
+    `    transaction_timestamp(),
+    auth.uid(),`,
+    `    (NEW.order_date::timestamp AT TIME ZONE 'America/Chicago'),
+    auth.uid(),`,
   );
   assert.notEqual(
-    splitRecipientAggregate,
+    backdatedRuntimeState,
     candidate,
-    'recipient-grouping mutation did not change the candidate',
+    'runtime effective-at mutation did not change the candidate',
   );
-  applySql(extractFunctionStatement(splitRecipientAggregate, 'get_commission_balance_report'));
+  applySql(extractFunctionStatement(backdatedRuntimeState, 'record_commission_earned_state'));
   expectSmokeFailure(
-    'SMOKE_FAIL: one recipient split into 2 aggregate rows after rename',
-    'recipient_name_split_aggregate',
+    'SMOKE_FAIL: paid-only negative balance was hidden',
+    'backdated_runtime_history',
+  );
+  applySql(extractFunctionStatement(candidate, 'record_commission_earned_state'));
+
+  const earnedAnchoredReport = candidate.replace(
+    '  FULL OUTER JOIN paid_by_recipient p',
+    '  JOIN paid_by_recipient p',
+  );
+  assert.notEqual(
+    earnedAnchoredReport,
+    candidate,
+    'paid-only join mutation did not change the candidate',
+  );
+  applySql(extractFunctionStatement(earnedAnchoredReport, 'get_commission_balance_report'));
+  expectSmokeFailure(
+    'SMOKE_FAIL: controlled opening baseline is wrong',
+    'earned_anchored_paid_report',
   );
   applySql(extractFunctionStatement(candidate, 'get_commission_balance_report'));
 
-  const mutableCustomerName = candidate.replace(
-    "COALESCE(NULLIF(cm.customer_name, ''), customer.farm_name, '[Unknown customer]'::text)",
-    "COALESCE(customer.farm_name, NULLIF(cm.customer_name, ''), '[Unknown customer]'::text)",
+  const missingSettlementPost = candidate.replace(
+    "  IF OLD.status <> 'posted' AND NEW.status = 'posted' THEN",
+    "  IF FALSE AND OLD.status <> 'posted' AND NEW.status = 'posted' THEN",
   );
-  assert.notEqual(
-    mutableCustomerName,
-    candidate,
-    'customer-name mutation did not change the candidate',
-  );
-  applySql(extractFunctionStatement(mutableCustomerName, 'get_commission_payment_detail_report'));
+  assert.notEqual(missingSettlementPost, candidate, 'settlement-post mutation did not change the candidate');
+  applySql(extractFunctionStatement(missingSettlementPost, 'record_commission_settlement_event'));
   expectSmokeFailure(
-    'SMOKE_FAIL: mutable order/customer labels rewrote payment detail history',
-    'mutable_customer_name_history',
+    'SMOKE_FAIL: post RPC did not append the exact settlement event',
+    'missing_posted_settlement_event',
   );
-  applySql(extractFunctionStatement(candidate, 'get_commission_payment_detail_report'));
+  applySql(extractFunctionStatement(candidate, 'record_commission_settlement_event'));
+
+  for (const [label, mutation, token] of [
+    [
+      'earned_ledger_rls_disabled',
+      'ALTER TABLE public.commission_earned_state_ledger DISABLE ROW LEVEL SECURITY;',
+      'COMMISSION_HISTORY_REPLAY_DRIFT: candidate function bodies or trust attributes differ',
+    ],
+    [
+      'earned_ledger_trigger_disabled',
+      'ALTER TABLE public.commission_earned_state_ledger DISABLE TRIGGER trg_commission_earned_state_ledger_immutable;',
+      'COMMISSION_HISTORY_REPLAY_DRIFT: ledger trigger catalog differs',
+    ],
+    [
+      'anonymous_earned_ledger_select',
+      'GRANT SELECT ON public.commission_earned_state_ledger TO anon;',
+      'COMMISSION_HISTORY_REPLAY_DRIFT: ledger RLS, owner, or ACL boundary differs',
+    ],
+  ]) {
+    expectCandidateFailure(`BEGIN;\n${mutation}\n${candidate}\nCOMMIT;`, token, label);
+  }
 
   const wrongForeignKey = `
 BEGIN;

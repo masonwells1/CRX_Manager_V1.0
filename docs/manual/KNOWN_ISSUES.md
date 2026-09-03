@@ -1,11 +1,10 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-09-03 for migration-ledger facts and commission-history item 3.4.** A read-only
-capture records **992 ledger rows**, 985 distinct names, live `max(version)` `20260903124741`, and
-effective ordering high-water **`20260831235900`** (authored name
-`20260831235900_serialize_gauntlet_write_boundaries`). The F06 source migration
-`20260903150000_job_chemicals_persist_driver` is now on `main`; the latest read-only 2026-09-03
-check confirms it is still not applied, so it must land before the higher-stamped commission migration.
+capture records **993 ledger rows**, 986 distinct names, live `max(version)` `20260903153402`, and
+effective ordering high-water **`20260903150000`** (authored name
+`20260903150000_job_chemicals_persist_driver`). F06 is applied live under that server-assigned
+version; the higher-stamped commission-history migration remains absent.
 The 2026-09-01 reading below is retained as provenance. The two Section 9 AP migrations
 `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
 `20260826222000_correct_ap_aging_due_date_buckets` were applied live on 2026-09-01 under Mason's explicit
@@ -3479,7 +3478,7 @@ Source: `docs/audits/gauntlet/2026-08-09-section-07-commissions-splits-payouts-v
 
 | # | Finding | Where | Live risk |
 |---|---|---|---|
-| 3.4 | **LIVE DEFECT; LOCAL CANDIDATE PROVEN 2026-09-03.** Production's temporary fail-closed report refuses non-current dates. Candidate `20260903150100` instead derives earned from order/cancellation dates and preserved pre-cancel cents, and paid from payment-item, payment, post, and void dates; Reports also shows the payment lines behind the total. | `src/pages/Reports.tsx`; local migration `20260903150100` | Production cannot answer a prior cutoff until the migration is separately approved and applied. The candidate supports 2026-03-09 through Chicago-today and explicitly excludes the two unrecoverable legacy cancellations from inception. Network-isolated full-schema replay and real create/post/report/void rollback proof pass; specialist and exact-SHA review still gate delivery. |
+| 3.4 | **LIVE DEFECT; CORRECTED LOCAL CANDIDATE PROVEN 2026-09-03.** Production's temporary fail-closed report refuses non-current dates. Candidate `20260903150100` records commission earned-state snapshots and signed post/void settlement events in two append-only bigint-cent ledgers; aggregate and detail reports read those immutable events only. | `src/pages/Reports.tsx`; local migration `20260903150100` | Production cannot answer a prior cutoff until the migration is reviewed clean and applied. The candidate supports 2026-03-09 through Chicago-today, treats the active pre-cutover rows as a reviewed opening restatement at their order dates, and excludes the two unrecoverable legacy cancellations from inception. Network-isolated full-schema replay, real create/post/report/soft-delete/void rollback proof, paid-only negative-balance proof, and history mutations pass; exact-SHA and Claude review still gate delivery. |
 | 3.5 | **Payout idempotency receipts are keyed to the operation, not the intent.** `useIdempotencyKey` scopes to `[operation, userId]` and deliberately retains the key after an uncertain response; `create_/post_/void_commission_payment` all run the operation-only replay check *before* loading the requested entity. | `src/hooks/useIdempotencyKey.ts:21-40`; `src/pages/CommissionPayments.tsx:302-420`; migrations `20260714180000:70-258`, `20260714230000:285-395`, `20260707060000:1569-1717` | Server posts Payment A, response is lost, admin retries on Payment B → server replays A's cached success and the UI reports success for the wrong payment. Same shape for a changed commission selection or void reason. Does **not** double-pay; it tells the operator a different financial action succeeded when it did not. |
 
 **Owner decision superseded for 3.4 on 2026-09-03.** Mason explicitly reopened the historical

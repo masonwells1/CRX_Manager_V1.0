@@ -61,9 +61,9 @@ cheap window has closed and the spec's scope changes (see §6).
 
 ## 3. What already exists — do not rebuild it
 
-A dated payment ledger is **already in place and already correct in shape.** This work is far
-smaller than "build commission history"; it is mostly *pointing the report at the ledger that is
-already there.*
+Payment headers and immutable item amounts already exist, but they are operational state—not a
+complete historical ledger. The final design must record posting and voiding as signed immutable
+events and must snapshot the earned liability whenever a report-relevant commission field changes.
 
 `commission_payments`
 : `id`, `payment_number`, `recipient_id`, `total_amount`, `status`, `payment_method`,
@@ -79,12 +79,12 @@ RPCs already live: `create_commission_payment`, `post_commission_payment`,
 Frontend already live: `src/pages/CommissionPayments.tsx` (lifecycle pending → paid → cancelled;
 voiding a payment resets its commissions to `pending`).
 
-So the answer to *"was this commission paid as of date D?"* is already derivable:
-a `posted` payment whose `payment_date <= D`, joined through `commission_payment_items`.
+Those rows provide the source facts for the cutover, but current header status and mutable
+commission fields cannot by themselves reproduce a past answer.
 
 ---
 
-## 4. The two real gaps
+## 4. The four real gaps
 
 Both are small, and both must be closed **before** the first payout or the gap becomes permanent.
 
@@ -108,19 +108,40 @@ unrecoverable. Going forward this must be stamped, or "cancelled as of D" stays 
 `cancelled`. Accept the 2 existing rows as unknown — do **not** invent a date for them; treat
 them as cancelled-from-inception and say so in the report footnote.
 
+### Gap 3 — earned liability is mutable
+
+`commission_amount`, recipient assignment, order date, status, and `deleted_at` can all change.
+Reading the current commission row therefore rewrites earlier reports after a later correction.
+
+**Fix:** add `commission_earned_state_ledger`, an append-only bigint-cent snapshot ledger. The
+pre-payout active population becomes an explicitly reviewed opening restatement effective at each
+order date; the two unrecoverable legacy cancellations enter as excluded states. Every future
+insert or report-relevant update records its real database transaction time.
+
+### Gap 4 — payout state is mutable
+
+Even with `posted_at` and `voided_at`, a report that rereads current payment headers/items is not
+an immutable audit trail and can incorrectly discard paid cash when the earning is later cancelled
+or soft-deleted.
+
+**Fix:** add `commission_settlement_events`, an append-only signed bigint-cent ledger. Posting
+creates positive events and voiding creates matching negative events with frozen recipient and
+reconciliation labels. Paid totals are aggregated independently from earned totals.
+
 ---
 
 ## 5. Target behaviour
 
-Rewrite `get_commission_balance_report(p_as_of_date date)` to answer from the dated ledger rather
-than from current status:
+Rewrite `get_commission_balance_report(p_as_of_date date)` to answer only from the two immutable
+event ledgers rather than from current status:
 
-- **Earned as of D** — commissions with `order_date <= D`, excluding any cancelled **on or
-  before D** (`cancelled_at <= D`; the 2 legacy unknowns are excluded always).
-- **Paid as of D** — sum of `commission_payment_items.amount` whose parent payment is `posted`,
-  has `payment_date <= D`, and was **not voided on or before D** (`voided_at IS NULL OR
-  voided_at > D`).
+- **Earned as of D** — the latest earned-state event for each commission before the Chicago
+  end-of-day cutoff, restricted to snapshotted `order_date <= D` and `is_earned = true`.
+- **Paid as of D** — the independent sum of signed settlement events before that cutoff whose
+  snapshotted `payment_date <= D`.
 - **Outstanding as of D** — earned minus paid, both as computed above.
+- Preserve a negative outstanding balance when paid cash survives a later cancellation/deletion;
+  that is an exception signal, not a value to hide or clamp.
 - Remove the `HISTORICAL_COMMISSION_BALANCE_UNAVAILABLE` raise **only once the above is proven**.
   Keep refusing dates earlier than the ledger's own start (see §7), and keep refusing future
   dates — a future as-of date has no legitimate meaning here.
@@ -151,17 +172,21 @@ Done means all of these, not "the tests pass":
 1. `voided_at` / `voided_by` on `commission_payments`, stamped by `void_commission_payment`.
 2. `cancelled_at` on `commissions`, stamped on every path that sets `status = 'cancelled'`
    (check `cancel_order` and the order-void paths — they zero pending commissions).
-3. `get_commission_balance_report` computes earned/paid/outstanding from the dated ledger.
-4. A refusal path remains for dates the ledger genuinely cannot answer (before ledger start, or
+3. Append-only earned-state and signed settlement ledgers have RLS, no direct non-owner grants,
+   RESTRICT foreign keys, and UPDATE/DELETE/TRUNCATE refusal triggers.
+4. `get_commission_balance_report` computes earned and paid independently from those ledgers;
+   detail reads frozen settlement snapshots and never current commission/profile/customer labels.
+5. A refusal path remains for dates the ledger genuinely cannot answer (before ledger start, or
    any future date), with a message that names the boundary date.
-5. **Real-path proof, not just unit tests:** create a commission payment, post it, run the report
+6. **Real-path proof, not just unit tests:** create a commission payment, post it, prove the RPC
+   stamped `posted_at`/`posted_by` and appended the positive settlement event, run the report
    for a date *before* the payment and a date *after* it, and confirm the two answers differ
    correctly. Then void it and re-run both. Use `[E2E]`-tagged fixtures per the live-test-data
    policy — never real recipients.
-6. Both money paths verified exact — see the money rules in `AGENTS.md`. Note `commission_amount`
+7. Both money paths verified exact — see the money rules in `AGENTS.md`. Note `commission_amount`
    and `commission_payments.total_amount` are `numeric`, not bigint cents; this spec does **not**
    authorise a unit rewrite, only that new math stays exact.
-7. New/changed migration passes the RLS + migration-drift gates and the exact-SHA adversarial
+8. New/changed migration passes the RLS + migration-drift gates and the exact-SHA adversarial
    review, per the standing gates.
 
 ---

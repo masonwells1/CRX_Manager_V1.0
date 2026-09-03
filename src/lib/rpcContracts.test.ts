@@ -2874,6 +2874,10 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
+  record_commission_earned_state:
+    'trigger-only append-only commission snapshot writer; the parent commission mutation owns the transaction and all application-role EXECUTE is revoked',
+  record_commission_settlement_event:
+    'trigger-only append-only settlement writer; the idempotent post or void payment RPC owns the transaction and all application-role EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',

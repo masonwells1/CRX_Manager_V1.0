@@ -1,11 +1,10 @@
 # CRX Manager — Current State
 
 **Last verified: 2026-09-03 for the migration ledger; 2026-09-01 for full schema shape (post
-return-credit chain).** A read-only 2026-09-03 query records **992 ledger rows**, 985 distinct
-names, `max(version)` `20260903124741`, and effective authored-name high-water
-`20260831235900_serialize_gauntlet_write_boundaries`. The F06 source migration
-`20260903150000_job_chemicals_persist_driver` is now on `main`; the latest read-only 2026-09-03
-check confirms it is still not applied, so it must land before the higher-stamped commission migration.
+return-credit chain).** A read-only 2026-09-03 query records **993 ledger rows**, 986 distinct
+names, `max(version)` `20260903153402`, and effective authored-name high-water
+`20260903150000_job_chemicals_persist_driver`. F06 is applied live under that server-assigned
+version, so the prerequisite immediately below the higher-stamped commission migration is satisfied.
 Schema shape still comes from the live introspection that regenerated
 `.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
 columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
@@ -54,8 +53,9 @@ matching issue entries are in `docs/manual/KNOWN_ISSUES.md`.
 `20260903150100_ledger_backed_commission_history` is proven in a network-isolated PostgreSQL 17
 full-schema replay and has a registered rollback-only create/post/report/void chain. It adds
 `commission_payments.voided_at`/`voided_by`, `commissions.cancelled_at` plus immutable
-`cancelled_amount_cents`, rewrites the aggregate from dated ledger facts, and adds per-payment
-reconciliation detail in Reports. Supported cutoffs begin 2026-03-09; the two existing
+`cancelled_amount_cents`, an append-only earned-state ledger, and a signed posted/voided settlement
+ledger. The aggregate and detail reports read only those immutable events, including paid-only
+negative balances after a later cancellation or soft delete. Supported cutoffs begin 2026-03-09; the two existing
 zero-dollar cancellations remain unstamped and are excluded from inception. Production continues
 to refuse non-current cutoffs until Mason separately approves the guarded migration apply. The
 live `[E2E]` rollback proof and merge are also not approved yet.

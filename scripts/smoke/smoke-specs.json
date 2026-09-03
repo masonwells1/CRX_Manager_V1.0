@@ -902,7 +902,7 @@
     },
     "commission_history_as_of": {
       "chain": "smoke-commission-history-as-of.sql",
-      "description": "Ledger-backed historical commission reporting real-path proof after 20260903150100: creates only [E2E]-tagged customer, order, commission, payment, and audit fixtures; exercises the real create and post payout RPCs; proves the same payment is absent before its posted/payment cutoff and present afterward in both aggregate and per-payment detail; voids it through the real wrapper and proves the earlier answer remains stable while the current cutoff excludes the void; cancels a second commission after preserving its exact 1234-cent pre-cancel amount; and verifies both unsupported-date refusals name their boundary. Terminal rollback.",
+      "description": "Ledger-backed historical commission reporting real-path proof after 20260903150100: creates only [E2E]-tagged fixtures; proves earned-state snapshots, real create/post RPC stamps, positive settlement events, immutable reconciliation labels, paid-only negative balances after soft deletion, RESTRICT hard-delete protection, signed void reversals, amount/recipient history stability across a controlled prior-day baseline, cancellation snapshots, immutable-ledger update/truncate refusal, and supported-date boundaries. Terminal rollback.",
       "covers": [
         "get_commission_balance_report",
         "get_commission_payment_detail_report",
