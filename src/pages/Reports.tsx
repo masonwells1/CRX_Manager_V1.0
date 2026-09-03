@@ -13,6 +13,7 @@ import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
+import { formatUSD } from '../lib/money';
 import LogbookReport from '../components/reports/LogbookReport';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
@@ -161,6 +162,7 @@ export default function Reports() {
   const [commBalanceData, setCommBalanceData] = useState<CommissionBalanceRow[]>([]);
   const [commPaymentDetailData, setCommPaymentDetailData] = useState<CommissionPaymentDetailRow[]>([]);
   const [commissionAsOfDate, setCommissionAsOfDate] = useState('');
+  const commissionRequestId = useRef(0);
 
   // ─── OPERATIONAL data ───────────────────────────────────────
   const [chemHistoryData, setChemHistoryData] = useState<ChemicalHistoryRow[]>([]);
@@ -329,14 +331,17 @@ export default function Reports() {
     // and shared presets such as "This Season" may end after today.
     const businessToday = todayInBusinessTz();
     const asOf = endDate && endDate < businessToday ? endDate : businessToday;
+    const requestId = ++commissionRequestId.current;
     setCommBalanceData([]);
     setCommPaymentDetailData([]);
     setCommissionAsOfDate(asOf);
     const { data: balanceData, error: balanceError } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
+    if (requestId !== commissionRequestId.current) return;
     if (balanceError) { toast('error', `Commission balance failed: ${balanceError.message}`); return; }
     const balanceRows = assertRpcResult<CommissionBalanceRow[]>(balanceData, 'get_commission_balance_report');
 
     const { data: detailData, error: detailError } = await supabase.rpc('get_commission_payment_detail_report', { p_as_of_date: asOf });
+    if (requestId !== commissionRequestId.current) return;
     if (detailError) { toast('error', `Commission payment detail failed: ${detailError.message}`); return; }
     const detailRows = assertRpcResult<CommissionPaymentDetailRow[]>(detailData, 'get_commission_payment_detail_report');
 
@@ -743,7 +748,6 @@ export default function Reports() {
 
   // ─── Formatting ─────────────────────────────────────────────
   const fmt = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
-  const fmtExactMoney = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 
   // ─── CSV export (profitability) ─────────────────────────────
   const handleProfitCSV = () => {
@@ -945,9 +949,9 @@ export default function Reports() {
 
   const commBalanceCols: Column<CommissionBalanceRow>[] = [
     { key: 'recipient_name', header: 'Salesperson', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.recipient_name}</span> },
-    { key: 'total_earned', header: 'Total Earned', sortable: true, render: (r) => <span className="font-mono">{fmtExactMoney(r.total_earned)}</span> },
-    { key: 'total_paid', header: 'Total Paid', sortable: true, render: (r) => <span className="font-mono">{fmtExactMoney(r.total_paid)}</span> },
-    { key: 'outstanding_balance', header: 'Outstanding', sortable: true, render: (r) => <span className={`font-mono font-bold ${r.outstanding_balance > 0 ? 'text-amber-600' : 'text-crx-green'}`}>{fmtExactMoney(r.outstanding_balance)}</span> },
+    { key: 'total_earned', header: 'Total Earned', sortable: true, render: (r) => <span className="font-mono">{formatUSD(r.total_earned)}</span> },
+    { key: 'total_paid', header: 'Total Paid', sortable: true, render: (r) => <span className="font-mono">{formatUSD(r.total_paid)}</span> },
+    { key: 'outstanding_balance', header: 'Outstanding', sortable: true, render: (r) => <span className={`font-mono font-bold ${r.outstanding_balance > 0 ? 'text-amber-600' : 'text-crx-green'}`}>{formatUSD(r.outstanding_balance)}</span> },
     { key: 'pending_count', header: 'Pending', sortable: true },
     { key: 'paid_count', header: 'Paid', sortable: true },
   ];
@@ -959,7 +963,7 @@ export default function Reports() {
     { key: 'source_number', header: 'Order / Job', sortable: true, render: (r) => `${r.source_type}: ${r.source_number}` },
     { key: 'customer_name', header: 'Customer', sortable: true },
     { key: 'commission_order_date', header: 'Commission Date', sortable: true, render: (r) => parseLocalDate(r.commission_order_date).toLocaleDateString() },
-    { key: 'settled_amount', header: 'Settled', sortable: true, render: (r) => <span className="font-mono font-medium">{fmtExactMoney(r.settled_amount)}</span> },
+    { key: 'settled_amount', header: 'Settled', sortable: true, render: (r) => <span className="font-mono font-medium">{formatUSD(r.settled_amount)}</span> },
   ];
 
   const chemHistoryCols: Column<ChemicalHistoryRow>[] = [

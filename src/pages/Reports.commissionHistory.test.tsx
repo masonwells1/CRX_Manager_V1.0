@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+
+type RpcResponse = { data: unknown; error: { message: string } | null };
+type RpcHandler = (name: string, args: Record<string, unknown>) => Promise<RpcResponse>;
 
 const H = vi.hoisted(() => ({
   rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
   toast: vi.fn(),
   auth: { role: 'admin' as const, profile: { id: 'admin-1', role: 'admin' }, deniedPages: [] as string[] },
+  rpcHandler: null as RpcHandler | null,
 }));
 
 type QueryBuilder = {
@@ -40,6 +44,7 @@ vi.mock('../lib/db', () => ({
     },
     rpc: (name: string, args: Record<string, unknown>) => {
       H.rpc.push({ name, args });
+      if (H.rpcHandler) return H.rpcHandler(name, args);
       if (name === 'get_commission_payment_detail_report') {
         return Promise.resolve({
           data: [{
@@ -100,6 +105,7 @@ beforeEach(() => {
   cleanup();
   H.rpc = [];
   H.toast.mockReset();
+  H.rpcHandler = null;
 });
 
 afterEach(() => {
@@ -144,5 +150,83 @@ describe('Reports commission history', () => {
       expect(balance?.args.p_as_of_date).toBe(businessToday);
       expect(detail?.args.p_as_of_date).toBe(businessToday);
     });
+  });
+
+  it('ignores an older response that finishes after a newer cutoff', async () => {
+    renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+    await screen.findByText('CP-2026-0042');
+
+    let resolveOlder!: (value: RpcResponse) => void;
+    let resolveNewer!: (value: RpcResponse) => void;
+    const older = new Promise<RpcResponse>((resolve) => { resolveOlder = resolve; });
+    const newer = new Promise<RpcResponse>((resolve) => { resolveNewer = resolve; });
+
+    H.rpc = [];
+    H.rpcHandler = (name, args) => {
+      const asOf = args.p_as_of_date;
+      if (name === 'get_commission_balance_report' && asOf === '2026-08-20') return older;
+      if (name === 'get_commission_balance_report' && asOf === '2026-08-21') return newer;
+      return Promise.resolve({
+        data: name === 'get_commission_payment_detail_report' ? [{
+          commission_id: 'commission-new',
+          commission_order_date: '2026-08-18',
+          customer_name: 'Newer Customer',
+          payment_date: '2026-08-21',
+          payment_id: 'payment-new',
+          payment_number: 'CP-NEWER',
+          recipient_id: 'recipient-new',
+          recipient_name: 'Newer Recipient',
+          settled_amount: 21.25,
+          source_number: 'ORDER-NEW',
+          source_type: 'Order',
+        }] : [],
+        error: null,
+      });
+    };
+
+    const endDateInput = document.querySelectorAll<HTMLInputElement>('input[type="date"]')[1];
+    expect(endDateInput).toBeDefined();
+    fireEvent.change(endDateInput, { target: { value: '2026-08-20' } });
+    await waitFor(() => expect(H.rpc.some(({ name, args }) => name === 'get_commission_balance_report' && args.p_as_of_date === '2026-08-20')).toBe(true));
+
+    fireEvent.change(endDateInput, { target: { value: '2026-08-21' } });
+    await waitFor(() => expect(H.rpc.some(({ name, args }) => name === 'get_commission_balance_report' && args.p_as_of_date === '2026-08-21')).toBe(true));
+
+    await act(async () => {
+      resolveNewer({
+        data: [{
+          recipient_id: 'recipient-new',
+          recipient_name: 'Newer Recipient',
+          total_earned: 21.25,
+          total_paid: 21.25,
+          outstanding_balance: 0,
+          pending_count: 0,
+          paid_count: 1,
+        }],
+        error: null,
+      });
+    });
+    await screen.findByText('CP-NEWER');
+
+    await act(async () => {
+      resolveOlder({
+        data: [{
+          recipient_id: 'recipient-old',
+          recipient_name: 'Older Recipient',
+          total_earned: 20,
+          total_paid: 0,
+          outstanding_balance: 20,
+          pending_count: 1,
+          paid_count: 0,
+        }],
+        error: null,
+      });
+    });
+
+    expect(screen.getAllByText('Newer Recipient').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Older Recipient')).not.toBeInTheDocument();
+    expect(screen.getByText(/Balance and payout detail shown through 8\/21\/2026/)).toBeInTheDocument();
   });
 });
