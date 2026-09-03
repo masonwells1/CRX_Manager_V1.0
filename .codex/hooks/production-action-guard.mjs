@@ -352,17 +352,71 @@ export function commandTouchesProtectedHarnessPath(command, workdir = "") {
 const READ_ONLY_SHELL_HEADS = new Set([
   "cat", "head", "tail", "less", "more", "wc", "grep", "egrep", "fgrep", "rg", "diff", "cmp", "comm",
   "md5sum", "sha1sum", "sha256sum", "sha512sum", "shasum", "cksum", "stat", "file", "ls", "tree",
-  "realpath", "readlink", "basename", "dirname", "test", "[", "echo", "printf", "od", "hexdump",
+  "realpath", "readlink", "basename", "dirname", "test", "[", "[[", "echo", "printf", "od", "hexdump",
   "strings", "nl", "tac", "type", "findstr", "fc", "dir", "where", "comp",
   "get-content", "gc", "select-string", "sls", "get-item", "gi", "get-childitem", "gci", "test-path",
   "resolve-path", "rvpa", "get-filehash", "compare-object", "compare", "measure-object", "measure",
   "write-output", "write-host", "get-acl",
+  // Round 13: the PowerShell pipeline stages and pure helpers a computed
+  // segment legitimately carries — `| Where-Object { $_ -match "x" }`,
+  // `(Join-Path $PWD docs)`, `| % { $_.Name }` — so refusing unknown command
+  // words in computed text does not make the shell unusable. None of these
+  // can name a file to write.
+  "where-object", "?", "foreach-object", "%", "out-string", "out-host", "out-null", "out-default",
+  "join-path", "split-path", "start-sleep", "write-verbose", "write-warning", "write-error",
+  "write-debug", "write-information", "write-progress",
 ]);
+// PowerShell verbs that are read-only by convention: Get-*, Test-*, Select-*,
+// Sort-Object, Group-Object, Format-*, Measure-*, Compare-*, ConvertTo-/
+// ConvertFrom-*, Resolve-*, Split-*, Join-*. (Set-, Out-, New-, Add-, Remove-,
+// Invoke-, Start-, Tee- are deliberately absent.)
+const PS_READ_ONLY_VERB_RE = /^(?:get|test|select|sort|group|format|measure|compare|convertto|convertfrom|resolve|split|join)-[a-z]+$/;
+// Shell keywords and builtins that run no program of their own. They take the
+// command position but cannot write a file; `eval`, `source` and `.` are
+// deliberately absent because they execute text.
+const SHELL_KEYWORD_HEADS = new Set([
+  "for", "foreach", "case", "esac", "fi", "done", "function", "return", "exit", "break", "continue",
+  "true", "false", "export", "set", "unset", "local", "declare", "typeset", "readonly", "shift", "read",
+  "let", "pwd", "sleep", "date", "whoami", "hostname", "id", "uname", "printenv", "seq", "param",
+  "begin", "process", "end", "throw", "switch", "default", "trap", ":", "select",
+  "cd", "chdir", "pushd", "popd", "set-location", "sl", "push-location", "pop-location",
+]);
+// Prefixes that are followed by the real command word: the command position
+// passes THROUGH them (`sudo tee`, `if ! grep`, `else tee`, `exec tee`).
+const TRANSPARENT_HEADS = new Set([
+  "sudo", "doas", "time", "env", "nohup", "nice", "exec", "command", "builtin", "!",
+  "if", "then", "else", "elif", "do", "while", "until", "try", "catch", "finally",
+]);
+// Executors: the word after their flags is a command they will run with the
+// data they receive, so `echo <protected> | xargs tee` writes the file named
+// in a READER's segment. They are unwrapped like shell wrappers, and a segment
+// headed by one is examined whenever ANY segment of the command names a
+// protected file or carries computed text.
+const EXECUTOR_HEADS = new Set(["xargs", "gxargs", "parallel"]);
+// `find` resolves a NAME to the files that carry it, so a protected basename
+// in its arguments counts as the protected file, and its own writers/executors
+// (`-delete`, `-exec`, `-fprint`) disqualify it as a read.
+const FIND_WRITE_OR_EXEC_RE = /^-(?:delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/;
 const GIT_READ_ONLY_SUBCOMMANDS = new Set([
   "diff", "show", "log", "status", "blame", "grep", "ls-files", "ls-tree", "cat-file", "rev-parse",
   "check-ignore", "check-attr", "diff-tree", "diff-index", "describe", "shortlog", "whatchanged",
   "annotate", "name-rev", "hash-object", "add", "commit",
 ]);
+// Codex round 13 (HIGH): the read-only git subcommands were accepted whatever
+// their options, and `git diff --output=<protected> HEAD HEAD` truncates the
+// file it names. The options that make a "read" write or execute are refused
+// on a protected file: `--output` (diff/log/show write their result to a file),
+// `--ext-diff`/`--textconv` (run the configured external programs on the
+// named file), `--exec`, and grep's `-O`/`--open-files-in-pager` (open the
+// matched files in an arbitrary program). `--output-indicator-*` is a
+// different option and stays allowed. A `-c key=value`/`--config-env` override
+// or a `GIT_*` environment assignment anywhere in the command can point
+// diff.external, core.pager or core.editor at any program, so those disqualify
+// the invocation too; and an option VALUE is never a pathspec, so `--opt=<protected>`
+// is refused whatever the option.
+const GIT_WRITE_OR_EXEC_OPTION_RE = /^(?:--output(?:=|$)|--ext-diff$|--textconv$|--exec(?:=|$)|-O|--open-files-in-pager(?:=|$))/;
+const GIT_UNSAFE_GLOBAL_OPTION_RE = /^(?:-c|--config-env(?:=|$)|--exec-path(?:=|$))/;
+const GIT_ENV_OVERRIDE_RE = /(?:^|[^\w])GIT_\w+\s*=/i;
 const NODE_HEADS = new Set(["node", "nodejs"]);
 function shellSegmentWords(segment) {
   return String(segment || "")
@@ -401,20 +455,34 @@ export function shellSegmentHead(segment) {
   }
   return { head: "", rest: [] };
 }
-function gitSubcommand(rest) {
-  for (let i = 0; i < rest.length; i++) {
+// Is this git invocation (the words after `git`) a read that cannot write or
+// execute? See GIT_WRITE_OR_EXEC_OPTION_RE above.
+export function gitInvocationIsReadOnly(rest, command = "", workdir = "") {
+  if (GIT_ENV_OVERRIDE_RE.test(String(command || ""))) return false;
+  let i = 0;
+  for (; i < rest.length; i++) {
     const word = rest[i];
-    if (/^-(?:C|c)$/.test(word)) { i++; continue; }
-    if (word.startsWith("-")) continue;
-    return word.toLowerCase();
+    if (word === "-C") { i++; continue; }
+    if (GIT_UNSAFE_GLOBAL_OPTION_RE.test(word)) return false;
+    if (word.startsWith("-")) continue; // --no-pager, -P, --literal-pathspecs
+    break;
   }
-  return "";
+  if (!GIT_READ_ONLY_SUBCOMMANDS.has(String(rest[i] || "").toLowerCase())) return false;
+  for (const word of rest.slice(i + 1)) {
+    if (GIT_WRITE_OR_EXEC_OPTION_RE.test(word)) return false;
+    const optionValue = /^--?[\w-]+=(.+)$/.exec(word);
+    if (optionValue && (PROTECTED_HARNESS_FRAGMENT_RE.test(optionValue[1]) || commandTouchesProtectedHarnessPath(optionValue[1], workdir))) return false;
+  }
+  return true;
 }
-function segmentHeadIsReadOnly({ head, rest }, segment, workdir) {
-  if (READ_ONLY_SHELL_HEADS.has(head)) return true;
-  if (head === "git") return GIT_READ_ONLY_SUBCOMMANDS.has(gitSubcommand(rest));
+// Is `head` (normalised) with the words that follow it a recognised read-only
+// operation? `node` may RUN a protected script — the protected token must be
+// the script, and nothing after it may name another protected file.
+function commandWordIsReadOnly(head, rest, command, workdir) {
+  if (READ_ONLY_SHELL_HEADS.has(head) || SHELL_KEYWORD_HEADS.has(head) || PS_READ_ONLY_VERB_RE.test(head)) return true;
+  if (head === "git") return gitInvocationIsReadOnly(rest, command, workdir);
+  if (head === "find") return !rest.some((word) => FIND_WRITE_OR_EXEC_RE.test(word));
   if (NODE_HEADS.has(head)) {
-    // node may RUN a protected script; the protected token must be the script.
     const script = rest.find((word) => !word.startsWith("-")) || "";
     const scriptIsProtected = protectedHarnessPathMentioned(script) || protectedHarnessPathMentioned(joinedWithWorkdir(script, workdir));
     if (!scriptIsProtected) return false;
@@ -423,16 +491,177 @@ function segmentHeadIsReadOnly({ head, rest }, segment, workdir) {
   }
   return false;
 }
-// The first shell segment that names a protected harness file without a
-// recognised read-only head, as `{ segment, head }`, or null when every such
-// segment is a read.
+// Does the next word make a `$var` / quoted word in command position an
+// EXPRESSION rather than an invocation? PowerShell's comparison, logical and
+// string operators (`$_ -match "x"`, `$a -join ","`), arithmetic and
+// assignment, `in`, or nothing at all. `-f` is deliberately NOT here: it is
+// PowerShell's format operator but also a flag every POSIX writer accepts, and
+// bash executes `$w -f src dest` when `$w` holds `cp`.
+const EXPRESSION_FOLLOWER_RE = /^(?:-[ci]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|is|isnot|as|and|or|xor|not|replace|split|join|band|bor|bxor|bnot|shl|shr)|in|[-+*\/%]?=|==|!=|=~|\+\+|--|[-+*\/%,]|\.\.|\?\?=?|[)}\]{(]|\|)$/i;
+const REDIRECT_TOKEN_RE = /^(?:\d?>>?|<|&>|>&|\d>&\d)$/;
+const PS_CAST_RE = /^\[[\w.]+\](?:\$|$)/;
+// Codex round 13 (HIGH): the round-12 rule looked only at a segment's HEAD, so
+// `$d=".codex/hooks/production-action-"; $f="guard.mjs"; Write-Output "" |
+// Tee-Object -FilePath $d$f` — no protected literal anywhere, a writer the verb
+// list does not know — returned blocked:false; and inside a reader's segment
+// `cat x $(tee <protected>)` was never looked at. So every COMMAND WORD of an
+// examined segment is walked, not just the first: the head, the word after
+// each `(`, `{`, paired backtick, `&`, assignment `=`, `in`, `-exec`, and
+// the word after a wrapper's or executor's flags. Each must be a recognised
+// read-only operation. A `$var` or quoted word in command position is an
+// expression when what follows is an operator or nothing (`$_ -match "x"`,
+// `"a" + "b"`) and an invocation otherwise (`$w $d$f`, `& $w`, `'tee' $d$f`).
+// Returns the first unrecognised command word, or "".
+export function unrecognizedCommandWord(segment, command = "", workdir = "") {
+  // `{}` is xargs'/find's placeholder, not a scriptblock: it vanishes before
+  // the brackets are spaced out.
+  let text = String(segment || "").replace(/\{\}/g, "");
+  const backticks = (text.match(/`/g) || []).length;
+  text = backticks >= 2 && backticks % 2 === 0 ? text.replace(/`/g, " ` ") : text.replace(/`/g, "");
+  text = text
+    .replace(/([{}()])/g, " $1 ")
+    .replace(/(\$[\w:.]+)\s*([-+*\/%]?=)(?!=)/g, "$1 $2 ")
+    .replace(/(^|\s)&(?=\S)/g, "$1& ")
+    .replace(/\^/g, "");
+  const tokens = text.trim().split(/\s+/).filter(Boolean);
+  let commandPosition = true;
+  let afterInvoker = false;
+  let skippingFlags = false;
+  let afterRedirect = false;
+  let inBacktick = false;
+  let previous = "";
+  const isFollower = (word) => word === undefined || EXPRESSION_FOLLOWER_RE.test(word);
+  const restAfter = (index) => {
+    const rest = [];
+    for (let j = index + 1; j < tokens.length; j++) {
+      if (/^[)}]$/.test(tokens[j]) || tokens[j] === "`") break;
+      rest.push(tokens[j].replace(SHELL_WORD_NOOP_RE, ""));
+    }
+    return rest;
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    const raw = tokens[i];
+    const before = previous;
+    previous = raw;
+    if (raw === "`") {
+      inBacktick = !inBacktick;
+      commandPosition = inBacktick;
+      afterInvoker = skippingFlags = afterRedirect = false;
+      continue;
+    }
+    if (raw === "{" || raw === "(") {
+      // `${VAR}` / `"${VAR}"` is a variable and `@{k=v}` a hashtable: neither opens
+      // a command. `$(…)`, `@(…)`, `(…)`, `<(…)`, `>(…)` and `{ … }` all do.
+      const variableBrace = raw === "{" && (before.endsWith("$") || before.endsWith("@"));
+      commandPosition = !variableBrace;
+      afterInvoker = skippingFlags = afterRedirect = false;
+      continue;
+    }
+    if (raw === "}" || raw === ")") { commandPosition = false; skippingFlags = false; continue; }
+    if (/^(?:[-+*\/%]?=|\?\?=)$/.test(raw)) { commandPosition = true; afterInvoker = false; continue; }
+    if (raw === "&") { commandPosition = true; afterInvoker = true; continue; }
+    if (/^in$/i.test(raw) && !commandPosition) { commandPosition = true; continue; }
+    if (/^-(?:exec|execdir|ok|okdir)$/.test(raw)) { commandPosition = true; continue; }
+    if (afterRedirect) { afterRedirect = false; continue; }
+    if (REDIRECT_TOKEN_RE.test(raw)) { afterRedirect = !/&\d$/.test(raw); continue; } // `> file` names a target; `2>&1` does not
+    if (!commandPosition) continue;
+    if (skippingFlags) {
+      if (/^[-/]/.test(raw)) continue;
+      skippingFlags = false;
+    }
+    const bare = raw.replace(SHELL_WORD_NOOP_RE, "");
+    const quoted = /^["']/.test(raw);
+    if (!quoted && /^[A-Za-z_][\w]*=/.test(raw)) continue; // FOO=bar prefix; stays in command position
+    if (!bare) continue;
+    if (bare.startsWith("$") || (quoted && /^["']*\$/.test(raw))) {
+      if (afterInvoker) return raw;
+      if (isFollower(tokens[i + 1])) { commandPosition = false; continue; }
+      return raw;
+    }
+    if (quoted) {
+      if (isFollower(tokens[i + 1])) { commandPosition = false; continue; }
+      // a quoted command name (`'tee' $d$f`, `bash -c "cat x"`) is that command
+    } else {
+      if (/^[@\d]/.test(bare) || PS_CAST_RE.test(bare) || (/^-/.test(bare) && !TRANSPARENT_HEADS.has(bare))) { commandPosition = false; continue; }
+      if (bare === "." || bare === "source" || bare === "eval") return raw;
+    }
+    const head = normalizeShellHead(bare);
+    if (TRANSPARENT_HEADS.has(head) || TRANSPARENT_HEADS.has(bare)) { afterInvoker = head === "exec"; continue; }
+    if (SHELL_WRAPPER_HEADS.has(head) || EXECUTOR_HEADS.has(head)) { skippingFlags = true; afterInvoker = true; continue; }
+    if (!commandWordIsReadOnly(head, restAfter(i), command, workdir)) return raw;
+    commandPosition = false;
+    afterInvoker = false;
+  }
+  return "";
+}
+const PROTECTED_HARNESS_BASENAMES = Object.freeze(PROTECTED_HARNESS_FILES.map((file) => file.split("/").pop().toLowerCase()));
+// After a `cd`/`Set-Location`/`pushd` the guard cannot bind a relative token to
+// a directory, so a bare protected BASENAME (`production-action-guard.mjs`,
+// `package.json`) counts as naming the protected file. Codex round 13, own
+// finding: `cd .codex/hooks; echo x | tee production-action-guard.mjs` passed
+// every gate because the directory-change rule knew only the verb list.
+export function protectedBasenameMentioned(segment) {
+  return commandPathTokens(segment).some((token) => {
+    const last = canonicalizeGuardPath(token).split("/").pop().toLowerCase();
+    if (!last) return false;
+    if (GLOB_CHARS_RE.test(last)) return PROTECTED_HARNESS_BASENAMES.some((name) => globSegmentToRegExp(last).test(name));
+    return PROTECTED_HARNESS_BASENAMES.includes(last);
+  });
+}
+export const CHANGES_DIRECTORY_RE = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+/i;
+function shellSegments(command) {
+  return String(command || "").split(/(?:&&|\|\|?|;|\r?\n)/).map((s) => s.trim()).filter(Boolean);
+}
+function segmentHeadIsExecutor(segment) {
+  const { head } = shellSegmentHead(segment);
+  return EXECUTOR_HEADS.has(head) || head === "find";
+}
+// The first shell segment that names a protected harness file and carries a
+// command word that is not a recognised read-only operation, as `{ segment,
+// head }`, or null when every such segment is a read. A segment headed by an
+// executor is examined whenever ANY segment names a protected file (the name
+// reaches it through the pipe), and after a directory change a protected
+// basename counts as the protected file.
 export function unrecognizedProtectedHarnessAccess(command, workdir = "") {
-  const segments = String(command || "").split(/(?:&&|\|\|?|;|\r?\n)/).map((s) => s.trim()).filter(Boolean);
+  const text = String(command || "");
+  const segments = shellSegments(text);
+  const changesDirectory = CHANGES_DIRECTORY_RE.test(text);
+  const names = (segment) =>
+    PROTECTED_HARNESS_FRAGMENT_RE.test(segment)
+    || commandTouchesProtectedHarnessPath(segment, workdir)
+    || ((changesDirectory || segmentHeadIsExecutor(segment)) && protectedBasenameMentioned(segment));
+  const commandNames = segments.some(names);
   for (const segment of segments) {
-    if (!PROTECTED_HARNESS_FRAGMENT_RE.test(segment) && !commandTouchesProtectedHarnessPath(segment, workdir)) continue;
-    const parsed = shellSegmentHead(segment);
-    if (segmentHeadIsReadOnly(parsed, segment, workdir)) continue;
-    return { segment, head: parsed.head };
+    if (!names(segment) && !(commandNames && segmentHeadIsExecutor(segment))) continue;
+    const word = unrecognizedCommandWord(segment, text, workdir);
+    if (!word) continue;
+    return { segment, head: normalizeShellHead(word.replace(SHELL_WORD_NOOP_RE, "")) || word };
+  }
+  return null;
+}
+// Codex round 13 (HIGH): the computed-text refusal above is scoped to segments
+// whose VERB the mutation list knows, and the fail-closed rule to segments that
+// NAME a protected file. A destination split across variables and written by a
+// writer the list does not know satisfies neither — `$d=".codex/hooks/
+// production-action-"; $f="guard.mjs"; Write-Output "" | Tee-Object -FilePath
+// $d$f` blanked the startup guard and returned blocked:false. So computed text
+// fails closed the same way protected names do: a segment that carries
+// computed text may contain only recognised read-only command words. Readers
+// with computed arguments (`cat $f`, `Get-Content (Join-Path $a $b)`, `git -C
+// $repo diff`), pipeline stages (`| Where-Object { $_ -match "x" }`) and
+// keywords (`if ($LASTEXITCODE -ne 0) { exit 1 }`) stay allowed. An executor
+// is examined whenever any segment is computed (the value reaches it through
+// the pipe). Returns `{ segment, head }` or null.
+export function computedSegmentWithUnrecognizedCommand(command, workdir = "") {
+  const text = String(command || "");
+  const segments = shellSegments(text);
+  const computed = (segment) => COMPUTED_ARGUMENT_RE.test(segment);
+  const commandComputed = segments.some(computed);
+  for (const segment of segments) {
+    if (!computed(segment) && !(commandComputed && segmentHeadIsExecutor(segment))) continue;
+    const word = unrecognizedCommandWord(segment, text, workdir);
+    if (!word) continue;
+    return { segment, head: normalizeShellHead(word.replace(SHELL_WORD_NOOP_RE, "")) || word };
   }
   return null;
 }
@@ -459,7 +688,19 @@ const SHELL_MUTATION_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|s
 // `$$` — with which `sh -c 'cp src "$1$2"' _ <prefix> <suffix>` assembles a
 // protected name from two harmless arguments. A bare `$` in a mutating segment
 // has no honest literal reading, so it is computed text wherever it appears.
-const COMPUTED_TEXT_RE = /\(|\$|\bjoin-path\b|\s-f\s|\s-join\b|%[^%\s]+%|![^!\s]+!/i;
+// Codex round 13 added two spellings the first cut could not see: a PAIRED
+// backtick pair is a POSIX command substitution (`tee \`cat dest.txt\``), and a
+// whitespace-led `@name` is a PowerShell splat — `$p=@{FilePath=$d$f};
+// Tee-Object @p` carries its computed destination in a hashtable no `$` in the
+// writing segment reveals. A lone backtick stays a PowerShell escape, and
+// `body=@file` (gh's file-argument form) is preceded by `=`, not whitespace.
+const COMPUTED_TEXT_RE = /\(|\$|`[^`]*`|(?<=\s)@[A-Za-z_$]|\bjoin-path\b|\s-f\s|\s-join\b|%[^%\s]+%|![^!\s]+!/i;
+// The same set WITHOUT the bare `-f` arm, for the fail-closed gate over
+// unrecognised command words: there `-f` is overwhelmingly a flag (`gh api -f
+// key=value`, `grep -f patterns`), and PowerShell's format operator cannot
+// build a destination without a `$`, a `(` or an assignment that the other arms
+// already see.
+const COMPUTED_ARGUMENT_RE = /\(|\$|`[^`]*`|(?<=\s)@[A-Za-z_$]|\bjoin-path\b|\s-join\b|%[^%\s]+%|![^!\s]+!/i;
 
 // The first MUTATING segment of `command` whose text is computed, or "" when
 // none is. Segments are the same pipeline/chain units the merge and push gates
@@ -1288,7 +1529,7 @@ export function evaluateProductionAction({
   if (reviewProofPathMentioned(command)) {
     return denied("CODEX PRODUCTION GATE: direct shell access to review proof files is blocked. Run the real review wrapper instead.");
   }
-  const changesDirectory = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+/i.test(command);
+  const changesDirectory = CHANGES_DIRECTORY_RE.test(command);
   if ((changesDirectory && reviewStateDirectoryMentioned(command)) || reviewStateDirectoryMentioned(actionRepoDir)) {
     return denied("CODEX PRODUCTION GATE: the wrapper-owned review state directory cannot be used as an interactive shell working directory.");
   }
@@ -1369,15 +1610,33 @@ export function evaluateProductionAction({
   }
   // Fail closed on protected files (Codex round 12): the verb-recognising rules
   // above catch the writers they know; this one refuses every head they do not.
+  // Round 13 walks every command word of the segment (not only its head), holds
+  // read-only git to a safe argument grammar (`git diff --output=<file>` is a
+  // write), examines executors fed by a pipe, and counts a protected basename
+  // as the file after a directory change.
   const unrecognizedAccess = unrecognizedProtectedHarnessAccess(command, actionRepoDir);
   if (unrecognizedAccess) {
     return denied(
       "CODEX PRODUCTION GATE: this command names a protected harness file and its command word " +
       `\`${unrecognizedAccess.head || "(none)"}\` is not a recognised read-only operation, in: ${unrecognizedAccess.segment}. ` +
       "The guard fails closed here: only known readers (cat/type/head/tail/grep/rg/Get-Content/Select-String/" +
-      "Get-Item/Test-Path/diff/hash tools/ls, read-only git subcommands, or `node <that protected script>`) may " +
-      "name these files from the shell; anything else is treated as a writer. Change one deliberately through " +
-      "the file tools, which are gated separately."
+      "Get-Item/Test-Path/diff/hash tools/ls, read-only git subcommands without --output/--ext-diff/--textconv/-c, " +
+      "or `node <that protected script>`) may name these files from the shell; anything else is treated as a " +
+      "writer. Change one deliberately through the file tools, which are gated separately."
+    );
+  }
+  // Fail closed on computed text (Codex round 13): a segment that builds text at
+  // run time may contain only recognised read-only command words, because the
+  // guard cannot read what a writer it does not know will do with a value it
+  // cannot see.
+  const computedAccess = computedSegmentWithUnrecognizedCommand(command, actionRepoDir);
+  if (computedAccess) {
+    return denied(
+      "CODEX PRODUCTION GATE: this shell segment builds text at run time (a `$` variable, a subexpression, " +
+      `a backtick substitution, a splat, or a %VAR% expansion) and its command word \`${computedAccess.head || "(none)"}\` ` +
+      `is not a recognised read-only operation, in: ${computedAccess.segment}. The guard cannot read a computed ` +
+      "argument and does not know what this command does with one, so it is refused rather than gated. Spell " +
+      "every argument literally, or read through a known reader (cat/Get-Content/grep/git diff/Where-Object …)."
     );
   }
   if (isGitPush(command) && pushContextIsAmbiguous(command)) {

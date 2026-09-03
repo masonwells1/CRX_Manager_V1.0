@@ -9,13 +9,17 @@ import path from "node:path";
 import {
   PROTECTED_HARNESS_FILES,
   canonicalizeGuardPath,
+  computedSegmentWithUnrecognizedCommand,
   evaluateProductionAction,
   expandBraces,
+  gitInvocationIsReadOnly,
   globCouldMatchProtectedHarnessPath,
   isClearlyReadOnlySql,
   mutatingSegmentWithComputedText,
+  protectedBasenameMentioned,
   pullRequestChecksGreen,
   shellSegmentHead,
+  unrecognizedCommandWord,
   unrecognizedProtectedHarnessAccess,
 } from "./production-action-guard.mjs";
 
@@ -962,6 +966,164 @@ try {
     true,
     "a bare wildcard delete is refused because it could expand to package.json",
   );
+  // ── round 13: read-only git grammar, computed text fails closed, basenames ──
+  // Codex two HIGHs on the exact-SHA proof of 5a9052934, both reproduced by
+  // execution before the fix. (1) `git diff --output=<protected> HEAD HEAD`
+  // truncated the guard: read-only git was accepted whatever its options.
+  // (2) `$d=".codex/hooks/production-action-"; $f="guard.mjs"; Write-Output ""
+  // | Tee-Object -FilePath $d$f` blanked it: the computed-text rule knew only
+  // the mutation verbs and the fail-closed rule only protected NAMES, and a
+  // split destination under an unknown writer satisfied neither. Own finding
+  // (3): `cd .codex/hooks; echo x | tee production-action-guard.mjs` — the
+  // directory-change rule knew only the verb list.
+  const guardFile = ".codex/hooks/production-action-guard.mjs";
+  for (const command of [
+    `git diff --output=${guardFile} HEAD HEAD`,
+    `git diff --output ${guardFile} HEAD HEAD`,
+    `git log --output=${lib} -1`,
+    `git show --output=${lib} HEAD`,
+    `git -c diff.external=evil.sh diff -- ${lib}`,
+    `git -c core.pager=evil.sh log -- ${lib}`,
+    `GIT_EXTERNAL_DIFF=evil.sh git diff -- ${lib}`,
+    `$env:GIT_EXTERNAL_DIFF="evil.sh"; git diff -- ${lib}`,
+    `git diff --ext-diff -- ${lib}`,
+    `git diff --textconv -- ${lib}`,
+    `git grep -O evil.sh pattern -- ${lib}`,
+    `git --exec-path=C:/evil diff -- ${lib}`,
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a read-only git subcommand with a write/exec option, config override or GIT_* env is not a read: ${command}`,
+    );
+  }
+  assert.equal(gitInvocationIsReadOnly(["diff", "--output=x", "HEAD"]), false, "the git grammar refuses --output");
+  assert.equal(gitInvocationIsReadOnly(["-c", "core.pager=x", "log"]), false, "the git grammar refuses -c");
+  assert.equal(gitInvocationIsReadOnly(["diff", "--", lib], "GIT_PAGER=x git diff"), false, "the git grammar refuses a GIT_* env anywhere in the command");
+  assert.equal(gitInvocationIsReadOnly(["diff", `--relative=${lib}`]), false, "an option VALUE naming a protected file is never a pathspec");
+  assert.equal(gitInvocationIsReadOnly(["-C", "C:/repo", "--no-pager", "diff", "--output-indicator-new=+", "--", lib]), true, "harmless options and -C stay a read");
+  assert.equal(gitInvocationIsReadOnly(["checkout", "--", lib]), false, "a non-read subcommand is not a read");
+  const split = [
+    '$d=".codex/hooks/production-action-"; $f="guard.mjs"; Write-Output "" | Tee-Object -FilePath $d$f',
+    'd=.claude/hooks/codex-bot-review-; f=lib.mjs; echo x | tee "$d$f"',
+    'd=.claude/hooks/codex-bot-review-; f=lib.mjs; install -m 644 forged.mjs "$d$f"',
+    'd=.claude/hooks/codex-bot-review-; f=lib.mjs; dd if=forged.mjs of="$d$f"',
+    '$w="Tee-Object"; & $w -FilePath $d$f',
+    "w=tee; $w $d$f",
+    "w=tee; 'tee' $d$f",
+    "$x = tee $d$f",
+    'Write-Output "" | ForEach-Object { Tee-Object -FilePath $d$f }',
+    'Write-Output "" | % { Tee-Object -FilePath $d$f }',
+    "echo $(tee $d$f)",
+    "cat x `tee $d$f`",
+    'Invoke-Expression "tee $d$f"',
+    '[IO.File]::WriteAllText($d+$f, "")',
+    'c="tee $d$f"; bash -c "$c"',
+    "cmd /c \"tee %d%%f%\"",
+    "set a=.claude/hooks/codex-bot-review-&& type nul | tee %a%lib.mjs",
+    "$p=@{FilePath=$d$f}; Tee-Object @p",
+    'printf "%s" $d$f | xargs tee',
+    'find . -name "$pat" -exec tee {} \\;',
+    "foreach ($f in $files) { tee $f }",
+    "if ($x) { tee $d$f }",
+    "exec tee $d$f",
+    'eval "tee $d$f"',
+    "read -r x < <(tee $d$f)",
+    "echo hi > >(tee $d$f)",
+    // the round-12 rule looked only at the head, so a substitution inside a
+    // READER's segment was never examined
+    `cat ${lib} $(tee ${lib})`,
+    `echo ${lib} | xargs tee`,
+    `echo ${lib} | xargs -n1 install forged.mjs`,
+  ];
+  for (const command of split) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `computed text under an unrecognised command word, or a substitution/executor fed a protected name, is refused: ${command}`,
+    );
+  }
+  for (const command of split.slice(0, 8)) {
+    assert.notEqual(computedSegmentWithUnrecognizedCommand(command), null, `the computed-text classifier flags it on its own: ${command}`);
+  }
+  assert.equal(computedSegmentWithUnrecognizedCommand('d=x; echo x | tee "$d$f"').head, "tee", "the classifier reports the offending command word");
+  assert.equal(unrecognizedCommandWord("cat x $(tee y)"), "tee", "the walker sees the word after `$(`");
+  assert.equal(unrecognizedCommandWord("Where-Object { $_ -match 'x' }"), "", "a `$var` followed by an operator is an expression");
+  assert.equal(unrecognizedCommandWord("w=tee; $w $d$f".split(";")[1]), "$w", "a `$var` followed by an argument is an invocation");
+  assert.equal(unrecognizedCommandWord("& $w -FilePath x"), "$w", "a `$var` after the call operator is an invocation");
+  assert.equal(unrecognizedCommandWord('"a" + "b"'), "", "a quoted word followed by an operator is an expression");
+  assert.equal(unrecognizedCommandWord("'tee' $d$f"), "'tee'", "a quoted word followed by an argument is that command");
+  assert.equal(unrecognizedCommandWord("if ($LASTEXITCODE -ne 0) { exit 1 }"), "", "keywords and casts are not writers");
+  assert.equal(unrecognizedCommandWord('bash -c "cat x | head"'.split("|")[0]), "", "a wrapper is unwrapped to the read it runs");
+  assert.equal(unrecognizedCommandWord("xargs -I{} tee {}"), "tee", "an executor is unwrapped to the command it runs");
+  for (const command of [
+    "cd .codex/hooks; echo x | tee production-action-guard.mjs",
+    "Set-Location .claude/hooks; Write-Output x | Tee-Object -FilePath codex-bot-review-lib.mjs",
+    "pushd scripts && install forged.mjs write-codex-push-proof.mjs",
+    "cd .codex/hooks && echo x | tee production-action-*.mjs",
+    "find .codex/hooks -name '*.mjs' -delete",
+    "find . -name production-action-guard.mjs -exec tee {} \\;",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `after a directory change, or under find, a protected basename is the protected file: ${command}`,
+    );
+  }
+  assert.equal(protectedBasenameMentioned("echo x | tee production-action-guard.mjs"), true, "the basename matcher sees a bare protected name");
+  assert.equal(protectedBasenameMentioned("echo x | tee production-action-*.mjs"), true, "…and a glob that could be one");
+  assert.equal(protectedBasenameMentioned("echo x | tee notes.txt"), false, "…but not an unrelated name");
+  // NEAR-MISS CANARIES: reads with computed arguments, pipeline stages,
+  // keywords, harmless git options, and directory changes followed by reads
+  // all stay allowed — "deny anything with a `$`" would pass the block above
+  // while making the shell unusable.
+  for (const innocent of [
+    `git diff --output-indicator-new=+ -- ${lib}`,
+    `git log -p --stat -- ${lib}`,
+    `git diff --no-ext-diff -- ${lib}`,
+    `git blame -L 1,10 ${lib}`,
+    "cat $f",
+    "Get-Content (Join-Path $a $b)",
+    "git -C $repo status",
+    "gh pr list --json title | ForEach-Object { $_.title }",
+    "gh pr view 563 --json mergeStateStatus | ConvertFrom-Json | % { $_.mergeStateStatus }",
+    "if ($LASTEXITCODE -ne 0) { exit 1 }",
+    "foreach ($f in Get-ChildItem docs) { Get-Content $f }",
+    "for f in $(git ls-files '*.ts'); do cat $f; done",
+    'echo "$HOME"',
+    "echo ${HOME}",
+    "$x = 5",
+    '$d=".codex/hooks/production-action-"',
+    "$x = (Get-Date).Year",
+    "[int]$x -gt 0",
+    'ls | grep "$pat" | sort',
+    "npm test 2>&1 | Select-String -Pattern 'fail'",
+    "git log --oneline -5 | ForEach-Object { $_.Split(' ')[0] }",
+    "while read -r line; do echo $line; done < file.txt",
+    "[ -f $f ] && cat $f",
+    "cd $dir && cat notes.md",
+    "find . -name package.json",
+    "find src -name '*.ts' | xargs grep -l foo",
+    "grep -f patterns.txt src/a.ts",
+    "gh api -X PUT repos/crop/crx/pulls/123/merge -f merge_method=squash | Out-Null",
+  ]) {
+    const verdict = evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: innocent } });
+    assert.doesNotMatch(
+      String(verdict.reason || ""),
+      /builds text at run time|not a recognised read-only operation/,
+      `a read, a pipeline stage, a keyword or a harmless git option is not refused by the round-13 rules: ${innocent}`,
+    );
+  }
+  // Cost, pinned so nobody "fixes" it back open: computed text under an
+  // unknown head is refused even when the head is a familiar tool, because the
+  // guard cannot know what it does with the value. Spell the argument.
+  for (const cost of ["npm run build -- --mode $MODE", "node scripts/other.mjs $x", "curl -o $out https://x", 'gh pr view $PR --json title']) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: cost } }).blocked,
+      true,
+      `computed text under an unrecognised head is refused, even a familiar one: ${cost}`,
+    );
+  }
 
   const botLibPush = makeRepo(".claude/hooks/codex-bot-review-lib.mjs", "export const ordinary = true;\n");
   assert.equal(

@@ -223,11 +223,18 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // that names one must start with a recognised read-only head (tee/Tee-Object/
   // install/dd and every unknown writer were allowed before), and the path
   // matcher is brace- and glob-aware. Anchors unchanged; pushLib identity.
-  codexGuard: "ac200f88aec9d2c2acc13d66190f25c632d6ff05",
+  // Re-pinned again 2026-09-03 (Codex round 13, two HIGHs on the exact-SHA proof
+  // of 5a9052934): every command word of an examined segment is walked (not
+  // only its head), read-only git is held to a safe argument grammar
+  // (`--output`/`--ext-diff`/`--textconv`/`-c`/`GIT_*=` disqualify it), a
+  // computed segment fails closed on unrecognised command words, executors fed
+  // by a pipe are examined, and a protected basename counts after a directory
+  // change. Anchors unchanged; pushLib identity.
+  codexGuard: "a1ba52df7b4e84989276632aea37fa8a1d567bcc",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "f9876854cf2ee271f36d6b7f8763ed97a7910fbd",
+  codexGuard: "d96b63533e81e00887c4361795c043f2c062f794",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 
