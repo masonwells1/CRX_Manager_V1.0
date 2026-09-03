@@ -80,6 +80,23 @@ under test rather than to the page loading at all.
 `npm run check:docs` all green. The new source contract was mutation-tested: pointing the branch
 back at `setOverageMessage(` turns it red, and reverting restores green.
 
+## Second review round on `0fe6f003a`
+
+Two further findings, both Minor, both fixed.
+
+**The banner named a cause it could not prove.** It read "This bill is still open in another tab",
+but `getUnresolvedIntent()` only proves the intent survived — it survives equally when durable
+storage cannot release the record, and there is then no other tab to close. The message sent the
+operator on an errand that could not help. This session's own page test is the proof: it makes the
+record survive by killing IndexedDB, with no peer tab anywhere. The banner now states the fact and
+offers the tab as a possibility rather than a diagnosis: "A pending request for this bill could not
+be cleared … If this bill is open in another tab, finish or close it; otherwise reload this page and
+try again." The same over-claim was removed from three comments and two test names.
+
+**SQLFluff LT14 on the scalar role lookups.** Each inline subquery `WHERE` now starts its own line,
+across all sixteen arms. Re-proven read-only on live after reformatting, including an absent role in
+the same predicate: zero rows, no error.
+
 ## Process finding: the CodeRabbit gate's request is ignored
 
 The gate's `@coderabbitai review` comment is authored by `github-actions[bot]`, and CodeRabbit does

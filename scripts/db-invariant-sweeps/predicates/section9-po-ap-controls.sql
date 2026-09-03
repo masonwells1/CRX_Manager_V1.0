@@ -84,14 +84,38 @@ SELECT
 -- the privilege call and raise. Pass the role's OID from a scalar subquery instead.
 -- has_table_privilege is strict, so an absent role yields NULL — never TRUE, never
 -- an error — which is the correct outcome: a role that does not exist holds nothing.
-WHERE has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated'), 'public.vendors', 'INSERT')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated'), 'public.vendors', 'UPDATE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated'), 'public.vendors', 'DELETE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated'), 'public.vendors', 'TRUNCATE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon'), 'public.vendors', 'INSERT')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon'), 'public.vendors', 'UPDATE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon'), 'public.vendors', 'DELETE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon'), 'public.vendors', 'TRUNCATE')
+WHERE has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'authenticated'), 'public.vendors', 'INSERT')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'authenticated'), 'public.vendors', 'UPDATE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'authenticated'), 'public.vendors', 'DELETE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'authenticated'), 'public.vendors', 'TRUNCATE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'anon'), 'public.vendors', 'INSERT')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'anon'), 'public.vendors', 'UPDATE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'anon'), 'public.vendors', 'DELETE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'anon'), 'public.vendors', 'TRUNCATE')
 
 UNION ALL
 
@@ -111,14 +135,38 @@ SELECT
   'vendor_bills:browser-mutation-privilege' AS violation_key,
   'anon/authenticated retains direct vendor-bill mutation privilege' AS reason
 -- Same absent-role abort risk as the vendors arm above; guard identically via OID.
-WHERE has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated'), 'public.vendor_bills', 'INSERT')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated'), 'public.vendor_bills', 'UPDATE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated'), 'public.vendor_bills', 'DELETE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated'), 'public.vendor_bills', 'TRUNCATE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon'), 'public.vendor_bills', 'INSERT')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon'), 'public.vendor_bills', 'UPDATE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon'), 'public.vendor_bills', 'DELETE')
-   OR has_table_privilege((SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon'), 'public.vendor_bills', 'TRUNCATE')
+WHERE has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'authenticated'), 'public.vendor_bills', 'INSERT')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'authenticated'), 'public.vendor_bills', 'UPDATE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'authenticated'), 'public.vendor_bills', 'DELETE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'authenticated'), 'public.vendor_bills', 'TRUNCATE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'anon'), 'public.vendor_bills', 'INSERT')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'anon'), 'public.vendor_bills', 'UPDATE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'anon'), 'public.vendor_bills', 'DELETE')
+   OR has_table_privilege(
+         (SELECT r.oid
+            FROM pg_roles r
+           WHERE r.rolname = 'anon'), 'public.vendor_bills', 'TRUNCATE')
 
 UNION ALL
 

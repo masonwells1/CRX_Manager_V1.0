@@ -58,11 +58,11 @@ export default function NewVendorBill() {
   const [saving, setSaving] = useState(false);
   const [overageMessage, setOverageMessage] = useState<string | null>(null);
   // Separate from overageMessage on purpose. overageMessage OPENS ReasonModal, whose
-  // confirm path calls handleSave(true, reason). That path cannot work while another
-  // tab still holds the pending intent — beginIntent() returns the stale intent
-  // verbatim, so p_confirm_po_overage never reaches the server and the operator loops
-  // through a reason prompt that is guaranteed to be refused. This one only renders a
-  // banner: it states the blocker and offers no confirmation control.
+  // confirm path calls handleSave(true, reason). That path cannot work while a pending
+  // intent survives — beginIntent() returns the stale intent verbatim, so
+  // p_confirm_po_overage never reaches the server and the operator loops through a
+  // reason prompt that is guaranteed to be refused. This one only renders a banner: it
+  // states the blocker and offers no confirmation control.
   const [overageBlockedMessage, setOverageBlockedMessage] = useState<string | null>(null);
 
   // Lookups
@@ -176,7 +176,7 @@ export default function NewVendorBill() {
       return;
     }
 
-    // Clear the cross-tab banner only once a real attempt is starting, so it survives
+    // Clear the blocking banner only once a real attempt is starting, so it survives
     // a validation bounce and disappears when the retry actually reaches the server.
     setOverageBlockedMessage(null);
     setSaving(true);
@@ -230,8 +230,9 @@ export default function NewVendorBill() {
       if (hasRpcCode(error, RpcErrorCodes.PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED)) {
         // 22023 is a definitive rejection, so classifyFailure normally DELETES the
         // pending record and the confirmed retry below mints a fresh intent that
-        // carries p_confirm_po_overage/p_po_overage_reason. It cannot delete the
-        // record while another tab still holds a live claim on it; the record then
+        // carries p_confirm_po_overage/p_po_overage_reason. That delete can fail —
+        // another tab holding a live claim is one cause, an unreachable durable store
+        // is another; the record then
         // survives, beginIntent() returns that stale intent verbatim (it ignores the
         // intent argument whenever a pending record exists), the confirmation fields
         // never reach the server, and the operator re-triggers this same branch
@@ -247,11 +248,17 @@ export default function NewVendorBill() {
         if (createBillIntent.getUnresolvedIntent()) {
           // Banner, NOT setOverageMessage: opening ReasonModal here would collect a
           // reason that beginIntent() then discards, so every confirmation returns to
-          // this same branch. Nothing the operator can type here helps until the other
-          // tab releases the claim.
+          // this same branch. Nothing the operator can type here helps until the
+          // pending request clears.
+          //
+          // Do NOT name a peer tab as the cause. getUnresolvedIntent() proves only that
+          // the intent survived; it survives equally when durable storage cannot release
+          // the record, and there is then no other tab to go and close. Naming an
+          // unverified cause sends the operator on an errand that cannot help.
           setOverageBlockedMessage(
-            'This bill is still open in another tab, so the overage confirmation cannot be attached yet. '
-            + 'Finish or close that tab, then try again.',
+            'A pending request for this bill could not be cleared, so the overage confirmation '
+            + 'cannot be attached yet. If this bill is open in another tab, finish or close it; '
+            + 'otherwise reload this page and try again.',
           );
           return;
         }

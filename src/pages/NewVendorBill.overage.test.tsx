@@ -6,7 +6,7 @@ import { IDBFactory } from 'fake-indexeddb';
  * Renders the REAL NewVendorBill page and drives a real PO-overage rejection.
  *
  * A source-text guard cannot catch this class of defect, because the defect was
- * WHICH dialog the cross-tab branch opens. `ReasonModal` collects a reason that
+ * WHICH dialog the blocked branch opens. `ReasonModal` collects a reason that
  * `beginIntent()` then discards whenever a pending record survives, so prompting
  * there loops forever — the operator confirms, the confirmation is dropped, and
  * the same refusal comes back. These tests render the page and look at the DOM.
@@ -81,7 +81,7 @@ describe('NewVendorBill PO-overage handling', () => {
     await waitFor(() => {
       expect(screen.getByText(/Enter a reason to confirm the overage/i)).toBeTruthy();
     });
-    expect(screen.queryByText(/still open in another tab/i)).toBeNull();
+    expect(screen.queryByText(/pending request for this bill could not be cleared/i)).toBeNull();
 
     mockRpc.mockResolvedValue({ data: 'bill-1', error: null });
     fireEvent.change(screen.getByPlaceholderText(/Why should cumulative billing exceed/i), {
@@ -108,7 +108,7 @@ describe('NewVendorBill PO-overage handling', () => {
     await fillAndSave();
 
     await waitFor(() => {
-      expect(screen.getByText(/still open in another tab/i)).toBeTruthy();
+      expect(screen.getByText(/pending request for this bill could not be cleared/i)).toBeTruthy();
     });
     expect(screen.queryByText(/Enter a reason to confirm the overage/i)).toBeNull();
     expect(screen.queryByPlaceholderText(/Why should cumulative billing exceed/i)).toBeNull();
