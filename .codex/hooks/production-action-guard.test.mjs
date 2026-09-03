@@ -620,9 +620,10 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "--admin=false asks for no bypass and stands down");
-  // Before this change an unapproved PR could not reach a merge at all, so the
-  // CLEAN mergeStateStatus check stood in for "somebody approved it". With the
-  // override live that inference is gone, and the verdict is read directly.
+  // Mason removed main's required approval on 2026-09-02, so a MISSING approval
+  // is no longer a merge blocker. This PR is still risky, so it stays blocked on
+  // the Codex proof — the assertion is therefore that it is not blocked ON REVIEW
+  // GROUNDS, which is the part that changed.
   const unapproved = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh pr merge 123 --squash" },
@@ -630,11 +631,10 @@ try {
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "REVIEW_REQUIRED" }),
   });
-  assert.equal(unapproved.blocked, true, "a PR with no current approval is denied");
-  assert.match(
+  assert.doesNotMatch(
     String(unapproved.reason || unapproved.message || JSON.stringify(unapproved)),
-    /reviewDecision=REVIEW_REQUIRED/,
-    "the approval denial reports GitHub's actual verdict",
+    /reviewDecision=REVIEW_REQUIRED|no current approval/,
+    "a missing approval is no longer a merge blocker (Mason, 2026-09-02)",
   );
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -642,21 +642,51 @@ try {
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
-  }).blocked, true, "CHANGES_REQUESTED is not an approval");
+  }).blocked, true, "CHANGES_REQUESTED still denies - never merge over an unresolved objection");
+  // --auto MUST NOT exempt an active objection (Codex High finding, PR #559).
+  // Every other gate exempts auto because GitHub holds the merge until its own
+  // requirements are met; the requirement that covered this one was the required
+  // review, which the same change removed. GitHub will now complete a queued
+  // auto-merge over CHANGES_REQUESTED, so the guard has to be the one to refuse.
   assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash --auto" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
+  }).blocked, true, "--auto does NOT exempt an active objection");
+  // A missing reviewDecision no longer fails closed HERE. Since 2026-09-02 `null`
+  // is the ordinary verdict GitHub returns for an unreviewed PR, so blocking it
+  // would rebuild the deadlock the protection change removed. The fail-closed
+  // floor lives upstream instead: an unresolvable PR is denied before this point.
+  const noVerdict = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh pr merge 123 --squash" },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: undefined }),
-  }).blocked, true, "a PR view with no reviewDecision fails closed");
-  assert.equal(evaluateProductionAction({
+  });
+  assert.doesNotMatch(
+    String(noVerdict.reason || noVerdict.message || JSON.stringify(noVerdict)),
+    /CHANGES_REQUESTED|no current approval/,
+    "an absent reviewDecision is not treated as an objection",
+  );
+  // The MCP merge route is gated exactly like the gh route - proven with an ACTIVE
+  // objection, which is what still blocks, rather than with a missing approval,
+  // which no longer does.
+  const mcpObjection = evaluateProductionAction({
     toolName: "mcp__github__merge_pull_request",
     toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
     repoDir: risky.repo,
     nowMs: now,
-    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "REVIEW_REQUIRED" }),
-  }).blocked, true, "the MCP merge route needs the approval too");
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
+  });
+  assert.equal(mcpObjection.blocked, true, "the MCP merge route enforces the objection too");
+  assert.match(
+    String(mcpObjection.reason || mcpObjection.message || JSON.stringify(mcpObjection)),
+    /CHANGES_REQUESTED/,
+    "the MCP-route denial names the objection",
+  );
 
   // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ─────────────
   // The gh-shaped routes above were the whole gate, which was survivable while

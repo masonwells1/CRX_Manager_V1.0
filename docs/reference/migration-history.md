@@ -5,7 +5,7 @@
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
 **Live-ledger capture — 2026-09-01, after the six-file return-credit COGS chain. THIS IS THE CURRENT
-BOUNDARY.** A read-only read on project `rhyzpcqhnizqbxphqdkr` records **986 ledger rows** (978
+BOUNDARY.** A read-only read on project `rhyzpcqhnizqbxphqdkr` records **986 ledger rows** (979
 distinct names — the difference is duplicate names, confirmed by `count(distinct name)`, not
 truncation), with `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover` as the
 newest applied authored name; the current effective ordering high-water is therefore
@@ -47,7 +47,7 @@ from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`: **976 le
 **APPLIED LIVE — 2026-09-01. The 2026-08-31 owner deferral below is CLOSED, not pending.** All six
 migrations were applied in order to `rhyzpcqhnizqbxphqdkr` on 2026-09-01 with Mason's in-chat
 approval, each behind a full migration-apply-guard proof (both reviewer charters returning CLEAN
-machine verdicts from `gpt-5.6-sol`/high) and each verified afterwards by read-only live query
+machine verdicts from `gpt-5.6-sol`/high) and each verified afterward by read-only live query
 rather than by the apply exit code. Live ledger after the chain: **986 rows**, `max(version)`
 `20260901184530`.
 

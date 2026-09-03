@@ -1037,7 +1037,7 @@ export default function OrderDetail() {
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'consolidate_draft_invoices' } });
       if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can consolidate invoices.');
-      else toast('error', err instanceof Error ? err.message : 'Failed to consolidate invoices.');
+      else toast('error', sanitizeError(err));
     } finally {
       setConsolidating(false);
     }
@@ -1095,7 +1095,7 @@ export default function OrderDetail() {
       if (isBelowCostApprovalHandledError(err)) return;
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'price_order' } });
       if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can price orders.');
-      else toast('error', err instanceof Error ? err.message : 'Failed to price the order.');
+      else toast('error', sanitizeError(err));
     } finally {
       setPricingOrder(false);
     }

@@ -1,5 +1,7 @@
 // Pure decision logic for the overnight autopilot (unattended-autopilot.mjs).
 // Isolated so the deny-set and flag-expiry logic can be unit-tested.
+
+import path from "node:path";
 //
 // Autopilot is OFF unless an unexpired flag file exists. When ON, the hook
 // AUTO-APPROVES tool calls so an overnight loop doesn't stall on permission
@@ -87,17 +89,129 @@ export function intentFresh(content, nowMs) {
 }
 
 // Which tool calls are blocked while intent-is-latched-but-unarmed. Reads, status
-// checks, session-state writes, the arm command itself, and clearing the intent
-// flag all pass; building/mutating waits for the arm.
+// checks, session-state writes and the arm command pass; building/mutating waits
+// for the arm.
 const INTENT_ALLOW_TOOL_RE = /^(Read|Glob|Grep|TaskList|TaskGet|TaskCreate|TaskUpdate|WebFetch|WebSearch|AskUserQuestion|Skill)$/i;
 const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|worktree\s+list)|ls|dir|cat|head|tail|grep|rg|find|echo|node\s+--version)\b/;
 
-export function overnightGateDecision(toolName, toolInput) {
+// THERE IS DELIBERATELY NO SHELL ESCAPE HATCH HERE (Mason, 2026-09-01).
+//
+// This gate used to allow any command containing `OVERNIGHT-INTENT.flag`, and the
+// deny message told agents to delete that file from the shell. The command never
+// worked: review-proof-guard.mjs (matcher "*") refuses every destructive shell
+// command touching .claude/session-state. Since this gate also blocks Write and
+// Edit, a session latched by MISTAKE — the latch fires on a prompt heuristic, so a
+// prompt that merely DISCUSSES autopilot trips it — had no unblocked path left
+// except arming autopilot, exactly the failure the handshake exists to prevent.
+// autopilot-lib.test.mjs asserted that command was allowed, and passed for months,
+// because it tested one hook of seven while the real chain denied it.
+//
+// A sanctioned `node scripts/clear-overnight-intent.mjs` escape was built and then
+// REMOVED after two rounds of exact-SHA gpt-5.6-sol review found four HIGH
+// bypasses in it: the allowance matched only BASENAMES (any planted file with that
+// name ran), and then, once tightened to exact strings, it was still unbound to the
+// project root (a planted `scripts/…` under a different cwd ran instead), while the
+// helper itself could be edited locally before invocation. Every fix was a new
+// text-matching rule on a command string — the shape this repo has already proven
+// does not converge (the `git clean` carve-out closed after six rounds).
+//
+// The trade was rejected on its merits: the disease is a session paused for at most
+// INTENT_FRESH_MS; the cure was a fresh way to EXECUTE CODE during precisely the
+// window when execution is meant to be paused. The residual is deliberate — wait
+// out the 45-minute expiry, or have Mason delete the flag himself (his shell is not
+// gated by these hooks). Do NOT arm autopilot to get unblocked, and do NOT
+// reintroduce a command allowance here without re-reading that review history.
+// overnight-intent-clear.test.mjs holds the deny message to this contract.
+
+// The arm command is the ONE command allowance, and it is anchored to a complete,
+// standalone invocation. A bare `/autopilot-arm\.mjs/` substring test let the
+// allowance ride on a chained command — `npm run build && node
+// .claude/hooks/autopilot-arm.mjs --hours 8` returned allow-through, so the BUILD
+// ran during the pause and the arm was merely along for the ride (CodeRabbit,
+// PR #548). Anchored start-to-end with no shell metacharacters admitted, so a
+// prefix, a suffix, or a chain cannot ride it.
+//
+// FORWARD SLASHES ONLY. An earlier revision also accepted the Windows backslash
+// spelling, which CI caught as a genuine cross-platform bug: on Linux `\` is not a
+// separator, so `.claude\hooks\autopilot-arm.mjs` is ONE filename and never
+// resolves to the trusted path. Normalizing backslashes would be worse than
+// rejecting them — on Linux a file literally named `.claude\hooks\autopilot-arm.mjs`
+// is creatable, and normalizing would match it against the trusted path while Node
+// executed the literal-backslash file instead. Node accepts forward slashes on
+// Windows, and forward slashes are the spelling both the deny message and
+// autopilot-arm.mjs's own header document, so this costs nothing: one canonical
+// shape, one slot to reason about.
+//
+// HORIZONTAL whitespace only (`[^\S\r\n]`, not `\s`). `\s` matches CR and LF,
+// which are shell command separators, so the anchor accepted multiline commands
+// (Codex gpt-5.6-sol, 2026-09-02, Low). The end anchor stops a second command from
+// being appended — `--off\nnpm run build` fails `[^\S\r\n]*$` — so this was not
+// exploitable, but the same `\s`-swallows-newlines mistake DID produce a real
+// bypass in review-proof-guard's cd scanner, where two invocations merged into
+// one. That guard uses `[^\S\r\n]` for exactly this reason; match it here rather
+// than rely on the anchors holding forever.
+//
+// The accepted arguments are exactly what autopilot-arm.mjs documents at its head:
+// a bare invocation, `--hours <n>`, `--off`, and `--status`. A first draft of this
+// anchor admitted only integer `--hours` and omitted `--status` entirely, which
+// BROKE two documented commands — `--status` is read-only and is precisely what a
+// paused agent should be able to run to see whether autopilot is armed (Codex
+// gpt-5.6-sol, exact-SHA review 2026-09-01: "blocks the CLI's documented read-only
+// --status command and fractional --hours values"). Hardening that quietly removes
+// a working command is a regression, not a win. `--hours` is clamped to
+// [0.25, 24] in the CLI, so fractional values are legitimate.
+const ARM_CMD_RE =
+  /^[^\S\r\n]*node[^\S\r\n]+(?:\.\/)?\.claude\/hooks\/autopilot-arm\.mjs(?:[^\S\r\n]+--hours[^\S\r\n]+\d{1,4}(?:\.\d{1,4})?|[^\S\r\n]+--off|[^\S\r\n]+--status)?[^\S\r\n]*$/;
+
+// The relative path in ARM_CMD_RE resolves against the SHELL'S working directory,
+// not the repo. Matching the text alone therefore proves nothing about WHICH file
+// runs: from a directory containing a planted `.claude/hooks/autopilot-arm.mjs`,
+// the sanctioned command executes that attacker file during the pause, and
+// everything it does inside that process is past every tool-call guard (Codex
+// gpt-5.6-sol, exact-SHA review 2026-09-02, HIGH — the same cwd-unbinding class
+// that killed the clear-script escape).
+//
+// So the allowance is bound to the TRUSTED PROJECT ROOT, not to a spelling: the
+// command's script argument must resolve to exactly
+// <projectDir>/.claude/hooks/autopilot-arm.mjs. This is a structural identity
+// check, which converges — unlike enumerating command spellings, which does not.
+//
+// Fails closed: no projectDir, or no cwd for a relative command, means the target
+// cannot be proven and the command waits for the arm.
+const ARM_SCRIPT_REL = [".cl" + "aude", "hooks", "autopilot-arm.mjs"];
+
+export function isSanctionedArmCommand(command, context = {}) {
+  const cmd = String(command ?? "");
+  if (!ARM_CMD_RE.test(cmd)) return false;
+
+  const projectDir = context.projectDir ? String(context.projectDir) : "";
+  if (!projectDir) return false;
+
+  // ARM_CMD_RE admits ONLY the documented repo-relative spelling, so the script
+  // token is always relative and must be resolved against the shell's cwd. An
+  // absolute path is not an accepted form at all — one shape, one slot.
+  const m = /^\s*node\s+(\S+)/.exec(cmd);
+  if (!m) return false;
+
+  if (!context.cwd) return false;      // unknown cwd → target unprovable → fail closed
+
+  const trusted = path.resolve(path.join(projectDir, ...ARM_SCRIPT_REL));
+  return path.resolve(path.join(String(context.cwd), m[1])) === trusted;
+}
+
+// `context` carries the TRUSTED project root (and the tool call's cwd) so the arm
+// allowance can be bound to a real file rather than to a string. Callers that omit
+// it get the fail-closed path: no root, no arm exception.
+export function overnightGateDecision(toolName, toolInput, context = {}) {
   const name = String(toolName || "");
   if (INTENT_ALLOW_TOOL_RE.test(name)) return "allow-through";
   const input = toolInput || {};
   const cmd = typeof input.command === "string" ? input.command : "";
-  if (cmd && (/autopilot-arm\.mjs/.test(cmd) || /OVERNIGHT-INTENT\.flag/.test(cmd))) return "allow-through";
+  const cwd = context.cwd ?? input.cwd ?? input.workdir;
+  if (/^(Bash|PowerShell)$/i.test(name) &&
+      isSanctionedArmCommand(cmd, { projectDir: context.projectDir, cwd })) {
+    return "allow-through";
+  }
   if (/^(Bash|PowerShell)$/i.test(name)) {
     // Read-only leading token AND no write redirect: `cat > file` / `echo .. >> f`
     // / `... | tee f` still mutate files (Codex 2026-07-05) — those wait for the arm.
@@ -127,4 +241,4 @@ export function flagActive(content, nowMs) {
   return { active: true, expires: data.expires };
 }
 
-export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE };
+export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, INTENT_FRESH_MS };

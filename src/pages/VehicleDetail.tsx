@@ -9,7 +9,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult } from '../lib/db';
+import { sanitizeError, supabase, checkMutationResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import type { Vehicle, VehicleType, VehicleStatus } from '../types';
 
@@ -130,7 +130,7 @@ export default function VehicleDetail() {
       }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_vehicle' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to save vehicle');
+      toast('error', sanitizeError(err));
     }
     setSaving(false);
   };

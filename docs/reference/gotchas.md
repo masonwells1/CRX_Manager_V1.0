@@ -119,7 +119,7 @@ The AP RPC trio (`create_vendor_bill`, `record_vendor_payment`, `void_vendor_bil
 | `parseDollarsToCents` PRESERVES leading minus | Pre-PR-15 it stripped them, turning `-50` discount into `+5000` cent ADD. Use `parseDollarsToCentsPositive()` for fields that must reject negatives (default callers don't need to switch). |
 | Edge Functions throw at startup if `ALLOWED_ORIGIN` is unset (and not localhost) | PR-16 removed silent fallback to `https://croprxsolutions.app`. Functions requiring the secret: create-user, process-blend-ticket, process-document, send-email (`seed-admin` — one of the original 5 — was deleted 2026-06-16 as a security cleanup; it no longer exists, verified against `supabase/functions/` 2026-07-13). reset-user-password uses a separate hard-coded array pattern; setup-blend-tickets-storage still exists on disk and is still dead code (delete pending — verified 2026-07-13). |
 | `logActivity({performedBy})` requires `profile.id` (no empty-string fallback) | PR-20 patched 8 handlers: WriteOffModal, FinanceChargePreviewModal, MonthEndClose, Deliveries, InvoiceDetail. If `profile` is null, handler returns early with toast. QuoteBuilder's compliance check is the one useEffect-gated callsite (still gates on `profile?.id`). |
-| Live General Invoice Detail rewrites do not preserve `invoice_items.order_item_id` until the PR #361 six-file chain is applied | Live `_save_invoice_scoped_impl` still rebuilds line items without that source field. Candidate migration `20260827041500` wraps it with server-side identity validation and restoration of line id, order lineage, historical cost, creation order, and delivery provenance. Until that candidate is reviewed and applied live, do not edit generated delivery/order invoices in the general editor; void/recreate them or use the governed source workflow. |
+| General Invoice Detail rewrites preserve `invoice_items.order_item_id` — **fixed live 2026-09-01** | `20260827041500` applied live on 2026-09-01 (ledger `version` `20260901184530`). It wraps `_save_invoice_scoped_impl` with server-side identity validation and restoration of line id, order lineage, historical cost, creation order, and delivery provenance. **The former restriction is lifted:** editing generated delivery/order invoices in the general editor no longer drops the source field, so the void/recreate workaround is no longer required. Before this applied, live rewrites rebuilt line items without `order_item_id`, so a later return refunded revenue while reversing zero COGS. |
 
 ---
 
@@ -311,12 +311,23 @@ gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 ```
 
 Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
-CodeRabbit review was submitted. Say so rather than treating green as clean. Since 2026-08-28,
-GitHub requires a current formal approval, so a misleading green CodeRabbit status cannot unlock
-the merge by itself: the missing approval keeps the PR blocked. Keep the candidate frozen and
-green, then re-request the failed final review with exactly `@coderabbitai review`; on #411 that
-turned the failure into a real 6-finding review. Never merge from the check row alone — confirm an
-`APPROVED` CodeRabbit review whose commit matches the PR head.
+CodeRabbit review was submitted. Say so rather than treating green as clean. This matters more
+since 2026-09-02, not less: Mason removed the required approving review from `main`, so a
+misleading green CodeRabbit status is no longer backstopped by a missing approval keeping the PR
+blocked. Nothing but this check stands between "CodeRabbit never actually ran" and a merge. Since
+2026-08-30 the normal trigger
+is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
+accidental duplicate. If CodeRabbit itself confirms a delivery failure or rate limit on the same
+frozen head, deliberately remove `coderabbit-review-requested`, **wait for the resulting reset run to
+finish**, and only then reapply `ready-for-coderabbit`; that is a paid retry, not the normal path.
+The wait is load-bearing rather than politeness: removing the marker fires an asynchronous
+`unlabeled` run that clears **both** labels, so a ready label reapplied while that run is still
+queued is cleared by it and nothing is posted. Confirm both labels are gone before relabelling. Never merge from the ordinary check row alone —
+confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
+`CHANGES_REQUESTED` verdict. An approving review is not required (removed 2026-09-02); when one
+*does* exist, require the hidden marker SHA, that authenticated `APPROVED` review's `commit_id`, and
+the live PR head to match. The generic Actions-authored marker is dedupe evidence, not an
+independent trust identity.
 
 ---
 

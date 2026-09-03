@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { ShieldAlert, RefreshCw, AlertTriangle, FileText, Wrench, PackageCheck, Activity } from 'lucide-react';
-import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult } from '../../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, sanitizeError } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
 import { Sentry } from '../../lib/sentry';
 import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages } from '../../lib/deliveryInvoiceCoverage';
+import { fetchSplitBillingOrderIds, SPLIT_BILLING_BLOCK_REASON } from '../../lib/deliverySplitBilling';
 
 interface NegativeInvRow {
   id: string;
@@ -113,6 +114,10 @@ export default function IntegrityCleanupPanel() {
   const [negatives, setNegatives] = useState<NegativeInvRow[]>([]);
   const [overReceived, setOverReceived] = useState<OverReceivedRow[]>([]);
   const [unbilled, setUnbilled] = useState<UnbilledDeliveryRow[]>([]);
+  // H5: order ids the server's ORDER_NEEDS_SPLIT_BILLING guard would refuse.
+  // Empty means "none known to be blocked" — see the fail-open note in
+  // fetchSplitBillingOrderIds.
+  const [splitBillingOrderIds, setSplitBillingOrderIds] = useState<Set<string>>(new Set());
   const [invoiceCoverageFailed, setInvoiceCoverageFailed] = useState(false);
   const [manufactured, setManufactured] = useState<ManufacturedRow[]>([]);
   const [alerts, setAlerts] = useState<IntegrityAlertRow[]>([]);
@@ -284,6 +289,7 @@ export default function IntegrityCleanupPanel() {
             toast('error', 'Failed to verify invoice coverage. Unbilled delivery results are hidden; refresh to try again.');
             setInvoiceCoverageFailed(true);
             setUnbilled([]);
+            setSplitBillingOrderIds(new Set());
           } else {
             const invRows = invoiceRows || [];
             const filtered = allCompleted.filter((d) => !invRows.some((invoice) =>
@@ -302,14 +308,33 @@ export default function IntegrityCleanupPanel() {
                 };
               }),
             );
+
+            // H5: which of the still-unbilled rows the server would refuse to
+            // single-invoice. Only the surviving rows are queried — a row that
+            // already has an invoice never renders a button.
+            const { data: splitIds, error: splitError } = await fetchSplitBillingOrderIds(
+              filtered.map((d) => d.order_id),
+            );
+            if (splitError) {
+              // Fail OPEN: keep the buttons. The server still refuses, and the
+              // refusal now reaches the operator intact (see handleBackfillInvoice).
+              Sentry.captureException(splitError, {
+                tags: { source: 'integrity_cleanup_query', section: 'split billing eligibility' },
+              });
+              setSplitBillingOrderIds(new Set());
+            } else {
+              setSplitBillingOrderIds(splitIds || new Set());
+            }
           }
         } else {
           setUnbilled([]);
+          setSplitBillingOrderIds(new Set());
         }
       } else {
         if (unbilledRes.error) Sentry.captureException(unbilledRes.error);
         setInvoiceCoverageFailed(true);
         setUnbilled([]);
+        setSplitBillingOrderIds(new Set());
       }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
@@ -353,7 +378,8 @@ export default function IntegrityCleanupPanel() {
       await fetchAll();
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
-      toast('error', err instanceof Error ? err.message : 'Reconcile failed');
+      // Same non-throwing-Supabase shape as handleBackfillInvoice above.
+      toast('error', sanitizeError(err));
     } finally {
       setReconcileInputs((prev) => ({ ...prev, [row.id]: { ...prev[row.id], busy: false } }));
     }
@@ -388,7 +414,8 @@ export default function IntegrityCleanupPanel() {
       await fetchAll();
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
-      toast('error', err instanceof Error ? err.message : 'Verification failed');
+      // Same non-throwing-Supabase shape as handleBackfillInvoice above.
+      toast('error', sanitizeError(err));
     } finally {
       setVerifyBusy((prev) => ({ ...prev, [rowId]: false }));
       setVerifyConfirmId(null);
@@ -413,7 +440,14 @@ export default function IntegrityCleanupPanel() {
       await fetchAll();
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
-      toast('error', err instanceof Error ? err.message : 'Backfill failed');
+      // H5: a non-throwing `supabase.rpc()` resolves its error as a PLAIN OBJECT,
+      // not an Error subclass (postgrest-js only constructs PostgrestError under
+      // `.throwOnError()`). `err instanceof Error` was therefore false and every
+      // server explanation — including the ORDER_NEEDS_SPLIT_BILLING sentence that
+      // tells the admin to use the split-billing flow — was replaced by the literal
+      // 'Backfill failed'. sanitizeError() handles object-shaped Postgrest errors
+      // and is what DeliveryDetail already uses on this same RPC.
+      toast('error', sanitizeError(err));
     } finally {
       setBackfillBusy((prev) => ({ ...prev, [row.id]: false }));
     }
@@ -435,7 +469,9 @@ export default function IntegrityCleanupPanel() {
       await fetchAll();
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
-      toast('error', err instanceof Error ? err.message : 'Could not resolve alert');
+      // checkMutationResult re-throws `result.error`, which is the same plain
+      // PostgREST object shape as the non-throwing rpc() calls above.
+      toast('error', sanitizeError(err));
     } finally {
       setResolveBusy((prev) => ({ ...prev, [alertId]: false }));
     }
@@ -681,12 +717,25 @@ export default function IntegrityCleanupPanel() {
                     </td>
                     <td className="px-3 py-2 text-right font-mono">{row.item_count}</td>
                     <td className="px-3 py-2">
-                      <Button
-                        onClick={() => handleBackfillInvoice(row)}
-                        loading={backfillBusy[row.id]}
-                      >
-                        Create draft invoice
-                      </Button>
+                      {/* H5: the server's ORDER_NEEDS_SPLIT_BILLING guard would refuse
+                          this row, so don't offer an action that cannot succeed. Shown
+                          disabled rather than hidden so the operator can see WHY the
+                          row is listed but not actionable here. */}
+                      {splitBillingOrderIds.has(row.order_id) ? (
+                        <div className="flex flex-col gap-1">
+                          <Button disabled>Create draft invoice</Button>
+                          <span className="text-xs text-amber-700 max-w-xs">
+                            {SPLIT_BILLING_BLOCK_REASON}
+                          </span>
+                        </div>
+                      ) : (
+                        <Button
+                          onClick={() => handleBackfillInvoice(row)}
+                          loading={backfillBusy[row.id]}
+                        >
+                          Create draft invoice
+                        </Button>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -280,6 +280,37 @@ jobs:
         # ratchet downward. Lower this number whenever a wave reduces it.
         run: bash scripts/validate-sql-migrations.sh --max-violations=61
 
+      - name: Migration hard-rules self-test
+        # Runner-bundled Node only; the checker and its tests import nothing
+        # outside node: builtins, so this job still needs no node_modules.
+        run: node scripts/check-migration-hard-rules.test.mjs
+
+      - name: Migration hard rules (no edited applied migration; new tables carry RLS + policy)
+        # 2026-09-03: two CRX Hard Rules that were enforced only by CodeRabbit
+        # (an AI reviewer the author can override) and by local Claude hooks
+        # (which fire only when Claude is the writer) now have a deterministic
+        # check. "Applied" = exists at the merge-base AND not newer than the
+        # applied high-water mark in the BASE tree's .claude/schema-registry.json;
+        # the base tree is used so a PR cannot widen the pending band by editing
+        # the registry. Unreadable registry = every base migration is applied.
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            compare_base="$PR_BASE_SHA"
+            compare_head="$PR_HEAD_SHA"
+          else
+            compare_base="$PUSH_BEFORE_SHA"
+            compare_head="$PUSH_AFTER_SHA"
+          fi
+          node scripts/check-migration-hard-rules.mjs --base "$compare_base" --head "$compare_head"
+
   lint-typecheck-test:
     name: Lint, Type Check, Test, Build
     runs-on: ubuntu-latest
@@ -329,6 +360,9 @@ jobs:
           esac
           echo "CI route: docs_only=$DOCS_ONLY full_ci=$FULL_CI reason=$ROUTE_REASON changed_count=$CHANGED_COUNT event_route=$EVENT_ROUTE prior_full_proof=$PRIOR_FULL_PROOF"
 
+      - name: CodeRabbit final-review gate regression tests
+        run: node .github/scripts/coderabbit-final-review.test.cjs
+
       - name: Cache node_modules
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         uses: actions/cache@v6
@@ -344,8 +378,19 @@ jobs:
         run: npm ci
 
       - name: Check for vulnerable dependencies
+        # 2026-09-02: raised critical -> high on Mason's approval. At `critical`
+        # a HIGH advisory passed the gate: browserslist GHSA-c83g-rgw3-j3cx was
+        # live on main that morning with CI green, and GitHub was reporting it on
+        # every push while this step said nothing. Dependabot security updates
+        # are enabled, so the fix PRs arrive on their own (#554 landed the
+        # browserslist bump); this makes the gate notice when one is outstanding
+        # instead of only mentioning it in push output nobody reads.
+        # Verified before the raise: with main's current lockfile only one
+        # MODERATE advisory remains (@humanfs/node), so this passes today.
+        # Do NOT lower it back to critical to get a red PR green — bump the
+        # dependency, or let the Dependabot PR land first.
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
-        run: npm audit --audit-level=critical
+        run: npm audit --audit-level=high
 
       - name: CI scope routing regression tests
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
@@ -359,9 +404,61 @@ jobs:
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run typecheck
 
+      - name: Detect Edge Function changes
+        # 2026-09-03: supabase/functions/ is Deno, so tsc and vitest never see
+        # it; two test files existed there that nothing ran. The Deno steps
+        # below run only when a function changed against the merge-base, and
+        # are SKIPPED otherwise (visible in the job, never a vacuous pass).
+        id: edge-scope
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            compare_base="$PR_BASE_SHA"
+          else
+            compare_base="$PUSH_BEFORE_SHA"
+          fi
+          changed=true
+          if [ "$compare_base" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "${compare_base}^{commit}" 2>/dev/null; then
+            merge_base="$(git merge-base "$compare_base" HEAD)"
+            if git diff --quiet "$merge_base" HEAD -- supabase/functions; then
+              changed=false
+            fi
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "Edge Function files changed since base: $changed"
+
+      - name: Set up Deno (Edge Functions changed)
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && steps.edge-scope.outputs.changed == 'true' }}
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: '2.9.4'
+
+      - name: Edge Function type check (Deno)
+        # --node-modules-dir=none: the repo root has a package.json, which makes
+        # Deno look for `npm:` specifiers in node_modules instead of its own
+        # cache; the functions are deployed without that node_modules.
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && steps.edge-scope.outputs.changed == 'true' }}
+        run: deno check --node-modules-dir=none supabase/functions/*/index.ts
+
+      - name: Edge Function unit tests (Deno)
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' && steps.edge-scope.outputs.changed == 'true' }}
+        run: deno test --no-prompt --node-modules-dir=none supabase/functions
+
       - name: Guard-hook regression tests (safety net must not regress)
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:correction-guards
+
+      - name: Live-testdata maintenance producer regression tests
+        # Wired 2026-09-03: this file was tracked but run by nothing.
+        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
+        run: node scripts/apply-live-testdata-maintenance-20260812.test.mjs
 
       - name: Phase 3C private-artifact regression tests
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}

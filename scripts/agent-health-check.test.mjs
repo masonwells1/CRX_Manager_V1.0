@@ -32,6 +32,27 @@ import {
   summarizeChecks,
 } from "./agent-health-check.mjs";
 import { clearWorktreeOverride } from "./install-git-hooks.mjs";
+import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
+
+// Git exports GIT_DIR (and friends) to hook child processes. This file builds
+// throwaway repositories and calls checkGitHooksInstalled() IN-PROCESS, so an
+// inherited GIT_DIR makes both halves target the real repository instead of the
+// fixture: the fixture's `git config core.hooksPath` writes there, and
+// agent-health-check.mjs reads core.hooksPath from there. Standalone runs and CI
+// have no GIT_DIR and pass; the bug exists only on the git-hook path, which CI
+// does not exercise. Scope, precisely: main's own .husky/pre-commit does NOT run
+// this test, so it never blocked commits here. It blocked worktrees whose
+// core.hooksPath pointed at the abandoned PR #432 Codex checkout, whose older
+// pre-commit runs `npm run test:agent-workflows` unconditionally; those runs
+// failed at the first PASS assertion. It also leaves the real repo marked
+// core.bare=true. Scrub before the first call rather than passing
+// `env` per child, because the in-process reader has no child to scrub.
+// See KNOWN_ISSUES and .claude/hooks/git-test-env.mjs (7 other test files use
+// scratchHookEnvironment() for the spawned-child form of this same bug).
+for (const name of gitLocalEnvironmentNames()) delete process.env[name];
+for (const name of Object.keys(process.env)) {
+  if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) delete process.env[name];
+}
 
 const root = mkdtempSync(path.join(os.tmpdir(), "crx-agent-health-"));
 

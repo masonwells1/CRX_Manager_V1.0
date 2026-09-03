@@ -13,7 +13,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { assertRpcResult, checkMutationResult, supabase, supabaseUntyped } from '../lib/db';
+import { sanitizeError, assertRpcResult, checkMutationResult, supabase, supabaseUntyped } from '../lib/db';
 import { localToday } from '../lib/dateUtils';
 import { waitForEpaRequestSlot } from '../lib/epaRequestThrottle';
 import { Sentry } from '../lib/sentry';
@@ -567,7 +567,7 @@ export default function ProductDetail() {
         `${candidate.vendor_name} at $${formatCostBasisDollars(candidate.normalized_cost_cents)}`,
       );
     } catch (error) {
-      toast('error', error instanceof Error ? error.message : 'Failed to preview cost basis');
+      toast('error', sanitizeError(error));
     } finally {
       setCostBasisBusy(false);
     }
@@ -583,7 +583,7 @@ export default function ProductDetail() {
         `${candidate.po_number} received PO cost`,
       );
     } catch (error) {
-      toast('error', error instanceof Error ? error.message : 'Failed to preview cost basis');
+      toast('error', sanitizeError(error));
     } finally {
       setCostBasisBusy(false);
     }
@@ -604,7 +604,7 @@ export default function ProductDetail() {
         `manual cost $${formatCostBasisDollars(costCents)}`,
       );
     } catch (error) {
-      toast('error', error instanceof Error ? error.message : 'Failed to preview cost basis');
+      toast('error', sanitizeError(error));
     } finally {
       setCostBasisBusy(false);
     }
@@ -694,7 +694,7 @@ export default function ProductDetail() {
       logActivity({ event: 'product_updated', description: `Product ${product.product_name} updated`, performedBy: profile!.id, entityType: 'product', entityId: id });
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_product' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to save Product');
+      toast('error', sanitizeError(err));
     } finally {
       setSaving(false);
     }
@@ -721,7 +721,7 @@ export default function ProductDetail() {
       });
       setCostModal(false);
     } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to preview cost change');
+      toast('error', sanitizeError(err));
     }
   };
 
@@ -784,7 +784,7 @@ export default function ProductDetail() {
         entityId: id,
       });
     } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to apply pricing');
+      toast('error', sanitizeError(err));
     } finally {
       setApplyingPricing(false);
     }

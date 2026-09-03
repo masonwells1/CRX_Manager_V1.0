@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck, RefreshCw, MapPin, FileText } from 'lucide-react';
-import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { sanitizeError, supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { blockedUnitSaveMessage, type UnitLoadState } from '../lib/units';
@@ -671,7 +671,7 @@ export function BlendTicketDetail() {
       toast('success', `Saved ${payload.length} field assignment${payload.length !== 1 ? 's' : ''}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_fields' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to save fields');
+      toast('error', sanitizeError(err));
     }
     setSavingFields(false);
   }
@@ -751,7 +751,7 @@ export function BlendTicketDetail() {
       await loadTicketData();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'reprocess_ocr' } });
-      toast('error', err instanceof Error ? err.message : 'Re-process failed');
+      toast('error', sanitizeError(err));
     }
     setReprocessing(false);
   }
@@ -866,7 +866,7 @@ export function BlendTicketDetail() {
       await loadTicketData();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'link_blend_ticket_to_order' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to link');
+      toast('error', sanitizeError(err));
     } finally {
       setLinking(false);
     }
@@ -906,7 +906,7 @@ export function BlendTicketDetail() {
       await loadTicketData();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'unlink_blend_ticket_from_order' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to unlink');
+      toast('error', sanitizeError(err));
     }
   }
 
@@ -1012,7 +1012,7 @@ export function BlendTicketDetail() {
       navigate(`/orders/${result.order_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_order_from_blend_ticket' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to create order');
+      toast('error', sanitizeError(err));
     } finally {
       setLinking(false);
     }
@@ -1056,7 +1056,7 @@ export function BlendTicketDetail() {
       toast('success', 'Application record created successfully');
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_application_record_from_blend_ticket' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to create application record');
+      toast('error', sanitizeError(err));
     } finally {
       setCreatingAppRecord(false);
     }
@@ -1749,7 +1749,7 @@ export function BlendTicketDetail() {
                     await loadTicketData();
                   } catch (err: unknown) {
                     Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'quick_link_blend_ticket' } });
-                    toast('error', err instanceof Error ? err.message : 'Failed to link');
+                    toast('error', sanitizeError(err));
                   } finally {
                     setLinking(false);
                   }

@@ -2120,9 +2120,19 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
   const objectViolations = [];
   for (const update of updates) {
     const fields = update.trim().split(/\s+/);
-    if (fields.length !== 4) throw new Error('private Phase 3C pre-push containment received malformed ref update');
+    if (fields.length !== 4) throw new Error('private Phase 3C pre-push containment received a malformed ref update: Git pre-push stdin must supply "<local-ref> <local-object-name> <remote-ref> <remote-object-name>"');
     const [localRef, localSha, remoteRef, remoteSha] = fields;
-    if (!localRef.startsWith('refs/') || !remoteRef.startsWith('refs/')) throw new Error('private Phase 3C pre-push containment received malformed ref update');
+    // Deliberately no shape requirement on <local-ref>. Git supplies it exactly
+    // as the operator wrote it whenever the local side is not an expandable ref
+    // name -- `HEAD`, `HEAD~2`, a raw object name -- and supplies the literal
+    // `(delete)` for a deletion (githooks(5), pre-push; confirmed against
+    // git 2.54.0). Requiring `refs/` here refused legal pushes such as
+    // `git push origin HEAD:<branch>` and `git push origin --delete <branch>`
+    // while doing no security work: the containment scan is driven entirely by
+    // <local-object-name>, which is validated by assertCommitSha below and is
+    // what reaches `git cat-file`. <local-ref> is only a label in violation
+    // messages, so constraining its shape protects nothing.
+    if (!remoteRef.startsWith('refs/')) throw new Error(`private Phase 3C pre-push containment requires a fully-qualified remote ref beginning with "refs/", but Git supplied "${remoteRef}"; push to a refs/ destination, e.g. refs/heads/<branch>`);
     if (isZeroSha(localSha)) continue; // deletion exports no new blob
     assertCommitSha(localSha, 'local');
     const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });

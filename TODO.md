@@ -14,6 +14,35 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 
 ## 🔴 1. Owner actions (needs Mason — ranked by value unblocked)
 
+> ### ⏰ DEADLINE ITEM — test the pricing/repricing path before sales season
+>
+> **Added 2026-09-02 at Mason's request** ("this all needs tested before we start sales season —
+> I don't have time now"). Deferred deliberately; it is **not** blocked and **not** forgotten.
+>
+> **What needs testing:** the full bulk-reprice path end to end, with real eyes, on real costs —
+> Products → **"Pricing .xlsx"** → edit costs/margins in Excel → **"Review Pricing File"** →
+> preview → approve → confirm tier prices moved correctly on live products.
+>
+> **Why it is dated rather than "someday":** margins are computed from `products.current_cost`, and
+> that cost basis is stale. Verified live 2026-09-02 — of 604 `product_cost_basis` rows, **602 are
+> the original `migration_baseline` load** (`effective_from` 2026-03-04 → 2026-07-18); exactly one
+> came from a supplier price selection and one from a product-page override. **No cost of any kind
+> has moved since 2026-07-18.** Every margin, profitability, and commission figure is therefore
+> computed against costs up to six months old. Repricing into a season on stale costs is the
+> expensive version of this bug.
+>
+> **What is already proven, so nobody rebuilds it:** the tooling exists and works. A real round trip
+> ran on 2026-09-02 — exported a workbook, edited a cost and a price through Excel, parsed it back,
+> and both edits came through on the right rows with money preserved as exact decimals and Excel
+> formulas detected rather than silently applied. Repo tests pass (14). Both RPCs are live
+> (`preview_product_cost_basis_changes`, `apply_product_cost_basis_change_set`). Row cap is 5,000,
+> well above the ~604-product catalog. **The gap is adoption and a real-data test, not construction.**
+>
+> Usage to date: **one** workbook export and 4 changed rows, all on 2026-08-18.
+>
+> Detail: `docs/manual/KNOWN_ISSUES.md` and the item-4 label-data entry below (same catalog, same
+> data-entry bottleneck — worth doing in one sitting).
+
 1. ~~**Re-base the 18 negative-inventory products**~~ — **⏸ DEFERRED by Mason 2026-07-16**
    ("skip and don't worry about it for now"). The 18 rows (verified live:
    `inventory.quantity_available < 0`) stay as-is until he brings physical counts;
@@ -55,6 +84,54 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
     parked migration re-checks the count before doing anything.
 
 ## 🔧 2. Engineering — Now / Next (see the 2026-07-15 execution plan for the full board)
+
+> ### ⏰ DEADLINE ITEM — restore "as of a past date" commission reporting
+>
+> **Added 2026-09-03 at Mason's request.** He was asked directly whether he uses historical
+> commission dates and said **"Yes I want to be able to look at historical dates."** Deferred
+> deliberately ("we are not going to patch it now"), **not** dropped.
+>
+> **Must land BEFORE the first commission payout of the season** — Mason put that at *"probably a
+> few months out"* on 2026-09-03. Confirm the real date with him; don't assume.
+>
+> **What happened:** migration `20260831162000` (PR #535) makes
+> `get_commission_balance_report` refuse any as-of date that is not Chicago-today. That is the
+> right call — the old answer was silently wrong, because `commissions` keeps only *current*
+> status, so a commission paid in July reported as "already paid" in a June run. The refusal is a
+> stopgap; restoring the capability properly is this item.
+>
+> **Why it is dated rather than "someday" — the window is open and closing.** Verified live
+> 2026-09-03: **35 commissions (33 pending, 2 cancelled, 0 paid), 8 commission_payments (all
+> unposted), and 0 commission_payment_items.** Nothing has ever been paid, so there is no history
+> to reconstruct and nothing is lost by building it now. Build it after a season of payouts and
+> everything before that point is **permanently unrecoverable** — the data will never have existed.
+>
+> **What already exists, so nobody scopes a rebuild:** the dated payment ledger is already there
+> and already the right shape. `commission_payments` has `payment_date`, `posted_at` and a
+> `unposted|posted|voided` status; `commission_payment_items` links payments to commissions with
+> amounts. `create_/post_/void_commission_payment` are live, and so is
+> `src/pages/CommissionPayments.tsx`. **The gap is two missing dated columns and a report that
+> reads current status instead of the ledger — not a new subsystem.**
+>
+> **The two real gaps:** `commission_payments` has no `voided_at` (so a void's timing is
+> unrecoverable), and `commissions` has no `cancelled_at` (the 2 existing cancelled rows have
+> already lost their date — accept that, don't invent one).
+>
+> Full spec, acceptance criteria, and the fallback if the window has closed:
+> `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md`.
+>
+> **ANSWERED 2026-09-03 — treat this as a financial-reporting requirement, not a convenience.**
+> Asked what he uses it for, Mason said: *"year end, checking what I owed and reconciling payouts —
+> all of it. It is very important to have this."* So it needs per-payment reconciliation detail,
+> not just per-recipient aggregates, and a year-end figure must return the **same answer when
+> re-run next year** — which is precisely what the current-status implementation cannot do.
+> The first payouts (≈2026-11/12) land near year-end 2026, so the first year-end that needs this
+> is likely the first one with payouts in it.
+>
+> **Verified 2026-09-03:** `_post_commission_payment_intent_impl_20260809` and
+> `_void_commission_payment_intent_impl_20260809` already write `commission_payment_items` and
+> maintain `commissions.paid_date`. The payout-reconciliation data will already be captured
+> correctly — this is a reporting rewrite over existing capture, not new plumbing.
 
 - **Gauntlet close-out (T3)** — most July-14/15 HIGHs verified applied live this pass
   (incl. the three commission/prepay-admin migrations, re-stamped as live versions

@@ -65,8 +65,32 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'An internal error occurred. Please try again.'],
   [/function [^\s]+\([^)]*\) does not exist/i,
    'An internal error occurred. Please try again.'],
-  [/permission denied for (table|relation|schema|sequence) "[^"]+"/i,
+  // PostgreSQL writes these identifiers UNQUOTED — `permission denied for table
+  // orders`, not `... for table "orders"`. The original pattern here required
+  // quotes, so every real permission error passed straight through this function
+  // and the table/function/schema name was shown to the operator. That was a live
+  // disclosure for every caller of sanitizeError, not only the ones added in the
+  // 2026-09-02 sweep; those merely lost the canned-literal accident that had been
+  // hiding it. The repo's own fixtures already used the real unquoted form
+  // (criticalAction.test.ts, applicatorSheetPrintData.test.ts,
+  // previousApplications.test.ts) — only this module's own test used the quoted
+  // form, so the pattern was written against the test's fiction rather than
+  // against what the database emits.
+  //
+  // Match the REGION (`permission denied for <anything>`) rather than enumerating
+  // object types: Postgres has many (table, view, materialized view, foreign
+  // table, sequence, function, procedure, schema, database, large object, ...) and
+  // an enumeration silently reopens the hole for whichever one is missing. A bare
+  // `permission denied` with no `for <object>` is left alone, so a hand-written
+  // RAISE EXCEPTION like 'Permission denied to edit this order' still reaches the
+  // operator intact.
+  [/permission denied for \S/i,
    'You do not have permission to perform this action'],
+  // PostgREST schema-cache misses name the function, table, column or
+  // relationship it could not resolve — e.g. `Could not find the function
+  // public.save_job(p_a, p_b) in the schema cache`. Same region approach.
+  [/could not find .+ in the schema cache/i,
+   'An internal error occurred. Please try again.'],
 ];
 
 export function sanitizeError(error: unknown): string {

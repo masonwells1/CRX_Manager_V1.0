@@ -1,18 +1,23 @@
 ## 2026-09-01 - Harden the migration-proof evidence bundle after an exact-head Codex review
 
-The exact-head `gpt-5.6-sol` review of PR #544 returned BLOCKERS on the same-PR changes to
-`scripts/write-apply-proofs.mjs`. All three findings were real and are fixed here.
+The exact-head `gpt-5.6-sol` review of PR #544 found that the reviewer child was receiving an
+incomplete evidence bundle. The findings were real and are fixed here.
 
 ### HIGH - incomplete security evidence could produce a false clean review
 
-The bundle embedded only the grants **declared in the migration under review**, and silently
-stopped after two call-site files, while the reviewer charter forbids looking anywhere else.
-A reviewer therefore saw a partial caller list presented as if complete, so an
-anon-executable `SECURITY DEFINER` helper or an unsafe third caller could be misclassified as
-private and pass the RLS / actor-forgery / idempotency gate.
+The bundle embedded only the grants **declared in the migration under review**, omitted frontend
+RPC callers and non-status CHECK values, and kept only the first caller found in each migration
+file. It also missed functions declared without an explicit `public.` prefix. Because the reviewer
+charter forbids looking anywhere else, a reviewer could see a partial caller list presented as if
+complete, or skip an endpoint / constraint check for lack of evidence.
 
-- The two-file call-site cap is removed. Silent truncation is the defect: it reads to the
-  reviewer as "these are all the callers".
+- Every caller across every migration is now embedded, including callers later in the migration
+  being reviewed. Silent truncation is the defect: it reads to the reviewer as "these are all the
+  callers".
+- Public functions declared either with or without `public.` are discovered. Their matching
+  `src/` RPC callers are embedded as well.
+- The registry slice includes relevant `check_constraints` entries alongside columns and status
+  values, so drift review can evaluate non-status CHECK constraints.
 - The grants section now states plainly that it shows the migration's own DDL and **not** the
   effective live ACL, that earlier migrations may have granted or revoked EXECUTE, and that a
   check turning on the effective grant must report BLOCKERS rather than infer the live posture.
@@ -35,17 +40,8 @@ could judge different inputs.
 - `evidenceHash` is recorded in both proof files, binding each proof to the inputs the
   verdicts actually rested on rather than to the migration alone.
 
-### MEDIUM - the refreshed registry contradicted the live-apply record
-
-`.claude/schema-registry.json` was regenerated mid-chain to unblock the final migration's
-review, so it stopped at `20260901183717` and omitted `20260827041500` - while
-`docs/manual/CURRENT_STATE.md` claimed it recorded `20260901184530`. That claim was false.
-The registry has been regenerated from live after the chain closed: high-water
-`20260901184530`, migration 6 present, 979 distinct applied names. `CURRENT_STATE.md` now
-records what actually happened, including the stale window.
-
 ### Note
 
-These defects were introduced by the same session that applied the migration chain, in the
-tooling it repaired mid-run. The independent exact-head review is what caught them; nothing
-here was self-diagnosed.
+The proof wrapper now has a `--print-evidence` mode and focused tests that exercise the real
+return-credit chain, an unqualified RPC declaration with frontend callers, and multiple same-file
+callers. These defects were found by independent review, not self-certification.

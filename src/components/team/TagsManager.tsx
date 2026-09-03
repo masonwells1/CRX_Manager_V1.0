@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Tag, Plus, X, Check } from 'lucide-react';
-import { supabase, checkMutationResult } from '../../lib/db';
+import { sanitizeError, supabase, checkMutationResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
@@ -140,7 +140,7 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
       if (onTagsChange) onTagsChange();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'TagsManager.removeTagFromNote' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to remove tag');
+      toast('error', sanitizeError(err));
     }
   };
 

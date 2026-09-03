@@ -1,7 +1,13 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-01 (post return-credit chain) for the migration ledger; 2026-08-27 11:43:53
-UTC for schema shape.** A read-only read after the six-file return-credit chain applied on 2026-09-01
+**Last verified: 2026-09-01 (post return-credit chain) for both the migration ledger and schema
+shape.** Schema shape comes from the live introspection that regenerated
+`.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
+columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
+read of individual routine bodies or their grants beyond the functions this chain touched, which
+were verified separately and are recorded below; the superseded 2026-08-27 11:43:53 UTC capture
+remains the last full routine-body reading.
+A read-only read after the six-file return-credit chain applied on 2026-09-01
 records **986 ledger rows**, with `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover`
 as the latest applied authored name; the current effective ordering name high-water is therefore
 **`20260827041500`**, and live `max(version)` is **`20260901184530`**. Read ordering from the authored
@@ -52,7 +58,8 @@ by `count(distinct name)`, not truncation). The first refresh was required mid-c
 apply, so the drift reviewer correctly refused a column check it could not perform. **That first
 refresh ran before the final migration applied, so it stopped at `20260901183717` and omitted
 `20260827041500` — a stale registry contradicting this document's own live-apply record.** The
-exact-head Codex review of PR #544 caught it; the registry was regenerated after the chain closed.
+exact-head `gpt-5.6-sol` review of the follow-up branch caught it; the registry was regenerated from
+live after the chain closed.
 The earlier note that this branch's registry stayed at `20260825142708` and that its refresh belonged
 to a separate product-data worktree is superseded.
 
@@ -92,9 +99,11 @@ applied live in order. See the next paragraph for the current state.
 
 **PR #361 return-credit chain — APPLIED LIVE 2026-09-01.** All six migrations
 (`20260827041000` through `20260827041500`) are in the live ledger on `rhyzpcqhnizqbxphqdkr`,
-applied in order with Mason's in-chat approval. Each passed a full migration-apply-guard proof (both
-reviewer charters CLEAN from `gpt-5.6-sol`/high) and was verified afterwards by read-only live query,
-not by the apply exit code. The `aa_crx_block_return_credit_during_cogs_cutover` barrier installed by
+applied in order with Mason's in-chat approval. Each passed a migration-apply-guard proof (both
+reviewer charters CLEAN from `gpt-5.6-sol`/high) and was verified afterward by read-only live query,
+not by the apply exit code. The proofs record that both charters ran against the exact migration
+bytes; they do not establish that the evidence those reviewers received was complete, so the
+independent live verification is what carries the weight here. The `aa_crx_block_return_credit_during_cogs_cutover` barrier installed by
 the first migration was removed by the last (verified: trigger `0`, function `0`), so return-credit
 issuance is open again. `20260826220000_quote_version_restore_trust_boundary` was already applied
 (ledger `version` `20260827113443`) before the chain, so nothing was wedged. Live ledger: 986 rows,

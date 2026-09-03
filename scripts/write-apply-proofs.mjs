@@ -132,17 +132,49 @@ function extractTsDeclaration(ts, name) {
   return alias ? alias[0] : null;
 }
 
-// Matches CREATE [OR REPLACE] FUNCTION for both bare and quoted identifiers:
-// `public.foo(` and `"public"."foo"(` are the same declaration. Missing the quoted
-// form silently dropped functions from the evidence bundle (observed 2026-09-01 on
-// 20260827041300, which declares three of its four functions quoted).
-const CREATE_FN_ANY = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+"?public"?\s*\.\s*"?(\w+)"?/gi;
+// Matches CREATE [OR REPLACE] FUNCTION for an unqualified public name and both
+// qualified forms: `foo(`, `public.foo(`, and `"public"."foo"(`. A migration can
+// use all three repository-supported spellings. The trailing parenthesis keeps an
+// unrelated schema-qualified declaration from being mistaken for an unqualified one.
+const CREATE_FN_ANY = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
+const CREATE_FN_LINE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/i;
 
 function createFnRegexFor(name) {
   return new RegExp(
-    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+"?public"?\\s*\\.\\s*"?${name}"?\\s*\\(`,
+    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:"?public"?\\s*\\.\\s*)?"?${name}"?\\s*\\(`,
     'gi',
   );
+}
+
+function functionInvocationRegex(name) {
+  // The leading boundary rejects another schema (for example `private.foo(...)`)
+  // while accepting an unqualified public call, `public.foo(...)`, and quoted SQL.
+  return new RegExp(`(?:^|[^\\w.])(?:"?public"?\\s*\\.\\s*)?"?${name}"?\\s*\\(`, 'i');
+}
+
+function frontendRpcCallSites(name) {
+  const srcDir = path.join(process.cwd(), 'src');
+  if (!existsSync(srcDir)) return [];
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(?:ts|tsx)$/.test(entry.name) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(entry.name)) files.push(full);
+    }
+  };
+  walk(srcDir);
+  const rpc = new RegExp(`\\.rpc\\(\\s*(['"])${name}\\1`, 'g');
+  const sites = [];
+  for (const file of files.sort()) {
+    const text = readFileSync(file, 'utf8');
+    for (const match of text.matchAll(rpc)) {
+      const line = text.slice(0, match.index).split(/\r?\n/).length;
+      const excerpt = text.split(/\r?\n/)[line - 1]?.trim() || '(call spans lines)';
+      sites.push(`  frontend RPC: ${path.relative(process.cwd(), file).split(path.sep).join('/')}:${line}\n    ${excerpt}`);
+    }
+  }
+  return sites;
 }
 
 // Read from the '(' at `open` through its matching ')'. A parameter list can itself
@@ -183,6 +215,12 @@ function buildEmbeddedEvidence(migRelPath) {
         tables_without_updated_at: reg.tables_without_updated_at,
         // CHECK 5 PRIMARY source, scoped to the tables this migration names.
         columns: Object.fromEntries(referencedTables.map((t) => [t, reg.columns[t]])),
+        // Non-status CHECK value sets use this registry section. Keeping entries only
+        // for referenced tables makes the evidence complete for CHECK 5 without
+        // crowding the migration bytes out of the child review prompt.
+        check_constraints: Object.fromEntries(
+          Object.entries(reg.check_constraints || {}).filter(([key]) => referencedTables.includes(key.split('.')[0])),
+        ),
       };
       parts.push(
         '',
@@ -243,7 +281,6 @@ function buildEmbeddedEvidence(migRelPath) {
   if (fnNames.length) {
     const migDir2 = path.join(process.cwd(), 'supabase', 'migrations');
     const allFiles = readdirSync(migDir2).filter((f) => f.endsWith('.sql')).sort();
-    const thisBase = path.basename(migRelPath);
     const sections = [];
     for (const name of fnNames) {
       const lines = [];
@@ -262,18 +299,17 @@ function buildEmbeddedEvidence(migRelPath) {
       //     and that function's guard prologue.
       const sites = [];
       for (const file of [...allFiles].reverse()) {
-        if (file === thisBase) continue;
         const text = readFileSync(path.join(migDir2, file), 'utf8');
         const fileLines = text.split(/\r?\n/);
         for (let i = 0; i < fileLines.length; i += 1) {
           const line = fileLines[i];
-          if (!line.includes(`public.${name}(`) && !line.includes(`"public"."${name}"(`)) continue;
+          if (!functionInvocationRegex(name).test(line)) continue;
           // Skip catalog assertions and DDL — they are not invocations.
           if (/regprocedure|has_function_privilege|pg_proc|pg_get_|^\s*(REVOKE|GRANT|ALTER|DROP|CREATE)\b/i.test(line)) continue;
           // Walk back to the enclosing function definition.
           let caller = null;
           for (let j = i; j >= 0; j -= 1) {
-            const m = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+"?public"?\s*\.\s*"?(\w+)"?/i.exec(fileLines[j]);
+            const m = CREATE_FN_LINE.exec(fileLines[j]);
             if (m) { caller = { name: m[1], at: j }; break; }
           }
           if (!caller) continue;
@@ -292,15 +328,16 @@ function buildEmbeddedEvidence(migRelPath) {
             declare.length ? `    actor binding: ${declare.map((l) => l.trim()).join(' | ')}` : '    actor binding: (none found in DECLARE)',
             prologue.length ? '    prologue after BEGIN:\n' + prologue.map((l) => '      ' + l).join('\n') : '',
           ].filter(Boolean).join('\n'));
-          break; // one representative site per file is enough
         }
-        // No cap. A silent truncation here reads to the reviewer as "these are all the
-        // callers", which is exactly how an unsafe third caller gets misclassified as
-        // private (Codex H1, 2026-09-01). Cost is bounded: one representative line per
-        // file, over files that mention the name at all.
+        // No cap: a silent truncation reads to the reviewer as "these are all the
+        // callers", which is exactly how an unsafe second or third caller can be
+        // misclassified as private (Codex H1, 2026-09-01).
       }
-      lines.push(`CALL SITES of ${name} in other migrations (newest first):`);
+      lines.push(`CALL SITES of ${name} across migrations (newest first):`);
       lines.push(sites.length ? sites.join('\n') : '  (no invocation found — it may be called only from application code or not at all)');
+      const frontendSites = frontendRpcCallSites(name);
+      lines.push(`FRONTEND RPC CALL SITES of ${name} in src/:`);
+      lines.push(frontendSites.length ? frontendSites.join('\n') : '  (no frontend RPC call found)');
       sections.push(lines.join('\n'));
     }
     parts.push(
