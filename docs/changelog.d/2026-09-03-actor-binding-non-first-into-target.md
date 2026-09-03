@@ -23,6 +23,13 @@ The same shape could overwrite a trusted local previously initialized from
   because they can decode to an actor-equivalent identifier.
 - A safe control confirms that an actor in the output expression list is not
   rejected when every assignment target is a different variable.
+- Ordinary hook fixtures now use an isolated empty migration directory. The
+  dedicated cross-migration pg_cron lifecycle fixtures retain their authored
+  multi-file histories, while unrelated cases no longer reparse all 900 real
+  migrations in each child process.
+- `KNOWN_ISSUES.md` now describes the hardened hook's post-merge capabilities
+  and keeps the remaining parser, naming, tool-path, and hidden-dataflow gaps
+  explicit.
 
 ### Scope
 

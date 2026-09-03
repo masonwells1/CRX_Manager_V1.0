@@ -12,11 +12,20 @@ import os from "node:os";
 import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Ordinary fixtures exercise one migration in isolation. Pointing all 500+
+// hook processes at the repository's real 900-file migration directory made
+// each unrelated DML case rebuild the cross-migration pg_cron alias history.
+// Dedicated lifecycle fixtures below still create multi-file histories and
+// therefore retain the real cross-migration coverage.
+const ordinaryMigrationRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-ordinary-"));
+const ordinaryMigrationDir = path.join(ordinaryMigrationRoot, "supabase", "migrations");
+mkdirSync(ordinaryMigrationDir, { recursive: true });
+const ordinaryMigrationPath = path.join(ordinaryMigrationDir, "20260807000000_test.sql");
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 
-function runHook(content, filePath = "supabase/migrations/20260807000000_test.sql") {
+function runHook(content, filePath = ordinaryMigrationPath) {
   const payload = { tool_input: { file_path: filePath, content } };
   return spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")], {
     input: JSON.stringify(payload),
@@ -3127,7 +3136,7 @@ ok(!isDeny(r), "file-level exempt marker skips the check entirely");
 
 // Edit-tool payloads use new_string rather than content
 r = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")], {
-  input: JSON.stringify({ tool_input: { file_path: "supabase/migrations/20260807000000_test.sql", new_string: fn(MUTATION) } }),
+  input: JSON.stringify({ tool_input: { file_path: ordinaryMigrationPath, new_string: fn(MUTATION) } }),
   encoding: "utf8",
 });
 ok(isDeny(r), "Edit-tool new_string payload is checked the same as Write content");
@@ -3400,4 +3409,5 @@ ok(!isDeny(r), "case-insensitive scope matching does not widen the guard past mi
     "an unreconstructable edit payload for a migration fails CLOSED");
 }
 
+rmSync(ordinaryMigrationRoot, { recursive: true, force: true });
 console.log(`actor-binding-check: ${pass} assertions passed`);

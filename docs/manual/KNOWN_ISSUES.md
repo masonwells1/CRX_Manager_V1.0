@@ -707,23 +707,21 @@ precisely: it inspects `Write` and `Edit` tool calls only.** Both manifests regi
 never presented to it (row 6). The sweep predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are
 the **post-apply** half, run against the live catalog, and are indifferent to how the file was written.
 
-**Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. The
-**active** hook is the unchanged 213-line guard: it catches ordinary spellings *of a whole-function write*
-and nothing more. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels closed over
-two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of that is in the
-running hook**, and this PR does not change it. Do not credit the active guard with #449's fixes. It is
-**not** a boundary, and no document should describe it as preventing actor forgery. Note in particular that
-the ordinary *incremental* edit path is not covered at all (row 3 below), so "catches every ordinary
-spelling" would overstate even the active guard.
+**Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. PR #449
+replaces the old 213-line whole-write-only check with the hardened guard described here when it lands:
+ordinary incremental edits are reconstructed, visible actor forwarding to callables is refused, and the 19
+reproduced laundering channels plus the one authorized non-first-`INTO` repair are covered. Until #449 is
+merged, `main` still runs the old guard; after it is merged, this paragraph describes the active hook. The
+rewrite is still **not a boundary**, and no document should describe it as preventing actor forgery. The
+remaining gaps below and the non-`Write`/`Edit` tool-path limit are why the cap remains operative.
 
 **What it does NOT catch, stated so nobody re-derives it:**
 
 | Gap | Why it is open |
 |---|---|
 | Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
-| Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **NARROWED 2026-09-01 (PR #449).** The **direct-assignment re-binding form is now covered by both post-apply sweep predicates**: each fails closed and scans the whole body, instead of truncating at the refusal, when the actor parameter is assigned to at statement position — pinned to statement position because named-argument syntax (`f(p_performed_by := v_actor)`) is lexically identical to assignment. Proved on real PostgreSQL 17 in both directions; zero new findings against the live catalog. **The laundering forms remain uncovered by the sweeps**: a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`, and `EXECUTE … USING` / `INSERT … RETURNING … INTO` are dataflow rather than a spelling. At **write time** none of these are caught: the incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` ships with PR #449's hardened hook, so credit it only once that is the running hook. **One bounded follow-up was authorized 2026-09-03:** PR #449's candidate now inspects every target in its already-recognized `SELECT`/`RETURNING`/`FETCH`/`EXECUTE INTO` lists, closing the reproduced non-first-target overwrite for guarded actor parameters and trusted `auth.uid()` locals. The predicates remain unchanged and still do not read `INTO` target lists. The broader best-effort cap remains in force, and the candidate must not be credited to the active hook before PR #449 lands. |
-| An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function | The hook analyses `tool_input.content \|\| tool_input.new_string` — the fragment alone. It does **not** reconstruct the full post-edit file the way `sql-safety.mjs`, `idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. With no function header, parameter list or `SECURITY DEFINER` attribute in the analysed text, the guard finds no candidate and allows. This is the *normal* editing path; the hook's own Edit-coverage test passes a whole function as `new_string`, so it does not exercise it. The sweeps do still see the applied routine. |
-| Cross-routine / cross-migration helpers | **Not covered — and there is no "fail-closed callable rule" in the running hook.** The analysis is intra-routine and single-file, and the active guard only considers a routine whose own body contains a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM`. A `SECURITY DEFINER` wrapper that accepts `p_performed_by` and delegates the write to a helper therefore has no literal DML in its body and is allowed — confirmed by running the real hook, which returned `allow`. Neither sweep predicate follows the helper call either. Any fail-closed callable handling belongs to **parked PR #449**; do not rely on it. |
+| Re-binding after a passing check, dynamic SQL, `RETURNING … INTO`, and temp-table round trips | **NARROWED by PR #449.** Direct `:=`/`=` actor re-binding is covered by both post-apply predicates and by the write-time hook. The hook also treats dynamic `EXECUTE` and visible actor forwarding as mutations, and the authorized 2026-09-03 repair inspects every target in recognized `SELECT`/`RETURNING`/`FETCH`/`EXECUTE INTO` lists, including positional aliases and fail-closed opaque Unicode targets. The predicates remain narrower: they do not model `INTO` lists, `EXECUTE … USING`, or temp-table dataflow. A temp-table round trip can still separate the actor source from both predicates' sinks, and novel laundering that hides the actor before a later use remains outside this text analysis. The broader best-effort cap remains in force. |
+| Cross-migration helper implementations and actor-hidden helper calls | PR #449 adds a fail-closed callable-forwarding rule, so an ordinary wrapper that visibly passes its actor parameter to a helper is refused even without literal DML. The hook still cannot inspect a helper body defined in another migration or follow an actor first hidden behind an unmodelled alias/CTE before the call. Neither sweep predicate follows helper calls across routines. Those residuals remain for exact-SHA review and CodeRabbit rather than another regex round. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
 | **A migration written by any tool other than `Write`/`Edit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
 
@@ -734,7 +732,7 @@ three careful passes.
 
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
-- **For the incremental-Edit, novel-lexical and non-`Write`/`Edit` tool-path gaps** (rows 3, 5 and 6
+- **For the novel-lexical and non-`Write`/`Edit` tool-path gaps** (the final two rows
   above): the exact-SHA `gpt-5.6-sol` proof on migration diffs and the CodeRabbit final review are the
   controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
   not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
@@ -744,20 +742,16 @@ three careful passes.
   clears both predicates without trying.** Do not describe any row here as requiring an attacker to clear
   all three controls.
 
-  Two of these three rows need no cleverness at all, which is the point of the cap: an ordinary incremental
-  `Edit` (row 3) and an ordinary shell-written migration (row 6) each bypass the *hook* with completely
+  The non-`Write`/`Edit` row needs no cleverness: an ordinary shell-written migration bypasses the hook with
   unremarkable SQL. "Deliberately obfuscated SQL" describes the novel-lexical row only, and even there it
   describes what defeats the hook, not what defeats the sweeps.
-- **For cross-routine / cross-migration helpers** (row 4): **only the Codex proof and the CodeRabbit
-  review.** Neither predicate can see this path. `actor-forgery.sql` needs actor/`auth.uid`/role proximity
-  inside the *wrapper's own* `prosrc`, and `-fin-audit.sql` needs both the parameter and the
-  `financial_audit_log` sink in that same source — but the wrapper only hands the parameter to a helper, and
-  a private helper is not even a candidate, since both predicates require
-  `has_function_privilege('authenticated', ...)`. Do not count the sweep here.
-- **For the re-binding and laundering gaps** (row 2): **only the Codex proof and the CodeRabbit review.**
-  Both predicates are gated on `prosrc !~* 'ACTOR_MISMATCH'`, so a re-binding that follows a passing check is
-  excluded from the sweep by the presence of the check it defeated; and a temp-table round trip matches
-  neither predicate's sink test. Do not count the sweep here.
+- **For actor-hidden cross-routine/cross-migration helper calls:** **only the Codex proof and CodeRabbit
+  review.** PR #449 refuses direct visible actor forwarding, but neither predicate can follow a value hidden
+  behind an unmodelled alias into a private helper, and a private helper is not itself a predicate candidate.
+  Do not count the sweep for that residual.
+- **For the remaining laundering gaps:** direct assignment is covered by the predicates and the recognized
+  `INTO` target-list forms are covered by the PR #449 hook. Temp-table and other actor-hiding dataflow remains
+  outside both predicates; only exact-SHA review and CodeRabbit cover those residuals.
 - **For the naming-scope gap** (row 1): **only the Codex proof and the CodeRabbit review.** The sweep
   predicates key on the same `^p_\w*by$|^p_actor|^p_user` pattern, so they share the blind spot rather than
   covering it. Do not cite the sweep as the compensating control for a `p_target_id`-shaped parameter.
@@ -767,10 +761,9 @@ Do not remove or weaken the hook — it is cheap and it catches the ordinary cas
 PostgreSQL's own parser (`libpg_query`) rather than more regexes; that removes the lexical category entirely
 but still does not solve the naming-scope limit.
 
-**Related open work.** PR #449 is parked with the 19 closed bypasses and 23 open review findings; it is worth
-landing after one clean review round, as an improvement to a capped control rather than a resumed programme.
-A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-recut-20260831` (no PR) and
-duplicates one of #449's fixes — delete it rather than continuing it.
+**Related delivery state.** PR #449 carries the hardened hook as an improvement to a capped control, not a
+resumed programme. Credit its behavior to the active hook only after Mason merges that PR. Any future novel
+parser/dataflow finding remains capped unless Mason separately authorizes it.
 
 
 ## FIXED IN CODE 2026-09-03, MIGRATION PENDING LIVE APPLY — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
