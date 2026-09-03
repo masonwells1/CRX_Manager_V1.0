@@ -30,6 +30,7 @@ import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 import { sessionProofDirs, sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
+import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 export const REQUIRED_CODEX_EFFORT = "high";
@@ -851,6 +852,23 @@ export function evaluateMigrationApply({
 
   let validProof = null;
   let contentMismatchedProof = null;
+  let evidenceMismatchedProof = null;
+  const evidenceHashByDir = new Map();
+  const evidenceHashForDir = (dir) => {
+    if (evidenceHashByDir.has(dir)) return evidenceHashByDir.get(dir);
+    let hash = null;
+    try {
+      // session-state is always <checkout>/.claude/session-state. Bind the
+      // proof to the complete source surface that the reviewer was shown, not
+      // merely to the one SQL string that is about to be transmitted.
+      hash = migrationProofEvidenceHash({
+        projectDir: path.resolve(dir, "..", ".."),
+        stateDir: dir,
+      });
+    } catch { /* unreadable evidence is never a valid proof */ }
+    evidenceHashByDir.set(dir, hash);
+    return hash;
+  };
   const freshCleanProofNames = [];
   for (const dir of proofDirs) {
     if (validProof) break;
@@ -913,6 +931,16 @@ export function evaluateMigrationApply({
               if (!contentMismatchedProof) contentMismatchedProof = { file: f, dir, data };
               continue;
             }
+            // The reviewer also judges registry, ledger, prior declarations,
+            // application callers, its charter, and the wrapper prompt. A
+            // migration-only hash would let any of those inputs move after a
+            // clean verdict. This is required in every mode: Mason's presence
+            // is authorization, not a reason to accept stale evidence.
+            const expectedEvidenceHash = evidenceHashForDir(dir);
+            if (!data.evidenceHash || !expectedEvidenceHash || data.evidenceHash !== expectedEvidenceHash) {
+              if (!evidenceMismatchedProof) evidenceMismatchedProof = { file: f, dir, data, expectedEvidenceHash };
+              continue;
+            }
             validProof = { file: f, dir, data };
             break;
           }
@@ -929,6 +957,16 @@ export function evaluateMigrationApply({
       `exactly match the SHA-256 of the transmitted SQL (expected: ${currentHash || "(no query text)"}; ` +
       `received: ${proofHash || "(missing)"}). Re-confirm the reviewers against the CURRENT SQL, ` +
       `update the proof's queryHash, and retry.`);
+  }
+
+  if (!validProof && evidenceMismatchedProof) {
+    const proofHash = String(evidenceMismatchedProof.data.evidenceHash || "");
+    return block(
+      `MIGRATION APPLY GUARD: the reviewer proof for "${migName || "(unnamed)"}" is not evidence-bound — ` +
+      `proofs require "evidenceHash" to match every repository input and reviewer charter that the ` +
+      `verdict saw (expected: ${evidenceMismatchedProof.expectedEvidenceHash || "(unreadable evidence)"}; ` +
+      `received: ${proofHash || "(missing)"}). Re-run node scripts/write-apply-proofs.mjs against the ` +
+      `CURRENT checkout; never edit proof JSON by hand.`);
   }
 
   if (validProof) {
@@ -987,13 +1025,19 @@ export function evaluateMigrationApply({
       // exact queryHash, age inside [0, 30min]; the first parseable file is kept
       // only so the block message below can say which criterion failed.
       let codexProof = null;
+      let codexProofEvidenceHash = null;
       for (const dir of proofDirs) {
         let candidate = null;
         try { candidate = JSON.parse(readFileSync(path.join(dir, `codex-review-mig-${safeName}.json`), "utf8")); } catch { continue; }
         if (!candidate) continue;
-        if (!codexProof) codexProof = candidate;
+        const candidateEvidenceHash = evidenceHashForDir(dir);
+        if (!codexProof) {
+          codexProof = candidate;
+          codexProofEvidenceHash = candidateEvidenceHash;
+        }
         const okVerdict = ["clean", "ship", "ship-with-followups"].includes(String(candidate.verdict || "").toLowerCase());
         const okHash = !!currentHash && String(candidate.queryHash || "") === currentHash;
+        const okEvidenceHash = !!candidateEvidenceHash && String(candidate.evidenceHash || "") === candidateEvidenceHash;
         const okIdentity = candidate.model === REQUIRED_CODEX_MODEL
           && candidate.reasoning_effort === REQUIRED_CODEX_EFFORT;
         let okFresh = false;
@@ -1001,10 +1045,16 @@ export function evaluateMigrationApply({
           const candidateAge = now - new Date(candidate.timestamp).getTime();
           okFresh = candidateAge >= 0 && candidateAge <= MAX_AGE_MS;
         } catch { okFresh = false; }
-        if (okVerdict && okHash && okIdentity && okFresh) { codexProof = candidate; break; }
+        if (okVerdict && okHash && okEvidenceHash && okIdentity && okFresh) {
+          codexProof = candidate;
+          codexProofEvidenceHash = candidateEvidenceHash;
+          break;
+        }
       }
       const cvOk = codexProof && ["clean", "ship", "ship-with-followups"].includes(String(codexProof.verdict || "").toLowerCase());
       const cvHashOk = codexProof && currentHash && String(codexProof.queryHash || "") === currentHash;
+      const cvEvidenceHashOk = codexProof && codexProofEvidenceHash
+        && String(codexProof.evidenceHash || "") === codexProofEvidenceHash;
       const cvIdentityOk = codexProof
         && codexProof.model === REQUIRED_CODEX_MODEL
         && codexProof.reasoning_effort === REQUIRED_CODEX_EFFORT;
@@ -1015,10 +1065,10 @@ export function evaluateMigrationApply({
         const cvAge = now - new Date(codexProof.timestamp).getTime();
         cvFresh = !!codexProof && cvAge >= 0 && cvAge <= MAX_AGE_MS;
       } catch { cvFresh = false; }
-      if (!cvOk || !cvHashOk || !cvIdentityOk || !cvFresh) {
+      if (!cvOk || !cvHashOk || !cvEvidenceHashOk || !cvIdentityOk || !cvFresh) {
         return block(
           `MIGRATION APPLY GUARD (hands-free run): the Sol high-effort gate is not satisfied for ` +
-          `"${migName || "(unnamed)"}" (${!codexProof ? "no Codex proof file" : !cvOk ? "verdict is not clean/ship" : !cvHashOk ? "queryHash does not match the transmitted SQL" : !cvIdentityOk ? `proof must record model=${REQUIRED_CODEX_MODEL} and reasoning_effort=${REQUIRED_CODEX_EFFORT}` : "proof timestamp is not within the last 30 minutes"}). ` +
+          `"${migName || "(unnamed)"}" (${!codexProof ? "no Codex proof file" : !cvOk ? "verdict is not clean/ship" : !cvHashOk ? "queryHash does not match the transmitted SQL" : !cvEvidenceHashOk ? "evidenceHash does not match the reviewed source surface" : !cvIdentityOk ? `proof must record model=${REQUIRED_CODEX_MODEL} and reasoning_effort=${REQUIRED_CODEX_EFFORT}` : "proof timestamp is not within the last 30 minutes"}). ` +
           `Autonomous applies require a fresh, content-bound Codex verdict (Mason's settled 2026-07-13 ` +
           `policy). Run: node scripts/write-apply-proofs.mjs ${migName || "<migName>"} — it runs the ` +
           `trusted Codex CLI itself and mints the content-bound proof ONLY on a CLEAN machine verdict. ` +

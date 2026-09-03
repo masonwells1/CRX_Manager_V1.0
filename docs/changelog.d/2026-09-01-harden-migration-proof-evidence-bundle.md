@@ -37,11 +37,15 @@ could judge different inputs.
   every reviewer.
 - After the last review the bundle is rebuilt and compared; a mismatch mints nothing and says
   which sources moved.
-- `evidenceHash` is recorded in both proof files, binding each proof to the inputs the
-  verdicts actually rested on rather than to the migration alone.
+- `evidenceHash` is a deterministic fingerprint of every review input: both reviewer
+  charters, the schema registry, migration history, applied-migration ledger, all migration
+  declarations/callers, production TypeScript RPC callers, and the proof-wrapper source.
+  It is recorded in both proof files and recomputed by the apply guard before it accepts either
+  proof, so an input change invalidates the verdict instead of silently reusing it.
 
 ### Note
 
 The proof wrapper now has a `--print-evidence` mode and focused tests that exercise the real
 return-credit chain, an unqualified RPC declaration with frontend callers, and multiple same-file
-callers. These defects were found by independent review, not self-certification.
+callers. That suite now runs inside `test:correction-guards`, the CI correction-guard job. These
+defects were found by independent review, not self-certification.

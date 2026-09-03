@@ -35,6 +35,7 @@ import {
   codexReviewProofVerdict,
   CODEX_VERDICT_TOKEN,
 } from './write-codex-push-proof.mjs';
+import { migrationProofEvidenceHash } from './migration-proof-evidence-hash.mjs';
 
 const rawArgs = process.argv.slice(2);
 
@@ -543,11 +544,13 @@ for (const name of names) {
   }
   const migRelPath = path.posix.join('supabase', 'migrations', `${name}.sql`);
 
-  // ONE bundle, built once and hashed, handed identically to every reviewer. Rebuilding
-  // per reviewer let two charters see different evidence if any source file moved between
-  // runs, while only the migration hash was re-checked afterwards (Codex H2, 2026-09-01).
+  // ONE bundle is built once and handed identically to every reviewer. Its hash is
+  // a complete input manifest, not only the rendered string: it binds the registry,
+  // ledger, prior declarations, frontend callers, both reviewer charters, and the
+  // prompt builder itself. The apply guard recomputes this same manifest before a
+  // hands-free apply, so recording an unused hash cannot create false confidence.
   const evidence = buildEmbeddedEvidence(migRelPath);
-  const evidenceHash = createHash('sha256').update(evidence).digest('hex');
+  const evidenceHash = migrationProofEvidenceHash({ projectDir: process.cwd(), stateDir });
 
   // Run EVERY required reviewer's charter as its own machine-verdict Codex run.
   // All must return a terminal CLEAN token, or nothing is minted.
@@ -573,10 +576,10 @@ for (const name of names) {
     exitCode = 1;
     continue;
   }
-  // The migration is not the only input the verdicts depend on. Rebuild the bundle and
-  // compare: if the registry, ledger, history, or any embedded source moved mid-review,
-  // the reviewers judged something this proof would no longer describe.
-  const evidenceHashAfter = createHash('sha256').update(buildEmbeddedEvidence(migRelPath)).digest('hex');
+  // The migration is not the only input the verdicts depend on. Recompute the whole
+  // input manifest: if any rendered source, reviewer charter, or prompt-builder byte
+  // moved mid-review, the reviewers judged something this proof would not describe.
+  const evidenceHashAfter = migrationProofEvidenceHash({ projectDir: process.cwd(), stateDir });
   if (evidenceHashAfter !== evidenceHash) {
     console.error(`the review evidence bundle for ${name} changed while the reviews were running (schema registry, ledger, migration-history, prior declarations or types moved). NO proofs minted; re-run so both reviewers judge one stable bundle.`);
     exitCode = 1;

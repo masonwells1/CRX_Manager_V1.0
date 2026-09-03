@@ -16,12 +16,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { evaluateMigrationApply, normalizeMigName, resolveMigrationSource, originFetchAgeMs } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
+import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // .claude/hooks/ → repo root → scripts/
@@ -93,8 +94,14 @@ function fixture({
       typeof snapshot === "string" ? snapshot : JSON.stringify(snapshot),
       "utf8");
   }
-  if (proof !== null) writeFileSync(path.join(stateDir, `migration-review-${SAFE}.json`), JSON.stringify(proof), "utf8");
-  if (codexProof !== null) writeFileSync(path.join(stateDir, `codex-review-mig-${SAFE}.json`), JSON.stringify(codexProof), "utf8");
+  // Real proofs always carry the wrapper's full evidence fingerprint. Fixtures
+  // inherit one unless a case explicitly supplies a bad/missing value.
+  const withEvidenceHash = (candidate) => {
+    if (Object.hasOwn(candidate, "evidenceHash")) return candidate;
+    return { ...candidate, evidenceHash: migrationProofEvidenceHash({ projectDir: root, stateDir }) };
+  };
+  if (proof !== null) writeFileSync(path.join(stateDir, `migration-review-${SAFE}.json`), JSON.stringify(withEvidenceHash(proof)), "utf8");
+  if (codexProof !== null) writeFileSync(path.join(stateDir, `codex-review-mig-${SAFE}.json`), JSON.stringify(withEvidenceHash(codexProof)), "utf8");
   if (autopilot !== null) writeFileSync(path.join(stateDir, "AUTOPILOT.on"), autopilot, "utf8");
   if (baseline !== null) {
     const baselineDir = path.join(root, "supabase", "baselines");
@@ -105,6 +112,27 @@ function fixture({
       "utf8");
   }
   return root;
+}
+
+// apply-migration-file deliberately clears an apply ledger after every attempt;
+// a second attempted apply is a new evidence set, not permission to reuse the
+// first attempt's snapshot or proof. Provenance tests that make two attempts
+// restore their fixture ledger and re-mint only the deterministic evidence hash
+// before exercising the independent second assertion.
+function restoreFixtureLedgerAndEvidence(root) {
+  const stateDir = path.join(root, ".claude", "session-state");
+  writeFileSync(path.join(stateDir, "applied-migrations.json"), JSON.stringify({
+    captured_at: iso(0),
+    applied: [{ version: "20260101000000", name: "20260101000000_baseline" }],
+  }), "utf8");
+  const evidenceHash = migrationProofEvidenceHash({ projectDir: root, stateDir });
+  for (const name of [`migration-review-${SAFE}.json`, `codex-review-mig-${SAFE}.json`]) {
+    const file = path.join(stateDir, name);
+    if (!existsSync(file)) continue;
+    const proof = JSON.parse(readFileSync(file, "utf8"));
+    proof.evidenceHash = evidenceHash;
+    writeFileSync(file, JSON.stringify(proof), "utf8");
+  }
 }
 
 // The pending-set preflight (2026-08-26) reads origin/main. Stubbed to the
@@ -478,6 +506,27 @@ denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers:
 allows(evaluate(fixture({ autopilot: armed(), codexProof: goodCodex })),
   "known-good ARMED fixture is allowed");
 
+denies(evaluate(fixture({
+  autopilot: armed(),
+  proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: HASH, evidenceHash: "0".repeat(64) },
+  codexProof: goodCodex,
+})),
+"not evidence-bound", "an armed run refuses a reviewer proof whose evidenceHash does not bind its full review input");
+
+denies(evaluate(fixture({
+  autopilot: armed(),
+  codexProof: { ...goodCodex, evidenceHash: "0".repeat(64) },
+})),
+"evidenceHash does not match", "an armed run refuses a Codex proof whose evidenceHash does not bind its full review input");
+
+{
+  const root = fixture({ autopilot: armed(), codexProof: goodCodex });
+  mkdirSync(path.join(root, "src"), { recursive: true });
+  writeFileSync(path.join(root, "src", "new-rpc-caller.ts"), "export const call = 'receive_po_items';\n", "utf8");
+  denies(evaluate(root), "not evidence-bound",
+    "a source caller added after review invalidates the reviewer proof rather than reusing its old fingerprint");
+}
+
 denies(
   evaluate(fixture({
     autopilot: armed(),
@@ -661,9 +710,6 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }), "utf8");
     // Nothing older is waiting here; this block is about proof-name matching.
     const aliasTracked = () => `supabase/migrations/${alias}.sql\n`;
-    // A genuine, fresh, clean proof for the LEGACY migration — nothing forged.
-    writeFileSync(path.join(stateDir, `migration-review-${legacy}.json`),
-      JSON.stringify({ migration: legacy, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: legacyHash }), "utf8");
     // The alias file is written to the PERMITTED directory on purpose. That is
     // literally what the PR #470 attack did — `cp <reviewed>.sql <alias>.sql` — so
     // source provenance alone does NOT stop it, and these cases must keep proving
@@ -672,6 +718,18 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
     writeFileSync(path.join(root, "supabase", "migrations", `${alias}.sql`), legacySql, "utf8");
     writeFileSync(path.join(root, "supabase", "migrations", `${legacy}.sql`), legacySql, "utf8");
+    // A genuine, fresh, clean proof for the LEGACY migration — nothing forged.
+    // Its evidence hash is calculated only after the complete reviewer source
+    // surface exists, exactly as the real proof wrapper does.
+    writeFileSync(path.join(stateDir, `migration-review-${legacy}.json`),
+      JSON.stringify({
+        migration: legacy,
+        timestamp: iso(0),
+        reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
+        findings: "clean",
+        queryHash: legacyHash,
+        evidenceHash: migrationProofEvidenceHash({ projectDir: root, stateDir }),
+      }), "utf8");
 
     // FIXED (PR: exact proof-name on the MCP path). requireExactProofName now
     // DEFAULTS to true, so the hook — which passes no such flag — refuses the alias.
@@ -755,6 +813,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     ok(res.stderr.includes("it is not that file"),
       "the refusal says the passed file is not the approved artifact");
     ok(!res.stdout.includes("Transmitting"), "an out-of-tree copy never transmits");
+    restoreFixtureLedgerAndEvidence(okRoot2);
     // Load-bearing pair: the repository file itself still applies, so the rule is
     // about identity and not about refusing everything.
     const realFile = path.join(okRoot2, "supabase", "migrations", `${MIG}.sql`);
@@ -793,6 +852,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     mkdirSync(path.join(parkedRoot, "supabase", "migrations"), { recursive: true });
     const permittedFile = path.join(parkedRoot, "supabase", "migrations", `${MIG}.sql`);
     writeFileSync(permittedFile, SQL, "utf8");
+    restoreFixtureLedgerAndEvidence(parkedRoot);
     makeOriginMain(parkedRoot); // merged gate also runs the pending-set preflight
     const moved = spawnSync(process.execPath, [scriptPath, permittedFile], {
       encoding: "utf8",
