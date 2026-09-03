@@ -11,6 +11,9 @@ import {
   chemLineBillingHazard,
   chemUnitUnspecifiedSides,
   rateDenominatorIsUnrecognized,
+  chemQuantityTolerance,
+  chemQuantityDisagreesWithRate,
+  chemQuantityExpectedButZero,
   type ChemCalcRow,
 } from './chemCalculator';
 import { normalizeRateUnit } from './labelGuardrails';
@@ -723,6 +726,118 @@ describe('chemCalculator — a RELOADED row is never rewritten (Codex P1 revert)
     const reloaded = row({ quantity: '150', rate_per_acre: '1.5' });  // no driver, as loaded
     expect(recomputeChemRowForAcres(reloaded, 200).quantity).toBe('150');
     expect(recomputeChemRowForAcres(reloaded, 50).quantity).toBe('150');
+  });
+});
+
+describe('chemCalculator — F06: a RELOADED row that carries its stored driver follows that side', () => {
+  // The two histories in the KNOWN_ISSUES F06 table. Both save as rate 1.5 / quantity 150
+  // over 100 acres; only the persisted driver tells them apart once reloaded.
+  it("driver 'rate' (typed 1.5 pt/ac): the quantity follows the acreage", () => {
+    const reloaded = row({ quantity: '150', rate_per_acre: '1.5', driver: 'rate' });
+    expect(recomputeChemRowForAcres(reloaded, 200)).toMatchObject({ rate_per_acre: '1.5', quantity: '300' });
+    expect(recomputeChemRowForAcres(reloaded, 50)).toMatchObject({ rate_per_acre: '1.5', quantity: '75' });
+  });
+  it("driver 'qty' (typed 150 pt total): the total is held and the rate follows", () => {
+    const reloaded = row({ quantity: '150', rate_per_acre: '1.5', driver: 'qty' });
+    expect(recomputeChemRowForAcres(reloaded, 200)).toMatchObject({ rate_per_acre: '0.75', quantity: '150' });
+    expect(recomputeChemRowForAcres(reloaded, 50)).toMatchObject({ rate_per_acre: '3', quantity: '150' });
+  });
+  it('a reloaded rate-driven line lands within the server tolerance at ANY acreage', () => {
+    const reloaded = row({ quantity: '10', rate_per_acre: '0.0561', driver: 'rate' });
+    for (const acres of [1, 178.31, 999.5, 5000]) {
+      const next = recomputeChemRowForAcres(reloaded, acres);
+      expect(chemQuantityDisagreesWithRate({ ...next, rate_unit: 'pt/ac', unit: 'pt' }, acres)).toBeNull();
+    }
+  });
+});
+
+describe('chemCalculator — F06: chemQuantityDisagreesWithRate mirrors CHEM_QUANTITY_NOT_DERIVED', () => {
+  const line = (over: Partial<{ quantity: string; rate_per_acre: string; rate_unit: string; unit: string }> = {}) => ({
+    quantity: '150', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'pt', ...over,
+  });
+
+  it('pins the tolerance to the server rule GREATEST(0.0001, LEAST(0.00005 x acres, 0.1))', () => {
+    expect(chemQuantityTolerance(0)).toBe(0.0001);
+    expect(chemQuantityTolerance(1)).toBe(0.0001);            // 0.00005 < 0.0001 -> floor
+    expect(chemQuantityTolerance(2)).toBe(0.0001);            // 0.0001 exactly
+    expect(chemQuantityTolerance(178.31)).toBeCloseTo(0.0089155, 10);
+    expect(chemQuantityTolerance(2000)).toBe(0.1);            // the knee
+    expect(chemQuantityTolerance(1e12)).toBe(0.1);            // capped, never caller-sized
+  });
+
+  it('the F06 shape: a stale reloaded line at doubled acreage is named, with the expected quantity', () => {
+    expect(chemQuantityDisagreesWithRate(line(), 200)).toBe(300);
+  });
+
+  it('a line whose quantity agrees with rate x acres is silent', () => {
+    expect(chemQuantityDisagreesWithRate(line(), 100)).toBeNull();
+  });
+
+  it("the gate's round-23 example — quantity typed, rate stored to 4 dp — is accepted", () => {
+    // 178.31 acres, operator typed 10, the UI stores rate fmt4(10 / 178.31) = 0.0561, and
+    // 0.0561 x 178.31 = 10.003191: off by 0.0032, inside 0.00005 x 178.31 = 0.0089.
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '10', rate_per_acre: '0.0561' }), 178.31)).toBeNull();
+  });
+
+  it('is exactly as strict as the SQL at the boundary', () => {
+    // 100 acres -> tolerance 0.005. Expected 150.
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '150.005' }), 100)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '150.0051' }), 100)).toBe(150);
+  });
+
+  it('compares units after normalisation, so a per-acre suffix or a spelling does not hide the equal path', () => {
+    expect(chemQuantityDisagreesWithRate(line({ rate_unit: 'PT/acre', unit: 'Pt' }), 200)).toBe(300);
+    expect(chemQuantityDisagreesWithRate(line({ rate_unit: 'pt per acre', unit: 'pt' }), 200)).toBe(300);
+  });
+
+  it('stays silent when the units DIFFER — that path belongs to chemLineBillingHazard', () => {
+    // 32 oz/ac over 100 acres = 3200 fl oz = 25 gal: correct, and NOT this helper's call.
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '25', rate_per_acre: '32', rate_unit: 'oz/ac', unit: 'gal' }), 100)).toBeNull();
+  });
+
+  it('stays silent when either unit is blank or unrecognised — chemUnitUnspecifiedSides owns that', () => {
+    expect(chemQuantityDisagreesWithRate(line({ unit: '' }), 200)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ rate_unit: '' }), 200)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ rate_unit: '/ac' }), 200)).toBeNull();
+  });
+
+  it('stays silent with no usable rate or acreage (the server takes a different exit there)', () => {
+    expect(chemQuantityDisagreesWithRate(line({ rate_per_acre: '' }), 200)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ rate_per_acre: '0' }), 200)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ rate_per_acre: 'abc' }), 200)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line(), 0)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line(), Number.POSITIVE_INFINITY)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line(), Number.NaN)).toBeNull();
+  });
+
+  it('stays silent on a zero quantity — that is the ZERO_BUT_EXPECTED shape, mirrored separately', () => {
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '0' }), 200)).toBeNull();
+  });
+
+  it('does not gate on price or customer_supplied: the server checks every line on the equal path', () => {
+    // The helper takes no price at all, so an unpriced stale line is still named.
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '150' }), 200)).toBe(300);
+  });
+});
+
+describe('chemCalculator — F06: chemQuantityExpectedButZero mirrors CHEM_QUANTITY_ZERO_BUT_EXPECTED', () => {
+  const zero = (over: Partial<{ quantity: string; rate_per_acre: string; price_per_unit_cents: string; customer_supplied: boolean }> = {}) => ({
+    quantity: '0', rate_per_acre: '1.5', price_per_unit_cents: '3800', customer_supplied: false, ...over,
+  });
+  it('a priced line recording 0 where 150 was derivable is named', () => {
+    expect(chemQuantityExpectedButZero(zero(), 100)).toBe(150);
+  });
+  it('exempt shapes stay silent: customer-supplied, unpriced, non-zero quantity', () => {
+    expect(chemQuantityExpectedButZero(zero({ customer_supplied: true }), 100)).toBeNull();
+    expect(chemQuantityExpectedButZero(zero({ price_per_unit_cents: '0' }), 100)).toBeNull();
+    expect(chemQuantityExpectedButZero(zero({ price_per_unit_cents: '' }), 100)).toBeNull();
+    expect(chemQuantityExpectedButZero(zero({ quantity: '150' }), 100)).toBeNull();
+  });
+  it("Mason's 2026-08-24 mid-entry shape (priced, acreage, NO rate yet, quantity 0) is accepted", () => {
+    expect(chemQuantityExpectedButZero(zero({ rate_per_acre: '' }), 100)).toBeNull();
+  });
+  it('no acreage yet means nothing was expected', () => {
+    expect(chemQuantityExpectedButZero(zero(), 0)).toBeNull();
   });
 });
 
