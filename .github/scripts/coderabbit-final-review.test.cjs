@@ -133,6 +133,46 @@ test('the gate\'s own label and comment writes are actually granted', () => {
   );
 });
 
+// GitHub accepts only this fixed set of keys in an Actions `permissions:` block.
+// An unknown key does not warn and does not degrade: it makes the workflow file
+// UNLOADABLE, and GitHub reports that as a zero-job run whose name is the file
+// path — which reads like an unrelated infrastructure blip, not a syntax error.
+// PR #563 added `administration: read` here (a GITHUB_TOKEN cannot hold repository
+// administration at all) and this suite stayed green, because every other test
+// reads the workflow as TEXT and never validates the key names. Run 33696773987
+// is that break observed live: it would have replaced a broken gate with no gate.
+// Sourced from the GitHub Actions `permissions` reference; extend the set only for
+// a key GitHub documents, never to make a failing workflow load.
+const ACTIONS_PERMISSION_KEYS = new Set([
+  'actions', 'attestations', 'checks', 'contents', 'deployments', 'discussions',
+  'id-token', 'issues', 'models', 'packages', 'pages', 'pull-requests',
+  'repository-projects', 'security-events', 'statuses',
+]);
+
+test('every declared permission is a key GitHub Actions actually accepts', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+  const permissionsBlock = workflow.match(/\npermissions:\r?\n([\s\S]*?)\r?\n(?=\S)/);
+  assert.ok(permissionsBlock, 'workflow must declare a top-level `permissions:` block');
+  // Deliberately broader than the `[a-z-]+` matcher above: this test has to SEE a
+  // malformed key in order to reject it, so it must not filter one out first.
+  const declared = permissionsBlock[1]
+    .split(/\r?\n/)
+    .filter((line) => /^ {2}[^#\s]/.test(line))
+    .map((line) => line.trim().split(/:\s*/)[0]);
+  assert.ok(declared.length > 0, 'permissions block must declare at least one scope');
+
+  assert.deepEqual(
+    declared.filter((key) => !ACTIONS_PERMISSION_KEYS.has(key)),
+    [],
+    'an unknown permissions key makes this workflow file unloadable — GitHub reports it '
+    + 'as a zero-job startup failure, not as a syntax error, so the gate silently stops '
+    + 'running instead of failing visibly',
+  );
+});
+
 test('the gate refuses to run on any event other than pull_request_target', async () => {
   const harness = makeHarness({ eventName: 'pull_request_review', action: 'submitted' });
   const result = await execute(harness);
