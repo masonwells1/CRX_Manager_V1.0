@@ -12,6 +12,8 @@ export interface JobChemicalPayloadSource {
   warehouse: string;
   vendor: string;
   customer_supplied: boolean;
+  /** F06: which field the operator typed ('rate' | 'qty'); undefined = unknown. */
+  driver?: 'rate' | 'qty';
 }
 
 export function buildJobChemicalsPayload(rows: JobChemicalPayloadSource[]) {
@@ -32,6 +34,12 @@ export function buildJobChemicalsPayload(rows: JobChemicalPayloadSource[]) {
     vendor: row.vendor || null,
     customer_supplied: row.customer_supplied || false,
     sort_order: index,
+    // F06 (2026-09-03): persisted to job_chemicals.driver so a RELOADED line knows which
+    // side to hold when the acreage changes. Only the two values the calculator produces
+    // are sent; anything else is null (unknown), which the server stores as NULL and the
+    // client leaves exactly as saved. save_job refuses any other string
+    // (CHEM_DRIVER_INVALID), so this narrowing is what keeps a stale tab from being refused.
+    driver: row.driver === 'rate' || row.driver === 'qty' ? row.driver : null,
     };
   });
 }
