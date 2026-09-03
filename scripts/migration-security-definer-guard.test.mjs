@@ -23,6 +23,20 @@ test('does not accept a commented, quoted, wrong-overload, or later-regranted re
   for (const sql of [commented, quoted, wrongOverload, regranted]) assert.deepEqual(securityDefinerMissingAnonRevokes(sql), ['post_return_credit']);
 });
 
+test('fails closed for quoted names and unsupported ACL forms that can restore execution', () => {
+  const quoted = `CREATE FUNCTION public."danger-fn"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['danger-fn']);
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\nGRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon WITH GRANT OPTION;`),
+    ['unparseable-security-definer-sql'],
+  );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\nGRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon;`),
+    ['unparseable-security-definer-sql'],
+  );
+});
+
 test('does not demand an anon revoke for invoker-security functions', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.safe_fn() RETURNS void LANGUAGE sql AS $$ SELECT; $$;'), []);
 });

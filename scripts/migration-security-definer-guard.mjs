@@ -2,6 +2,7 @@
 // inherited PUBLIC and CRX's explicit anon EXECUTE grants. Unknown syntax and
 // unterminated SQL fail closed rather than becoming an ACL bypass.
 export const CREATE_FN_ANY = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
+const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
 
 function blank(out, count) { return out + ' '.repeat(count); }
 
@@ -87,29 +88,34 @@ function canonicalSignature(name, args, declaration = false) {
 
 function aclEvents(sql) {
   const events = [];
-  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
+  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
   for (const match of sql.matchAll(re)) {
     const open = match.index + match[0].length - 1;
     const args = balanced(sql, open);
     if (!args) return null;
     const roles = /^\s+(?:FROM|TO)\s+([^;]+);/i.exec(sql.slice(args.end));
-    if (!roles) return null;
-    events.push({ action: match[1].toLowerCase(), signature: canonicalSignature(match[2], args.text), roles: roles[1].split(',').map((r) => r.trim().replaceAll('"', '').toLowerCase()) });
+    if (!roles || /\b(?:WITH|GROUP|ROLE)\b/i.test(roles[1])) return null;
+    events.push({ action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text), roles: roles[1].split(',').map((r) => r.trim().replaceAll('"', '').toLowerCase()) });
   }
+  // Schema-wide grants, default privileges, and unfamiliar GRANT/REVOKE forms
+  // can restore effective execution without appearing in a function-specific
+  // event. The producer has no live ACL graph, so reject them rather than guess.
+  if ((sql.match(/\b(?:GRANT|REVOKE)\b/gi) || []).length !== events.length) return null;
   return events;
 }
 
 export function securityDefinerMissingAnonRevokes(sql) {
   const executable = executableSql(sql);
   if (executable === null) return ['unparseable-security-definer-sql'];
-  const declarations = [...executable.matchAll(CREATE_FN_ANY)];
+  const declarations = [...executable.matchAll(SECURITY_DEFINER_CREATE)];
   const required = new Map();
   for (let index = 0; index < declarations.length; index++) {
     const declaration = declarations[index];
     const args = balanced(executable, declaration.index + declaration[0].length - 1);
     if (!args) return ['unparseable-security-definer-sql'];
     const end = declarations[index + 1]?.index ?? executable.length;
-    if (/\bSECURITY\s+DEFINER\b/i.test(executable.slice(declaration.index, end))) required.set(canonicalSignature(declaration[1], args.text, true), declaration[1]);
+    const name = declaration[1] || declaration[2];
+    if (/\bSECURITY\s+DEFINER\b/i.test(executable.slice(declaration.index, end))) required.set(canonicalSignature(name, args.text, true), name);
   }
   const events = aclEvents(executable);
   if (events === null) return ['unparseable-security-definer-sql'];
