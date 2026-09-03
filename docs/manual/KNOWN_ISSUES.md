@@ -1,11 +1,31 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-03 for migration-ledger facts and commission-history item 3.4.** A read-only
-capture records **993 ledger rows**, 986 distinct names, live `max(version)` `20260903153402`, and
-effective ordering high-water **`20260903150000`** (authored name
-`20260903150000_job_chemicals_persist_driver`). F06 is applied live under that server-assigned
-version; the higher-stamped commission-history migration remains absent.
-The 2026-09-01 reading below is retained as provenance. The two Section 9 AP migrations
+**Last verified: 2026-09-03 for the F2 entry and migration-ledger facts.** The ordering boundary is
+the newest applied authored NAME:
+**`20260903150000_job_chemicals_persist_driver`**. Read ordering from the NAME — it is what
+the ordering guard compares and it moves far less often than the counters. For provenance, the same
+read observed 993 ledger rows (986 distinct names) and `max(version)` `20260903153402`; **treat both
+of those as a point-in-time observation, not a fact** — any lane applying a migration moves them, so
+re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
+F2 item below was re-verified against live on this date (function bodies, grants, the
+`invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
+item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
+six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
+
+**F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
+`20260903153402`.** It is also the current ordering boundary named above. Verified independently
+against production on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job`
+is at md5 `18d08d5f40aea91fe13ac3e5a686c549` with exactly one overload, so no duplicate function was
+created. This **supersedes every earlier statement in this file that F06 was merged but not
+applied** — that wording was correct when written and is now false; its earlier 990-row /
+`max(version)` `20260903025854` / `20260831212415_guard_cycle_count_completion_revision` authoring
+figures are likewise superseded. The caution it carried still stands on its own terms: PR #582
+merging changed the repository, and the apply that changed production was a separate act minutes
+later, so a merge must never be read as an apply — confirm each against live separately.
+
+**Superseded 2026-09-01 ledger reading, kept for provenance.** A read-only capture recorded **980 ledger rows**
+and effective ordering high-water **`20260826222000`** (authored name
+`20260826222000_correct_ap_aging_due_date_buckets`). The two Section 9 AP migrations
 `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
 `20260826222000_correct_ap_aging_due_date_buckets` were applied live on 2026-09-01 under Mason's explicit
 in-chat approval, through the full apply gate (ordering, destructive-content, reviewer proof and Codex
@@ -814,14 +834,50 @@ role gate.** Eight `SECURITY DEFINER` generators (`next_application_record_numbe
 `next_commission_payment_number`, `next_cycle_count_number`, `next_delivery_number`,
 `next_invoice_number`, `next_job_number`, `next_po_number`, `next_return_number`) grant `EXECUTE` to
 `authenticated` and check nothing (live, read-only, 2026-09-01). `anon` has no grant; they insert
-nothing; exposure is sequence-number disclosure and advisory-lock contention by any logged-in
-principal including a deactivated one. Severity MEDIUM (Codex). The branch
+no business rows. Severity MEDIUM (Codex).
+
+**Two corrections from live read-only introspection on 2026-09-03 — the original exposure line
+understated this.** (1) `next_invoice_number` is **not** read-only: it calls `nextval()` and
+conditionally `setval()` on `invoice_number_seq`, `cs_invoice_number_seq`, `mc_invoice_number_seq`
+and `cm_invoice_number_seq`, so an unauthorized caller can **advance live invoice numbering**, not
+merely observe the next value. (2) There is a real unauthorized population today: live `profiles`
+holds **2 active `entity_recipient` (customer-portal) accounts** and **1 deactivated `sales_rep`**,
+and all three can call all eight generators right now. The branch
 `codex/section1-security-hardening-20260725` carries migration
 `20260725234503_harden_section1_number_and_field_actor.sql`, **not applied and not on `main`**, and
-covers only six of the eight; its other half (`bind_save_field_actor`) is live via PR #285. A plain
-`REVOKE` is wrong — `CycleCounts.tsx:155` and `JobDetail.tsx:1838` call two of them directly.
-**Fix shape:** new migration, all eight, in-body active-profile + role gates, grants preserved,
-through `migration-review`.
+covers only six of the eight; its other half (`bind_save_field_actor`) is live via PR #285. A
+BLANKET `REVOKE` is wrong — `CycleCounts.tsx:155` and `JobDetail.tsx:1861` call two of them
+directly and would break. A TARGETED revoke of the other six is right, and is what shipped.
+**Fix shape:** new migration, all eight, in-body active-profile + role gates, plus direct
+`authenticated` EXECUTE revoked from the six with no browser caller, through `migration-review`.
+
+**Status 2026-09-03 — FIX WRITTEN AND PROVEN, NOT YET APPLIED.**
+`supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql` on branch
+`claude/f2-number-generator-gates-e12d02` covers all **eight**, gates in-body before each advisory
+lock, **and narrows the grants**: direct `authenticated` EXECUTE is REVOKED from the six generators
+the browser never calls, while `next_cycle_count_number` and `next_job_number` keep theirs. The gate
+settles WHO may call and cannot settle WHERE FROM — the gap it left is that the gate admits `driver`
+on `next_invoice_number` for auto-invoice on an ASSIGNED delivery, but a direct RPC call carries no
+delivery context, so any active driver could advance invoice numbering at will. Allowed sets are the
+union of the creating surface's roles in `src/lib/pagePermissions.ts` and the roles the 18 live
+internal caller RPCs admit, so no currently succeeding path starts failing — `driver` is in the
+invoice set because `_complete_delivery_authorized_impl` admits admin, sales_rep, or the delivery's
+**own assigned** driver (and already requires `is_active`) and reaches `next_invoice_number` through
+auto-invoice. Proof: `scripts/smoke/prove-number-generator-gates.mjs`
+→ `NUMBER_GENERATOR_GATE_PROOF_PASS` on a disposable `postgres:17-alpine` (`--network none`), which
+reproduces the hole first, then asserts the full 7-principal × 8-generator allow matrix, the intended
+`proacl` SHAPE across the replace (two keep `authenticated`, six lost it, none hold `anon`, all keep
+`service_role`), a browser-shaped `SET LOCAL ROLE authenticated` call, an active driver's DIRECT call
+returning `permission denied for function next_invoice_number`, and **fifteen mutation tests** each
+showing a guard actually fires. `typecheck`/`lint` clean.
+
+**Two claims in earlier revisions of this entry were superseded on 2026-09-03 and are corrected
+above:** that the branch "re-emits no `GRANT`/`REVOKE`" (it now revokes from six), and that
+`_complete_delivery_authorized_impl` "checks authentication but not role" (it checks role; verified
+against live `prosrc`). Both were true when written.
+**Not applied live and not merged** — the live apply needs Mason's in-chat approval, a same-session
+apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict. This item stays OPEN until that lands;
+`codex/section1-security-hardening-20260725` stays until then per the branch-retention note below.
 
 **F3 — nine enforcement-file patterns missing from the `.claude/settings.json` `ask` list.**
 `scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, `scripts/normalize-eol.mjs`,
