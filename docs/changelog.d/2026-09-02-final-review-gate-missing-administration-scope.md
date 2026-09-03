@@ -33,22 +33,38 @@ deliberately does not spell that name out — see
 `2026-09-02-review-capture-redacts-on-token-names.md` for why writing it here
 blinded the review harness.)
 
-**2. The workflow never declared `administration: read`.**
+**2. The workflow declared `pull-requests: read`, and its labels live on a PR.**
 
 Raising the ceiling was necessary but not sufficient — a fresh run showed
-`Issues: write` correctly granted and still 403'd. The denied call is
-`repos.getCollaboratorPermissionLevel` (`.github/scripts/coderabbit-final-review.cjs:671`),
-which the gate uses to verify the actor who applied `ready-for-coderabbit`
-actually holds write or admin. That endpoint requires `administration: read`,
-which was not in the permissions block, so the gate died on its own security
-check before doing any work.
+`Issues: write` correctly granted and still 403'd. GitHub gates the
+`/issues/{n}/labels` endpoints on the **Pull requests** permission whenever the
+target number is a pull request, so `issues: write` alone does not reach them.
+`#570` fixed this by moving that scope to `pull-requests: write`.
 
-### Why granting it is safe here
+### Correction — this branch first blamed the wrong scope
 
-`administration: read` is read-only, and although `pull_request_target` is the
-privileged trigger, this job checks out **only** the default branch with
-`persist-credentials: false` and never fetches or executes the pull request's
-code — so no untrusted code runs with the token.
+Cause 2 was originally recorded here as a missing `administration: read`, needed
+by `repos.getCollaboratorPermissionLevel`
+(`.github/scripts/coderabbit-final-review.cjs:671`). **That was wrong**, and the
+logs say so plainly. Every observed failure — runs `33702506753`, `33701849744`,
+`33700442498`, `33700095181`, `33699009201`, `33702436849` — names the label
+endpoints, not the collaborator-permission endpoint:
+
+```
+workflow label reset failed for ready-for-coderabbit (Resource not accessible by
+integration); coderabbit-review-requested (Resource not accessible by integration)
+```
+
+`getCollaboratorPermissionLevel` is reached only on the `labeled` event carrying
+`ready-for-coderabbit` (`coderabbit-final-review.cjs:648-671`). Every failing run
+took the reset/reconcile path and returned before that line, so the call has never
+been exercised and has never 403'd. The scope was a prediction reasoned from the
+symptom, and the symptom had a different cause.
+
+The speculative grant has been dropped from this branch — see
+`2026-09-03-drop-speculative-administration-scope.md`. The ready-label path
+remains unexercised end to end; if the first genuine review request 403s there,
+the error text names the endpoint and the scope can be added with evidence.
 
 ### Scope note
 
