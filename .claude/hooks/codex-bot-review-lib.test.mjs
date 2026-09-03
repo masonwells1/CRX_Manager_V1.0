@@ -341,7 +341,19 @@ eq(
 // Measured at the CALL, not the definition: `function codexAppAdvisory({ request`
 // matches the same prefix and now sits textually before the call, so a bare
 // indexOf would measure the wrong thing and pass no matter where the call lands.
-const codexAdvisoryCallAt = codexGuardSource.indexOf("const advisory = codexAppAdvisory({ request");
+//
+// There are TWO call sites since Codex round 9: the GitHub-connector merge tool
+// (one PR per call, so its allow point is right there) and the shell drain
+// after the segment loop. The ordering pins below measure the LAST one — the
+// shell drain — because that is the one a regression would move back inside
+// the loop; the connector site is pinned separately for reachability.
+const codexAdvisoryCallAt = codexGuardSource.lastIndexOf("const advisory = codexAppAdvisory({ request");
+const codexConnectorAdvisoryAt = codexGuardSource.indexOf("codexAppAdvisory({ request: result.advisoryRequest");
+const codexConnectorRouteAt = codexGuardSource.indexOf("if (GITHUB_MERGE_TOOL.test(name)) {");
+ok(
+  codexConnectorRouteAt > 0 && codexConnectorAdvisoryAt > codexConnectorRouteAt,
+  "REACHABILITY (Codex round 9): the GitHub-connector merge route runs the advisory itself — after round 8 deferred the lookup out of the per-merge gate, this route returned the deferred request untouched and a connector-driven merge skipped the check a shell merge got",
+);
 const codexVerdictMatch = codexGuardSource.match(
   /if \((?:!pullRequestApproved\(pullRequest\)|pullRequestReviewBlocked\(pullRequest\))\)/,
 );

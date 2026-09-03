@@ -201,11 +201,18 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // hard gates; SEC-002 — the shell no-op set gained cmd.exe's caret and a
   // backslash-deleted view for the POSIX escape. Anchors unchanged; the pushLib
   // transform is still identity. Output from the producer test's candidate.
-  codexGuard: "a6ddfb81edf46002d596e2de356a91c387abf525",
+  // Re-pinned again 2026-09-03 (Codex round 9, two HIGHs on the exact-SHA proof
+  // of dc965401f): the GitHub-connector merge route now runs the deferred
+  // advisory itself (round 8 had left it returning the request untouched), and a
+  // mutating shell segment whose text is computed — parenthesised expression,
+  // `$` variable, Join-Path, -f/-join — is refused outright instead of parsed.
+  // Anchors unchanged; pushLib transform still identity. Output from the
+  // producer test's candidate.
+  codexGuard: "17cd7527224e391d24ca41e2781c66b38e1982b4",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "af78094716d8ab2c5bf61d868be6b01d29dd2093",
+  codexGuard: "707147f4ce45eca294f405294a5f84cfccfbfcbb",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

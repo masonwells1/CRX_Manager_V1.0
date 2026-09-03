@@ -220,6 +220,30 @@ export function commandTouchesProtectedHarnessPath(command) {
     PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(token)));
 }
 
+// The mutating verbs the shell-mutation gate recognises. Kept as one source so
+// the computed-text check below and `shellMutatesPath` cannot drift apart.
+const SHELL_MUTATION_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|remove-item|move-item|copy-item|rename-item|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i;
+// Text that builds a value at run time rather than spelling it: a parenthesised
+// (sub)expression, a `$` variable or `$(…)`/`${…}`, Join-Path, and the -f / -join
+// string operators. Deliberately broad — the point is to refuse the SHAPE of a
+// computed destination, not to recognise particular constructions.
+const COMPUTED_TEXT_RE = /\(|\$[A-Za-z_{(]|\bjoin-path\b|\s-f\s|\s-join\b/i;
+
+// The first MUTATING segment of `command` whose text is computed, or "" when
+// none is. Segments are the same pipeline/chain units the merge and push gates
+// use, so a variable in a harmless later stage does not condemn an earlier
+// redirect. Codex round 9 (HIGH): `Set-Content (".claude/hooks/codex-bot-review-"
+// + "lib.mjs")` and `Copy-Item evil.mjs (Join-Path ".claude/hooks"
+// "codex-bot-review-lib.mjs")` both returned blocked:false, because no literal
+// token in either spells the protected file.
+export function mutatingSegmentWithComputedText(command) {
+  const segments = String(command || "").split(/(?:&&|\|\|?|;|\r?\n)/).map((s) => s.trim()).filter(Boolean);
+  for (const segment of segments) {
+    if (SHELL_MUTATION_RE.test(segment) && COMPUTED_TEXT_RE.test(segment)) return segment;
+  }
+  return "";
+}
+
 // scripts/apply-migration-file.mjs mutates the LIVE database. It was added
 // 2026-08-24 as a gated door for migrations too large to transmit through
 // apply_migration, and Codex's review of that PR caught that the new spelling
@@ -985,13 +1009,25 @@ export function evaluateProductionAction({
         "CODEX PRODUCTION GATE: could not determine WHICH pull request this merge tool targets from its inputs, so the merge is denied (fail closed) — the guard must never verify one PR while the tool merges another."
       );
     }
-    return gatePullRequestMerge({
+    const result = gatePullRequestMerge({
       request,
       repoDir: actionRepoDir,
       nowMs,
       runGit,
       runGh,
     });
+    if (result.blocked) return result;
+    // The connector merges exactly ONE pull request per call, so there is no
+    // later segment for the advisory to starve: this IS the command's allow
+    // point, and the deferred lookup runs here. Codex round 9 found this path
+    // returning the deferred request untouched after round 8 moved the lookup
+    // out of the per-merge gate — a merge driven through the connector skipped
+    // the check a shell merge got, the asymmetry AGENTS.md forbids.
+    if (result.advisoryRequest) {
+      const advisory = codexAppAdvisory({ request: result.advisoryRequest, repoDir: actionRepoDir, runGh });
+      if (advisory) return advisory;
+    }
+    return { blocked: false };
   }
 
   if (GITHUB_TOOL.test(name) && !githubToolIsReadOnly(name)) {
@@ -1031,7 +1067,7 @@ export function evaluateProductionAction({
   if (/[\r\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
     return denied("CODEX PRODUCTION GATE: multiline shell commands that reference the production/review harness are blocked.");
   }
-  const shellMutatesPath = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|remove-item|move-item|copy-item|rename-item|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i.test(command);
+  const shellMutatesPath = SHELL_MUTATION_RE.test(command);
   if (shellMutatesPath && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
     return denied("CODEX PRODUCTION GATE: direct shell mutation of the production/review harness is blocked. Use the reviewed maintenance workflow with Mason's approval.");
   }
@@ -1045,6 +1081,28 @@ export function evaluateProductionAction({
       "CODEX PRODUCTION GATE: an argument of this mutating command resolves to a protected harness file " +
       "once `.`/`..` segments and drive-relative prefixes are canonicalized, even though it is not spelled " +
       "that way. Use the reviewed maintenance workflow with Mason's approval."
+    );
+  }
+  // A destination the guard cannot READ cannot be gated (Codex round 9). Every
+  // check above examines literal tokens; a path assembled at run time —
+  // `(".claude/hooks/codex-bot-review-" + "lib.mjs")`, `(Join-Path ".claude/hooks"
+  // "x.mjs")`, `$dest`, `-f` formatting — has no literal token to examine and
+  // walked straight past all of them. Enumerating the ways PowerShell can build
+  // a string is the losing half of that trade (rounds 2, 3, 4, 7, 8 were each
+  // one more spelling), so the SHAPE is refused instead: a mutating shell
+  // segment whose text carries a computed expression is denied outright, the
+  // same stance this guard already takes on shell-expanded interpreter
+  // arguments and on merge segments carrying a command substitution. Spell the
+  // destination literally and the segment is gated normally. Scoped to the
+  // MUTATING segment so `npm test 2>&1 | Where-Object { $_ -match "x" }` — a
+  // redirect in one stage and a variable in another — is not caught.
+  const computedSegment = mutatingSegmentWithComputedText(command);
+  if (computedSegment) {
+    return denied(
+      "CODEX PRODUCTION GATE: this mutating shell command builds a path or argument at run time " +
+      `(a parenthesised expression, a \`$\` variable, Join-Path, or the -f/-join operators) in: ${computedSegment}. ` +
+      "The guard cannot read a computed destination, so it is refused rather than gated. Spell the " +
+      "destination path literally and run the command again."
     );
   }
   if (isGitPush(command) && pushContextIsAmbiguous(command)) {

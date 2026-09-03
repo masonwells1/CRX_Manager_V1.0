@@ -630,6 +630,53 @@ try {
     );
   }
 
+  // ── round 9: a COMPUTED destination is refused, not parsed ─────────────────
+  // Codex HIGH on the exact-SHA proof of dc965401f. Every token check above
+  // reads literals; a path assembled at run time has none to read, and both of
+  // Codex's probes returned blocked:false. Rounds 2, 3, 4, 7 and 8 were each one
+  // more spelling, so this refuses the SHAPE: a mutating segment carrying a
+  // parenthesised expression, a `$` variable, Join-Path or -f/-join is denied
+  // outright, like a shell-expanded interpreter argument already is.
+  for (const command of [
+    'Set-Content (".claude/hooks/codex-bot-review-" + "lib.mjs") -Value ""',
+    'Copy-Item evil.mjs (Join-Path ".claude/hooks" "codex-bot-review-lib.mjs")',
+    'Set-Content ("{0}/{1}" -f ".claude/hooks", "codex-push-lib.mjs") -Value ""',
+    '$d = ".claude/hooks"; Set-Content "$d/codex-push-lib.mjs" -Value ""',
+    'Set-Content $dest -Value ""',
+    "echo x > $(Get-Content dest.txt)",
+    'Set-Content -Path (Get-Content dest.txt) -Value ""',
+    'Set-Content ((".claude", "hooks", "codex-push-lib.mjs") -join "/") -Value ""',
+  ]) {
+    const verdict = evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } });
+    assert.equal(verdict.blocked, true, `a computed destination in a mutating command must be refused: ${command}`);
+    assert.match(String(verdict.reason), /computed destination|builds a path/i, `…as a computed destination, not by accident of some other gate: ${command}`);
+  }
+  // A computed form that ALSO spells the protected path literally is caught by
+  // the earlier literal gate first; either denial is the right answer.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: 'Set-Content -Path (Join-Path $PWD ".claude/hooks/codex-push-lib.mjs") -Value ""' } }).blocked,
+    true,
+    "a computed form that still spells the protected path is denied (by whichever gate sees it first)",
+  );
+  // NEAR-MISS CANARIES: the refusal is scoped to the MUTATING segment. A
+  // variable or subexpression in a non-mutating stage, a literal destination
+  // with an ordinary value, and a plain redirect all stay allowed — otherwise
+  // "deny anything with a `$`" would pass every case above while making the
+  // shell unusable.
+  for (const innocent of [
+    'npm test 2>&1 | Where-Object { $_ -match "fail" }',
+    "git log --oneline > docs/out.txt",
+    'Set-Content docs/notes.txt -Value "plain"',
+    "Get-ChildItem (Join-Path $PWD docs) | Select-Object Name",
+    'Write-Output ("a" + "b")',
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: innocent } }).blocked,
+      false,
+      `a computed expression outside a mutating segment, or a literal destination, stays allowed: ${innocent}`,
+    );
+  }
+
   const botLibPush = makeRepo(".claude/hooks/codex-bot-review-lib.mjs", "export const ordinary = true;\n");
   assert.equal(
     evaluatePush(botLibPush.repo).blocked,
@@ -1087,6 +1134,59 @@ try {
   });
   assert.equal(chainedControlVerdict.blocked, false, "CONTROL: two clean merges are allowed");
   assert.equal(chainedControlAttempts, 2, "CONTROL: the advisory runs once per merge AFTER both cleared their hard gates — deferred, not dropped");
+
+  // ── round 9: the GitHub-connector merge tool must get the advisory too ─────
+  // Codex HIGH on the exact-SHA proof of dc965401f — a regression round 8
+  // introduced. Moving the lookup out of gatePullRequestMerge() left the
+  // connector route (mcp__github__merge_pull_request, one PR per call) returning
+  // the deferred request untouched: a mocked unresolved Codex thread on the
+  // exact head produced blocked:false through the connector while the same PR
+  // through `gh pr merge` produced blocked:true. Behavioural, on both routes.
+  const standingThreadGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      return JSON.stringify({ data: { repository: { pullRequest: {
+        headRefOid: risky.sha,
+        reviewThreads: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [{
+            isResolved: false,
+            isOutdated: false,
+            comments: { nodes: [{ author: { login: "chatgpt-codex-connector" }, originalCommit: { oid: risky.sha } }] },
+          }],
+        },
+      } } } });
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  const connectorStanding = evaluateProductionAction({
+    toolName: "mcp__github__merge_pull_request",
+    toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: standingThreadGh,
+  });
+  assert.equal(connectorStanding.blocked, true, "an unresolved Codex App thread on the exact head denies a CONNECTOR merge, not only a shell one");
+  assert.match(String(connectorStanding.reason), /unresolved comment/, "…with the App-review denial, not some other gate");
+  const shellStanding = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: standingThreadGh,
+  });
+  assert.equal(shellStanding.blocked, true, "PARITY: the same standing thread denies the shell route");
+  assert.match(String(shellStanding.reason), /unresolved comment/, "…with the same denial");
+  // And the connector route still ALLOWS when the App has nothing standing —
+  // the fix must add the check, not turn the route into a deny.
+  const connectorClean = evaluateProductionAction({
+    toolName: "mcp__github__merge_pull_request",
+    toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: controlGh,
+  });
+  assert.equal(connectorClean.blocked, false, "CONTROL: a clean, green, proof-backed connector merge with a failed (fail-open) advisory is still allowed");
   // --auto MUST NOT exempt an active objection (Codex High finding, PR #559).
   // Every other gate exempts auto because GitHub holds the merge until its own
   // requirements are met; the requirement that covered this one was the required
