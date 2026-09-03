@@ -166,15 +166,39 @@ Done means all of these, not "the tests pass":
 
 ---
 
-## 8. Open question for Mason
+## 8. What Mason uses this for — ANSWERED 2026-09-03
 
-Not blocking the build, but shapes the UI:
+Asked directly, he said:
 
-> **What do you use a historical commission balance *for*?** Year-end, checking what was owed at
-> a point in time, reconciling against a payout, something else?
+> *"I use historical commission balance for year end, checking what I owed and reconciling payouts
+> — all of it. It is very important to have this."*
 
-Asked 2026-09-03; not yet answered. The answer decides whether this needs a date picker on the
-existing report or a proper dated statement per recipient.
+**Treat this as a financial-reporting requirement, not a convenience feature.** All three uses are
+accounting uses, and two of them are the kind you have to be able to defend after the fact:
+
+1. **Year-end** — commission liability as of the fiscal close. A reported number that later
+   silently changes is the worst failure mode here; year-end figures get filed and referenced.
+2. **What was owed at a point in time** — outstanding liability per recipient as of any date.
+3. **Reconciling payouts** — tying a specific payment back to the individual commissions it
+   covered, and confirming the totals agree.
+
+Design consequences:
+
+- Not just a date picker. Use 3 needs **per-payment detail** — payment number, date, and the
+  commission lines it settled — not only per-recipient aggregates.
+- Use 1 means the report must be **stable when re-run**: the same as-of date must return the same
+  answer next year. That is exactly what the current current-status implementation cannot do, and
+  it is the strongest argument for the ledger-backed rewrite.
+- Timing note: the first payouts land around "a few months out" (≈2026-11/12), which is roughly
+  **year-end 2026**. So the first year-end that needs this is likely the first one with payouts in
+  it. Do not let this slip past the first payout.
+
+**Verified 2026-09-03 — the reconciliation plumbing already works.** `post_commission_payment` and
+`void_commission_payment` are thin wrappers; the real bodies are
+`_post_commission_payment_intent_impl_20260809` and `_void_commission_payment_intent_impl_20260809`,
+and **both write `commission_payment_items` and maintain `commissions.paid_date`.** So use 3 needs
+a report over data the system will already be recording correctly — no new capture. This is more
+tractable than it looks; confirm it still holds before building.
 
 ---
 

@@ -36,6 +36,26 @@ Files: `TODO.md` (dated callout at the top of the engineering section) and
 existing machinery, the two gaps, target behaviour, acceptance criteria including real-path proof,
 and the fallback path).
 
-One question is recorded as open and unanswered: what Mason uses a historical commission balance
-*for*. It decides whether this is a date picker on the existing report or a dated per-recipient
-statement, so it is flagged rather than assumed.
+## 2026-09-03 (follow-up) — Mason answered the open question; requirement upgraded
+
+The entry above recorded one question as open: what Mason uses a historical commission balance
+*for*. He answered it the same day — "year end, checking what I owed and reconciling payouts — all
+of it. It is very important to have this."
+
+That upgrades it from a convenience feature to a financial-reporting requirement, and changes the
+design in two concrete ways. Payout reconciliation needs per-payment detail — payment number, date,
+and the individual commission lines it settled — not only per-recipient aggregates. And a year-end
+figure must return the same answer when re-run a year later, which is exactly what the
+current-status implementation cannot promise and the strongest argument for the ledger-backed
+rewrite.
+
+Timing is tighter than first recorded: the first payouts land around 2026-11/12, roughly year-end
+2026, so the first year-end that needs this is likely the first one with payouts in it.
+
+One finding makes it more tractable than it looked. Verified live: `post_commission_payment` and
+`void_commission_payment` are thin wrappers, and the real bodies
+(`_post_commission_payment_intent_impl_20260809`, `_void_commission_payment_intent_impl_20260809`)
+already write `commission_payment_items` and maintain `commissions.paid_date`. The reconciliation
+data will therefore already be captured correctly as payouts happen — this is a reporting rewrite
+over existing capture, not new plumbing. The two dated-column gaps
+(`commission_payments.voided_at`, `commissions.cancelled_at`) are unchanged.

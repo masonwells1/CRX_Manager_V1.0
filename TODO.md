@@ -120,10 +120,18 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > Full spec, acceptance criteria, and the fallback if the window has closed:
 > `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md`.
 >
-> **Open question for Mason, asked 2026-09-03 and not yet answered:** what does he use a
-> historical commission balance *for* (year-end, point-in-time liability, payout reconciliation)?
-> It decides whether this is a date picker on the existing report or a dated per-recipient
-> statement.
+> **ANSWERED 2026-09-03 — treat this as a financial-reporting requirement, not a convenience.**
+> Asked what he uses it for, Mason said: *"year end, checking what I owed and reconciling payouts —
+> all of it. It is very important to have this."* So it needs per-payment reconciliation detail,
+> not just per-recipient aggregates, and a year-end figure must return the **same answer when
+> re-run next year** — which is precisely what the current-status implementation cannot do.
+> The first payouts (≈2026-11/12) land near year-end 2026, so the first year-end that needs this
+> is likely the first one with payouts in it.
+>
+> **Verified 2026-09-03:** `_post_commission_payment_intent_impl_20260809` and
+> `_void_commission_payment_intent_impl_20260809` already write `commission_payment_items` and
+> maintain `commissions.paid_date`. The payout-reconciliation data will already be captured
+> correctly — this is a reporting rewrite over existing capture, not new plumbing.
 
 - **Gauntlet close-out (T3)** — most July-14/15 HIGHs verified applied live this pass
   (incl. the three commission/prepay-admin migrations, re-stamped as live versions
