@@ -259,6 +259,13 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
       "CODEX REVIEW NOTICE: the Codex GitHub App has left no review comments on this PR. If it never ran, " +
       "comment `@codex review` and read the result before merging anything non-trivial.\n",
     );
+  } else if (codexVerdict.status === "incomplete") {
+    process.stderr.write(
+      `CODEX REVIEW NOTICE: the Codex GitHub App's review threads could only be PARTLY read (${codexVerdict.codexThreads} ` +
+      "seen; a later page failed, the cursor was unusable, or the page cap was reached). Nothing standing was seen " +
+      "in what was read, but an unread page could still hold one, so this is NOT a clean reading. Merging anyway " +
+      `(this gate fails open by design). Read them by hand: gh pr view ${request.selector || "<number>"} --comments\n`,
+    );
   }
 }
 

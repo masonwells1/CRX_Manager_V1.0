@@ -212,11 +212,17 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // b95a519a7): the computed-text rule now counts cmd.exe's `%VAR%` / `!VAR!`
   // expansion, and cmd's own write verbs (copy/move/xcopy/robocopy/mklink)
   // joined the mutation list. Anchors unchanged; pushLib transform identity.
-  codexGuard: "73df35e3059e71b240ee38f14df1fec9a3ebe9f7",
+  // Re-pinned again 2026-09-03 (Codex round 11, two HIGHs + one Medium on the
+  // exact-SHA proof of 008f300fc): protected-path candidates are now joined
+  // onto the tool's working directory before matching (file tools and shell), a
+  // directory-changing mutation is refused as unbindable, ANY `$` in a mutating
+  // segment is computed text, and the advisory prints an "incomplete" notice
+  // when the thread walk did not finish. Anchors unchanged; pushLib identity.
+  codexGuard: "a542fc1b1ef311bf8df71756336e9efb2835e4c0",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "5a0f8d29d04a0d8dff38d9badd2217201842e6cd",
+  codexGuard: "0bddb11d28fd8af8feb4ddd51b2d760e09509df2",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

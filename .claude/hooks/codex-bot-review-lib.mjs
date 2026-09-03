@@ -153,26 +153,48 @@ query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
 // run after it (PR #502 established this class; Codex round 6 found this
 // instance). The callers additionally run this only after their hard denials,
 // so the ordering does not depend on this budget being right.
+//
+// `incomplete` (Codex round 11, Medium): the walk can also END without
+// concluding — a later page comes back null, the server claims hasNextPage
+// with no usable cursor, or the page cap is reached with more pages behind
+// it. Those used to return what had been read as if it were everything, so a
+// resolved thread on page one plus an unresolved one on page four read as
+// "clean-at-head". The result now carries `incomplete: true` on every such
+// path, and evaluateCodexBotReview() refuses to call an incomplete read clean:
+// a standing finding it DID see still blocks, but anything short of that is
+// reported as "incomplete" so the callers print a notice instead of nothing.
 export function collectCodexThreads(runQuery, { deadlineMs = null, now = Date.now } = {}) {
   let cursor = null;
   let headRefOid = "";
   const nodes = [];
+  let incomplete = false;
   for (let page = 0; page < CODEX_THREAD_MAX_PAGES; page += 1) {
     if (deadlineMs !== null && now() >= deadlineMs) {
       throw new Error("codex-bot review lookup exceeded its time budget before it could finish paging");
     }
     const pr = runQuery(cursor);
-    if (!pr) break;
+    if (!pr) {
+      // Page one failing is "could not read at all" (empty head, handled by
+      // the callers); a LATER page failing leaves a partial read.
+      if (page > 0) incomplete = true;
+      break;
+    }
     if (!headRefOid) headRefOid = String(pr.headRefOid || "");
     const threads = pr?.reviewThreads;
     if (Array.isArray(threads?.nodes)) nodes.push(...threads.nodes);
     if (threads?.pageInfo?.hasNextPage !== true) break;
     const next = String(threads?.pageInfo?.endCursor || "");
-    // No cursor but "hasNextPage" would loop forever on the same page.
-    if (!next || next === cursor) break;
+    // No cursor but "hasNextPage" would loop forever on the same page — and
+    // there IS more, which this walk cannot reach.
+    if (!next || next === cursor) {
+      incomplete = true;
+      break;
+    }
     cursor = next;
+    // The cap is about to end the walk while the server still has pages.
+    if (page + 1 >= CODEX_THREAD_MAX_PAGES) incomplete = true;
   }
-  return { headRefOid, reviewThreads: { nodes } };
+  return { headRefOid, reviewThreads: { nodes }, incomplete };
 }
 
 // Normalize one GraphQL reviewThread node into { author, oid, resolved }.
@@ -221,23 +243,33 @@ export function isStandingAtHead(thread, head) {
 // Classify the Codex App's position on the head that is about to merge.
 //
 // Returns { status, unresolvedAtHead, codexThreads, headOid }, where status is
-// "findings-at-head" | "clean-at-head" | "stale" | "none". Only
+// "findings-at-head" | "clean-at-head" | "stale" | "none" | "incomplete". Only
 // "findings-at-head" blocks a merge; see the fail-open note above.
+//
+// "incomplete" (Codex round 11): the thread walk ended without reaching every
+// page (see collectCodexThreads). A standing finding that WAS read still blocks
+// — partial evidence of a problem is evidence — but a partial read is never
+// reported as clean, stale, or none, because the unread pages could hold the
+// unresolved thread. Callers print a notice for it, as for every other
+// non-blocking outcome.
 export function evaluateCodexBotReview(pullRequest) {
   const head = String(pullRequest?.headRefOid || "").trim().toLowerCase();
   const threads = codexBotThreads(pullRequest);
   const base = { unresolvedAtHead: 0, codexThreads: threads.length, headOid: head };
 
+  // Unresolved AND raised against this exact commit — checked FIRST so a
+  // standing finding on a page that was read blocks even when later pages
+  // were not.
+  const standing = head ? threads.filter((thread) => isStandingAtHead(thread, head)) : [];
+  if (standing.length > 0) {
+    return { status: "findings-at-head", ...base, unresolvedAtHead: standing.length };
+  }
+  if (pullRequest?.incomplete === true) return { status: "incomplete", ...base };
+
   if (threads.length === 0) return { status: "none", ...base };
   // An unknown head cannot be matched against anything. Report rather than
   // guess — "stale" prints, it does not block.
   if (!head) return { status: "stale", ...base };
-
-  // Unresolved AND raised against this exact commit.
-  const standing = threads.filter((thread) => isStandingAtHead(thread, head));
-  if (standing.length > 0) {
-    return { status: "findings-at-head", ...base, unresolvedAtHead: standing.length };
-  }
 
   // It has threads here, but nothing unresolved is anchored to this head:
   // either everything was worked, or its findings predate the current commit.

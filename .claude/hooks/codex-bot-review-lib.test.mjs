@@ -216,27 +216,50 @@ eq(evaluateCodexBotReview(pr(pr530)).unresolvedAtHead, 1, "PR #530 shape: 40 unr
   collectCodexThreads(() => { n += 1; return page([], false, null); });
   eq(n, 1, "paging stops when hasNextPage is false");
 
+  // A complete walk is marked complete.
+  eq(two.incomplete, false, "a walk that reached hasNextPage:false is complete");
+
   // A server that claims hasNextPage forever must not spin: bounded by
-  // CODEX_THREAD_MAX_PAGES.
+  // CODEX_THREAD_MAX_PAGES — and the cap leaves the read INCOMPLETE (Codex
+  // round 11): pages behind the cap were never fetched, so a clean reading of
+  // what was fetched proves nothing.
   let runaway = 0;
-  collectCodexThreads(() => { runaway += 1; return page([thread()], true, `c${runaway}`); });
+  const capped = collectCodexThreads(() => { runaway += 1; return page([thread({ resolved: true, oid: HEAD })], true, `c${runaway}`); });
   eq(runaway, CODEX_THREAD_MAX_PAGES, "paging is bounded by CODEX_THREAD_MAX_PAGES");
+  eq(capped.incomplete, true, "hitting the page cap with more pages behind it is an INCOMPLETE read");
+  eq(evaluateCodexBotReview(capped).status, "incomplete", "a capped walk whose fetched pages look clean is 'incomplete', never 'clean-at-head'");
 
   // hasNextPage true but no usable cursor would otherwise refetch page 1 forever.
   let stuck = 0;
-  collectCodexThreads(() => { stuck += 1; return page([thread()], true, ""); });
+  const stuckWalk = collectCodexThreads(() => { stuck += 1; return page([thread({ resolved: true, oid: HEAD })], true, ""); });
   eq(stuck, 1, "an empty endCursor stops paging instead of refetching the same page");
+  eq(stuckWalk.incomplete, true, "…and the read is incomplete, because the server said there was more");
   let repeat = 0;
-  collectCodexThreads(() => { repeat += 1; return page([thread()], true, "same"); });
+  const repeatWalk = collectCodexThreads(() => { repeat += 1; return page([thread({ resolved: true, oid: HEAD })], true, "same"); });
   eq(repeat, 2, "a repeated endCursor stops paging rather than looping");
+  eq(repeatWalk.incomplete, true, "…and that read is incomplete too");
+  eq(evaluateCodexBotReview(repeatWalk).status, "incomplete", "a cursor-stuck walk of resolved threads is 'incomplete', not 'clean-at-head'");
 
-  // A failed request mid-walk keeps what was already read.
+  // A failed request mid-walk keeps what was already read — a standing finding
+  // that WAS read still blocks — but never passes a partial read off as clean.
   const partial = collectCodexThreads((cursor) =>
     cursor === null ? page([thread({ resolved: false, oid: HEAD })], true, "c1") : null);
   eq(partial.reviewThreads.nodes.length, 1, "a null page ends the walk without discarding earlier nodes");
+  eq(partial.incomplete, true, "a null LATER page is an incomplete read");
   eq(evaluateCodexBotReview(partial).status, "findings-at-head", "partial results still block when they carry a standing finding");
-  eq(collectCodexThreads(() => null).headRefOid, "", "an immediately failed fetch yields an empty head, which reads as 'none'");
-  eq(evaluateCodexBotReview(collectCodexThreads(() => null)).status, "none", "a total fetch failure is 'none', never a block");
+  const partialClean = collectCodexThreads((cursor) =>
+    cursor === null ? page([thread({ resolved: true, oid: HEAD })], true, "c1") : null);
+  eq(
+    evaluateCodexBotReview(partialClean).status,
+    "incomplete",
+    "MUST NOT READ AS CLEAN: a resolved thread on page one and a failed page two is 'incomplete' — the unread page could hold the unresolved one (Codex round 11)",
+  );
+  const partialEmpty = collectCodexThreads((cursor) => (cursor === null ? page([], true, "c1") : null));
+  eq(evaluateCodexBotReview(partialEmpty).status, "incomplete", "no threads on page one plus a failed page two is 'incomplete', not 'none'");
+  const firstFail = collectCodexThreads(() => null);
+  eq(firstFail.headRefOid, "", "an immediately failed fetch yields an empty head, which reads as 'none'");
+  eq(firstFail.incomplete, false, "page ONE failing is 'could not read', which the callers already handle by the empty head — not a partial read");
+  eq(evaluateCodexBotReview(firstFail).status, "none", "a total fetch failure is 'none', never a block");
 }
 // The query must accept a cursor, or paging silently refetches page one.
 ok(/\$after\s*:\s*String/.test(CODEX_THREADS_QUERY), "query declares an $after cursor variable");
@@ -284,8 +307,12 @@ ok(/CODEX_THREADS_QUERY/.test(guardSource), "pr-merge-guard.mjs runs the shared 
 // the suite still green (2026-09-02).
 eq(
   (guardSource.match(/CODEX REVIEW NOTICE/g) || []).length,
-  3,
-  "pr-merge-guard.mjs prints a notice on all three non-blocking paths (fetch-failed, stale, none)",
+  4,
+  "pr-merge-guard.mjs prints a notice on all four non-blocking paths (fetch-failed, stale, none, incomplete)",
+);
+ok(
+  /status === "incomplete"/.test(guardSource) && /NOT a clean reading/.test(guardSource),
+  "the incomplete-walk path (Codex round 11) says out loud that a partial read is not a clean one",
 );
 ok(
   /CODEX REVIEW NOTICE: could not read/.test(guardSource),
@@ -313,8 +340,12 @@ ok(/findings-at-head/.test(codexGuardSource), "the Codex guard branches on findi
 ok(/collectCodexThreads/.test(codexGuardSource), "the Codex guard pages the thread read too");
 eq(
   (codexGuardSource.match(/CODEX REVIEW NOTICE/g) || []).length,
-  3,
-  "the Codex guard prints all three non-blocking notices, matching the Claude guard",
+  4,
+  "the Codex guard prints all four non-blocking notices, matching the Claude guard",
+);
+ok(
+  /status === "incomplete"/.test(codexGuardSource) && /NOT a clean reading/.test(codexGuardSource),
+  "the Codex guard's incomplete-walk notice matches the Claude guard's — a one-sided silence there is the drift this file exists to catch",
 );
 
 // ── gate ORDERING, pinned on both guards ─────────────────────────────────────

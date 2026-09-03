@@ -684,6 +684,90 @@ try {
     false,
     "a cmd.exe copy between ordinary files stays allowed",
   );
+  // ── round 11: the working directory is part of the path ───────────────────
+  // Codex HIGH on the exact-SHA proof of 008f300fc — a hole that predates this
+  // PR but lives in this file. Every matcher compared the raw candidate, so a
+  // tool told to run IN the protected directory could name the module by its
+  // bare basename: `workdir: ".claude/hooks"` + `Set-Content codex-bot-review-lib.mjs`
+  // and the equivalent Write/Edit inputs all returned blocked:false.
+  for (const [workdir, candidate] of [
+    [".claude/hooks", "codex-bot-review-lib.mjs"],
+    [".claude\\hooks", "codex-push-lib.mjs"],
+    [".codex/hooks", "production-action-guard.mjs"],
+    ["scripts", "write-codex-push-proof.mjs"],
+    [".claude", "hooks/codex-push-lib.mjs"],
+    [".claude/hooks/", "./codex-bot-review-lib.mjs"],
+  ]) {
+    for (const tool of ["Write", "Edit", "apply_patch"]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: tool, toolInput: { file_path: candidate, workdir } }).blocked,
+        true,
+        `${tool} must join the working directory before matching: workdir=${workdir} path=${candidate}`,
+      );
+    }
+    for (const command of [`Set-Content ${candidate} -Value ""`, `echo x > ${candidate}`]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: "PowerShell", toolInput: { command, workdir } }).blocked,
+        true,
+        `a shell write must join the working directory before matching: workdir=${workdir} ${command}`,
+      );
+    }
+  }
+  // `cwd` is the other spelling the guard already reads for the working directory.
+  assert.equal(
+    evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "codex-bot-review-lib.mjs", cwd: ".claude/hooks" } }).blocked,
+    true,
+    "the `cwd` spelling of the working directory is joined too",
+  );
+  // NEAR-MISS CANARIES: an unrelated file in an unrelated working directory,
+  // and a protected-looking basename in a directory that is not the protected
+  // one, both stay editable — the join must not turn every basename into a hit.
+  for (const [workdir, candidate] of [
+    ["docs", "notes.md"],
+    ["docs", "codex-push-lib.mjs"],
+    [".claude/hooks", "codex-bot-review-lib.test.mjs"],
+    [".claude/hooks", "some-other-lib.mjs"],
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: candidate, workdir } }).blocked,
+      false,
+      `an unprotected file stays editable whatever the working directory: workdir=${workdir} path=${candidate}`,
+    );
+  }
+  // A directory change INSIDE the command moves the working directory out from
+  // under the join; a mutating command that also changes directory is refused.
+  for (const command of [
+    "Set-Location .claude/hooks; Set-Content codex-bot-review-lib.mjs -Value \"\"",
+    "cd .claude/hooks && echo x > codex-push-lib.mjs",
+    "pushd .codex\\hooks; Set-Content production-action-guard.mjs -Value \"\"",
+    "cd docs; echo x > notes.md",
+  ]) {
+    const verdict = evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } });
+    assert.equal(verdict.blocked, true, `a directory change followed by a write is unbindable and must be refused: ${command}`);
+  }
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "cd .claude/hooks; Get-Content codex-bot-review-lib.mjs" } }).blocked,
+    false,
+    "a directory change followed by a READ stays allowed",
+  );
+  // Positional and special shell parameters are computed text too (Codex
+  // round 11): `$1$2` assembles a protected name from two harmless arguments.
+  for (const command of [
+    "sh -c 'cp source \"$1$2\"' _ .claude/hooks/codex-bot-review- lib.mjs",
+    "bash -c 'echo x > $1' _ .claude/hooks/codex-push-lib.mjs",
+    "cp evil.mjs $@",
+    "cp evil.mjs \"$*\"",
+  ]) {
+    // Some of these also spell a protected literal, or invoke `sh -c`, and an
+    // earlier gate may deny first; any denial is the right answer, and the
+    // classifier pin below proves the computed-text rule sees them on its own.
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a positional/special parameter in a mutating segment is computed text: ${command}`,
+    );
+    assert.notEqual(mutatingSegmentWithComputedText(command), "", `the classifier itself flags the mutating segment: ${command}`);
+  }
   assert.equal(mutatingSegmentWithComputedText("echo 100% done > docs/out.txt"), "", "a lone percent sign is not an expansion");
   assert.equal(mutatingSegmentWithComputedText("Write-Output %date% | Out-Null"), "", "an expansion in a NON-mutating segment is not condemned");
   // A computed form that ALSO spells the protected path literally is caught by

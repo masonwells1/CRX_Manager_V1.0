@@ -215,9 +215,23 @@ function commandPathTokens(command) {
   }
   return tokens;
 }
-export function commandTouchesProtectedHarnessPath(command) {
+// A candidate path as the file system will see it: joined onto the working
+// directory the tool will run in, unless it is already rooted. Codex round 11
+// (HIGH): a `workdir` of `.claude/hooks` turned a bare `codex-bot-review-lib.mjs`
+// into the protected module while every matcher saw only the basename.
+// Purely textual, like canonicalizeGuardPath — the join never touches disk.
+export function joinedWithWorkdir(candidate, workdir) {
+  const raw = String(candidate || "").trim();
+  const base = String(workdir || "").trim().replace(/\\/g, "/");
+  if (!raw || !base) return raw;
+  if (/^(?:[A-Za-z]:)?[\\/]/.test(raw) || /^[A-Za-z]:/.test(raw)) return raw; // rooted or drive-qualified already
+  return `${base.replace(/\/+$/, "")}/${raw}`;
+}
+
+export function commandTouchesProtectedHarnessPath(command, workdir = "") {
   return commandPathTokens(command).some((token) =>
-    PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(token)));
+    PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(token))
+    || (workdir && PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(joinedWithWorkdir(token, workdir)))));
 }
 
 // The mutating verbs the shell-mutation gate recognises. Kept as one source so
@@ -237,7 +251,12 @@ const SHELL_MUTATION_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|s
 // computed destination, not to recognise particular constructions. The same
 // two cmd forms are already how maintenanceProducerCommandMentioned() spots
 // dynamic syntax, so this is the guard agreeing with itself.
-const COMPUTED_TEXT_RE = /\(|\$[A-Za-z_{(]|\bjoin-path\b|\s-f\s|\s-join\b|%[^%\s]+%|![^!\s]+!/i;
+// ANY `$` counts (Codex round 11): the first cut matched `$name`, `$(`, `${`
+// and missed the positional and special parameters — `$1`, `$@`, `$*`, `$?`,
+// `$$` — with which `sh -c 'cp src "$1$2"' _ <prefix> <suffix>` assembles a
+// protected name from two harmless arguments. A bare `$` in a mutating segment
+// has no honest literal reading, so it is computed text wherever it appears.
+const COMPUTED_TEXT_RE = /\(|\$|\bjoin-path\b|\s-f\s|\s-join\b|%[^%\s]+%|![^!\s]+!/i;
 
 // The first MUTATING segment of `command` whose text is computed, or "" when
 // none is. Segments are the same pipeline/chain units the merge and push gates
@@ -942,6 +961,13 @@ function codexAppAdvisory({ request, repoDir, runGh, deadlineMs = Date.now() + C
       "CODEX REVIEW NOTICE: the Codex GitHub App has left no review comments on this PR. If it never ran, " +
       "comment `@codex review` and read the result before merging anything non-trivial.\n",
     );
+  } else if (codexVerdict.status === "incomplete") {
+    process.stderr.write(
+      `CODEX REVIEW NOTICE: the Codex GitHub App's review threads could only be PARTLY read (${codexVerdict.codexThreads} ` +
+      "seen; a later page failed, the cursor was unusable, or the page cap was reached). Nothing standing was seen " +
+      "in what was read, but an unread page could still hold one, so this is NOT a clean reading. Merging anyway " +
+      `(this gate fails open by design). Read them by hand: gh pr view ${request.selector || "<number>"} --comments\n`,
+    );
   }
   return null;
 }
@@ -979,8 +1005,17 @@ export function evaluateProductionAction({
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
   }
   const mutatingFileTool = /(?:write|edit|delete|move|rename|patch|replace|create|update)/i.test(name);
+  // A relative path is relative to the tool's WORKING DIRECTORY, not to the
+  // repo root (Codex round 11, HIGH): `workdir: ".claude/hooks"` plus
+  // `file_path: "codex-bot-review-lib.mjs"` is the protected module, and the
+  // raw candidate — a bare basename — matched nothing. Every candidate is
+  // therefore tested both as spelled and as joined onto the resolved working
+  // directory; the protected matcher is suffix-anchored, so the absolute form
+  // still matches. Over-inclusive for a protected-looking suffix under an
+  // unrelated working directory, which is the deny direction.
   if (mutatingFileTool && (
-    [...pathCandidates, ...patchDestinations].some((candidate) => protectedHarnessPathMentioned(candidate))
+    [...pathCandidates, ...patchDestinations].some((candidate) =>
+      protectedHarnessPathMentioned(candidate) || protectedHarnessPathMentioned(joinedWithWorkdir(candidate, actionRepoDir)))
   )) {
     return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
   }
@@ -1086,11 +1121,25 @@ export function evaluateProductionAction({
   // PR #563 round 2). A command is not one path and cannot simply be
   // canonicalized, so a mutating command that carries a dot-segment AND names a
   // protected file is refused rather than gated.
-  if (shellMutatesPath && commandTouchesProtectedHarnessPath(command)) {
+  if (shellMutatesPath && commandTouchesProtectedHarnessPath(command, actionRepoDir)) {
     return denied(
       "CODEX PRODUCTION GATE: an argument of this mutating command resolves to a protected harness file " +
-      "once `.`/`..` segments and drive-relative prefixes are canonicalized, even though it is not spelled " +
-      "that way. Use the reviewed maintenance workflow with Mason's approval."
+      "once `.`/`..` segments, drive-relative prefixes and the working directory are canonicalized, even " +
+      "though it is not spelled that way. Use the reviewed maintenance workflow with Mason's approval."
+    );
+  }
+  // A directory change INSIDE the command moves the working directory out from
+  // under every path check above: `Set-Location .claude/hooks; Set-Content
+  // codex-bot-review-lib.mjs` writes the protected module while each token,
+  // joined onto the working directory the hook was told about, looks harmless
+  // (Codex round 11, same class as the workdir finding). The push gate already
+  // refuses a directory-changing push as unbindable; a directory-changing
+  // MUTATION is refused the same way. `cd` on its own, or with a read, is fine.
+  if (shellMutatesPath && changesDirectory) {
+    return denied(
+      "CODEX PRODUCTION GATE: this command changes directory and then writes, so the write's destination " +
+      "cannot be bound to the working directory the guard inspected. Run the write from the repository root " +
+      "with the destination path spelled out, without `cd`/`Set-Location`/`pushd`."
     );
   }
   // A destination the guard cannot READ cannot be gated (Codex round 9). Every
