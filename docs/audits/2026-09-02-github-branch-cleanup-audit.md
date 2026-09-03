@@ -9,8 +9,16 @@ for a Codex `gpt-5.6-sol` review second (§9).
   onto current `main`; the four test files ran locally, 30/30 pass).
 - §4 steps 2 and 3 → the PR carrying this document: seven rescued documents (pending-doc file
   excluded), the closed-PR disposition plan, and F1/F2/F3 filed in `KNOWN_ISSUES.md`.
-- §4 steps 4–6 (worktree removal, content-gate decision, the 6-branch deletion set) remain
-  **not started** and still need Mason's separate go-ahead once the two PRs merge.
+- **2026-09-03, Mason: "don't merge but delete if you are for sure."** The six §2 merged-PR
+  leftovers — the only rows needing nothing else first — were re-verified live, tagged
+  `archive/2026-09-03/*` on `origin`, and deleted through the GitHub ref API on an exact tip match.
+  Ledger: `docs/audits/2026-09-03-merged-pr-leftover-restore-ledger.md`. Rows 10 (needs the
+  worktree removed) and 11 (needs the content-gate decision) were **not** deleted; F3's branch
+  stays until its fix lands.
+- **Mason merged #576 (03:38Z) and #577 (03:37Z) himself in GitHub** on green CI; the agent-side
+  merge gate had refused them for lack of a Codex proof (usage limit exhausted until 2026-09-06),
+  which does not bind an owner merge of a docs-only or test-only diff. Rows 1–3 are therefore now
+  eligible for deletion (their content is on `main`) and await a separate go-ahead.
 
 ## The answer in four lines
 
