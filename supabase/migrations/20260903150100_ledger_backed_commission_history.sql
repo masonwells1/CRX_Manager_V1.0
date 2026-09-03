@@ -264,6 +264,14 @@ BEGIN
          AND tgname = 'trg_commissions_stamp_cancellation_history'
          AND NOT tgisinternal
          AND tgenabled = 'O'
+         -- ROW + BEFORE + INSERT + UPDATE. Pin the complete behavior-bearing
+         -- catalog shape so a same-named trigger cannot conceal missed history.
+         AND tgtype = 23
+         AND tgfoid = 'public.stamp_commission_cancellation_history()'::regprocedure
+         AND tgqual IS NULL
+         AND tgnargs = 0
+         AND octet_length(tgargs) = 0
+         AND tgattr::text = ''
     ) OR has_function_privilege('anon', 'public.get_commission_balance_report(date)', 'EXECUTE')
        OR has_function_privilege('anon', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
        OR NOT has_function_privilege('authenticated', 'public.get_commission_balance_report(date)', 'EXECUTE')
@@ -817,8 +825,14 @@ BEGIN
        WHERE tgrelid = 'public.commissions'::regclass
          AND tgname = 'trg_commissions_stamp_cancellation_history'
          AND NOT tgisinternal
-         AND tgenabled = 'O') <> 1 THEN
-    RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: cancellation history trigger missing or disabled';
+         AND tgenabled = 'O'
+         AND tgtype = 23
+         AND tgfoid = 'public.stamp_commission_cancellation_history()'::regprocedure
+         AND tgqual IS NULL
+         AND tgnargs = 0
+         AND octet_length(tgargs) = 0
+         AND tgattr::text = '') <> 1 THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: cancellation history trigger catalog shape differs';
   END IF;
 
   IF NOT EXISTS (

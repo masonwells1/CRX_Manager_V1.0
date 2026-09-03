@@ -149,17 +149,23 @@ async function waitForExit(handle, timeoutMs = 10_000) {
   ]);
 }
 
-async function proveWriterLockConflict(candidateSource, expectedToBlock) {
-  const match = candidateSource.match(
-    /LOCK TABLE public\.commission_payments,[\s\S]*?public\.commissions\s+IN ([A-Z ]+) MODE;/,
+function extractCandidateLockStatement(candidateSource) {
+  const matches = candidateSource.match(
+    /LOCK TABLE public\.commission_payments,\s+public\.commission_payment_items,\s+public\.commissions\s+IN [A-Z ]+ MODE;/g,
   );
-  assert.ok(match, 'candidate lock statement is missing or unparseable');
+  assert.equal(
+    matches?.length,
+    1,
+    'candidate must contain exactly one lock statement covering all three cheap-window writer tables',
+  );
+  return matches[0];
+}
+
+async function proveWriterLockConflict(candidateSource, expectedToBlock) {
+  const lockStatement = extractCandidateLockStatement(candidateSource);
   const holder = startPsql(`
 BEGIN;
-LOCK TABLE public.commission_payments,
-           public.commission_payment_items,
-           public.commissions
-  IN ${match[1]} MODE;
+${lockStatement}
 \\echo COMMISSION_HISTORY_LOCK_HELD
 SELECT pg_sleep(2);
 ROLLBACK;
@@ -411,6 +417,20 @@ SELECT conname || '=' || pg_get_constraintdef(oid)
   );
   await proveWriterLockConflict(candidate, true);
   console.log('COMMISSION_HISTORY_CONCURRENT_WRITERS_BLOCKED tables=3');
+  const incompleteLockCoverage = candidate.replace(
+    '           public.commission_payment_items,\n',
+    '',
+  );
+  assert.notEqual(
+    incompleteLockCoverage,
+    candidate,
+    'lock-table coverage mutation did not change the candidate',
+  );
+  assert.throws(
+    () => extractCandidateLockStatement(incompleteLockCoverage),
+    /exactly one lock statement covering all three cheap-window writer tables/,
+  );
+  console.log('COMMISSION_HISTORY_MUTATION_REJECTED missing_payment_items_writer_lock');
   const weakenedLock = candidate.replace(
     'IN SHARE ROW EXCLUSIVE MODE;',
     'IN ACCESS SHARE MODE;',
@@ -466,6 +486,22 @@ COMMIT;
     weakNamedConstraint,
     'COMMISSION_HISTORY_REPLAY_DRIFT: required CHECK definition differs',
     'same_named_check_true',
+  );
+
+  const wrongCancellationTrigger = `
+BEGIN;
+DROP TRIGGER trg_commissions_stamp_cancellation_history ON public.commissions;
+CREATE TRIGGER trg_commissions_stamp_cancellation_history
+  AFTER UPDATE ON public.commissions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.stamp_commission_cancellation_history();
+${candidate}
+COMMIT;
+`;
+  expectCandidateFailure(
+    wrongCancellationTrigger,
+    'COMMISSION_HISTORY_REPLAY_DRIFT: FK, trigger, or grant boundary differs',
+    'same_named_wrong_cancellation_trigger',
   );
 
   psql(`
