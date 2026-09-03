@@ -109,8 +109,9 @@ events, including paid-only negative balances after a later cancellation or soft
 cutoffs begin on the first complete Chicago day after the real database cutover; every earlier date
 fails closed because pre-cutover earned-state versions do not exist. The cutover is
 `2026-09-03T20:26:11.402245Z`, so the first supported Chicago date is `2026-09-04`; the partial apply
-day correctly refuses instead of returning a number. The aggregate RPC is used by Reports; the new
-payment-detail RPC is backend-only until a later frontend change. New and revised commissions must
+day correctly refuses instead of returning a number. Reports shows both the recipient balance summary
+and the payment-by-payment commission detail, and caps shared future-ending presets at Chicago-today
+before calling either RPC. New and revised commissions must
 carry an `order_date`, and payout creation now rejects negative items or a payment date before
 the commission's order date. Canonical zero-dollar commissions remain settleable; the report
 counts them pending until a signed post event exists and returns them to pending after void. The two existing zero-dollar

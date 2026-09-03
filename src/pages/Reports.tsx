@@ -26,7 +26,7 @@ import {
 } from '../lib/recognizedInvoiceCustomers';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
-  ChemicalHistoryRow, CommissionBalanceRow, InventoryCostRow,
+  ChemicalHistoryRow, CommissionBalanceRow, CommissionPaymentDetailRow, InventoryCostRow,
   YearEndSummaryData,
 } from '../types';
 
@@ -159,6 +159,8 @@ export default function Reports() {
   const [grossSalesGroupBy, setGrossSalesGroupBy] = useState<'product' | 'customer' | 'salesman'>('product');
   const [custBalanceData, setCustBalanceData] = useState<CustomerBalanceRow[]>([]);
   const [commBalanceData, setCommBalanceData] = useState<CommissionBalanceRow[]>([]);
+  const [commPaymentDetailData, setCommPaymentDetailData] = useState<CommissionPaymentDetailRow[]>([]);
+  const [commissionAsOfDate, setCommissionAsOfDate] = useState('');
 
   // ─── OPERATIONAL data ───────────────────────────────────────
   const [chemHistoryData, setChemHistoryData] = useState<ChemicalHistoryRow[]>([]);
@@ -323,12 +325,23 @@ export default function Reports() {
 
   const fetchCommissionBalance = useCallback(async () => {
     // The RPC's cutoff and future-date guard are Chicago-business-day based.
-    // A viewer in another timezone must not accidentally ask for Chicago tomorrow.
-    const asOf = endDate || todayInBusinessTz();
+    // A viewer in another timezone must not accidentally ask for Chicago tomorrow,
+    // and shared presets such as "This Season" may end after today.
+    const businessToday = todayInBusinessTz();
+    const asOf = endDate && endDate < businessToday ? endDate : businessToday;
     setCommBalanceData([]);
-    const { data, error } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
-    if (error) { toast('error', `Commission balance failed: ${error.message}`); return; }
-    setCommBalanceData(assertRpcResult<CommissionBalanceRow[]>(data, 'get_commission_balance_report'));
+    setCommPaymentDetailData([]);
+    setCommissionAsOfDate(asOf);
+    const { data: balanceData, error: balanceError } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
+    if (balanceError) { toast('error', `Commission balance failed: ${balanceError.message}`); return; }
+    const balanceRows = assertRpcResult<CommissionBalanceRow[]>(balanceData, 'get_commission_balance_report');
+
+    const { data: detailData, error: detailError } = await supabase.rpc('get_commission_payment_detail_report', { p_as_of_date: asOf });
+    if (detailError) { toast('error', `Commission payment detail failed: ${detailError.message}`); return; }
+    const detailRows = assertRpcResult<CommissionPaymentDetailRow[]>(detailData, 'get_commission_payment_detail_report');
+
+    setCommBalanceData(balanceRows);
+    setCommPaymentDetailData(detailRows);
   }, [endDate, toast]);
 
   // ─── FINANCIAL parent fetcher ─────────────────────────────────
@@ -730,6 +743,7 @@ export default function Reports() {
 
   // ─── Formatting ─────────────────────────────────────────────
   const fmt = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+  const fmtExactMoney = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 
   // ─── CSV export (profitability) ─────────────────────────────
   const handleProfitCSV = () => {
@@ -847,6 +861,20 @@ export default function Reports() {
     toast('success', 'Report exported');
   };
 
+  const handleCommissionPaymentDetailCSV = () => {
+    exportToCSV(commPaymentDetailData as unknown as Record<string, unknown>[], [
+      { key: 'payment_number', header: 'Payment Number' },
+      { key: 'payment_date', header: 'Payment Date', format: fmtDateCSV },
+      { key: 'recipient_name', header: 'Recipient' },
+      { key: 'source_type', header: 'Source Type' },
+      { key: 'source_number', header: 'Source Number' },
+      { key: 'customer_name', header: 'Customer' },
+      { key: 'commission_order_date', header: 'Commission Date', format: fmtDateCSV },
+      { key: 'settled_amount', header: 'Settled Amount', format: fmtCSV },
+    ], 'commission_payment_detail');
+    toast('success', 'Payment detail exported');
+  };
+
   // ─── Column definitions ─────────────────────────────────────
   const customerCols: Column<CustomerProfit>[] = [
     { key: 'farm_name', header: 'Customer', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.farm_name}</span> },
@@ -917,11 +945,21 @@ export default function Reports() {
 
   const commBalanceCols: Column<CommissionBalanceRow>[] = [
     { key: 'recipient_name', header: 'Salesperson', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.recipient_name}</span> },
-    { key: 'total_earned', header: 'Total Earned', sortable: true, render: (r) => <span className="font-mono">{fmt(r.total_earned)}</span> },
-    { key: 'total_paid', header: 'Total Paid', sortable: true, render: (r) => <span className="font-mono">{fmt(r.total_paid)}</span> },
-    { key: 'outstanding_balance', header: 'Outstanding', sortable: true, render: (r) => <span className={`font-mono font-bold ${r.outstanding_balance > 0 ? 'text-amber-600' : 'text-crx-green'}`}>{fmt(r.outstanding_balance)}</span> },
+    { key: 'total_earned', header: 'Total Earned', sortable: true, render: (r) => <span className="font-mono">{fmtExactMoney(r.total_earned)}</span> },
+    { key: 'total_paid', header: 'Total Paid', sortable: true, render: (r) => <span className="font-mono">{fmtExactMoney(r.total_paid)}</span> },
+    { key: 'outstanding_balance', header: 'Outstanding', sortable: true, render: (r) => <span className={`font-mono font-bold ${r.outstanding_balance > 0 ? 'text-amber-600' : 'text-crx-green'}`}>{fmtExactMoney(r.outstanding_balance)}</span> },
     { key: 'pending_count', header: 'Pending', sortable: true },
     { key: 'paid_count', header: 'Paid', sortable: true },
+  ];
+
+  const commPaymentDetailCols: Column<CommissionPaymentDetailRow>[] = [
+    { key: 'payment_number', header: 'Payment #', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.payment_number}</span> },
+    { key: 'payment_date', header: 'Payment Date', sortable: true, render: (r) => parseLocalDate(r.payment_date).toLocaleDateString() },
+    { key: 'recipient_name', header: 'Recipient', sortable: true },
+    { key: 'source_number', header: 'Order / Job', sortable: true, render: (r) => `${r.source_type}: ${r.source_number}` },
+    { key: 'customer_name', header: 'Customer', sortable: true },
+    { key: 'commission_order_date', header: 'Commission Date', sortable: true, render: (r) => parseLocalDate(r.commission_order_date).toLocaleDateString() },
+    { key: 'settled_amount', header: 'Settled', sortable: true, render: (r) => <span className="font-mono font-medium">{fmtExactMoney(r.settled_amount)}</span> },
   ];
 
   const chemHistoryCols: Column<ChemicalHistoryRow>[] = [
@@ -1165,14 +1203,51 @@ export default function Reports() {
             </div>
           )}
 
+          {financialTab === 'commission_balance' && commissionAsOfDate && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              Balance and payout detail shown through {parseLocalDate(commissionAsOfDate).toLocaleDateString()}.
+              {endDate > commissionAsOfDate && ' The selected range ends in the future, so this report is capped at today.'}
+            </div>
+          )}
+
           <Card padding={false}>
             <div className="p-5">
               {financialTab === 'pnl' && <DataTable data={pnlData as unknown as Record<string, unknown>[]} columns={pnlCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No P&L data" emptyDescription="Select a date range to generate P&L" loading={loading} />}
               {financialTab === 'gross_sales' && <DataTable data={grossSalesData as unknown as Record<string, unknown>[]} columns={grossSalesCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['group_name']} emptyTitle="No gross sales data" emptyDescription="Select a date range" loading={loading} />}
               {financialTab === 'customer_balance' && <DataTable data={custBalanceData as unknown as Record<string, unknown>[]} columns={custBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['farm_name']} emptyTitle="No outstanding balances" loading={loading} />}
-              {financialTab === 'commission_balance' && <DataTable data={commBalanceData as unknown as Record<string, unknown>[]} columns={commBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['recipient_name']} emptyTitle="No commission data" loading={loading} />}
+              {financialTab === 'commission_balance' && (
+                <>
+                  <h3 className="mb-4 text-base font-semibold text-nav-dark">Balance by salesperson</h3>
+                  <DataTable data={commBalanceData as unknown as Record<string, unknown>[]} columns={commBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['recipient_name']} emptyTitle="No commission data" loading={loading} />
+                </>
+              )}
             </div>
           </Card>
+
+          {financialTab === 'commission_balance' && (
+            <Card padding={false}>
+              <div className="p-5">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold text-nav-dark">Payment reconciliation</h3>
+                    <p className="mt-1 text-sm text-secondary">Each posted payment is tied to the commission lines it settled as of the selected date.</p>
+                  </div>
+                  <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={handleCommissionPaymentDetailCSV} disabled={commPaymentDetailData.length === 0}>
+                    Export Payment Detail
+                  </Button>
+                </div>
+                <DataTable
+                  data={commPaymentDetailData as unknown as Record<string, unknown>[]}
+                  columns={commPaymentDetailCols as unknown as Column<Record<string, unknown>>[]}
+                  searchable
+                  searchKeys={['payment_number', 'recipient_name', 'source_number', 'customer_name']}
+                  emptyTitle="No posted commission payments"
+                  emptyDescription="Posted payment lines through the selected date will appear here."
+                  loading={loading}
+                />
+              </div>
+            </Card>
+          )}
         </>
       )}
 

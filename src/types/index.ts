@@ -3406,6 +3406,21 @@ export interface CommissionBalanceRow {
   paid_count: number;
 }
 
+export interface CommissionPaymentDetailRow {
+  [k: string]: unknown;
+  payment_id: string;
+  payment_number: string;
+  payment_date: string;
+  recipient_id: string | null;
+  recipient_name: string;
+  commission_id: string;
+  source_type: string;
+  source_number: string;
+  customer_name: string;
+  commission_order_date: string;
+  settled_amount: number;
+}
+
 export interface InventoryCostRow {
   [k: string]: unknown;
   product_id: string;
