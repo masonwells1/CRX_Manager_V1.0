@@ -6,7 +6,18 @@ import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { canonicalizeGuardPath, evaluateProductionAction, isClearlyReadOnlySql, mutatingSegmentWithComputedText, pullRequestChecksGreen } from "./production-action-guard.mjs";
+import {
+  PROTECTED_HARNESS_FILES,
+  canonicalizeGuardPath,
+  evaluateProductionAction,
+  expandBraces,
+  globCouldMatchProtectedHarnessPath,
+  isClearlyReadOnlySql,
+  mutatingSegmentWithComputedText,
+  pullRequestChecksGreen,
+  shellSegmentHead,
+  unrecognizedProtectedHarnessAccess,
+} from "./production-action-guard.mjs";
 
 const projectRoot = process.cwd();
 // Git exports repository selectors while running hooks. This test creates
@@ -800,6 +811,157 @@ try {
       `a computed expression outside a mutating segment, or a literal destination, stays allowed: ${innocent}`,
     );
   }
+  // ── round 12: fail closed on protected files ──────────────────────────────
+  // Codex HIGH on the exact-SHA proof of 312f4a9f0. Every shell rule decided
+  // "is this a write?" by recognising the verb, so a writer the list did not
+  // know was not a write: `Write-Output forged | Tee-Object -FilePath <lib>`,
+  // `tee`, `install`, `dd of=`, a brace expansion and a wildcard all overwrote
+  // the startup-imported module and returned blocked:false (reproduced by
+  // execution before the fix; the same six pass on origin/main). A segment that
+  // NAMES a protected file must now start with a recognised read-only head.
+  const lib = ".claude/hooks/codex-bot-review-lib.mjs";
+  for (const command of [
+    `Write-Output forged | Tee-Object -FilePath ${lib}`,
+    `echo forged | tee ${lib}`,
+    "printf x | tee -a .codex/hooks/production-action-guard.mjs",
+    `install -m 644 forged.mjs ${lib}`,
+    `dd if=forged.mjs of=${lib}`,
+    "cp forged.mjs .claude/hooks/{codex-bot-review-lib,x}.mjs",
+    "cat forged.mjs | tee .claude/hooks/{codex-bot-review-lib,x}.mjs",
+    "cp forged.mjs .claude/hooks/codex-bot-review-l*.mjs",
+    "cat forged.mjs | tee .claude/hooks/codex-bot-review-l*.mjs",
+    "cat forged.mjs | tee .claude/hooks/codex-bot-review-li?.mjs",
+    "cat forged.mjs | tee .claude/hooks/codex-bot-review-li[b].mjs",
+    `python -c "open('${lib}','w').write('x')"`,
+    `sed --in-place 's/a/b/' ${lib}`,
+    `git checkout -- ${lib}`,
+    `git restore ${lib}`,
+    `node scripts/fix.mjs ${lib}`,
+    "npx prettier --write package.json",
+    `& C:\\tools\\evil.exe ${lib}`,
+    "rm -f {package.json,x}",
+    `cmd /c "type forged.mjs | tee ${lib}"`,
+    `bash -c "install forged.mjs ${lib}"`,
+    "powershell -NoProfile -File .codex/hooks/production-action-guard.mjs",
+  ]) {
+    // Some of these are also caught by an earlier verb-based gate (cp, rm);
+    // any denial is the right answer, and the classifier pins below prove the
+    // fail-closed rule and the glob matcher see their cases on their own.
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `an unrecognised head naming a protected file is treated as a writer: ${command}`,
+    );
+  }
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "echo x | tee codex-bot-review-lib.mjs", workdir: ".claude/hooks" } }).blocked,
+    true,
+    "the fail-closed rule joins the working directory like every other matcher",
+  );
+  // The classifier itself, on the forms the verb gates cannot see.
+  for (const command of [
+    `Write-Output forged | Tee-Object -FilePath ${lib}`,
+    `echo forged | tee ${lib}`,
+    `install -m 644 forged.mjs ${lib}`,
+    `dd if=forged.mjs of=${lib}`,
+    "cat forged.mjs | tee .claude/hooks/codex-bot-review-l*.mjs",
+    "cat forged.mjs | tee .claude/hooks/{codex-bot-review-lib,x}.mjs",
+  ]) {
+    assert.notEqual(unrecognizedProtectedHarnessAccess(command), null, `the fail-closed classifier flags: ${command}`);
+  }
+  assert.equal(unrecognizedProtectedHarnessAccess(`echo forged | tee ${lib}`).head, "tee", "the classifier reports the offending head");
+  assert.equal(shellSegmentHead("MSYS_NO_PATHCONV=1 sudo /usr/bin/CAT.exe x").head, "cat", "the head skips assignments and sudo and drops directory/extension");
+  assert.equal(shellSegmentHead("FOO=bar").head, "", "an assignment alone has no head");
+  assert.equal(shellSegmentHead('cmd /c "type x"').head, "type", "a cmd wrapper is unwrapped to the command it runs");
+  assert.equal(shellSegmentHead("powershell -NoProfile -Command Get-Content x").head, "get-content", "a PowerShell wrapper is unwrapped past its flags");
+  assert.equal(shellSegmentHead("bash -c 'tee x'").head, "tee", "an unwrapped writer is still the writer");
+  // The glob matcher: segment-by-segment from the right, suffix semantics.
+  for (const glob of [
+    ".claude/hooks/codex-bot-review-l*.mjs",
+    ".claude/hooks/*.mjs",
+    "C:/repo/.claude/hooks/codex-bot-review-li?.mjs",
+    ".claude/**/codex-push-lib.mjs",
+    "scripts/*.mjs",
+    "*",
+    "dist/*",
+    "*.json",
+  ]) {
+    assert.equal(globCouldMatchProtectedHarnessPath(glob), true, `a glob that could expand to a protected file matches: ${glob}`);
+  }
+  for (const glob of [
+    "dist/*.js",
+    "docs/*.md",
+    "*.mjs",
+    ".claude/hooks/*.test.mjs",
+    "src/**/*.ts",
+    ".claude/hooks/codex-bot-review-lib.mjs",
+  ]) {
+    assert.equal(globCouldMatchProtectedHarnessPath(glob), false, `a glob that cannot reach a protected file (or is not a glob) does not match: ${glob}`);
+  }
+  assert.deepEqual(expandBraces("a/{b,c}.mjs"), ["a/b.mjs", "a/c.mjs"], "a comma group expands to its alternatives");
+  assert.deepEqual(expandBraces('{"a":1}'), ['{"a":1}'], "a brace pair without a comma is not an expansion");
+  assert.deepEqual(expandBraces("x{1..3}"), ["x*"], "a range becomes a wildcard");
+  // PROTECTED_HARNESS_FILES must be exactly the set PROTECTED_HARNESS_SOURCE
+  // matches, or the glob matcher silently protects fewer files than the regex.
+  for (const file of PROTECTED_HARNESS_FILES) {
+    assert.equal(canonicalizeGuardPath(file), file, `protected file list entries are canonical: ${file}`);
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: file } }).blocked,
+      true,
+      `every listed protected file is protected by the regex too: ${file}`,
+    );
+  }
+  assert.equal(PROTECTED_HARNESS_FILES.length, 15, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
+  // NEAR-MISS CANARIES: reads, the sanctioned script runs, staging and
+  // committing, and every command that names NO protected file stay allowed.
+  // "Deny anything that names a hook file" would pass the block above while
+  // making the harness unusable — the proof wrapper is itself a protected file.
+  for (const [command, workdir] of [
+    [`cat ${lib}`],
+    [`cat ${lib} | sed -n '1,40p'`],
+    [`Get-Content ${lib} | Select-String advisory`],
+    ["type .codex\\hooks\\production-action-guard.mjs | findstr gate"],
+    [`grep -n advisory ${lib}`],
+    ["rg -n advisory .claude/hooks/codex-push-lib.mjs"],
+    [`git diff -- ${lib}`],
+    [`git -C C:/repo show origin/main:${lib} | head -n 20`],
+    [`git add ${lib}`],
+    [`git --no-pager log -3 -- ${lib}`],
+    ["node scripts/write-codex-push-proof.mjs"],
+    ["node scripts/write-apply-proofs.mjs --migration supabase/migrations/x.sql"],
+    ["node .codex/hooks/production-action-guard.test.mjs"],
+    ["npm run test:agent-workflows"],
+    [`Test-Path ${lib}`],
+    [`sha256sum ${lib}`],
+    ["cd .claude/hooks && cat codex-bot-review-lib.mjs"],
+    ["echo '{\"a\":1,\"b\":2}' > cfg.json"],
+    ["rm -rf dist"],
+    ["rm -rf dist/*.js"],
+    ["echo x | tee notes.txt"],
+    ["install -m 644 a.txt docs/b.txt"],
+    ["dd if=a.img of=b.img"],
+    ["cat codex-bot-review-lib.mjs", ".claude/hooks"],
+    [`MSYS_NO_PATHCONV=1 cat ${lib}`],
+    [`cmd /c "type ${lib}"`],
+    [`bash -c "cat ${lib} | head -n 5"`],
+    [`powershell -NoProfile -Command "Get-Content ${lib}"`],
+    [`env FOO=1 cat ${lib}`],
+  ]) {
+    const toolInput = workdir ? { command, workdir } : { command };
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput }).blocked,
+      false,
+      `a read, a sanctioned run, or a command naming no protected file stays allowed: ${command}`,
+    );
+  }
+  // Cost, pinned so nobody "fixes" it back open: a wildcard that could expand
+  // to a protected ROOT file (`build\*` → build/package.json under the suffix
+  // rule the literal matcher already uses) is refused; spell the directory.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "Remove-Item -Recurse build\\*" } }).blocked,
+    true,
+    "a bare wildcard delete is refused because it could expand to package.json",
+  );
 
   const botLibPush = makeRepo(".claude/hooks/codex-bot-review-lib.mjs", "export const ordinary = true;\n");
   assert.equal(

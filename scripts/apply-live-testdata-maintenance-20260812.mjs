@@ -218,11 +218,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // directory-changing mutation is refused as unbindable, ANY `$` in a mutating
   // segment is computed text, and the advisory prints an "incomplete" notice
   // when the thread walk did not finish. Anchors unchanged; pushLib identity.
-  codexGuard: "a542fc1b1ef311bf8df71756336e9efb2835e4c0",
+  // Re-pinned again 2026-09-03 (Codex round 12, HIGH on the exact-SHA proof of
+  // 312f4a9f0): the shell gate now fails CLOSED on protected files — a segment
+  // that names one must start with a recognised read-only head (tee/Tee-Object/
+  // install/dd and every unknown writer were allowed before), and the path
+  // matcher is brace- and glob-aware. Anchors unchanged; pushLib identity.
+  codexGuard: "ac200f88aec9d2c2acc13d66190f25c632d6ff05",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "0bddb11d28fd8af8feb4ddd51b2d760e09509df2",
+  codexGuard: "f9876854cf2ee271f36d6b7f8763ed97a7910fbd",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

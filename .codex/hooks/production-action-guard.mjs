@@ -79,6 +79,28 @@ const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
+// The same set, spelled out, for the glob matcher below: a wildcard token has
+// to be tested against concrete names, and a regex cannot be enumerated. The
+// test file pins that every entry matches PROTECTED_HARNESS_PATH_RE and that the
+// count equals the alternatives in PROTECTED_HARNESS_SOURCE, so the two cannot
+// drift apart silently.
+export const PROTECTED_HARNESS_FILES = Object.freeze([
+  ".claude/hooks/codex-push-guard.mjs",
+  ".claude/hooks/codex-push-lib.mjs",
+  ".claude/hooks/codex-bot-review-lib.mjs",
+  ".claude/hooks/review-proof-guard.mjs",
+  ".claude/hooks/live-testdata-lib.mjs",
+  ".codex/hooks/production-action-guard.mjs",
+  ".codex/hooks/codex-hook-adapter.mjs",
+  "scripts/run-claude-review.mjs",
+  "scripts/write-codex-push-proof.mjs",
+  "scripts/write-apply-proofs.mjs",
+  "scripts/overnight-codex-gate.mjs",
+  "scripts/apply-live-testdata-maintenance-20260812.mjs",
+  "package.json",
+  ".claude/settings.json",
+  ".codex/hooks.json",
+]);
 const MAINTENANCE_PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";
 export function maintenanceProducerCommandMentioned(command) {
   const compact = String(command || "")
@@ -195,6 +217,39 @@ const SHELL_WORD_NOOP_RE = /[`"'^]/g;
 // still caught by the two views that keep it.
 const POSIX_ESCAPE_RE = /\\/g;
 
+// Brace expansion, done the way the shell does it BEFORE the text is split into
+// words: `.claude/hooks/{codex-bot-review-lib,x}.mjs` is two paths, one of them
+// protected, and no token of the unexpanded text spells either (Codex round 12:
+// `cp evil.mjs .claude/hooks/{codex-bot-review-lib,x}.mjs` returned
+// blocked:false). Only a comma-bearing group expands — `{"a":1}` in an echoed
+// JSON literal is not an expansion and must not become a wildcard. A range
+// (`{1..3}`) or a group that would expand past the cap is replaced by `*`, which
+// the glob matcher below treats as "could be anything", the safe direction.
+const BRACE_GROUP_RE = /\{([^{}]*,[^{}]*)\}/;
+const BRACE_RANGE_RE = /\{[^{}]*\.\.[^{}]*\}/g;
+const BRACE_EXPANSION_CAP = 64;
+export function expandBraces(text) {
+  let expansions = [String(text || "").replace(BRACE_RANGE_RE, "*")];
+  for (let round = 0; round < 8; round++) {
+    const next = [];
+    let changed = false;
+    for (const item of expansions) {
+      const match = BRACE_GROUP_RE.exec(item);
+      if (!match) { next.push(item); continue; }
+      changed = true;
+      for (const alternative of match[1].split(",")) {
+        next.push(item.slice(0, match.index) + alternative + item.slice(match.index + match[0].length));
+      }
+    }
+    expansions = next;
+    if (!changed) break;
+    if (expansions.length > BRACE_EXPANSION_CAP) {
+      return [String(text || "").replace(/\{[^{}]*\}/g, "*").replace(/[{}]/g, "*")];
+    }
+  }
+  return expansions;
+}
+
 function commandPathTokens(command) {
   const raw = String(command || "");
   // Three views of the same command. The first splits on quotes so a quoted
@@ -202,18 +257,54 @@ function commandPathTokens(command) {
   // characters so an intra-word splice collapses back to the path the shell
   // will actually open; the third additionally deletes backslashes for the
   // POSIX-escape case. All are needed: no view alone covers the others' cases.
+  // Each view is then brace-expanded, so a comma-bearing group yields one view
+  // per alternative.
   const dequoted = raw.replace(SHELL_WORD_NOOP_RE, "");
-  const views = [raw, dequoted, dequoted.replace(POSIX_ESCAPE_RE, "")];
+  const views = [raw, dequoted, dequoted.replace(POSIX_ESCAPE_RE, "")].flatMap(expandBraces);
   const tokens = [];
   for (const view of views) {
     for (const token of view.split(/[\s"'`,;()|&<>]+/)) {
       if (!token) continue;
-      // `-Path=x`, `--file=x`, `Path:x` — keep the value, drop the flag name.
-      const value = token.replace(/^[-/]{1,2}[A-Za-z][\w-]*[:=]/, "");
+      // `-Path=x`, `--file=x`, `Path:x`, `of=x`, `FOO=x` — keep the value, drop
+      // the flag or key name. (`dd of=<protected>` was Codex round 12's writer.)
+      const value = token.replace(/^[-/]{1,2}[A-Za-z][\w-]*[:=]/, "").replace(/^[A-Za-z_][\w-]*=/, "");
       if (value) tokens.push(value);
     }
   }
   return tokens;
+}
+// Could this wildcard token expand to a protected harness file? The literal
+// matcher cannot see `codex-bot-review-l*.mjs` (Codex round 12), and a hook
+// cannot ask the file system what a glob will expand to at run time without
+// getting a different answer than the shell may. So the glob is matched against
+// the concrete protected names, segment by segment from the RIGHT, with the
+// same suffix semantics PROTECTED_HARNESS_PATH_RE uses: the token must have at
+// least as many segments as the protected path, every trailing segment must be
+// able to match, and any extra leading segments are unconstrained (they are the
+// enclosing directories). A character class is treated as "any one character"
+// and `**` as "any one segment" — both over-inclusive, both safe.
+const GLOB_CHARS_RE = /[*?[]/;
+function globSegmentToRegExp(segment) {
+  let source = "";
+  for (const ch of segment.replace(/\[[^\]]*\]/g, "?").replace(/[[\]]/g, "?")) {
+    if (ch === "*") source += "[^/]*";
+    else if (ch === "?") source += "[^/]";
+    else source += ch.replace(/[.\\+^$(){}|]/g, "\\$&");
+  }
+  return new RegExp(`^${source}$`, "i");
+}
+export function globCouldMatchProtectedHarnessPath(token) {
+  const canonical = canonicalizeGuardPath(token);
+  if (!GLOB_CHARS_RE.test(canonical)) return false;
+  const segments = canonical.replace(/^\//, "").split("/");
+  return PROTECTED_HARNESS_FILES.some((file) => {
+    const target = file.split("/");
+    if (segments.length < target.length) return false;
+    for (let i = 1; i <= target.length; i++) {
+      if (!globSegmentToRegExp(segments[segments.length - i]).test(target[target.length - i])) return false;
+    }
+    return true;
+  });
 }
 // A candidate path as the file system will see it: joined onto the working
 // directory the tool will run in, unless it is already rooted. Codex round 11
@@ -231,7 +322,119 @@ export function joinedWithWorkdir(candidate, workdir) {
 export function commandTouchesProtectedHarnessPath(command, workdir = "") {
   return commandPathTokens(command).some((token) =>
     PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(token))
-    || (workdir && PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(joinedWithWorkdir(token, workdir)))));
+    || globCouldMatchProtectedHarnessPath(token)
+    || (workdir && (
+      PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(joinedWithWorkdir(token, workdir)))
+      || globCouldMatchProtectedHarnessPath(joinedWithWorkdir(token, workdir)))));
+}
+
+// Codex round 12 (HIGH): every shell rule above and below decides "is this a
+// write?" by recognising the verb — SHELL_MUTATION_RE — and a verb it does not
+// know is, by construction, not a write. `Write-Output forged | Tee-Object
+// -FilePath <protected>`, `tee`, `install`, `dd of=` all overwrote the module
+// this guard imports at startup and returned blocked:false. Enumerating writers
+// is the same losing trade as enumerating path spellings (rounds 2–8), so the
+// rule is inverted for protected files only: a shell segment that NAMES a
+// protected harness file must start with a recognised READ-ONLY command, and
+// any other head — a writer, an interpreter wrapper (`cmd /c`, `bash -c`,
+// `powershell -Command`), an editor, an unknown tool — is treated as a writer
+// and refused. Reading them stays cheap and ordinary: cat/type/head/tail/grep/
+// rg/Get-Content/Select-String/Get-Item/Test-Path/diff/hashes/ls, the read-only
+// git subcommands (diff, show, log, blame, status, ls-files, add, commit …),
+// and `node <that script>` — running one of the protected scripts is the
+// sanctioned workflow, so node is allowed when the protected token IS the
+// script being run, and refused when a protected path is merely an argument to
+// some other script. sed/perl/awk/python are deliberately NOT readers: each has
+// an in-place flag the verb list can miss (`sed --in-place`), and reading
+// through `cat <file> | sed -n …` costs nothing. This mirrors the stance the
+// Claude-side review-proof-guard has taken since it shipped. Commands that name
+// no protected file are untouched.
+const READ_ONLY_SHELL_HEADS = new Set([
+  "cat", "head", "tail", "less", "more", "wc", "grep", "egrep", "fgrep", "rg", "diff", "cmp", "comm",
+  "md5sum", "sha1sum", "sha256sum", "sha512sum", "shasum", "cksum", "stat", "file", "ls", "tree",
+  "realpath", "readlink", "basename", "dirname", "test", "[", "echo", "printf", "od", "hexdump",
+  "strings", "nl", "tac", "type", "findstr", "fc", "dir", "where", "comp",
+  "get-content", "gc", "select-string", "sls", "get-item", "gi", "get-childitem", "gci", "test-path",
+  "resolve-path", "rvpa", "get-filehash", "compare-object", "compare", "measure-object", "measure",
+  "write-output", "write-host", "get-acl",
+]);
+const GIT_READ_ONLY_SUBCOMMANDS = new Set([
+  "diff", "show", "log", "status", "blame", "grep", "ls-files", "ls-tree", "cat-file", "rev-parse",
+  "check-ignore", "check-attr", "diff-tree", "diff-index", "describe", "shortlog", "whatchanged",
+  "annotate", "name-rev", "hash-object", "add", "commit",
+]);
+const NODE_HEADS = new Set(["node", "nodejs"]);
+function shellSegmentWords(segment) {
+  return String(segment || "")
+    .replace(SHELL_WORD_NOOP_RE, "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+function normalizeShellHead(word) {
+  return String(word || "")
+    .toLowerCase()
+    .replace(/\\/g, "/")
+    .replace(/^.*\//, "")
+    .replace(/\.(?:exe|cmd|bat|com)$/, "");
+}
+// The command word of a shell segment, with leading environment assignments,
+// `sudo`, `time`, `env`, `MSYS_NO_PATHCONV=1`-style prefixes and PowerShell's
+// call operator `&` skipped. A shell WRAPPER (`cmd /c …`, `bash -c …`,
+// `powershell -NoProfile -Command …`) is unwrapped: its flags are skipped and
+// the head is the first word of the text it will run, so `cmd /c "type
+// <protected>"` is the read it is. The wrapper's own writers are still seen —
+// `cmd /c "type x > <protected>"` keeps its `>` for the redirect gate, and the
+// segment split already happened on the whole text, quotes included. A
+// segment that begins with an assignment and nothing else has no head.
+const SHELL_WRAPPER_HEADS = new Set(["cmd", "bash", "sh", "zsh", "dash", "pwsh", "powershell"]);
+export function shellSegmentHead(segment) {
+  const words = shellSegmentWords(segment);
+  let i = 0;
+  for (let unwrap = 0; unwrap < 4; unwrap++) {
+    while (i < words.length && (/^[A-Za-z_][\w]*=/.test(words[i]) || /^(?:sudo|time|env|&)$/i.test(words[i]))) i++;
+    if (i >= words.length) return { head: "", rest: [] };
+    const head = normalizeShellHead(words[i]);
+    if (!SHELL_WRAPPER_HEADS.has(head)) return { head, rest: words.slice(i + 1) };
+    i++;
+    while (i < words.length && /^[-/]/.test(words[i])) i++;
+  }
+  return { head: "", rest: [] };
+}
+function gitSubcommand(rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const word = rest[i];
+    if (/^-(?:C|c)$/.test(word)) { i++; continue; }
+    if (word.startsWith("-")) continue;
+    return word.toLowerCase();
+  }
+  return "";
+}
+function segmentHeadIsReadOnly({ head, rest }, segment, workdir) {
+  if (READ_ONLY_SHELL_HEADS.has(head)) return true;
+  if (head === "git") return GIT_READ_ONLY_SUBCOMMANDS.has(gitSubcommand(rest));
+  if (NODE_HEADS.has(head)) {
+    // node may RUN a protected script; the protected token must be the script.
+    const script = rest.find((word) => !word.startsWith("-")) || "";
+    const scriptIsProtected = protectedHarnessPathMentioned(script) || protectedHarnessPathMentioned(joinedWithWorkdir(script, workdir));
+    if (!scriptIsProtected) return false;
+    const remainder = rest.slice(rest.indexOf(script) + 1).join(" ");
+    return !PROTECTED_HARNESS_FRAGMENT_RE.test(remainder) && !commandTouchesProtectedHarnessPath(remainder, workdir);
+  }
+  return false;
+}
+// The first shell segment that names a protected harness file without a
+// recognised read-only head, as `{ segment, head }`, or null when every such
+// segment is a read.
+export function unrecognizedProtectedHarnessAccess(command, workdir = "") {
+  const segments = String(command || "").split(/(?:&&|\|\|?|;|\r?\n)/).map((s) => s.trim()).filter(Boolean);
+  for (const segment of segments) {
+    if (!PROTECTED_HARNESS_FRAGMENT_RE.test(segment) && !commandTouchesProtectedHarnessPath(segment, workdir)) continue;
+    const parsed = shellSegmentHead(segment);
+    if (segmentHeadIsReadOnly(parsed, segment, workdir)) continue;
+    return { segment, head: parsed.head };
+  }
+  return null;
 }
 
 // The mutating verbs the shell-mutation gate recognises. Kept as one source so
@@ -1162,6 +1365,19 @@ export function evaluateProductionAction({
       `(a parenthesised expression, a \`$\` variable, Join-Path, or the -f/-join operators) in: ${computedSegment}. ` +
       "The guard cannot read a computed destination, so it is refused rather than gated. Spell the " +
       "destination path literally and run the command again."
+    );
+  }
+  // Fail closed on protected files (Codex round 12): the verb-recognising rules
+  // above catch the writers they know; this one refuses every head they do not.
+  const unrecognizedAccess = unrecognizedProtectedHarnessAccess(command, actionRepoDir);
+  if (unrecognizedAccess) {
+    return denied(
+      "CODEX PRODUCTION GATE: this command names a protected harness file and its command word " +
+      `\`${unrecognizedAccess.head || "(none)"}\` is not a recognised read-only operation, in: ${unrecognizedAccess.segment}. ` +
+      "The guard fails closed here: only known readers (cat/type/head/tail/grep/rg/Get-Content/Select-String/" +
+      "Get-Item/Test-Path/diff/hash tools/ls, read-only git subcommands, or `node <that protected script>`) may " +
+      "name these files from the shell; anything else is treated as a writer. Change one deliberately through " +
+      "the file tools, which are gated separately."
     );
   }
   if (isGitPush(command) && pushContextIsAmbiguous(command)) {
