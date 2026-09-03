@@ -208,11 +208,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // `$` variable, Join-Path, -f/-join — is refused outright instead of parsed.
   // Anchors unchanged; pushLib transform still identity. Output from the
   // producer test's candidate.
-  codexGuard: "17cd7527224e391d24ca41e2781c66b38e1982b4",
+  // Re-pinned again 2026-09-03 (Codex round 10, HIGH on the exact-SHA proof of
+  // b95a519a7): the computed-text rule now counts cmd.exe's `%VAR%` / `!VAR!`
+  // expansion, and cmd's own write verbs (copy/move/xcopy/robocopy/mklink)
+  // joined the mutation list. Anchors unchanged; pushLib transform identity.
+  codexGuard: "73df35e3059e71b240ee38f14df1fec9a3ebe9f7",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "707147f4ce45eca294f405294a5f84cfccfbfcbb",
+  codexGuard: "5a0f8d29d04a0d8dff38d9badd2217201842e6cd",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

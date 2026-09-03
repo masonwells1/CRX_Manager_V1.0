@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { canonicalizeGuardPath, evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
+import { canonicalizeGuardPath, evaluateProductionAction, isClearlyReadOnlySql, mutatingSegmentWithComputedText, pullRequestChecksGreen } from "./production-action-guard.mjs";
 
 const projectRoot = process.cwd();
 // Git exports repository selectors while running hooks. This test creates
@@ -646,18 +646,58 @@ try {
     "echo x > $(Get-Content dest.txt)",
     'Set-Content -Path (Get-Content dest.txt) -Value ""',
     'Set-Content ((".claude", "hooks", "codex-push-lib.mjs") -join "/") -Value ""',
+    // Codex round 10: cmd.exe builds text with %VAR% and delayed !VAR! expansion,
+    // which the first cut of this rule did not count as computed. The fragments
+    // never spell the protected file; cmd assembles it.
+    'cmd /c "set a=.claude/hooks/codex-bot-review-&& echo x > %a%lib.mjs"',
+    'cmd /v:on /c "set a=.claude/hooks/codex-bot-review-&& echo x > !a!lib.mjs"',
+    "echo x > %a%lib.mjs",
+    "echo x > !a!lib.mjs",
+    // Substring expansion has the same shape.
+    'cmd /c "set a=.claude/hooks/codex-bot-review-lib.mjs.bak&& echo x > %a:~0,-4%"',
   ]) {
     const verdict = evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } });
     assert.equal(verdict.blocked, true, `a computed destination in a mutating command must be refused: ${command}`);
     assert.match(String(verdict.reason), /computed destination|builds a path/i, `…as a computed destination, not by accident of some other gate: ${command}`);
   }
+  assert.equal(
+    mutatingSegmentWithComputedText('cmd /c "set a=.claude/hooks/codex-bot-review-&& echo x > %a%lib.mjs"'),
+    'echo x > %a%lib.mjs"',
+    "the classifier names the MUTATING segment carrying the cmd expansion, not the harmless `set`",
+  );
+  // cmd.exe's own write verbs were missing from the mutation list entirely, so
+  // `copy evil.mjs <protected>` was not even a mutation to the literal gate.
+  for (const command of [
+    "copy evil.mjs .claude\\hooks\\codex-push-lib.mjs",
+    "move evil.mjs .claude/hooks/codex-bot-review-lib.mjs",
+    "xcopy evil.mjs .codex\\hooks\\production-action-guard.mjs /Y",
+    "mklink .claude\\hooks\\codex-push-lib.mjs evil.mjs",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a cmd.exe write verb against a protected file must be refused: ${command}`,
+    );
+  }
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "copy docs\\a.md docs\\b.md" } }).blocked,
+    false,
+    "a cmd.exe copy between ordinary files stays allowed",
+  );
+  assert.equal(mutatingSegmentWithComputedText("echo 100% done > docs/out.txt"), "", "a lone percent sign is not an expansion");
+  assert.equal(mutatingSegmentWithComputedText("Write-Output %date% | Out-Null"), "", "an expansion in a NON-mutating segment is not condemned");
   // A computed form that ALSO spells the protected path literally is caught by
   // the earlier literal gate first; either denial is the right answer.
-  assert.equal(
-    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: 'Set-Content -Path (Join-Path $PWD ".claude/hooks/codex-push-lib.mjs") -Value ""' } }).blocked,
-    true,
-    "a computed form that still spells the protected path is denied (by whichever gate sees it first)",
-  );
+  for (const command of [
+    'Set-Content -Path (Join-Path $PWD ".claude/hooks/codex-push-lib.mjs") -Value ""',
+    "copy evil.mjs %APPDATA%\\..\\..\\repo\\.claude\\hooks\\codex-push-lib.mjs",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a computed form that still spells the protected path is denied (by whichever gate sees it first): ${command}`,
+    );
+  }
   // NEAR-MISS CANARIES: the refusal is scoped to the MUTATING segment. A
   // variable or subexpression in a non-mutating stage, a literal destination
   // with an ordinary value, and a plain redirect all stay allowed — otherwise

@@ -222,12 +222,22 @@ export function commandTouchesProtectedHarnessPath(command) {
 
 // The mutating verbs the shell-mutation gate recognises. Kept as one source so
 // the computed-text check below and `shellMutatesPath` cannot drift apart.
-const SHELL_MUTATION_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|remove-item|move-item|copy-item|rename-item|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i;
+// cmd.exe's own verbs (copy, move, xcopy, robocopy, mklink) joined the list in
+// Codex round 10: the list knew PowerShell's and POSIX's spellings of "write a
+// file" but not cmd's, so `copy evil.mjs <protected>` was not a mutation at all.
+const SHELL_MUTATION_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|remove-item|move-item|copy-item|rename-item|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|mv|cp|del|erase|copy|move|xcopy|robocopy|mklink|sed\s+-i|perl\s+-pi|apply_patch)\b)/i;
 // Text that builds a value at run time rather than spelling it: a parenthesised
-// (sub)expression, a `$` variable or `$(…)`/`${…}`, Join-Path, and the -f / -join
-// string operators. Deliberately broad — the point is to refuse the SHAPE of a
-// computed destination, not to recognise particular constructions.
-const COMPUTED_TEXT_RE = /\(|\$[A-Za-z_{(]|\bjoin-path\b|\s-f\s|\s-join\b/i;
+// (sub)expression, a `$` variable or `$(…)`/`${…}`, Join-Path, the -f / -join
+// string operators, and cmd.exe's `%VAR%` / delayed `!VAR!` expansion (Codex
+// round 10 — the first cut knew only the PowerShell and POSIX spellings, and
+// `set a=.claude/hooks/codex-bot-review-&& echo x > %a%lib.mjs` assembled the
+// protected path with no literal token spelling it). Substring forms
+// (`%a:~0,5%`) are covered because the body match is anything up to the closing
+// delimiter. Deliberately broad — the point is to refuse the SHAPE of a
+// computed destination, not to recognise particular constructions. The same
+// two cmd forms are already how maintenanceProducerCommandMentioned() spots
+// dynamic syntax, so this is the guard agreeing with itself.
+const COMPUTED_TEXT_RE = /\(|\$[A-Za-z_{(]|\bjoin-path\b|\s-f\s|\s-join\b|%[^%\s]+%|![^!\s]+!/i;
 
 // The first MUTATING segment of `command` whose text is computed, or "" when
 // none is. Segments are the same pipeline/chain units the merge and push gates
