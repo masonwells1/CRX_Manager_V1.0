@@ -44,7 +44,7 @@ import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { centsTimesQuantity, isExactDecimalText, quantitySurvivesSave } from '../lib/money';
-import { applyChemEdit, chemLineBillingHazard, chemUnitUnspecifiedSides, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
+import { applyChemEdit, chemLineBillingHazard, chemQuantityDisagreesWithRate, chemQuantityExpectedButZero, chemUnitUnspecifiedSides, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, normalizeRateUnit, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
@@ -161,6 +161,8 @@ interface JobDbRow {
     vendor?: string | null;
     customer_supplied?: boolean | null;
     sort_order: number;
+    /** F06: 'rate' | 'qty' | null; absent on a pre-apply schema (select is `*`). */
+    driver?: string | null;
     product?: { product_name: string } | null;
   }>;
   job_field_shares?: Array<{
@@ -246,13 +248,15 @@ interface ChemRow {
    *  inventory or bill for it. Persisted to job_chemicals.customer_supplied. */
   customer_supplied: boolean;
   sort_order: number;
-  /** UI-only (NOT persisted): which field the user last drove — so an acreage
-   *  change re-derives the OTHER field and never silently rewrites a
-   *  hand-entered quantity (Codex P2). 'rate' = quantity follows; 'qty' = rate
-   *  follows; undefined = a RELOADED or untouched line, which an acreage change
-   *  leaves EXACTLY AS SAVED — it does NOT follow its rate. That is F06, still
-   *  open by design: see the block above setChemRows and
-   *  `recomputeChemRowForAcres` in src/lib/chemCalculator.ts. */
+  /** Which field the user last drove — so an acreage change re-derives the OTHER
+   *  field and never silently rewrites a hand-entered quantity (Codex P2).
+   *  'rate' = quantity follows; 'qty' = rate follows. PERSISTED since F06
+   *  (2026-09-03) on job_chemicals.driver and read back on reload, so a reloaded
+   *  line follows the side the operator actually typed. undefined = UNKNOWN (a
+   *  line saved before that column existed, or written by the close-quote /
+   *  recipe paths), which an acreage change leaves EXACTLY AS SAVED; the
+   *  chemRowDefects mirror then shows the disagreement on the row instead of
+   *  letting save_job roll the whole save back. */
   driver?: 'rate' | 'qty';
 }
 
@@ -1447,6 +1451,8 @@ export default function JobDetail() {
   //    saves a ZERO quantity or a ZERO price — a line that bills nothing and deducts nothing.
   const chemRowDefects = useMemo(() => {
     const byIndex = new Map<number, string>();
+    // The acreage the server checks against: the sum over the fields being saved.
+    const acres = sumAcres(fieldRows);
     chemRows.forEach((c, i) => {
       if (!c.product_id) return;
       if (rateDenominatorIsUnrecognized(c.rate_unit)) {
@@ -1505,6 +1511,25 @@ export default function JobDetail() {
         byIndex.set(i, 'its quantity is negative — a line cannot apply or bill a negative amount; use a credit memo or a return for corrections');
         return;
       }
+      // F06 (2026-09-03): mirror of CHEM_QUANTITY_NOT_DERIVED on the units-equal path, with
+      // the server's own tolerance. A line whose driver is unknown is left as saved when the
+      // acreage changes (never guessed — see recomputeChemRowForAcres), so its rate and total
+      // stop agreeing and save_job would refuse the WHOLE save with no warning. Naming the
+      // row here turns that into a per-line instruction: re-typing either field re-derives
+      // the other and records which one was typed. The different-units path is covered by
+      // chemLineBillingHazard below with the same tolerance through the converter.
+      const expectedQty = chemQuantityDisagreesWithRate(c, acres);
+      if (expectedQty != null) {
+        byIndex.set(i, `its rate (${c.rate_per_acre}/ac over ${fmt4(acres)} acres = ${fmt4(expectedQty)}) and its quantity (${c.quantity}) no longer agree — usually because the acres changed after the line was saved. Re-type the rate per acre to refill the quantity, or re-type the quantity to refill the rate`);
+        return;
+      }
+      // Mirror of CHEM_QUANTITY_ZERO_BUT_EXPECTED: priced, a positive quantity was derivable,
+      // and the line records 0. The invoice bills the quantity, so this would charge nothing.
+      const expectedNonZero = chemQuantityExpectedButZero(c, acres);
+      if (expectedNonZero != null) {
+        byIndex.set(i, `it records a quantity of 0 while carrying a price and a rate of ${c.rate_per_acre}/ac over ${fmt4(acres)} acres (${fmt4(expectedNonZero)} expected) — the invoice would bill nothing for it. Enter the quantity applied, or clear the rate and the price if none was used`);
+        return;
+      }
       // Cents are WHOLE, so the gate has to be stricter for them than for a quantity.
       // isExactDecimalText('150.7') is true, but the saved total (parseInt, below) and
       // buildJobChemicalsPayload both TRUNCATE it to 150 — the operator's number would
@@ -1523,7 +1548,7 @@ export default function JobDetail() {
       }
     });
     return byIndex;
-  }, [chemRows]);
+  }, [chemRows, fieldRows]);
 
   // SAFE-SCOPE U7: a job is "multi-owner" when its fields' billed shares span more
   // than one distinct customer — the same customer set transfer_job_to_invoice
@@ -1765,25 +1790,23 @@ export default function JobDetail() {
     }
     setShareRows(savedShares);
 
-    // F06 IS STILL OPEN, DELIBERATELY. `driver` is UI-only and never persisted, so a reloaded
-    // row comes back driverless and recomputeChemRowForAcres leaves it STALE on an acreage
-    // change — a saved 1.5 pt/ac line over 100 acres still reads 150 pt at 200 acres.
-    //
-    // An earlier pass tried to RECOVER the provenance by testing quantity == rate x acres.
-    // That is unsound and was reverted: applyChemEdit back-solves rate_per_acre whenever the
-    // user types a quantity, so a hand-entered total satisfies that same equality BY
-    // CONSTRUCTION. The test cannot separate the two cases, and acting on it would rewrite a
-    // hand-entered total whenever acreage changed — the exact harm the driverless branch
-    // exists to prevent. Under-billing is bad; silently rewriting an operator's typed
-    // chemical amount is worse, so leaving the row as saved is the safe side. (Codex P1)
-    //
-    // The real fix is to PERSIST the driver on job_chemicals, which needs a migration.
+    // F06 (2026-09-03): the stored `driver` comes back with the row, so a reloaded line
+    // follows the side the operator actually typed when the acreage changes. A line with
+    // NO stored driver (saved before migration 20260903150000, or written by the
+    // close-quote / recipe paths) reloads as undefined and recomputeChemRowForAcres leaves
+    // it exactly as saved — guessing from quantity == rate x acres was tried and reverted
+    // as unsound, because a hand-entered total satisfies that equality by construction
+    // (Codex P1). For those lines the chemRowDefects mirror shows the disagreement on the
+    // row instead of letting save_job roll the whole save back. Only the two values the
+    // calculator produces are accepted here; anything else is treated as unknown.
     setChemRows(
       (j.job_chemicals || []).map((c) => {
         const quantity = c.quantity?.toString() || '0';
         const rate_per_acre = c.rate_per_acre?.toString() || '';
+        const driver = c.driver === 'rate' || c.driver === 'qty' ? c.driver : undefined;
         return {
           id: c.id,
+          driver,
           product_id: c.product_id,
           product_name: c.product?.product_name || '',
           quantity,
