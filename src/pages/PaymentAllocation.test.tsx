@@ -46,10 +46,9 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
 }));
 
-vi.mock('../lib/parseCents', () => ({
-  parseDollarsToCents: vi.fn((v: string) => Math.round(parseFloat(v) * 100)),
-  MONEY_PRECISION_MESSAGE: 'Enter an amount with no more than two decimal places.',
-}));
+// parseCents is deliberately NOT mocked: the real parser refuses more than two
+// decimals (null) and a rounding stand-in would let this page's refusal branches
+// pass whether or not they work (2026-09-03).
 
 import PaymentAllocation, { autoAllocate } from './PaymentAllocation';
 

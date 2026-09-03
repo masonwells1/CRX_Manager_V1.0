@@ -47,10 +47,11 @@ exact-whole-cent policy.
    assertion with a refusal group (positive, currency-formatted, thousandth of a cent, trailing
    zeros, the signed variant, and "refusal ≠ the malformed-input 0"). `WriteOffModal.test.tsx`
    proves `12.345` shows the message and calls no RPC. `FieldAppChemicalEntry.test.tsx` proves a
-   third decimal digit emits no change and the box keeps `65.00`. The two page tests that mock
-   the parser (`InvoiceDetail.test.tsx`, `PaymentAllocation.test.tsx`) export the message
-   constant from their mock; their rounding mocks are unchanged and still do not exercise the
-   refusal.
+   third decimal digit emits no change and the box keeps `65.00`. The two page tests that used
+   to mock the parser with a ROUNDING stand-in (`InvoiceDetail.test.tsx`,
+   `PaymentAllocation.test.tsx`) now run against the real parser — a mock that behaves the
+   opposite way to the unit under test on exactly this input would have passed whether or not
+   those pages handled the refusal (both suites, 40 tests, pass unchanged against the real one).
 
 **Proof observed.**
 - Browser (real `WriteOffModal` in the gitignored stubbed-data Vite harness, no login): typed
@@ -64,4 +65,4 @@ exact-whole-cent policy.
 
 **Not verified.** Only the write-off modal was driven in a browser; the other 14 screens are
 covered by the type change (a caller that ignored the refusal would not compile), the audit table,
-and their existing test suites. The two rounding mocks remain a known gap.
+and their existing test suites.
