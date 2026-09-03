@@ -1,6 +1,6 @@
 # Commission "as of a past date" reporting — deferred build spec
 
-**Status:** NOT STARTED — deferred by Mason on 2026-09-03.
+**Status:** LOCAL CANDIDATE PROVEN — not applied live, live-tested, merged, or deployed.
 **Deadline driver:** must land **before the first commission payout of the season**, which Mason
 put at *"probably a few months out"* (so roughly 2026-11 → 2026-12; confirm with him, don't
 assume the date).
@@ -193,12 +193,12 @@ Design consequences:
   **year-end 2026**. So the first year-end that needs this is likely the first one with payouts in
   it. Do not let this slip past the first payout.
 
-**Verified 2026-09-03 — the reconciliation plumbing already works.** `post_commission_payment` and
-`void_commission_payment` are thin wrappers; the real bodies are
-`_post_commission_payment_intent_impl_20260809` and `_void_commission_payment_intent_impl_20260809`,
-and **both write `commission_payment_items` and maintain `commissions.paid_date`.** So use 3 needs
-a report over data the system will already be recording correctly — no new capture. This is more
-tractable than it looks; confirm it still holds before building.
+**Corrected from live source inspection 2026-09-03 — the reconciliation plumbing already works.**
+`create_commission_payment` writes the immutable `commission_payment_items` snapshots. The post and
+void wrappers delegate to `_post_commission_payment_intent_impl_20260809` and
+`_void_commission_payment_intent_impl_20260809`, which consume those rows and maintain
+`commissions.paid_date`; they do not create the item rows themselves. The build therefore remains a
+reporting rewrite over data the existing lifecycle records, plus dated void/cancellation evidence.
 
 ---
 

@@ -85,11 +85,12 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 
 ## 🔧 2. Engineering — Now / Next (see the 2026-07-15 execution plan for the full board)
 
-> ### ⏰ DEADLINE ITEM — restore "as of a past date" commission reporting
+> ### ⏰ DEADLINE ITEM — restore "as of a past date" commission reporting — LOCAL CANDIDATE PROVEN
 >
 > **Added 2026-09-03 at Mason's request.** He was asked directly whether he uses historical
 > commission dates and said **"Yes I want to be able to look at historical dates."** Deferred
-> deliberately ("we are not going to patch it now"), **not** dropped.
+> deliberately ("we are not going to patch it now"), then reopened for implementation on
+> 2026-09-03. The local candidate is proven but **not applied, live-tested, merged, or deployed**.
 >
 > **Must land BEFORE the first commission payout of the season** — Mason put that at *"probably a
 > few months out"* on 2026-09-03. Confirm the real date with him; don't assume.
@@ -113,9 +114,17 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > `src/pages/CommissionPayments.tsx`. **The gap is two missing dated columns and a report that
 > reads current status instead of the ledger — not a new subsystem.**
 >
-> **The two real gaps:** `commission_payments` has no `voided_at` (so a void's timing is
-> unrecoverable), and `commissions` has no `cancelled_at` (the 2 existing cancelled rows have
-> already lost their date — accept that, don't invent one).
+> **Candidate solution:** add `commission_payments.voided_at`/`voided_by`, plus
+> `commissions.cancelled_at` and an exact bigint-cent pre-cancellation snapshot. A single trigger
+> covers every cancellation writer; the report reads payment items with post/payment/void dates and
+> exposes per-payment detail. The 2 existing cancelled rows keep no invented date or amount and are
+> excluded from inception.
+>
+> **Proof/status 2026-09-03:** full schema plus 72 selected migrations replayed on a
+> network-isolated PostgreSQL 17 container; the real create → post → report before/after → void →
+> report chain passed and rolled back; four weakened variants were rejected. Remaining gates are
+> specialist migration/RLS review, exact-SHA Sol review, PR/CI/CodeRabbit, then Mason's separate
+> approvals for live apply, live `[E2E]` proof, and merge.
 >
 > Full spec, acceptance criteria, and the fallback if the window has closed:
 > `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md`.

@@ -28,7 +28,7 @@
 - `orders` - Confirmed orders (order_number, status, totals, order_date, customer_po_number, is_planned, season, program_notes). Note: `total_paid`/`balance_due` columns were DROPPED — AR is tracked via `invoices.balance_cents`.
 - `order_items` - Order line items (quantity_delivered, quantity_remaining, notes, **cost_at_time_cents** bigint — snapshot of `products.current_cost` at insert time, populated by `trg_snapshot_order_item_cost` BEFORE INSERT trigger; migration 20260513050000, audit #32)
 - `payments` - Legacy payment records (DEPRECATED — use allocation_sets + invoice_line_allocations instead)
-- `commissions` - Per-order OR per-job per-recipient (split_percentage, commission_amount numeric dollars, status CHECK: pending/paid/cancelled, paid_date). **U8 (migration `20260707060000`, APPLIED LIVE 2026-07-06):** `order_id` is now nullable; new nullable `job_id`/`invoice_id` FKs give application-channel (job) commissions the same lineage orders always had — `chk_commission_source` CHECK requires at least one of order_id/job_id. `invoice_id` is generation-precise: it's the exact field_application invoice that minted a job commission, so reversal/payout-liveness checks key on it (not job-level liveness, which can't tell an old generation from a fresh one across a void→re-invoice cycle). Partial indexes on both new columns.
+- `commissions` - Per-order OR per-job per-recipient (split_percentage, commission_amount numeric dollars, status CHECK: pending/paid/cancelled, paid_date). **LOCAL CANDIDATE `20260903150100`, NOT LIVE:** nullable `cancelled_at` plus `cancelled_amount_cents bigint` preserve the cancellation time and exact pre-zero amount; one trigger stamps every transition to cancelled and prevents reopening a cancelled row. The two legacy zero-dollar cancellations remain NULL-stamped. **U8 (migration `20260707060000`, APPLIED LIVE 2026-07-06):** `order_id` is now nullable; new nullable `job_id`/`invoice_id` FKs give application-channel (job) commissions the same lineage orders always had — `chk_commission_source` CHECK requires at least one of order_id/job_id. `invoice_id` is generation-precise: it's the exact field_application invoice that minted a job commission, so reversal/payout-liveness checks key on it (not job-level liveness, which can't tell an old generation from a fresh one across a void→re-invoice cycle). Partial indexes on both new columns.
 
 ## Inventory
 - `inventory` - Stock per product per location (quantity_available, quantity_prebooked, quantity_on_order, reorder_point, min_stock_level, manufactured_at_delivery — P4-7 phantom-row flag, default false)
@@ -96,7 +96,7 @@
 
 ## Financial
 - `accounting_periods` - Month-end close tracking (status: open/closed)
-- `commission_payments` - Commission payment headers (status: unposted/posted)
+- `commission_payments` - Commission payment headers (status: unposted/posted/voided). **LOCAL CANDIDATE `20260903150100`, NOT LIVE:** `voided_at timestamptz` and `voided_by uuid` are stamped by the existing void lifecycle so historical reports can keep a payment before its later void and exclude it afterward.
 - `commission_payment_items` - Individual commissions included in a payment
 - `write_offs` - Invoice write-off records with reason and approval
 - `finance_charges` - Interest charges on overdue invoices

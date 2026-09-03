@@ -283,6 +283,11 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // first to CREATE the function under its post-rename name (the rename itself
   // defined no function body on disk).
   _draw_down_quote_below_cost_impl_20260810: ['draw_down_quote'],
+  // Direct EXECUTE is revoked. This private implementation is the write half
+  // of void_commission_payment and intentionally shares the public operation's
+  // actor/fingerprint-bound receipt so wrapper retries reach the committed
+  // result instead of creating a second namespace.
+  _void_commission_payment_intent_impl_20260809: ['void_commission_payment'],
   // Direct EXECUTE is revoked. This is the idempotent implementation behind
   // the public restore_quote_version wrapper; both intentionally use the one
   // public restore_quote_version cache namespace so a replay through the

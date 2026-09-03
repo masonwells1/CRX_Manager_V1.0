@@ -1,15 +1,19 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-01 (post return-credit chain) for both the migration ledger and schema
-shape.** Schema shape comes from the live introspection that regenerated
+**Last verified: 2026-09-03 for the migration ledger; 2026-09-01 for full schema shape (post
+return-credit chain).** A read-only 2026-09-03 query records **992 ledger rows**, 985 distinct
+names, `max(version)` `20260903124741`, and effective authored-name high-water
+`20260831235900_serialize_gauntlet_write_boundaries`. Schema shape still comes from the live
+introspection that regenerated
 `.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
 columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
 read of individual routine bodies or their grants beyond the functions this chain touched, which
 were verified separately and are recorded below; the superseded 2026-08-27 11:43:53 UTC capture
 remains the last full routine-body reading.
-A read-only read after the six-file return-credit chain applied on 2026-09-01
+
+The now-superseded read-only ledger capture after the six-file return-credit chain on 2026-09-01
 records **986 ledger rows**, with `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover`
-as the latest applied authored name; the current effective ordering name high-water is therefore
+as the latest applied authored name at that time; the then-current effective ordering name high-water was
 **`20260827041500`**, and live `max(version)` is **`20260901184530`**. Read ordering from the authored
 NAME, not from `version` — the two diverge.
 
@@ -43,6 +47,16 @@ All four migrations of the draw-down chain are applied live: the cutover barrier
 intent binding (`20260825034622`). The authoritative rollout record — per-migration SHA-256 pins,
 proofs, and postflight — is the block at the top of `docs/reference/migration-history.md`; the
 matching issue entries are in `docs/manual/KNOWN_ISSUES.md`.
+
+**Commission history is a local candidate, not a live capability yet.** Migration
+`20260903150100_ledger_backed_commission_history` is proven in a network-isolated PostgreSQL 17
+full-schema replay and has a registered rollback-only create/post/report/void chain. It adds
+`commission_payments.voided_at`/`voided_by`, `commissions.cancelled_at` plus immutable
+`cancelled_amount_cents`, rewrites the aggregate from dated ledger facts, and adds per-payment
+reconciliation detail in Reports. Supported cutoffs begin 2026-03-09; the two existing
+zero-dollar cancellations remain unstamped and are excluded from inception. Production continues
+to refuse non-current cutoffs until Mason separately approves the guarded migration apply. The
+live `[E2E]` rollback proof and merge are also not approved yet.
 
 **The 976th row is not part of the draw-down chain.** `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`
 (history row 891) applied live on 2026-08-25 as ledger version `20260825142708`, after the

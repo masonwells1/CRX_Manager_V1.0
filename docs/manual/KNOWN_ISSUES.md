@@ -1,8 +1,9 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-01 for migration-ledger facts.** A read-only capture records **980 ledger rows**
-and effective ordering high-water **`20260826222000`** (authored name
-`20260826222000_correct_ap_aging_due_date_buckets`). The two Section 9 AP migrations
+**Last verified: 2026-09-03 for migration-ledger facts and commission-history item 3.4.** A read-only
+capture records **992 ledger rows**, 985 distinct names, live `max(version)` `20260903124741`, and
+effective ordering high-water **`20260831235900`** (authored name
+`20260831235900_serialize_gauntlet_write_boundaries`). The two Section 9 AP migrations
 `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
 `20260826222000_correct_ap_aging_due_date_buckets` were applied live on 2026-09-01 under Mason's explicit
 in-chat approval, through the full apply gate (ordering, destructive-content, reviewer proof and Codex
@@ -10,8 +11,8 @@ gate) — verified post-apply against the live catalog: exactly one `get_ap_agin
 present, buckets keyed on `due_date`, `SECURITY DEFINER` with `search_path=public, pg_temp` intact.
 The earlier 976-, 977- and 978-row readings are superseded, and so is the `max(version)` that came with
 them: the 978-row capture recorded `migrations_high_water` `20260827113443`, but after the two 2026-09-01
-applies the live `max(version)` is **`20260901045346`**. `20260827113443` is history, not the current
-maximum. The 978-row capture also recorded `quote_versions.restore_trusted_at`. Read ordering from the
+applies the then-live `max(version)` was `20260901045346`; it is now superseded by the 2026-09-03
+capture above. `20260827113443` is history, not the current maximum. The 978-row capture also recorded `quote_versions.restore_trusted_at`. Read ordering from the
 authored NAME, never from `version` — the two diverge, which is why searching the ledger by version stamp
 finds neither Section 9 migration even though both are applied. This pass does not re-certify every issue
 narrative below or claim a fresh post-apply read of function bodies, grants, or operational counts.
@@ -3269,16 +3270,19 @@ Genuinely still-open items from that same hunt (checked against `LEDGER.json`, n
 
 Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-severity** turned out to already be fixed by later sessions — confirmed via migration files on disk: `reverse_blend_ticket_approval:billed-ticket-reopen-and-edit` → `20260622080000_blend_ticket_reopen_and_content_lock.sql`; `void_commission_payment:resurrect-cancelled-order` → `20260622070000_void_commission_payment_dead_order_guard.sql`. Both **confirmed applied live** (present by name in `supabase_migrations.schema_migrations`, checked 2026-07-13).
 
-### PARTLY OPEN 2026-08-09 — two HIGH commission findings from the Section 7 gauntlet refresh (owner decision SETTLED: Option B; **3.5 fixed and live 2026-08-11**, 3.4 still parked)
+### PARTLY OPEN — two HIGH commission findings from the Section 7 gauntlet refresh (**3.5 fixed and live 2026-08-11; 3.4 has a proven local candidate dated 2026-09-03**)
 
 Source: `docs/audits/gauntlet/2026-08-09-section-07-commissions-splits-payouts-voids-refresh.md` (verdict REMEDIATION REQUIRED, 0 BLOCKER / 2 HIGH). Both were proven against **live** `pg_proc.prosrc`, not just disk. Neither is an access-control defect — RLS, admin-only payout reads, and RPC-only mutations all held. Gauntlet summary rows **3.4** and **3.5**.
 
 | # | Finding | Where | Live risk |
 |---|---|---|---|
-| 3.4 | **Historical Commission Balance reports are rewritten by later payout activity.** `get_commission_balance_report(date)` filters *earned* by `cm.order_date <= p_as_of_date` but derives paid/outstanding from **current** `cm.status`. | `src/pages/Reports.tsx:281-285`; `supabase/migrations/20260330100000_prelaunch_state_machine_and_security.sql:770-807` | A commission earned in June and paid in July shows as **paid** when the June 30 report is rerun; voiding that July payout flips it back to **outstanding**. Month-end commission liability is not reproducible for accounting or dispute review. Read-only defect — no wrong money moves. |
+| 3.4 | **LIVE DEFECT; LOCAL CANDIDATE PROVEN 2026-09-03.** Production's temporary fail-closed report refuses non-current dates. Candidate `20260903150100` instead derives earned from order/cancellation dates and preserved pre-cancel cents, and paid from payment-item, payment, post, and void dates; Reports also shows the payment lines behind the total. | `src/pages/Reports.tsx`; local migration `20260903150100` | Production cannot answer a prior cutoff until the migration is separately approved and applied. The candidate supports 2026-03-09 through Chicago-today and explicitly excludes the two unrecoverable legacy cancellations from inception. Network-isolated full-schema replay and real create/post/report/void rollback proof pass; specialist and exact-SHA review still gate delivery. |
 | 3.5 | **Payout idempotency receipts are keyed to the operation, not the intent.** `useIdempotencyKey` scopes to `[operation, userId]` and deliberately retains the key after an uncertain response; `create_/post_/void_commission_payment` all run the operation-only replay check *before* loading the requested entity. | `src/hooks/useIdempotencyKey.ts:21-40`; `src/pages/CommissionPayments.tsx:302-420`; migrations `20260714180000:70-258`, `20260714230000:285-395`, `20260707060000:1569-1717` | Server posts Payment A, response is lost, admin retries on Payment B → server replays A's cached success and the UI reports success for the wrong payment. Same shape for a changed commission selection or void reason. Does **not** double-pay; it tells the operator a different financial action succeeded when it did not. |
 
-**Owner decision SETTLED (Mason, in-chat 2026-08-09): Option B.** Fix 3.5 (payout idempotency intent-binding) now; **3.4 stays parked** as a known reporting-accuracy defect. Rationale as presented and accepted: neither finding moves money wrongly, but 3.5 can tell an operator a payout succeeded when it did not, while 3.4 never causes a wrong payment and its proper fix (durable dated payout event ledger) is a materially larger build deserving its own session. Do not re-open 3.4 without a fresh owner decision; do not treat 3.4 as unknown — it is recorded here deliberately.
+**Owner decision superseded for 3.4 on 2026-09-03.** Mason explicitly reopened the historical
+report because he needs it for year-end liability, point-in-time amounts owed, and payout
+reconciliation. The build is now a local candidate. Live apply, live `[E2E]` proof, and merge each
+remain outside the current approval and must not be inferred from the local proof.
 
 Options as presented:
 
@@ -3290,7 +3294,13 @@ Prevention actions proposed by the report: a static guard requiring any RPC acce
 
 ### 3.5 CLOSED — APPLIED LIVE AND VERIFIED 2026-08-11
 
-Option B was merged to `main` via PR #378 and the migration was applied to production on 2026-08-11 with Mason's explicit approval, after the final Codex round returned clean. The live ledger carries it under version `20260811183437` with name `20260811130000_bind_commission_payout_idempotency_to_intent` (the apply tool stamps its own clock as the version — match on the name). Verified against production afterwards: the catalog postconditions all hold (one overload per function, no helper survived, `anon` locked out of all three entry points, no PostgREST role able to reach an internal function), and a nine-assertion rollback-only chain run live observed the actor and fingerprint on the receipt, an identical intent replaying to the same payment, `IDEMPOTENCY_INTENT_MISMATCH` on a changed selection / changed reference / a post aimed at a different payment, `IDEMPOTENCY_ACTOR_MISMATCH` for a second admin reusing the key, `IDEMPOTENCY_KEY_REQUIRED` on a NULL key, and a legacy unbound receipt failing closed. Full detail in `docs/CHANGELOG.md` (2026-08-11 closeout) and `docs/reference/migration-history.md` row 867. **3.4 remains open and parked** by the settled owner decision above.
+Option B was merged to `main` via PR #378 and the migration was applied to production on 2026-08-11 with Mason's explicit approval, after the final Codex round returned clean. The live ledger carries it under version `20260811183437` with name `20260811130000_bind_commission_payout_idempotency_to_intent` (the apply tool stamps its own clock as the version — match on the name). Verified against production afterwards: the catalog postconditions all hold (one overload per function, no helper survived, `anon` locked out of all three entry points, no PostgREST role able to reach an internal function), and a nine-assertion rollback-only chain run live observed the actor and fingerprint on the receipt, an identical intent replaying to the same payment, `IDEMPOTENCY_INTENT_MISMATCH` on a changed selection / changed reference / a post aimed at a different payment, `IDEMPOTENCY_ACTOR_MISMATCH` for a second admin reusing the key, `IDEMPOTENCY_KEY_REQUIRED` on a NULL key, and a legacy unbound receipt failing closed. Full detail in `docs/CHANGELOG.md` (2026-08-11 closeout) and `docs/reference/migration-history.md` row 867. **3.4 remains open in production; its local candidate is proven but unapplied.**
+
+> **Deadline/status callout (updated 2026-09-03):** land before the first commission payout of the
+> season. Current live evidence still shows zero payment items and no posted/voided payout, so the
+> cheap exact-history window remains open. The candidate deliberately fails its first populated
+> apply if that condition or the two known legacy cancellations drift. See `TODO.md` and the build
+> spec for the approval sequence.
 
 The table below records what was built, and is kept for reference; every row is now live.
 

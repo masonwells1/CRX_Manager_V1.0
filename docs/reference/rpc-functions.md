@@ -196,10 +196,12 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `generate_quote_number()` — auto-generate quote number
 - `generate_ticket_number()` — auto-generate blend ticket number
 
-## Reporting (13 RPCs)
+## Reporting (14 RPCs)
 - `get_logbook_by_customer()`, `get_logbook_by_applicator()`, `get_logbook_by_field()`, `get_logbook_faa()`
 - `get_bottom_line_pnl()`, `get_gross_sales_report()`, `get_customer_balance_listing(p_as_of_date)` — cutoff-aware customer balance listing; current-date admin/sales-rep access, historical cutoffs admin-only; deliberately fails closed when later mutable balance activity prevents reconstruction. Cumulative invoice totals include fully paid invoices; only Outstanding Balance and Oldest Unpaid are open-only. **Applied live 2026-09-01 (`20260827041000`):** bottom-line PNL, monthly summary, and customer year-end reporting recognize `posted`, `overdue`, and `paid` invoices without widening the open AR balance definition.
-- `get_chemical_history()`, `get_commission_balance_report()`, `get_inventory_cost_report()`
+- `get_chemical_history()`, `get_inventory_cost_report()`
+- `get_commission_balance_report(p_as_of_date)` — **LOCAL CANDIDATE `20260903150100`, NOT LIVE:** admin-only exact earned/paid/outstanding balances from 2026-03-09 through Chicago-today. Earned uses order date plus dated cancellation snapshots; paid uses immutable payment items plus payment, post, and void dates. Earlier and future dates fail closed with the supported boundary.
+- `get_commission_payment_detail_report(p_as_of_date)` — **LOCAL CANDIDATE `20260903150100`, NOT LIVE:** companion admin-only reconciliation rows grouped in Reports by payment number/date, with recipient, commission line, order/job source, customer, commission date, and exact settled amount.
 
 ## Sales Reports (3 RPCs)
 - `get_sales_detail_report(p_start_date, p_end_date, p_product_id, p_customer_ids uuid[], p_sales_rep_id, p_category, p_season)` — line-item sales detail with LATERAL JOIN to invoices for invoice_number. Joins order_items -> orders -> customers -> products -> profiles. All filters optional
@@ -219,7 +221,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 
 ## Financial
 - `close_accounting_period()`, `check_period_open()`, `get_monthly_summary()`
-- `create_commission_payment()`, `post_commission_payment()`
+- `create_commission_payment()`, `post_commission_payment()`, `void_commission_payment()` — create snapshots exact `commission_payment_items`; post marks the payout effective; **LOCAL CANDIDATE `20260903150100`, NOT LIVE:** void also stamps `voided_at`/`voided_by` so prior cutoff reports remain reproducible.
 - `apply_write_off(invoice_id, amount_cents, reason, performed_by, idempotency_key?)` — writes off balance with idempotency guard, creates write-off record and audit log entry. Auto-sets status='paid' when write-off brings balance to 0. Accepts 'posted' or 'overdue' invoices.
 - `reverse_write_off(write_off_id, reason, performed_by?, idempotency_key?)` — admin-only. Marks write-off `reversed_at`/`reversed_by`/`reversed_reason`, decrements `invoices.write_off_cents` (balance_cents is GENERATED — never written directly), and re-derives status when reversal lifts balance > 0: `'overdue'` if past due_date, `'posted'` otherwise. Returns `{ success, write_off_id, amount_cents, invoice_id, new_balance_cents, status_changed, new_status }`. Idempotent: replays return the previously stored result. Wave A.1 + 20260506200000 follow-up / migration 20260506170000 + 20260506200000.
 - `generate_finance_charges(performed_by, ...)` — admin-only (role check enforced in RPC body), request-bound idempotent, advisory-locked by calendar month, and generates finance-charge invoices while excluding active prior assessments in that month; voided/cancelled charge invoices permit a corrected assessment. The live 2026-07-21 release-gate wrapper requires a nonblank idempotency key before delegation.
