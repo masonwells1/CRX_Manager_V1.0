@@ -39,20 +39,13 @@ export function BlendTicketDetail() {
   const { toast } = useToast();
   const ocrThresholds = useOCRThresholds();
   const saveIdem = useIdempotencyKey('save_blend_ticket', profile?.id || '');
-  // F1: scoped by the route id. These five keys' post-RPC resets moved after
-  // assertRpcResult, so they survive an ambiguous reply — and this component does NOT
-  // remount when the route id changes (App.tsx renders it without a key) while line
-  // ~1103 navigates to a DIFFERENT blend ticket (the duplicate warning). Unscoped, a
-  // retained key could replay ticket A's receipt against ticket B. The two batch keys
-  // are scoped the same way: per-route rotation is strictly safer than none, and the
-  // same-record retry guarantee is unaffected.
-  const linkIdem = useIdempotencyKey('link_blend_ticket_to_order', profile?.id || '', id ?? '');
-  const unlinkIdem = useIdempotencyKey('unlink_blend_ticket_from_order', profile?.id || '', id ?? '');
-  const createOrderIdem = useIdempotencyKey('create_order_from_blend_ticket', profile?.id || '', id ?? '');
+  const linkIdem = useIdempotencyKey('link_blend_ticket_to_order', profile?.id || '');
+  const unlinkIdem = useIdempotencyKey('unlink_blend_ticket_from_order', profile?.id || '');
+  const createOrderIdem = useIdempotencyKey('create_order_from_blend_ticket', profile?.id || '');
   const appRecordIdem = useIdempotencyKey('create_application_record_from_blend_ticket', profile?.id || '');
   const fieldsIdem = useIdempotencyKey('save_blend_ticket_fields', profile?.id || '');
-  const approveIdem = useIdempotencyKey('batch_approve_blend_tickets', profile?.id || '', id ?? '');
-  const rejectIdem = useIdempotencyKey('batch_reject_blend_tickets', profile?.id || '', id ?? '');
+  const approveIdem = useIdempotencyKey('batch_approve_blend_tickets', profile?.id || '');
+  const rejectIdem = useIdempotencyKey('batch_reject_blend_tickets', profile?.id || '');
 
   const [ticket, setTicket] = useState<BlendTicket | null>(null);
   const [images, setImages] = useState<BlendTicketImage[]>([]);
@@ -601,8 +594,8 @@ export function BlendTicketDetail() {
           p_idempotency_key: approveKey,
         });
         if (error) throw error;
-        const result = assertRpcResult<{ approved_count: number }>(data, 'batch_approve_blend_tickets');
         approveIdem.resetKey();
+        const result = assertRpcResult<{ approved_count: number }>(data, 'batch_approve_blend_tickets');
         if (result.approved_count < 1) {
           throw new Error('Blend ticket could not be approved — it may already be reviewed or not yet completed.');
         }
@@ -634,8 +627,8 @@ export function BlendTicketDetail() {
           p_idempotency_key: rejectKey,
         });
         if (error) throw error;
-        const result = assertRpcResult<{ rejected_count: number }>(data, 'batch_reject_blend_tickets');
         rejectIdem.resetKey();
+        const result = assertRpcResult<{ rejected_count: number }>(data, 'batch_reject_blend_tickets');
         if (result.rejected_count < 1) {
           throw new Error('Blend ticket could not be rejected — it may already be reviewed or not yet completed.');
         }
@@ -865,8 +858,8 @@ export function BlendTicketDetail() {
         p_idempotency_key: linkKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; items_linked?: number }>(data, 'link_blend_ticket_to_order');
       linkIdem.resetKey();
+      const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; items_linked?: number }>(data, 'link_blend_ticket_to_order');
       if (!result.success) throw new Error(result.error);
       toast('success', `Linked to order ${result.order_number} (${result.items_linked} items matched)`);
       setShowLinkModal(false);
@@ -906,8 +899,8 @@ export function BlendTicketDetail() {
         p_idempotency_key: unlinkKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<{ success: boolean; error?: string }>(data, 'unlink_blend_ticket_from_order');
       unlinkIdem.resetKey();
+      const result = assertRpcResult<{ success: boolean; error?: string }>(data, 'unlink_blend_ticket_from_order');
       if (!result.success) throw new Error(result.error);
       toast('success', 'Blend ticket unlinked from order');
       await loadTicketData();
@@ -1011,8 +1004,8 @@ export function BlendTicketDetail() {
         p_idempotency_key: createOrderKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; order_id?: string; items_created?: number }>(data, 'create_order_from_blend_ticket');
       createOrderIdem.resetKey();
+      const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; order_id?: string; items_created?: number }>(data, 'create_order_from_blend_ticket');
       if (!result.success) throw new Error(result.error);
       toast('success', `Order ${result.order_number} created with ${result.items_created} items`);
       setShowCreateOrderModal(false);
@@ -1749,8 +1742,8 @@ export function BlendTicketDetail() {
                       p_idempotency_key: linkKey,
                     });
                     if (error) throw error;
-                    const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; items_linked?: number }>(data, 'link_blend_ticket_to_order');
                     linkIdem.resetKey();
+                    const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; items_linked?: number }>(data, 'link_blend_ticket_to_order');
                     if (!result.success) throw new Error(result.error);
                     toast('success', `Linked to order ${result.order_number} (${result.items_linked} items matched)`);
                     await loadTicketData();

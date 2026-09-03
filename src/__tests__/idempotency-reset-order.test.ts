@@ -169,12 +169,41 @@ const ALLOWED_REASONS: Record<string, Reason[]> = {
 };
 
 /**
- * JobDetail.tsx carries 4 sites of this same class. They are deliberately EXCLUDED
- * from the F1 change because a concurrent session owns that file; see the F1 entry in
- * docs/manual/KNOWN_ISSUES.md for the tracked follow-up. Listed here so the guard
- * reports honestly rather than pretending the file is clean.
+ * Files that STILL CARRY the F1 defect and are deliberately not fixed here.
+ *
+ * This list is an admission, not an excuse: every entry is a live reset-before-assert
+ * site. It exists so the guard reports the true state instead of pretending these
+ * files are clean, and so a future session can find the work.
+ *
+ *  - JobDetail.tsx — 4 sites; a concurrent session owned the file during this change.
+ *  - Everything else — reverted to main after the round-2 Codex review. Reordering the
+ *    reset makes the client RETAIN the key, and on these pages the key is not bound to
+ *    what the RPC actually targets (an in-page selection, a staged payload, component
+ *    state, or a `/new` route with no id), so retaining it trades duplicate-on-retry
+ *    for cross-record replay — demonstrably worse on PrepayWorkspacePanel, where
+ *    batch B would receive batch A's receipt and clear B's allocations unapplied.
+ *    Fixing them needs the key bound to the REQUEST PAYLOAD (the
+ *    fingerprintIntentPayload approach), not to the URL. Tracked in
+ *    docs/manual/KNOWN_ISSUES.md.
+ *
+ * Do NOT add a file here to make the suite pass. An entry means "known broken,
+ * deliberately deferred, written down" — if that is not true, fix the site instead.
  */
-const KNOWN_UNFIXED = new Set(['src/pages/JobDetail.tsx']);
+const KNOWN_UNFIXED = new Set([
+  'src/pages/JobDetail.tsx',
+  'src/pages/QuoteBuilder.tsx',
+  'src/pages/BlendTicketDetail.tsx',
+  'src/components/prepay/PrepayWorkspacePanel.tsx',
+  'src/components/invoices/FinanceChargePreviewModal.tsx',
+  'src/components/deliveries/QuickDeliveryModal.tsx',
+  'src/pages/Deliveries.tsx',
+  'src/pages/DeliveryRemainders.tsx',
+  'src/pages/Invoices.tsx',
+  'src/pages/NewOrder.tsx',
+  'src/pages/PaymentAllocation.tsx',
+  'src/pages/Quotes.tsx',
+  'src/pages/FieldSetup.tsx',
+]);
 
 /** Classify one hit from the surrounding source, or null if nothing excuses it. */
 function classify(lines: string[], lineNo: number): Reason | null {
@@ -343,27 +372,30 @@ describe('F1 guard — no money screen retires its key before the reply is check
    * Retaining the key across an ambiguous reply is the point of F1 — but on a detail
    * page that does not remount when the route id changes (every `<x>/:id` route in
    * src/App.tsx is rendered without a `key` prop), an unscoped retained key can replay
-   * record A's receipt against record B. Reachability was established per page from the
-   * navigation calls, NOT assumed: DeliveryDetail navigates to another delivery after
-   * create_followup_delivery, QuoteBuilder to another quote after
-   * create_quote_from_template / rollover_quote_to_season, InvoiceDetail to another
-   * invoice on save and on committed-receipt reconciliation, BlendTicketDetail to the
-   * duplicate ticket, FieldApplicationInvoice to another field-app invoice.
+   * record A's receipt against record B.
    *
-   * PaymentAllocation, DeliveryRemainders and MonthEndClose are deliberately absent:
-   * none is mounted on an `:id` route, so there is no record identity to carry.
-   * InvoiceDetail's saveIdem is absent because it is already scoped via its second
-   * argument.
+   * SCOPE OF THIS PR, narrowed 2026-09-03 after the round-2 Codex review found the
+   * generalisation unsafe. A key is only listed here when the route id it is scoped by
+   * is the SAME value the RPC targets:
+   *   - DeliveryDetail — cancel/void/complete/create_followup all send the route id.
+   *   - InvoiceDetail — transfer_invoice_to_job sends the route id. saveIdem is absent
+   *     because it is already record-scoped via its second argument.
+   *   - FieldApplicationInvoice — delete_invoices sends [id] and
+   *     transfer_invoice_to_job sends id, both the route id.
+   *
+   * Deliberately NOT here, because route-id scoping would NOT match what the RPC
+   * targets and would give false assurance — these pages were reverted to main and are
+   * tracked as follow-up: QuoteBuilder (RPCs target component state `quoteId`, and
+   * `/quotes/new` has no id at all), BlendTicketDetail (RPCs target asynchronously
+   * hydrated `ticket.id`), and every page whose intent lives in an in-page payload
+   * rather than the route — PrepayWorkspacePanel, Deliveries batch cancel, Invoices
+   * batch void/delete, PaymentAllocation, FinanceChargePreviewModal, Quotes,
+   * DeliveryRemainders, NewOrder, QuickDeliveryModal, FieldSetup. Binding those needs
+   * the request payload, not the URL — see docs/manual/KNOWN_ISSUES.md.
    */
   const RECORD_SCOPED_KEYS: Record<string, string[]> = {
     'src/pages/DeliveryDetail.tsx': ['cancelIdem', 'followupIdem', 'completeIdem', 'voidIdem'],
-    'src/pages/QuoteBuilder.tsx': [
-      'fromTemplateIdem', 'rolloverIdem', 'drawDownIdem', 'closeAppliedIdem', 'closeShortIdem',
-    ],
     'src/pages/InvoiceDetail.tsx': ['transferToSchedulingIdem'],
-    'src/pages/BlendTicketDetail.tsx': [
-      'linkIdem', 'unlinkIdem', 'createOrderIdem', 'approveIdem', 'rejectIdem',
-    ],
     'src/pages/FieldApplicationInvoice.tsx': ['deleteIdem', 'transferToSchedulingIdem'],
   };
 

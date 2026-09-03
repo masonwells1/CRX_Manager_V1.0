@@ -569,8 +569,8 @@ export default function FieldSetup() {
       if (error) {
         toast('error', rpcAuthErrorMessage(error) ?? error.message);
       } else {
-        assertRpcResult(data, 'save_field');
         saveFieldIdem.resetKey();
+        assertRpcResult(data, 'save_field');
         const savedFieldId = isNew ? data : id;
 
         // The field record is saved; now persist its acreage. Track whether any acreage RPC

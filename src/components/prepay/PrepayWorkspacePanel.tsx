@@ -203,8 +203,8 @@ export default function PrepayWorkspacePanel() {
           p_idempotency_key: key,
         });
         if (error) throw error;
-        const result = assertRpcResult<{ applied_count: number; total_applied_cents: number }>(data, 'batch_apply_prepayments');
         batchApplyIdem.resetKey();
+        const result = assertRpcResult<{ applied_count: number; total_applied_cents: number }>(data, 'batch_apply_prepayments');
         toast('success', `Applied ${fmt(result.total_applied_cents)} across ${result.applied_count} allocation(s)`);
         setPendingAllocations([]);
         fetchData();

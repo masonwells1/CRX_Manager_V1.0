@@ -295,8 +295,8 @@ export default function PaymentAllocation() {
       });
 
       if (error) throw error;
-      const result = assertRpcResult<PaymentAllocationResult>(data, 'allocate_payment');
       allocatePaymentIdem.resetKey();
+      const result = assertRpcResult<PaymentAllocationResult>(data, 'allocate_payment');
       setLastResult(result);
 
       const parts = [`Applied ${fmt(result.total_allocated_cents)} to ${result.invoices_paid} invoice(s)`];

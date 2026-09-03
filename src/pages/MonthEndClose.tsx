@@ -355,12 +355,16 @@ export default function MonthEndClose() {
 
       const statements = assertRpcResult<DetailedStatementData[]>(data, 'generate_batch_statements');
       // assertRpcResult only rejects null/undefined, so the ARRAY check below is this
-      // path's real validation of the reply — the key is retired after it, not before,
-      // or a non-null non-array response would lose its replay key (Codex MEDIUM, F1).
+      // path's real validation of the reply, and the key is retired after it rather
+      // than before (Codex MEDIUM, F1).
+      //
+      // Scope note, corrected after Codex LOW: generate_batch_statements is STABLE,
+      // performs no writes and ignores p_idempotency_key entirely, so there is nothing
+      // here to double-apply and a retry simply recomputes. The ordering is kept for
+      // consistency with the other money paths, NOT because a duplicate is possible —
+      // do not read this block as evidence that this RPC commits anything.
       if (!statements || !Array.isArray(statements)) {
-        // Ambiguous reply: the run may have committed server-side. KEEP the key so a
-        // retry replays instead of generating a second batch.
-        toast('error', 'generate_batch_statements returned an unexpected response — retry to reconcile it.');
+        toast('error', 'generate_batch_statements returned an unexpected response — please retry.');
         setGenerating(false);
         return;
       }

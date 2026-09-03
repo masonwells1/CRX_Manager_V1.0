@@ -798,11 +798,41 @@ re-confirming findings F1–F3 of `docs/audits/2026-09-01-no-pr-branch-dispositi
 the three was tracked here before; each lived only on a branch 150–690 commits behind `main`. The
 branches are references, not merge candidates — every fix must be re-derived on current `main`.
 
-**F1 — MOSTLY FIXED 2026-09-03, two instances still OPEN** (branch
-`claude/money-screens-idempotency-key-582a41`; not "closed" — the same defect class remains
-live in `JobDetail.tsx` and in two click-reset designs, both listed at the end of this entry).
-39 call sites
-across 20 files now retire the key only after `assertRpcResult`, plus two click-level repairs in
+**F1 — PARTIALLY FIXED 2026-09-03; MOST of the defect class is still OPEN** (branch
+`claude/money-screens-idempotency-key-582a41`, PR #584). Read the "still open" list below before
+assuming any screen is covered.
+
+**Fixed: 16 sites across 8 files.** Only where the key is bound to what the RPC actually targets —
+`OrderDetail`, `DeliveryDetail`, `InvoiceDetail`, `FieldApplicationInvoice`, `FieldStop`,
+`Returns`, `PrepaymentManagerPanel`, `MonthEndClose`. Ten keys on the four detail pages are also
+scoped to the route id via the hook's `intentScope`, because detail pages do NOT remount on a
+route-id change (every `<x>/:id` route in `src/App.tsx` is rendered without a `key` prop) and a
+retained unscoped key would otherwise replay record A's receipt against record B.
+
+**STILL OPEN — do not assume these are fixed.** Twelve pages were REVERTED to `main` after the
+round-2 `gpt-5.6-sol` review, because reordering the reset makes the client RETAIN the key and on
+these pages the key is bound to the URL rather than to what the RPC targets (an in-page selection,
+a staged payload, component state, or a `/new` route with no id). Retaining it there trades
+duplicate-on-retry for **cross-record replay** — demonstrated worst case on `PrepayWorkspacePanel`,
+where batch B receives batch A's receipt, reports success, and clears B's staged allocations
+without applying them. Open: `QuoteBuilder`, `BlendTicketDetail`, `PrepayWorkspacePanel`,
+`Deliveries` (batch cancel), `Invoices` (batch void/delete), `PaymentAllocation`,
+`FinanceChargePreviewModal`, `Quotes`, `DeliveryRemainders`, `NewOrder`, `QuickDeliveryModal`,
+`FieldSetup`, plus `JobDetail` (4 sites, owned by a concurrent session). **Fix shape:** bind the
+key to the REQUEST PAYLOAD — the `fingerprintIntentPayload` approach from PR #535 — not to the
+route. Enumerated in `src/__tests__/idempotency-reset-order.test.ts` (`KNOWN_UNFIXED`), which fails
+if a NEW site appears.
+
+**ALSO OPEN — the original sweep missed an entire class.** It matched `resetKey()` /
+`resetKeyFor(` literally and never saw **aliased** resets from destructured hooks
+(`const { resetKey: resetXKey } = useIdempotencyKey(...)`). `QuoteBuilder.tsx:1522` calls
+`resetSaveQuoteIdempotencyKey()` before the assert on 1523 — the F1 defect, live, on `save_quote`.
+`CustomerDetail.tsx`, `ProductDetail.tsx`, `PurchaseOrderDetail.tsx` and `JobDetail.tsx` use the
+same aliased form and were never examined. Any re-sweep must match the destructured alias, not the
+method name.
+
+**Historical note on the original attempt:** 39 call sites
+across 20 files were reordered, plus two click-level repairs in
 `OrderDetail.tsx` (`onCreateInvoiceClick` and the Cancel Order button — both RPCs take a payload
 that cannot vary between attempts, so a per-click reset only removed duplicate protection).
 **The Cancel Order defect was found by driving the real screen; the unit tests and the static guard

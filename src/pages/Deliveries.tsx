@@ -626,10 +626,9 @@ export default function Deliveries() {
           p_idempotency_key: cancelKey,
         });
         if (error) throw error;
-        const cancelResult = assertRpcResult(data, 'batch_cancel_deliveries');
         batchCancelIdem.resetKey();
         logActivity({ event: 'batch_cancel_deliveries', description: `Batch cancelled ${ids.length} delivery(ies). Reason: ${reason}`, performedBy: profile.id });
-        return cancelResult;
+        return assertRpcResult(data, 'batch_cancel_deliveries');
       },
       toast,
       successMessage: `Cancelled ${ids.length} delivery(ies)`,
