@@ -1715,6 +1715,13 @@ function hasActorMismatchRaiseException(rawAction, structuralAction, actorParam)
  * uses the file-level exempt marker and a manual review. */
 function hasActorReferenceRebinding(structuralBody, actorReferences) {
   const blockQualifier = `(?:${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*)?`;
+  // PostgreSQL decodes U&"..." before resolving a PL/pgSQL assignment target.
+  // This guard intentionally does not duplicate that escape grammar, so any
+  // opaque Unicode target in a recognized INTO list could be the guarded actor
+  // under another spelling. Fail closed for this bounded assignment surface.
+  const opaqueUnicodeTarget =
+    `(?:${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*)?${SQL_UNICODE_IDENTIFIER_PATTERN}`;
+  if (hasIntoAssignmentTarget(structuralBody, opaqueUnicodeTarget)) return true;
   for (const reference of actorReferences) {
     const ref = actorReferencePattern(reference);
     if (hasIntoAssignmentTarget(structuralBody, `${blockQualifier}${ref}`)) return true;

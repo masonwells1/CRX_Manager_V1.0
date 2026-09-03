@@ -3321,6 +3321,10 @@ for (const [label, rebind] of [
   ["SELECT ... INTO a second target", "  SELECT p_target_id, p_target_id INTO p_target_id, p_performed_by;"],
   ["SELECT ... INTO the second positional actor target",
     "  SELECT p_target_id, p_target_id INTO p_target_id, $1;"],
+  ["SELECT ... INTO a first opaque Unicode actor target",
+    '  SELECT p_target_id INTO U&"p_performed_b\\0079";'],
+  ["SELECT ... INTO a second opaque Unicode actor target",
+    '  SELECT p_target_id, p_target_id INTO p_target_id, U&"p_performed_b\\0079";'],
   ["RETURNING ... INTO a second target",
     "  UPDATE financial_audit_log SET actor_user_id = p_target_id WHERE false " +
       "RETURNING actor_user_id, actor_user_id INTO p_target_id, p_performed_by;"],

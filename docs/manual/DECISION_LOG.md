@@ -15,7 +15,9 @@ repair; keep the broader cap."
 **Decision.** PR #449 may make one narrow repair to the capped write-time actor-binding guard:
 for the already-recognized PL/pgSQL `SELECT`, `RETURNING`, `FETCH`, and dynamic `EXECUTE` `INTO`
 forms, inspect every assignment target rather than only the first. The repair applies both to a
-guarded actor parameter and to a trusted local initialized from `auth.uid()`.
+guarded actor parameter and to a trusted local initialized from `auth.uid()`. Because PostgreSQL
+decodes `U&"..."` identifiers before target resolution and this best-effort guard intentionally does
+not, opaque Unicode targets inside those recognized lists fail closed.
 
 **Boundary.** The 2026-09-01 best-effort cap below remains operative. This exception does not
 authorize another general pattern-hardening round, a new SQL parser, wider actor-name discovery,

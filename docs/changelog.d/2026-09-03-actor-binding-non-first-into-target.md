@@ -19,7 +19,8 @@ The same shape could overwrite a trusted local previously initialized from
   readers now split their recognized target lists and inspect every target.
 - The check covers guarded actor parameters, positional actor aliases, quoted
   and block-qualified targets already supported by the guard, and trusted
-  `auth.uid()` locals.
+  `auth.uid()` locals. Opaque PostgreSQL Unicode-escaped targets fail closed
+  because they can decode to an actor-equivalent identifier.
 - A safe control confirms that an actor in the output expression list is not
   rejected when every assignment target is a different variable.
 
@@ -32,6 +33,10 @@ incremental edits, or change the post-apply sweep predicates.
 
 ### Proof
 
-- With the repair present, the focused real-hook suite passes 498 assertions.
+- With the repaired target-list logic present, the focused real-hook suite
+  passes 501 assertions.
 - Mutating the helper back to first-target-only behavior makes the trusted
   local second-target regression fail; restoring the repair returns it green.
+- The first exact-commit review found a Unicode-escaped actor-equivalent target;
+  the corrected candidate adds first- and non-first-target regressions for that
+  valid PostgreSQL spelling.
