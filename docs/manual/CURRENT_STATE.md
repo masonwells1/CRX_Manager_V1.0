@@ -1,13 +1,20 @@
 # CRX Manager — Current State
 
 **Last verified: 2026-09-03 for the migration ledger ONLY. Schema shape is still the 2026-09-01
-reading below and was NOT re-read.** A read-only capture on 2026-09-03 records **992 ledger rows**
-(985 distinct names — the difference is duplicate names, from `count(distinct name)`, not
-truncation), live `max(version)` is **`20260903124741`**, and the newest applied authored NAME is
-**`20260831235900_serialize_gauntlet_write_boundaries`**, which is therefore the current effective
-ordering high-water. Read ordering from the authored NAME, not from `version` — the two diverge, and
+reading below and was NOT re-read.** The current effective ordering high-water is the newest applied
+authored NAME: **`20260831235900_serialize_gauntlet_write_boundaries`**.
+
+Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
-high-water" rule compared against it silently skips files authored `20260831*`.
+high-water" rule compared against it silently skips files authored `20260831*`. The NAME is also the
+durable way to state this boundary: it is what the ordering guard compares, and it changes far less
+often than the counters.
+
+For provenance, the same read observed **992 ledger rows** (985 distinct names — the difference is
+duplicate names, from `count(distinct name)`, not truncation) and `max(version)`
+**`20260903124741`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
+any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
+not evidence that something went wrong, and it should not be re-pinned on every apply.
 
 **Disk-vs-live drift, confirmed 2026-09-03 — OWNED BY PR #535, NOT AN ORPHAN.** Six `20260831*`
 migrations are applied live with **no file on `main`**:

@@ -1,9 +1,12 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-03 for the F2 entry and migration-ledger facts.** A read-only capture on
-2026-09-03 at ~14:0xZ records **992 ledger rows** (985 distinct names), live `max(version)`
-**`20260903124741`**, and newest applied authored NAME
-**`20260831235900_serialize_gauntlet_write_boundaries`** — the current ordering high-water. Only the
+**Last verified: 2026-09-03 for the F2 entry and migration-ledger facts.** The ordering boundary is
+the newest applied authored NAME:
+**`20260831235900_serialize_gauntlet_write_boundaries`**. Read ordering from the NAME — it is what
+the ordering guard compares and it moves far less often than the counters. For provenance, the same
+read observed 992 ledger rows (985 distinct names) and `max(version)` `20260903124741`; **treat both
+of those as a point-in-time observation, not a fact** — any lane applying a migration moves them, so
+re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
 F2 item below was re-verified against live on this date (function bodies, grants, the
 `invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
