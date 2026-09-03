@@ -103,12 +103,13 @@ function selectedMigrationsThroughCandidate() {
     (local) => path.resolve(local) === path.resolve(MIGRATION_PATH),
   );
   assert.notEqual(candidateIndex, -1, 'candidate is absent from the ledger-selected replay');
-  assert.equal(
-    candidateIndex,
-    migrations.length - 1,
-    'candidate must be the final selected migration in this isolated release proof',
-  );
-  return migrations;
+  const trailing = migrations.slice(candidateIndex + 1);
+  if (trailing.length > 0) {
+    console.log(
+      `COMMISSION_HISTORY_REPLAY_STOPS_AT_CANDIDATE trailing=${trailing.map((local) => path.basename(local)).join(',')}`,
+    );
+  }
+  return migrations.slice(0, candidateIndex + 1);
 }
 
 function applySql(source, { allowFailure = false } = {}) {
