@@ -7,7 +7,41 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
-## 2026-09-02 — `overnight` is a topic word, not a freeze signal
+## 2026-09-02 (later) — `overnight` is REMOVED from the freeze list; the narrowing is abandoned
+
+**Source:** Mason's in-chat decision on 2026-09-02, put to him after a fourth review round proved
+the narrowed pattern still froze ordinary questions. He chose removal — which is what he had asked
+for originally, before the narrowing was proposed to him.
+
+**Decision.** `overnight` no longer appears in the `strong` list of
+`.claude/hooks/autopilot-intent-reminder.mjs` in any form. This **supersedes the two entries below
+it** from earlier the same day, which are kept as the record of why the narrowing was attempted.
+
+**Why.** Three attempts to keep the word as a narrowed pattern were each defeated by a phrasing the
+previous round had not considered: the bare word, then punctuation-as-terminator
+(`investigate the overnight: flag behavior`), then general prepositions
+(`overnight in the documentation is misspelled`), and finally nominal use at a sentence end —
+`what is overnight?`, raised as P1 by Codex and Major by CodeRabbit, and confirmed by running the
+real hook. That last one is the ORIGINAL defect, not a marginal case: asking a question about the
+feature still froze the session for 45 minutes with no exit but arming autopilot.
+
+A guard written as a text pattern over free-form input does not converge. Same shape as the
+`git clean` carve-out (six rounds) and the same judgement as removing the Governed Autonomous
+Software Factory, which went partly because "casual words like 'factory' or 'overnight' flipped
+governed state".
+
+**What was given up, knowingly.** `run this overnight` alone no longer latches the handshake. The
+`triggers` list still matches the bare word, so it still injects the arm-autopilot reminder — the
+pre-latch behaviour, not a silent loss. A missed latch costs a reminder; a false latch costs a
+45-minute lockout whose only exit is the thing the handshake exists to prevent.
+
+**Operative rule.** Do not reintroduce `overnight` to `strong` in any form. Every phrasing the
+removed patterns once accepted is pinned as non-latching in `prompt-hooks.test.mjs`, and
+`hook-router.test.mjs` pins both halves end to end — the word reminding but not latching, and a
+real request (`im going to bed, keep working`) still latching. A genuinely new class of failure —
+the latch firing from something other than prompt text — is a different matter.
+
+## 2026-09-02 — `overnight` is a topic word, not a freeze signal (SUPERSEDED by the entry above)
 
 **Source:** Mason's in-chat approval on 2026-09-02 ("yes drop the word overnight from the freeze
 list"), after the defect froze the same session twice inside ten minutes.

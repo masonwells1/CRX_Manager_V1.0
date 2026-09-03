@@ -248,36 +248,38 @@ rmSync(hbProj, { recursive: true, force: true });
     ok(latches(using).latched, `a real hands-free request must still latch: "${using}"`);
   }
 
-  // 3. The word itself is not banned — it is split by grammar. Adverbial
-  //    `overnight` (ending its phrase) is a real request and MUST still latch;
-  //    hook-router.test.mjs pins the first of these end to end. Deleting the
-  //    replacement pattern instead of narrowing it turns this block red, which
-  //    is what stops "drop the word" being implemented as "drop the coverage".
-  //    The last three are CodeRabbit's P2 on PR #565: an earlier fixed follower
-  //    whitelist silently dropped these, and a dropped latch is not harmless —
-  //    an unattended run stalls for permission later, which is the complaint the
-  //    whole subsystem exists to answer.
-  for (const adverbial of [
+  // 3. `overnight` NEVER latches, in any grammatical role (Mason, 2026-09-02,
+  //    after five review rounds). Three attempts to keep it as a narrowed
+  //    pattern were each defeated by a phrasing the previous round had not
+  //    considered, ending with `what is overnight?` — the original defect, not a
+  //    marginal case. Every prompt below is a shape one of those attempts
+  //    ACCEPTED as a request; they are pinned as non-latching so no future
+  //    "improvement" can reintroduce the pattern without turning this red.
+  //
+  //    What is deliberately given up: the first four are genuine hands-free
+  //    requests that no longer latch. `triggers` still matches the bare word, so
+  //    they still get the arm-autopilot reminder — a miss costs a reminder,
+  //    while a false latch costs a 45-minute lockout whose only exit is arming.
+  for (const nonLatching of [
+    // once treated as requests
     "run this overnight",
-    "keep going overnight, ill check in the morning",
     "run it overnight and dont ask me",
-    "work on this overnight please",
-    "run this overnight without asking me again",
     "work overnight for me",
     "keep working overnight through the morning",
+    // round 4 false positives (Codex P1 + CodeRabbit Major) that forced the removal
+    "what is overnight?",
+    "can you explain overnight?",
+    "the feature is called overnight.",
+    "overnight, my report is wrong",
+    "overnight, tonight's deployment is delayed",
   ]) {
-    ok(latches(adverbial).latched, `adverbial overnight is a real request: "${adverbial}"`);
+    const got = latches(nonLatching);
+    ok(!got.latched, `overnight must never latch, in any role: "${nonLatching}"`);
+    ok(got.reminded, "...but the arm-autopilot reminder still fires");
   }
 
-  // 4. ...while `overnight` modifying a noun is naming a thing, and must not
-  //    freeze. These are the shapes that appear in questions about the feature.
-  //
-  //    `investigate the overnight: flag behavior` is CodeRabbit's Major on the
-  //    same line: a colon was read as a phrase terminator when it was in fact
-  //    introducing a noun. The determiner rule is what catches it, and the last
-  //    case (nothing before the word at all) is what the determiner rule alone
-  //    would miss — between them the two halves are load-bearing in both
-  //    directions, which is why neither may be "simplified" away.
+  // 4. The mentions that started this, still non-latching. Kept from the earlier
+  //    rounds so the removal is pinned from both directions.
   for (const naming of [
     "why does the overnight flag keep firing",
     "explain the overnight handshake to me",
@@ -285,10 +287,6 @@ rmSync(hbProj, { recursive: true, force: true });
     "investigate the overnight: flag behavior",
     "drop the word overnight from the freeze list",
     "overnight flag is broken again",
-    // Round 3 (CodeRabbit, PR #565): sentence-leading, so no determiner
-    // precedes it, and an ordinary preposition then carried it to a freeze.
-    // General-purpose prepositions introduce noun phrases at least as often as
-    // they continue a clause, so they are no longer accepted at all.
     "overnight in the documentation is misspelled",
     "the note about overnight on line 40 is wrong",
     "grep for overnight to see where it fires",

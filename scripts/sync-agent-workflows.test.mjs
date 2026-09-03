@@ -175,6 +175,60 @@ try {
       "only skills/source-command-<name>/... is foreign; near-miss shapes stay checked",
     );
     assert.equal(nearMisses.extras.length, 4, "every near-miss is still reported as drift");
+
+    // ── the three narrowing conditions (Codex, PR #565) ────────────────────
+    // Each closes a way the exemption could have let non-generated instructions
+    // live in .agents/ unchallenged. Drop the corresponding option from
+    // classifyExtras and exactly one of these goes red.
+
+    // (a) A directory the generator PREVIOUSLY owned stays ours. Otherwise
+    //     deleting a canonical `.claude` command named source-command-* drops
+    //     its mirror out of `expected`, and the orphan would be waved through as
+    //     importer litter while its stale instructions remain on disk.
+    const orphaned = classifyExtras(["skills/source-command-demo/SKILL.md"], {
+      previouslyManaged: ["skills/source-command-demo/SKILL.md"],
+    });
+    assert.deepEqual(orphaned.foreignDirs, [], "a formerly generated directory is not importer litter");
+    assert.deepEqual(
+      orphaned.extras,
+      ["skills/source-command-demo/SKILL.md"],
+      "an orphaned mirror of a deleted canonical command is still drift",
+    );
+
+    // (b) Ownership is per DIRECTORY, not per file. When the generator emits
+    //     skills/source-command-demo/SKILL.md, a hand-added sibling in that same
+    //     directory is drift — not litter — even though the sibling itself is
+    //     never in `expected`.
+    const sibling = classifyExtras(["skills/source-command-demo/manual.md"], {
+      expectedKeys: ["skills/source-command-demo/SKILL.md"],
+    });
+    assert.deepEqual(sibling.foreignDirs, [], "a canonical directory is never reclassified as foreign");
+    assert.deepEqual(
+      sibling.extras,
+      ["skills/source-command-demo/manual.md"],
+      "an extra file beside a generated adapter stays drift",
+    );
+
+    // (c) The exemption is for UNTRACKED working-tree litter only. Once the
+    //     importer output is staged or tracked it is becoming part of the repo,
+    //     and mangled instructions must fail the parity check rather than ride
+    //     in silently. Proven live as well: staging the fixture turned --check
+    //     from PASS to `FAIL ... is not generated from .claude`.
+    const staged = classifyExtras(["skills/source-command-ship/SKILL.md"], {
+      trackedPaths: ["skills/source-command-ship/SKILL.md"],
+    });
+    assert.deepEqual(staged.foreignDirs, [], "tracked importer output is not exempt");
+    assert.deepEqual(
+      staged.extras,
+      ["skills/source-command-ship/SKILL.md"],
+      "staged or tracked importer files must fail the check",
+    );
+
+    // ...and the untracked twin of (c) still passes, so the fix did not simply
+    // delete the exemption.
+    const untracked = classifyExtras(["skills/source-command-ship/SKILL.md"]);
+    assert.deepEqual(untracked.foreignDirs, ["source-command-ship"]);
+    assert.deepEqual(untracked.extras, [], "untracked importer litter is still exempt");
   }
 } finally {
   rmSync(targetRoot, { recursive: true, force: true });

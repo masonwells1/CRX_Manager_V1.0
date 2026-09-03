@@ -8,6 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeEol } from "./normalize-eol.mjs";
@@ -137,21 +138,71 @@ export function writeExpected(expected, targetRoot = TARGET_ROOT) {
 //
 // Classify by REGION, not by an enumeration of the 24 names: any path under a
 // `skills/<importer-prefixed-dir>/` that this generator does not itself produce.
-// The `!expected.has()` filter upstream is what makes that safe — a path the
-// generator DOES emit stays in `expected` and is still held to the missing/stale
-// checks above, so this can never silently drop a real adapter, even one that
-// happens to be named `source-command-*`.
+//
+// Three narrowing conditions, each closing a hole Codex found on PR #565. The
+// exemption applies ONLY to a directory that is
+//
+//   1. not currently generated  — a path in `expected` is filtered out upstream,
+//      but that is not enough on its own: see (2);
+//   2. not PREVIOUSLY generated — if `generated-manifest.json` ever owned a file
+//      in that directory, the directory is ours. Without this, deleting a
+//      canonical `.claude` command named `source-command-*` would drop its
+//      mirror out of `expected`, this filter would then call the orphan
+//      "importer litter", and stale instructions would survive `--check`. It
+//      also fixes the sibling case: when `skills/source-command-demo/SKILL.md`
+//      IS generated, a hand-added `manual.md` beside it stays drift, because
+//      ownership is decided per DIRECTORY, not per file;
+//   3. not tracked or staged in git — the exemption is for untracked
+//      working-tree litter. Once someone `git add -A`s the importer output it is
+//      becoming part of the repo, and mangled instructions must fail the parity
+//      check rather than ride in silently.
+//
+// Together these keep the invariant the exemption could otherwise break:
+// `.agents/` is generated solely from `.claude/`.
 const FOREIGN_SKILL_DIR_RE = /^skills\/(source-command-[^/]+)\//;
 
-export function classifyExtras(extraRelativePaths) {
+function importerDirOf(relativePath) {
+  return FOREIGN_SKILL_DIR_RE.exec(relativePath)?.[1] ?? null;
+}
+
+export function classifyExtras(extraRelativePaths, options = {}) {
+  const { expectedKeys = [], previouslyManaged = [], trackedPaths = [] } = options;
+
+  // Any directory this generator owns now, or owned before, is OURS.
+  const ownedDirs = new Set();
+  for (const key of [...expectedKeys, ...previouslyManaged]) {
+    const dir = importerDirOf(key);
+    if (dir) ownedDirs.add(dir);
+  }
+  const tracked = new Set(trackedPaths);
+
   const extras = [];
   const foreignDirs = new Set();
   for (const relative of extraRelativePaths) {
-    const foreign = FOREIGN_SKILL_DIR_RE.exec(relative);
-    if (foreign) foreignDirs.add(foreign[1]);
+    const dir = importerDirOf(relative);
+    if (dir && !ownedDirs.has(dir) && !tracked.has(relative)) foreignDirs.add(dir);
     else extras.push(relative);
   }
   return { extras, foreignDirs: [...foreignDirs].sort() };
+}
+
+// Paths under .agents/ that git already knows about (tracked or staged), as
+// TARGET_ROOT-relative unix paths. Failure to run git is treated as "nothing is
+// tracked", which only ever makes the check MORE permissive about litter — never
+// less permissive about real drift, which is decided by `expected` alone.
+function gitKnownTargetPaths(targetRoot = TARGET_ROOT) {
+  const rel = unix(path.relative(ROOT, targetRoot)) || ".agents";
+  const out = new Set();
+  for (const args of [["ls-files", "-z", "--", rel], ["diff", "--cached", "--name-only", "-z", "--", rel]]) {
+    const r = spawnSync("git", ["-C", ROOT, ...args], { encoding: "utf8" });
+    if (r.status !== 0 || !r.stdout) continue;
+    for (const line of r.stdout.split("\0")) {
+      if (!line) continue;
+      const withinTarget = unix(path.relative(rel, line));
+      if (withinTarget && !withinTarget.startsWith("..")) out.add(withinTarget);
+    }
+  }
+  return [...out];
 }
 
 function checkExpected(expected) {
@@ -164,7 +215,14 @@ function checkExpected(expected) {
   const actualFiles = walkFiles(TARGET_ROOT)
     .map((file) => unix(path.relative(TARGET_ROOT, file)))
     .filter((relative) => !relative.startsWith("session-state/"));
-  const { extras, foreignDirs } = classifyExtras(actualFiles.filter((relative) => !expected.has(relative)));
+  const { extras, foreignDirs } = classifyExtras(
+    actualFiles.filter((relative) => !expected.has(relative)),
+    {
+      expectedKeys: [...expected.keys()],
+      previouslyManaged: previousManagedFiles(),
+      trackedPaths: gitKnownTargetPaths(),
+    },
+  );
   for (const extra of extras) {
     mismatches.push(`${extra} is not generated from .claude`);
   }

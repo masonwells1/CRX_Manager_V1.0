@@ -59,68 +59,46 @@ if (!triggers.some((re) => re.test(prompt))) emit();
 // for this; two `gpt-5.6-sol` reviews returned BLOCKERS and Mason removed it,
 // because the cure was a new way to execute code during the pause.
 //
-// A bare `/overnight/` was such a word and is deliberately gone (Mason,
-// 2026-09-02). It froze one session twice inside ten minutes: once on "i think
-// the overnight flag is getting worked on you might investigate", and again on
-// the approval to make this very change. Same defect, same word, already judged
-// once — the Governed Autonomous Software Factory was removed on 2026-08-07
-// partly because "casual words like 'factory' or 'overnight' flipped governed
-// state" (docs/manual/DECISION_LOG.md).
+// `overnight` is deliberately ABSENT from this list, in any form (Mason,
+// 2026-09-02, after five review rounds). Do not add it back.
 //
-// It is REPLACED below rather than deleted, because "run this overnight" is a
-// real hands-free request and latching it is a property worth keeping. The split
-// is grammatical, not a list of banned phrasings: adverbial `overnight` says WHEN
-// the work happens and is a request; attributive `overnight` modifies a noun and
-// is naming a thing ("the overnight flag", "the overnight bug hunt", "the word
-// overnight from the list").
+// It began as a bare `/overnight/` and froze one session twice inside ten
+// minutes: once on "i think the overnight flag is getting worked on you might
+// investigate", and again on the approval to remove it. Three successive
+// attempts to keep it as a NARROWED pattern — adverbial-only, then plus a
+// determiner lookbehind, then with the preposition followers stripped — were
+// each defeated by a phrasing the previous round had not considered:
 //
-// TWO independent signals, because CodeRabbit found a real hole on each side of a
-// single one (PR #565). Both must agree before the session is frozen:
+//   round 1  the word alone                 "the overnight flag is ..."
+//   round 2  any punctuation as terminator  "investigate the overnight: flag ..."
+//   round 3  general prepositions           "overnight in the documentation ..."
+//   round 4  nominal use at a sentence end  "what is overnight?"
+//            possessive followers           "overnight, my report is wrong"
 //
-//   NOT-NAMED  — no determiner or quoting word immediately before it. This is
-//                what makes "the word overnight FROM the list" safe even though
-//                `from` is a perfectly good adverbial preposition, and it is the
-//                closed half of the rule: English determiners are a fixed set,
-//                nouns are not.
-//   ADVERBIAL  — it ends the phrase, or the next word starts a new clause rather
-//                than continuing a noun phrase. This is what makes a leading
-//                "overnight flag is broken" safe, where nothing precedes it.
+// Round 4's `what is overnight?` is the ORIGINAL defect, not a marginal case:
+// asking a question about the feature still froze the session. The pattern was
+// not converging, so it is gone rather than narrowed a fourth time.
 //
-// Neither alone is enough. A single lookahead let `investigate the overnight:
-// flag behavior` through, because `:` was read as a terminator when it was in
-// fact introducing a noun. A single lookbehind lets `overnight flag is broken`
-// through when the sentence opens with it. Each rule covers the other's gap.
+// This is the same judgement recorded for the Governed Autonomous Software
+// Factory, removed on 2026-08-07 partly because "casual words like 'factory' or
+// 'overnight' flipped governed state" (docs/manual/DECISION_LOG.md), and the
+// same shape as the `git clean` carve-out that closed after six rounds: a guard
+// written as a text pattern over free-form input does not converge.
 //
-// The follower set is NOT a general list of adverbial words. Round 3 of review
-// (CodeRabbit, PR #565) showed why: `overnight in the documentation is
-// misspelled` opens the sentence, so no determiner precedes it, and a
-// general-purpose preposition then carried it straight to a freeze. Ordinary
-// prepositions — in, on, at, to, from, with, into, about — introduce noun
-// phrases at least as often as they continue a clause, so they are gone. What
-// remains either opens a new clause (`and`, `so`, `then`, a pronoun, `please`)
-// or is time/manner flavoured in a way that only follows an action verb
-// (`through`, `until`, `tonight`, `without`). `for` is admitted ONLY as `for
-// me`/`for us`: "work overnight for me" is a request, "overnight for the
-// documentation" is a topic.
-//
-// Where the rules disagree, prefer MISSING a real request over freezing on a
-// mention — but a miss is not free either (round 2 of the same review): the
-// unattended run then stalls for permission later, which is the complaint this
-// subsystem answers. A miss at least degrades to the arm-autopilot reminder
-// `triggers` still injects, while a false freeze can only be escaped by arming.
-// Pinned in prompt-hooks.test.mjs and hook-router.test.mjs.
-//
-// `this`/`that` are deliberately NOT determiners here: "run this overnight" is
-// the canonical request, and hook-router.test.mjs:53 pins it.
-const OVERNIGHT_REQUEST =
-  /(?<!\b(?:the|an?|its|their|our|your|any|each|every|word|term|about)\s+)\bovernight\b(?=\s*$|\s*[.!?]|\s*[,;:]?\s+(?:(?:and|so|then|please|ok|okay|tonight|through|throughout|until|till|til|without|i|im|ill|ive|i'm|i'll|i've|we|you|my)\b|for\s+(?:me|us)\b))/;
+// WHAT IS LOST, stated plainly: "run this overnight" on its own no longer
+// latches the deterministic handshake. `triggers` above still matches the bare
+// word, so such a prompt still injects the arm-autopilot reminder — the pre-latch
+// behaviour, not a silent loss. The four patterns below still latch, and they
+// cover the phrasings that accompany a real unattended run. The trade was made
+// knowingly: a missed latch costs a reminder, while a false latch costs a
+// 45-minute lockout whose only exit is arming autopilot — precisely what this
+// handshake exists to prevent.
 
 const strong = [
   /going\s+to\s+bed/,
   /hands.?free/,
   /run\s+(it|this)\s+(all\s+)?night/,
   /while\s+i('?m| am)\s+(asleep|sleeping|away|gone)/,
-  OVERNIGHT_REQUEST,
 ];
 if (strong.some((re) => re.test(prompt))) {
   try {
