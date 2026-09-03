@@ -150,3 +150,12 @@ scripts/apply-live-testdata-maintenance-20260812.mjs text eol=lf
 scripts/apply-live-testdata-maintenance-20260812.test.mjs text eol=lf
 .codex/hooks/production-action-guard.mjs text eol=lf
 .claude/hooks/codex-push-lib.mjs text eol=lf
+
+# F2 number-generator gates (2026-09-03). The migration's function bodies are
+# hashed by scripts/smoke/prove-number-generator-gates.mjs against md5 pins read
+# from live pg_proc.prosrc, and migration-history.md records this file's
+# LF-normalized sha256. A CRLF checkout would install bytes neither pin was
+# computed against, so the fidelity proof would fail on Windows for a reason that
+# has nothing to do with the SQL. Pin both to LF.
+supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql text eol=lf
+scripts/smoke/prove-number-generator-gates.mjs text eol=lf

@@ -1,7 +1,31 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-01 (post return-credit chain) for both the migration ledger and schema
-shape.** Schema shape comes from the live introspection that regenerated
+**Last verified: 2026-09-03 for the migration ledger ONLY. Schema shape is still the 2026-09-01
+reading below and was NOT re-read.** A read-only capture on 2026-09-03 records **992 ledger rows**
+(985 distinct names — the difference is duplicate names, from `count(distinct name)`, not
+truncation), live `max(version)` is **`20260903124741`**, and the newest applied authored NAME is
+**`20260831235900_serialize_gauntlet_write_boundaries`**, which is therefore the current effective
+ordering high-water. Read ordering from the authored NAME, not from `version` — the two diverge, and
+`.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
+high-water" rule compared against it silently skips files authored `20260831*`.
+
+**Disk-vs-live drift, confirmed 2026-09-03:** five migrations are applied live with **no file in this
+repository** — `20260831160000_harden_receiving_reversal_and_ap_reporting`,
+`20260831161000_require_cumulative_po_bill_confirmation`,
+`20260831162000_fail_closed_historical_commission_balance`,
+`20260831212415_guard_cycle_count_completion_revision`, and
+`20260831235900_serialize_gauntlet_write_boundaries`. `main`'s newest tracked migration is
+`20260827041500`. This is the same class of gap PR #371 closed on 2026-08-11 and that reopened on
+2026-08-12 (see the recovery note in `docs/reference/migration-history.md`); it is open again, five
+files wide, and is not owned by any current task. Until it closes, `main` does not describe
+production, and any migration whose safety argument rests on "the live body equals the last committed
+body" must verify against live rather than against disk.
+
+This header supersedes the 2026-09-01 ledger figures below; its non-ledger observations still stand.
+
+**Superseded 2026-09-01 (post return-credit chain) header, kept for provenance — its 986-row /
+`20260827041500` / `20260901184530` figures must not be used as the current ordering boundary.**
+Schema shape comes from the live introspection that regenerated
 `.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
 columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
 read of individual routine bodies or their grants beyond the functions this chain touched, which
