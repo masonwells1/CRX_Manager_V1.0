@@ -710,10 +710,18 @@ the **post-apply** half, run against the live catalog, and are indifferent to ho
 **Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. PR #449
 replaces the old 213-line whole-write-only check with the hardened guard described here when it lands:
 ordinary incremental edits are reconstructed, visible actor forwarding to callables is refused, and the 19
-reproduced laundering channels plus the one authorized non-first-`INTO` repair are covered. Until #449 is
+reproduced laundering channels plus the authorized non-first-`INTO` and rollback-state repairs are covered. Until #449 is
 merged, `main` still runs the old guard; after it is merged, this paragraph describes the active hook. The
 rewrite is still **not a boundary**, and no document should describe it as preventing actor forgery. The
 remaining gaps below and the non-`Write`/`Edit` tool-path limit are why the cap remains operative.
+
+**Transaction-state narrowing (authorized 2026-09-03).** A later
+`ALTER ... SECURITY INVOKER` no longer clears earlier definer evidence when executable SQL in the
+migration contains `ROLLBACK` or `ABORT`; that includes a demotion rolled back to a savepoint and a
+demotion aborted in a later transaction. The hook conservatively requires the authored definer body to
+pass instead of trying to reconstruct transaction state. Comment and string occurrences are masked.
+This closes the reproduced exact-review bypass but does not turn the reader into a transaction parser or
+change the broader cap.
 
 **What it does NOT catch, stated so nobody re-derives it:**
 

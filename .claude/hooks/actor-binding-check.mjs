@@ -2760,6 +2760,17 @@ function alteredRoutineSecurityModes(structuralSql) {
   return altered;
 }
 
+/** A lexical "last ALTER wins" model is unsafe when the migration can roll a
+ * later SECURITY INVOKER demotion back. We deliberately do not attempt to
+ * reconstruct PostgreSQL transaction/savepoint state here: if executable SQL
+ * contains ROLLBACK (including ROLLBACK TO) or ABORT, no INVOKER ALTER may be
+ * used as evidence that an earlier DEFINER mode is gone. This is conservative
+ * by design; the reviewed file-level exemption remains available for a safe
+ * migration whose transaction flow is too unusual for this reader. */
+function hasRollbackCapableTransactionControl(structuralSql) {
+  return /(?:^|;)\s*(?:ROLLBACK|ABORT)\b/i.test(String(structuralSql || ""));
+}
+
 function routineNamesMayMatch(left, right) {
   // A SECURITY mode change may reduce risk only when both sides identify the
   // same schema-qualified routine. PostgreSQL search_path makes unqualified
@@ -2851,6 +2862,8 @@ try {
   const alteredSecurityModes = masked === null
     ? []
     : alteredRoutineSecurityModes(masked);
+  const hasRollbackControl = masked !== null &&
+    hasRollbackCapableTransactionControl(masked);
   const createdRoutines = [];
   if (masked !== null && hasExecuteSqlReadonlyOperatorAlias(masked)) {
     violations.push(
@@ -3079,7 +3092,9 @@ try {
     const laterSecurityModes = alteredSecurityModes.filter((altered) =>
       altered.index > head.index && routineAlterMatchesCreate(createdRoutine, altered)
     );
-    const finalAlteredMode = laterSecurityModes.at(-1)?.mode;
+    const finalAlteredMode = laterSecurityModes.findLast((altered) =>
+      !hasRollbackControl || altered.mode !== "INVOKER"
+    )?.mode;
     const isSecurityDefiner = finalAlteredMode
       ? finalAlteredMode === "DEFINER"
       : /SECURITY\s+DEFINER/i.test(attrs);
@@ -3177,7 +3192,9 @@ try {
   for (const altered of alteredSecurityModes) {
     if (altered.mode !== "DEFINER") continue;
     const laterMode = alteredSecurityModes.findLast((candidate) =>
-      candidate.index > altered.index && routineAltersMatch(candidate, altered)
+      candidate.index > altered.index &&
+      routineAltersMatch(candidate, altered) &&
+      (!hasRollbackControl || candidate.mode !== "INVOKER")
     );
     if (laterMode?.mode === "INVOKER") continue;
     if (createdRoutines.some((created) => routineAlterMatchesCreate(created, altered))) {

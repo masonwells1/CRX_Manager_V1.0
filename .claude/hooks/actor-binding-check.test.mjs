@@ -3122,6 +3122,66 @@ r = runHook(
 );
 ok(!isDeny(r), "ALTER FUNCTION SECURITY INVOKER overrides an earlier CREATE SECURITY DEFINER mode");
 
+r = runHook(
+  "BEGIN;\n" +
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "rolled_back_demotion") +
+  "\nSAVEPOINT mode_flip;" +
+  "\nALTER FUNCTION public.rolled_back_demotion(uuid) SECURITY INVOKER;" +
+  "\nROLLBACK TO SAVEPOINT mode_flip;" +
+  "\nCOMMIT;"
+);
+ok(isDeny(r), "a rolled-back SECURITY INVOKER demotion cannot hide the committed SECURITY DEFINER create");
+
+r = runHook(
+  "BEGIN;\n" +
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "released_demotion") +
+  "\nSAVEPOINT mode_flip;" +
+  "\nALTER FUNCTION public.released_demotion(uuid) SECURITY INVOKER;" +
+  "\nRELEASE SAVEPOINT mode_flip;" +
+  "\nCOMMIT;"
+);
+ok(!isDeny(r), "a released SECURITY INVOKER demotion remains effective when no rollback is present");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "commented_rollback") +
+  "\n-- ROLLBACK TO SAVEPOINT mode_flip;" +
+  "\nALTER FUNCTION public.commented_rollback(uuid) SECURITY INVOKER;"
+);
+ok(!isDeny(r), "a rollback spelling in a comment does not invalidate a real INVOKER demotion");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "literal_rollback") +
+  "\nSELECT 'ROLLBACK TO SAVEPOINT mode_flip';" +
+  "\nALTER FUNCTION public.literal_rollback(uuid) SECURITY INVOKER;"
+);
+ok(!isDeny(r), "a rollback spelling in string data does not invalidate a real INVOKER demotion");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "aborted_demotion") +
+  "\nCOMMIT;\nBEGIN;" +
+  "\nALTER FUNCTION public.aborted_demotion(uuid) SECURITY INVOKER;" +
+  "\nABORT;"
+);
+ok(isDeny(r), "an aborted later transaction cannot demote an already committed SECURITY DEFINER create");
+
+r = runHook(
+  "ALTER FUNCTION public.existing_actor(uuid) SECURITY DEFINER;" +
+  "\nSAVEPOINT mode_flip;" +
+  "\nALTER FUNCTION public.existing_actor(uuid) SECURITY INVOKER;" +
+  "\nROLLBACK TO mode_flip;"
+);
+ok(isDeny(r), "a rolled-back INVOKER ALTER cannot hide an unreadable existing routine elevation");
+
+r = runHook(
+  "BEGIN;\n" +
+  fn(BOUND, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "bound_rolled_back_demotion") +
+  "\nSAVEPOINT mode_flip;" +
+  "\nALTER FUNCTION public.bound_rolled_back_demotion(uuid) SECURITY INVOKER;" +
+  "\nROLLBACK TO mode_flip;" +
+  "\nCOMMIT;"
+);
+ok(!isDeny(r), "rollback ambiguity still allows a SECURITY DEFINER create with a proven actor refusal");
+
 r = runHook(fn(MUTATION, "p_performed_by uuid", ""));
 ok(!isDeny(r), "function with no SECURITY clause (invoker default) is out of scope");
 

@@ -7,6 +7,26 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — authorize the rollback-state repair in PR #449; keep the broader cap
+
+**Source:** Mason's in-chat direction on 2026-09-03 after the exact-SHA reviewer blocked the
+replacement candidate: "ok fix the issues then".
+
+**Decision.** PR #449 may close the reproduced transaction-state bypass in its final
+`SECURITY DEFINER`/`SECURITY INVOKER` mode reader. If executable migration SQL contains a
+`ROLLBACK` (including `ROLLBACK TO SAVEPOINT`) or `ABORT` statement, a later
+`ALTER ... SECURITY INVOKER` is not accepted as proof that an earlier definer mode is gone.
+The reader instead evaluates the remaining definer evidence and requires the authored routine
+body to pass the actor-binding check. Comments and string data are masked before this decision,
+so those words alone do not trigger it.
+
+**Boundary.** This is a second narrow exception to the 2026-09-01 cap, authorized because a
+real exact-SHA proof gate reproduced it on the otherwise final candidate. It does not add a
+transaction-state parser or reopen general lexical/dataflow hardening. The rule is deliberately
+fail-closed: an unusual safe migration combining an invoker demotion with rollback control must
+be simplified or use the existing reviewed file-level exemption. Future residuals remain capped
+unless Mason separately authorizes them.
+
 ## 2026-09-03 — authorize one non-first-INTO repair in PR #449; keep the broader cap
 
 **Source:** Mason's in-chat direction on 2026-09-03: "Authorize the one bounded non-first-INTO
