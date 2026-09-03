@@ -47,15 +47,20 @@ maximum. The 978-row capture also recorded `quote_versions.restore_trusted_at`. 
 authored NAME, never from `version` — the two diverge, which is why searching the ledger by version stamp
 finds neither Section 9 migration even though both are applied. This pass does not re-certify every issue
 narrative below or claim a fresh post-apply read of function bodies, grants, or operational counts.
-**SUPERSEDED 2026-09-03 — four of the six gauntlet migrations dated 20260831 in PR #535 ARE live.**
+**SUPERSEDED 2026-09-03 — point-in-time: four of the six gauntlet migrations dated 20260831 in
+PR #535 were live at this reading. ALL SIX are live now; the current statement is the PR #535
+paragraph near the top of this file.**
 The sentence that stood here ("written, reviewed candidates and are not claimed live") is no longer
 true. A read-only capture on 2026-09-03 records **990 ledger rows** and effective ordering high-water
 **`20260831212415`** (authored name `20260831212415_guard_cycle_count_completion_revision`).
 `20260831160000`, `20260831161000`, `20260831162000` and `20260831212415` applied live on 2026-09-03
 as ledger versions `20260903023935`, `20260903024550`, `20260903025249` and `20260903025854`.
-`20260831233000` and `20260831235900` are still unapplied candidates. Read ordering from the authored
-NAME, not `version` — searching this ledger by version stamp finds none of the four even though all
-four are applied. See the OPEN 2026-09-03 entry below for the source-on-branch-only consequence.
+`20260831233000` and `20260831235900` were still unapplied **when this 990-row capture was taken**;
+they applied later the same day at `20260903124710` and `20260903124741`, so **all six are now live** —
+see the PR #535 paragraph near the top of this file, which is the current statement. This block is
+kept as the point-in-time record of the 990-row read, not as current state. Read ordering from the
+authored NAME, not `version` — searching this ledger by version stamp finds none of them even though
+all are applied. See the OPEN 2026-09-03 entry below for the source-on-branch-only consequence.
 The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
 that evidence supports the six pending return-credit candidates without superseding the newer ledger
 capture above.
@@ -328,12 +333,14 @@ instrumentation. Both migrations are applied and must not be edited.
 
 ---
 
-## OPEN 2026-09-03 — four migrations applied live on 2026-09-03 have no file on `main`
+## OPEN 2026-09-03 — six migrations applied live on 2026-09-03 have no file on `main`
 
 **Severity: LOW while it lasts — live is HEALTHY. This is a source-of-truth gap, not a defect.**
-Four migrations from PR #535's branch `codex/gauntlet-s9-safety-20260831` were applied live on
+All six migrations from PR #535's branch `codex/gauntlet-s9-safety-20260831` were applied live on
 2026-09-03. Their files exist only on that unmerged branch; `origin/main` does not contain them
-(verified 2026-09-03 by a GitHub read of `refs/heads/main`, which returns 404 for the first file):
+(verified 2026-09-03 by a GitHub read of `refs/heads/main`, which returns 404 for the first file).
+This entry originally listed four; the last two applied later the same day and are added here rather
+than left to a second entry:
 
 | Authored name | Ledger version |
 |---|---|
@@ -341,15 +348,19 @@ Four migrations from PR #535's branch `codex/gauntlet-s9-safety-20260831` were a
 | `20260831161000_require_cumulative_po_bill_confirmation` | `20260903024550` |
 | `20260831162000_fail_closed_historical_commission_balance` | `20260903025249` |
 | `20260831212415_guard_cycle_count_completion_revision` | `20260903025854` |
+| `20260831233000_bind_section9_replays_to_intent` | `20260903124710` |
+| `20260831235900_serialize_gauntlet_write_boundaries` | `20260903124741` |
 
-**Why live is healthy.** All four only added optional new capability. `origin/main` references none
+**Why live is healthy.** All six only added optional new capability. `origin/main` references none
 of the new parameters anywhere under `src/`, and the new `create_vendor_bill` overage parameters all
 carry defaults, so main's shorter call still binds. There is no live defect to repair and no
-user-visible symptom. The risk is entirely conditional on merging #535 before its two remaining
-migrations apply — see the vendor-bill edit blocker recorded on the PR.
+user-visible symptom. The vendor-bill edit blocker recorded on the PR — which was conditional on the
+last two migrations not yet being applied — is **CLEARED**: both applied on 2026-09-03, and
+`update_vendor_bill` was verified live as a single 9-argument overload accepting
+`p_confirm_po_overage` and `p_po_overage_reason`, so the branch's call resolves.
 
 **Consequence while this is open.** PR #581 (schema-registry refresh) is parked behind #535: its
-Codex proof returned BLOCKERS because the registry asserts a live high-water whose four `20260831*`
+Codex proof returned BLOCKERS because the registry asserts a live high-water whose `20260831*`
 migrations have no file on `main`. #535 must merge before #581, and no separate registry refresh
 should be run in the meantime — #581 redoes it. `npm run agent-health` reports the same condition as
 a session-staleness WARN, which is expected and not a new finding.
