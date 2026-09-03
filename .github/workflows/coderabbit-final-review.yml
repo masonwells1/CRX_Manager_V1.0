@@ -28,7 +28,28 @@ permissions:
   checks: read
   contents: read
   issues: write
-  pull-requests: read
+  # Labels and comments on a PULL REQUEST are authorized against the
+  # pull-requests scope, not the issues scope, even though the REST routes this
+  # gate calls live under /issues. `issues: write` alone is NOT enough, and an
+  # explicit `pull-requests: read` actively pins the scope this gate needs at
+  # read. Every reset event — synchronize, reopen, draft conversion, base edit,
+  # auto-merge change — calls issues.removeLabel for both workflow labels, so
+  # every push to any open pull request produced "Resource not accessible by
+  # integration": the gate failed before it could do anything, AND before it
+  # could clear its own labels. The label-cleanup line in those logs is the
+  # symptom; this scope is the cause. Observed red on every open pull request
+  # from 2026-09-02 21:48Z (run 33696854203 among many); the rare green run was
+  # an event that never touched a label.
+  #
+  # Safe on this privileged pull_request_target workflow for the same reason
+  # `issues: write` already is: the job checks out ONLY the default branch with
+  # persist-credentials:false and never fetches or executes the pull request's
+  # code, so no untrusted code ever holds this token.
+  #
+  # `issues: write` is kept. It is believed redundant here — every object this
+  # gate touches is a pull request — but removing it is a separate, unproven
+  # narrowing and does not belong in the fix for the outage.
+  pull-requests: write
   statuses: read
 
 concurrency:

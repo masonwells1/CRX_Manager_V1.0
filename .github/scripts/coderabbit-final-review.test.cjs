@@ -84,6 +84,61 @@ test('no pull-request event other than pull_request_target triggers this privile
   );
 });
 
+// GitHub accepts only this fixed set of keys in an Actions `permissions:` block.
+// An unknown key does not warn and does not degrade — it makes the workflow file
+// unloadable, and GitHub reports it as a zero-job run whose `name` is the file
+// path, which reads like an unrelated infrastructure blip rather than a syntax
+// error. PR #563 added `administration: read` here (the GITHUB_TOKEN cannot hold
+// repository administration at all) and this suite stayed green, because every
+// other test in it reads the workflow as TEXT and never parses it. Run
+// 33696773987 is that break observed live.
+const ACTIONS_PERMISSION_KEYS = new Set([
+  'actions', 'artifact-metadata', 'attestations', 'checks', 'code-quality',
+  'contents', 'deployments', 'discussions', 'id-token', 'issues', 'models',
+  'packages', 'pages', 'pull-requests', 'repository-projects', 'security-events',
+  'statuses', 'vulnerability-alerts',
+]);
+
+function declaredWorkflowPermissions() {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+  const block = workflow.match(/\npermissions:\r?\n([\s\S]*?)\r?\n(?=\S)/);
+  assert.ok(block, 'workflow must declare a `permissions:` block');
+  const entries = block[1]
+    .split(/\r?\n/)
+    .filter((line) => /^ {2}[^#\s]/.test(line))
+    .map((line) => line.trim().split(/:\s*/));
+  assert.ok(entries.length > 0, 'permissions block must declare at least one scope');
+  return new Map(entries.map(([key, value]) => [key, value]));
+}
+
+test('every declared permission is a key GitHub Actions actually accepts', () => {
+  const unknown = [...declaredWorkflowPermissions().keys()]
+    .filter((key) => !ACTIONS_PERMISSION_KEYS.has(key));
+  assert.deepEqual(
+    unknown,
+    [],
+    'an unknown permissions key makes this workflow file unloadable — GitHub reports it '
+    + 'as a zero-job startup failure, not as a syntax error',
+  );
+});
+
+// Labels and comments on a PULL REQUEST are authorized against the pull-requests
+// scope even though the REST routes live under /issues, so `issues: write` alone
+// is not enough. `pull-requests: read` pinned the needed scope at read and every
+// reset event's issues.removeLabel returned "Resource not accessible by
+// integration", failing the gate on every open pull request on 2026-09-02.
+test('the gate holds pull-requests: write, the scope its label writes are checked against', () => {
+  assert.equal(
+    declaredWorkflowPermissions().get('pull-requests'),
+    'write',
+    'resetLabels() and the request path mutate labels on a pull request; read here '
+    + 'makes every synchronize, reopen, draft, base-edit and auto-merge event fail',
+  );
+});
+
 test('the gate refuses to run on any event other than pull_request_target', async () => {
   const harness = makeHarness({ eventName: 'pull_request_review', action: 'submitted' });
   const result = await execute(harness);
