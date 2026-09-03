@@ -1,4 +1,3 @@
--- STATUS: APPLIED LIVE 2026-09-03 (ledger version 20260903024550)
 -- Gauntlet Section 9: prevent cumulative PO-linked bills from silently
 -- exceeding 105% of the purchase-order total.
 

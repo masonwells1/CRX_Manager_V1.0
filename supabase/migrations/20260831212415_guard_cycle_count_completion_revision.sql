@@ -1,4 +1,3 @@
--- STATUS: APPLIED LIVE 2026-09-03 (ledger version 20260903025854)
 -- Close the Cycle Count stale-completion race without changing the business
 -- operation's identity. Item writers lock their item before the parent; the
 -- completer locks every item before the parent. That ordering means a write

@@ -144,4 +144,26 @@ describe('gauntlet caller-side safety guards', () => {
       'the overage branch must not read the stale unresolvedIntent state field',
     ).not.toContain('if (createBillIntent.unresolvedIntent) {');
   });
+
+  // Detecting the surviving claim is only half the fix. ReasonModal's confirm path
+  // calls handleSave(true, reason), and beginIntent() discards those flags while a
+  // pending record exists — so opening the modal here prompts for a reason that is
+  // guaranteed to be thrown away, and every confirmation returns to this branch.
+  // The blocker must render as a plain banner with no confirmation control.
+  it('reports a surviving cross-tab claim without opening the overage reason prompt', () => {
+    const page = source('src/pages/NewVendorBill.tsx');
+
+    const branch = page.slice(page.indexOf('if (createBillIntent.getUnresolvedIntent()) {'));
+    const branchBody = branch.slice(0, branch.indexOf('return;'));
+
+    expect(branchBody).toContain('setOverageBlockedMessage(');
+    expect(
+      branchBody,
+      'the cross-tab branch must not set overageMessage — that opens ReasonModal, whose confirmation cannot reach the server',
+    ).not.toContain('setOverageMessage(');
+    expect(
+      page,
+      'ReasonModal must stay driven only by overageMessage',
+    ).toContain('open={overageMessage !== null}');
+  });
 });

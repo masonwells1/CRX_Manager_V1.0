@@ -137,6 +137,48 @@ describe('useUncertainMutationIntent', () => {
     expect(currentRefRead).toEqual({ amount: 100 });
   });
 
+  // Why NewVendorBill must NOT offer a reason prompt while a claim survives.
+  // This is the vendor-bill shape at the layer that owns the behavior: once a
+  // pending record exists, beginIntent() returns it VERBATIM and ignores the
+  // intent it was handed. So the confirmed retry re-sends the ORIGINAL payload —
+  // p_confirm_po_overage stays false and p_po_overage_reason never appears — and
+  // the server repeats the identical refusal. A reason prompt there can only loop.
+  it('drops the overage confirmation from a retry while a pending record survives', async () => {
+    type BillArgs = { p_bill_number: string; p_confirm_po_overage: boolean; p_po_overage_reason?: string };
+    const { result } = renderHook(() => useUncertainMutationIntent<BillArgs>({
+      operation: 'create_vendor_bill',
+      userId: 'admin-overage-retry',
+      surface: 'new-vendor-bill',
+      scope: 'bill-overage-retry',
+    }));
+
+    // First attempt: no confirmation, as the page sends it before the server refuses.
+    await act(async () => {
+      await result.current.beginIntent({ p_bill_number: 'VB-1', p_confirm_po_overage: false });
+    });
+
+    // The pending record is still there — which is exactly the state the page is in
+    // when classifyFailure() cannot delete it because a peer tab holds a live claim.
+    // The cause of survival does not matter here; its consequence does.
+    expect(result.current.getUnresolvedIntent()).not.toBeNull();
+
+    // The confirmed retry, exactly as the page performs it. handleSave(true, reason)
+    // builds confirmed args, but the call site is
+    //   unresolvedIntent ? beginIntent(unresolvedIntent) : beginIntent({ ...fresh })
+    // and on the retry render unresolvedIntent IS set — so the confirmed args are
+    // computed and then discarded before the hook ever sees them.
+    const survivor = result.current.getUnresolvedIntent() as BillArgs;
+    let retried!: BillArgs;
+    await act(async () => {
+      retried = await result.current.beginIntent(survivor);
+    });
+
+    // The confirmation is gone: this retry is byte-identical to the refused one.
+    expect(retried.p_confirm_po_overage).toBe(false);
+    expect(retried.p_po_overage_reason).toBeUndefined();
+    expect(retried).toEqual({ p_bill_number: 'VB-1', p_confirm_po_overage: false });
+  });
+
   it('keeps an intent mismatch locked until the caller reconciles the receipt', async () => {
     const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>());
     await act(async () => result.current.beginIntent({ amount: 100 }));

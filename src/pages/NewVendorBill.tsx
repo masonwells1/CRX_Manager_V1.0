@@ -57,6 +57,13 @@ export default function NewVendorBill() {
   });
   const [saving, setSaving] = useState(false);
   const [overageMessage, setOverageMessage] = useState<string | null>(null);
+  // Separate from overageMessage on purpose. overageMessage OPENS ReasonModal, whose
+  // confirm path calls handleSave(true, reason). That path cannot work while another
+  // tab still holds the pending intent — beginIntent() returns the stale intent
+  // verbatim, so p_confirm_po_overage never reaches the server and the operator loops
+  // through a reason prompt that is guaranteed to be refused. This one only renders a
+  // banner: it states the blocker and offers no confirmation control.
+  const [overageBlockedMessage, setOverageBlockedMessage] = useState<string | null>(null);
 
   // Lookups
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -169,6 +176,9 @@ export default function NewVendorBill() {
       return;
     }
 
+    // Clear the cross-tab banner only once a real attempt is starting, so it survives
+    // a validation bounce and disappears when the retry actually reaches the server.
+    setOverageBlockedMessage(null);
     setSaving(true);
     try {
       const subtotalCents = parseDollarsToCents(subtotalDollars);
@@ -235,7 +245,11 @@ export default function NewVendorBill() {
         // another claimant kept it alive.
         await createBillIntent.classifyFailure(error);
         if (createBillIntent.getUnresolvedIntent()) {
-          setOverageMessage(
+          // Banner, NOT setOverageMessage: opening ReasonModal here would collect a
+          // reason that beginIntent() then discards, so every confirmation returns to
+          // this same branch. Nothing the operator can type here helps until the other
+          // tab releases the claim.
+          setOverageBlockedMessage(
             'This bill is still open in another tab, so the overage confirmation cannot be attached yet. '
             + 'Finish or close that tab, then try again.',
           );
@@ -457,6 +471,11 @@ export default function NewVendorBill() {
             : createBillIntent.isRetryExpired
             ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
             : 'The last response was uncertain. These fields are locked so a second bill cannot be created. Retry this exact bill to reconcile it.'}
+        </div>
+      )}
+      {overageBlockedMessage && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          {overageBlockedMessage}
         </div>
       )}
       <div className="flex justify-end gap-3">

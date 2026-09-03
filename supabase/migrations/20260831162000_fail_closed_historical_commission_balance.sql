@@ -1,4 +1,3 @@
--- STATUS: APPLIED LIVE 2026-09-03 (ledger version 20260903025249)
 -- Gauntlet Section 7.3.4: the commissions table stores current payout status,
 -- not immutable dated status history. Refuse historical cutoffs instead of
 -- rewriting old liability reports after a later payout or void.
