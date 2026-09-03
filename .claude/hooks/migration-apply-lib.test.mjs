@@ -177,6 +177,30 @@ function makeOriginMain(root) {
   writeFileSync(path.join(root, ".git", "FETCH_HEAD"), "fixture\n", "utf8");
 }
 
+// Real second-door runs resolve the reviewer policy from origin/main.  The
+// fixture proof predates its synthetic origin/main ref, so stamp that trusted
+// commit only after makeOriginMain has made the ref real.  Direct library tests
+// inject null instead: those tests isolate a different rule and must not depend
+// on a temporary repository's ref layout.
+function stampFixtureReviewerPolicy(root) {
+  const ref = spawnSync("git", ["-C", root, "rev-parse", "origin/main^{commit}"], {
+    encoding: "utf8",
+    env: cleanEnv(),
+  });
+  if (ref.status !== 0) throw new Error(`fixture reviewer policy ref unavailable: ${ref.stderr}`);
+  const reviewerPolicyCommit = ref.stdout.trim();
+  const stateDir = path.join(root, ".claude", "session-state");
+  for (const file of [
+    path.join(stateDir, `migration-review-${SAFE}.json`),
+    path.join(stateDir, `codex-review-mig-${SAFE}.json`),
+  ]) {
+    if (!existsSync(file)) continue;
+    const proof = JSON.parse(readFileSync(file, "utf8"));
+    proof.reviewerPolicyCommit = reviewerPolicyCommit;
+    writeFileSync(file, JSON.stringify(proof), "utf8");
+  }
+}
+
 const evaluate = (root, over = {}) => evaluateMigrationApply({
   name: MIG,
   query: SQL,
@@ -186,6 +210,7 @@ const evaluate = (root, over = {}) => evaluateMigrationApply({
   gitWorktreeList: noWorktrees,
   gitTrackedMigrations: onlyThisMigration,
   originFetchAge: () => 0,
+  reviewerPolicyCommit: null,
   ...over,
 });
 
@@ -578,6 +603,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
     gitTrackedMigrations: onlyThisMigration,
     originFetchAge: () => 0,
+    reviewerPolicyCommit: null,
   });
   ok(viaHookShape.decision === viaScriptShape.decision, "both doors reach the identical verdict");
 }
@@ -604,6 +630,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   mkdirSync(path.join(okRoot, "supabase", "migrations"), { recursive: true });
   writeFileSync(path.join(okRoot, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
   makeOriginMain(okRoot);
+  stampFixtureReviewerPolicy(okRoot);
   const dry = runScript(okRoot);
   ok(dry.status === 0, `dry run on a passing gate exits 0 (got ${dry.status}: ${dry.stderr})`);
   ok(dry.stdout.includes("APPLY GATE PASSED"), "dry run reports the gate passed");
@@ -740,6 +767,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
       originFetchAge: () => 0,
+      reviewerPolicyCommit: null,
     });
     denies(byDefault, "without subagent review proof", "the DEFAULT now refuses the aliased legacy name (was the bug)");
 
@@ -751,6 +779,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
       originFetchAge: () => 0,
+      reviewerPolicyCommit: null,
       requireExactProofName: false,
     });
     ok(lenient.decision === "allow", "opt-in substring matching is still the vulnerable behaviour (no longer the default)");
@@ -761,6 +790,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
       originFetchAge: () => 0,
+      reviewerPolicyCommit: null,
       requireExactProofName: true,
     });
     denies(strict, "without subagent review proof", "exact proof-name matching refuses the aliased legacy name");
@@ -774,6 +804,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
       originFetchAge: () => 0,
+      reviewerPolicyCommit: null,
       requireExactProofName: true,
     });
     denies(honest, "MIGRATION ORDERING GUARD",
@@ -801,6 +832,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     // origin/main and a FETCH_HEAD in the fixture. Without it the mirror assertion
     // below fails for that reason instead of the identity rule it is testing.
     makeOriginMain(okRoot2);
+    stampFixtureReviewerPolicy(okRoot2);
     const outside = mkdtempSync(path.join(os.tmpdir(), "crx-copy-"));
     roots.push(outside);
     const copy = path.join(outside, `${MIG}.sql`);
@@ -814,6 +846,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       "the refusal says the passed file is not the approved artifact");
     ok(!res.stdout.includes("Transmitting"), "an out-of-tree copy never transmits");
     restoreFixtureLedgerAndEvidence(okRoot2);
+    stampFixtureReviewerPolicy(okRoot2);
     // Load-bearing pair: the repository file itself still applies, so the rule is
     // about identity and not about refusing everything.
     const realFile = path.join(okRoot2, "supabase", "migrations", `${MIG}.sql`);
@@ -854,6 +887,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     writeFileSync(permittedFile, SQL, "utf8");
     restoreFixtureLedgerAndEvidence(parkedRoot);
     makeOriginMain(parkedRoot); // merged gate also runs the pending-set preflight
+    stampFixtureReviewerPolicy(parkedRoot);
     const moved = spawnSync(process.execPath, [scriptPath, permittedFile], {
       encoding: "utf8",
       env: cleanEnv({ CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" }),
@@ -935,6 +969,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       evaluateMigrationApply({
         name: parkedName, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
         projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+        reviewerPolicyCommit: null,
       }),
       "MIGRATION SOURCE GUARD",
       "a migration parked in scripts/.staging-migrations/ cannot be applied from there");
@@ -947,6 +982,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
         evaluateMigrationApply({
           name: `${parkedName}.sql${suffix}`, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
           projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+          reviewerPolicyCommit: null,
         }),
         "MIGRATION SOURCE GUARD",
         `a "${suffix}" draft is refused without the rule ever naming that suffix`);
@@ -974,6 +1010,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
         evaluateMigrationApply({
           name, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
           projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+          reviewerPolicyCommit: null,
         }),
         "MIGRATION SOURCE GUARD",
         `a name spelled ${JSON.stringify(name)} cannot reach outside the permitted directory`);
@@ -994,6 +1031,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
         name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
         projectDir: mine, cwd: mine,
         gitWorktreeList: () => `worktree ${mine}\n\nworktree ${sibling}\n`,
+        reviewerPolicyCommit: null,
       }),
       "MIGRATION SOURCE GUARD",
       "a migration file in a sibling worktree does not satisfy provenance for this session");
@@ -1014,6 +1052,20 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     writeFileSync(
       path.join(linked, "supabase", "baselines", "manifest.json"),
       JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }), "utf8");
+    const linkedState = path.join(linked, ".claude", "session-state");
+    mkdirSync(linkedState, { recursive: true });
+    writeFileSync(path.join(linkedState, "applied-migrations.json"), JSON.stringify({
+      captured_at: iso(0),
+      applied: [{ version: "20260101000000", name: "20260101000000_baseline" }],
+    }), "utf8");
+    writeFileSync(path.join(linkedState, `migration-review-${SAFE}.json`), JSON.stringify({
+      migration: MIG,
+      timestamp: iso(0),
+      reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
+      findings: "clean",
+      queryHash: HASH,
+      evidenceHash: migrationProofEvidenceHash({ projectDir: linked, stateDir: linkedState }),
+    }), "utf8");
     allows(
       evaluateMigrationApply({
         name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
@@ -1024,8 +1076,37 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
         // that has no real origin/main — a denial for the wrong reason.
         gitTrackedMigrations: onlyThisMigration,
         originFetchAge: () => 0,
+        reviewerPolicyCommit: null,
       }),
       "a migration built in the worktree the session is working in satisfies provenance");
+  }
+
+  // A matching proof in the PRIMARY checkout is not a substitute for one in the
+  // active linked worktree. Before this assertion existed, the proof scanner
+  // accepted any session sibling and compared its proof against primary bytes;
+  // a linked worktree could then change callers or policy after that review.
+  {
+    const primary = fixture();
+    const linked = mkdtempSync(path.join(os.tmpdir(), "crx-proof-sibling-"));
+    roots.push(linked);
+    const linkedState = path.join(linked, ".claude", "session-state");
+    mkdirSync(path.join(linked, "supabase", "migrations"), { recursive: true });
+    mkdirSync(path.join(linked, "supabase", "baselines"), { recursive: true });
+    mkdirSync(linkedState, { recursive: true });
+    writeFileSync(path.join(linked, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+    writeFileSync(path.join(linked, "supabase", "baselines", "manifest.json"), readFileSync(path.join(primary, "supabase", "baselines", "manifest.json")));
+    writeFileSync(path.join(linkedState, "applied-migrations.json"), readFileSync(path.join(primary, ".claude", "session-state", "applied-migrations.json")));
+    denies(
+      evaluateMigrationApply({
+        name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
+        projectDir: primary, cwd: linked,
+        gitWorktreeList: () => `worktree ${primary}\n\nworktree ${linked}\n`,
+        gitTrackedMigrations: onlyThisMigration,
+        originFetchAge: () => 0,
+        reviewerPolicyCommit: null,
+      }),
+      "without subagent review proof",
+      "a primary-only proof cannot authorize an active linked worktree");
   }
 
   // CRLF ON DISK must not refuse a legitimate apply. A worktree checked out before
@@ -1193,6 +1274,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
           projectDir: viaJunction, cwd: viaJunction, gitWorktreeList: noWorktrees,
           gitTrackedMigrations: onlyThisMigration,
           originFetchAge: () => 0,
+          reviewerPolicyCommit: null,
         }),
         "a checkout reached through a junction still satisfies provenance");
     } else {
@@ -1384,6 +1466,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
   writeFileSync(path.join(root, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
   makeOriginMain(root);
+  stampFixtureReviewerPolicy(root);
   const snapshot = path.join(root, ".claude", "session-state", "applied-migrations.json");
   ok(existsSync(snapshot), "fixture starts with a snapshot present");
 

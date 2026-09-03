@@ -59,8 +59,6 @@ function collectPaths(root, stateDir) {
   if (!contained(root, stateDir)) throw new Error(`migration-proof state directory is outside the checkout: ${stateDir}`);
   const inputs = new Set([
     '.claude/schema-registry.json',
-    '.claude/agents/rls-security-reviewer.md',
-    '.claude/agents/migration-drift-reviewer.md',
     'docs/reference/migration-history.md',
     'src/types/index.ts',
     'scripts/write-apply-proofs.mjs',

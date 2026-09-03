@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
+import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 
 function printedEvidence(migration) {
   return execFileSync(
@@ -33,4 +34,14 @@ test('evidence retains every caller in a migration file', () => {
   assert.match(evidence, /CALL SITES of _begin_below_cost_money_write across migrations/);
   assert.match(evidence, /inside function: public\.create_direct_order/);
   assert.match(evidence, /inside function: public\.duplicate_quote/);
+});
+
+test('proof production fails closed when SECURITY DEFINER lacks an anon revoke', () => {
+  const sql = `CREATE OR REPLACE FUNCTION public.post_return_credit(p_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN; END; $$;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(sql), ['post_return_credit']);
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${sql}\nREVOKE EXECUTE ON FUNCTION public.post_return_credit(uuid) FROM anon;`),
+    [],
+  );
 });

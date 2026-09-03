@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The ONLY sanctioned producer of migration-apply-guard proof files. Pass the
 // migration NAMES (without .sql) as args. For EACH migration it executes EVERY
-// required reviewer's charter (.claude/agents/<reviewer>.md) as its own real,
+// required reviewer's protected origin/main charter as its own real,
 // read-only run of the trusted Codex CLI (same trusted-binary resolution +
 // terminal machine-token verdict as scripts/write-codex-push-proof.mjs) and —
 // ONLY when ALL charters return CLEAN with the file content unchanged — mints
@@ -24,9 +24,10 @@
 //   the caller's say-so is assertion, not evidence. The subagent reviewers
 //   still run per /migration-review (their findings drive the fix loop); the
 //   machine verdict here is what makes the stamped proof evidence.
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   CODEX_REVIEW_EFFORT,
@@ -34,8 +35,10 @@ import {
   codexExecutable,
   codexReviewProofVerdict,
   CODEX_VERDICT_TOKEN,
+  fixedGitExecutable,
 } from './write-codex-push-proof.mjs';
 import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.mjs';
+import { CREATE_FN_ANY, securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 
 const rawArgs = process.argv.slice(2);
 
@@ -72,12 +75,38 @@ if (names.length === 0) {
 const stateDir = path.join(process.cwd(), '.claude', 'session-state');
 mkdirSync(stateDir, { recursive: true });
 
-// Each required reviewer's CHARTER (its .claude/agents/*.md instruction file) is
-// executed as its own read-only Codex run with a terminal machine token, so the
-// reviewers the proof records are reviews that genuinely ran — not an assertion
+// Each required reviewer's protected origin/main charter is executed as its own
+// read-only Codex run with a terminal machine token, so the reviewers the proof
+// records are reviews that genuinely ran — not an assertion
 // (Codex round-4 review of PR #142: a proof naming reviewers that never ran let
 // a hands-free apply pass the two-reviewer requirement on say-so).
 const REQUIRED_REVIEWERS = ['rls-security-reviewer', 'migration-drift-reviewer'];
+
+// The candidate must never supply the instructions that decide whether it is
+// safe. Read both reviewer charters from protected origin/main with the same
+// fixed Git binary used by the push-proof snapshotter. Reviewer children run
+// from a blank temporary directory, preventing project AGENTS.md/CLAUDE.md from
+// being auto-loaded as candidate-controlled instructions.
+function trustedReviewerPolicy() {
+  const git = fixedGitExecutable();
+  const base = spawnSync(git, ['--no-replace-objects', 'rev-parse', 'origin/main^{commit}'], {
+    cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_NO_REPLACE_OBJECTS: '1' },
+  });
+  const commit = String(base.stdout || '').trim();
+  if (base.status !== 0 || !/^[a-f0-9]{40}$/i.test(commit)) throw new Error('could not resolve protected origin/main reviewer policy');
+  const charters = new Map();
+  for (const reviewer of REQUIRED_REVIEWERS) {
+    const relative = `.claude/agents/${reviewer}.md`;
+    const result = spawnSync(git, ['--no-replace-objects', 'show', `${commit}:${relative}`], {
+      cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_NO_REPLACE_OBJECTS: '1' },
+    });
+    if (result.status !== 0 || !result.stdout) throw new Error(`could not read protected reviewer charter ${relative}`);
+    charters.set(reviewer, String(result.stdout));
+  }
+  return { commit, charters };
+}
 
 // The reviewer child CANNOT read files. Verified 2026-09-01 by direct probe:
 // `codex exec --sandbox read-only` on Windows exposes no native file-read tool, so it
@@ -137,7 +166,6 @@ function extractTsDeclaration(ts, name) {
 // qualified forms: `foo(`, `public.foo(`, and `"public"."foo"(`. A migration can
 // use all three repository-supported spellings. The trailing parenthesis keeps an
 // unrelated schema-qualified declaration from being mistaken for an unqualified one.
-const CREATE_FN_ANY = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
 const CREATE_FN_LINE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/i;
 
 function createFnRegexFor(name) {
@@ -447,7 +475,7 @@ function buildReviewerCharterPrompt(reviewerName, charterText, migRelPath, evide
     '',
     evidence,
     '',
-    '───────── REVIEWER CHARTER (from .claude/agents/) ─────────',
+    '───────── REVIEWER CHARTER (protected origin/main policy) ─────────',
     charterText,
     '───────── END CHARTER ─────────',
     '',
@@ -474,12 +502,9 @@ if (printEvidenceOnly) {
 
 let exitCode = 0;
 
-function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, snapshot) {
-  const charterFile = `.claude/agents/${reviewerName}.md`;
-  if (!snapshot.has(charterFile)) {
-    return { verdict: null, error: `reviewer charter ${charterFile} not found in the validated evidence snapshot` };
-  }
-  const prompt = buildReviewerCharterPrompt(reviewerName, snapshot.text(charterFile), migRelPath, evidence);
+function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, charterText) {
+  if (!charterText) return { verdict: null, error: `protected reviewer charter for ${reviewerName} is absent` };
+  const prompt = buildReviewerCharterPrompt(reviewerName, charterText, migRelPath, evidence);
   console.log(`Running trusted Codex as "${reviewerName}" on ${migRelPath} (this can take a few minutes)...`);
   // `--disable hooks`: the repo's own Stop hook (stop-wrap.mjs) blocks whenever the
   // working tree has unacknowledged dirty files, which a READ-ONLY reviewer child can
@@ -497,21 +522,22 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, sna
   // (observed 2026-09-01 as exit=null with empty stdout AND stderr — no error, just
   // gone). `codex exec` with no PROMPT argument reads the prompt from stdin, which has
   // no such limit.
-  const result = spawnSync(codexBin, [
-    'exec', '--ephemeral', '--ignore-user-config',
-    '--model', CODEX_REVIEW_MODEL, '-c', `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
-    '--sandbox', 'read-only', '-C', process.cwd(), '-c', 'approval_policy=never',
-    '--disable', 'hooks',
-  ], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-    input: prompt,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    shell: false,
-    timeout: 540_000,
-    maxBuffer: 64 * 1024 * 1024,
-    windowsHide: true,
-  });
+  const reviewCwd = mkdtempSync(path.join(tmpdir(), 'crx-migration-review-'));
+  let result;
+  try {
+    result = spawnSync(codexBin, [
+      'exec', '--ephemeral', '--ignore-user-config',
+      '--model', CODEX_REVIEW_MODEL, '-c', `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
+      '--sandbox', 'read-only', '-C', reviewCwd, '-c', 'approval_policy=never',
+      '--disable', 'hooks',
+    ], {
+      cwd: reviewCwd,
+      encoding: 'utf8', input: prompt, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
+      timeout: 540_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true,
+    });
+  } finally {
+    rmSync(reviewCwd, { recursive: true, force: true });
+  }
   const capturePath = path.join(stateDir, `codex-review-mig-${safe}-${reviewerName}-capture.txt`);
   writeFileSync(capturePath, `exit=${result.status}\n\nSTDOUT\n${result.stdout || ''}\n\nSTDERR\n${result.stderr || ''}\n`, 'utf8');
   console.log(`  → captured to ${capturePath}`);
@@ -547,6 +573,20 @@ for (const name of names) {
   }
   const evidenceHash = snapshot.evidenceHash;
   const queryHash = hashSql(snapshot.text(migRelPath));
+  let reviewerPolicy;
+  try { reviewerPolicy = trustedReviewerPolicy(); }
+  catch (error) {
+    console.error(`ERROR: could not load protected reviewer policy: ${error.message || error}. NO proofs minted.`);
+    exitCode = 1;
+    continue;
+  }
+  const missingAnonRevokes = securityDefinerMissingAnonRevokes(snapshot.text(migRelPath));
+  if (missingAnonRevokes.length) {
+    console.error(`ERROR: ${name} defines SECURITY DEFINER function(s) without an explicit REVOKE from anon: ${missingAnonRevokes.join(', ')}. ` +
+      'CRX default privileges grant anon EXECUTE, and REVOKE FROM PUBLIC is insufficient. Add an explicit anon revoke before requesting review. NO proofs minted.');
+    exitCode = 1;
+    continue;
+  }
   try {
     if (captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir }).evidenceHash !== evidenceHash) {
       console.error(`review evidence changed while its snapshot was being built for ${name}. NO proofs minted; re-run on a stable checkout.`);
@@ -563,7 +603,7 @@ for (const name of names) {
   // All must return a terminal CLEAN token, or nothing is minted.
   let allClean = true;
   for (const reviewerName of REQUIRED_REVIEWERS) {
-    const { verdict, error } = runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, snapshot);
+    const { verdict, error } = runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, reviewerPolicy.charters.get(reviewerName));
     if (error) {
       console.error(`ERROR: ${error} — NO proofs minted for "${name}".`);
       allClean = false;
@@ -578,7 +618,7 @@ for (const name of names) {
   if (!allClean) { exitCode = 1; continue; }
 
   // The migration is not the only input the verdicts depend on. Recompute the whole
-  // input manifest: if any rendered source, reviewer charter, or prompt-builder byte
+  // input manifest: if any rendered candidate source or prompt-builder byte
   // moved mid-review, the reviewers judged something this proof would not describe.
   let evidenceHashAfter = null;
   try { evidenceHashAfter = captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir }).evidenceHash; }
@@ -598,6 +638,7 @@ for (const name of names) {
     timestamp: ts,
     reviewers: REQUIRED_REVIEWERS,
     reviewerEvidence: 'each reviewer charter executed by the trusted Codex CLI with a terminal machine verdict; see codex-review-mig-*-capture.txt',
+    reviewerPolicyCommit: reviewerPolicy.commit,
     findings: 'clean',
     queryHash,
     // sha256 of the single evidence bundle both reviewers received, re-verified unchanged

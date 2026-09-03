@@ -27,7 +27,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
-import { sessionProofDirs, sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
+import { sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
 import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
@@ -315,6 +315,9 @@ export function evaluateMigrationApply({
   // fetch, or null when unknowable. Both real callers leave them unset.
   gitTrackedMigrations,
   originFetchAge,
+  // Tests may pass null when their temporary repositories intentionally lack a
+  // protected origin/main policy ref. Real callers omit this and fail closed.
+  reviewerPolicyCommit,
   // Defaults to TRUE so a caller that forgets it inherits the safe behaviour.
   // It was introduced (PR #470) opt-in for scripts/apply-migration-file.mjs only,
   // which left the MCP apply_migration path — the door used for ROUTINE migrations —
@@ -412,7 +415,15 @@ export function evaluateMigrationApply({
       throw err;
     }
   };
-  const proofDirs = sessionProofDirs(projectDir, hookCwd, listWorktrees);
+  // Evidence is session-owned: a proof may be discovered in a sibling state
+  // directory for diagnosis, but it can NEVER authorize the checkout that is
+  // applying the migration. Never validate a primary-checkout proof against
+  // primary bytes while the active worktree supplies different callers, schema,
+  // history, or reviewer policy. A proof must live in the active worktree's
+  // session state; do not fall back to sibling proof directories.
+  const activeProofRoot = resolveSessionWorktree(projectDir, hookCwd, listWorktrees) || projectDir;
+  const activeProofStateDir = path.join(activeProofRoot, ".claude", "session-state");
+  const authorizedProofDirs = [activeProofStateDir];
 
   // SOURCE PROVENANCE PREFLIGHT. Runs before ordering, autopilot, destructive
   // classification and the proof scan, because it answers the question those all
@@ -853,24 +864,21 @@ export function evaluateMigrationApply({
   let validProof = null;
   let contentMismatchedProof = null;
   let evidenceMismatchedProof = null;
-  const evidenceHashByDir = new Map();
-  const evidenceHashForDir = (dir) => {
-    if (evidenceHashByDir.has(dir)) return evidenceHashByDir.get(dir);
-    let hash = null;
-    try {
-      // session-state is always <checkout>/.claude/session-state. Bind the
-      // proof to the complete source surface that the reviewer was shown, not
-      // merely to the one SQL string that is about to be transmitted.
-      hash = migrationProofEvidenceHash({
-        projectDir: path.resolve(dir, "..", ".."),
-        stateDir: dir,
-      });
-    } catch { /* unreadable evidence is never a valid proof */ }
-    evidenceHashByDir.set(dir, hash);
-    return hash;
-  };
+  let activeEvidenceHash = null;
+  let protectedReviewerPolicyCommit = reviewerPolicyCommit ?? null;
+  try {
+    activeEvidenceHash = migrationProofEvidenceHash({
+      projectDir: activeProofRoot,
+      stateDir: activeProofStateDir,
+    });
+  } catch { /* unreadable active evidence is never a valid proof */ }
+  if (reviewerPolicyCommit === undefined) try {
+    protectedReviewerPolicyCommit = execFileSync("git", ["rev-parse", "origin/main^{commit}"], {
+      cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch { /* an unverifiable protected policy never authorizes an apply */ }
   const freshCleanProofNames = [];
-  for (const dir of proofDirs) {
+  for (const dir of authorizedProofDirs) {
     if (validProof) break;
     try {
       const files = readdirSync(dir).filter(f => f.startsWith("migration-review-") && f.endsWith(".json"));
@@ -936,8 +944,9 @@ export function evaluateMigrationApply({
             // migration-only hash would let any of those inputs move after a
             // clean verdict. This is required in every mode: Mason's presence
             // is authorization, not a reason to accept stale evidence.
-            const expectedEvidenceHash = evidenceHashForDir(dir);
-            if (!data.evidenceHash || !expectedEvidenceHash || data.evidenceHash !== expectedEvidenceHash) {
+            const expectedEvidenceHash = activeEvidenceHash;
+            if (!data.evidenceHash || !expectedEvidenceHash || data.evidenceHash !== expectedEvidenceHash
+              || (reviewerPolicyCommit !== null && (!protectedReviewerPolicyCommit || data.reviewerPolicyCommit !== protectedReviewerPolicyCommit))) {
               if (!evidenceMismatchedProof) evidenceMismatchedProof = { file: f, dir, data, expectedEvidenceHash };
               continue;
             }
@@ -1018,19 +1027,20 @@ export function evaluateMigrationApply({
       //     "timestamp": <ISO-8601, <30 min old> }
       // Write it ONLY after an ACTUAL /codex-review run on this migration this
       // session — a fabricated file violates Mason's codex-gate rule and is the
-      // documented self-attestation residual (KNOWN_ISSUES §4b).
-      // Searched across the same session-scoped directories as the reviewer proof
-      // above, for the same reason. A candidate only WINS by satisfying
+      // documented self-attestation residual (KNOWN_ISSUES §4b). Searched only
+      // in the active worktree's proof directory, just like reviewer proof above:
+      // a sibling proof is evidence for a different checkout. A candidate only
+      // WINS by satisfying
       // every criterion the single-directory version demanded — clean verdict,
       // exact queryHash, age inside [0, 30min]; the first parseable file is kept
       // only so the block message below can say which criterion failed.
       let codexProof = null;
       let codexProofEvidenceHash = null;
-      for (const dir of proofDirs) {
+      for (const dir of authorizedProofDirs) {
         let candidate = null;
         try { candidate = JSON.parse(readFileSync(path.join(dir, `codex-review-mig-${safeName}.json`), "utf8")); } catch { continue; }
         if (!candidate) continue;
-        const candidateEvidenceHash = evidenceHashForDir(dir);
+        const candidateEvidenceHash = activeEvidenceHash;
         if (!codexProof) {
           codexProof = candidate;
           codexProofEvidenceHash = candidateEvidenceHash;
