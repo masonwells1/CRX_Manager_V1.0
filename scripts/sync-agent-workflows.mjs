@@ -150,6 +150,23 @@ function isSafeManagedEntry(entry) {
   return entry.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
+// KNOWINGLY GIVEN UP (Mason's call, 2026-09-03, round 12): this drops `known`, so
+// --write cannot tell "the last sync generated nothing" from "the record is unusable".
+// Both prune nothing, and --write then overwrites the manifest anyway. If the unusable
+// manifest owned an adapter that is no longer generated, that file survives on disk while
+// the only record naming it is erased, and every later --check reports it as drift with a
+// `--write` remedy that cannot remove it (Codex, PR #565).
+//
+// Not fixed, deliberately. The stale-mirror behavior is PRE-EXISTING - the old reader
+// answered a corrupt manifest with an empty list too, so it also pruned nothing. What the
+// round-10 version check changed is only the SIZE of that set: a manifest from a different
+// generator version, e.g. {"version":2,...}, used to be read and pruned and now reads as
+// unavailable. Aborting the write instead is the wrong shape, because --write is the
+// remedy an operator reaches for when the manifest is broken; refusing to run it there
+// reads as a dead end unless the error also says "delete the file and re-run", which is a
+// new failure mode in the function that had already produced eleven rounds of findings.
+// Recovery today is the same one sentence: delete generated-manifest.json and re-run
+// --write. See docs/manual/KNOWN_ISSUES.md.
 function previousManagedFiles(targetRoot = TARGET_ROOT) {
   return previousManifest(targetRoot).managed;
 }

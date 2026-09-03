@@ -289,6 +289,53 @@ inside one PR is the known non-terminating pattern, and each round costs another
 shared ~2/hour allowance. The hard gate defined in `AGENTS.md` — the exact-SHA `gpt-5.6-sol`
 high-effort proof — returned CLEAN on the merged head with "Nothing required remains".
 
+## OPEN (ACCEPTED — WONTFIX by decision) 2026-09-03 — `--write` overwrites an UNUSABLE manifest after pruning nothing
+
+**Mason's call, in chat, 2026-09-03.** Round 12 on PR #565, raised by the Codex PR reviewer
+against `a31b92b1e`. Real, and partly widened by this PR's own round-10 fix — recorded here
+rather than patched, on the same reasoning as the entry below it.
+
+**The gap.** `previousManagedFiles()` returns `previousManifest(targetRoot).managed` and drops
+the `known` flag. So `--write` cannot distinguish "the last sync generated nothing" from "the
+record is unusable" — both yield an empty list, both prune nothing — and `--write` then
+overwrites `generated-manifest.json` with the current set regardless. If the unusable manifest
+owned an adapter that is no longer generated, that file survives on disk while the only record
+naming it is erased. Every later `--check` reports it as `is not generated from .claude`, and
+the remedy those runs print — `--write` — cannot remove it, because the ownership record is
+gone.
+
+**Why it is accepted, not fixed.**
+
+1. **The stale-mirror behavior is PRE-EXISTING.** The old reader answered a corrupt manifest
+   with `managed: []` too, so it also pruned nothing. Round 10 did not create this path.
+2. **What round 10 changed is only the SIZE of the affected set.** Requiring an own `version`
+   equal to `MANIFEST_VERSION` means a manifest from a different generator version — e.g.
+   `{"version":2,"managed":[…]}` — now reads as unavailable where it used to be read and
+   pruned. That widening is the honest cost of refusing to parse an unknown schema on a guess,
+   and refusing is the right trade: the alternative is trusting a shape this generator did not
+   write, in a list that feeds a delete.
+3. **The reviewer's proposed remedy is the wrong shape.** "Abort the write when provenance is
+   unavailable" collides with the fact that `--write` is exactly what an operator reaches for
+   when the manifest is broken. Refusing to run there reads as a dead end unless the error also
+   names the escape, which is a new failure mode in the function that had already produced
+   eleven rounds of findings — each fix shipping a new edge.
+
+**Recovery, if it ever happens.** One sentence: delete `.agents/generated-manifest.json` and
+re-run `node scripts/sync-agent-workflows.mjs --write`. With no manifest present,
+`previousManifest()` returns `{ managed: [], known: true }` — a real answer, not an unknown —
+so the write proceeds normally and the tree is rebuilt. The surviving stale file is then
+removed by hand, which is the same manual step the drift report already asks for.
+
+**What still holds.** `--check` is not fooled: it still reports the stale file as drift and
+still withholds the importer exemption while provenance is unknown, printing the operator note
+naming `generated-manifest.json`. Nothing is silently accepted; the cost is that the printed
+remedy is incomplete for this one case.
+
+**Operative rule.** Do not patch this as "abort on `known: false`". If it is reopened, the
+change must keep `--write` usable as the repair path — an error that names deleting the
+manifest, or a warning that lets the write proceed — and must come with a test proving the
+repair path still works from a corrupt manifest.
+
 ## OPEN (ACCEPTED — WONTFIX by decision) 2026-09-03 — the `.agents/` drift sweep reads the DISK, so an index-only adapter is never examined
 
 **Mason's call, in chat, 2026-09-03.** Round 11 of findings in
