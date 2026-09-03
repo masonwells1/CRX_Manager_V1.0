@@ -410,8 +410,26 @@ export default function VendorBillDetail() {
           'The exact server total shows this edit would raise active billing above 105% of the purchase order. Enter a reason to confirm the overage.',
         );
       } else if (getIdempotencyBindingRejection(err)) {
-        editIdem.resetKey();
-        toast('warning', 'That retry belongs to a different bill edit. Your current changes were not saved; retry to submit them with a fresh key.');
+        // A binding rejection can still carry the receipt of an edit that
+        // COMMITTED and lost its response. The confirmed PO-overage path is the
+        // real case: the reason modal has already closed, so the next Save
+        // re-sends the same visible edit with p_confirm_po_overage=false and no
+        // reason under the retained key, and the server answers
+        // IDEMPOTENCY_INTENT_MISMATCH with the committed update receipt.
+        // Discarding it and rotating the key would run the edit a second time
+        // and write duplicate financial-audit and activity rows.
+        const committed = getIdempotencyMismatchResult(err, 'update_vendor_bill');
+        const committedBillId = committed?.bill_id;
+        if (committed && typeof committedBillId === 'string' && committedBillId === bill.id) {
+          editIdem.resetKey();
+          toast('warning', 'This edit was already saved. Showing the saved bill instead of applying it twice.');
+          setEditModalOpen(false);
+          setEditModalBillId(null);
+          fetchBill();
+        } else {
+          editIdem.resetKey();
+          toast('warning', 'That retry belongs to a different bill edit. Your current changes were not saved; retry to submit them with a fresh key.');
+        }
       } else {
         toast('error', sanitizeError(err));
       }

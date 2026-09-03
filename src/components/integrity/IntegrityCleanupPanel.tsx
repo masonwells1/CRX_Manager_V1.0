@@ -350,7 +350,8 @@ export default function IntegrityCleanupPanel() {
   const handleReconcile = async (row: NegativeInvRow) => {
     if (!profile) return;
     const input = reconcileInputs[row.id];
-    if (!input?.qty || isNaN(parseFloat(input.qty)) || parseFloat(input.qty) < 0) {
+    const newQuantity = parseFloat(input?.qty ?? '');
+    if (!input?.qty || isNaN(newQuantity) || newQuantity < 0) {
       toast('error', 'Enter a non-negative quantity');
       return;
     }
@@ -361,14 +362,20 @@ export default function IntegrityCleanupPanel() {
     // Bind retries to this row and its exact operator-entered correction. A
     // changed quantity or reason is new intent; a lost response is the same
     // intent and must replay safely.
-    const scope = `reconcile:${row.id}:${input.qty}:${input.reason.trim()}`;
+    //
+    // Scope on the PARSED quantity, not the raw input text: this RPC writes an
+    // absolute inventory level, and "1.0", "1" and "1e0" all send the identical
+    // p_new_quantity. Keying on the typed string would mint a fresh key for a
+    // reformatted retry, bypass the saved receipt, and re-run the correction —
+    // overwriting any legitimate stock movement that happened in between.
+    const scope = `reconcile:${row.id}:${newQuantity}:${input.reason.trim()}`;
     if (reconcileInFlightRef.current.has(scope)) return;
     reconcileInFlightRef.current.add(scope);
     setReconcileInputs((prev) => ({ ...prev, [row.id]: { ...prev[row.id], busy: true } }));
     try {
       const { data, error } = await supabase.rpc('reconcile_negative_inventory', {
         p_inventory_id: row.id,
-        p_new_quantity: parseFloat(input.qty),
+        p_new_quantity: newQuantity,
         p_reason: input.reason.trim(),
         p_performed_by: profile.id,
         p_idempotency_key: reconcileIdem.getKeyFor(scope),

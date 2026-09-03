@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
+import { fingerprintIntentPayload, generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -173,5 +173,43 @@ describe('legacyIntentChanged', () => {
     expect(legacyIntentChanged(first, { ...first })).toBe(false);
     expect(legacyIntentChanged(first, { key: 'same-key', intent: '{"quantity":2}' })).toBe(true);
     expect(legacyIntentChanged(first, { key: 'new-key', intent: '{"quantity":2}' })).toBe(false);
+  });
+});
+
+describe('fingerprintIntentPayload', () => {
+  const boundaryA = { type: 'Polygon', coordinates: [[[0, 0], [0, 1], [1, 1], [0, 0]]] };
+  const boundaryB = { type: 'Polygon', coordinates: [[[5, 5], [5, 6], [6, 6], [5, 5]]] };
+  const row = { customer_id: 'cust-1', field_name: 'North 40', total_acres: 40 };
+
+  it('is stable for the same payload so a true retry still replays', () => {
+    expect(fingerprintIntentPayload([row, boundaryA, null]))
+      .toBe(fingerprintIntentPayload([row, boundaryA, null]));
+  });
+
+  it('returns a fixed-width hex digest', () => {
+    expect(fingerprintIntentPayload([row, boundaryA, null])).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('changes when the boundary geometry changes', () => {
+    // The BulkFieldImport P1: same row index, customer and field name, but a
+    // different boundary must NOT reuse the earlier key, or the retained
+    // field_id replays and overwrites the existing field.
+    expect(fingerprintIntentPayload([row, boundaryA, null]))
+      .not.toBe(fingerprintIntentPayload([row, boundaryB, null]));
+  });
+
+  it('changes when the billable stated acreage changes', () => {
+    expect(fingerprintIntentPayload([row, boundaryA, null]))
+      .not.toBe(fingerprintIntentPayload([row, boundaryA, 38.5]));
+  });
+
+  it('changes when any field-payload attribute changes', () => {
+    expect(fingerprintIntentPayload([row, boundaryA, null]))
+      .not.toBe(fingerprintIntentPayload([{ ...row, field_name: 'South 40' }, boundaryA, null]));
+  });
+
+  it('does not throw on an unserializable payload', () => {
+    expect(() => fingerprintIntentPayload(undefined)).not.toThrow();
+    expect(fingerprintIntentPayload(undefined)).toMatch(/^[0-9a-f]{16}$/);
   });
 });

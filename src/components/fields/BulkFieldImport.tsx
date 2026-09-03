@@ -43,6 +43,7 @@ import {
 } from '../../lib/fieldImportCustomers';
 import type { Customer, ParsedImportField } from '../../types';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { fingerprintIntentPayload } from '../../lib/idempotency';
 
 
 interface BulkFieldImportProps {
@@ -419,10 +420,6 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
     for (const [fieldIndex, pf] of validFields.entries()) {
       try {
-        // The ordered import row is stable throughout this modal session. Use
-        // it to keep every retry on the same server-side intent, while a
-        // neighboring row always gets a distinct key.
-        const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}`;
         // Pre-validate the FULL multi-part acreage against the server's 0.1–5000 band BEFORE
         // creating the field. Otherwise an out-of-band import creates a field that
         // set_field_boundary then rejects, leaving an orphan a sales_rep cannot delete
@@ -450,6 +447,23 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           notes: pf.notes,
           is_active: true,
         };
+
+        // The ordered import row keeps every retry of THIS row on the same
+        // server-side intent, while a neighboring row gets a distinct key.
+        // Position and name alone are not enough to identify the work: a lost
+        // save_field response leaves this key cached (handleClose resets the
+        // modal's state but not the hook's scoped keys, and Fields.tsx keeps
+        // the component mounted), so a later import carrying the same row
+        // index, customer and field name but a DIFFERENT boundary would replay
+        // the earlier field_id and overwrite that existing field instead of
+        // creating the requested one. Fingerprinting the payload the key was
+        // minted for makes changed content mint a fresh key, while a true retry
+        // of unchanged content still replays.
+        const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}:${fingerprintIntentPayload([
+          fieldPayload,
+          pf.full_boundary_geojson,
+          pf.stated_acres ?? null,
+        ])}`;
 
         const { data: fieldId, error: saveError } = await supabase.rpc('save_field', {
           p_field_id: (null as string | null) as string,

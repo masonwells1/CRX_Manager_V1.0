@@ -14,6 +14,7 @@ import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { fingerprintIntentPayload } from '../lib/idempotency';
 import { Sentry } from '../lib/sentry';
 import UnitSelect from '../components/blendtickets/UnitSelect';
 import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
@@ -342,30 +343,47 @@ export default function BlendRecipes() {
           .order('sort_order');
         if (itemsErr) throw itemsErr;
 
+        const duplicateItems = (items as RecipeItemDbRow[] | null || []).map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit: item.unit,
+          rate_per_acre: item.rate_per_acre,
+          price_per_unit_cents: item.price_per_unit_cents ?? 0,
+          notes: item.notes ?? null,
+        }));
+
+        // Keep the same key for a lost-response retry of this exact source
+        // recipe. A different row gets its own scoped intent and cannot replay
+        // this duplicate's cached result.
+        //
+        // Bind the key to the fetched SNAPSHOT, not just the recipe id: this
+        // page is not remounted between duplications, so a recipe that is
+        // edited and duplicated again would otherwise reuse the cached key,
+        // let save_blend_recipe replay key-only, and report success while no
+        // copy of the revised recipe was ever created.
+        const intentScope = `${scope}:${fingerprintIntentPayload([
+          recipe.name,
+          recipe.recipe_type,
+          recipe.description ?? null,
+          recipe.crop_type ?? null,
+          recipe.timing ?? null,
+          duplicateItems,
+        ])}`;
+
         const { data, error } = await supabase.rpc('save_blend_recipe', {
           p_recipe_id: null as unknown as string,
           p_name: `${recipe.name} (Copy)`,
           p_recipe_type: recipe.recipe_type,
-          p_items: (items as RecipeItemDbRow[] | null || []).map((item) => ({
-            product_id: item.product_id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit: item.unit,
-            rate_per_acre: item.rate_per_acre,
-            price_per_unit_cents: item.price_per_unit_cents ?? 0,
-            notes: item.notes ?? null,
-          })),
+          p_items: duplicateItems,
           p_description: recipe.description || undefined,
           p_crop_type: recipe.recipe_type === 'crop_specific' ? recipe.crop_type || undefined : undefined,
           p_timing: recipe.recipe_type === 'crop_specific' ? recipe.timing || undefined : undefined,
-          // Keep the same key for a lost-response retry of this exact source
-          // recipe. A different row gets its own scoped intent and cannot
-          // replay this duplicate's cached result.
-          p_idempotency_key: duplicateRecipeIdem.getKeyFor(scope),
+          p_idempotency_key: duplicateRecipeIdem.getKeyFor(intentScope),
         });
         if (error) throw error;
         assertRpcResult(data, 'save_blend_recipe');
-        duplicateRecipeIdem.resetKeyFor(scope);
+        duplicateRecipeIdem.resetKeyFor(intentScope);
       },
       toast,
       successMessage: 'Recipe duplicated',

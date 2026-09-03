@@ -30,7 +30,15 @@ describe('gauntlet caller-side safety guards', () => {
   it('keeps bulk field-import RPC intents stable per imported row and refuses re-entry', () => {
     const component = source('src/components/fields/BulkFieldImport.tsx');
     expect(component).toContain('uploadInFlightRef.current');
-    expect(component).toContain('const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}`');
+    // The scope must bind the row's CONTENT, not just its position and name.
+    // A lost save_field response keeps the key cached while the modal stays
+    // mounted, so a position-only scope would let a later import of different
+    // geometry replay the earlier field_id and overwrite that field.
+    expect(component).toContain(
+      'const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}:${fingerprintIntentPayload([',
+    );
+    expect(component).toContain('pf.full_boundary_geojson,');
+    expect(component).toContain('pf.stated_acres ?? null,');
     expect(component).toContain('saveFieldIdem.getKeyFor(intentScope)');
     expect(component).toContain('setBoundaryIdem.getKeyFor(intentScope)');
     expect(component).toContain('setOverrideAcresIdem.getKeyFor(intentScope)');
@@ -42,7 +50,11 @@ describe('gauntlet caller-side safety guards', () => {
     const recipes = source('src/pages/BlendRecipes.tsx');
     const integrity = source('src/components/integrity/IntegrityCleanupPanel.tsx');
     expect(recipes).toContain('duplicateInFlightRef.current.has(scope)');
-    expect(recipes).toContain('p_idempotency_key: duplicateRecipeIdem.getKeyFor(scope)');
+    // The duplicate key is bound to the fetched recipe snapshot, so editing the
+    // source recipe and duplicating again cannot replay the earlier receipt.
+    expect(recipes).toContain('p_idempotency_key: duplicateRecipeIdem.getKeyFor(intentScope)');
+    expect(recipes).toContain('const intentScope = `${scope}:${fingerprintIntentPayload([');
+    expect(recipes).toContain('duplicateItems,');
     expect(integrity).toContain('reconcileInFlightRef.current.has(scope)');
     expect(integrity).toContain('p_idempotency_key: reconcileIdem.getKeyFor(scope)');
   });
