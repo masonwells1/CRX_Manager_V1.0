@@ -87,6 +87,21 @@ function balanced(text, open) {
   return null;
 }
 
+function statementEnd(text, start) {
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '"') {
+      i++;
+      while (i < text.length) {
+        if (text[i] === '"' && text[i + 1] === '"') { i += 2; continue; }
+        if (text[i] === '"') break;
+        i++;
+      }
+      if (i === text.length) return null;
+    } else if (text[i] === ';') return i;
+  }
+  return text.length;
+}
+
 function splitArgs(args) {
   const parts = []; let start = 0, depth = 0;
   for (let i = 0; i <= args.length; i++) {
@@ -116,7 +131,7 @@ function aclEvents(sql) {
     const args = balanced(sql, open);
     if (!args) return null;
     const roles = /^\s+(?:FROM|TO)\s+([^;]+);/i.exec(sql.slice(args.end));
-    if (!roles || /\b(?:WITH|GROUP|ROLE)\b/i.test(roles[1])) return null;
+    if (!roles || /\b(?:WITH|GROUP|ROLE|GRANTED\s+BY)\b/i.test(roles[1])) return null;
     const signature = canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2]));
     if (!signature) return null;
     const roleNames = roles[1].split(',').map((role) => role.trim());
@@ -152,6 +167,7 @@ function dropRoutineEvents(sql) {
 export function securityDefinerMissingAnonRevokes(sql) {
   const executable = executableSql(sql);
   if (executable === null) return ['unparseable-security-definer-sql'];
+  if (/\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b[\s\S]*?\bOWNER\s+TO\b/i.test(executable)) return ['unparseable-security-definer-sql'];
   const declarations = [
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
     ...executable.matchAll(SECURITY_DEFINER_ALTER).map((match) => ({ match, kind: 'alter' })),
@@ -169,9 +185,10 @@ export function securityDefinerMissingAnonRevokes(sql) {
     const { match: declaration, kind } = declarations[index];
     const args = balanced(executable, declaration.index + declaration[0].length - 1);
     if (!args) return ['unparseable-security-definer-sql'];
-    const end = executable.indexOf(';', args.end);
+    const end = statementEnd(executable, args.end);
+    if (end === null) return ['unparseable-security-definer-sql'];
     const name = declaration[1] || declaration[2];
-    const definition = executable.slice(declaration.index, end === -1 ? executable.length : end);
+    const definition = executable.slice(declaration.index, end);
     const signature = canonicalSignature(name, args.text, kind === 'create', Boolean(declaration[1]));
     if (!signature) return ['unparseable-security-definer-sql'];
     if (/\bSECURITY\s+DEFINER\b/i.test(definition)) lifecycle.push({
