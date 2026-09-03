@@ -85,13 +85,14 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 
 ## 🔧 2. Engineering — Now / Next (see the 2026-07-15 execution plan for the full board)
 
-> ### ⏰ DEADLINE ITEM — restore "as of a past date" commission reporting — LOCAL CANDIDATE PROVEN
+> ### ✅ COMPLETED LIVE — restore "as of a past date" commission reporting
 >
 > **Added 2026-09-03 at Mason's request.** He was asked directly whether he uses historical
 > commission dates and said **"Yes I want to be able to look at historical dates."** Deferred
 > deliberately ("we are not going to patch it now"), then reopened for implementation on
-> 2026-09-03. The corrected local candidate is under renewed proof and review and is **not applied,
-> live-tested, merged, or deployed**.
+> 2026-09-03. Migration `20260903150100_ledger_backed_commission_history` was applied live the same
+> day as ledger version `20260903202611`; exact reports begin on `2026-09-04` Chicago time. The
+> reviewed source is awaiting merge through the protected PR path.
 >
 > **Must land BEFORE the first commission payout of the season** — Mason put that at *"probably a
 > few months out"* on 2026-09-03. Confirm the real date with him; don't assume.
@@ -131,9 +132,10 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > event exists.
 >
 > **Proof/status 2026-09-03:** the first candidate's PostgreSQL 17 proof passed, but exact-SHA and
-> Claude reviews correctly rejected its backdated opening state. The corrected candidate uses a real
-> immutable cutover and is being re-proven and re-reviewed. Mason has authorized the guarded live
-> apply only if the corrected review is clean; live `[E2E]` fixture writes and merge remain separate.
+> Claude reviews correctly rejected its backdated opening state. The corrected migration uses a real
+> immutable cutover and passed renewed PostgreSQL 17, exact-SHA, RLS, drift, and Claude review gates
+> before its guarded live apply. Postflight found 35 opening states (33 baseline, 2 legacy excluded),
+> zero settlement events, and no live `[E2E]` fixture writes. Source merge remains separate.
 >
 > Full spec, acceptance criteria, and the fallback if the window has closed:
 > `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md`.

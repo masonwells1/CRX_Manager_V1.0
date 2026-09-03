@@ -1,11 +1,14 @@
 # Commission "as of a past date" reporting — deferred build spec
 
-**Status:** CORRECTED LOCAL CANDIDATE UNDER RE-REVIEW — not applied live, live-tested, merged, or deployed.
+**Status:** IMPLEMENTED AND APPLIED LIVE 2026-09-03 as ledger version `20260903202611`; exact reporting begins `2026-09-04` Chicago time. Source merge is pending; no live `[E2E]` fixtures were created.
 **Deadline driver:** must land **before the first commission payout of the season**, which Mason
 put at *"probably a few months out"* (so roughly 2026-11 → 2026-12; confirm with him, don't
 assume the date).
 **Owner decision on record (2026-09-03):** *"Yes I want to be able to look at historical dates."*
 Mason uses this capability and wants it back — this is a deferral, **not** a decision to drop it.
+
+The remaining sections preserve the design and acceptance record that governed the build. Current
+ship state is recorded in `docs/reference/migration-history.md`.
 
 ---
 

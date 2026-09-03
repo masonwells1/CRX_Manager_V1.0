@@ -99,23 +99,24 @@ intent binding (`20260825034622`). The authoritative rollout record — per-migr
 proofs, and postflight — is the block at the top of `docs/reference/migration-history.md`; the
 matching issue entries are in `docs/manual/KNOWN_ISSUES.md`.
 
-**Commission history is a corrected local candidate, not a live capability yet.** Migration
-`20260903150100_ledger_backed_commission_history` is under renewed proof and review after the first
-candidate was rejected for backdating mutable current state. It adds
+**Commission history is live from the first complete post-cutover Chicago day.** Migration
+`20260903150100_ledger_backed_commission_history` applied on 2026-09-03 as live ledger version
+`20260903202611`, after the first candidate was rejected for backdating mutable current state. It adds
 `commission_payments.voided_at`/`voided_by`, `commissions.cancelled_at` plus immutable
 `cancelled_amount_cents`, one immutable cutover record, an append-only earned-state ledger, and a
 signed posted/voided settlement ledger. The aggregate and detail reports read only those immutable
 events, including paid-only negative balances after a later cancellation or soft delete. Exact
 cutoffs begin on the first complete Chicago day after the real database cutover; every earlier date
-fails closed because pre-cutover earned-state versions do not exist. On the apply date itself, the
-Commission Balance screen will therefore show the refusal instead of a number; the first supported
-date will be the next Chicago calendar day. The aggregate RPC is already used by Reports; the new
+fails closed because pre-cutover earned-state versions do not exist. The cutover is
+`2026-09-03T20:26:11.402245Z`, so the first supported Chicago date is `2026-09-04`; the partial apply
+day correctly refuses instead of returning a number. The aggregate RPC is used by Reports; the new
 payment-detail RPC is backend-only until a later frontend change. New and revised commissions must
 carry an `order_date`, and payout creation now rejects negative items or a payment date before
 the commission's order date. Canonical zero-dollar commissions remain settleable; the report
 counts them pending until a signed post event exists and returns them to pending after void. The two existing zero-dollar
-cancellations enter the opening observation as excluded legacy states. Mason authorized the guarded
-live apply only after clean exact-artifact and Claude review; live `[E2E]` fixtures and merge remain separate.
+cancellations enter the opening observation as excluded legacy states. Postflight confirmed 35 opening
+events (33 baseline and 2 legacy excluded), zero settlement events, the reviewed function fingerprints,
+RLS/ACLs, and all required triggers. No live `[E2E]` fixtures were created; source merge remains separate.
 
 **The 976th row is not part of the draw-down chain.** `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`
 (history row 891) applied live on 2026-08-25 as ledger version `20260825142708`, after the

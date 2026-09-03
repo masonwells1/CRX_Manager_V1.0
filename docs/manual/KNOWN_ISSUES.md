@@ -3528,20 +3528,19 @@ Genuinely still-open items from that same hunt (checked against `LEDGER.json`, n
 
 Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-severity** turned out to already be fixed by later sessions — confirmed via migration files on disk: `reverse_blend_ticket_approval:billed-ticket-reopen-and-edit` → `20260622080000_blend_ticket_reopen_and_content_lock.sql`; `void_commission_payment:resurrect-cancelled-order` → `20260622070000_void_commission_payment_dead_order_guard.sql`. Both **confirmed applied live** (present by name in `supabase_migrations.schema_migrations`, checked 2026-07-13).
 
-### PARTLY OPEN — two HIGH commission findings from the Section 7 gauntlet refresh (**3.5 fixed and live 2026-08-11; 3.4 has a corrected local candidate dated 2026-09-03**)
+### CLOSED — two HIGH commission findings from the Section 7 gauntlet refresh (**3.5 fixed live 2026-08-11; 3.4 fixed live 2026-09-03**)
 
 Source: `docs/audits/gauntlet/2026-08-09-section-07-commissions-splits-payouts-voids-refresh.md` (verdict REMEDIATION REQUIRED, 0 BLOCKER / 2 HIGH). Both were proven against **live** `pg_proc.prosrc`, not just disk. Neither is an access-control defect — RLS, admin-only payout reads, and RPC-only mutations all held. Gauntlet summary rows **3.4** and **3.5**.
 
 | # | Finding | Where | Live risk |
 |---|---|---|---|
-| 3.4 | **LIVE DEFECT; CORRECTED LOCAL CANDIDATE UNDER RE-REVIEW 2026-09-03.** Production's temporary fail-closed report refuses non-current dates. Candidate `20260903150100` records one immutable cutover, commission earned-state snapshots, and signed post/void settlement events in append-only bigint-cent ledgers; aggregate and detail reports read those immutable events only. | `src/pages/Reports.tsx`; local migration `20260903150100` | Production cannot answer a prior cutoff until the migration is reviewed clean and applied. The first candidate was correctly rejected because it backdated today's mutable rows to their order dates. The correction captures opening rows at the real cutover and supports only the first complete Chicago day after it through Chicago-today; earlier dates, including the partial apply day, fail closed. The two legacy cancellations enter the opening observation as excluded states. The 8 existing empty `SEED-*` payment headers were already unpostable under the current live empty-batch guard and remain unchanged. New payout creation rejects negative items and payment dates before the selected commission's order date. Canonical zero-dollar commissions remain settleable and their count moves from pending to paid only on a signed post event. Renewed PostgreSQL proof, exact-SHA, drift/RLS, and Claude review gate the authorized apply. |
+| 3.4 | **RESOLVED — APPLIED LIVE 2026-09-03.** Migration `20260903150100` records one immutable cutover, commission earned-state snapshots, and signed post/void settlement events in append-only bigint-cent ledgers; aggregate and detail reports read those immutable events only. | `src/pages/Reports.tsx`; migration `20260903150100` (live ledger `20260903202611`) | Production supports exact cutoffs from `2026-09-04` through Chicago-today. The first candidate was correctly rejected because it backdated today's mutable rows to their order dates. The shipped correction captures 35 opening rows at the real cutover; earlier dates, including the partial apply day, fail closed. The two legacy cancellations are excluded opening states. The 8 existing empty `SEED-*` payment headers remain unchanged and unpostable. New payout creation rejects negative items and payment dates before the commission order date. Canonical zero-dollar commissions remain settleable and move from pending to paid only on a signed post event. PostgreSQL 17 proof, exact-SHA, drift/RLS, and Claude review were clean before apply. |
 | 3.5 | **Payout idempotency receipts are keyed to the operation, not the intent.** `useIdempotencyKey` scopes to `[operation, userId]` and deliberately retains the key after an uncertain response; `create_/post_/void_commission_payment` all run the operation-only replay check *before* loading the requested entity. | `src/hooks/useIdempotencyKey.ts:21-40`; `src/pages/CommissionPayments.tsx:302-420`; migrations `20260714180000:70-258`, `20260714230000:285-395`, `20260707060000:1569-1717` | Server posts Payment A, response is lost, admin retries on Payment B → server replays A's cached success and the UI reports success for the wrong payment. Same shape for a changed commission selection or void reason. Does **not** double-pay; it tells the operator a different financial action succeeded when it did not. |
 
-**Owner decision superseded for 3.4 on 2026-09-03.** Mason explicitly reopened the historical
+**Owner decision completed for 3.4 on 2026-09-03.** Mason explicitly reopened the historical
 report because he needs it for year-end liability, point-in-time amounts owed, and payout
-reconciliation. The build is now a local candidate. Mason later authorized the exact commission-
-history migration to apply live only after a clean Claude review. Live `[E2E]` fixture writes and
-merge remain outside that approval.
+reconciliation, then authorized the exact commission-history migration after clean Claude review.
+The migration is live; no live `[E2E]` fixture rows were created. Source merge remains separate.
 
 Options as presented:
 
@@ -3553,13 +3552,12 @@ Prevention actions proposed by the report: a static guard requiring any RPC acce
 
 ### 3.5 CLOSED — APPLIED LIVE AND VERIFIED 2026-08-11
 
-Option B was merged to `main` via PR #378 and the migration was applied to production on 2026-08-11 with Mason's explicit approval, after the final Codex round returned clean. The live ledger carries it under version `20260811183437` with name `20260811130000_bind_commission_payout_idempotency_to_intent` (the apply tool stamps its own clock as the version — match on the name). Verified against production afterwards: the catalog postconditions all hold (one overload per function, no helper survived, `anon` locked out of all three entry points, no PostgREST role able to reach an internal function), and a nine-assertion rollback-only chain run live observed the actor and fingerprint on the receipt, an identical intent replaying to the same payment, `IDEMPOTENCY_INTENT_MISMATCH` on a changed selection / changed reference / a post aimed at a different payment, `IDEMPOTENCY_ACTOR_MISMATCH` for a second admin reusing the key, `IDEMPOTENCY_KEY_REQUIRED` on a NULL key, and a legacy unbound receipt failing closed. Full detail in `docs/CHANGELOG.md` (2026-08-11 closeout) and `docs/reference/migration-history.md` row 867. **3.4 remains open in production; its corrected local candidate is under renewed review and unapplied.**
+Option B was merged to `main` via PR #378 and the migration was applied to production on 2026-08-11 with Mason's explicit approval, after the final Codex round returned clean. The live ledger carries it under version `20260811183437` with name `20260811130000_bind_commission_payout_idempotency_to_intent` (the apply tool stamps its own clock as the version — match on the name). Verified against production afterwards: the catalog postconditions all hold (one overload per function, no helper survived, `anon` locked out of all three entry points, no PostgREST role able to reach an internal function), and a nine-assertion rollback-only chain run live observed the actor and fingerprint on the receipt, an identical intent replaying to the same payment, `IDEMPOTENCY_INTENT_MISMATCH` on a changed selection / changed reference / a post aimed at a different payment, `IDEMPOTENCY_ACTOR_MISMATCH` for a second admin reusing the key, `IDEMPOTENCY_KEY_REQUIRED` on a NULL key, and a legacy unbound receipt failing closed. Full detail in `docs/CHANGELOG.md` (2026-08-11 closeout) and `docs/reference/migration-history.md` row 867. **3.4 is also fixed live as of 2026-09-03 by `20260903150100_ledger_backed_commission_history`.**
 
-> **Deadline/status callout (updated 2026-09-03):** land before the first commission payout of the
-> season. Current live evidence still shows zero payment items and no posted/voided payout, so the
-> cheap exact-history window remains open. The candidate deliberately fails its first populated
-> apply if that condition or the two known legacy cancellations drift. See `TODO.md` and the build
-> spec for the approval sequence.
+> **Deadline/status callout (completed 2026-09-03):** the migration landed before the first
+> commission payout. Apply-time evidence showed zero payment items and no posted/voided payout, so
+> the exact-history window was preserved. The two known legacy cancellations were captured as
+> excluded opening states rather than assigned invented dates.
 
 The table below records what was built, and is kept for reference; every row is now live.
 
