@@ -175,11 +175,13 @@ const ALLOWED_REASONS: Record<string, Reason[]> = {
 /**
  * Files that STILL CARRY the F1 defect and are deliberately not fixed here.
  *
- * This list is an admission, not an excuse: every entry is a live reset-before-assert
- * site. It exists so the guard reports the true state instead of pretending these
- * files are clean, and so a future session can find the work.
+ * This list is an admission, not an excuse. It exists so the guard reports the true
+ * state instead of pretending these files are clean, and so a future session can find
+ * the work. Most entries are live reset-before-assert sites; two (BulkTicketUpload,
+ * ManualTicketCreate) are labelled scanner false positives at their entries below.
  *
- *  - JobDetail.tsx — 4 sites; a concurrent session owned the file during this change.
+ *  - JobDetail.tsx — 3 pinned sites, plus 2 real defects this scanner cannot see; a
+ *    concurrent session owned the file during this change. See its entry below.
  *  - Everything else — reverted to main after the round-2 Codex review. Reordering the
  *    reset makes the client RETAIN the key, and on these pages the key is not bound to
  *    what the RPC actually targets (an in-page selection, a staged payload, component
@@ -214,6 +216,11 @@ const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
   // (Save as Recipe and Complete Job are modal openers that deliberately rotate
   // intent), and that a third hit existed only because a COMMENT mentioning `.update(`
   // fooled the scanner into thinking a call preceded it.
+  //
+  // Precisely (Codex round-6 LOW): only Complete Job's classification CHANGED, because
+  // its onClick opens eight lines above its reset and the window was four. Save as
+  // Recipe already classified as intent-rotation — its handler and reset share one
+  // line — and dropped out only when JobDetail was added to ALLOWED_REASONS.
   //
   // THE SCANNER UNDERCOUNTS THIS FILE. Two real defects are invisible to it because
   // they are a DIFFERENT SHAPE — a reset placed BEFORE the call that uses the key,
@@ -345,6 +352,11 @@ function classify(lines: string[], lineNo: number): Reason | null {
   // genuinely follows a mutating call be excused just because a handler opened
   // earlier, so the window must ALSO be free of a mutating call between the handler
   // and the reset.
+  //
+  // GAP, stated (Codex round-6 MEDIUM): the mutating-call list below omits `.insert()`
+  // and `.upsert()`, which therefore neither block this excuse nor set the scanner's
+  // CALL state. classify() also reads RAW lines, so an `onClick=` inside a comment or
+  // string can still excuse a real hit.
   const rotationLines = lines.slice(Math.max(0, lineNo - 15), lineNo);
   const handlerIdx = lastIndexMatching(rotationLines, /onClick=|onChange=/);
   if (handlerIdx >= 0) {
@@ -379,9 +391,14 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  * doing it in the one place a developer is most likely to write that word: a comment
  * explaining the assert (Codex round-5 MEDIUM).
  *
- * Block comments spanning lines are not handled; a `/* ... assertRpcResult ... *\/`
- * block between a call and a reset can still mask it. Stated, not fixed — closing it
- * needs a real tokenizer.
+ * NOT HANDLED, stated rather than fixed (rounds 5–6) — closing these needs a real
+ * tokenizer, and that belongs to the OWED aliased-reset sweep, not to this PR:
+ *  - a multi-line block comment between a call and a reset can still mask it;
+ *  - a whole TEMPLATE LITERAL is removed including its `${…}` interpolations, so a
+ *    reset executed inside one is invisible, and a multi-line template body still
+ *    reads as code because stripping is line-based;
+ *  - only the hit scan is stripped. classify() and aliasNames() read RAW lines, so a
+ *    comment or string can excuse a real hit or invent an alias.
  */
 function stripNoise(line: string): string {
   return line
@@ -411,6 +428,10 @@ function stripNoise(line: string): string {
  * `save_customer` defect at CustomerDetail.tsx:796 escaped the original 249-site sweep
  * entirely (Codex round-3 HIGH). Aliases are resolved per file and matched as well.
  *
+ * NOTE (Codex round-6 MEDIUM): this scans RAW source, so a comment or string containing
+ * `resetKey:` can invent an alias and produce false reports. The hit scan is stripped
+ * of comments and strings; alias discovery and classify() are not.
+ *
  * WHAT THIS DOES NOT CATCH (Codex round-4 MEDIUM — stated so the guard is not trusted
  * past its reach): only a DIRECT destructure in the same file, `{ resetKey: name }`.
  * A second rename of that name, a wrapper function that calls it, an alias imported
@@ -439,6 +460,12 @@ function aliasResetPattern(source: string): RegExp | null {
  * Pinning cardinality alone lets a new defect be swapped in as an old one is removed
  * (Codex round-4 MEDIUM). The identifier is stable under reformatting and line moves,
  * unlike a line number, and changes when a DIFFERENT key's reset appears.
+ *
+ * IT IS NOT A LOGICAL SITE IDENTITY, stated (Codex round-6 MEDIUM): `foo.bar.resetKey()`
+ * is attributed to `bar.resetKey`; an alias itself named `resetKey` can be counted
+ * twice; and several tokens sharing one line are collected without regard to their
+ * order. The sorted array is stable run-to-run, but identity and cardinality are
+ * approximations.
  */
 function siteIdentifiers(line: string, names: string[]): string[] {
   const clean = stripNoise(line);

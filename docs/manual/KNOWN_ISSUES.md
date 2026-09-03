@@ -883,9 +883,12 @@ declared in `ALLOWED_REASONS`, which is how the sixth `JobDetail` site appeared.
 **JobDetail's count is NOT the scanner's number — do not quote the pin as a defect count.**
 It read 5, then 6, then 3 across rounds 3–5, and every move was the guard being wrong rather than
 the file changing. Round 5 established: two of the six were never defects (`Save as Recipe` and
-`Complete Job` are modal-opening buttons that deliberately rotate intent, missed only because the
-classifier's window was four lines and their handlers open eight lines up), and a third existed
-only because a COMMENT containing `.update(` convinced the scanner a call had preceded it.
+`Complete Job` are modal-opening buttons that deliberately rotate intent), and a third existed only
+because a COMMENT containing `.update(` convinced the scanner a call had preceded it. Round 6
+sharpened that: only `Complete Job`'s classification actually changed — its handler opens eight
+lines above its reset and the window was four — while `Save as Recipe` already classified correctly
+(handler and reset share a line) and dropped out only when `JobDetail` was added to
+`ALLOWED_REASONS`.
 **Meanwhile the scanner UNDERCOUNTS the same file**: `runJobSave` and `assignWithOverride` each
 retire the key on their FIRST line, before the call that uses it, so an exact retry gets a brand-new
 key. That is a real defect of a DIFFERENT SHAPE — reset-before-**call**, not reset-before-assert —
@@ -904,7 +907,23 @@ same consequence and is not looked for at all — two live instances in `JobDeta
 comments and string literals are stripped before matching (round 5: a comment mentioning
 `assertRpcResult` between a call and an early reset used to hide the reset entirely, and a comment
 mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is still not handled.
-Closing (a), (b) and (f) needs a real tokenizer, not a line scan.
+(g) The same stripping removes whole TEMPLATE LITERALS including their `${…}` interpolations, so a
+reset executed inside an interpolation is invisible, and because stripping is line-based a multi-line
+template body still reads as code. (h) Only the hit scan is stripped: `classify()` and `aliasNames()`
+still read RAW lines, so a comment or string containing `onClick=`, `.throwOnError()` or a recovery
+marker can excuse a real hit, and one containing `resetKey:` can invent an alias. (i) The
+"no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/
+`functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
+intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes
+`foo.bar.resetKey()` to `bar.resetKey`, can double-count when an alias is itself named `resetKey`,
+and does not order multiple tokens sharing one line. Closing (a), (b), (f), (g) and (h) needs a real
+tokenizer, not a line scan.
+
+**These residuals are the reason this guard is a tripwire, not a proof.** Six adversarial rounds
+drove the product findings to zero and then kept finding more in the scanner itself; that is the
+signal the review had stopped describing the change and started describing the instrument. The
+scanner is deliberately frozen here rather than chased further — a complete sweep is the OWED
+aliased-reset work, which needs an AST.
 
 **Historical note on the original attempt:** 39 call sites
 across 20 files were reordered, plus two click-level repairs in

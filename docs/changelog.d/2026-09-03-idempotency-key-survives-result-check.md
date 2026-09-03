@@ -46,10 +46,13 @@ payload while the screen reports the edited one. Every site below clears that ba
   scheduling.
 - **`FieldApplicationInvoice`** — delete invoices, transfer to scheduling.
 - **`Returns`** — the cancel key's scope and its request now use ONE value. The scope
-  trimmed the reason while the request sent it raw, and the server fingerprints the raw
-  reason, so `"Damaged "` and `"Damaged"` shared a client key but were two different
-  server intents: after a lost response, a whitespace-only edit produced an
-  intent-mismatch rejection the handler threw without reconciling or retiring the key.
+  trimmed the reason while the request sent it raw, and the server fingerprints and
+  stores the raw reason without normalising it, so the two halves could describe
+  different intents. **This was NOT reachable in production and no user hit it:**
+  `ReasonModal` is the only caller and already passes `onConfirm(trimmed)`. The change
+  is defensive and runtime-equivalent today — it removes a latent trap for any future
+  caller that does not trim. Recorded this way because an earlier draft of this entry
+  described it as a live defect, which was wrong.
 - **`PrepaymentManagerPanel`**, **`MonthEndClose`**. The individual
   prepayment apply is additionally scoped **by customer** via `getKeyFor`: the panel
   lists every customer, so an unscoped retained key would hand customer A's receipt to
@@ -74,8 +77,10 @@ clear B's staged allocations without applying them.
 Reverted and tracked: `QuoteBuilder`, `BlendTicketDetail`, `PrepayWorkspacePanel`,
 `Deliveries` (batch cancel), `Invoices` (batch void/delete), `PaymentAllocation`,
 `FinanceChargePreviewModal`, `Quotes`, `DeliveryRemainders`, `NewOrder`,
-`QuickDeliveryModal`, `FieldSetup`. Plus `JobDetail` (6 sites, owned by a concurrent
-session). Fixing them needs the key bound to the **request payload**, which is the
+`QuickDeliveryModal`, `FieldSetup`. Plus `JobDetail` (3 pinned sites, owned by a
+concurrent session, plus 2 real defects of a different shape the scanner cannot see —
+`runJobSave` and `assignWithOverride` retire the key BEFORE the call that uses it).
+Fixing them needs the key bound to the **request payload**, which is the
 `fingerprintIntentPayload` approach from PR #535 — not the URL.
 
 **Reverted after round 3:** `FieldStop` (it does not remount stop-to-stop, and the file's
@@ -120,7 +125,7 @@ duplicate recovery.
   keys. For the record scoping: A(ambiguous) → B → back to A produced key1, key2, key1
   with the component confirmed still mounted across the route change.
 - `typecheck`, `lint`, `test`, `build` — all green, and CI green on the candidate commit.
-- Reviewed by Codex `gpt-5.6-sol` at high effort over four rounds; every round found real
+- Reviewed by Codex `gpt-5.6-sol` at high effort over six rounds; every round found real
   defects **in this change**. Round 1 (2 HIGH) included a cross-record replay *introduced
   by the first version of this fix*. Round 2 (6 HIGH) found the whole generalisation
   unsafe, which is why twelve pages were reverted. Round 3 (3 HIGH) rejected `FieldStop`
@@ -129,4 +134,11 @@ duplicate recovery.
   retained site against its RPC's full parameter list from the migration source: ten of
   eleven cleared, and the eleventh — `cancel_return`'s trimmed-scope/raw-request mismatch
   — is fixed above. It also showed the guard was both over- and under-counting
-  `JobDetail`. The narrowness of this change is the review's doing, not the plan's.
+  `JobDetail`. Round 6 (0 HIGH, 5 MEDIUM, 2 LOW) re-audited all eleven retained sites
+  against their current migration contracts and found **no money regression**; every one
+  of its findings was about the scanner's own precision or about wording in these docs.
+  **That is where the review was stopped.** When findings move out of the product and
+  into the instrument, the review has stopped describing the change — the remaining
+  scanner limits are recorded as residuals (a)–(j) in `KNOWN_ISSUES.md` rather than
+  chased, because closing them needs an AST and belongs to the owed aliased-reset sweep.
+  The narrowness of this change is the review's doing, not the plan's.

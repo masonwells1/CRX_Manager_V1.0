@@ -534,12 +534,16 @@ export default function Returns() {
       action: async () => {
         // The scope and the REQUEST must use the same value. They did not: the scope
         // trimmed the reason while p_reason sent it raw, and the server fingerprints
-        // raw p_reason. So "Damaged " and "Damaged" shared one client key but were two
-        // different server intents — after a lost response, a whitespace-only edit
-        // produced an intent-mismatch rejection that this handler throws without
-        // reconciling or retiring the retained key (Codex round-5 MEDIUM). One local
-        // const now feeds the scope, the request and the audit line, so they cannot
-        // drift apart again.
+        // (and stores) raw p_reason without normalising it. One local const now feeds
+        // the scope, the request and the audit line so they cannot drift apart.
+        //
+        // NOT A LIVE DEFECT, and do not let the next reader think it was (Codex
+        // round-6 LOW corrected round-5 MEDIUM): ReasonModal is the ONLY caller of
+        // handleCancel and it already calls onConfirm(trimmed), so a raw untrimmed
+        // reason never reached the request. This change is DEFENSIVE and
+        // runtime-equivalent today — it removes a latent trap for any future second
+        // caller that does not trim, which would otherwise let two different server
+        // intents share one client key.
         const cancelReason = reason.trim();
         const cancelScope = JSON.stringify([activeReturn.id, cancelReason]);
         const cancelKey = cancelIdem.getKeyFor(cancelScope);

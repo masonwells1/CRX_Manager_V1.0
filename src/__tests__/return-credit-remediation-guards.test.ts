@@ -69,9 +69,12 @@ function assertFrontendGuards(returnsText: string, invoiceText: string) {
   // `JSON.stringify([activeReturn.id, reason.trim()])` — which the defect satisfied:
   // the scope trimmed the reason while the request sent `p_reason: reason` raw, and the
   // server fingerprints the raw value, so two different server intents shared one client
-  // key. A guard that pins one half of a pairing cannot see the halves disagree. All
-  // three lines below are now pinned, so the scope, the request and the audit line must
-  // keep using the SAME value.
+  // key. A guard that pins one half of a pairing cannot see the halves disagree.
+  //
+  // WHAT THIS PINS, exactly (Codex round-6 MEDIUM cut an earlier overclaim here): the
+  // declaration of the single trimmed const, its use as the SCOPE, and its use as the
+  // REQUEST argument. The logActivity audit line also uses it, but is NOT pinned —
+  // reverting that one line to raw `reason` would keep this test green.
   expect(returnsText).toContain('const cancelReason = reason.trim();');
   expect(returnsText).toContain('JSON.stringify([activeReturn.id, cancelReason])');
   expect(returnsText).toContain('p_reason: cancelReason,');
