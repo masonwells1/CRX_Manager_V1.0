@@ -11,7 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { assertRpcResult, supabase } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 
 type CallListKey = 'prepay' | 'no-recent-contact' | 'stale-quotes' | 'lapsed-products' | 'unassigned-accounts';
@@ -511,7 +511,11 @@ export default function CallLists() {
     // Blank falls back to the default; an explicit "0" is a legitimate
     // show-everyone threshold and must NOT be coerced to the default.
     if (selectedList === 'prepay') {
-      const cents = minPriorSpend.trim() === '' ? DEFAULT_MIN_PRIOR_SPEND_CENTS : Math.max(0, parseDollarsToCents(minPriorSpend));
+      // A threshold with more than two decimals is refused (null); it must not
+      // fall through to 0, because 0 is the legitimate show-everyone threshold.
+      const parsedThreshold = minPriorSpend.trim() === '' ? DEFAULT_MIN_PRIOR_SPEND_CENTS : parseDollarsToCents(minPriorSpend);
+      if (parsedThreshold === null) { toast('error', `Minimum prior spend: ${MONEY_PRECISION_MESSAGE}`); setLoading(false); return; }
+      const cents = Math.max(0, parsedThreshold);
       if (cents === applied.minPriorSpendCents) void load();
       else updateQuery({ minPriorSpend: String(cents) });
     } else if (selectedList === 'no-recent-contact') {

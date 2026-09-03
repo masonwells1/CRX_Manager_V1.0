@@ -11,7 +11,7 @@ import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
@@ -278,6 +278,16 @@ export default function BlendRecipes() {
       }
     }
 
+    // A price with more than two decimals is refused (null) and stops the save
+    // by name; it must never reach the RPC as a $0 item price.
+    const itemPriceCents = editItems.map((item) => parseDollarsToCents(item.price_input));
+    const badPriceIdx = itemPriceCents.findIndex((c) => c === null);
+    if (badPriceIdx !== -1) {
+      const who = editItems[badPriceIdx].product_name || `item ${badPriceIdx + 1}`;
+      toast('error', `${who}: ${MONEY_PRECISION_MESSAGE}`);
+      return;
+    }
+
     await runCriticalAction({
       action: async () => {
         // Audit #34: atomic save — recipe + items in one transaction. Update
@@ -288,13 +298,13 @@ export default function BlendRecipes() {
           p_recipe_id: editId as string,
           p_name: form.name.trim(),
           p_recipe_type: form.recipe_type,
-          p_items: editItems.map((item) => ({
+          p_items: editItems.map((item, idx) => ({
             product_id: item.product_id,
             product_name: item.product_name,
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
-            price_per_unit_cents: parseDollarsToCents(item.price_input),
+            price_per_unit_cents: itemPriceCents[idx] as number,
             notes: item.notes || null,
           })),
           p_description: form.description || undefined,

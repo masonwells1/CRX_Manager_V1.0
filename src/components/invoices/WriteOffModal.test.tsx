@@ -95,6 +95,19 @@ describe('WriteOffModal', () => {
     expect(mockToast).toHaveBeenCalledWith('error', 'Enter a valid write-off amount');
   });
 
+  // Mason's 2026-09-03 decision: an amount with more than two decimals is
+  // REFUSED with the shared message, never rounded or truncated. Before this,
+  // "12.345" silently became a $12.34 write-off.
+  it('refuses an amount with more than two decimals and calls no RPC', async () => {
+    render(<WriteOffModal {...defaultProps} />);
+    const inputs = screen.getAllByRole('spinbutton');
+    fireEvent.change(inputs[0], { target: { value: '12.345' } });
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Test reason' } });
+    fireEvent.click(screen.getByRole('button', { name: /apply write-off/i }));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Enter an amount with no more than two decimal places.');
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('shows error toast for amount exceeding balance', async () => {
     render(<WriteOffModal {...defaultProps} />);
     // Find the number input (within Input component, it renders with label)

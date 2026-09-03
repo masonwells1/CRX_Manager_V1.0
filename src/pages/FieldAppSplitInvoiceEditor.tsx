@@ -139,6 +139,10 @@ function dollarsToCents(raw: string): number | null {
   // value into the save RPC. parseDollarsToCents is positive-only and returns cents.
   if (raw == null || raw.trim() === '') return null;
   const cents = parseDollarsToCents(raw);
+  // More than two decimals is refused by the parser (null). Surface it the same
+  // way as "not entered": validateForSave() then names the line and blocks the
+  // save, instead of a truncated price reaching the RPC.
+  if (cents === null) return null;
   // parseDollarsToCents is positive-only (it strips the sign). Preserve a leading minus so
   // downstream validation (`<= 0` / `< 0`) REJECTS a credit/negative instead of silently
   // flipping e.g. "-50.00" into a +$50 CHARGE (Codex r2 #C). Flat-fee credits aren't a

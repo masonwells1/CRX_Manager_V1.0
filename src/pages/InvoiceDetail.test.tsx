@@ -107,6 +107,7 @@ vi.mock('../lib/dateUtils', () => ({
 }));
 vi.mock('../lib/parseCents', () => ({
   parseDollarsToCents: vi.fn((v: string) => Math.round(parseFloat(v) * 100)),
+  MONEY_PRECISION_MESSAGE: 'Enter an amount with no more than two decimal places.',
 }));
 vi.mock('../components/invoices/WriteOffModal', () => ({ default: () => null }));
 vi.mock('../components/invoices/InvoicePrintDialog', () => ({ default: () => null }));

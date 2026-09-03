@@ -48,6 +48,7 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
 
 vi.mock('../lib/parseCents', () => ({
   parseDollarsToCents: vi.fn((v: string) => Math.round(parseFloat(v) * 100)),
+  MONEY_PRECISION_MESSAGE: 'Enter an amount with no more than two decimal places.',
 }));
 
 import PaymentAllocation, { autoAllocate } from './PaymentAllocation';

@@ -21,7 +21,7 @@ import { supabase, assertRpcResult } from '../../lib/db';
 import type { Json } from '../../types/supabase';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
-import { parseDollarsToCents } from '../../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
 import { localToday } from '../../lib/dateUtils';
 import { formatCents as fmt } from '../../lib/money';
 
@@ -148,6 +148,11 @@ export default function PrepayWorkspacePanel() {
 
     for (const [invoiceId, amountStr] of Object.entries(applyAmounts)) {
       const cents = parseDollarsToCents(amountStr || '0');
+      if (cents === null) {
+        const invNumber = invoices.find((i) => i.id === invoiceId)?.invoice_number;
+        toast('error', invNumber ? `${invNumber}: ${MONEY_PRECISION_MESSAGE}` : MONEY_PRECISION_MESSAGE);
+        return;
+      }
       if (cents <= 0) continue;
       totalApplied += cents;
       newAllocations.push({
