@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
+import './migration-security-definer-guard.test.mjs';
 
 function printedEvidence(migration) {
   return execFileSync(

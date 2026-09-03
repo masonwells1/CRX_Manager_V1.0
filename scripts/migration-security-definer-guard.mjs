@@ -2,8 +2,9 @@
 // inherited PUBLIC and CRX's explicit anon EXECUTE grants. Unknown syntax and
 // unterminated SQL fail closed rather than becoming an ACL bypass.
 export const CREATE_FN_ANY = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
-const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
-const SECURITY_DEFINER_ALTER = /ALTER\s+FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+const SECURITY_DEFINER_ALTER = /ALTER\s+(?:FUNCTION|ROUTINE)\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+const SECURITY_DEFINER_ROUTINE_HEADER = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION|ALTER\s+(?:FUNCTION|ROUTINE))\s+/gi;
 
 function blank(out, count) { return out + ' '.repeat(count); }
 
@@ -50,7 +51,12 @@ function executableSql(sql) {
       }
     }
     if (ch === '"') {
-      let end = i + 1; while (end < src.length && src[end] !== '"') end++;
+      let end = i + 1;
+      while (end < src.length) {
+        if (src[end] === '"' && src[end + 1] === '"') { end += 2; continue; }
+        if (src[end] === '"') break;
+        end++;
+      }
       if (end === src.length) return null;
       out += src.slice(i, end + 1); i = end + 1; continue;
     }
@@ -90,14 +96,19 @@ function canonicalSignature(name, args, declaration = false, quoted = false) {
 
 function aclEvents(sql) {
   const events = [];
-  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+FUNCTION\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
   for (const match of sql.matchAll(re)) {
     const open = match.index + match[0].length - 1;
     const args = balanced(sql, open);
     if (!args) return null;
     const roles = /^\s+(?:FROM|TO)\s+([^;]+);/i.exec(sql.slice(args.end));
     if (!roles || /\b(?:WITH|GROUP|ROLE)\b/i.test(roles[1])) return null;
-    events.push({ action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2])), roles: roles[1].split(',').map((r) => r.trim().replaceAll('"', '').toLowerCase()) });
+    events.push({ action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2])), roles: roles[1].split(',').map((role) => {
+      const value = role.trim();
+      if (/^public$/i.test(value)) return 'public';
+      if (/^anon$/i.test(value)) return 'anon';
+      return null;
+    }) });
   }
   // Schema-wide grants, default privileges, and unfamiliar GRANT/REVOKE forms
   // can restore effective execution without appearing in a function-specific
@@ -113,6 +124,14 @@ export function securityDefinerMissingAnonRevokes(sql) {
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
     ...executable.matchAll(SECURITY_DEFINER_ALTER).map((match) => ({ match, kind: 'alter' })),
   ].sort((a, b) => a.match.index - b.match.index);
+  const declarationOffsets = new Set(declarations.map(({ match }) => match.index));
+  for (const header of executable.matchAll(SECURITY_DEFINER_ROUTINE_HEADER)) {
+    const end = executable.indexOf(';', header.index + header[0].length);
+    const statement = executable.slice(header.index, end === -1 ? executable.length : end);
+    if (/\bSECURITY\s+DEFINER\b/i.test(statement) && !declarationOffsets.has(header.index)) {
+      return ['unparseable-security-definer-sql'];
+    }
+  }
   const required = new Map();
   for (let index = 0; index < declarations.length; index++) {
     const { match: declaration, kind } = declarations[index];
