@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-09-02",
+    "generated_at": "2026-09-03",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260901184530",
+    "migrations_high_water": "20260903025854",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -368,6 +368,10 @@
       "20260827041300_align_return_credit_delivery_surfaces",
       "20260827041400_align_return_credit_order_invoice_gates",
       "20260827041500_preserve_generated_invoice_lineage_and_finish_cutover",
+      "20260831160000_harden_receiving_reversal_and_ap_reporting",
+      "20260831161000_require_cumulative_po_bill_confirmation",
+      "20260831162000_fail_closed_historical_commission_balance",
+      "20260831212415_guard_cycle_count_completion_revision",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1790,7 +1794,8 @@
         "vendor_payment",
         "purchase_order",
         "accounting_period",
-        "quote"
+        "quote",
+        "receiving_record"
       ],
       "constraints": [
         "financial_audit_log_entity_type_check"
@@ -1861,7 +1866,8 @@
         "vendor_bill_updated",
         "vendor_payment_recorded",
         "vendor_payment_voided",
-        "rup_sales_voided"
+        "rup_sales_voided",
+        "receiving_reversed"
       ],
       "constraints": [
         "financial_audit_log_operation_type_check"
@@ -2973,6 +2979,12 @@
       "table": "customers",
       "constraint": "customers_crops_allowed_check",
       "def": "CHECK (((crops <@ ARRAY['corn'::text, 'soybeans'::text, 'wheat'::text, 'milo'::text, 'cotton'::text, 'alfalfa'::text, 'pasture_hay'::text, 'other'::text]) AND ((crops = '{}'::text[]) OR (array_ndims(crops) = 1))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "cycle_counts",
+      "constraint": "cycle_counts_item_revision_nonnegative_chk",
+      "def": "CHECK ((item_revision >= 0))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -4418,7 +4430,8 @@
         "status",
         "initiated_by",
         "started_at",
-        "created_at"
+        "created_at",
+        "item_revision"
       ]
     },
     "deliveries": {
@@ -6522,7 +6535,8 @@
       "notes",
       "started_at",
       "completed_at",
-      "created_at"
+      "created_at",
+      "item_revision"
     ],
     "deliveries": [
       "id",
