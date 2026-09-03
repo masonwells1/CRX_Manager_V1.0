@@ -1,15 +1,23 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-09-03 for the F2 entry and migration-ledger facts.** A read-only capture on
-2026-09-03 records **992 ledger rows** (985 distinct names), live `max(version)`
+2026-09-03 at ~14:0xZ records **992 ledger rows** (985 distinct names), live `max(version)`
 **`20260903124741`**, and newest applied authored NAME
 **`20260831235900_serialize_gauntlet_write_boundaries`** — the current ordering high-water. Only the
 F2 item below was re-verified against live on this date (function bodies, grants, the
 `invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-five-file disk-vs-live migration drift confirmed the same day.
+six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
 
-**Superseded 2026-09-01 ledger reading, kept for provenance.** A read-only capture records **980 ledger rows**
+**F06 (`20260903150000_job_chemicals_persist_driver`) is MERGED TO `main` BUT NOT APPLIED.** Its
+earlier authoring read — 990 ledger rows, `max(version)` `20260903025854`, latest authored name
+`20260831212415_guard_cycle_count_completion_revision` — is superseded by the 992-row capture above,
+but its **schema statement still holds and was independently re-confirmed against
+`information_schema.columns` on 2026-09-03**: live `job_chemicals` has **no `driver` column**, so
+that migration is not applied. The file landing on `main` via PR #582 changed the repository, not
+production. Do not read the merge as an apply.
+
+**Superseded 2026-09-01 ledger reading, kept for provenance.** A read-only capture recorded **980 ledger rows**
 and effective ordering high-water **`20260826222000`** (authored name
 `20260826222000_correct_ap_aging_due_date_buckets`). The two Section 9 AP migrations
 `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
@@ -799,7 +807,26 @@ A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-rec
 duplicates one of #449's fixes — delete it rather than continuing it.
 
 
-## OPEN 2026-09-01 — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
+## FIXED IN CODE 2026-09-03, MIGRATION PENDING LIVE APPLY — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
+
+**Fix (2026-09-03).** The driver is now PERSISTED, exactly as the "clean fix" below asked
+for. Migration `20260903150000_job_chemicals_persist_driver.sql` adds nullable
+`job_chemicals.driver` (`'rate' | 'qty' | NULL`, CHECK `job_chemicals_driver_chk`) and
+re-emits `save_job` from the applied 20260820120000 body with only the driver read,
+validation (`CHEM_DRIVER_INVALID`, the thirteenth refusal) and INSERT added, marker bumped
+to `chem_unit_invariant_v3`. No refusal reads it; the money derivation is untouched.
+`buildJobChemicalsPayload` sends it, `JobDetail` reads it back on reload, and
+`recomputeChemRowForAcres` follows the stored side. Rows with NULL driver — every row saved
+before the apply, and every row the close-quote (20260703200000) and recipe (20260618230000)
+paths write — are still left exactly as saved; instead, `chemRowDefects` now mirrors
+`CHEM_QUANTITY_NOT_DERIVED` (units-equal path, server tolerance) and
+`CHEM_QUANTITY_ZERO_BUT_EXPECTED` per line, so the disagreement is shown on the row and the
+save is refused in the browser rather than rolling back at the server. Container proof
+(`scripts/smoke/prove-save-job-persist-driver.mjs`: T1–T66 + D1–D8, 13 mutants) and browser
+proof are recorded in `docs/changelog.d/2026-09-03-f06-job-chemicals-driver.md`. **Until the
+migration is applied live, the on-screen mirror is the whole fix in production** and every
+line still reloads as driver-unknown. The heuristic recovery below stays reverted. The
+original entry is kept as the diagnosis.
 
 **Plain English.** Open a saved job, change the acres, and a chemical line keeps both numbers it was
 saved with. A line saved as **1.5 pt/ac, quantity 150, over 100 acres** still reads 1.5 and 150 at

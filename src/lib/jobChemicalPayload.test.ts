@@ -44,6 +44,21 @@ describe('buildJobChemicalsPayload', () => {
       vendor: 'acme',
       customer_supplied: false,
       sort_order: 0,
+      driver: null,
+    });
+  });
+
+  describe('F06: driver is persisted so a reloaded line knows which field was typed', () => {
+    it.each(['rate', 'qty'] as const)('sends %j through unchanged', (driver) => {
+      expect(buildJobChemicalsPayload([row({ driver })])[0].driver).toBe(driver);
+    });
+    it('sends null when unknown — the server stores NULL and the grid leaves the line as saved', () => {
+      expect(buildJobChemicalsPayload([row()])[0].driver).toBeNull();
+      expect(buildJobChemicalsPayload([row({ driver: undefined })])[0].driver).toBeNull();
+    });
+    it('never sends any other string, because save_job refuses it (CHEM_DRIVER_INVALID)', () => {
+      const stale = { ...row(), driver: 'total' as unknown as 'rate' };
+      expect(buildJobChemicalsPayload([stale])[0].driver).toBeNull();
     });
   });
 

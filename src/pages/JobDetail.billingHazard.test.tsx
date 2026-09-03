@@ -448,24 +448,16 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(args.p_job_payload.total_cost_cents).toBe(15);
   }, 30000);
 
-  it('a RELOADED line keeps the operator\'s saved quantity when the acreage changes', async () => {
-    // F06 IS STILL OPEN and this test pins the SAFE side of it, not a fix. `driver` is never
-    // persisted, so a reloaded row is left untouched when the acreage changes: a 1.5 pt/ac
-    // line saved over 100 acres still reads 150 pt after the job grows to 200. That
-    // under-bills and under-applies.
-    //
-    // An earlier pass "fixed" it by inferring the driver from `quantity == rate x acres`.
-    // Codex refuted it (P1) and the inference was reverted: applyChemEdit back-solves
-    // rate_per_acre whenever the user types a quantity, so a HAND-ENTERED total satisfies
-    // that equality by construction and would have been silently rewritten too. Rewriting an
-    // operator's typed chemical amount is worse than leaving it stale, so until the driver is
-    // persisted on job_chemicals the page must not touch a reloaded quantity at all.
+  /** Mount on the Locations tab with one reloaded 1.5 pt/ac / 150 pt line over 100 acres,
+   *  carrying whatever `driver` the database returned, then double the acreage and move to
+   *  the Chemicals tab. Returns the spinbutton values as they stand after the change. */
+  async function reloadLineAndDoubleAcres(driver: 'rate' | 'qty' | null) {
     mockFrom.mockImplementation((table: string) => {
       if (table === 'jobs') {
         return buildChain({
           data: makeJob({
             ...HAZARD_CHEM,
-            quantity: 150, unit: 'pt', rate_per_acre: 1.5, rate_unit: 'pt/ac',
+            quantity: 150, unit: 'pt', rate_per_acre: 1.5, rate_unit: 'pt/ac', driver,
           }),
           error: null,
         });
@@ -488,17 +480,74 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     }, { timeout: 15000 });
     fireEvent.change(acresInput, { target: { value: '200' } });
 
-    // Move to the Chemicals tab, where the quantity input lives.
+    // Move to the Chemicals tab, where the rate and quantity inputs live.
     const chemTab = screen.getAllByRole('button').find((b) => /chemical/i.test(b.textContent || ''));
     fireEvent.click(chemTab as HTMLElement);
-
-    // The saved quantity must be left exactly as the operator saved it — NOT re-derived.
     await waitFor(() => {
-      const values = screen.getAllByRole('spinbutton').map((el) => (el as HTMLInputElement).value);
-      expect(values).toContain('150');
+      expect(screen.getAllByRole('spinbutton').length).toBeGreaterThan(2);
     }, { timeout: 15000 });
-    const after = screen.getAllByRole('spinbutton').map((el) => (el as HTMLInputElement).value);
-    expect(after).not.toContain('300');
+    return () => screen.getAllByRole('spinbutton').map((el) => (el as HTMLInputElement).value);
+  }
+
+  it('a RELOADED line with NO stored driver keeps its saved quantity — and is named on screen', async () => {
+    // F06 (fixed 2026-09-03 by persisting job_chemicals.driver): a row that reloads with
+    // driver NULL — saved before the column existed, or written by the close-quote / recipe
+    // paths — is still left untouched when the acreage changes. Guessing the driver from
+    // `quantity == rate x acres` was refuted (Codex P1): applyChemEdit back-solves the rate
+    // whenever a total is typed, so a HAND-ENTERED total satisfies the equality by
+    // construction and would be silently rewritten. What changed: the disagreement is now
+    // named on the row (the mirror of save_job's CHEM_QUANTITY_NOT_DERIVED) instead of the
+    // server refusing the whole job save with no warning.
+    const values = await reloadLineAndDoubleAcres(null);
+    await waitFor(() => expect(values()).toContain('150'), { timeout: 15000 });
+    expect(values()).not.toContain('300');
+    expect(await screen.findByText(/no longer agree/i, {}, { timeout: 15000 })).toBeTruthy();
+  }, 30000);
+
+  it("a RELOADED line stored with driver 'rate' re-derives its quantity when the acreage changes", async () => {
+    const values = await reloadLineAndDoubleAcres('rate');
+    await waitFor(() => expect(values()).toContain('300'), { timeout: 15000 });
+    expect(values()).toContain('1.5');
+    expect(screen.queryByText(/no longer agree/i)).toBeNull();
+  }, 30000);
+
+  it("a RELOADED line stored with driver 'qty' holds its typed total and re-derives the rate", async () => {
+    const values = await reloadLineAndDoubleAcres('qty');
+    await waitFor(() => expect(values()).toContain('0.75'), { timeout: 15000 });
+    expect(values()).toContain('150');
+    expect(values()).not.toContain('300');
+    expect(screen.queryByText(/no longer agree/i)).toBeNull();
+  }, 30000);
+
+  it("SAVES the stored driver and the re-derived quantity end to end", async () => {
+    // Database driver='rate' → acreage change → the payload save_job receives carries
+    // driver 'rate' and the re-derived quantity, so the next reload knows the side again.
+    mountWith({ ...HAZARD_CHEM, quantity: 150, unit: 'pt', rate_per_acre: 1.5, rate_unit: 'pt/ac', driver: 'rate' });
+    const locTab = await waitFor(() => {
+      const b = screen.getAllByRole('button').find((x) => /^locations/i.test((x.textContent || '').trim()));
+      if (!b) throw new Error('Locations tab not found');
+      return b;
+    }, { timeout: 15000 });
+    fireEvent.click(locTab as HTMLElement);
+    const acresInput = await waitFor(() => {
+      const found = screen.getAllByRole('spinbutton')
+        .find((el) => (el as HTMLInputElement).value === '100');
+      if (!found) throw new Error('acres input not found');
+      return found as HTMLInputElement;
+    }, { timeout: 15000 });
+    fireEvent.change(acresInput, { target: { value: '200' } });
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
+    await clickSave(save);
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true),
+      { timeout: 15000 },
+    );
+    const saveCall = mockRpc.mock.calls.find((c) => c[0] === 'save_job');
+    const args = saveCall?.[1] as { p_chemicals: Array<Record<string, unknown>>; p_fields: Array<Record<string, unknown>> };
+    expect(args.p_fields[0].acres_to_treat).toBe(200);
+    expect(args.p_chemicals[0]).toMatchObject({ driver: 'rate', rate_per_acre: 1.5, quantity: 300 });
   }, 30000);
 
   it('refuses a quantity typed in exponent notation instead of billing it as zero', async () => {

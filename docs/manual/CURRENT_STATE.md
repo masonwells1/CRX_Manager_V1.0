@@ -27,6 +27,16 @@ whose safety argument rests on "the live body equals the last committed body" mu
 **live**, not against disk. `20260903160000` does exactly that — it pins md5 hashes read from live
 `pg_proc.prosrc` rather than diffing against tracked files.
 
+**F06 (`20260903150000_job_chemicals_persist_driver`) is MERGED TO `main` BUT NOT APPLIED LIVE.**
+PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration file, the `save_job`
+re-emission (marker `chem_unit_invariant_v3`) and its client changes on `main`. Production is
+unchanged: a direct read of `information_schema.columns` on 2026-09-03 returns **no `driver` column
+on `job_chemicals`**, and its authoring read recorded `save_job` still at the 20260820120000 body
+(md5 `227ab7b6bc2023724adf6952a221d2a8`, single overload). **A doc merge is not an apply — do not
+read one as the other.** F06's earlier 990-row / `20260903025854` / `20260831212415` ledger figures
+are superseded by the 992-row capture above; only its not-applied schema statement carries forward,
+and that part was independently re-confirmed.
+
 This header supersedes the 2026-09-01 ledger figures below; its non-ledger observations still stand.
 
 **Superseded 2026-09-01 (post return-credit chain) header, kept for provenance — its 986-row /
