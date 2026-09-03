@@ -8,4 +8,4 @@ The proof producer reads reviewer charters from that protected commit and runs
 review children from an empty temporary directory, so candidate `AGENTS.md`,
 `CLAUDE.md`, and branch charter edits cannot supply reviewer instructions. It
 also refuses to mint a proof for a migration whose `SECURITY DEFINER` functions
-lack an explicit revoke from `anon`.
+do not explicitly revoke both inherited `PUBLIC` and CRX's `anon` execution.

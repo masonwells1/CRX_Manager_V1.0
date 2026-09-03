@@ -119,6 +119,15 @@ const proofEvidenceHash = (stateDir) => migrationProofEvidenceHash({
   stateDir,
 });
 
+function fixtureReviewerPolicyCommit(stateDir) {
+  const root = path.resolve(stateDir, "..", "..");
+  const result = spawnSync("git", ["-C", root, "rev-parse", "origin/main^{commit}"], {
+    encoding: "utf8",
+    env: hermeticEnv(),
+  });
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
+
 function writeProof(stateDir, query, extra = {}) {
   writeFileSync(path.join(stateDir, `migration-review-${MIG}.json`), JSON.stringify({
     migration: MIG,
@@ -127,6 +136,7 @@ function writeProof(stateDir, query, extra = {}) {
     findings: "clean",
     queryHash: sha(query),
     evidenceHash: proofEvidenceHash(stateDir),
+    reviewerPolicyCommit: fixtureReviewerPolicyCommit(stateDir),
     ...extra,
   }));
 }
@@ -268,6 +278,14 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeProof(stateDir, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
     ok(!isDeny(r), "valid proof + benign migration → allowed");
+
+    writeProof(stateDir, BENIGN_SQL, { reviewerPolicyCommit: undefined });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "reviewer proof missing its protected policy commit is denied");
+    writeProof(stateDir, BENIGN_SQL, { reviewerPolicyCommit: "0".repeat(40) });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "reviewer proof bound to a different protected policy commit is denied");
+    writeProof(stateDir, BENIGN_SQL);
 
     writeProof(stateDir, BENIGN_SQL, { queryHash: undefined });
     r = runHook(call(BENIGN_SQL), tmp);

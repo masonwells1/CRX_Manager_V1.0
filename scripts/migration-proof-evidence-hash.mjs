@@ -62,6 +62,10 @@ function collectPaths(root, stateDir) {
     'docs/reference/migration-history.md',
     'src/types/index.ts',
     'scripts/write-apply-proofs.mjs',
+    // These two imports decide which executable reviewer and ACL policy checks
+    // produced the verdict. A proof cannot survive either changing mid-review.
+    'scripts/write-codex-push-proof.mjs',
+    'scripts/migration-security-definer-guard.mjs',
     'scripts/migration-proof-evidence-hash.mjs',
     normal(path.join(relativeStateDir, 'applied-migrations.json')),
   ]);

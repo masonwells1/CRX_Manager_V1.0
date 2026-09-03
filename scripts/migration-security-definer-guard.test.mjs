@@ -11,7 +11,16 @@ ${suffix}`;
 
 test('requires a SECURITY DEFINER function to explicitly revoke anon execute', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes(definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC;')), ['post_return_credit']);
-  assert.deepEqual(securityDefinerMissingAnonRevokes(definition('REVOKE EXECUTE ON FUNCTION public.post_return_credit(uuid) FROM anon;')), []);
+  assert.deepEqual(securityDefinerMissingAnonRevokes(definition('REVOKE EXECUTE ON FUNCTION public.post_return_credit(uuid) FROM anon;')), ['post_return_credit']);
+  assert.deepEqual(securityDefinerMissingAnonRevokes(definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;')), []);
+});
+
+test('does not accept a commented, quoted, wrong-overload, or later-regranted revoke', () => {
+  const commented = definition('-- REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  const quoted = definition("SELECT 'REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;';");
+  const wrongOverload = definition('REVOKE ALL ON FUNCTION public.post_return_credit(text) FROM PUBLIC, anon;');
+  const regranted = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO PUBLIC;');
+  for (const sql of [commented, quoted, wrongOverload, regranted]) assert.deepEqual(securityDefinerMissingAnonRevokes(sql), ['post_return_credit']);
 });
 
 test('does not demand an anon revoke for invoker-security functions', () => {

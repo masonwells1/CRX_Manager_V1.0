@@ -552,6 +552,27 @@ denies(evaluate(fixture({
     "a source caller added after review invalidates the reviewer proof rather than reusing its old fingerprint");
 }
 
+// The producer's transitive trust dependencies are review inputs too. A temporary
+// weakening of either executable resolver or SECURITY DEFINER scanner must change
+// the fingerprint before a proof can authorize an apply.
+for (const dependency of [
+  "scripts/write-codex-push-proof.mjs",
+  "scripts/migration-security-definer-guard.mjs",
+]) {
+  const root = fixture();
+  const target = path.join(root, ...dependency.split("/"));
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, "trusted dependency\n", "utf8");
+  const stateDir = path.join(root, ".claude", "session-state");
+  const proofPath = path.join(stateDir, `migration-review-${SAFE}.json`);
+  const proof = JSON.parse(readFileSync(proofPath, "utf8"));
+  proof.evidenceHash = migrationProofEvidenceHash({ projectDir: root, stateDir });
+  writeFileSync(proofPath, JSON.stringify(proof), "utf8");
+  writeFileSync(target, "temporarily weakened dependency\n", "utf8");
+  denies(evaluate(root), "not evidence-bound",
+    `${dependency} changed after review invalidates the proof`);
+}
+
 denies(
   evaluate(fixture({
     autopilot: armed(),
