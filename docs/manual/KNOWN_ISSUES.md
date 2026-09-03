@@ -2,9 +2,9 @@
 
 **Last verified: 2026-09-03 for the F2 entry and migration-ledger facts.** The ordering boundary is
 the newest applied authored NAME:
-**`20260831235900_serialize_gauntlet_write_boundaries`**. Read ordering from the NAME — it is what
+**`20260903150000_job_chemicals_persist_driver`**. Read ordering from the NAME — it is what
 the ordering guard compares and it moves far less often than the counters. For provenance, the same
-read observed 992 ledger rows (985 distinct names) and `max(version)` `20260903124741`; **treat both
+read observed 993 ledger rows (986 distinct names) and `max(version)` `20260903153402`; **treat both
 of those as a point-in-time observation, not a fact** — any lane applying a migration moves them, so
 re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
 F2 item below was re-verified against live on this date (function bodies, grants, the
@@ -12,13 +12,16 @@ F2 item below was re-verified against live on this date (function bodies, grants
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
 
-**F06 (`20260903150000_job_chemicals_persist_driver`) is MERGED TO `main` BUT NOT APPLIED.** Its
-earlier authoring read — 990 ledger rows, `max(version)` `20260903025854`, latest authored name
-`20260831212415_guard_cycle_count_completion_revision` — is superseded by the 992-row capture above,
-but its **schema statement still holds and was independently re-confirmed against
-`information_schema.columns` on 2026-09-03**: live `job_chemicals` has **no `driver` column**, so
-that migration is not applied. The file landing on `main` via PR #582 changed the repository, not
-production. Do not read the merge as an apply.
+**F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
+`20260903153402`.** It is also the current ordering boundary named above. Verified independently
+against production on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job`
+is at md5 `18d08d5f40aea91fe13ac3e5a686c549` with exactly one overload, so no duplicate function was
+created. This **supersedes every earlier statement in this file that F06 was merged but not
+applied** — that wording was correct when written and is now false; its earlier 990-row /
+`max(version)` `20260903025854` / `20260831212415_guard_cycle_count_completion_revision` authoring
+figures are likewise superseded. The caution it carried still stands on its own terms: PR #582
+merging changed the repository, and the apply that changed production was a separate act minutes
+later, so a merge must never be read as an apply — confirm each against live separately.
 
 **Superseded 2026-09-01 ledger reading, kept for provenance.** A read-only capture recorded **980 ledger rows**
 and effective ordering high-water **`20260826222000`** (authored name

@@ -2,17 +2,18 @@
 
 **Last verified: 2026-09-03 for the migration ledger ONLY. Schema shape is still the 2026-09-01
 reading below and was NOT re-read.** The current effective ordering high-water is the newest applied
-authored NAME: **`20260831235900_serialize_gauntlet_write_boundaries`**.
+authored NAME: **`20260903150000_job_chemicals_persist_driver`**.
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
-high-water" rule compared against it silently skips files authored `20260831*`. The NAME is also the
+high-water" rule compared against it silently skips files authored `20260831*` and `20260903*` alike
+— the `version` stamps run ahead of the authored names in both ranges. The NAME is also the
 durable way to state this boundary: it is what the ordering guard compares, and it changes far less
 often than the counters.
 
-For provenance, the same read observed **992 ledger rows** (985 distinct names — the difference is
+For provenance, the same read observed **993 ledger rows** (986 distinct names — the difference is
 duplicate names, from `count(distinct name)`, not truncation) and `max(version)`
-**`20260903124741`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
+**`20260903153402`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
 any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
 not evidence that something went wrong, and it should not be re-pinned on every apply.
 
@@ -34,15 +35,21 @@ whose safety argument rests on "the live body equals the last committed body" mu
 **live**, not against disk. `20260903160000` does exactly that — it pins md5 hashes read from live
 `pg_proc.prosrc` rather than diffing against tracked files.
 
-**F06 (`20260903150000_job_chemicals_persist_driver`) is MERGED TO `main` BUT NOT APPLIED LIVE.**
-PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration file, the `save_job`
-re-emission (marker `chem_unit_invariant_v3`) and its client changes on `main`. Production is
-unchanged: a direct read of `information_schema.columns` on 2026-09-03 returns **no `driver` column
-on `job_chemicals`**, and its authoring read recorded `save_job` still at the 20260820120000 body
-(md5 `227ab7b6bc2023724adf6952a221d2a8`, single overload). **A doc merge is not an apply — do not
-read one as the other.** F06's earlier 990-row / `20260903025854` / `20260831212415` ledger figures
-are superseded by the 992-row capture above; only its not-applied schema statement carries forward,
-and that part was independently re-confirmed.
+**F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
+`20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
+file, the `save_job` re-emission (marker `chem_unit_invariant_v3`) and its client changes on `main`;
+the live apply followed separately and is now confirmed. Verified independently against production
+on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job` is at md5
+`18d08d5f40aea91fe13ac3e5a686c549` — the candidate body, which replaced the 20260820120000 body
+(`227ab7b6bc2023724adf6952a221d2a8`) — with exactly one overload, so no duplicate function was
+created. F06's earlier 990-row / `20260903025854` / `20260831212415` ledger figures are superseded by
+the 993-row capture above.
+
+**The sequencing lesson outlives the fact.** For the window between that merge and that apply, this
+file correctly recorded F06 as merged but NOT applied: `main` carried the migration while production
+had no `driver` column. That window exists for every migration, so **a merge is not an apply** —
+confirm each against live separately rather than inferring one from the other. Earlier revisions of
+this section stated the not-applied half; they were right when written and are now superseded.
 
 This header supersedes the 2026-09-01 ledger figures below; its non-ledger observations still stand.
 
