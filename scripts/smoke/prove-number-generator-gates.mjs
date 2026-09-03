@@ -606,13 +606,24 @@ $probe$;`, { allowFailure: true });
   // the ONLY thing stopping a driver advancing invoice sequences by direct RPC
   // is that `authenticated` can no longer execute it at all. Assert the refusal
   // is a privilege error, not the gate: the gate would have let this through.
+  // Derive the id from PRINCIPALS rather than naming it. An earlier revision
+  // wrote `PRINCIPALS.driver`, but PRINCIPALS is keyed by UUID, so that was
+  // `undefined` and the probe ran with the literal subject "undefined". The
+  // assertion still passed -- EXECUTE is checked before the body, so no JWT can
+  // reach the gate -- which is exactly what made it invisible: a test claiming
+  // "active driver" that never had one. Caught by adversarial review 2026-09-03.
+  const activeDriverId = Object.keys(PRINCIPALS).find(
+    (id) => PRINCIPALS[id].role === 'driver' && PRINCIPALS[id].active,
+  );
+  assert.ok(activeDriverId, 'no active driver in PRINCIPALS -- the direct-call probe would prove nothing');
+
   const deniedDirect = psql(`
 SET client_min_messages TO NOTICE;
 DO $probe$
 DECLARE v_result text;
 BEGIN
   SET LOCAL ROLE authenticated;
-  PERFORM set_config('request.jwt.claims', '{"sub":"${PRINCIPALS.driver}"}', true);
+  PERFORM set_config('request.jwt.claims', '{"sub":"${activeDriverId}"}', true);
   BEGIN
     EXECUTE 'SELECT public.next_invoice_number(''chemical_sale'')' INTO v_result;
     RAISE NOTICE 'DIRECT_CALL OK:%', v_result;

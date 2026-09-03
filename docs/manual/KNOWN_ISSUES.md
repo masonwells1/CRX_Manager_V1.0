@@ -845,23 +845,36 @@ holds **2 active `entity_recipient` (customer-portal) accounts** and **1 deactiv
 and all three can call all eight generators right now. The branch
 `codex/section1-security-hardening-20260725` carries migration
 `20260725234503_harden_section1_number_and_field_actor.sql`, **not applied and not on `main`**, and
-covers only six of the eight; its other half (`bind_save_field_actor`) is live via PR #285. A plain
-`REVOKE` is wrong — `CycleCounts.tsx:155` and `JobDetail.tsx:1838` call two of them directly.
-**Fix shape:** new migration, all eight, in-body active-profile + role gates, grants preserved,
-through `migration-review`.
+covers only six of the eight; its other half (`bind_save_field_actor`) is live via PR #285. A
+BLANKET `REVOKE` is wrong — `CycleCounts.tsx:155` and `JobDetail.tsx:1861` call two of them
+directly and would break. A TARGETED revoke of the other six is right, and is what shipped.
+**Fix shape:** new migration, all eight, in-body active-profile + role gates, plus direct
+`authenticated` EXECUTE revoked from the six with no browser caller, through `migration-review`.
 
 **Status 2026-09-03 — FIX WRITTEN AND PROVEN, NOT YET APPLIED.**
 `supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql` on branch
 `claude/f2-number-generator-gates-e12d02` covers all **eight**, gates in-body before each advisory
-lock, and re-emits no `GRANT`/`REVOKE`. Allowed sets are the union of the creating surface's roles in
-`src/lib/pagePermissions.ts` and the roles the 18 live internal caller RPCs admit, so no currently
-succeeding path starts failing — notably `driver` is in the invoice set because
-`_complete_delivery_authorized_impl` checks authentication but not role and reaches
-`next_invoice_number` through auto-invoice. Proof: `scripts/smoke/prove-number-generator-gates.mjs`
+lock, **and narrows the grants**: direct `authenticated` EXECUTE is REVOKED from the six generators
+the browser never calls, while `next_cycle_count_number` and `next_job_number` keep theirs. The gate
+settles WHO may call and cannot settle WHERE FROM — the gap it left is that the gate admits `driver`
+on `next_invoice_number` for auto-invoice on an ASSIGNED delivery, but a direct RPC call carries no
+delivery context, so any active driver could advance invoice numbering at will. Allowed sets are the
+union of the creating surface's roles in `src/lib/pagePermissions.ts` and the roles the 18 live
+internal caller RPCs admit, so no currently succeeding path starts failing — `driver` is in the
+invoice set because `_complete_delivery_authorized_impl` admits admin, sales_rep, or the delivery's
+**own assigned** driver (and already requires `is_active`) and reaches `next_invoice_number` through
+auto-invoice. Proof: `scripts/smoke/prove-number-generator-gates.mjs`
 → `NUMBER_GENERATOR_GATE_PROOF_PASS` on a disposable `postgres:17-alpine` (`--network none`), which
-reproduces the hole first, then asserts the full 7-principal × 8-generator allow matrix,
-byte-identical `proacl` across the replace, a browser-shaped `SET LOCAL ROLE authenticated` call, and
-**nine mutation tests** each showing a postflight assertion actually fires. `typecheck`/`lint` clean.
+reproduces the hole first, then asserts the full 7-principal × 8-generator allow matrix, the intended
+`proacl` SHAPE across the replace (two keep `authenticated`, six lost it, none hold `anon`, all keep
+`service_role`), a browser-shaped `SET LOCAL ROLE authenticated` call, an active driver's DIRECT call
+returning `permission denied for function next_invoice_number`, and **fifteen mutation tests** each
+showing a guard actually fires. `typecheck`/`lint` clean.
+
+**Two claims in earlier revisions of this entry were superseded on 2026-09-03 and are corrected
+above:** that the branch "re-emits no `GRANT`/`REVOKE`" (it now revokes from six), and that
+`_complete_delivery_authorized_impl` "checks authentication but not role" (it checks role; verified
+against live `prosrc`). Both were true when written.
 **Not applied live and not merged** — the live apply needs Mason's in-chat approval, a same-session
 apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict. This item stays OPEN until that lands;
 `codex/section1-security-hardening-20260725` stays until then per the branch-retention note below.

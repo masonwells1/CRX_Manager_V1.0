@@ -44,10 +44,17 @@ IF NOT EXISTS (SELECT 1 FROM public.profiles
 
 Every set excludes deactivated profiles and `entity_recipient`.
 
-**The gate is in the body, not on the grants.** `src/pages/CycleCounts.tsx:155` and
-`src/pages/JobDetail.tsx:1838` call two of these directly from the browser as `authenticated`, so a
-`REVOKE` would break both screens. No `GRANT`/`REVOKE` is re-emitted; `CREATE OR REPLACE` preserves
-the existing ACL, and that assumption is proven rather than assumed (below).
+**The gate is in the body AND the grants are narrowed.** `src/pages/CycleCounts.tsx:155` and
+`src/pages/JobDetail.tsx:1861` call two of these directly from the browser as `authenticated`, so
+those two KEEP their grant. Direct `authenticated` EXECUTE is **REVOKED from the other six**
+(`next_application_record_number`, `next_commission_payment_number`, `next_delivery_number`,
+`next_invoice_number`, `next_po_number`, `next_return_number`) — added on Mason's explicit approval
+after adversarial review rated it HIGH. The in-body gate settles WHO may call; it cannot settle
+WHERE FROM, and that was the gap: the gate admits `driver` on `next_invoice_number` because
+auto-invoice on a driver's ASSIGNED delivery needs it, but a direct RPC call carries no delivery
+context, so any active driver could pick any `p_invoice_type` and advance invoice numbering at will.
+Safe because all 16 live routines referencing those six are `SECURITY DEFINER` and run as the
+postgres owner; `service_role` keeps EXECUTE throughout.
 
 ### How the role sets were chosen
 
@@ -55,9 +62,12 @@ Union of (a) the roles that can reach the creating surface in `src/lib/pagePermi
 (b) the roles admitted by every live RPC that calls the generator internally. 18 internal
 `SECURITY DEFINER` RPCs call these. Load-bearing findings:
 
-* `_complete_delivery_authorized_impl` checks authentication but **not** role, and the deliveries
-  surface admits `driver`. A driver completing a delivery reaches `next_invoice_number` through the
-  auto-invoice path, so `driver` is in the invoice and delivery sets. An admin-only gate would have
+* `_complete_delivery_authorized_impl` admits admin, sales_rep, or the delivery's **own assigned**
+  driver, and already requires `is_active = true` (verified against live `prosrc`; an earlier
+  revision of this line said it "checks authentication but not role", which is false — the real path
+  is tighter than that implied, not looser). A driver completing their assigned delivery reaches
+  `next_invoice_number` through the auto-invoice path, so `driver` is in the invoice and delivery
+  sets. An admin-only gate would have
   broken delivery completion in production.
 * `complete_job` admits `applicator`, but its invoice branch runs through `transfer_job_to_invoice`,
   which **already** requires admin/sales_rep. So applicator is deliberately *not* in the invoice set,
@@ -76,8 +86,14 @@ Disposable `postgres:17-alpine`, `--network none`, tmpfs; never reads a DB URL. 
 * **After:** the full 7×8 matrix plus the unauthenticated case matches the intended allow table
   exactly. Deactivated admin, deactivated sales_rep and `entity_recipient` get `INSUFFICIENT_ROLE`
   on all eight; no JWT gets `AUTH_REQUIRED` on all eight.
-* **ACL preservation:** per-function `proacl` captured before and after the replace and asserted
-  byte-identical. `authenticated` keeps `EXECUTE` on all eight; `anon` gains it on none.
+* **ACL shape:** per-function `proacl` captured before and after and asserted against the intended
+  shape in both directions — the two browser callers keep `authenticated` EXECUTE, the other six must
+  have LOST it, `anon` holds it on none, `service_role` keeps it on all eight. It formerly asserted
+  the ACLs were byte-identical; once the revoke existed that check was not merely stale but
+  dangerous — it would have passed while the revoke silently did nothing.
+* **The driver hole, proven closed:** an active driver calling
+  `next_invoice_number('chemical_sale')` directly as `authenticated` returns
+  `permission denied for function next_invoice_number`.
 * **Browser-shaped call:** `SET LOCAL ROLE authenticated` + JWT claim returns `CC-2026-00001`, the
   exact path `CycleCounts.tsx` uses.
 * **Sequence safety:** `invoice_number_seq` advanced 8 → 11 for exactly 3 admitted callers. Refused
