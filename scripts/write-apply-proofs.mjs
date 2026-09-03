@@ -119,12 +119,19 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe) {
   // added `--settings '{"disableAllHooks":true}'` to scripts/run-claude-review.mjs.
   // This does NOT weaken the gate: the child is still --sandbox read-only, and the
   // single-token / terminal-token / hash-binding / 30-min-expiry rules all still apply.
-  const result = spawnSync(codexBin, [
+  const args = [
     'exec', '--ephemeral', '--ignore-user-config',
     '--model', CODEX_REVIEW_MODEL, '-c', `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
     '--sandbox', 'read-only', '-C', process.cwd(), '-c', 'approval_policy=never',
     '--disable', 'hooks', prompt,
-  ], {
+  ];
+  if (process.platform === 'win32') {
+    // The native Windows backend is required for a read-only child to retain
+    // local read access. This is the same restricted-user boundary used by
+    // write-codex-push-proof; --sandbox read-only still denies writes.
+    args.splice(args.indexOf('-C'), 0, '-c', 'windows.sandbox="elevated"');
+  }
+  const result = spawnSync(codexBin, args, {
     cwd: process.cwd(),
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
