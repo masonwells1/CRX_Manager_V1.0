@@ -1393,6 +1393,9 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // declare p_idempotency_key, and use the canonical replay machinery, so they are
   // classified here rather than in the migration-only bucket.
   '_cancel_order_idem_impl_20260721',
+  '_cancel_return_intent_impl_20260812',
+  '_draw_down_quote_below_cost_impl_20260810',
+  '_restore_quote_version_below_cost_impl_20260810',
   '_save_field_app_split_invoice_impl',
   '_save_purchase_order_ascii_identity_impl',
   'adjust_inventory',
@@ -2764,7 +2767,7 @@ function generatedMutatingRpcInventory(): Set<string> {
 }
 
 const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
-  // The live registry/type regeneration through 20260722064814 moved every
+  // The live registry/type regeneration through 20260903202611 moved every
   // former entry into
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
@@ -2777,41 +2780,6 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
 
-  // Private implementation behind the public cancel_return RPC. Direct
-  // EXECUTE is revoked, it declares p_idempotency_key, and it deliberately
-  // enforces the public 'cancel_return' cache namespace. Migration
-  // 20260827041500 re-emits it for exact inventory reversal, placing it in the
-  // pending-migration inventory while it remains absent from generated types.
-  '_cancel_return_intent_impl_20260812',
-
-  // Private implementation behind the public draw_down_quote RPC, so it is
-  // absent from the generated types by design. It declares p_idempotency_key
-  // text and owns the canonical check_idempotency/save_idempotency pair for the
-  // 'draw_down_quote' operation. The new public wrapper separately owns the
-  // actor/fingerprint replay check and receipt binding, then forwards the same
-  // key through this implementation — the test above re-asserts the full chain.
-  // Pre-apply-window entry: it enters the inventory because migration
-  // 20260816120000 is the FIRST on-disk CREATE of this function under its
-  // post-rename name. 20260812115237 renamed the original public body with
-  // ALTER FUNCTION ... RENAME TO and defined no body on disk, so the
-  // transitive-mutation walker could not see it until now. Move this to
-  // MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever becomes public.
-  '_draw_down_quote_below_cost_impl_20260810',
-
-  // Private implementation behind the public restore_quote_version RPC, so it
-  // is absent from the generated types by design. It declares
-  // p_idempotency_key text and owns the canonical
-  // check_idempotency('restore_quote_version') lookup plus the idempotency_keys
-  // cache write, asserting a single affected row.
-  // Pre-apply-window entry, exactly like the draw-down impl above: it enters
-  // the inventory because migration 20260826220000 is the FIRST on-disk CREATE
-  // of this function under its post-rename name. 20260812115237 renamed the
-  // original public body with ALTER FUNCTION ... RENAME TO and defined no body
-  // on disk, so the transitive-mutation walker could not see it until now.
-  // Move this to MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever
-  // becomes public — live grants on 2026-08-25 show no EXECUTE for anon,
-  // authenticated or service_role, and 20260826220000 re-asserts that shape.
-  '_restore_quote_version_below_cost_impl_20260810',
 ]);
 
 /**
@@ -2874,10 +2842,10 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
-  record_commission_earned_state:
-    'trigger-only append-only commission snapshot writer; the parent commission mutation owns the transaction and all application-role EXECUTE is revoked',
-  record_commission_settlement_event:
-    'trigger-only append-only settlement writer; the idempotent post or void payment RPC owns the transaction and all application-role EXECUTE is revoked',
+  // record_commission_earned_state and record_commission_settlement_event were
+  // pre-apply trigger-only exemptions. The 2026-09-03 live registry refresh
+  // moved its high-water through their migration, so they are no longer part of
+  // the generated mutator inventory and retaining either entry would be stale.
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',
