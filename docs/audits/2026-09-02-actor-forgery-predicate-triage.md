@@ -177,18 +177,24 @@ that (a null actor backfilled from another caller-controlled parameter); the tru
 accepted limit, because the form is the house pattern and refusing to credit it would return the
 sweep to ~31 rows. These predicates are over-broad heuristics, not proofs of safety.
 
-## Status: PARKED at round 5 — not merged
+## Status: MERGED 2026-09-02, carrying two known gaps
 
-PR #564 is pushed, green, and **left open**. Mason capped the review loop at one final round
-(2026-09-02); the round-5 exact-SHA `gpt-5.6-sol` proof on `b4f2b567a` returned **BLOCKERS**, so the
-branch parks rather than merges. Do not open a round 6 without a fresh decision from Mason.
+PR #564 **merged to `main` as `fdfba4ec5`**, merged by Mason himself, and the production deploy for
+that commit succeeded. This section is the record of what shipped unfixed — read it before treating
+either gap below as a new discovery.
+
+Mason capped the review loop at one final round. The round-5 exact-SHA `gpt-5.6-sol` proof on
+`b4f2b567a` returned **BLOCKERS**, and `pr-merge-guard.mjs` requires a fresh clean proof for any
+diff `contentIsRisky` flags — which this one is, because a checker for forged actors necessarily
+quotes the very identifiers that classifier looks for. No agent could merge it. Mason used the
+owner escape hatch the gate is built around, after being shown the two open findings below.
 
 ### Round-5 findings, and their disposition
 
 **HIGH — the null-tolerant truncation has more spellings than round 4 closed.** Round 4 added a
 whole-body arm for `coalesce(<actor>, p_*)`. Codex correctly notes that
 `CASE WHEN p_actor IS NULL THEN p_target_id ELSE p_actor END`, a quoted parameter, and a positional
-`$2` fallback all reach the same place and none is detected. **Real, and not fixed here.** It is also
+`$2` fallback all reach the same place and none is detected. **Real, and SHIPPED UNFIXED.** It is also
 the shape of problem this repo has settled twice: enumerating spellings of a hazard reopens on the
 next spelling. Closing it properly means not truncating at a null-tolerant guard at all, which
 returns the sweep to ~31 rows, or real PL/pgSQL dataflow analysis, which the 2026-09-01 cap entry
@@ -196,7 +202,7 @@ declined to fund. That is a scoping decision for Mason, not something to improvi
 
 **HIGH — a credited refusal disables the raw dynamic-SQL arm.** Both raw-source arms are gated on
 *no* credited refusal, so `EXECUTE … set_config(…) USING <actor>` before an otherwise-sound
-`auth.uid()` comparison is invisible. **Real, and not fixed here.** The gate exists because an
+`auth.uid()` comparison is invisible. **Real, and SHIPPED UNFIXED.** The gate exists because an
 ungated raw arm reported `actor_safe_refusal_forward` — closing the false negative reopened a false
 positive. A correct fix needs the raw scan restricted to the pre-refusal region of the *raw* source,
 which the lexer's offsets do not currently carry across.
@@ -207,16 +213,29 @@ PR #566 after this branch's last sync**; this branch never touched either file
 (`git log HEAD..origin/main` showed exactly that one commit). The stale base has since been merged
 in, so the finding cannot recur. This is the recurring "main moved" artifact, not a regression.
 
-### What this branch is worth as it stands
+### Why it merged anyway
 
-Measured, not asserted. Against `main` it closes three inherited bypasses — including the one review
-thread PR #449 left open — and adds a real-PostgreSQL regression suite plus a Docker-free CI guard
-where there was none. It reports strictly *more* than `main` on the live catalog (21 rows vs 1,
-`cancel_delivery` included in both), so no routine `main` reports is cleared by it. The theoretical
-regression Codex raises against the base financial predicate — that accepting a prose refusal message
-could clear something the literal-matching version caught — does not appear on live code.
+Measured, not asserted. Against the predecessor predicates it closes three inherited bypasses —
+including the one review thread PR #449 left open — and adds a real-PostgreSQL regression suite plus
+a Docker-free CI guard where there was none. It reports strictly *more* on the live catalog (21 rows
+vs 1, `cancel_delivery` included in both), so **no routine the old version reported is cleared by
+it**. The theoretical regression Codex raises against the base financial predicate — that accepting a
+prose refusal message could clear something the literal-matching version caught — does not appear on
+live code. Holding it back would have left a strictly weaker checker in place.
 
-### Recommended next step
+### What is still open
 
-Merge or discard is Mason's call. If it merges, the two open findings above should be logged as
-tracked residuals rather than silently inherited.
+The two gaps above are tracked residuals, not resolved. Neither is a hole in the application: both
+are places this *checker* can still be fooled, and the live catalog contains no routine matching
+either shape as of 2026-09-02.
+
+Closing gap (a) properly is an **owner scoping decision, not a regex tweak** — it means no longer
+truncating at a null-tolerant guard, which takes the live sweep from 21 rows back to ~31 and gives
+back most of the noise reduction this change bought. Do not decide that unilaterally. Gap (b) needs
+the pre-refusal region of the *raw* source, which the lexer's collapsed offsets do not carry; that is
+real work, not a patch.
+
+No CodeRabbit review ran on this candidate. The gate that requests one has been failing repo-wide
+since it landed in #516 — it lacks `administration: read`, so it fails on its collaborator-permission
+check before doing anything and cannot even clear its own labels. The fix was already written in open
+PR #563 at the time of this merge.
