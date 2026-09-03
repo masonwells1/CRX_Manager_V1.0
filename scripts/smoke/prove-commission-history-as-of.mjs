@@ -361,14 +361,34 @@ try {
 
   restoreBaseline();
   const migrations = selectedMigrationsThroughCandidate();
+  const candidateSource = readFileSync(MIGRATION_PATH, 'utf8');
   migrations.forEach((local, index) => {
     if (path.basename(local) === '20260817120000_carry_allocated_line_cents_through_lifecycle.sql') {
       restoreLiveCrLfCloseRemainder();
     }
+    if (path.resolve(local) === path.resolve(MIGRATION_PATH)) {
+      for (const [label, signature] of [
+        ['fresh_anonymous_report_grant', 'public.get_commission_balance_report(date)'],
+        [
+          'fresh_anonymous_private_void_grant',
+          'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)',
+        ],
+      ]) {
+        const freshAclMutation = candidateSource.replace(
+          'DO $precondition$',
+          `GRANT EXECUTE ON FUNCTION ${signature} TO anon;\n\nDO $precondition$`,
+        );
+        assert.notEqual(freshAclMutation, candidateSource, `${label} did not change the candidate`);
+        expectCandidateFailure(
+          freshAclMutation,
+          'COMMISSION_HISTORY_FRESH_ACL_DRIFT: existing report or void implementation ACL differs',
+          label,
+        );
+      }
+    }
     applyMigration(local, index);
   });
 
-  const candidateSource = readFileSync(MIGRATION_PATH, 'utf8');
   for (const functionName of [
     '_void_commission_payment_intent_impl_20260809',
     'get_commission_balance_report',
@@ -518,9 +538,92 @@ COMMIT;
 `;
   expectCandidateFailure(
     missedCancellationHistory,
-    'COMMISSION_HISTORY_REPLAY_DRIFT: unexpected NULL-history cancellation set',
+    'COMMISSION_HISTORY_REPLAY_DRIFT: NULL-history cancellations differ from the exact reviewed identity set',
     'missed_cancellation_history_row',
   );
+
+  const syntheticLegacyIds = [
+    '00000000-0000-0000-0000-0000000000a1',
+    '00000000-0000-0000-0000-0000000000b2',
+  ];
+  const syntheticLegacyDigest = createHash('md5')
+    .update([...syntheticLegacyIds].sort().join(','))
+    .digest('hex');
+  const syntheticLineageCandidate = candidate.replaceAll(
+    'd2111549f1dc613edf9a31e4d152b096',
+    syntheticLegacyDigest,
+  );
+  assert.notEqual(
+    syntheticLineageCandidate,
+    candidate,
+    'synthetic legacy-identity candidate did not replace the reviewed digest',
+  );
+  const seedSyntheticLegacyRows = () => psql(`
+SET session_replication_role = replica;
+INSERT INTO public.commissions (
+  id, order_id, customer_id, order_date, status, commission_amount
+) VALUES
+  ('${syntheticLegacyIds[0]}', gen_random_uuid(), gen_random_uuid(), DATE '2026-03-16', 'cancelled', 0),
+  ('${syntheticLegacyIds[1]}', gen_random_uuid(), gen_random_uuid(), DATE '2026-03-16', 'cancelled', 0);
+SET session_replication_role = origin;
+`);
+  const clearSyntheticLegacyRows = () => psql(`
+SET session_replication_role = replica;
+DELETE FROM public.commissions WHERE id IN ('${syntheticLegacyIds[0]}', '${syntheticLegacyIds[1]}');
+SET session_replication_role = origin;
+`);
+
+  seedSyntheticLegacyRows();
+  try {
+    applySql(syntheticLineageCandidate);
+    console.log('COMMISSION_HISTORY_SYNTHETIC_LEGACY_IDENTITY_BASELINE_PASS rows=2');
+  } finally {
+    clearSyntheticLegacyRows();
+  }
+
+  for (const [label, mutation] of [
+    [
+      'removed_legacy_identity',
+      `DELETE FROM public.commissions WHERE id = '${syntheticLegacyIds[0]}'`,
+    ],
+    [
+      'dated_legacy_identity',
+      `UPDATE public.commissions
+          SET cancelled_at = transaction_timestamp(), cancelled_amount_cents = 0
+        WHERE id = '${syntheticLegacyIds[0]}'`,
+    ],
+    [
+      'replaced_legacy_identity',
+      `UPDATE public.commissions
+          SET id = '00000000-0000-0000-0000-0000000000c3'
+        WHERE id = '${syntheticLegacyIds[0]}'`,
+    ],
+  ]) {
+    seedSyntheticLegacyRows();
+    try {
+      psql(`
+SET session_replication_role = replica;
+${mutation};
+SET session_replication_role = origin;
+`);
+      expectCandidateFailure(
+        syntheticLineageCandidate,
+        'COMMISSION_HISTORY_REPLAY_DRIFT: NULL-history cancellations differ from the exact reviewed identity set',
+        label,
+      );
+    } finally {
+      psql(`
+SET session_replication_role = replica;
+DELETE FROM public.commissions
+ WHERE id IN (
+   '${syntheticLegacyIds[0]}',
+   '${syntheticLegacyIds[1]}',
+   '00000000-0000-0000-0000-0000000000c3'
+ );
+SET session_replication_role = origin;
+`);
+    }
+  }
 
   for (const [label, signature] of [
     ['anonymous_cancellation_helper_grant', 'public.stamp_commission_cancellation_history()'],

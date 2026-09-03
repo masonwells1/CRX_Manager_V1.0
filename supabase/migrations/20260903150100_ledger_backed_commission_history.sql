@@ -35,6 +35,7 @@ DO $precondition$
 DECLARE
   v_history_columns integer;
   v_cancelled_count bigint;
+  v_legacy_identity_digest text;
   v_report_body_md5 text;
   v_void_body_md5 text;
 BEGIN
@@ -70,12 +71,13 @@ BEGIN
         'COMMISSION_HISTORY_CHEAP_WINDOW_CLOSED: payout activity exists; reconstruct and set a later ledger boundary before applying';
     END IF;
 
-    SELECT count(*)
-      INTO v_cancelled_count
+    SELECT count(*), md5(string_agg(id::text, ',' ORDER BY id))
+      INTO v_cancelled_count, v_legacy_identity_digest
       FROM public.commissions
      WHERE status = 'cancelled';
 
     IF v_cancelled_count <> 2
+       OR v_legacy_identity_digest IS DISTINCT FROM 'd2111549f1dc613edf9a31e4d152b096'
        OR EXISTS (
          SELECT 1
            FROM public.commissions
@@ -87,22 +89,63 @@ BEGIN
             )
        ) THEN
       RAISE EXCEPTION
-        'COMMISSION_HISTORY_CANCELLATION_DRIFT: expected exactly two zero-dollar legacy cancellations dated 2026-03-16, found %',
+        'COMMISSION_HISTORY_CANCELLATION_DRIFT: expected exact reviewed two-row legacy cancellation identity set, found % rows',
         v_cancelled_count;
     END IF;
   END IF;
 
-  -- Clean-schema rebuilds have zero legacy cancellations. The reviewed live
-  -- system has exactly two; every later cancellation must carry ledger fields.
+  -- First apply replaces two existing functions. Refuse any direct ACL drift
+  -- before CREATE OR REPLACE / REVOKE can normalize and conceal it.
+  IF v_history_columns = 0 AND EXISTS (
+    SELECT 1
+      FROM (
+        SELECT p.oid AS function_oid,
+               privilege.grantee,
+               privilege.privilege_type,
+               privilege.is_grantable,
+               true AS actual_present
+          FROM pg_proc p
+          CROSS JOIN LATERAL aclexplode(
+            COALESCE(p.proacl, acldefault('f', p.proowner))
+          ) privilege
+         WHERE p.oid = ANY (ARRAY[
+           'public.get_commission_balance_report(date)'::regprocedure::oid,
+           'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure::oid
+         ])
+           AND privilege.grantee <> p.proowner
+      ) actual
+      FULL JOIN (VALUES
+        ('public.get_commission_balance_report(date)'::regprocedure::oid, 'authenticated'::regrole::oid, 'EXECUTE'::text, false, true),
+        ('public.get_commission_balance_report(date)'::regprocedure::oid, 'service_role'::regrole::oid, 'EXECUTE'::text, false, true)
+      ) expected(function_oid, grantee, privilege_type, is_grantable, expected_present)
+      USING (function_oid, grantee, privilege_type, is_grantable)
+     WHERE actual.actual_present IS NULL
+        OR expected.expected_present IS NULL
+  ) THEN
+    RAISE EXCEPTION 'COMMISSION_HISTORY_FRESH_ACL_DRIFT: existing report or void implementation ACL differs';
+  END IF;
+
+  -- Zero NULL-history cancellations are accepted only while the complete
+  -- commission subsystem is still a clean rebuild. Any populated lineage must
+  -- retain the exact two reviewed live identities; every later cancellation
+  -- carries ledger fields.
   IF v_history_columns = 4 THEN
-    SELECT count(*)
-      INTO v_cancelled_count
+    SELECT count(*), md5(string_agg(id::text, ',' ORDER BY id))
+      INTO v_cancelled_count, v_legacy_identity_digest
       FROM public.commissions
      WHERE status = 'cancelled'
        AND cancelled_at IS NULL
        AND cancelled_amount_cents IS NULL;
 
-    IF v_cancelled_count NOT IN (0, 2)
+    IF (
+         NOT EXISTS (SELECT 1 FROM public.commissions)
+         AND NOT EXISTS (SELECT 1 FROM public.commission_payments)
+         AND NOT EXISTS (SELECT 1 FROM public.commission_payment_items)
+         AND v_cancelled_count = 0
+       ) THEN
+      NULL;
+    ELSIF v_cancelled_count <> 2
+       OR v_legacy_identity_digest IS DISTINCT FROM 'd2111549f1dc613edf9a31e4d152b096'
        OR EXISTS (
          SELECT 1
            FROM public.commissions
@@ -116,7 +159,7 @@ BEGIN
             )
        ) THEN
       RAISE EXCEPTION
-        'COMMISSION_HISTORY_REPLAY_DRIFT: unexpected NULL-history cancellation set (% rows)',
+        'COMMISSION_HISTORY_REPLAY_DRIFT: NULL-history cancellations differ from the exact reviewed identity set (% rows)',
         v_cancelled_count;
     END IF;
   END IF;
@@ -859,6 +902,7 @@ DO $postcondition$
 DECLARE
   v_bad_columns bigint;
   v_legacy_cancelled_count bigint;
+  v_legacy_identity_digest text;
 BEGIN
   SELECT count(*)
     INTO v_bad_columns
@@ -883,14 +927,22 @@ BEGIN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: % history column(s) missing or wrong type', v_bad_columns;
   END IF;
 
-  SELECT count(*)
-    INTO v_legacy_cancelled_count
+  SELECT count(*), md5(string_agg(id::text, ',' ORDER BY id))
+    INTO v_legacy_cancelled_count, v_legacy_identity_digest
     FROM public.commissions
    WHERE status = 'cancelled'
      AND cancelled_at IS NULL
      AND cancelled_amount_cents IS NULL;
 
-  IF v_legacy_cancelled_count NOT IN (0, 2)
+  IF (
+       NOT EXISTS (SELECT 1 FROM public.commissions)
+       AND NOT EXISTS (SELECT 1 FROM public.commission_payments)
+       AND NOT EXISTS (SELECT 1 FROM public.commission_payment_items)
+       AND v_legacy_cancelled_count = 0
+     ) THEN
+    NULL;
+  ELSIF v_legacy_cancelled_count <> 2
+     OR v_legacy_identity_digest IS DISTINCT FROM 'd2111549f1dc613edf9a31e4d152b096'
      OR EXISTS (
        SELECT 1
          FROM public.commissions
@@ -904,7 +956,7 @@ BEGIN
           )
      ) THEN
     RAISE EXCEPTION
-      'COMMISSION_HISTORY_POSTCOND: unexpected NULL-history cancellation set (% rows)',
+      'COMMISSION_HISTORY_POSTCOND: NULL-history cancellations differ from the exact reviewed identity set (% rows)',
       v_legacy_cancelled_count;
   END IF;
 
