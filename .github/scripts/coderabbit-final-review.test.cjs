@@ -453,7 +453,11 @@ function makeHarness({
           }
           const sequence = checkRunsSequence || [checkRuns];
           const current = sequence[Math.min(checkRunsIndex++, sequence.length - 1)];
-          return { data: { check_runs: current } };
+          // The REAL envelope, `total_count` included. The paginate mock below
+          // normalizes it the way Octokit does; both halves are needed, because
+          // an envelope with no `total_count` would not trip normalization and
+          // the mock would keep modelling a contract that does not exist.
+          return { data: { total_count: current.length, check_runs: current } };
         },
       },
       issues: {
@@ -541,9 +545,31 @@ function makeHarness({
         },
       },
     },
+    // Models Octokit's paginate, INCLUDING normalizePaginatedListResponse.
+    //
+    // This mock used to hand the mapFn the raw envelope, so
+    // `(response) => response.data.check_runs` looked correct here and returned
+    // `undefined` in production — the gate then died on `check.app?.id` with
+    // "Cannot read properties of undefined (reading 'app')" the first time any
+    // PR reached the ready-label path (#563, run 33707346152). A mock that
+    // encodes the wrong contract cannot catch a bug caused by that contract.
+    //
+    // Real behaviour: for a namespaced list envelope (has `total_count`, has no
+    // `url`), Octokit REPLACES `response.data` with the inner array before the
+    // mapFn runs.
     paginate: async (method, params, map) => {
       const response = await method(params);
-      return map ? map(response) : response.data;
+      const data = response.data;
+      const isNamespacedList = data
+        && typeof data === 'object'
+        && !Array.isArray(data)
+        && 'total_count' in data
+        && !('url' in data);
+      const normalized = isNamespacedList
+        ? data[Object.keys(data).find((key) => Array.isArray(data[key]))]
+        : data;
+      const normalizedResponse = { ...response, data: normalized };
+      return map ? map(normalizedResponse) : normalizedResponse.data;
     },
   };
   const context = {
