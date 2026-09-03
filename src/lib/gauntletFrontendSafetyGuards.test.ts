@@ -11,7 +11,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const source = (path: string) => readFileSync(join(ROOT, path), 'utf8');
+// Windows checkouts materialize these sources with CRLF (core.autocrlf=true), so
+// multi-line toContain assertions written with LF would fail there while passing
+// in CI. Normalize for the same reason scripts/normalize-eol.mjs exists.
+const source = (path: string) =>
+  readFileSync(join(ROOT, path), 'utf8').replace(/\r\n/g, '\n');
 
 describe('gauntlet caller-side safety guards', () => {
   it('serializes cycle-count edits and completes only after a fresh authoritative read', () => {

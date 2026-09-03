@@ -513,6 +513,7 @@ try {
     baseRefOid: risky.base,
     headRefName: "feature/test",
     headRefOid: risky.sha,
+    reviewDecision: "APPROVED",
     mergeStateStatus: "CLEAN",
     statusCheckRollup: greenChecks,
   };
@@ -594,6 +595,171 @@ try {
     repoDir: risky.repo,
     runGh: () => featurePrJson,
   }).blocked, false, "gh PR merge to a non-production base is allowed");
+
+  // ── Mason's manual review override is his alone (2026-09-01) ──────────────
+  // "Include administrators" is OFF on main's branch protection so Mason can
+  // hand-merge a PR whose review is stuck. The bypass rides on admin rights,
+  // which is exactly what Codex's own token carries — so the flag is refused
+  // before the PR is even resolved (note: no runGh stub is supplied below).
+  const adminMerge = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash --admin" },
+    repoDir: risky.repo,
+    nowMs: now,
+  });
+  assert.equal(adminMerge.blocked, true, "--admin merge is denied without resolving the PR");
+  assert.match(
+    String(adminMerge.reason || adminMerge.message || JSON.stringify(adminMerge)),
+    /--admin/,
+    "--admin denial names the flag",
+  );
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --admin=false --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, false, "--admin=false asks for no bypass and stands down");
+  // Mason removed main's required approval on 2026-09-02, so a MISSING approval
+  // is no longer a merge blocker. This PR is still risky, so it stays blocked on
+  // the Codex proof — the assertion is therefore that it is not blocked ON REVIEW
+  // GROUNDS, which is the part that changed.
+  const unapproved = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "REVIEW_REQUIRED" }),
+  });
+  assert.doesNotMatch(
+    String(unapproved.reason || unapproved.message || JSON.stringify(unapproved)),
+    /reviewDecision=REVIEW_REQUIRED|no current approval/,
+    "a missing approval is no longer a merge blocker (Mason, 2026-09-02)",
+  );
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
+  }).blocked, true, "CHANGES_REQUESTED still denies - never merge over an unresolved objection");
+  // --auto MUST NOT exempt an active objection (Codex High finding, PR #559).
+  // Every other gate exempts auto because GitHub holds the merge until its own
+  // requirements are met; the requirement that covered this one was the required
+  // review, which the same change removed. GitHub will now complete a queued
+  // auto-merge over CHANGES_REQUESTED, so the guard has to be the one to refuse.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash --auto" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
+  }).blocked, true, "--auto does NOT exempt an active objection");
+  // A missing reviewDecision no longer fails closed HERE. Since 2026-09-02 `null`
+  // is the ordinary verdict GitHub returns for an unreviewed PR, so blocking it
+  // would rebuild the deadlock the protection change removed. The fail-closed
+  // floor lives upstream instead: an unresolvable PR is denied before this point.
+  const noVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: undefined }),
+  });
+  assert.doesNotMatch(
+    String(noVerdict.reason || noVerdict.message || JSON.stringify(noVerdict)),
+    /CHANGES_REQUESTED|no current approval/,
+    "an absent reviewDecision is not treated as an objection",
+  );
+  // The MCP merge route is gated exactly like the gh route - proven with an ACTIVE
+  // objection, which is what still blocks, rather than with a missing approval,
+  // which no longer does.
+  const mcpObjection = evaluateProductionAction({
+    toolName: "mcp__github__merge_pull_request",
+    toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
+  });
+  assert.equal(mcpObjection.blocked, true, "the MCP merge route enforces the objection too");
+  assert.match(
+    String(mcpObjection.reason || mcpObjection.message || JSON.stringify(mcpObjection)),
+    /CHANGES_REQUESTED/,
+    "the MCP-route denial names the objection",
+  );
+
+  // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ─────────────
+  // The gh-shaped routes above were the whole gate, which was survivable while
+  // GitHub itself refused an unapproved merge: a raw REST call simply got a 405.
+  // Mason's admin override removed that backstop — an agent holding his admin
+  // credential can now merge through any transport — so the endpoint and the
+  // mutation are denied by DESTINATION, whatever tool names them. The Claude
+  // guard has denied raw REST since 2026-07-16; the Codex guard had not, and
+  // GraphQL-over-curl was uncovered on both sides.
+  for (const rawMerge of [
+    "curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/crop/crx/pulls/123/merge",
+    "Invoke-RestMethod -Method Put -Uri https://api.github.com/repos/crop/crx/pulls/123/merge",
+    "wget --method=PUT https://api.github.com/repos/crop/crx/pulls/123/merge",
+    "curl https://api.github.com/graphql -d '{\"query\":\"mutation{mergePullRequest(input:{pullRequestId:\\\"PR_1\\\"}){clientMutationId}}\"}'",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: rawMerge },
+      repoDir: risky.repo,
+      nowMs: now,
+    }).blocked, true, `raw merge transport denied: ${rawMerge.slice(0, 40)}`);
+  }
+  // A recognized outer `gh pr merge` must not shield a raw merge hidden in a
+  // command substitution: the gh form is gated, hits `continue`, and the
+  // embedded curl would never be inspected (Codex bot P1 on PR #541).
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --body \"$(curl -X PUT https://api.github.com/repos/crop/crx/pulls/9/merge)\"" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "raw merge endpoint inside a gh merge's substitution is denied");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --body \"`curl -X PUT https://api.github.com/repos/crop/crx/pulls/9/merge`\"" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "backtick substitution carrying a raw merge is denied");
+  // A substitution can equally carry a second gh merge whose flags the parser
+  // never sees; the inner one runs FIRST (Codex bot P1 on PR #541).
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --body \"$(gh pr merge 456 --ad\"\"min)\"" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "a nested gh merge inside a substitution is denied");
+  // Quote and backslash concatenation build a flag gh honours but a raw-word
+  // comparison misses.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --ad\"\"min --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "quote-concatenated --admin is still the admin bypass");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 \"--admin\" --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, true, "fully quoted --admin is still the admin bypass");
+  // A gh-shaped merge still routes through the real gate rather than the raw
+  // denial — otherwise the blanket rule would swallow the approved path.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, false, "an ordinary gh merge is not caught by the raw-transport rule");
   assert.equal(evaluateProductionAction({
     toolName: "mcp__github__merge_pull_request",
     toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
@@ -827,6 +993,7 @@ try {
       baseRefOid,
       headRefName: "feature/test",
       headRefOid: stale.sha,
+      reviewDecision: "APPROVED",
       mergeStateStatus: "CLEAN",
       statusCheckRollup: greenChecks,
     });
@@ -885,6 +1052,7 @@ try {
         baseRefOid: githubBase,
         headRefName: "feature/test",
         headRefOid: updatedHead,
+        reviewDecision: "APPROVED",
         mergeStateStatus: "CLEAN",
         statusCheckRollup: greenChecks,
       }),
@@ -913,6 +1081,7 @@ try {
       baseRefName: "main",
       headRefName: "feature/test",
       headRefOid: stale.sha,
+      reviewDecision: "APPROVED",
       mergeStateStatus: "CLEAN",
       statusCheckRollup: greenChecks,
     }));
@@ -955,6 +1124,7 @@ try {
         baseRefOid: githubBase,
         headRefName: "feature/test",
         headRefOid: updatedHead,
+        reviewDecision: "APPROVED",
         mergeStateStatus: "CLEAN",
         statusCheckRollup: greenChecks,
       }),

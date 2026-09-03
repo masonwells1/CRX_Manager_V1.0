@@ -2698,8 +2698,21 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// No migration indexed by the current history is waiting on a live apply.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
+// The six PR #535 gauntlet migrations are written, reviewed candidates awaiting
+// the governed live apply. Their authored timestamps sort after the last applied
+// authored name (20260827041500) but below the registry's migrations_high_water,
+// which now carries the ledger VERSION Supabase assigned to the 2026-09-01
+// return-credit chain (20260901184530). Without this registration the discovery
+// rule would drop them from the mutator inventory and silently pre-suppress the
+// exemptions that describe them. Clear these entries as each one applies live.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+  '20260831160000',
+  '20260831161000',
+  '20260831162000',
+  '20260831212415',
+  '20260831233000',
+  '20260831235900',
+]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even

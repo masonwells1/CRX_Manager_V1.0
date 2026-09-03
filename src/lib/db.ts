@@ -119,6 +119,14 @@ export const RpcErrorCodes = {
   // line with no unit price cannot be billed, and the split lines must add back
   // up to the quantity requested.
   BOOKED_PRICE_REQUIRED: 'BOOKED_PRICE_REQUIRED',
+  // save_job raises the bare token (`RAISE EXCEPTION 'SHARE_NOT_100' USING
+  // DETAIL = ...`) when a job's field shares do not total 100%. JobDetail used
+  // to detect it with `err instanceof Error && err.message.includes(...)`, which
+  // was dead on arrival: save_job's refusal arrives as a plain PostgREST object,
+  // so the guard never matched and the friendly message never fired for a real
+  // refusal. Registering the token here lets the caller use the object-aware
+  // hasRpcCode() instead.
+  SHARE_NOT_100: 'SHARE_NOT_100',
   COST_BASIS_REQUIRED: 'COST_BASIS_REQUIRED',
   DRAW_ALLOCATION_MISMATCH: 'DRAW_ALLOCATION_MISMATCH',
   // Same migration: a draw line that matches no booked price tier, and a tier

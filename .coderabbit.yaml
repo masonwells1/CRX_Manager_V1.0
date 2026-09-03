@@ -26,7 +26,11 @@ reviews:
   #
   # Mason approved the hard final-review gate on 2026-08-28. GitHub now requires
   # one approval, dismisses stale approvals after a new commit, requires approval
-  # from someone other than the last pusher, and enforces those rules for admins.
+  # from someone other than the last pusher, and requires the branch to be up to
+  # date. Since 2026-09-01 those rules are NO LONGER enforced for administrators:
+  # Mason has a manual override for a stuck review (see DECISION_LOG). CodeRabbit
+  # remains the normal merge-unlock path, and agents are barred from the override
+  # by the merge guards, but this file should not claim admins are bound.
   # CodeRabbit's formal approval is therefore the normal merge-unlock path; the
   # existing required build/deployment contexts remain separate and unchanged.
   request_changes_workflow: true
@@ -75,9 +79,10 @@ reviews:
   # enforces this rule, are parked in PR #441.
 
   auto_review:
-    # Do not spend a review on PR creation or work-in-progress pushes. Post
-    # `@coderabbitai review` once the candidate is frozen, checks are green, and
-    # the separate Codex review is clean.
+    # Do not spend a review on PR creation or work-in-progress pushes. Once the
+    # candidate is frozen, checks are green, and the separate Codex review is
+    # clean, apply `ready-for-coderabbit`. The trusted GitHub workflow validates
+    # that exact head and posts `@coderabbitai review` once.
     enabled: false
     auto_incremental_review: false
     drafts: false

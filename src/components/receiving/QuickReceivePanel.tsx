@@ -18,7 +18,7 @@ import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../../lib/db';
+import { sanitizeError, supabase, assertRpcResult } from '../../lib/db';
 import {
   UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
@@ -255,7 +255,7 @@ export default function QuickReceivePanel() {
       setStep('review');
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'match_quick_receive_items' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to match items');
+      toast('error', sanitizeError(err));
     }
     setMatching(false);
   };
@@ -482,7 +482,7 @@ export default function QuickReceivePanel() {
         setReceiveCount(request.itemsPayload.length);
         setStep('success');
       } else if (disposition === 'definitive') {
-        toast('error', error instanceof Error ? error.message : 'Failed to receive items');
+        toast('error', sanitizeError(error));
       } else {
         toast('warning', 'The receipt may already be recorded. Retry the locked request unchanged to reconcile it.');
       }

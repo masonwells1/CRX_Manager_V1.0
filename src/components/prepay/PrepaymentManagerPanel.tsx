@@ -14,7 +14,7 @@ import DataTable, { type Column } from '../ui/DataTable';
 import Modal from '../ui/Modal';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../../lib/db';
+import { sanitizeError, supabase, assertRpcResult } from '../../lib/db';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { exportToCSV, fmtCSV } from '../../lib/csvExport';
 import { runCriticalAction } from '../../lib/criticalAction';
@@ -414,7 +414,7 @@ export default function PrepaymentManagerPanel() {
       fetchCustomers();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'apply_remaining_prepayments' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to apply prepayments');
+      toast('error', sanitizeError(err));
     }
     setApplying(null);
   };
@@ -450,7 +450,7 @@ export default function PrepaymentManagerPanel() {
       fetchCustomers();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'batch_apply_all_prepayments' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to apply batch prepayments');
+      toast('error', sanitizeError(err));
     }
     setBatchApplying(false);
   };

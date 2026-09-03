@@ -1,11 +1,512 @@
 # Decision Log
 
-Last verified: 2026-08-31
+Last verified: 2026-09-02
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-02 — the CodeRabbit gate is `pull_request_target`-ONLY; never add a review trigger
+
+**Source:** Mason's in-chat approval on 2026-09-02 ("yes remove it and take it through"), after the
+flaw was proven on PR #516 rather than argued. Shipped in #516 (`f2307fbf9`).
+
+**Decision.** `.github/workflows/coderabbit-final-review.yml` triggers on `pull_request_target`
+and nothing else. Do **not** add `pull_request_review`, or any other pull-request event, back to
+it — and do not re-litigate this as a missing feature.
+
+**Why.** The job holds `issues: write`. That is only defensible because `pull_request_target`
+selects the workflow YAML from the DEFAULT BRANCH, so a pull request cannot supply the steps that
+run. `pull_request_review` does not behave that way: it selects the YAML from the PULL REQUEST's
+own ref. Checking out the default branch inside the job does not rescue it, because the step doing
+that checkout would itself come from the PR. A PR editing the workflow could therefore run its own
+steps with the job's write token on any submitted review, bypassing the frozen-head, required-check
+and one-shot validations the gate exists to enforce.
+
+**The proof, because this is the part worth keeping.** The workflow file did not exist on `main`
+at all, and a run of it still appeared and succeeded:
+
+```
+event=pull_request_review
+head_sha=8ddcd9aeea...                              # the PR's commit
+head_branch=codex/coderabbit-ready-label-20260830   # the PR's branch
+path=.github/workflows/coderabbit-final-review.yml
+conclusion=success
+```
+
+A file absent from `main` cannot have come from `main`. To re-check this on any run:
+`gh api repos/<owner>/<repo>/actions/runs/<id> --jq '.event, .head_sha, .head_branch, .path'`.
+
+Two automated reviewers disagreed and the run settled it: the GitHub Codex connector rated it P1,
+while the `write-codex-push-proof.mjs` CLI review returned CLEAN — it verified the
+`pull_request_target` path ("executes only trusted default-branch code") and generalised to the
+whole workflow. When reviewers disagree about a trigger, go read a real run's `event` and
+`head_branch`.
+
+**Blast radius, stated honestly.** Limited here: only Mason and his agents can push branches to
+this repo, and anyone who can do that could already edit labels and comments directly. The fork
+case was not fully verified. This was "a gate whose stated guarantee is false on one path", not a
+live break-in route — which is why it was fixed before merge rather than handled as an incident.
+
+**What was given up.** The removed path re-validated gate state when a review was submitted,
+largely policing approvals — already near-vestigial after the required review was removed earlier
+the same day (see the entry below). `runReviewAuthorization()`,
+`blockCodeRabbitAuthorizationAndReconcile()`, `blockCodeRabbitAuthorizationAndReset()` and their 19
+tests were deleted with it (net −908/+65). Git history keeps them if the feature is ever rebuilt
+behind a default-branch-sourced mechanism.
+
+**Operative rule.** The trigger list is pinned by two mutation-tested guards, so this is enforced,
+not merely written down: `no pull-request event other than pull_request_target triggers this
+privileged workflow` parses the `on:` block, and `the gate refuses to run on any event other than
+pull_request_target` drives `run()`, which fails closed rather than silently reconciling. Re-adding
+the trigger alone does not revive the path — it turns both tests red.
+
+## 2026-09-02 — The required review on `main` is removed; CI becomes the merge gate
+
+**Source:** Mason's in-chat request on 2026-09-02 ("we need to remove the requred review setting
+for a pr merge on github"), and his choice, when the scope question was put to him, to keep running
+CodeRabbit but stop letting it block a merge.
+
+**Decision.** `required_pull_request_reviews` was deleted from classic branch protection on `main`.
+A pull request now merges with no approving review. Verified live immediately after the change:
+`reviews_required: false`, while `SQL Migration Validation` and `Lint, Type Check, Test, Build`
+remain required, `strict` (branch up to date) stays on, and force-push and deletion stay blocked.
+The `protect-main` ruleset was not touched and its bypass list is still empty.
+
+**Why.** The approval requirement was the only merge gate that could wedge with nothing green to do
+about it. CodeRabbit is a shared, rate-limited fleet allowance; when it was down, throttled, or
+stuck, `main` became unmergeable, and the only escape was the 2026-09-01 administrator override —
+a control reserved to Mason by hand and forbidden to every agent. That made routine landings depend
+on Mason being at a keyboard. Removing the requirement moves the gate to the checks that actually
+run on every commit.
+
+**What replaced it.** CI. `Removing the review did not remove the tests` is the operative sentence:
+the required status checks, the up-to-date requirement, and the force-push/deletion blocks all
+still bind everyone, including Mason. Policy that CodeRabbit reviews each frozen candidate and its
+real findings get fixed is unchanged — it is now held by convention and by the merge gates rather
+than by GitHub.
+
+**The half that stayed hard.** Both merge gates (`pr-merge-guard.mjs` via `pullRequestReviewBlocked`
+in `codex-push-lib.mjs`) deny any merge whose `reviewDecision` is `CHANGES_REQUESTED`. **Operative
+rule: a missing review no longer blocks a merge, but an unresolved objection still does.** Merging
+without an approval emits a stderr notice instead of a denial. The predicate deliberately does not
+fail closed on a null verdict — `null` is now what GitHub returns for an unreviewed PR, so treating
+it as a block would rebuild the deadlock; the fail-closed floor lives upstream in `gateRequest`,
+which denies outright when the PR's JSON cannot be fetched at all.
+
+**Supersedes the 2026-09-01 entry below.** The manual override existed only to escape a stuck
+review; with no required review there is nothing to escape. `enforce_admins` remains off, and both
+gates still hard-deny `gh pr merge --admin` — an override path no agent takes regardless of what it
+currently buys.
+
+**Residual, stated because it is load-bearing.** The ruleset still sets
+`require_extra_approval_for_unattributed_changes: true`, so a PR whose commits GitHub cannot
+attribute to a known account can still demand an approval. That is a narrow path, not the general
+rule, and clearing it is Mason's by hand.
+
+## 2026-09-01 (end of day) — SIX adversarial rounds on the enforcement-surface rule, then a deliberate stop
+
+**Mason's decision, 2026-09-01, after the sixth round: fix what that round found, then stop
+commissioning rounds.** Do not reopen this by running more adversarial reviews at it; the remaining
+gaps are recorded in `KNOWN_ISSUES.md` and in the round-6 changelog entry, and closing them is not
+what a command-text rule can do.
+
+**What the cap does and does not cover — read this before concluding the cap was broken.** It caps
+reviews *this project commissions*. It does not silence the **Codex PR-review connector**
+(`chatgpt-codex-connector`), which the Codex cloud settings configure to review on PR open and on
+each push, and which is not a commissioned round.
+
+**That is Codex, NOT CodeRabbit — do not generalize this to CodeRabbit.** `.coderabbit.yaml` sets
+`reviews.auto_review.enabled: false` for both public repos, so CodeRabbit reviews only when someone
+posts an explicit `@coderabbitai review` after the candidate commit is frozen. Nothing here excuses
+skipping that trigger; expecting a CodeRabbit review to appear on its own is how a PR sits unreviewed.
+
+The Codex connector went on to report further real bypasses on PR #530 — `rg --pre`, and later
+`git -c diff.external=… --ext-diff` and `git grep --open-files-in-pager=…`, each executing an
+arbitrary program against a protected file (all three reproduced as real deletions), and doubled path
+separators (`.github//workflows/…`) defeating the matcher — plus several defects in the guard-claim
+ratchet itself. Those were fixed, because
+**fixing a finding that has already been delivered is not commissioning a round.** The changelog
+entries and the test comments number those findings by review round for traceability, which is why
+they say "seventh"; that numbering describes the reviews that happened, not a decision to reopen the
+cap. The cap stands: do not commission an eighth.
+
+Each of six independent exact-SHA `gpt-5.6-sol` reviews found a REAL bypass in the rule that replaced
+the deleted lock. In order: a destructive-verb blocklist that `cp`/`tee`/`sed -i` walked past; `..`
+traversal (a bypass the deleted lock had already closed once, lost in the port); read-only heads that
+write a named file (`node -e`, `sed 'w'`, `sort -o`, `find -fprintf`, `awk '>p'`); command wrappers
+and output-operand utilities (`command cp`, `uniq in out`, `yq -i`, `npx rimraf`); a protected path
+as a flag's VALUE (`git diff --output=`); a forged command name (`scripts/cat`, and a shell function
+shadowing `cat`); and finally nested execution (`echo $(rm …)`, `PATH=/tmp:$PATH`).
+
+**The lesson is the pattern, not any single finding.** A guard that inspects shell command text can
+always be fooled by a shell that rewrites its own commands, so this class of rule converges slowly
+and never finishes. Three of the seven defects were things the DELETED lock had already solved and
+this rewrite dropped — porting a guard is where its hard-won cases get lost, and a diff of what the
+old one handled would have caught all three cheaper than review did.
+
+**Operative rules:**
+
+- This rule is a speed bump. The boundary is GitHub branch protection, required checks, and review.
+  Do not describe it otherwise, and do not remove an `ask` entry on its strength.
+- Adding a verb, flag, or head to it is almost always the wrong instinct. Ask instead whether the
+  SHAPE is wrong — positional-versus-flag-value, bare-versus-path-qualified head, and outer-versus-
+  nested execution each closed a whole class where an enumeration would have closed one case.
+- Six rounds is the recorded ceiling for adversarial iteration on a guard of this kind. If a future
+  guard needs more than that, the design is wrong, not the implementation.
+
+## 2026-09-01 (later the same day) — the guarded-surface lock is DELETED; `review-proof-guard` absorbs its real coverage
+
+**Closes the open question in the two entries below, and supersedes both.** `guarded-surface-lock.mjs`,
+`guarded-surface-lib.mjs`, its test, and `scripts/guard-unlock.mjs` are removed. There is no unlock
+protocol any more; do not reintroduce one. The 2026-08-25 `ask` tier stays exactly as it is — it was
+always the real gate, and nothing here weakens it.
+
+**Mason's decision, 2026-09-01, after being shown the evidence below.**
+
+**Why.** Three independent lines of evidence pointed the same way.
+
+1. **It was never a boundary.** Proven 2026-08-31 by direct reproduction: with the surface LOCKED, a
+   five-line script writing through node's `fs` created a file inside `.claude/hooks/` and the hook
+   never fired. It inspects the arguments of tool calls; code an agent writes and then runs does its
+   writing inside its own process, where no tool call exists to inspect.
+2. **It failed OPEN exactly when it mattered.** A `SyntaxError` in its rule book killed the hook
+   process before `deny()` existed, so it emitted nothing — and a PreToolUse hook that emits no
+   decision is not a denial. Reproduced in isolation (exit 1, empty stdout). Its disabled state was
+   indistinguishable, from the agent's side, from its working state.
+3. **It failed CLOSED catastrophically the rest of the time.** Registered under `matcher: "*"`, a
+   runtime error in the rule book denied EVERY tool call in the session, including the ones needed to
+   repair it. That happened twice in fifteen minutes during ordinary two-step edits, and each recovery
+   required Mason to run a shell command outside the agent. A safety control whose normal failure mode
+   is a total outage costs more than the speed bump it buys.
+
+An exact-SHA `gpt-5.6-sol` review of the narrowed lock returned BLOCKERS with three HIGH findings —
+the read-only allowlist permitting `node -e` writes, uninspected process-input channels, and the
+module-load fail-open — and recommended, unprompted, that "command-text filtering can remain only as
+defense in depth." It reached the same conclusion from a cold read.
+
+**What replaced it, so this is not a net loss of coverage.** `review-proof-guard.mjs` already blocked
+destructive shell writes everywhere under `.claude/` — verified live: `echo test > .claude/hooks/x`
+was refused by the *proof guard*, not by the lock. So the lock's genuinely unique reach was four
+paths, now denied by the same proven machinery: `.husky/**`, `.github/workflows/**`, `.codex/hooks*`,
+`.coderabbit.yaml`. `.claude/hooks` is listed with them as well, because the lock also caught the
+overwrite verbs that carry content from history or a patch file — `git checkout|restore|apply|am|rm|mv`
+and `patch` — which the older `.claude` state-dir rule does not. Missing that would have been a silent
+loss; it is covered and mutation-tested.
+
+**Operative rules:**
+
+- Enforcement files are gated by TWO things and no third: the `ask` tier for native `Edit`/`Write`,
+  and `review-proof-guard.mjs` for destructive/overwriting shell and MCP routes. Reads are always
+  allowed on both.
+- Do not build another self-protecting hook over these files. The pattern was tried, hardened across
+  five adversarial rounds, and removed. If a gap needs closing, extend `review-proof-guard.mjs`.
+- **A `matcher: "*"` hook is a session-wide single point of failure.** Any hook registered that
+  broadly must be trivially simple, or a bug in it takes down every tool call. That is the general
+  lesson, independent of this lock.
+- The durable boundary is unchanged and is not in this repository: GitHub `protect-main` branch
+  protection, required checks, and formal review. Repository hooks are defense in depth.
+
+## 2026-09-01 — the guarded surface is NARROWED to hook/registration files; whether the lock survives at all is an open owner decision
+
+**SUPERSEDED the same day by the entry above — the lock was deleted rather than kept narrowed.**
+Retained because the narrowing rationale explains what is and is not worth guarding.
+
+
+**Amends the 2026-08-31 entry below.** That entry's "operative rules" list a guarded set including
+`package.json`, `package-lock.json`, `scripts/(check|validate|verify)-*`, and the proof/review
+runners. Those are **no longer guarded**. The rest of that entry — especially the CORRECTION that
+this is a speed bump and that the `ask` tier stays — is unchanged and still governs.
+
+**What was removed, and why.** Each dropped path was reachable a second way (`npm pkg set`, a
+swapped dependency, a rewritten validator), so guarding the *file* was never a boundary — it was a
+speed bump layered on a speed bump. Meanwhile they are the files ordinary work touches most, and the
+cost was concrete: `npm install` died, and a `package.json` merge conflict could not be resolved at
+all, because git's `>>>>>>>` markers parse as a shell redirect *into* the guarded file. The `ask`
+tier still gates native `Edit`/`Write` on `package.json`. What remains guarded is the set with no
+second path: hook files, hook registration and the permission manifests, `.husky/`, CI workflows,
+`.coderabbit.yaml`, and the lock's own unlock switch and unlock record.
+
+**Also fixed:** reading a guarded file through `Read`/`Glob`/`Grep`/`NotebookRead` is now allowed
+outright (`READ_ONLY_TOOL_NAMES`). The path scan had been judging any tool carrying a `file_path`,
+so a plain `Read` of a hook was denied by a guard whose own refusal text promised that reading was
+always fine. The refusal text also claimed "an agent shell cannot run" the unlock; that was
+disproved on 2026-08-31 and now reads as friction, not a boundary.
+
+**The finding that reframes the whole thing.** The lock **fails open** on a `SyntaxError` in its own
+rule book — the static `import` precedes the `try`/`catch`, so the process dies before `deny()`
+exists, emits nothing, and a PreToolUse hook that emits no decision is not a denial. Reproduced in
+isolation: exit 1, empty stdout. It fails *closed* on a runtime error, which is worse in a different
+way — it denies **every** tool call in the session, including the ones needed to repair it, and
+recovery took a shell command from Mason outside the agent. That happened twice in fifteen minutes
+during ordinary two-step edits. Full detail in `KNOWN_ISSUES.md` (2026-09-01).
+
+So the lock is strictest when healthy and silently inert when its rule book is malformed — which is
+the state tampering produces. Routing the load-time case into the `try` via dynamic `import()` only
+converts it into the lockout case.
+
+**OPEN — needs Mason's decision. Recommendation on the table: delete the lock.** Its only coverage
+the `ask` tier never had is shell/MCP writes to enforcement paths. But `review-proof-guard.mjs`
+already denies destructive shell writes anywhere under `.claude/` — verified live on 2026-09-01,
+where `echo test > .claude/hooks/zz-live-probe.tmp` was refused by the *proof guard*, not by this
+lock. The genuine residual is therefore only `.husky/`, `.github/workflows/`, `.codex/hooks/`, and
+`.coderabbit.yaml`, which could be added to an existing guard's deny list in a few lines — with no
+unlock ceremony, no self-protecting rule book, no fail-open surface, and no way to brick a session.
+Until Mason rules, the lock stays as narrowed and the `ask` tier remains the real gate.
+
+## 2026-08-31 — control files are LOCKED by a hook, superseding the 2026-08-25 `ask` tier
+
+**Supersedes item 3 of the 2026-08-25 entry below** ("Control-file edits move to the `ask` tier").
+That entry's protected set and its `Edit`/`Write` `ask` rules are replaced by a deterministic
+PreToolUse lock; do not restore them.
+
+Mason asked to stop being prompted for approval on file edits. Investigating that produced three
+findings, in order, and the third is the one that mattered:
+
+1. **The `ask` tier only ever covered `Edit` and `Write`.** `.claude/settings.json` also grants a
+   blanket `"Bash"`, so `sed -i` on a hook file, a `>` redirect over a manifest, or
+   `git checkout <rev> -- .claude/hooks/…` was never gated at all. CodeRabbit raised this as a
+   Major Security finding on PR #530 ("Gate Bash writes to enforcement paths"), and it is a real
+   PRE-EXISTING gap that PR #530 surfaced rather than introduced.
+2. **Removing the `ask` entries opened a two-step silent path.** Live `execute_sql`, live
+   `apply_migration`, and pushes are auto-allowed, so the hooks are their only protection — and
+   `review-proof-guard.mjs` deliberately permits ordinary hook/settings edits. An exact-SHA
+   `gpt-5.6-sol` review blocked PR #530's first commit HIGH for exactly this: weaken a guard, then
+   run the operation it gated, with no approval at either step. Keeping approval on the final
+   deploy/merge tools does not close it, because the guard can be weakened first.
+3. **`ask` semantics are mode-dependent, and one mode ignored them entirely.** As the 2026-08-25
+   entry records, under `defaultMode: "dontAsk"` an `ask` rule is an auto-DENY. But a session
+   running in bypass-permissions mode honours neither — during PR #530 the authoring agent edited
+   `.claude/settings.json` freely. A protection that evaporates in one mode is not a boundary.
+
+**Mason's decision, 2026-08-31 (revised the same evening — read the correction below before
+citing this entry).** Add `.claude/hooks/guarded-surface-lock.mjs` (rule book in
+`guarded-surface-lib.mjs`), which denies WRITES on every channel — Bash, native `Write`/`Edit`, MCP
+path fields, `apply_patch` destinations — in every permission mode including bypass mode. **Reads
+stay allowed**, unlike `review-proof-guard.mjs`'s deny-every-mention, because agents inspect hooks
+constantly during normal work.
+
+**CORRECTION, same evening: this is a speed bump, NOT a boundary — and the `ask` entries stay.**
+The lock was first built to replace the `ask` tier, on the premise that it could not be
+circumvented. Three rounds of exact-SHA `gpt-5.6-sol` review dismantled that premise, and the
+decisive one was reproduced directly rather than accepted on the reviewer's word: with the surface
+**locked**, a five-line script writing through node's `fs` created a file inside `.claude/hooks/`
+and the hook never fired. It inspects the ARGUMENTS OF TOOL CALLS; code that an agent writes and
+then runs performs its writes inside its own process, where no tool call exists to inspect. The TTY
+unlock is no stronger — a reviewer with PTY allocation can satisfy `isTTY`, and the confirmation
+phrase is a literal in the source.
+
+This is the same residual gap `review-proof-guard.mjs` already documents about itself: a
+string-matching guard over tool commands stops named and accidental writes, not a determined agent
+that hides the target from the command text.
+
+**Operative consequence:** the `ask` entries for these paths REMAIN. Removing them in favour of the
+lock would have been a net weakening, because under `dontAsk` an `ask` rule is a real denial for
+`Edit`/`Write` while the lock is bypassable. The lock is kept as defense in depth — it closes the
+CodeRabbit Major finding that blanket `Bash` was never gated on these paths at all, which no `ask`
+rule ever covered. Do not describe it as a boundary, and do not remove the `ask` tier on its
+strength. The durable boundary remains GitHub branch protection plus review, exactly as for the
+proof guard.
+
+**Operative rules:**
+
+- The guarded set is everything that can stop a guard running or change what it concludes — the
+  2026-08-25 list minus `AGENTS.md` and `CLAUDE.md` (prose advises, it does not enforce), plus
+  `package-lock.json`, `scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, and
+  the lock's own `guarded-surface-lib.mjs` and `scripts/guard-unlock.mjs` — without which the lock
+  would be decorative.
+- `node scripts/guard-unlock.mjs --minutes N` opens the lock for tool-call writes. It needs an
+  interactive TTY and a typed phrase, auto-expires (4h cap), reports `--status`, and closes early
+  with `--lock`. Treat it as a deliberate speed bump for the ordinary path, **not** proof that only
+  a human can open it: a PTY-capable agent can satisfy both conditions, and the phrase is a literal
+  in the source. Because the `ask` tier stays, this is not the only thing standing between an agent
+  and these files.
+- Shell read/write is split by a fail-closed allowlist of read-only command heads. An unlisted head
+  is a writer, so new verbs are denied without being enumerated — a blocklist reopens every time
+  someone learns one.
+- **This did not solve the complaint that prompted it.** The `ask` entries were never the source of
+  Mason's prompts (in his normal `dontAsk` sessions they were silent denials), so what is actually
+  prompting him remains unidentified — most likely individual hooks returning `ask`. Tracked as
+  open; do not assume PR #530 addressed it.
+- Known cost, accepted: changing a guard, a CI workflow, or a dependency now needs a deliberate
+  unlock first, on top of the `ask` tier that already applied.
+- **Do not treat a passing lock test suite as proof the lock holds.** It carried 166 green
+  assertions, had been observed blocking its own author mid-task, and still had a fatal hole; the
+  next review round found three more, and the round after that three more again. Self-written tests
+  encode the author's model of the threat. Guard work gets an independent adversarial pass before
+  anyone relies on it.
+
+Source: PR #530, `docs/changelog.d/2026-08-31-guarded-surface-lock.md`, and the two superseded
+entries in `docs/changelog.d/` from the same day.
+
+## 2026-09-01 — Mason gets a manual review override on `main`; agents are locked out of it
+
+**Source:** Mason's in-chat request on 2026-09-01 ("add manual override as option in my github
+account to get around the has to have a review"), and his choice of the "override + agent lockout"
+option when the trade-off was put to him.
+
+**Decision.** Classic branch protection on `main` no longer enforces its rules for administrators
+(`enforce_admins: false`). Mason can therefore merge a pull request whose review is stuck, by hand,
+using GitHub's "Merge without waiting for requirements to be met (administrators only)" control on
+the PR page. The `protect-main` ruleset is unchanged and its bypass list stays empty, so the
+required `Vercel`, `Lint, Type Check, Test, Build`, and `SQL Migration Validation` checks still
+bind everyone. **The override skips the review, never the tests.** No other protection setting
+changed: one approval, stale approvals dismissed on every push, approval from someone other than
+the last pusher, branch up to date, no force-push, no deletion.
+
+**Why.** The review requirement lived entirely in classic protection — the ruleset requires zero
+approvals — so this was the one setting that could be relaxed to reach the review without touching
+the automated checks. Mason authors the PRs, and GitHub does not let an author approve their own,
+so when CodeRabbit is down, rate-limited, or wedged, nothing could approve and `main` became
+unmergeable with no manual escape.
+
+**The lockout is the load-bearing half.** The bypass is granted by admin rights on Mason's account,
+and every Claude and Codex session runs on that same token — so opening it for him opened it for
+them, which would have quietly reduced the whole CodeRabbit gate to advice. Both merge gates
+therefore hard-deny `gh pr merge --admin` (before the PR is even resolved) and verify
+`reviewDecision === "APPROVED"` directly, instead of inferring an approval from a CLEAN
+`mergeStateStatus` the way they safely could while nothing could bypass. **Operative rule: an agent
+may never use the override, for any diff or any deadline — a stuck review is handed to Mason with
+the reason.**
+
+**Caveat that must not be lost.** `reviewDecision === "APPROVED"` is bound to the current head only
+because stale-review dismissal and require-last-push-approval are on. If either is ever turned off,
+both gates must additionally verify that an APPROVED review's `commit_id` equals `headRefOid`.
+
+**What the lockout is, honestly.** It is an honest-mistake net, not a boundary. Because agents
+authenticate as Mason, the guards can only refuse the *commands* that would use the override — they
+cannot withhold the capability. Codex's exact-SHA proof on this PR made that concrete by finding the
+lockout bypassable through raw REST and GraphQL merge transports (denied by destination now, on both
+guards). Codex's third pass then demonstrated a bypass no command guard can reach at all: a command
+that builds the merge URL from separate strings.
+
+**Mason declined the durable fix (2026-09-01).** Giving agents a separate non-admin GitHub
+credential was put to him twice — at design time and again after that demonstration — and he chose
+both times to keep the setup simple and accept the residual. **Settled: do not re-open or implement
+the separate credential unless Mason asks.** The accepted mitigations are the guards, the required
+Vercel/CI/SQL checks the ruleset still enforces on everyone, and Vercel's one-click rollback.
+Detail in `docs/manual/KNOWN_ISSUES.md`.
+
+**Proof.** Live protection and ruleset state read with `gh api` before and after. Guard behavior
+covered by `.claude/hooks/pr-merge-guard.test.mjs` (66 assertions) and
+`.codex/hooks/production-action-guard.test.mjs`, mutation-tested where the blob pin allows;
+`npm run test:agent-workflows` green. Detail:
+`docs/changelog.d/2026-09-01-github-manual-review-override.md`.
+
+## 2026-09-01 — the write-time actor-binding guard is CAPPED as best-effort; do not fund another hardening round
+
+**Source:** Mason's in-chat decision on 2026-09-01 ("cap it"), after he asked for at least two more
+adversarial rounds on PR #449 and both rounds found real bypasses.
+
+**The decision.** `.claude/hooks/actor-binding-check.mjs` is a **speed bump, not a boundary**. It stays
+in place and stays maintained for ordinary spellings, but it is no longer treated as a control that
+can be driven to zero findings. Do not open a round 4 of pattern-by-pattern hardening. The load-bearing
+protections against actor forgery are, in order: the **post-apply sweep predicates**
+(`scripts/db-invariant-sweeps/predicates/actor-forgery.sql` and `-fin-audit.sql`, which run against the
+live catalog), the **exact-SHA Codex proof** on migration diffs, and the **CodeRabbit final review**.
+
+**Why — the evidence, not a preference.** Two independent agents ran two rounds on 2026-08-31/09-01 and
+closed **19 laundering channels**, each reproduced by running the real hook and each fix mutation-tested.
+Round 1 closed 12, then probed its own repair and found 4 more — one it had introduced with its own
+fix. Round 2 probed round 1's repair with 87 payloads and found 7 more across 4 previously-unseen root
+causes. The finding-count on the PR went from 10 open, through two rounds of genuine work, to **23 open**
+(16 of them dated 2026-09-01, i.e. new objections to the fixes themselves). It goes backwards while
+genuinely improving.
+
+**The root cause is a tool mismatch, and one finding proves it.** PostgreSQL needs no whitespace before a
+quoted identifier, so `CREATE OR REPLACE FUNCTION"public"."f"(` is valid SQL — and the guard never matched
+it, meaning a ~3,000-line security check **never ran on that routine at all**. That single lexical fact
+punched holes in **eight independent regexes written across three careful passes**. Nobody missed it eight
+times through inattention; a regex encodes a guess about tokenization, and when the guess is wrong in one
+place it is wrong everywhere. A second root cause is structural rather than lexical: the guard proves a
+**name**, and a PL/pgSQL parameter is an ordinary local, so `p_performed_by := p_target_id;` after a
+passing check re-forges the actor. Nine spellings of that were found.
+
+**Residual risk, stated plainly — and it is NOT uniform.** Three different residuals remain, with different
+compensating controls, and conflating them would overstate the defence:
+
+1. **Lexical bypasses** (the quoted-identifier gap and other novel spellings). These evade the *write-time*
+   hook only. Because such a routine carries no binding check at all, its source contains no `ACTOR_MISMATCH`
+   token, so the post-apply sweep predicates do still consider it — and they fire when the actor parameter is
+   COALESCEd, compared against `auth.uid()`, mentioned near role text, or written into `financial_audit_log`
+   within the same statement. The controls that ALWAYS apply here are the Codex proof and the CodeRabbit
+   review; the sweep is a **partial, conditional** third — it fires only on those specific sinks, so a
+   lexical bypass that routes the parameter to any other write target clears it without trying. Capping the
+   hook does not remove the Codex proof or the CodeRabbit review, but do not state the residual as
+   "an attacker must clear all three" — that is true only for the subset of shapes the predicates' sinks
+   happen to cover, and asserting it flatly is the same overclaim this entry exists to remove.
+2. **Re-binding and laundering bypasses** — `p_performed_by := p_target_id;` after a passing check,
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips. **The post-apply sweeps do NOT
+   cover these, and it is not a near miss.** Both predicates select only rows where
+   `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that performs a legitimate-looking binding check and *then*
+   re-assigns the parameter is excluded from both sweeps outright — the very presence of the check it
+   defeated is what hides it. A temp-table round trip evades them for a second, independent reason:
+   `actor-forgery.sql` requires the parameter to appear near `coalesce`/`auth.uid`/role text, and
+   `actor-forgery-fin-audit.sql` requires it to appear after `financial_audit_log` **before the next
+   semicolon**, so stashing the parameter in a temp table in one statement and inserting it into the audit
+   log in another satisfies neither. Only the Codex proof and the CodeRabbit review stand here.
+3. **The naming-scope gap** — actor-shaped parameters that do not match `^p_\w*by$|^p_actor|^p_user`, e.g.
+   `p_target_id` or `p_acting_user_id`. **The live sweep predicates share this exact name pattern, so the
+   sweep does NOT cover this path either.** Do not claim the sweep as the compensating control for it. The
+   only things standing here are the Codex proof and the CodeRabbit review on the migration diff. Closing it
+   needs real dataflow over write targets — analysis of which values reach an actor column — not another
+   pattern, and it would have to change the hook and both predicates together.
+
+Note on (2): the incidental write-time coverage of `EXECUTE … USING` / `INSERT … RETURNING … INTO` — an
+unconditional `hasMutation` trigger rather than modelled taint — lives in **parked PR #449, not in the hook
+that is running**. The active `.claude/hooks/actor-binding-check.mjs` is 213 lines and contains no such
+trigger (PR #449's hardened rewrite is the ~3,000-line version referenced above), so today these forms are
+not caught at write time at all. Do not credit the running guard with them until #449 lands.
+
+Note on the tool path, which is wider than any residual listed above: the guard is registered under the
+matcher `"Write|Edit"` in **both** `.claude/settings.json` and `.codex/hooks.json`, so a migration created
+through Bash or PowerShell — `cat`, `tee`, a redirect, a generator script — is never presented to it, and
+`bash-safety.mjs` blocks only *modification* of an existing file under `supabase/migrations/`, not
+*creation* of a new one. Ordinary SQL bypasses the guard on tool choice alone. This is not a residual of the
+analysis; it is the analysis never running. The post-apply sweeps are unaffected — they read the live
+catalog and do not care which tool wrote the file. Any claim that this guard covers "every ordinary
+spelling" must be scoped to hooked `Write`/`Edit` calls.
+
+Note on cross-routine delegation: a `SECURITY DEFINER` wrapper that accepts an actor parameter and
+delegates the write to a helper is allowed at write time — the guard only proceeds when the routine's own
+body holds a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM` — and it is **not** covered by the sweeps
+either, because the wrapper carries neither predicate's cue in its own `prosrc` and a private helper fails
+the `has_function_privilege('authenticated', ...)` candidacy test. There is no fail-closed callable rule in
+the running hook; that belongs to parked PR #449.
+
+Note on the write path itself: the hook reads `tool_input.content || tool_input.new_string` and analyses that
+fragment alone — it does **not** reconstruct the full post-edit file the way `sql-safety.mjs`,
+`idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. An ordinary
+incremental `Edit` that inserts an unsafe write *inside* an existing function therefore carries no function
+header, no parameter list and no `SECURITY DEFINER` attribute in the analysed text, so the guard finds no
+candidate and allows it. This is the normal editing path, not an exotic one; the hook's own Edit-coverage
+test passes a whole function as `new_string` and so does not exercise it.
+
+**If this is ever revisited, rebuild rather than re-harden.** The only approach that removes the whole
+category is parsing with PostgreSQL's own grammar (`libpg_query`), which eliminates "spellings" entirely and
+turns the re-binding hole into a real assignment-target check. That is a scoped project with a dependency
+and a rewrite — not another round. It does **not** solve the naming-scope limit, which needs real dataflow.
+
+**Operative rules.**
+- Do not open another pattern-hardening round on this guard; cite this entry and close the request.
+- Do not describe this guard as preventing actor forgery. It reduces it. Say so in any doc that mentions it.
+- Do not cite the post-apply sweeps as the compensating control for the re-binding, laundering or
+  naming-scope residuals. They cover the lexical residual only, and only at the sinks they key on.
+- Before starting related work, check for stranded parallel attempts — a third, unpushed regex attempt
+  (`codex/actor-binding-guard-recut-20260831`, local only, no PR) duplicated one of PR #449's fixes.
+- PR #449 itself is **parked, not abandoned**: it holds the 19 closed bypasses and is worth landing after
+  one clean review round on a fresh review budget. Landing it is an improvement to a capped control, not a
+  resumption of the hardening programme.
+
+**A generalisable lesson recorded here because it recurred seven times in ~24 hours.** Every one of those
+seven guard comments asserted a safety property its code did not have, and **every one overclaimed** — none
+understated. Three were in this file alone, including *"Non-mutating functions are never flagged"*, which a
+test in the same file already disproved. The ratchet worth building: **for each guard, assert that its
+refusal text and header comments do not claim a property the test suite has not demonstrated.** When the
+author of a guard cannot correctly state what it does, that is the system reporting that it exceeded the
+complexity a reader can hold.
+
 
 ## 2026-08-31 — `core.hooksPath` points at the tracked `.husky`, never husky's generated `.husky/_`
 
@@ -91,7 +592,46 @@ would; do not treat the section as Opus-only or relitigate its scope. Every sett
 the pending effort sweep from the 2026-07-25 entry remain in force. This supersedes only the
 model-scope wording of the 2026-07-25 entry; its substance is unchanged.
 
-## 2026-08-31 — defer the six-file return-credit migration rollout
+## 2026-09-01 — split the return-credit landing: docs now, migration-gate hardening separately
+
+**Decision:** Mason directed that the documentation corrections for the applied return-credit chain
+land on their own, and that the `scripts/write-apply-proofs.mjs` evidence-bundle hardening be carried
+in a separate change.
+**Why:** The repository was actively telling every session that the six migrations were unapplied,
+including the per-migration ledger rows a session reads to decide what is pending. That correction is
+urgent and low-risk. The gate hardening had produced two successive rounds of real exact-head review
+findings and was starting to reach into the apply guard itself; holding the corrections behind it was
+the worse trade.
+**What this forbids/implies:** Do not treat the parked gate work as abandoned or as already landed.
+Its working state is on branch `claude/return-credit-chain-applied-2026-09-01`, with two known open
+findings from the 2026-09-01 exact-head review: caller discovery misses unqualified calls (proven by
+`PERFORM void_invoice(...)` inside `batch_void_invoices`), and `evidenceHash` is written into the
+proof but never enforced by `migration-apply-lib.mjs`, so a stale proof survives an evidence change.
+The second is the sharper one — a recorded-but-unenforced hash implies protection that does not
+exist, and should be either enforced or removed rather than left as-is. A live read on 2026-09-01
+confirmed the incomplete caller evidence caused no production damage.
+
+## 2026-09-01 — reopen and complete the six-file return-credit rollout (supersedes 2026-08-31)
+
+**Decision:** Mason reopened the deferred rollout in-chat and authorized applying all six migrations
+`20260827041000` through `20260827041500` to production. All six were applied in order on 2026-09-01
+and verified live. This supersedes the 2026-08-31 deferral entry below, which is now closed.
+**Why:** The chain repairs a real return-credit COGS defect. Production has never issued a return
+credit (zero credited returns, zero credit memos), so the fix landed before the defect could produce a
+wrong number, and the issuance freeze the chain installs had no practical customer impact.
+**What this forbids/implies:** The 2026-08-31 "do not apply" instruction is spent — do NOT treat this
+chain as pending, and do not re-apply or restamp it. Each apply carried a full migration-apply-guard
+proof (both reviewer charters CLEAN from `gpt-5.6-sol`/high) and independent read-only live
+verification. Nine gate refusals occurred across the run; every one was a gap in the reviewer evidence
+bundle, none was a defect in a migration, and no verdict was overridden. The cutover barrier is
+removed. The rejected `20260827223000` ledger-order trigger was never part of this chain and stays
+unapplied. Live ledger and per-migration versions: `docs/reference/migration-history.md`.
+
+**Provenance note:** the 2026-08-31 entry below was authored by a Codex session and attributed to
+Mason; on 2026-09-01 Mason said the deferral was not his ("i dont think its mine"). It is retained
+unaltered as a record of what the repository claimed, not as a decision he made.
+
+## 2026-08-31 — defer the six-file return-credit migration rollout (SUPERSEDED 2026-09-01; attribution disputed)
 
 **Decision:** Keep migrations `20260827041000` through `20260827041500` unapplied for now. Their
 reviewed source files remain unchanged under `supabase/migrations/`, but Mason is not authorizing
@@ -156,6 +696,22 @@ pipes, `node -e`, `bash -c`, `python3 -c`, heredocs, and `node -v`, all reportin
 ineffective — it blocks *reading* the file it protects while `node runner.mjs` / `npm run x` / `make x`
 execute it freely. It is coupled to the blob-pinned maintenance producer, so it is the next
 harness-focused task after this one, not a backlog item.
+
+## 2026-08-30 — A default-branch label gate posts the final CodeRabbit command once
+
+**Decision:** After the frozen candidate is current, green, and separately reviewed, the landing
+owner applies `ready-for-coderabbit`; a default-branch workflow validates that exact PR head and
+posts exactly `@coderabbitai review` once with a hidden SHA marker. The generic Actions-authored
+marker prevents duplicate requests but is not a separate security identity. Before merge, its SHA,
+CodeRabbit's authenticated approval `commit_id`, and the live PR head must be identical.
+**Why:** Manual comment posting was easy to forget or repeat, while automatic PR/push reviews spent
+the shared budget before changes were deployable.
+**What this forbids/implies:** Do not post the normal command by hand. New commits and reopened/draft
+state, base drift, close/reopen, auto-merge changes, or requested-marker removal reset both labels;
+a failed gate posts nothing, and duplicate events cannot post a second request. Manual re-arming is reserved for a confirmed
+automation or CodeRabbit delivery failure.
+The two introducing PRs are one-time bootstrap exceptions because `pull_request_target` runs only
+workflow code already on `main`; they receive one manual command after their heads are frozen/green.
 
 ## 2026-08-28 — CodeRabbit reviews only frozen release candidates
 

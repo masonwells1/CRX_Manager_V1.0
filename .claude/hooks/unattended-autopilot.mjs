@@ -35,7 +35,7 @@ function deny(name) {
 }
 
 function denyUnarmed(name) {
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `OVERNIGHT HANDSHAKE: Mason asked for a hands-free run but autopilot is NOT armed, so "${name}" is paused. Arm it FIRST (node .claude/hooks/autopilot-arm.mjs --hours N), confirm to Mason in one plain-English line, then continue. If this is NOT actually a hands-free run, delete .claude/session-state/OVERNIGHT-INTENT.flag and continue normally. Reassurance without arming is the exact repeated failure this blocks.` } }));
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `OVERNIGHT HANDSHAKE: Mason asked for a hands-free run but autopilot is NOT armed, so "${name}" is paused. Arm it FIRST (node .claude/hooks/autopilot-arm.mjs --hours N), confirm to Mason in one plain-English line, then continue. If this is NOT actually a hands-free run — the latch fires on a prompt heuristic, so a prompt that merely DISCUSSES autopilot trips it — then do NOT arm autopilot to get unblocked. There is deliberately no shell escape: the latch expires by itself 45 minutes after it was written, and Mason can delete the flag file himself (his shell is not gated by these hooks; in a worktree it lives at <worktree>/.claude/session-state/OVERNIGHT-INTENT.flag, not the main checkout's). Reads still work while you wait — use them, and tell Mason plainly that you are paused and why. Reassurance without arming is the exact repeated failure this blocks.` } }));
   process.exit(0);
 }
 
@@ -57,7 +57,14 @@ if (!armed) {
   // before any building/mutating call proceeds. (Fail-open on any error.)
   try {
     if (existsSync(intentPath) && intentFresh(readFileSync(intentPath, "utf8"), Date.now())) {
-      const gate = overnightGateDecision(payload?.tool_name, payload?.tool_input);
+      // Pass the TRUSTED project root and the call's cwd so the arm allowance can
+      // be bound to the real script rather than to its spelling (Codex HIGH,
+      // 2026-09-02): a relative path resolves against the shell's directory, so
+      // matching the text alone would run a planted file during the pause.
+      const gate = overnightGateDecision(payload?.tool_name, payload?.tool_input, {
+        projectDir,
+        cwd: payload?.cwd,
+      });
       if (gate === "deny-until-armed") denyUnarmed(payload?.tool_name || "(tool)");
     }
   } catch { /* fail open */ }

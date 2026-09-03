@@ -16,7 +16,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { sanitizeError, supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
@@ -390,7 +390,7 @@ export default function Rebates() {
       fetchPrograms();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'delete_rebate_program' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to delete program');
+      toast('error', sanitizeError(err));
     }
   };
 
@@ -413,7 +413,7 @@ export default function Rebates() {
       fetchClaims();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'delete_rebate_claim' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to delete claim');
+      toast('error', sanitizeError(err));
     }
   };
 

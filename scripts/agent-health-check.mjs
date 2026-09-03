@@ -4,6 +4,14 @@ import { accessSync, constants as fsConstants, existsSync, readFileSync, readdir
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeEol } from "./normalize-eol.mjs";
+// Named for its original test use, but the hazard is not test-specific: git exports
+// repository-local GIT_* variables to hook children, and GIT_DIR outranks BOTH `cwd`
+// and `-C <dir>`. Any check below that names a directory would otherwise silently
+// report on whichever repository invoked the hook instead. Reusing the one scrub
+// helper rather than hand-rolling a second variable list is deliberate — it asks git
+// itself via `rev-parse --local-env-vars` and also strips the indexed GIT_CONFIG_KEY_n
+// / GIT_CONFIG_VALUE_n payload, which an obvious hand-written denylist misses.
+import { scratchHookEnvironment } from "../.claude/hooks/git-test-env.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
@@ -70,6 +78,11 @@ export function checkBranchStaleness(runner) {
           cwd: ROOT,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
+          // Same class as checkGitHooksInstalled: an inherited GIT_DIR outranks cwd, so
+          // from a hook this would report the calling worktree's staleness as ROOT's.
+          // Benign (it only downgrades to WARN) but wrong, and fixing one instance of a
+          // defect class while leaving its sibling is how the class survives.
+          env: scratchHookEnvironment(ROOT),
         });
     const [behind, ahead] = String(output).trim().split(/\s+/).map(Number);
     if (!Number.isInteger(behind) || !Number.isInteger(ahead)) throw new Error("unexpected rev-list output");
@@ -204,6 +217,10 @@ export function checkGitHooksInstalled(root, platform = process.platform) {
       encoding: "utf8",
       timeout: 10_000,
       stdio: ["ignore", "pipe", "ignore"],
+      // Without this, an inherited GIT_DIR beats `-C root` and this reads the calling
+      // repository's core.hooksPath while the canonical comparison below still expects
+      // root/.husky — so a correctly-installed fixture or worktree reports FAIL.
+      env: scratchHookEnvironment(root),
     }).trim();
   } catch {
     hooksPath = "";

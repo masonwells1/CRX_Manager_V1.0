@@ -1963,35 +1963,32 @@ export function resolveSessionWorktree(root, hookCwd, listWorktrees) {
   return best;
 }
 
+// The session-scoped checkout ROOTS: the primary, plus the worktree the session is
+// actually working in when that can be established. The migration apply gate needs
+// the roots themselves — to locate the repository migration file the transmitted SQL
+// must come from — while sessionProofDirs() needs their session-state directories.
+//
+// Both are expressed in terms of resolveSessionWorktree() rather than repeating its
+// traversal. Two independent refactors of this function landed at once (PR #502
+// extracted resolveSessionWorktree for the pending-queue root; PR #533 added the
+// roots list for source provenance), and each carried the same warning: a second
+// copy of this resolution would drift, and the looser copy becomes the way in. So
+// there is exactly one traversal, and these are both views of it.
+//
+// NOTE ON COST: each call here invokes `listWorktrees` once. Callers that ask for
+// both views — migration-apply-lib does — MUST pass a memoised listing, because a
+// hook killed mid-git-call emits nothing and a PreToolUse hook that emits nothing
+// does not deny. That memoisation lives at the call site, which owns the budget.
+export function sessionCheckoutRoots(root, hookCwd, listWorktrees) {
+  const roots = [path.resolve(root)];
+  const best = resolveSessionWorktree(root, hookCwd, listWorktrees);
+  if (best) roots.push(path.resolve(best));
+  return [...new Set(roots)];
+}
+
 export function sessionProofDirs(root, hookCwd, listWorktrees) {
-  const stateDir = (dir) => path.resolve(dir, ".claude", "session-state");
-  const dirs = [stateDir(root)];
-  const cwd = String(hookCwd || "").trim();
-  if (!cwd) return dirs;
-  let porcelain;
-  try {
-    porcelain = listWorktrees();
-  } catch {
-    return dirs;
-  }
-  // Windows paths differ in case between `git worktree list` and process.cwd(),
-  // so compare on a normalised key; keep the ORIGINAL path for the return value.
-  const key = (p) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
-  const cwdKey = key(cwd);
-  const contains = (parent, child) => child === parent || child.startsWith(parent + path.sep);
-  // Worktrees nest in this repo (C:/CRX_Manager/.claude/worktrees/*), and the
-  // primary checkout is listed FIRST — so "first match wins" would resolve a
-  // nested worktree's cwd to the primary and reintroduce the original bug. Take
-  // the LONGEST containing path: the most specific checkout is the real one.
-  let best = null;
-  for (const line of String(porcelain ?? "").split(/\r?\n/)) {
-    const match = /^worktree\s+(.+)$/.exec(line.trim());
-    if (!match) continue;
-    const wt = path.resolve(match[1]);
-    if (contains(key(wt), cwdKey) && (!best || wt.length > best.length)) best = wt;
-  }
-  if (best) dirs.push(stateDir(best));
-  return [...new Set(dirs)];
+  return sessionCheckoutRoots(root, hookCwd, listWorktrees)
+    .map((dir) => path.resolve(dir, ".claude", "session-state"));
 }
 
 // ── PR-merge request detection (2026-07-16 scaffolding review Theme 1) ───────
@@ -2020,23 +2017,61 @@ export function ghMergeRequest(command) {
   // `--disable-auto` cancels a pending auto-merge — it does not land anything,
   // so the gate stands down for it.
   if (words.some((word) => word.toLowerCase() === "--disable-auto")) return null;
-  const valueFlags = new Set(["--repo", "-R", "--match-head-commit", "--subject", "--body", "-t", "-b"]);
+  // Lowercase: membership is tested against the normalized flag name below.
+  const valueFlags = new Set(["--repo", "-r", "--match-head-commit", "--subject", "--body", "-t", "-b"]);
   let selector = "";
   let repo = "";
   let auto = false;
+  let admin = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
-    if (word.startsWith("--repo=")) { repo = word.slice("--repo=".length); continue; }
-    if (word.toLowerCase() === "--auto" || word.toLowerCase().startsWith("--auto=")) { auto = true; continue; }
-    if (valueFlags.has(word)) {
+    // Flag NAMES are matched with quotes and backslashes removed: the shell
+    // concatenates `--ad""min` and `--ad\min` into `--admin` before gh ever sees
+    // them, so a parser that compares the raw word misses the flag while gh
+    // honours it (Codex bot P1 on PR #541). Values keep their original case —
+    // only the name is lowercased.
+    const stripped = word.replace(/["'\\]/g, "");
+    const lower = stripped.toLowerCase();
+    if (lower.startsWith("--repo=")) { repo = stripped.slice("--repo=".length); continue; }
+    // `--auto=false` asks gh NOT to auto-merge, so that command lands the PR
+    // immediately. Classifying it as auto exempted it from the green-pipeline
+    // check and (since 2026-09-01) the approval check too — an exemption that is
+    // only sound for a REAL auto-merge, which GitHub holds until every
+    // requirement is met (Codex bot P1 on PR #541).
+    //
+    // Only Go's ParseBool TRUE spellings count as auto (`1`, `t`, `true`, in any
+    // case). Everything else — `f`, `F`, `0`, `false`, and values gh rejects
+    // outright — falls through to auto:false, which costs nothing but the full
+    // checks. Listing the FALSE spellings was the losing direction: `--auto=f`
+    // is valid Go and was missed (Codex bot, second finding on the same line).
+    if (lower === "--auto") { auto = true; continue; }
+    if (lower.startsWith("--auto=")) {
+      const value = lower.slice("--auto=".length);
+      auto = value === "1" || value === "t" || value === "true";
+      continue;
+    }
+    // `--admin` merges with administrator privileges, skipping main's required
+    // review. Mason turned "Include administrators" OFF on 2026-09-01 so HE can
+    // clear a stuck review by hand; that override travels with the same token
+    // every agent session holds, so the merge gates refuse the flag outright.
+    // Only an explicit ParseBool FALSE stands down — an unparseable value is
+    // treated as a bypass request and denied, which costs nothing because gh
+    // rejects it too.
+    if (lower === "--admin") { admin = true; continue; }
+    if (lower.startsWith("--admin=")) {
+      const value = lower.slice("--admin=".length);
+      admin = !(value === "0" || value === "f" || value === "false");
+      continue;
+    }
+    if (valueFlags.has(lower)) {
       const value = words[index + 1] || "";
-      if (word === "--repo" || word === "-R") repo = value;
+      if (lower === "--repo" || lower === "-r") repo = value;
       index += 1;
       continue;
     }
-    if (index > mergeIndex && !word.startsWith("-") && !selector) selector = word;
+    if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
-  return { selector, repo, auto };
+  return { selector, repo, auto, admin };
 }
 
 // `gh api -X PUT repos/o/r/pulls/N/merge`, plus the GraphQL mergePullRequest
@@ -2099,6 +2134,45 @@ export function pullRequestChecksGreen(pullRequest) {
     }
     return false;
   });
+}
+
+// GitHub's own review verdict for a pull request, from
+// `gh pr view --json reviewDecision`.
+//
+// `pullRequestApproved` reports whether a CURRENT approval exists. It is
+// head-bound only while main's protection sets dismiss_stale_reviews (verified
+// live 2026-09-02, and re-verify before relying on it): GitHub dismisses every
+// approval when a new commit is pushed, so APPROVED cannot be describing an
+// older head. Since 2026-09-02 the merge gates use this only to decide whether
+// to PRINT A NOTICE, never to deny — see `pullRequestReviewBlocked`.
+export function pullRequestApproved(pullRequest) {
+  return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
+}
+
+// The merge-blocking half of the review verdict (Mason, 2026-09-02).
+//
+// Until 2026-09-02 the gates denied any merge whose reviewDecision was not
+// APPROVED. GitHub itself required an approval then, so the gate matched the
+// server. Mason removed that requirement from main's classic branch protection
+// on 2026-09-02 because a stuck or un-run CodeRabbit review blocked landings
+// that were otherwise green, and the only way past it was his manual
+// administrator override — a control no agent may use.
+//
+// What survives is the property that actually mattered: never merge over an
+// unresolved objection. CHANGES_REQUESTED means a reviewer looked and said no,
+// so it still hard-denies. Every other verdict — APPROVED, REVIEW_REQUIRED, and
+// the null GitHub now returns when no review is required — allows the merge,
+// because "nobody has reviewed this yet" is no longer a server-side blocker.
+//
+// This deliberately does NOT fail closed on a missing field: after the
+// protection change, `null` is the ordinary verdict for an unreviewed PR and
+// treating it as a block would restore exactly the deadlock this removed. The
+// fail-closed floor lives upstream instead — gateRequest() denies outright if
+// the PR's JSON cannot be fetched at all, so this predicate is never reached
+// with an unknown verdict. The green-pipeline check remains a hard deny, so
+// CI, not a review, is what gates a landing now.
+export function pullRequestReviewBlocked(pullRequest) {
+  return String(pullRequest?.reviewDecision || "").toUpperCase() === "CHANGES_REQUESTED";
 }
 
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

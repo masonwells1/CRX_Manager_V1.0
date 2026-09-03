@@ -35,7 +35,9 @@ import {
   mcpMergeRequest,
   proofSearchDirs,
   proofValid,
+  pullRequestApproved,
   pullRequestChecksGreen,
+  pullRequestReviewBlocked,
   riskyFiles,
 } from "./codex-push-lib.mjs";
 
@@ -64,22 +66,78 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
   requests.push(mcpMergeRequest(toolInput));
 } else if (typeof toolInput.command === "string" && toolInput.command) {
   for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
+    // The mergePullRequest mutation is denied by NAME, whatever transport
+    // carries it — `gh api graphql`, curl, Invoke-RestMethod, a fetch in a node
+    // one-liner. Until 2026-09-01 only the `gh api graphql` spelling was caught
+    // (below), which was survivable because GitHub itself refused an unapproved
+    // merge and a raw call just got a 405. Mason's admin override removed that
+    // backstop, and Codex's proof on PR #541 found the transport gap on both
+    // guards. Naming the destination beats enumerating the tools that reach it.
+    if (/\bmergePullRequest\b/i.test(segment)) {
+      deny("PR MERGE GATE: GraphQL mergePullRequest mutations are denied — whatever transport carries them — because the guard cannot resolve and verify the PR's base, head, and checks for them. Use `gh pr merge <number>` so the gate can verify the merge.");
+    }
     const api = ghApiMergeRequest(segment);
+    // Subsumed by the name check above; kept as the backstop if that check is
+    // ever narrowed.
     if (api?.unsupportedGraphql) {
       deny("PR MERGE GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify the PR's head/checks. Use `gh pr merge <number>` instead.");
     }
     const found = api || ghMergeRequest(segment);
-    if (found) { requests.push(found); continue; }
     // Raw REST merges outside gh — curl/wget/Invoke-RestMethod/node fetch — name
     // the same endpoint but carry auth/context the guard cannot resolve, so they
     // are denied outright rather than gated (Codex round-2: an authenticated
     // `curl -X PUT .../pulls/N/merge` bypassed the gate entirely).
-    if (/\/pulls\/[^\s/]+\/merge\b/i.test(segment)) {
+    //
+    // This scan must run even when a gh form ALSO matched this segment. A
+    // recognized outer `gh pr merge` used to reach `continue` first, so a raw
+    // merge hidden in a command substitution — `gh pr merge 1 --body "$(curl -X
+    // PUT .../pulls/9/merge)"` — was never inspected (Codex bot P1 on PR #541).
+    // Counting occurrences keeps the ONE endpoint a `gh api ... /merge` request
+    // legitimately names from denying its own gated route, while any additional
+    // mention is treated as a second, unresolvable merge.
+    const endpointMentions = segment.match(/\/pulls\/[^\s/]+\/merge\b/gi) || [];
+    if (endpointMentions.length > (api ? 1 : 0)) {
       deny("PR MERGE GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against .../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, and checks for them. Use `gh pr merge <number>` so the gate can verify the merge.");
     }
+    // A merge segment carrying a command substitution is unresolvable, so it is
+    // refused rather than gated. Counting endpoints above closed the RAW-call
+    // shape, but the substitution can equally hold a second `gh pr merge` —
+    // `gh pr merge 1 --body "$(gh pr merge 2 --admin)"` runs the INNER merge
+    // first, while the parser records only the outer request and never sees the
+    // inner flag (Codex bot P1 on PR #541). This is the same stance the Codex
+    // guard already takes on interpreter arguments: when part of a command is
+    // shell-expanded, what it will actually do is not statically knowable.
+    if (found && /\$\(|`|\$\{/.test(segment)) {
+      deny(
+        "PR MERGE GATE: this merge command contains a command substitution, so what it will actually " +
+        "run is not statically knowable — a substitution can carry a second merge, or flags the parser " +
+        "never sees. Run the merge as its own plain command, with the PR number and flags spelled out."
+      );
+    }
+    if (found) { requests.push(found); continue; }
   }
 }
 if (requests.length === 0) passthrough();
+
+// ── the administrator override is Mason's, never an agent's ─────────────────
+// On 2026-09-01 Mason turned "Include administrators" OFF on main's branch
+// protection so he can hand-merge a PR whose review is stuck (CodeRabbit down,
+// rate-limited, or wedged). That bypass is granted by admin rights, not by a
+// separate credential — so every agent session, running on his token, inherits
+// it. Denied here, before the PR is even resolved: there is no base branch and
+// no diff for which an agent asking GitHub to skip review is the right move.
+if (requests.some((request) => request?.admin)) {
+  deny(
+    "PR MERGE GATE: `--admin` merges with administrator privileges, overriding branch protection. " +
+    "That override exists for Mason to use by hand on the PR page — an agent may never use it, whatever " +
+    "the diff or the deadline. Use the ordinary merge instead: an approving review is NOT required " +
+    "(removed 2026-09-02), so a green, up-to-date candidate with no `CHANGES_REQUESTED` verdict merges " +
+    "without `--admin`. If a review did ask for changes, resolve it first — apply the " +
+    "`ready-for-coderabbit` label and let the default-branch workflow post the review command once, " +
+    "then fix what it finds. Do not post `@coderabbitai review` by hand — that routes around the label " +
+    "gate. If the merge is still blocked, hand the PR to Mason and say why."
+  );
+}
 
 // ── resolve the PR (fail closed) ─────────────────────────────────────────────
 const projectDir = path.resolve(
@@ -116,7 +174,7 @@ function gateRequest(request) {
     // merge actually lands on. The proof must be bound to THAT, not to the local
     // origin/main, which can be stale (Codex round-6: a proof reviewed against an
     // old local base validated while GitHub merged onto newer main content).
-    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,statusCheckRollup,autoMergeRequest");
+    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest");
     if (request.repo) viewArgs.push("--repo", request.repo);
     pr = JSON.parse(gh(viewArgs));
     if (!pr?.baseRefName || !pr?.headRefOid || !pr?.baseRefOid) {
@@ -131,6 +189,40 @@ function gateRequest(request) {
     deny(`PR MERGE GATE: merges into protected branch "${base}" are always blocked.`);
   }
   if (base !== "main") return; // ordinary feature-branch merges are not production landings
+
+  // ── no merging over an unresolved objection ────────────────────────────────
+  // Mason removed main's required-approval rule on 2026-09-02, so a MISSING
+  // approval is no longer a blocker here. An ACTIVE objection still is: merging
+  // over CHANGES_REQUESTED throws away a review that already found something.
+  // **This check must NEVER be exempt for `--auto`** (Codex High, 2026-09-02).
+  // Every other gate here exempts auto-merge because GitHub holds the merge until
+  // its own requirements are met — but the requirement that used to cover this one
+  // was main's required review, and THIS CHANGE removed it. With no required
+  // review, GitHub will happily complete a queued auto-merge on a PR carrying
+  // CHANGES_REQUESTED, so an auto exemption here would be a live hole opened by
+  // the very commit that removed the server-side floor. Deny regardless of auto.
+  if (pullRequestReviewBlocked(pr)) {
+    deny(
+      "PR MERGE GATE: GitHub reports reviewDecision=CHANGES_REQUESTED — a reviewer has open objections on " +
+      "this pull request. Removing main's required-approval rule did not authorize merging over a review " +
+      "that asked for changes. Fix every real finding and push it; a genuine nitpick may be dismissed with " +
+      "a one-line reason in the thread. Merge only after that."
+    );
+  }
+
+  // An unreviewed PR may now land, but say so out loud — the standing policy is
+  // still that CodeRabbit reviews the frozen candidate and its real findings get
+  // fixed. This is a notice, not a gate: write to stderr, then keep going.
+  if (!request.auto && !pullRequestApproved(pr)) {
+    process.stderr.write(
+      `PR MERGE NOTICE: reviewDecision=${String(pr.reviewDecision || "").toUpperCase() || "<none>"} — merging ` +
+      "without a current approval, which main no longer requires (Mason, 2026-09-02). If CodeRabbit has " +
+      "not reviewed this candidate, apply the `ready-for-coderabbit` label — the default-branch " +
+      "workflow revalidates this exact head and posts the review command once. Do not post " +
+      "`@coderabbitai review` by hand; that routes around the label gate. Read the review and fix " +
+      "what it finds first.\n"
+    );
+  }
 
   // ── green-pipeline requirement ─────────────────────────────────────────────
   // `--auto` defers the merge to GitHub, which itself enforces the required

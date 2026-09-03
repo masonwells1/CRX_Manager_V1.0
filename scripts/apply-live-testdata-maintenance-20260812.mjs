@@ -96,21 +96,69 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // keeps this branch's blob. Inputs verified against the merged working tree
   // with `git hash-object`; outputs taken from the producer test's printed
   // candidate, not hand-computed.
-  // pushLib re-pinned 2026-09-01 (PR #502, merge of origin/main): the
-  // pending-set apply guard taught codex-push-lib.mjs to resolve the session's
-  // own checkout before the preflight, so the file's blob moved. main had not
-  // touched codex-push-lib.mjs since this branch forked, so the merge produced
-  // this branch's blob rather than a third one; verified with `git hash-object`
-  // against the merged working tree. codexGuard is untouched by this PR and
-  // keeps main's blob. The risky producer-path anchor this transform verifies is
-  // unchanged, so the transform is still identity and input == output. Output
-  // taken from the producer test's printed candidate, not hand-computed.
-  codexGuard: "b49b0cbda10ac55ad11249aeef50ccecbc06b896",
-  pushLib: "ccc813f3241750f5feee81e3e03a7a91e10055fb",
+  // pushLib re-pinned 2026-09-01 (merge of origin/main into PR #533). BOTH sides
+  // moved this file independently and neither pin survives: main's PR #502 extracted
+  // resolveSessionWorktree for the pending-queue root, while this branch extracted
+  // sessionCheckoutRoots for source provenance. The merge is neither blob — the
+  // reconciliation expresses BOTH helpers in terms of the single resolveSessionWorktree
+  // traversal, which is what each side's own comment demanded (a second copy would
+  // drift, and the looser copy becomes the way in).
+  //
+  // codexGuard is untouched by this PR and keeps main's blob. RISKY_PATH_RES,
+  // RISKY_CONTENT_RE and contentIsRisky are byte-for-byte untouched, and the risky
+  // producer-path anchor this transform verifies is still present exactly once, so
+  // the transform remains identity and input == output.
+  //
+  // Both pushLib values below are taken from the producer test's printed candidate,
+  // never hand-computed — that is the sanctioned re-pin procedure.
+  //
+  // Both re-pinned again 2026-09-01 (manual review override, merge of origin/main):
+  // Mason turned "Include administrators" OFF on main's branch protection, so both
+  // merge gates gained an `--admin` refusal and an explicit reviewDecision===APPROVED
+  // requirement. codexGuard moves because this branch edits it; pushLib moves because
+  // this branch's `--admin` parsing and pullRequestApproved() land on top of the
+  // reconciled resolveSessionWorktree above. Neither guard's risky-producer-path
+  // anchor nor its protected-harness list changed, so both transforms still behave
+  // exactly as before. Inputs verified with `tr -d '\r' | git hash-object --stdin`
+  // against the merged working tree; outputs taken from the producer test's printed
+  // candidate, not hand-computed.
+  // codexGuard re-pinned once more 2026-09-01, same PR: Codex's exact-SHA proof
+  // found the agent lockout bypassable through raw REST and GraphQL merge
+  // transports, which this guard did not deny at all (the Claude side has since
+  // 2026-07-16). Both are now denied by destination. pushLib is untouched by
+  // that fix and keeps the blob above. Anchors unchanged; transform identity.
+  // Both re-pinned again 2026-09-01, same PR: the Codex PR bot found two P1
+  // bypasses in the candidate itself — `--auto=false` (an IMMEDIATE merge) was
+  // classified as an auto-merge and so skipped both the approval and green
+  // checks, and a recognized outer `gh pr merge` shielded a raw merge hidden in
+  // a command substitution. codexGuard now scans merge destinations before the
+  // gh routes dispatch; pushLib parses the `--auto` value. Anchors unchanged;
+  // transforms still identity for pushLib.
+  // Both re-pinned again 2026-09-01, same PR, round 4: the Codex bot found that
+  // gh honours `--auto=f`/`--auto=F` (Go ParseBool) and that shell quote or
+  // backslash concatenation builds a flag gh sees but a raw-word comparison
+  // misses (`--ad""min`). Flag NAMES are now normalized before matching, only
+  // ParseBool TRUE spellings count as auto, and a merge segment carrying a
+  // command substitution is refused as unresolvable rather than gated. Anchors
+  // unchanged; the pushLib transform is still identity.
+  // pushLib re-pinned 2026-09-02: Mason removed main's required-approval rule,
+  // so the merge gates stopped denying a missing approval. codex-push-lib gained
+  // pullRequestReviewBlocked (denies CHANGES_REQUESTED only) and reworded the
+  // pullRequestApproved comment. Anchors unchanged; the transform is still
+  // identity.
+  // codexGuard re-pinned 2026-09-02 (PR #559, Codex Medium): the Codex-side merge
+  // gate was migrated off pullRequestApproved onto pullRequestReviewBlocked so it
+  // matches the Claude side after main's required review was removed. The
+  // objection check is deliberately NOT exempt for --auto (Codex High, same run).
+  // codexGuard re-pinned again 2026-09-02 (PR #560, CodeRabbit): the guard now
+  // IMPORTS pullRequestReviewBlocked from .claude/hooks/codex-push-lib.mjs
+  // instead of mirroring it locally. Mirroring is what let the two sides drift.
+  codexGuard: "0fd170d5b972a2b5fc660136949df1bb48917f43",
+  pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "d43e1b8975e56d29092d0dc1f469d572daf8346c",
-  pushLib: "ccc813f3241750f5feee81e3e03a7a91e10055fb",
+  codexGuard: "4ce9ecd68f006392df3291f1b0c3df40c8e5add3",
+  pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

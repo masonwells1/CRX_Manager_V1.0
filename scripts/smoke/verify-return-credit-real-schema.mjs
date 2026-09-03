@@ -179,6 +179,7 @@ function concurrencyFixture(slot) {
     laterInvoice: `00000000-0000-4361-8008-0000000000${suffix}`,
     delivery: `00000000-0000-4361-8009-0000000000${suffix}`,
     deliveryItem: `00000000-0000-4361-8010-0000000000${suffix}`,
+    sourceItem: `00000000-0000-4361-8011-0000000000${suffix}`,
   };
   const marker = `pr361_concurrency_${suffix}`;
   return {
@@ -226,10 +227,10 @@ function concurrencyFixture(slot) {
          'credit_memo', 'draft', current_date, current_date, -1000, -500, '00000000-0000-4000-8000-000000000081',
          NULL, NULL);
       INSERT INTO public.invoice_items (
-        invoice_id, order_item_id, product_id, description, quantity,
+        id, invoice_id, order_item_id, product_id, description, quantity,
         unit_price_cents, extended_cents, cost_cents, unit_size
       ) VALUES (
-        '${ids.sourceInvoice}', '${ids.orderItem}', '${ids.product}', '[SMOKE] PR361 concurrency source ${suffix}',
+        '${ids.sourceItem}', '${ids.sourceInvoice}', '${ids.orderItem}', '${ids.product}', '[SMOKE] PR361 concurrency source ${suffix}',
         1, 1000, 1000, 500, 'gal'
       );
       INSERT INTO public.returns (
@@ -268,10 +269,11 @@ function concurrencyFixture(slot) {
       SELECT set_config('app.crx_return_credit_lineage', '1', true);
       INSERT INTO public.invoice_items (
         invoice_id, order_item_id, product_id, description, quantity,
-        unit_price_cents, extended_cents, cost_cents, unit_size
+        unit_price_cents, extended_cents, cost_cents, return_credit_cogs_cents,
+        return_credit_source_item_id, unit_size
       ) VALUES (
         '${ids.creditInvoice}', '${ids.orderItem}', '${ids.product}', '[SMOKE] PR361 concurrent credit ${suffix}',
-        -1, 1000, -1000, 500, 'gal'
+        -1, 1000, -1000, 500, -500, '${ids.sourceItem}', 'gal'
       );
       COMMIT;
     `,
@@ -573,8 +575,8 @@ function cleanupDeliveryRaceFixtures() {
 function postingConcurrencyFixture(slot) {
   const fixture = concurrencyFixture(slot);
   const zeroCostCreditSql = fixture.creditSql.replace(
-    "-1, 1000, -1000, 500, 'gal'",
-    "-1, 1000, -1000, 0, 'gal'",
+    `-1, 1000, -1000, 500, -500, '${fixture.ids.sourceItem}', 'gal'`,
+    "-1, 1000, -1000, 0, 0, NULL, 'gal'",
   );
   assert.notEqual(zeroCostCreditSql, fixture.creditSql, 'posting fixture did not zero the latent credit cost');
   return {
@@ -632,8 +634,8 @@ function postingConcurrencyFixture(slot) {
 function fullyCostedPostingFixture(slot) {
   const fixture = postingConcurrencyFixture(slot);
   const creditSql = fixture.creditSql.replace(
-    "-1, 1000, -1000, 0, 'gal'",
-    "-1, 1000, -1000, 500, 'gal'",
+    "-1, 1000, -1000, 0, 0, NULL, 'gal'",
+    `-1, 1000, -1000, 500, -500, '${fixture.ids.sourceItem}', 'gal'`,
   );
   assert.notEqual(creditSql, fixture.creditSql, 'fully-costed fixture did not restore credit cost');
   return {
@@ -670,13 +672,17 @@ const expectedProofs = [
   'POSTFLIGHT_OVERLOAD_COLLISION_REJECTED',
   'QUOTE_TRUST_PREREQUISITE_GUARD_REMOVAL_DETECTED',
   'NON_RESTOCKED_RETURN_ZERO_COGS_PROVEN',
+  'ZERO_COGS_SAME_CUSTOMER_SPLIT_ISOLATION_PROVEN',
+  'SPLIT_CUSTOMER_SOURCE_LINEAGE_REJECTED',
+  'MIXED_OWNER_SPLIT_SAME_CUSTOMER_CREDIT_PROVEN',
   'SOURCE_BASIS_MUTATION_REJECTED',
   'CREDIT_LINE_INSERT_REJECTED',
   'INVENTORY_UNIT_MISMATCH_REJECTED',
-  'SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED',
+  'SOURCE_LINEAGE_INSERT_REVALIDATION_RACE_PROVEN',
   'SOURCE_POST_AFTER_CREDIT_REJECTED',
   'SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED',
   'SOURCE_POST_AFTER_FULLY_COSTED_CREDIT_ALLOWED',
+  'UNRELATED_SOURCE_INVOICE_DATE_CORRECTION_ALLOWED',
   'SOURCE_POST_CONCURRENT_RETRY_PROVEN',
   'DELIVERY_ALLOCATION_CREDIT_FILTER_REMOVAL_DETECTED',
   'DELIVERY_AUTO_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
@@ -686,7 +692,9 @@ const expectedProofs = [
   'DASHBOARD_CANCELLED_CREDIT_FILTER_REMOVAL_DETECTED',
   'ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
   'SPLIT_ORDER_INVOICE_CREDIT_FILTER_REMOVAL_DETECTED',
+  'DELIVERY_BEFORE_BILLING_FORWARD_REPLAY_PRESERVED',
   'SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED',
+  'ZERO_COGS_EXACT_SOURCE_GUARD_REMOVAL_DETECTED',
   'RETURN_CREDIT_LEDGER_GUARD_REMOVAL_DETECTED',
   'ZERO_COST_LEDGER_MUTATION_DETECTED',
   'CREDIT_REVENUE_LEDGER_MUTATION_DETECTED',
@@ -1266,9 +1274,54 @@ try {
   copy(DELIVERY_SURFACE_CANDIDATE, path.basename(DELIVERY_SURFACE_CANDIDATE));
   apply(path.basename(DELIVERY_SURFACE_CANDIDATE));
   migrations.push(DELIVERY_SURFACE_CANDIDATE);
+  const deliveryBeforeBillingHash = psqlValue(`
+    SELECT encode(sha256(convert_to(replace(p.prosrc, E'\\r\\n', E'\\n'), 'UTF8')), 'hex')
+      FROM pg_proc p
+     WHERE p.oid = 'public._post_invoice_impl_20260714(uuid,text)'::regprocedure
+       AND position('WAVE-A-DELIVERY-BEFORE-BILLING-2026-08-11' in p.prosrc) > 0
+       AND position('DELIVERY_NOT_COMPLETED' in p.prosrc) > 0;
+  `);
+  assert.match(
+    deliveryBeforeBillingHash,
+    /^[0-9a-f]{64}$/,
+    'forward-replayed delivery-before-billing contract is missing before the order-gate migration',
+  );
+  // Snapshot the exact pre-migration bodies of the two order-gate helpers so the
+  // canonical re-apply below can restore them verbatim. Reconstructing them by
+  // reversing one known snippet silently breaks the moment the migration changes
+  // anything else in those bodies (it did, when the Chicago business-date fix
+  // landed), and the failure surfaces as an opaque preflight contract drift.
+  psql(`
+    CREATE SCHEMA IF NOT EXISTS smoke_snapshot;
+    DROP TABLE IF EXISTS smoke_snapshot.order_gate_bodies;
+    CREATE TABLE smoke_snapshot.order_gate_bodies AS
+    SELECT p.oid::regprocedure::text AS signature, p.prosrc
+    FROM pg_proc p
+    WHERE p.oid IN (
+      'public._create_invoice_from_order_impl_20260718(uuid,uuid,text,text)'::regprocedure,
+      'public._create_split_invoices_from_order_provenance_impl_20260719(uuid,uuid,text,text)'::regprocedure
+    );
+  `);
+  assert.equal(
+    psqlValue('SELECT count(*) FROM smoke_snapshot.order_gate_bodies;'),
+    '2',
+    'order-gate pre-migration body snapshot did not capture both helpers',
+  );
   copy(ORDER_INVOICE_GATE_CANDIDATE, path.basename(ORDER_INVOICE_GATE_CANDIDATE));
   apply(path.basename(ORDER_INVOICE_GATE_CANDIDATE));
   migrations.push(ORDER_INVOICE_GATE_CANDIDATE);
+  assert.equal(
+    psqlValue(`
+      SELECT encode(sha256(convert_to(replace(p.prosrc, E'\\r\\n', E'\\n'), 'UTF8')), 'hex')
+        FROM pg_proc p
+       WHERE p.oid = 'public._post_invoice_impl_20260714(uuid,text)'::regprocedure
+         AND position('WAVE-A-DELIVERY-BEFORE-BILLING-2026-08-11' in p.prosrc) > 0
+         AND position('DELIVERY_NOT_COMPLETED' in p.prosrc) > 0;
+    `),
+    deliveryBeforeBillingHash,
+    'order-gate migration changed or removed the forward-replayed delivery-before-billing contract',
+  );
+  completedProofs.add('DELIVERY_BEFORE_BILLING_FORWARD_REPLAY_PRESERVED');
   copy(INVOICE_LINEAGE_CANDIDATE, path.basename(INVOICE_LINEAGE_CANDIDATE));
   apply(path.basename(INVOICE_LINEAGE_CANDIDATE));
   migrations.push(INVOICE_LINEAGE_CANDIDATE);
@@ -1403,6 +1456,207 @@ try {
   completedProofs.add('SOURCE_BASIS_MUTATION_REJECTED');
   completedProofs.add('CREDIT_LINE_INSERT_REJECTED');
 
+  // Exact zero-COGS lineage must freeze only the source line actually selected
+  // by stable FIFO. A later same-customer partial invoice sharing the order
+  // item/product/unit remains independently correctable.
+  const sameCustomerSplit = concurrencyFixture(22);
+  psql(`
+    BEGIN;
+    ${sameCustomerSplit.sql}
+    SET LOCAL session_replication_role = replica;
+    UPDATE public.invoice_items
+       SET created_at = now() - interval '1 day', cost_cents = 0
+     WHERE id = '${sameCustomerSplit.ids.sourceItem}';
+    UPDATE public.invoices SET total_cost_cents = 0
+     WHERE id = '${sameCustomerSplit.ids.sourceInvoice}';
+    UPDATE public.return_items
+       SET condition = 'damaged', restock = false, restocked = false
+     WHERE id = '${sameCustomerSplit.ids.returnItem}';
+    INSERT INTO public.invoices (
+      id, invoice_number, customer_id, order_id, invoice_type, status,
+      invoice_date, due_date, total_amount_cents, total_cost_cents, created_by,
+      posted_at, posted_by
+    ) VALUES (
+      '${sameCustomerSplit.ids.laterInvoice}', 'SMK-RCC-SAME-CUSTOMER-SIBLING-22',
+      '${sameCustomerSplit.ids.customer}', '${sameCustomerSplit.ids.order}',
+      'chemical_sale', 'posted', current_date, current_date, 1000, 500,
+      '00000000-0000-4000-8000-000000000081', now(),
+      '00000000-0000-4000-8000-000000000081'
+    );
+    INSERT INTO public.invoice_items (
+      id, invoice_id, order_item_id, product_id, description, quantity,
+      unit_price_cents, extended_cents, cost_cents, unit_size, created_at
+    ) VALUES (
+      '00000000-0000-4361-8012-000000000022',
+      '${sameCustomerSplit.ids.laterInvoice}', '${sameCustomerSplit.ids.orderItem}',
+      '${sameCustomerSplit.ids.product}', '[SMOKE] same-customer sibling source',
+      1, 1000, 1000, 500, 'gal', now()
+    );
+    SET LOCAL session_replication_role = origin;
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    SELECT public.issue_return_credit(
+      '${sameCustomerSplit.ids.return}',
+      '00000000-0000-4000-8000-000000000081',
+      'smk-rcc-zero-cogs-same-customer-split'
+    );
+    DO $same_customer_split$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM public.invoice_items credit_line
+        WHERE credit_line.return_credit_source_item_id = '${sameCustomerSplit.ids.sourceItem}'
+          AND credit_line.return_credit_cogs_cents = 0
+          AND credit_line.cost_cents = 0
+      ) THEN
+        RAISE EXCEPTION 'ZERO_COGS_EXACT_SOURCE_LINEAGE_MISSING';
+      END IF;
+      BEGIN
+        UPDATE public.invoices SET invoice_date = invoice_date - 1
+         WHERE id = '${sameCustomerSplit.ids.sourceInvoice}';
+        RAISE EXCEPTION 'SMOKE_FAIL: selected zero-COGS source invoice remained editable';
+      EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM <> 'RETURN_CREDIT_SOURCE_RECOGNITION_REQUIRED' THEN RAISE; END IF;
+      END;
+      UPDATE public.invoices SET invoice_date = invoice_date - 1
+       WHERE id = '${sameCustomerSplit.ids.laterInvoice}';
+    END;
+    $same_customer_split$;
+    ROLLBACK;
+  `);
+  completedProofs.add('ZERO_COGS_SAME_CUSTOMER_SPLIT_ISOLATION_PROVEN');
+
+  // The current return model has one primary-customer credit header. If a
+  // matching recognized split line belongs to another customer, fail closed
+  // rather than moving that customer's AR into the primary account.
+  const otherCustomerSplit = concurrencyFixture(21);
+  psql(`
+    BEGIN;
+    ${otherCustomerSplit.sql}
+    SET LOCAL session_replication_role = replica;
+    INSERT INTO public.customers (id, farm_name)
+    VALUES ('00000000-0000-4361-8012-000000000021', '[SMOKE] split billed owner 21');
+    UPDATE public.invoices
+       SET customer_id = '00000000-0000-4361-8012-000000000021', total_cost_cents = 0
+     WHERE id = '${otherCustomerSplit.ids.sourceInvoice}';
+    UPDATE public.invoice_items SET cost_cents = 0
+     WHERE id = '${otherCustomerSplit.ids.sourceItem}';
+    SET LOCAL session_replication_role = origin;
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    DO $split_customer$
+    BEGIN
+      BEGIN
+        PERFORM public.issue_return_credit(
+          '${otherCustomerSplit.ids.return}',
+          '00000000-0000-4000-8000-000000000081',
+          'smk-rcc-split-customer-source-lineage'
+        );
+        RAISE EXCEPTION 'SMOKE_FAIL: split-customer source was credited to the order customer';
+      EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM <> 'RETURN_CREDIT_SPLIT_CUSTOMER_SOURCE_REQUIRES_LINEAGE' THEN RAISE; END IF;
+      END;
+    END;
+    $split_customer$;
+    ROLLBACK;
+  `);
+  completedProofs.add('SPLIT_CUSTOMER_SOURCE_LINEAGE_REJECTED');
+
+  // Mixed ownership is the realistic split-billing shape: one order item is
+  // recognized to BOTH the order customer and another customer. The refusal
+  // above must apply only to quantity the order customer's own lots cannot
+  // cover. Without this case the proof passes equally for a correct
+  // remainder-scoped refusal and for an unconditional one that makes every
+  // split-billed return uncreditable, which is the regression this guards.
+  const mixedOwnerSplit = concurrencyFixture(23);
+  const mixedOwnerOtherCustomer = '00000000-0000-4361-8012-000000000023';
+  const mixedOwnerSameCustomerItem = '00000000-0000-4361-8013-000000000023';
+  psql(`
+    BEGIN;
+    ${mixedOwnerSplit.sql}
+    SET LOCAL session_replication_role = replica;
+    INSERT INTO public.customers (id, farm_name)
+    VALUES ('${mixedOwnerOtherCustomer}', '[SMOKE] split billed owner 23');
+    -- Reassign the seeded source invoice to the OTHER customer, then add a
+    -- second recognized invoice for the order customer that fully covers the
+    -- returned quantity. Both remain live recognized sources for one order item.
+    UPDATE public.invoices
+       SET customer_id = '${mixedOwnerOtherCustomer}'
+     WHERE id = '${mixedOwnerSplit.ids.sourceInvoice}';
+    INSERT INTO public.invoices (
+      id, invoice_number, customer_id, order_id, invoice_type, status,
+      invoice_date, due_date, total_amount_cents, total_cost_cents, created_by,
+      posted_at, posted_by
+    ) VALUES (
+      '${mixedOwnerSplit.ids.laterInvoice}', 'SMK-RCC-CONC-OWN-23',
+      '${mixedOwnerSplit.ids.customer}', '${mixedOwnerSplit.ids.order}',
+      'chemical_sale', 'posted', current_date, current_date, 1000, 500,
+      '00000000-0000-4000-8000-000000000081', now(), '00000000-0000-4000-8000-000000000081'
+    );
+    INSERT INTO public.invoice_items (
+      id, invoice_id, order_item_id, product_id, description, quantity,
+      unit_price_cents, extended_cents, cost_cents, unit_size
+    ) VALUES (
+      '${mixedOwnerSameCustomerItem}', '${mixedOwnerSplit.ids.laterInvoice}',
+      '${mixedOwnerSplit.ids.orderItem}', '${mixedOwnerSplit.ids.product}',
+      '[SMOKE] PR361 same-customer source 23', 1, 1000, 1000, 500, 'gal'
+    );
+    SET LOCAL session_replication_role = origin;
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    DO $mixed_owner_split$
+    DECLARE
+      v_result jsonb;
+      v_credit_id uuid;
+      v_linked_to_same_customer int;
+      v_unlinked_remainder int;
+      v_linked_to_other_customer int;
+    BEGIN
+      -- Must SUCCEED: the order customer's own recognized lot covers the whole
+      -- returned quantity, so no foreign AR can be pulled into this credit.
+      v_result := public.issue_return_credit(
+        '${mixedOwnerSplit.ids.return}',
+        '00000000-0000-4000-8000-000000000081',
+        'smk-rcc-mixed-owner-split'
+      );
+      v_credit_id := (v_result ->> 'credit_invoice_id')::uuid;
+      IF v_credit_id IS NULL THEN
+        RAISE EXCEPTION 'MIXED_OWNER_SPLIT_MISSING_CREDIT';
+      END IF;
+      SELECT
+        count(*) FILTER (WHERE ii.return_credit_source_item_id = '${mixedOwnerSameCustomerItem}'),
+        count(*) FILTER (WHERE ii.return_credit_source_item_id IS NULL),
+        count(*) FILTER (WHERE ii.return_credit_source_item_id = '${mixedOwnerSplit.ids.sourceItem}')
+        INTO v_linked_to_same_customer, v_unlinked_remainder, v_linked_to_other_customer
+      FROM public.invoice_items ii
+      WHERE ii.invoice_id = v_credit_id AND ii.quantity < 0;
+      -- Credit only the order customer's lot ...
+      IF v_linked_to_same_customer <> 1 THEN
+        RAISE EXCEPTION 'MIXED_OWNER_SPLIT_SAME_CUSTOMER_LOT_NOT_CREDITED:%', v_linked_to_same_customer;
+      END IF;
+      -- ... never the other customer's ...
+      IF v_linked_to_other_customer <> 0 THEN
+        RAISE EXCEPTION 'MIXED_OWNER_SPLIT_CREDITED_FOREIGN_LOT:%', v_linked_to_other_customer;
+      END IF;
+      -- ... and leave no unlinked remainder, since the return was fully covered.
+      IF v_unlinked_remainder <> 0 THEN
+        RAISE EXCEPTION 'MIXED_OWNER_SPLIT_UNEXPECTED_REMAINDER:%', v_unlinked_remainder;
+      END IF;
+    END;
+    $mixed_owner_split$;
+    ROLLBACK;
+  `);
+  completedProofs.add('MIXED_OWNER_SPLIT_SAME_CUSTOMER_CREDIT_PROVEN');
+
   const orderGateFixture = (suffix, allocated) => `
     BEGIN;
     SELECT set_config(
@@ -1457,22 +1711,21 @@ try {
     );
     SET LOCAL session_replication_role = origin;
   `;
+  // Restore the two order-gate helpers to the EXACT bodies captured before the
+  // order-gate migration first applied, so re-applying it below re-runs its real
+  // preflight against the real pre-migration contract. Restoring verbatim from
+  // the snapshot keeps this probe correct no matter what else the migration
+  // changes inside those bodies.
   const restoreOldOrderGates = `
     DO $restore_old_order_gates$
     DECLARE
       v_src text;
-      v_order_new text := E'SELECT COUNT(*) INTO v_existing_count\\n    FROM invoices\\n   WHERE order_id = p_order_id\\n     AND status NOT IN (''voided'', ''cancelled'')\\n     AND invoice_type <> ''credit_memo''\\n     AND deleted_at IS NULL;';
-      v_order_old text := E'SELECT COUNT(*) INTO v_existing_count\\n    FROM invoices\\n   WHERE order_id = p_order_id\\n     AND status NOT IN (''voided'', ''cancelled'');';
-      v_split_new text := E'SELECT COUNT(*) INTO v_existing_count FROM invoices\\n    WHERE order_id = p_order_id AND status NOT IN (''voided'', ''cancelled'')\\n     AND invoice_type <> ''credit_memo''\\n     AND deleted_at IS NULL;';
-      v_split_old text := E'SELECT COUNT(*) INTO v_existing_count FROM invoices\\n    WHERE order_id = p_order_id AND status NOT IN (''voided'', ''cancelled'');';
     BEGIN
-      SELECT prosrc INTO v_src FROM pg_proc
-       WHERE oid = 'public._create_invoice_from_order_impl_20260718(uuid,uuid,text,text)'::regprocedure;
-      v_src := replace(v_src, v_order_new, v_order_old);
+      SELECT prosrc INTO STRICT v_src FROM smoke_snapshot.order_gate_bodies
+       WHERE signature LIKE '\\_create\\_invoice\\_from\\_order\\_impl\\_20260718(%';
       EXECUTE format('CREATE OR REPLACE FUNCTION public._create_invoice_from_order_impl_20260718(p_order_id uuid, p_salesman_id uuid DEFAULT NULL, p_invoice_type text DEFAULT ''chemical_sale'', p_idempotency_key text DEFAULT NULL) RETURNS uuid LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS %L', v_src);
-      SELECT prosrc INTO v_src FROM pg_proc
-       WHERE oid = 'public._create_split_invoices_from_order_provenance_impl_20260719(uuid,uuid,text,text)'::regprocedure;
-      v_src := replace(v_src, v_split_new, v_split_old);
+      SELECT prosrc INTO STRICT v_src FROM smoke_snapshot.order_gate_bodies
+       WHERE signature LIKE '\\_create\\_split\\_invoices\\_from\\_order\\_provenance\\_impl\\_20260719(%';
       EXECUTE format('CREATE OR REPLACE FUNCTION public._create_split_invoices_from_order_provenance_impl_20260719(p_order_id uuid, p_salesman_id uuid DEFAULT NULL, p_invoice_type text DEFAULT ''chemical_sale'', p_idempotency_key text DEFAULT NULL) RETURNS uuid[] LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS %L', v_src);
     END;
     $restore_old_order_gates$;
@@ -2031,7 +2284,7 @@ try {
   );
   completedProofs.add('DASHBOARD_UNBILLED_CREDIT_FILTER_REMOVAL_DETECTED');
   psql(canonicalDashboard);
-  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', '583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
+  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', 'f70e6c5d6f192d8e5cb355dde8126f353842f20191c32d27a7ca28342fc385d5');
 
   const dashboardCancelledCreditMutant = canonicalDashboard.replace(
     /(\s+AND i\.status = 'posted'\r?\n)\s+AND i\.invoice_type <> 'credit_memo'\r?\n/,
@@ -2090,7 +2343,7 @@ try {
   );
   completedProofs.add('DASHBOARD_CANCELLED_CREDIT_FILTER_REMOVAL_DETECTED');
   psql(canonicalDashboard);
-  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', '583519bf36990ea38eac510ce46aeaf0425b13964abbab2fded53d442e60a769');
+  assertInstalledFunctionHash('public.get_dashboard_action_items(integer)', 'f70e6c5d6f192d8e5cb355dde8126f353842f20191c32d27a7ca28342fc385d5');
 
   const completeGateStart = deliverySurfaceSql.indexOf('CREATE OR REPLACE FUNCTION public._complete_delivery_authorized_impl(');
   const completeGateEnd = deliverySurfaceSql.indexOf('ALTER FUNCTION public.get_dashboard_action_items', completeGateStart);
@@ -2152,7 +2405,7 @@ try {
   );
   completedProofs.add('UNBILLED_DELIVERY_CREDIT_FILTER_REMOVAL_DETECTED');
   psql(canonicalBackfillGate);
-  assertInstalledFunctionHash('public._create_invoice_for_unbilled_delivery_impl_20260718(uuid,uuid,text)', 'd74e002a01fffedbb69322174f1da1cad8b86b0df4312c5ac56257f1f6077f5f');
+  assertInstalledFunctionHash('public._create_invoice_for_unbilled_delivery_impl_20260718(uuid,uuid,text)', '89149c4596b68c8f98c52118433b21afc515f8af2e10d2ffa7ccb11cd87002e8');
 
   const sourceGuardStart = cogsSql.indexOf('CREATE FUNCTION public.guard_return_credit_source_recognition()');
   const sourceGuardEnd = cogsSql.indexOf('REVOKE ALL ON FUNCTION public.guard_return_credit_source_recognition()', sourceGuardStart);
@@ -2209,21 +2462,26 @@ try {
   assert.notEqual(mutantVoidEarly, null, 'source-lock mutant still blocked the source void while the credit lock was held');
   assert.equal(mutantVoidEarly.status, 0, `source-lock mutant unexpectedly rejected the racing source void:\n${mutantVoidEarly.stderr || mutantVoidEarly.stdout}`);
   const mutantCreditResult = await mutantCredit;
-  assert.equal(mutantCreditResult.status, 0, `source-lock mutant concurrent credit failed:\n${mutantCreditResult.stderr || mutantCreditResult.stdout}`);
+  assert.notEqual(mutantCreditResult.status, 0, 'source-lock mutant concurrent credit bypassed exact source-line revalidation');
+  assert.match(
+    `${mutantCreditResult.stdout}\n${mutantCreditResult.stderr}`,
+    /RETURN_CREDIT_SOURCE_LINEAGE_INVALID/,
+    'source-lock mutant racing credit did not fail at exact source-line revalidation',
+  );
   assert.equal(
     psqlValue(`
-      SELECT CASE WHEN s.deleted_at IS NOT NULL AND count(ii.id) = 1 THEN 1 ELSE 0 END
+      SELECT CASE WHEN s.deleted_at IS NOT NULL AND count(ii.id) = 0 THEN 1 ELSE 0 END
       FROM public.invoices s
       LEFT JOIN public.invoice_items ii ON ii.invoice_id = '${mutantConcurrency.ids.creditInvoice}'
       WHERE s.id = '${mutantConcurrency.ids.sourceInvoice}'
       GROUP BY s.deleted_at;
     `),
     '1',
-    'source-lock mutant did not expose an unrecognized sale with an active cost credit',
+    'source-lock mutant left an active cost credit after source-line revalidation',
   );
-  completedProofs.add('SOURCE_CREDIT_CONCURRENCY_RACE_DETECTED');
+  completedProofs.add('SOURCE_LINEAGE_INSERT_REVALIDATION_RACE_PROVEN');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'bbff0678a006179be1f86ef01a0ae87713323b6b9338762d675b7ac28290d4f0');
 
   // Sequential latent-defect proof: if a return credit was issued while its
   // source invoice was still a draft, later recognition must fail closed. A
@@ -2410,7 +2668,7 @@ try {
   );
   completedProofs.add('SOURCE_POST_CREDIT_CONCURRENCY_RACE_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'bbff0678a006179be1f86ef01a0ae87713323b6b9338762d675b7ac28290d4f0');
 
   const allConcurrencyFixtures = [
     canonicalConcurrency,
@@ -2457,7 +2715,54 @@ try {
   assert.match(sourceGuardMutantOutput, /SMOKE_FAIL: source sale with an active return credit was soft-deleted/, `source-recognition guard mutant did not reach the source-sale oracle:\n${sourceGuardMutantOutput}`);
   completedProofs.add('SOURCE_RECOGNITION_GUARD_REMOVAL_DETECTED');
   psql(canonicalSourceGuardHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', '0a5b569800bea5a0acbfaf55020ae4a9bde462a937e8db24597a586e477811b7');
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'bbff0678a006179be1f86ef01a0ae87713323b6b9338762d675b7ac28290d4f0');
+
+  // Every generated line, including a zero-COGS damaged return, carries its
+  // exact recognized source. Remove only that exact-id join from the header
+  // guard and prove the source date can cross a reporting boundary again.
+  const zeroCogsExactSourceGuardMutant = canonicalSourceGuardHelper.replace(
+    /       -- RETURN_CREDIT_EXACT_SOURCE_RECOGNITION_GUARD_BEGIN[\s\S]*?       -- RETURN_CREDIT_EXACT_SOURCE_RECOGNITION_GUARD_END\r?\n/,
+    '       JOIN public.invoice_items credit_line ON FALSE\n',
+  );
+  assert.notEqual(
+    zeroCogsExactSourceGuardMutant,
+    canonicalSourceGuardHelper,
+    'zero-COGS exact-source guard mutant did not alter the executable guard',
+  );
+  psql(zeroCogsExactSourceGuardMutant);
+  const zeroCogsExactSourceGuardMutantSmoke = psql(`
+    BEGIN;
+    ${damagedReturnSql}
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000081","role":"authenticated"}',
+      true
+    );
+    SELECT public.issue_return_credit(
+      '${damagedReturn.ids.return}',
+      '00000000-0000-4000-8000-000000000081',
+      'smk-rcc-zero-cogs-exact-source-guard-mutant'
+    );
+    UPDATE public.invoices
+       SET invoice_date = invoice_date - 1
+     WHERE id = '${damagedReturn.ids.sourceInvoice}';
+    DO $zero_cogs_exact_source_guard_mutant$
+    BEGIN
+      RAISE EXCEPTION 'SMOKE_FAIL: zero-COGS exact-source guard removal allowed source-basis mutation';
+    END;
+    $zero_cogs_exact_source_guard_mutant$;
+    ROLLBACK;
+  `, { allowFailure: true });
+  const zeroCogsExactSourceGuardMutantOutput = `${zeroCogsExactSourceGuardMutantSmoke.stdout}\n${zeroCogsExactSourceGuardMutantSmoke.stderr}`;
+  assert.notEqual(zeroCogsExactSourceGuardMutantSmoke.status, 0, 'zero-COGS exact-source guard mutant unexpectedly committed');
+  assert.match(
+    zeroCogsExactSourceGuardMutantOutput,
+    /SMOKE_FAIL: zero-COGS exact-source guard removal allowed source-basis mutation/,
+    `zero-COGS exact-source guard mutant did not reach the damaged-return oracle:\n${zeroCogsExactSourceGuardMutantOutput}`,
+  );
+  completedProofs.add('ZERO_COGS_EXACT_SOURCE_GUARD_REMOVAL_DETECTED');
+  psql(canonicalSourceGuardHelper);
+  assertInstalledFunctionHash('public.guard_return_credit_source_recognition()', 'bbff0678a006179be1f86ef01a0ae87713323b6b9338762d675b7ac28290d4f0');
 
   // Return-credit ledger mutation proof: without the line guard, the smoke
   // can rewrite an active negative-cost credit line and make a later return
@@ -2494,7 +2799,7 @@ try {
   assert.match(zeroCostLineMutantOutput, /SMOKE_FAIL: active zero-cost return-credit line was costed later/, `zero-cost credit-line mutant did not reach the immutable-ledger oracle:\n${zeroCostLineMutantOutput}`);
   completedProofs.add('ZERO_COST_LEDGER_MUTATION_DETECTED');
   psql(canonicalLineageHelper);
-  assertInstalledFunctionHash('public.guard_return_credit_lineage()', 'c598d6afa59082e540b7d38c2f413bf204c5b93f938ab570cb82978c9c84a86d');
+  assertInstalledFunctionHash('public.guard_return_credit_lineage()', '7c8747bc970ac3ddd3cc2ce26f1cfea449c6930e9fb8d87c709c8bcccafee3ff');
 
   psql(`
     DROP TRIGGER aa_crx_guard_return_credit_lineage ON public.invoice_items;
@@ -2585,10 +2890,10 @@ try {
   assert.match(unlinkedCostMutantOutput, /SMOKE_FAIL: unlinked cost credit was ignored by return issuance/, `unlinked-cost guard mutant did not reach the ambiguous-credit oracle:\n${unlinkedCostMutantOutput}`);
   completedProofs.add('UNLINKED_COST_GUARD_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '292439b173e66b97945c0532f4cc069ff80168aa6933c374ba794e910bda9dd4');
 
   const priorCreditConsumptionMutant = canonicalIssueHelper.replace(
-    'COALESCE(pl.reversed_qty, 0)',
+    'COALESCE(prl.returned_qty, 0)',
     '0',
   );
   assert.notEqual(priorCreditConsumptionMutant, canonicalIssueHelper, 'prior-credit-consumption mutant did not alter the executable allocator');
@@ -2599,7 +2904,7 @@ try {
   assert.match(priorCreditMutantOutput, /SMOKE_FAIL:|RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED/, `prior-credit-consumption mutant did not reach an accounting oracle:\n${priorCreditMutantOutput}`);
   completedProofs.add('PRIOR_CREDIT_CONSUMPTION_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '292439b173e66b97945c0532f4cc069ff80168aa6933c374ba794e910bda9dd4');
 
   const unclearedLineageMutant = canonicalIssueHelper.replace(
     /  PERFORM set_config\('app\.crx_return_credit_lineage', '0', true\);\r?\n/,
@@ -2613,11 +2918,21 @@ try {
   assert.match(unclearedLineageOutput, /SMOKE_FAIL: active return-credit header ledger was mutated/, `lineage-clear mutant did not reach the header bypass-window oracle:\n${unclearedLineageOutput}`);
   completedProofs.add('LINEAGE_CLEAR_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '292439b173e66b97945c0532f4cc069ff80168aa6933c374ba794e910bda9dd4');
 
+  // Match the FIFO ordering key by shape rather than by one hard-coded CTE
+  // alias. The allocator's deterministic order is asserted in more than one CTE
+  // and the alias there is an implementation detail, so a literal alias-bound
+  // search silently degrades into a no-op mutant the moment the SQL is
+  // refactored — which reports a passing guard that never actually ran.
+  const fifoOrderKey = /ORDER BY (\w+)\.created_at, \1\.source_item_id, \1\.line_cost_cents/g;
+  assert.ok(
+    (canonicalIssueHelper.match(fifoOrderKey) || []).length >= 2,
+    'expected the deterministic FIFO ordering key in the allocator helper',
+  );
   const groupedCostBucketMutant = canonicalIssueHelper.replaceAll(
-    'PARTITION BY al.id ORDER BY al.created_at, al.source_item_id, al.line_cost_cents',
-    'PARTITION BY al.id ORDER BY al.line_cost_cents, al.created_at, al.source_item_id',
+    fifoOrderKey,
+    'ORDER BY $1.line_cost_cents, $1.created_at, $1.source_item_id',
   );
   assert.notEqual(groupedCostBucketMutant, canonicalIssueHelper, 'grouped-cost-bucket mutant did not alter the executable helper');
   psql(groupedCostBucketMutant);
@@ -2627,11 +2942,11 @@ try {
   assert.match(mutantOutput, /SMOKE_FAIL: RETURN_COGS_EXPECTED_6700 got[\s\S]*6601/, `grouped-cost-bucket mutant did not reach the 6601 accounting oracle:\n${mutantOutput}`);
   completedProofs.add('GROUPED_COST_BUCKET_6601_REJECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '292439b173e66b97945c0532f4cc069ff80168aa6933c374ba794e910bda9dd4');
 
   const creditSeasonMutant = canonicalIssueHelper.replace(
-    'SET total_cost_cents = -v_cogs, season = public.current_season()',
-    'SET total_cost_cents = -v_cogs, season = public.current_season() - 1',
+    'season = public.compute_season(v_business_date)',
+    'season = public.compute_season(v_business_date) - 1',
   );
   assert.notEqual(creditSeasonMutant, canonicalIssueHelper, 'credit-season mutant did not alter current-season attribution');
   psql(creditSeasonMutant);
@@ -2645,12 +2960,14 @@ try {
   );
   completedProofs.add('CREDIT_CURRENT_SEASON_MUTATION_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '292439b173e66b97945c0532f4cc069ff80168aa6933c374ba794e910bda9dd4');
 
+  // Match across the line break with \r?\n. A plain multi-line literal only
+  // matches an LF checkout, so on a CRLF working copy this mutant silently
+  // became a no-op and the assertion below reported a guard that never ran.
   const fractionalDoubleRoundMutant = canonicalIssueHelper.replace(
-    `(ROUND(cp.line_cost_cents * (cp.posted_qty - cp.available_qty + cp.part_qty))
-       - ROUND(cp.line_cost_cents * (cp.posted_qty - cp.available_qty)))::bigint AS part_cost_cents`,
-    'ROUND(cp.line_cost_cents * cp.part_qty)::bigint AS part_cost_cents',
+    /\(ROUND\(sp\.line_cost_cents \* \(sp\.prior_cogs_qty \+ sp\.part_qty\)\)\r?\n\s+- ROUND\(sp\.line_cost_cents \* sp\.prior_cogs_qty\)\)::bigint/,
+    'ROUND(sp.line_cost_cents * sp.part_qty)::bigint',
   );
   assert.notEqual(fractionalDoubleRoundMutant, canonicalIssueHelper, 'fractional double-round mutant did not alter the executable allocation');
   psql(fractionalDoubleRoundMutant);
@@ -2664,28 +2981,24 @@ try {
   );
   completedProofs.add('FRACTIONAL_COGS_DOUBLE_ROUNDING_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '292439b173e66b97945c0532f4cc069ff80168aa6933c374ba794e910bda9dd4');
 
   const unstableBackdatedOrderMutant = canonicalIssueHelper
-    .replace(
+    .replaceAll(
       'ii.return_credit_source_item_id AS source_item_id',
-      'ii.cost_cents AS line_cost_cents',
+      'ii.cost_cents AS prior_line_cost_cents',
     )
-    .replace(
+    .replaceAll(
       'GROUP BY rs.id, ii.return_credit_source_item_id',
       'GROUP BY rs.id, ii.cost_cents',
     )
     .replace(
-      'pl.source_item_id = sl.source_item_id',
-      'pl.line_cost_cents = sl.line_cost_cents',
+      'prl.source_item_id = sl.source_item_id',
+      'prl.prior_line_cost_cents = sl.line_cost_cents',
     )
     .replace(
-      'GREATEST(sl.posted_qty - COALESCE(pl.reversed_qty, 0), 0)',
-      'GREATEST(sl.posted_qty - GREATEST(LEAST(COALESCE(pl.reversed_qty,0) - COALESCE(SUM(sl.posted_qty) OVER (PARTITION BY sl.id, sl.line_cost_cents ORDER BY sl.invoice_date, sl.created_at, sl.source_item_id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0), sl.posted_qty),0),0)',
-    )
-    .replaceAll(
-      'PARTITION BY sl.id, sl.line_cost_cents ORDER BY sl.created_at, sl.source_item_id',
-      'PARTITION BY sl.id, sl.line_cost_cents ORDER BY sl.invoice_date, sl.created_at, sl.source_item_id',
+      'pcl.source_item_id = sl.source_item_id',
+      'pcl.prior_line_cost_cents = sl.line_cost_cents',
     )
     .replaceAll(
       'PARTITION BY al.id ORDER BY al.created_at, al.source_item_id, al.line_cost_cents',
@@ -2698,30 +3011,30 @@ try {
   assert.notEqual(unstableBackdatedOrderSmoke.status, 0, 'backdated-order mutant smoke unexpectedly committed');
   assert.match(
     unstableBackdatedOrderOutput,
-    /RETURN_CREDIT_REVERSAL_EXCEEDS_RECOGNIZED/,
-    `recognized-COGS cap did not reject the unstable backdated order:\n${unstableBackdatedOrderOutput}`,
+    /SMOKE_FAIL: RETURN_CREDIT_COGS_BACKDATED_EXPECTED_375 got[\s\S]*250/,
+    `cost-grouped source lineage did not expose the backdated under-reversal:\n${unstableBackdatedOrderOutput}`,
   );
   completedProofs.add('BACKDATED_SAME_COST_ORDER_REGRESSION_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '292439b173e66b97945c0532f4cc069ff80168aa6933c374ba794e910bda9dd4');
 
-  const recognizedCapMutant = unstableBackdatedOrderMutant.replace(
+  const recognizedCapMutant = priorCreditConsumptionMutant.replace(
     /  -- RETURN_CREDIT_RECOGNIZED_CAP_BEGIN[\s\S]*?  -- RETURN_CREDIT_RECOGNIZED_CAP_END\r?\n/,
     '',
   );
-  assert.notEqual(recognizedCapMutant, unstableBackdatedOrderMutant, 'recognized-COGS cap mutant did not alter the executable helper');
+  assert.notEqual(recognizedCapMutant, priorCreditConsumptionMutant, 'recognized-COGS cap mutant did not alter the executable helper');
   psql(recognizedCapMutant);
   const recognizedCapSmoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
   const recognizedCapOutput = `${recognizedCapSmoke.stdout}\n${recognizedCapSmoke.stderr}`;
   assert.notEqual(recognizedCapSmoke.status, 0, 'recognized-COGS cap mutant smoke unexpectedly committed');
   assert.match(
     recognizedCapOutput,
-    /SMOKE_FAIL: RETURN_CREDIT_COGS_BACKDATED_EXPECTED_375 got[\s\S]*376/,
-    `recognized-COGS cap mutant did not expose the backdated same-cost over-reversal:\n${recognizedCapOutput}`,
+    /SMOKE_FAIL: FRACTIONAL_COGS_EXPECTED_251 got[\s\S]*250/,
+    `recognized-COGS cap mutant did not expose duplicate fractional source consumption:\n${recognizedCapOutput}`,
   );
   completedProofs.add('BACKDATED_SAME_COST_RECOGNIZED_CAP_REMOVAL_DETECTED');
   psql(canonicalIssueHelper);
-  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '3691cc43227521b2e054731692dddcf7027a80f63977bb6f7df6be4511220612');
+  assertInstalledFunctionHash('public._issue_return_credit_impl(uuid,uuid,text)', '292439b173e66b97945c0532f4cc069ff80168aa6933c374ba794e910bda9dd4');
 
   const smoke = psql(`\\i /tmp/${path.basename(SMOKE)}`, { allowFailure: true });
   const output = `${smoke.stdout}\n${smoke.stderr}`;
