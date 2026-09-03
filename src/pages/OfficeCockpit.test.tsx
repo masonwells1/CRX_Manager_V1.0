@@ -45,7 +45,7 @@ vi.mock('../components/ui/Toast', () => ({
   useToast: () => ({ toast: mockToast }),
 }));
 
-vi.mock('../lib/db', () => ({
+vi.mock('../lib/db', async () => ({
   supabase: {
     from: vi.fn((table: string) => emptyQuery(table)),
     rpc: vi.fn((functionName: string) => {
@@ -92,7 +92,12 @@ vi.mock('../lib/db', () => ({
   assertRpcResult: vi.fn((data: unknown) => data),
   hasRpcCode: vi.fn(() => false),
   RpcErrorCodes: { INVOICE_ALREADY_POSTED: 'INVOICE_ALREADY_POSTED' },
-  sanitizeError: vi.fn((error: unknown) => error),
+  // The REAL sanitizeError, never a stub. The previous stub returned the error
+  // OBJECT rather than a string, so a screen that rendered its result would have
+  // been asserted against a value the real function can never produce.
+  sanitizeError: (await vi.importActual<typeof import('../lib/errorSanitizer')>(
+    '../lib/errorSanitizer',
+  )).sanitizeError,
 }));
 
 vi.mock('../lib/idempotency', () => ({
