@@ -504,6 +504,72 @@ COMMIT;
     'same_named_wrong_cancellation_trigger',
   );
 
+  const missedCancellationHistory = `
+BEGIN;
+SET LOCAL session_replication_role = replica;
+INSERT INTO public.commissions (
+  order_id, customer_id, order_date, status, commission_amount
+) VALUES (
+  gen_random_uuid(), gen_random_uuid(), CURRENT_DATE, 'cancelled', 0
+);
+SET LOCAL session_replication_role = origin;
+${candidate}
+COMMIT;
+`;
+  expectCandidateFailure(
+    missedCancellationHistory,
+    'COMMISSION_HISTORY_REPLAY_DRIFT: unexpected NULL-history cancellation set',
+    'missed_cancellation_history_row',
+  );
+
+  for (const [label, signature] of [
+    ['anonymous_cancellation_helper_grant', 'public.stamp_commission_cancellation_history()'],
+    [
+      'anonymous_private_void_helper_grant',
+      'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)',
+    ],
+  ]) {
+    expectCandidateFailure(
+      `
+BEGIN;
+GRANT EXECUTE ON FUNCTION ${signature} TO anon;
+${candidate}
+COMMIT;
+`,
+      'COMMISSION_HISTORY_REPLAY_DRIFT: FK, trigger, or grant boundary differs',
+      label,
+    );
+  }
+
+  psql('CREATE ROLE commission_history_unexpected_acl_probe NOLOGIN;');
+  try {
+    expectCandidateFailure(
+      `
+BEGIN;
+GRANT EXECUTE ON FUNCTION public.get_commission_balance_report(date)
+  TO commission_history_unexpected_acl_probe;
+${candidate}
+COMMIT;
+`,
+      'COMMISSION_HISTORY_REPLAY_DRIFT: FK, trigger, or grant boundary differs',
+      'unexpected_report_role_grant',
+    );
+  } finally {
+    psql('DROP ROLE commission_history_unexpected_acl_probe;');
+  }
+
+  expectCandidateFailure(
+    `
+BEGIN;
+GRANT EXECUTE ON FUNCTION public.get_commission_balance_report(date)
+  TO authenticated WITH GRANT OPTION;
+${candidate}
+COMMIT;
+`,
+    'COMMISSION_HISTORY_REPLAY_DRIFT: FK, trigger, or grant boundary differs',
+    'report_grant_option',
+  );
+
   psql(`
 CREATE TEMP TABLE commission_money_predicate_probe (
   amount numeric CHECK (amount IS NULL OR (

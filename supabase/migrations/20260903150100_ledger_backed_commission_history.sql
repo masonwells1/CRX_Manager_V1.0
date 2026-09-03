@@ -92,6 +92,35 @@ BEGIN
     END IF;
   END IF;
 
+  -- Clean-schema rebuilds have zero legacy cancellations. The reviewed live
+  -- system has exactly two; every later cancellation must carry ledger fields.
+  IF v_history_columns = 4 THEN
+    SELECT count(*)
+      INTO v_cancelled_count
+      FROM public.commissions
+     WHERE status = 'cancelled'
+       AND cancelled_at IS NULL
+       AND cancelled_amount_cents IS NULL;
+
+    IF v_cancelled_count NOT IN (0, 2)
+       OR EXISTS (
+         SELECT 1
+           FROM public.commissions
+          WHERE status = 'cancelled'
+            AND cancelled_at IS NULL
+            AND cancelled_amount_cents IS NULL
+            AND (
+              order_date IS DISTINCT FROM DATE '2026-03-16'
+              OR commission_amount IS DISTINCT FROM 0::numeric
+              OR deleted_at IS NOT NULL
+            )
+       ) THEN
+      RAISE EXCEPTION
+        'COMMISSION_HISTORY_REPLAY_DRIFT: unexpected NULL-history cancellation set (% rows)',
+        v_cancelled_count;
+    END IF;
+  END IF;
+
   IF (SELECT count(*) FROM pg_proc
        WHERE pronamespace = 'public'::regnamespace
          AND proname = 'get_commission_balance_report') <> 1 THEN
@@ -278,10 +307,42 @@ BEGIN
        OR NOT has_function_privilege('authenticated', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
        OR NOT has_function_privilege('service_role', 'public.get_commission_balance_report(date)', 'EXECUTE')
        OR NOT has_function_privilege('service_role', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
+       OR has_function_privilege('anon', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
        OR has_function_privilege('authenticated', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
        OR has_function_privilege('service_role', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
+       OR has_function_privilege('anon', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
        OR has_function_privilege('authenticated', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
-       OR has_function_privilege('service_role', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE') THEN
+       OR has_function_privilege('service_role', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
+       OR EXISTS (
+         SELECT 1
+           FROM (
+             SELECT p.oid AS function_oid,
+                    privilege.grantee,
+                    privilege.privilege_type,
+                    privilege.is_grantable,
+                    true AS actual_present
+               FROM pg_proc p
+               CROSS JOIN LATERAL aclexplode(
+                 COALESCE(p.proacl, acldefault('f', p.proowner))
+               ) privilege
+              WHERE p.oid = ANY (ARRAY[
+                'public.get_commission_balance_report(date)'::regprocedure::oid,
+                'public.get_commission_payment_detail_report(date)'::regprocedure::oid,
+                'public.stamp_commission_cancellation_history()'::regprocedure::oid,
+                'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure::oid
+              ])
+                AND privilege.grantee <> p.proowner
+           ) actual
+           FULL JOIN (VALUES
+             ('public.get_commission_balance_report(date)'::regprocedure::oid, 'authenticated'::regrole::oid, 'EXECUTE'::text, false, true),
+             ('public.get_commission_balance_report(date)'::regprocedure::oid, 'service_role'::regrole::oid, 'EXECUTE'::text, false, true),
+             ('public.get_commission_payment_detail_report(date)'::regprocedure::oid, 'authenticated'::regrole::oid, 'EXECUTE'::text, false, true),
+             ('public.get_commission_payment_detail_report(date)'::regprocedure::oid, 'service_role'::regrole::oid, 'EXECUTE'::text, false, true)
+           ) expected(function_oid, grantee, privilege_type, is_grantable, expected_present)
+           USING (function_oid, grantee, privilege_type, is_grantable)
+          WHERE actual.actual_present IS NULL
+             OR expected.expected_present IS NULL
+       ) THEN
       RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: FK, trigger, or grant boundary differs';
     END IF;
   END IF;
@@ -797,6 +858,7 @@ COMMENT ON FUNCTION public.get_commission_payment_detail_report(date) IS
 DO $postcondition$
 DECLARE
   v_bad_columns bigint;
+  v_legacy_cancelled_count bigint;
 BEGIN
   SELECT count(*)
     INTO v_bad_columns
@@ -819,6 +881,31 @@ BEGIN
 
   IF v_bad_columns <> 0 THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: % history column(s) missing or wrong type', v_bad_columns;
+  END IF;
+
+  SELECT count(*)
+    INTO v_legacy_cancelled_count
+    FROM public.commissions
+   WHERE status = 'cancelled'
+     AND cancelled_at IS NULL
+     AND cancelled_amount_cents IS NULL;
+
+  IF v_legacy_cancelled_count NOT IN (0, 2)
+     OR EXISTS (
+       SELECT 1
+         FROM public.commissions
+        WHERE status = 'cancelled'
+          AND cancelled_at IS NULL
+          AND cancelled_amount_cents IS NULL
+          AND (
+            order_date IS DISTINCT FROM DATE '2026-03-16'
+            OR commission_amount IS DISTINCT FROM 0::numeric
+            OR deleted_at IS NOT NULL
+          )
+     ) THEN
+    RAISE EXCEPTION
+      'COMMISSION_HISTORY_POSTCOND: unexpected NULL-history cancellation set (% rows)',
+      v_legacy_cancelled_count;
   END IF;
 
   IF (SELECT count(*) FROM pg_trigger
@@ -882,10 +969,42 @@ BEGIN
      OR NOT has_function_privilege('authenticated', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.get_commission_balance_report(date)', 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
      OR has_function_privilege('service_role', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
-     OR has_function_privilege('service_role', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE') THEN
+     OR has_function_privilege('service_role', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
+     OR EXISTS (
+       SELECT 1
+         FROM (
+           SELECT p.oid AS function_oid,
+                  privilege.grantee,
+                  privilege.privilege_type,
+                  privilege.is_grantable,
+                  true AS actual_present
+             FROM pg_proc p
+             CROSS JOIN LATERAL aclexplode(
+               COALESCE(p.proacl, acldefault('f', p.proowner))
+             ) privilege
+            WHERE p.oid = ANY (ARRAY[
+              'public.get_commission_balance_report(date)'::regprocedure::oid,
+              'public.get_commission_payment_detail_report(date)'::regprocedure::oid,
+              'public.stamp_commission_cancellation_history()'::regprocedure::oid,
+              'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure::oid
+            ])
+              AND privilege.grantee <> p.proowner
+         ) actual
+         FULL JOIN (VALUES
+           ('public.get_commission_balance_report(date)'::regprocedure::oid, 'authenticated'::regrole::oid, 'EXECUTE'::text, false, true),
+           ('public.get_commission_balance_report(date)'::regprocedure::oid, 'service_role'::regrole::oid, 'EXECUTE'::text, false, true),
+           ('public.get_commission_payment_detail_report(date)'::regprocedure::oid, 'authenticated'::regrole::oid, 'EXECUTE'::text, false, true),
+           ('public.get_commission_payment_detail_report(date)'::regprocedure::oid, 'service_role'::regrole::oid, 'EXECUTE'::text, false, true)
+         ) expected(function_oid, grantee, privilege_type, is_grantable, expected_present)
+         USING (function_oid, grantee, privilege_type, is_grantable)
+        WHERE actual.actual_present IS NULL
+           OR expected.expected_present IS NULL
+     ) THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: function grant boundary drift';
   END IF;
 
