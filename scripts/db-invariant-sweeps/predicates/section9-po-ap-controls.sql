@@ -75,14 +75,21 @@ UNION ALL
 SELECT
   'vendors:browser-mutation-privilege' AS violation_key,
   'anon/authenticated retains direct vendor mutation privilege' AS reason
-WHERE has_table_privilege('authenticated', 'public.vendors', 'INSERT')
-   OR has_table_privilege('authenticated', 'public.vendors', 'UPDATE')
-   OR has_table_privilege('authenticated', 'public.vendors', 'DELETE')
-   OR has_table_privilege('authenticated', 'public.vendors', 'TRUNCATE')
-   OR has_table_privilege('anon', 'public.vendors', 'INSERT')
-   OR has_table_privilege('anon', 'public.vendors', 'UPDATE')
-   OR has_table_privilege('anon', 'public.vendors', 'DELETE')
-   OR has_table_privilege('anon', 'public.vendors', 'TRUNCATE')
+-- has_table_privilege() with a role NAME raises `role "<name>" does not exist`
+-- when that role is absent. The error aborts the whole statement, so every other
+-- arm of this UNION ALL returns nothing and the sweep reports a false CLEAN.
+-- Test pg_roles first — the same shape migration 20260831235900 uses for
+-- has_function_privilege.
+WHERE (EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
+       AND (has_table_privilege('authenticated', 'public.vendors', 'INSERT')
+         OR has_table_privilege('authenticated', 'public.vendors', 'UPDATE')
+         OR has_table_privilege('authenticated', 'public.vendors', 'DELETE')
+         OR has_table_privilege('authenticated', 'public.vendors', 'TRUNCATE')))
+   OR (EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
+       AND (has_table_privilege('anon', 'public.vendors', 'INSERT')
+         OR has_table_privilege('anon', 'public.vendors', 'UPDATE')
+         OR has_table_privilege('anon', 'public.vendors', 'DELETE')
+         OR has_table_privilege('anon', 'public.vendors', 'TRUNCATE')))
 
 UNION ALL
 
@@ -101,14 +108,17 @@ UNION ALL
 SELECT
   'vendor_bills:browser-mutation-privilege' AS violation_key,
   'anon/authenticated retains direct vendor-bill mutation privilege' AS reason
-WHERE has_table_privilege('authenticated', 'public.vendor_bills', 'INSERT')
-   OR has_table_privilege('authenticated', 'public.vendor_bills', 'UPDATE')
-   OR has_table_privilege('authenticated', 'public.vendor_bills', 'DELETE')
-   OR has_table_privilege('authenticated', 'public.vendor_bills', 'TRUNCATE')
-   OR has_table_privilege('anon', 'public.vendor_bills', 'INSERT')
-   OR has_table_privilege('anon', 'public.vendor_bills', 'UPDATE')
-   OR has_table_privilege('anon', 'public.vendor_bills', 'DELETE')
-   OR has_table_privilege('anon', 'public.vendor_bills', 'TRUNCATE')
+-- Same absent-role abort risk as the vendors arm above; guard identically.
+WHERE (EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
+       AND (has_table_privilege('authenticated', 'public.vendor_bills', 'INSERT')
+         OR has_table_privilege('authenticated', 'public.vendor_bills', 'UPDATE')
+         OR has_table_privilege('authenticated', 'public.vendor_bills', 'DELETE')
+         OR has_table_privilege('authenticated', 'public.vendor_bills', 'TRUNCATE')))
+   OR (EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
+       AND (has_table_privilege('anon', 'public.vendor_bills', 'INSERT')
+         OR has_table_privilege('anon', 'public.vendor_bills', 'UPDATE')
+         OR has_table_privilege('anon', 'public.vendor_bills', 'DELETE')
+         OR has_table_privilege('anon', 'public.vendor_bills', 'TRUNCATE')))
 
 UNION ALL
 

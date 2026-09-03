@@ -1,4 +1,4 @@
--- STATUS: PARKED - NOT APPLIED
+-- STATUS: APPLIED LIVE 2026-09-03 (ledger version 20260903023935)
 -- Gauntlet Section 9: receiving reversal safety and accurate AP calendar reporting.
 --
 -- This migration is intentionally post-high-water and additive. It binds each

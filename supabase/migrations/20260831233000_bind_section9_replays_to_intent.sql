@@ -1,4 +1,4 @@
--- STATUS: PARKED - NOT APPLIED
+-- STATUS: APPLIED LIVE 2026-09-03 (ledger version 20260903124710)
 -- Bind the remaining Section 9 AP/PO replay receipts to actor + exact intent.
 --
 -- The mature implementations below still own every inventory, PO, AP, money,

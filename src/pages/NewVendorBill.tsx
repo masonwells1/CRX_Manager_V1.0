@@ -218,7 +218,22 @@ export default function NewVendorBill() {
       });
 
       if (hasRpcCode(error, RpcErrorCodes.PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED)) {
+        // 22023 is a definitive rejection, so classifyFailure normally DELETES the
+        // pending record and the confirmed retry below mints a fresh intent that
+        // carries p_confirm_po_overage/p_po_overage_reason. It cannot delete the
+        // record while another tab still holds a live claim on it; the record then
+        // survives, beginIntent() returns that stale intent verbatim (it ignores the
+        // intent argument whenever a pending record exists), the confirmation fields
+        // never reach the server, and the operator re-triggers this same branch
+        // forever with no way to tell why. Say so instead of looping in silence.
         await createBillIntent.classifyFailure(error);
+        if (createBillIntent.unresolvedIntent) {
+          setOverageMessage(
+            'This bill is still open in another tab, so the overage confirmation cannot be attached yet. '
+            + 'Finish or close that tab, then try again.',
+          );
+          return;
+        }
         setOverageMessage(
           'The exact server total shows this bill would raise active billing above 105% of the purchase order. Enter a reason to confirm the overage.',
         );

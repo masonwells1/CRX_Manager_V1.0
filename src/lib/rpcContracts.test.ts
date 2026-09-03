@@ -2693,19 +2693,28 @@ function registryMigrationHighWater(): string {
   return registry._meta?.migrations_high_water || '';
 }
 
-// Intentional bookkeeping gate: update this set when Section 9 applies or a
-// new current pending migration is added; otherwise the inventory fails closed.
-// Keep this set aligned with rows explicitly marked PENDING APPLY in
-// docs/reference/migration-history.md.
+// Intentional bookkeeping gate: migrations whose RPCs must stay in the mutator
+// inventory because neither the generated types nor the schema registry know
+// about them yet. Every entry must have a row in
+// docs/reference/migration-history.md marked PENDING APPLY or APPLIED LIVE.
 //
-// The six PR #535 gauntlet migrations are written, reviewed candidates awaiting
-// the governed live apply. Their authored timestamps sort after the last applied
-// authored name (20260827041500) but below the registry's migrations_high_water,
-// which now carries the ledger VERSION Supabase assigned to the 2026-09-01
-// return-credit chain (20260901184530). Without this registration the discovery
-// rule would drop them from the mutator inventory and silently pre-suppress the
-// exemptions that describe them. Clear these entries as each one applies live.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+// The six PR #535 gauntlet migrations APPLIED LIVE on 2026-09-03 (ledger
+// versions 20260903023935/024550/025249/025854/124710/124741). They stay
+// registered here, and it is NOT correct to clear them just because they applied:
+// migrations_high_water carries a ledger VERSION, not an authored name, so it
+// reads 20260903025854 while these files are authored 20260831*. Every one of
+// them therefore sorts BELOW the high-water, the `timestamp > highWater` arm of
+// the discovery rule is false for all six, and emptying this set would drop them
+// from the inventory and silently pre-suppress the exemptions that describe them
+// — the exact failure this gate exists to prevent.
+//
+// PR #581's registry refresh has ALREADY merged (main c02da074e) and does not
+// clear these: it ran before 20260831233000 and 20260831235900 applied, so the
+// registry lists only four of the six. Clear an entry only once a refresh taken
+// AFTER 2026-09-03 12:47 UTC lands, together with src/types/supabase.ts
+// regenerated from production — at that point the generated-names arm covers
+// these RPCs on its own.
+const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831160000',
   '20260831161000',
   '20260831162000',
@@ -2715,10 +2724,11 @@ const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
 ]);
 
 /**
- * Explicitly pending migrations remain part of the contract inventory even
- * when Supabase assigned a later ledger version to another applied migration.
+ * Registered migrations remain part of the contract inventory even when Supabase
+ * assigned a later ledger version to another applied migration — which is why
+ * this survives the apply and is cleared by the type/registry regeneration.
  */
-function pendingMigrationTimestamps(): Set<string> {
+function migrationsAwaitingTypeRegeneration(): Set<string> {
   const historyPath = join(
     dirname(fileURLToPath(import.meta.url)),
     '..',
@@ -2729,22 +2739,26 @@ function pendingMigrationTimestamps(): Set<string> {
   );
   const migrationDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'supabase', 'migrations');
   const lines = readFileSync(historyPath, 'utf8').split(/\r?\n/);
-  const pendingRows = lines.filter((line) =>
-    /^\|\s*\d+\s*\|\s*\d{14}\s*\|.*\bPENDING APPLY\b/i.test(line),
-  );
-  const timestamps = new Set(
-    pendingRows.map((line) => {
-      const match = line.match(/^\|\s*\d+\s*\|\s*(\d{14})\s*\|\s*\*\*PENDING APPLY\b/i);
-      if (!match) {
-        throw new Error(`Pending migration-history row must start its purpose with PENDING APPLY: ${line}`);
-      }
-      return match[1];
-    }),
-  );
-  const expected = [...EXPECTED_PENDING_MIGRATION_TIMESTAMPS].sort();
-  const actual = [...timestamps].sort();
-  if (actual.length !== expected.length || actual.some((timestamp, index) => timestamp !== expected[index])) {
-    throw new Error(`Pending migration-history drift: expected ${expected.join(', ')}, found ${actual.join(', ') || '(none)'}`);
+  // Each registered timestamp must have a real migration-history row, and that
+  // row must state a rollout status this gate understands. Scanning for
+  // "PENDING APPLY" alone stopped working once the Section 9 chain applied on
+  // 2026-09-03: the rows correctly became "APPLIED LIVE", the scan found none,
+  // and the set could not simply be emptied — see the constant's comment for why
+  // clearing it would silently drop these RPCs from the inventory.
+  const timestamps = new Set<string>();
+  for (const timestamp of MIGRATIONS_AWAITING_TYPE_REGENERATION) {
+    const row = lines.find((line) =>
+      new RegExp(`^\\|\\s*\\d+\\s*\\|\\s*${timestamp}\\s*\\|`).test(line),
+    );
+    if (!row) {
+      throw new Error(`Registered migration ${timestamp} has no docs/reference/migration-history.md row.`);
+    }
+    if (!/\*\*(PENDING APPLY|APPLIED LIVE)\b/i.test(row)) {
+      throw new Error(
+        `Migration-history row for ${timestamp} must start its purpose with PENDING APPLY or APPLIED LIVE: ${row}`,
+      );
+    }
+    timestamps.add(timestamp);
   }
   const diskTimestamps = new Set(
     readdirSync(migrationDir)
@@ -2768,7 +2782,7 @@ function generatedMutatingRpcInventory(): Set<string> {
   const functions = latestMigrationFunctions();
   const mutators = transitiveMutatingFunctionNames(latestMigrationFunctionBodies());
   const highWater = registryMigrationHighWater();
-  const pendingTimestamps = pendingMigrationTimestamps();
+  const pendingTimestamps = migrationsAwaitingTypeRegeneration();
   return new Set([...mutators].filter((name) => {
     const timestamp = functions.get(name)?.fileName.match(/^\d{14}/)?.[0] || '';
     return generatedNames.has(name)

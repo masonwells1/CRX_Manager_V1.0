@@ -58,6 +58,11 @@ interface CountItemDbRow {
   [key: string]: unknown;
 }
 
+// Failed item writes are keyed by their OWNING cycle count so a failure in one
+// count cannot block completing another. Cycle-count ids are UUIDs and never
+// contain ':', so this prefix is unambiguous.
+const failedItemWriteKey = (cycleCountId: string, itemId: string) => `${cycleCountId}:${itemId}`;
+
 export default function CycleCounts() {
   const { profile, role } = useAuth();
   const { toast } = useToast();
@@ -309,7 +314,7 @@ export default function CycleCounts() {
       });
 
       if (error) {
-        failedItemWritesRef.current.add(itemId);
+        failedItemWritesRef.current.add(failedItemWriteKey(item.cycle_count_id, itemId));
         Sentry.captureException(error);
         toast('error', error.message || 'Failed to update count');
         return;
@@ -319,7 +324,7 @@ export default function CycleCounts() {
       if (itemWriteIntentsRef.current.get(itemId)?.scope === intentScope) {
         itemWriteIntentsRef.current.delete(itemId);
       }
-      failedItemWritesRef.current.delete(itemId);
+      failedItemWritesRef.current.delete(failedItemWriteKey(item.cycle_count_id, itemId));
       setActiveCount((previousCount) =>
         previousCount && previousCount.id === item.cycle_count_id
           ? { ...previousCount, item_revision: result.item_revision }
@@ -355,11 +360,16 @@ export default function CycleCounts() {
   // Complete the cycle count
   const waitForAuthoritativeCountItems = async (): Promise<CompletionSnapshot | null> => {
     await Promise.all([...pendingItemWritesRef.current]);
-    if (failedItemWritesRef.current.size > 0) {
+    if (!activeCount) return null;
+    // Failed writes are tracked per cycle count, not component-wide. A failure
+    // left behind in count A must not block completing count B: this set
+    // outlives the detail modal, so an unscoped check wedged every other count
+    // until the operator reopened A or reloaded the page.
+    const activeFailurePrefix = failedItemWriteKey(activeCount.id, '');
+    if ([...failedItemWritesRef.current].some((key) => key.startsWith(activeFailurePrefix))) {
       toast('error', 'Fix the failed count update before completing this cycle count.');
       return null;
     }
-    if (!activeCount) return null;
     // Read the revision first. If any item changes while the item snapshot is
     // loading, its trigger advances this revision and completion fails closed.
     const { data: countState, error: countStateError } = await supabase
@@ -436,7 +446,12 @@ export default function CycleCounts() {
 
     await runCriticalAction({
       action: async () => {
-        const key = completeCycleCountIdem.getKey();
+        // Scope the completion key to this exact count and expected revision.
+        // An unscoped key survived closing count A, so completing count B
+        // replayed A's key, the server wrapper raised a payload conflict, and
+        // every retry for B failed until the page was reloaded.
+        const completionScope = `complete:${activeCount.id}:${snapshot.itemRevision}`;
+        const key = completeCycleCountIdem.getKeyFor(completionScope);
         // complete_cycle_count RETURNS void — .throwOnError() for fire-and-forget.
         await supabase.rpc('complete_cycle_count', {
           p_cycle_count_id: activeCount.id,
@@ -444,7 +459,7 @@ export default function CycleCounts() {
           p_idempotency_key: key,
           p_expected_item_revision: snapshot.itemRevision,
         }).throwOnError();
-        completeCycleCountIdem.resetKey();
+        completeCycleCountIdem.resetKeyFor(completionScope);
 
         const varianceItems = snapshot.items.filter((i) => i.variance && i.variance !== 0);
 

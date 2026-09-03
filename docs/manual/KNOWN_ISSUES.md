@@ -1,8 +1,10 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-01 for migration-ledger facts.** A read-only capture records **980 ledger rows**
-and effective ordering high-water **`20260826222000`** (authored name
-`20260826222000_correct_ap_aging_due_date_buckets`). The two Section 9 AP migrations
+**Last verified: 2026-09-03 for migration-ledger facts.** A read-only capture records **992 ledger rows**
+and effective ordering high-water **`20260831235900`** (authored name
+`20260831235900_serialize_gauntlet_write_boundaries`, ledger version `20260903124741`). This
+supersedes the earlier 980-row / `20260826222000` reading and the 986-row reading quoted in
+`docs/reference/migration-history.md`; both are history, not current state. The two Section 9 AP migrations
 `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
 `20260826222000_correct_ap_aging_due_date_buckets` were applied live on 2026-09-01 under Mason's explicit
 in-chat approval, through the full apply gate (ordering, destructive-content, reviewer proof and Codex
@@ -15,7 +17,15 @@ maximum. The 978-row capture also recorded `quote_versions.restore_trusted_at`. 
 authored NAME, never from `version` — the two diverge, which is why searching the ledger by version stamp
 finds neither Section 9 migration even though both are applied. This pass does not re-certify every issue
 narrative below or claim a fresh post-apply read of function bodies, grants, or operational counts.
-The six gauntlet migrations dated 20260831 in PR #535 are written, reviewed candidates and are not claimed live.
+**SUPERSEDED 2026-09-03 — four of the six gauntlet migrations dated 20260831 in PR #535 ARE live.**
+The sentence that stood here ("written, reviewed candidates and are not claimed live") is no longer
+true. A read-only capture on 2026-09-03 records **990 ledger rows** and effective ordering high-water
+**`20260831212415`** (authored name `20260831212415_guard_cycle_count_completion_revision`).
+`20260831160000`, `20260831161000`, `20260831162000` and `20260831212415` applied live on 2026-09-03
+as ledger versions `20260903023935`, `20260903024550`, `20260903025249` and `20260903025854`.
+`20260831233000` and `20260831235900` are still unapplied candidates. Read ordering from the authored
+NAME, not `version` — searching this ledger by version stamp finds none of the four even though all
+four are applied. See the OPEN 2026-09-03 entry below for the source-on-branch-only consequence.
 The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
 that evidence supports the six pending return-credit candidates without superseding the newer ledger
 capture above.
@@ -246,6 +256,44 @@ The remaining fractional historical rows described below are still tracked data 
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
+
+---
+
+## OPEN 2026-09-03 — four migrations applied live on 2026-09-03 have no file on `main`
+
+**Severity: LOW while it lasts — live is HEALTHY. This is a source-of-truth gap, not a defect.**
+Four migrations from PR #535's branch `codex/gauntlet-s9-safety-20260831` were applied live on
+2026-09-03. Their files exist only on that unmerged branch; `origin/main` does not contain them
+(verified 2026-09-03 by a GitHub read of `refs/heads/main`, which returns 404 for the first file):
+
+| Authored name | Ledger version |
+|---|---|
+| `20260831160000_harden_receiving_reversal_and_ap_reporting` | `20260903023935` |
+| `20260831161000_require_cumulative_po_bill_confirmation` | `20260903024550` |
+| `20260831162000_fail_closed_historical_commission_balance` | `20260903025249` |
+| `20260831212415_guard_cycle_count_completion_revision` | `20260903025854` |
+
+**Why live is healthy.** All four only added optional new capability. `origin/main` references none
+of the new parameters anywhere under `src/`, and the new `create_vendor_bill` overage parameters all
+carry defaults, so main's shorter call still binds. There is no live defect to repair and no
+user-visible symptom. The risk is entirely conditional on merging #535 before its two remaining
+migrations apply — see the vendor-bill edit blocker recorded on the PR.
+
+**Consequence while this is open.** PR #581 (schema-registry refresh) is parked behind #535: its
+Codex proof returned BLOCKERS because the registry asserts a live high-water whose four `20260831*`
+migrations have no file on `main`. #535 must merge before #581, and no separate registry refresh
+should be run in the meantime — #581 redoes it. `npm run agent-health` reports the same condition as
+a session-staleness WARN, which is expected and not a new finding.
+
+**This is the FOURTH occurrence of this class.** See the CLOSED 2026-08-11 entry ("three migrations
+are live but their source files are not yet on `main`") and the CLOSED 2026-08-13 entry ("six
+migrations applied live on 2026-08-12 have no file on `main`"). The 2026-08-13 entry already records
+that the *prevention* gap stays open: nothing reconciles the live ledger against tracked migration
+files automatically. Each occurrence has been closed individually by landing the files; the
+recurrence itself is the standing finding, and a ledger-vs-tracked-files reconciliation check is the
+durable fix.
+
+**Closes when PR #535 merges**, which lands all six files under `supabase/migrations/`.
 
 ---
 
@@ -3318,7 +3366,7 @@ Source: `docs/audits/gauntlet/2026-08-09-section-07-commissions-splits-payouts-v
 | 3.4 | **Historical Commission Balance reports are rewritten by later payout activity.** `get_commission_balance_report(date)` filters *earned* by `cm.order_date <= p_as_of_date` but derives paid/outstanding from **current** `cm.status`. | `src/pages/Reports.tsx:281-285`; `supabase/migrations/20260330100000_prelaunch_state_machine_and_security.sql:770-807` | A commission earned in June and paid in July shows as **paid** when the June 30 report is rerun; voiding that July payout flips it back to **outstanding**. Month-end commission liability is not reproducible for accounting or dispute review. Read-only defect — no wrong money moves. |
 | 3.5 | **Payout idempotency receipts are keyed to the operation, not the intent.** `useIdempotencyKey` scopes to `[operation, userId]` and deliberately retains the key after an uncertain response; `create_/post_/void_commission_payment` all run the operation-only replay check *before* loading the requested entity. | `src/hooks/useIdempotencyKey.ts:21-40`; `src/pages/CommissionPayments.tsx:302-420`; migrations `20260714180000:70-258`, `20260714230000:285-395`, `20260707060000:1569-1717` | Server posts Payment A, response is lost, admin retries on Payment B → server replays A's cached success and the UI reports success for the wrong payment. Same shape for a changed commission selection or void reason. Does **not** double-pay; it tells the operator a different financial action succeeded when it did not. |
 
-**Superseded 2026-08-31 by Mason's instruction to fix all gauntlet findings.** The current candidate closes 3.4 with the conservative fail-closed option: Commission Balance reports current state only and reject historical cutoffs until an immutable payout event ledger exists. This removes the reproducibly wrong historical answer without inventing dates for old payouts. Migration `20260831162000_fail_closed_historical_commission_balance.sql` is not live until the governed rollout completes.
+**Superseded 2026-08-31 by Mason's instruction to fix all gauntlet findings.** The current candidate closes 3.4 with the conservative fail-closed option: Commission Balance reports current state only and reject historical cutoffs until an immutable payout event ledger exists. This removes the reproducibly wrong historical answer without inventing dates for old payouts. Migration `20260831162000_fail_closed_historical_commission_balance.sql` **is now APPLIED LIVE** (2026-09-03, ledger version `20260903025249`), so Commission Balance is current-state-only in production today. The frontend half ships with PR #535.
 
 Options as presented:
 

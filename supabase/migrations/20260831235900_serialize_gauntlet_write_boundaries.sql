@@ -1,4 +1,4 @@
--- STATUS: PARKED - NOT APPLIED
+-- STATUS: APPLIED LIVE 2026-09-03 (ledger version 20260903124741)
 -- Gauntlet exact-head follow-up: close the two remaining write races.
 --
 -- 1. reverse_receiving_record now takes the linked PO-item row lock, then the
