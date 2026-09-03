@@ -237,8 +237,15 @@ export function writeExpected(expected, targetRoot = TARGET_ROOT) {
     const target = path.join(targetRoot, stale);
     // A SECOND, independent containment check. previousManifest() already rejects a
     // manifest holding an escaping entry, but this line DELETES, and a delete does not
-    // get to assume its caller validated. Anything that does not resolve to a path
-    // strictly inside targetRoot is skipped, not removed.
+    // get to assume its caller validated.
+    //
+    // It is a LEXICAL check, and the earlier wording here ("does not resolve to a path
+    // strictly inside targetRoot") over-claimed by implying realpath resolution. It does
+    // not follow links: a junction or symlink AT `.agents/skills/demo` pointing outside
+    // the tree passes this test and the delete goes through it (gpt-5.6-sol, pre-merge
+    // review of PR #565 — recorded, not fixed; see docs/manual/KNOWN_ISSUES.md). What it
+    // does catch is an entry whose PATH TEXT escapes, which is the manifest-supplied
+    // case this pairs with.
     const within = path.relative(targetRoot, target);
     if (!within || within.startsWith("..") || path.isAbsolute(within)) continue;
     rmSync(target, { force: true });

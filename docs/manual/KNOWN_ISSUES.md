@@ -289,6 +289,78 @@ inside one PR is the known non-terminating pattern, and each round costs another
 shared ~2/hour allowance. The hard gate defined in `AGENTS.md` — the exact-SHA `gpt-5.6-sol`
 high-effort proof — returned CLEAN on the merged head with "Nothing required remains".
 
+## OPEN 2026-09-03 — thirteen recorded limitations in `sync-agent-workflows.mjs`, from the pre-merge whole-branch review
+
+**Source:** `gpt-5.6-sol` at high reasoning effort, run read-only over the complete PR #565 diff
+(`origin/main...HEAD`) in an isolated workspace before merge. It returned `FINDINGS` with one
+BLOCKER and five HIGH. Mason's call, in chat, 2026-09-03: fix the two claims that were FALSE,
+record the rest, merge.
+
+**Why these are recorded rather than fixed.** This is internal build tooling — it mirrors
+instruction files from `.claude/` into `.agents/` and fails a commit when they drift. No
+customer, money, inventory, or database path touches it. Every finding below needs an actor who
+can already write the working tree, the git index, or filesystem links inside the repository —
+an actor who can already edit any file directly, so none of them is an escalation. Against that,
+eleven consecutive review rounds on this one file each produced a narrow fix that shipped a new
+edge; the deciding factor is that stopping is worth more than the next narrow patch.
+
+**BLOCKER as reported — filesystem links defeat containment.** `writeExpected()` proves
+containment with `path.relative()`, which is LEXICAL only. Replace `.agents/skills/demo` with a
+Windows junction and a stale manifest entry deletes through it via `rmSync`, or an expected entry
+overwrites through it via `writeFileSync`. The round-10 comment at the prune loop says an entry
+that "does not resolve to a path strictly inside targetRoot is skipped" — read as `realpath`,
+that claims more than the code does; it is a lexical check. Recorded, not fixed.
+
+**HIGH:**
+
+- `walkFiles()` skips entries that are neither regular files nor directories, so an extra
+  SYMLINK vanishes from the drift sweep; and an expected symlink whose external target holds
+  matching text is followed by `readFileSync` and passes `--check`.
+- `gitEnvironment()` discards a legitimate `GIT_INDEX_FILE` that lives outside the repository
+  git directory, after which git reads the DEFAULT index and the result is still reported
+  `known: true` — confident, from the wrong index. A cross-drive path or a path through a
+  junction can also pass the lexical containment test.
+- The staged-path check compares with a case-sensitive `Set`. On Windows, stage
+  `skills/source-command-x/SKILL.md` then case-rename the working-tree leaf to `skill.md`
+  without updating the index: git reports one spelling, disk enumeration the other, the lookup
+  misses, and the exemption is granted. Unicode-normalization aliases have the same shape.
+
+**MEDIUM:**
+
+- A shape-valid manifest can name files the generator never owned — `{"version":1,"managed":
+  ["session-state/local-state.json"]}` is accepted and deletes that file on `--write`. Extra
+  top-level properties are also accepted, despite the comment claiming the exact emitted schema.
+- Case- or Unicode-equivalent expected paths collide on Windows (`skills/Foo/SKILL.md` versus a
+  `foo` command), so one overwrites the other and `--check` can never pass.
+- A source path changing from a directory to a file leaves an empty directory after pruning, and
+  the subsequent write throws — so the documented `--write` repair cannot repair it.
+- The fail-closed wiring is not regression-protected: the tests pass `trackingKnown: false`
+  directly and never exercise `gitKnown.known && prior.known`, so deleting either signal from
+  `checkExpected()` would restore a fail-open path with the suite still green.
+
+**LOW:**
+
+- The no-durable-ownership pin (case (h)) reads a manifest its own fixture supplies, so
+  reintroducing `ownedImporterDirs` in `buildExpected()` would not turn it red.
+- Case (j) never reaches the prune loop, because `previousManifest()` rejects its fixtures
+  first — so removing the delete-site containment check leaves it green. The layer-isolation
+  evidence in `docs/changelog.d/2026-09-03-manifest-entry-must-not-delete-outside-target-root.md`
+  came from a MANUAL run with the first layer disabled; it was real, but it is not reproducible
+  from the repository. There is also no positive test proving a valid stale managed file IS
+  removed.
+- The `source-command-` prefix is treated as provenance: any hand-made untracked
+  `skills/source-command-anything/` directory gets the exemption and is reported as
+  importer-written and "safe to delete".
+- `--check` decodes targets as UTF-8, so invalid bytes become U+FFFD and can compare equal to
+  canonical source containing a literal U+FFFD. The write path compares bytes and is unaffected.
+
+**Operative rule.** Do not open a round 13 to patch one of these in isolation. If this file is
+revisited, the worthwhile change is structural — resolve real paths before writing or deleting,
+and compare paths case-insensitively on Windows — with tests for each, not another narrow
+pattern. Two claims found FALSE by the same review were corrected before merge: the
+admission-rule comment in `.claude/hooks/autopilot-intent-reminder.mjs`, and the understated
+consequence in the index-only entry below.
+
 ## OPEN (ACCEPTED — WONTFIX by decision) 2026-09-03 — `--write` overwrites an UNUSABLE manifest after pruning nothing
 
 **Mason's call, in chat, 2026-09-03.** Round 12 on PR #565, raised by the Codex PR reviewer
@@ -349,12 +421,28 @@ it; the working-tree copy is then deleted WITHOUT staging that deletion; `git co
 candidate tree carries the adapter, but it is absent from `actualFiles`, so `--check` never sees
 it and the parity gate passes. A mangled adapter lands in the repository.
 
+**CORRECTED 2026-09-03, same day.** The first version of this entry described the cost as "one
+stale mangled instruction file … not wrong behavior in the app". That **understated it**, and
+Mason approved accepting the gap on that description, so the correction is recorded here rather
+than quietly edited. A later `gpt-5.6-sol` review of the whole branch made the point: the
+sequence is not limited to a leftover importer copy. Whatever is staged is what lands, so
+**arbitrary content can be placed into `.agents/skills/`** — the namespace that exists
+specifically to be read as Codex agent instructions — and the parity gate will not see it. The
+scope is also broader than the importer region: ANY path under `.agents/` that is in the index
+and absent from disk escapes the sweep, not only `source-command-*` ones.
+
+What that does and does not mean. It is **not** a remote or unprivileged path: it takes an
+actor that can already stage into the index and commit, which is an actor that can already
+write any file in the repository. So it is not an escalation. But "an unreferenced stale file"
+was the wrong frame — the honest frame is that this gate does not see index-only content, and
+agent-instruction files are exactly what the gate was added to police.
+
 **Why it is accepted, not fixed.**
 
-1. **The consequence is one already accepted knowingly.** The cost is a stale, mangled
-   instruction file sitting unreferenced under `.agents/` — the same consequence class as the
-   gap pinned on purpose by test case (d) when the durable ownership layer was cut on
-   2026-09-03. It is not wrong behavior in the app, and nothing reads those files automatically.
+1. **The consequence class was already accepted knowingly** — an unpoliced file in the
+   `.agents/` mirror, like the gap pinned by test case (d) when the durable ownership layer was
+   cut on 2026-09-03 — and the actor required already has repository write access, so nothing
+   here is reachable by someone who could not already do worse directly.
 2. **The obvious fix trades a contrived hole for a false positive on an ordinary action.**
    Unioning `gitKnownTargetPaths()` into the sweep would also pull in staged DELETIONS, because
    `git diff --cached --name-only` reports them. A legitimate `git rm` of a non-generated file

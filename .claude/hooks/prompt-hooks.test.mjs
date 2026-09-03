@@ -241,11 +241,55 @@ rmSync(hbProj, { recursive: true, force: true });
   //    autopilot, which is the admission rule the `strong` list documents.
   for (const using of [
     "im going to bed, keep working",
-    "run this hands-free until morning",
     "run it all night and dont stop",
     "keep going while im asleep",
   ]) {
     ok(latches(using).latched, `a real hands-free request must still latch: "${using}"`);
+  }
+
+  // 2b. `hands.?free` was REMOVED from `strong` on 2026-09-03 (Mason's call). It
+  //     is the feature's NAME, so it failed the admission rule outright: it
+  //     matched questions about the feature and even NEGATIONS of a request.
+  //     Seven of seven question/negation probes latched before the removal. Same
+  //     defect as the bare `overnight`, same remedy.
+  //
+  //     What is given up, stated plainly: `run this hands-free` no longer
+  //     latches. `triggers` still matches the phrase, so it still reminds — the
+  //     pre-latch behaviour, not a silent loss. A miss costs a reminder; a false
+  //     latch costs a 45-minute lockout whose only exit is arming autopilot.
+  for (const handsFree of [
+    // questions ABOUT the feature - the defect
+    "What does hands-free mode do?",
+    "is hands-free mode documented anywhere",
+    // negations of a request - the same defect, inverted
+    "Do not run this hands-free",
+    "never run this hands free",
+    // ...and the genuine request, knowingly downgraded to reminder-only
+    "run this hands-free until morning",
+  ]) {
+    const got = latches(handsFree);
+    ok(!got.latched, `hands-free must never latch, in any role: "${handsFree}"`);
+    ok(got.reminded, "...but the arm-autopilot reminder still fires");
+  }
+
+  // 2c. KNOWN RESIDUAL, pinned rather than narrowed away. The three surviving
+  //     `strong` entries are plain substring patterns with no notion of quoting
+  //     or negation, so a prompt that QUOTES one while discussing this guard
+  //     still latches. That is a real false positive and it is NOT fixed here:
+  //     four attempts to narrow `overnight` by grammar were each defeated by a
+  //     phrasing the round before had not considered, and the settled answer is
+  //     that a pattern is either a usage phrase or it is removed - not narrowed a
+  //     fifth time. These assert the CURRENT behaviour so nobody reads the
+  //     admission-rule comment as a stronger promise than the code makes.
+  for (const metaDiscussion of [
+    'Does saying "going to bed" arm autopilot?',
+    "the going to bed phrase is in the strong list, right?",
+    "why does run it all night latch but overnight does not",
+  ]) {
+    ok(
+      latches(metaDiscussion).latched,
+      `ACCEPTED RESIDUAL: quoting a usage phrase while discussing the guard still latches: "${metaDiscussion}"`,
+    );
   }
 
   // 3. `overnight` NEVER latches, in any grammatical role (Mason, 2026-09-02,

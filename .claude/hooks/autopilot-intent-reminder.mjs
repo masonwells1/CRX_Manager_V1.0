@@ -50,14 +50,34 @@ if (!triggers.some((re) => re.test(prompt))) emit();
 // actually armed (or the flag is deliberately cleared). Weak signals only remind.
 //
 // ADMISSION RULE: a pattern belongs here only if it is a phrase Mason can be
-// USING but not NAMING. Every entry below is first-person or imperative, so it
-// cannot appear in a question ABOUT autopilot. A bare topic word can, and the
-// cost of that false positive is severe: the latch blocks Bash/Write/Edit for 45
-// minutes, review-proof-guard.mjs refuses every command that would clear the
-// flag, and the only unblocked path left is arming autopilot — exactly what this
-// handshake exists to prevent. PR #548 built a sanctioned clear-the-flag script
-// for this; two `gpt-5.6-sol` reviews returned BLOCKERS and Mason removed it,
-// because the cure was a new way to execute code during the pause.
+// USING but not NAMING. Every entry below is a first-person or imperative USAGE,
+// never the feature's name, so none of them appears in an ordinary question about
+// autopilot. A bare topic word does, and the cost of that false positive is
+// severe: the latch blocks Bash/Write/Edit for 45 minutes, review-proof-guard.mjs
+// refuses every command that would clear the flag, and the only unblocked path
+// left is arming autopilot — exactly what this handshake exists to prevent.
+// PR #548 built a sanctioned clear-the-flag script for this; two `gpt-5.6-sol`
+// reviews returned BLOCKERS and Mason removed it, because the cure was a new way
+// to execute code during the pause.
+//
+// STATED HONESTLY, because an earlier version of this comment claimed more than
+// the code delivers: "does not appear in an ordinary question" is NOT "cannot
+// appear in any prompt that is not a request". These are plain substring
+// patterns with no notion of quoting or negation, so a prompt that QUOTES one
+// while discussing this guard — `does saying "going to bed" arm autopilot?` —
+// still latches. That residual is pinned as a known non-goal in
+// prompt-hooks.test.mjs rather than narrowed away: four attempts to narrow
+// `overnight` by grammar were each defeated by a phrasing the round before had
+// not considered, and the settled answer is that a pattern is either a usage
+// phrase or it is removed. Meta-discussion of the guard is the one place these
+// misfire, and the escape is the same as any false latch: arm, or wait it out.
+//
+// `hands.?free` was REMOVED from this list on 2026-09-03 (Mason's call) for
+// failing the admission rule outright: it is the feature's NAME, so it matched
+// `what does hands-free mode do?` and even the negation `do not run this
+// hands-free`. Seven of seven question/negation probes latched. Same defect as
+// the bare `overnight`, same remedy — it stays in `triggers`, so a genuine
+// `run this hands-free` still reminds without freezing the session.
 //
 // `overnight` is deliberately ABSENT from this list, in any form (Mason,
 // 2026-09-02, after five review rounds). Do not add it back.
@@ -96,7 +116,6 @@ if (!triggers.some((re) => re.test(prompt))) emit();
 
 const strong = [
   /going\s+to\s+bed/,
-  /hands.?free/,
   /run\s+(it|this)\s+(all\s+)?night/,
   /while\s+i('?m| am)\s+(asleep|sleeping|away|gone)/,
 ];

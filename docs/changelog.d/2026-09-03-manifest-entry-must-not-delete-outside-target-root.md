@@ -74,6 +74,12 @@ authoritative empty record. Both keys now go through `Object.hasOwn`.
   detect the deletion at all.
 - **Layer isolation:** with `isSafeManagedEntry()` disabled but the containment check left in,
   case (j) still passes. Each layer is independently effective, so neither is decoration.
+  **Correction, same day:** that isolation was a MANUAL run — the committed case (j) does not
+  reach the prune loop, because `previousManifest()` rejects its fixtures first, so removing the
+  delete-site check alone leaves the test green. The evidence was real but is not reproducible
+  from the repository, and the containment check is LEXICAL: it does not follow a junction or
+  symlink. Both points are recorded in `docs/manual/KNOWN_ISSUES.md` under the pre-merge
+  whole-branch review.
 - `npm run test:agent-workflows` green (whole suite), `npm run lint` clean, pre-push typecheck
   and build passed.
 
