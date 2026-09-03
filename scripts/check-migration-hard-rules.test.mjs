@@ -135,6 +135,25 @@ CREATE POLICY pa ON public.a USING (true);
 `;
 eq(analyzeMigrationSql(TWO_TABLES).violations.map((v) => v.table), ['public.b'], 'each created table is checked on its own');
 
+const EXEMPT = `
+-- rls-check: exempt — system counter table reached only through a SECURITY DEFINER RPC
+CREATE TABLE public.counters (id int);
+`;
+eq(analyzeMigrationSql(EXEMPT).violations, [], 'documented exemption marker passes');
+eq(analyzeMigrationSql(EXEMPT).exempt, true, 'exemption is reported, not hidden');
+eq(analyzeMigrationSql(EXEMPT).exemptViolations.length, 1, 'the would-be violation is still surfaced for the log');
+
+const NEAR_MISS_MARKER = `
+-- rls-check: exemption requested
+CREATE TABLE public.counters (id int);
+`;
+eq(analyzeMigrationSql(NEAR_MISS_MARKER).violations.length, 1, 'DENY canary: a misspelled marker does not exempt');
+
+const MARKER_OUTSIDE_COMMENT = `
+CREATE TABLE public.counters (id int); rls-check: exempt
+`;
+eq(analyzeMigrationSql(MARKER_OUTSIDE_COMMENT).violations.length, 1, 'DENY canary: marker must be a -- comment');
+
 // ---------------------------------------------------------------------------
 // Pure: change classification
 // ---------------------------------------------------------------------------
@@ -301,6 +320,16 @@ scenarios.push(['adding a migration whose table lacks RLS fails', (dir) => {
   const result = runCli(dir, base, head);
   eq(result.status, 1, 'exit 1');
   ok(result.stdout.includes('new table public.widgets is missing'), 'names the table');
+}]);
+
+scenarios.push(['adding an exempt-marked migration passes with a loud notice', (dir) => {
+  const base = seedBase(dir);
+  write(dir, 'supabase/migrations/20260905000000_exempt.sql', EXEMPT);
+  const head = commitAll(dir, 'add exempt');
+  const result = runCli(dir, base, head);
+  eq(result.status, 0, 'exit 0');
+  ok(result.stdout.includes('rls-check: exempt'), 'notice names the marker');
+  ok(result.stdout.includes('⚠'), 'reported as a warning line');
 }]);
 
 scenarios.push(['adding a migration with no CREATE TABLE passes', (dir) => {

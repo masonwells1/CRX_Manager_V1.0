@@ -23,7 +23,9 @@ scanning, CodeRabbit hard-rule checks). Four gaps were approved and closed here.
   `CREATE TABLE` in an added migration must have a matching
   `ALTER TABLE … ENABLE ROW LEVEL SECURITY` and at least one
   `CREATE POLICY … ON <table>` in that file. Names compare lowercase, unquoted,
-  schema-qualified.
+  schema-qualified. The same `-- rls-check: exempt` marker the local
+  `rls-on-new-tables` hook honors is honored here (one use in 900 migrations),
+  and an exempt file is printed as a warning so the reason gets reviewed.
 
 Until now both rules were enforced only by CodeRabbit (an AI reviewer whose
 failed checks the author can override) and by local Claude hooks that fire only
@@ -65,9 +67,12 @@ also passes against PR #563's pending revision of the script it covers.
 
 ### Proof observed
 
-- `node scripts/check-migration-hard-rules.test.mjs`: 14 throwaway-repository
-  scenarios plus matcher unit tests, every acceptance rule with a near-miss
-  DENY canary.
+- `node scripts/check-migration-hard-rules.test.mjs`: 66 assertions, 15
+  throwaway-repository scenarios plus matcher unit tests, every acceptance
+  rule with a near-miss DENY canary. One canary earned its keep during the
+  build: the exemption marker regex copied from the local hook also accepted
+  `-- rls-check: exemption requested`; the CI copy now requires the exact
+  word.
 - `--audit-all` over all 900 migrations: 163 `CREATE TABLE` statements, only 2
   historical files (2026-02-21 rate limiting, 2026-05-13 rebate counters) would
   fail — both have RLS but no policy, both pre-date this gate, neither is
@@ -76,9 +81,15 @@ also passes against PR #563's pending revision of the script it covers.
 - `deno check` on all 7 function entry points and `deno test` (22 passed)
   locally with Deno 2.9.4.
 - A temporary commit on the PR branch touching an Edge Function proved the
-  Deno steps run in CI; it was reverted before the candidate was frozen.
+  Deno steps run in CI; it was reverted before the candidate was frozen. The
+  clean run before it showed the same steps as SKIPPED, not passed.
 
 ### Not verified
 
 - The Deno steps against a future Edge Function type error in CI (only the
   green path ran there; the red path was proven locally).
+- The migration hard-rules check going red on a live CI run. The local
+  `rls-on-new-tables` hook refused to write the no-RLS canary migration, which
+  is that hook working as designed; the CI red path is proven by the checker's
+  own end-to-end tests, which run the real script against throwaway git
+  repositories and assert exit code 1 and the exact message.

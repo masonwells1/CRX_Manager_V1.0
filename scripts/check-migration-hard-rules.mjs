@@ -30,6 +30,10 @@
 //   `ALTER TABLE <name> ... ENABLE ROW LEVEL SECURITY` and in at least one
 //   `CREATE POLICY ... ON <name>` in the SAME file. Names are compared
 //   lowercase, unquoted, schema-qualified (unqualified names mean `public`).
+//   The one documented exemption is the same marker the local
+//   .claude/hooks/rls-on-new-tables.mjs hook honors: a `-- rls-check: exempt`
+//   comment in the file (used once in 900 migrations, for a SECURITY DEFINER
+//   only counter table). An exempt file is reported loudly, never silently.
 //
 // USAGE
 //   node scripts/check-migration-hard-rules.mjs --base <sha> --head <sha> [--repo-root <dir>]
@@ -68,6 +72,12 @@ export function normalizeRelationName(raw) {
   return parts.slice(-2).join('.');
 }
 
+// The local hook's marker test with a word boundary added: the hook's
+// `/rls-check:\s*exempt/` also matches "exemption requested", which the DENY
+// canary in the test file caught. The marker lives in a comment, so it is
+// checked on the raw text before comments are stripped.
+export const RLS_EXEMPT_MARKER_RE = /--\s*rls-check:\s*exempt\b/i;
+
 const IDENT = String.raw`[A-Za-z0-9_".]+`;
 const CREATE_TABLE_RE = new RegExp(
   String.raw`\bcreate\s+(?:(?:global|local)\s+)?(?:(temp|temporary|unlogged)\s+)?table\s+(?:if\s+not\s+exists\s+)?(${IDENT})`,
@@ -83,11 +93,14 @@ const CREATE_POLICY_RE = new RegExp(
 );
 
 /**
- * Returns { tables: [...], violations: [...] } for one migration's SQL text.
- * A violation is a table created without RLS enabled or without any policy in
- * the same file.
+ * Returns { tables: [...], violations: [...], exempt: boolean } for one
+ * migration's SQL text. A violation is a table created without RLS enabled or
+ * without any policy in the same file. When the file carries the documented
+ * `-- rls-check: exempt` marker, violations are still computed but returned
+ * under `exemptViolations` so the caller can report them without failing.
  */
 export function analyzeMigrationSql(sql) {
+  const exempt = RLS_EXEMPT_MARKER_RE.test(String(sql));
   const text = stripSqlComments(sql);
   const created = new Map();
   for (const match of text.matchAll(CREATE_TABLE_RE)) {
@@ -111,7 +124,10 @@ export function analyzeMigrationSql(sql) {
     if (!policyOn.has(name)) missing.push('CREATE POLICY ... ON <table>');
     if (missing.length > 0) violations.push({ table: name, spelled, missing });
   }
-  return { tables: [...created.keys()], violations };
+  if (exempt) {
+    return { tables: [...created.keys()], violations: [], exemptViolations: violations, exempt: true };
+  }
+  return { tables: [...created.keys()], violations, exemptViolations: [], exempt: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -254,7 +270,13 @@ export function runDiffCheck({ repoRoot, base, head, log = console.log }) {
       log(`  ✗ could not read added migration at head: ${relPath}`);
       continue;
     }
-    const { tables, violations } = analyzeMigrationSql(sql);
+    const { tables, violations, exemptViolations, exempt } = analyzeMigrationSql(sql);
+    if (exempt && exemptViolations.length > 0) {
+      for (const violation of exemptViolations) {
+        log(`  ⚠ ${relPath}: new table ${violation.spelled} is missing ${violation.missing.join(' and ')} but the file carries "-- rls-check: exempt" — reviewers must confirm the written reason`);
+      }
+      continue;
+    }
     if (violations.length === 0) {
       if (tables.length > 0) log(`  ✓ ${relPath}: ${tables.length} new table(s) carry RLS + policy`);
       continue;
@@ -274,17 +296,19 @@ export function runAuditAll({ repoRoot, log = console.log }) {
   const files = readdirSync(dir).filter((name) => /\.sql$/i.test(name)).sort();
   let failing = 0;
   let tablesSeen = 0;
+  let exemptFiles = 0;
   for (const name of files) {
-    const { tables, violations } = analyzeMigrationSql(readFileSync(path.join(dir, name), 'utf8'));
+    const { tables, violations, exempt } = analyzeMigrationSql(readFileSync(path.join(dir, name), 'utf8'));
     tablesSeen += tables.length;
+    if (exempt) exemptFiles += 1;
     if (violations.length === 0) continue;
     failing += 1;
     for (const violation of violations) {
       log(`  ${name}: ${violation.spelled} missing ${violation.missing.join(' and ')}`);
     }
   }
-  log(`MIGRATION HARD RULES AUDIT: ${files.length} files, ${tablesSeen} CREATE TABLE statements, ${failing} file(s) would fail the RLS rule`);
-  return { files: files.length, tablesSeen, failing };
+  log(`MIGRATION HARD RULES AUDIT: ${files.length} files, ${tablesSeen} CREATE TABLE statements, ${failing} file(s) would fail the RLS rule, ${exemptFiles} carry the rls-check: exempt marker`);
+  return { files: files.length, tablesSeen, failing, exemptFiles };
 }
 
 function parseArgs(argv) {

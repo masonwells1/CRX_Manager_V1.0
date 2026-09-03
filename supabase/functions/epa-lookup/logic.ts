@@ -1,4 +1,3 @@
-// CI PROOF ONLY (PR #575): this comment exists to make the Deno steps run once; reverted before freeze.
 export type SupportedRegistrationType = "section3" | "distributor";
 
 export type RegistrationClassification =
