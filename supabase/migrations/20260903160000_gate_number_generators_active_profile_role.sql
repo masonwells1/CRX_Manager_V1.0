@@ -15,9 +15,13 @@
 -- conditionally setval() on four invoice sequences, so an unauthorized caller
 -- could advance live invoice numbering.
 --
--- The gate goes INSIDE each body, not on the grants: src/pages/CycleCounts.tsx
--- and src/pages/JobDetail.tsx call two of these directly from the browser as
--- `authenticated`, so a REVOKE would break both screens. Grants are unchanged.
+-- The gate goes INSIDE each body because src/pages/CycleCounts.tsx and
+-- src/pages/JobDetail.tsx call two of these directly from the browser as
+-- `authenticated`, so those two must keep their grant. The OTHER SIX are also
+-- revoked from `authenticated` further down -- see the REVOKE block -- so the
+-- in-body gate is defense in depth for them rather than the only barrier. An
+-- earlier revision of this file said "Grants are unchanged"; that is no longer
+-- true and the REVOKE block explains why.
 --
 -- Role sets are the union of (a) the roles that can reach the creating surface
 -- in src/lib/pagePermissions.ts and (b) the roles admitted by every live
@@ -112,14 +116,16 @@
 -- "looks gated" token test -- a token test would accept a later migration's
 -- improved body and silently revert it; see the comment on that branch.
 --
--- KNOWN AND ACCEPTED: this makes the file un-appliable to a database rebuilt
--- from this repository's migrations, because the on-disk ancestors of these
--- bodies differ from live. That rebuild is already impossible for an unrelated
--- reason -- six 20260831* migrations are applied live with no file on `main` --
--- and production, the only target this file is written for, matches the pins.
--- Raised as HIGH by adversarial review 2026-09-03 and accepted deliberately:
--- refusing to silently overwrite production is worth more than a replay path
--- that does not currently work.
+-- REBUILD IS SUPPORTED, via a third accepted value. An earlier revision accepted
+-- only the live pre-image and this migration's own output, which made the file
+-- un-appliable to any database rebuilt from this repository -- it would abort on
+-- the first generator and every later migration would never run. That was
+-- documented as an accepted trade, and adversarial review was right that
+-- documenting a reproducibility break is not the same as being entitled to one.
+-- The v_ancestor map below adds the body each generator's last TRACKED migration
+-- produces, so a clean reset, a staging build, and a disaster-recovery replay all
+-- proceed. It stays an exact-hash allowlist: three known values per generator,
+-- anything else still aborts by name.
 --
 -- Hashes are md5 over prosrc with per-line trailing whitespace stripped:
 -- next_cycle_count_number carries 9 characters of trailing whitespace live that
@@ -148,6 +154,24 @@ DECLARE
     'next_job_number',                '183721b3349f15162c068f58e2877b5d',
     'next_po_number',                 '448fc5d0dbfbba0a8ae11b96e4ee9fcb',
     'next_return_number',             '8e8acd85a14248cfeccfd7cc5a047c29'
+  );
+  -- The body each generator's LAST tracked migration produces -- i.e. what a
+  -- database rebuilt from this repository actually has at this point. Accepting
+  -- these is what makes a clean replay, a staging build, and a disaster-recovery
+  -- restore work: without them this file aborts on the first generator and every
+  -- later migration never runs. Raised as HIGH by adversarial review 2026-09-03.
+  -- All eight differ from live, because live has been re-emitted since by
+  -- migrations whose files are not on `main`. Extracted from the tracked
+  -- migrations and hashed with the same normalization as the other two maps.
+  v_ancestor CONSTANT jsonb := jsonb_build_object(
+    'next_application_record_number', 'f9cae26ffd3239f81287fbc3cc85c10f',
+    'next_commission_payment_number', '7c056481fa798bfe57329d1d7e6fd1ad',
+    'next_cycle_count_number',        'd84f61c5caa81d28f07400568dac655e',
+    'next_delivery_number',           '86e01277a0652ae84007b9b507c41297',
+    'next_invoice_number',            '928499b5faf6e37509215f0b1b2f566b',
+    'next_job_number',                '1f9cc3928006de61801679c800b68f83',
+    'next_po_number',                 'b11e8d6e42738098cb1b8af7902ba0d8',
+    'next_return_number',             '0df6ccb0b7c0d5b24a4c0232caa94390'
   );
   v_name text;
   v_pin  text;
@@ -191,7 +215,15 @@ BEGIN
       CONTINUE;
     END IF;
 
-    RAISE EXCEPTION 'PREFLIGHT: public.% is neither the reviewed pre-image (md5 %) nor the body this migration installs (md5 %); found %. Refusing to overwrite it -- a later change may be sitting here. Re-read the live body, re-review, and re-pin before applying.', v_name, v_pin, v_applied ->> v_name, v_md5;
+    -- Rebuild case: the body this repository's own migrations produce. Also an
+    -- exact hash, so this widens the accepted set by exactly one known value per
+    -- generator and still refuses anything unrecognised.
+    IF v_md5 = v_ancestor ->> v_name THEN
+      RAISE NOTICE 'PREFLIGHT: public.% carries its tracked-migration body (rebuilt database); gating it.', v_name;
+      CONTINUE;
+    END IF;
+
+    RAISE EXCEPTION 'PREFLIGHT: public.% matches none of the three accepted bodies -- reviewed pre-image (md5 %), this migration output (md5 %), tracked-migration ancestor (md5 %); found %. Refusing to overwrite it -- a later change may be sitting here. Re-read the live body, re-review, and re-pin before applying.', v_name, v_pin, v_applied ->> v_name, v_ancestor ->> v_name, v_md5;
   END LOOP;
 
   RAISE NOTICE 'PREFLIGHT: all eight generators match the reviewed pre-image or are already gated.';
@@ -535,9 +567,37 @@ BEGIN
 END;
 $function$;
 
--- Grants are deliberately NOT re-emitted: CREATE OR REPLACE preserves the
--- existing ACL, and the two browser call sites depend on `authenticated`
--- keeping EXECUTE. The postflight block below proves that held.
+-- ---------------------------------------------------------------------------
+-- DIRECT EXECUTE IS REVOKED FROM THE SIX GENERATORS THE BROWSER NEVER CALLS.
+--
+-- CREATE OR REPLACE above preserves the existing ACL, so without this block all
+-- eight would remain directly callable by any active profile in their role set.
+-- For next_invoice_number that is the damaging half of the original finding: the
+-- in-body gate admits `driver` because a driver completing THEIR ASSIGNED
+-- delivery reaches it through auto-invoice, but a direct RPC call carries no
+-- delivery context at all -- so any active driver could pick any p_invoice_type
+-- and advance the field-application, chemical-sale, misc-charge or credit-memo
+-- sequence at will, bypassing the assigned-driver restriction that governs the
+-- real workflow. Raised as HIGH by adversarial review 2026-09-03 and approved by
+-- Mason the same day, superseding this file's earlier "grants are unchanged".
+--
+-- Safe because every internal caller is SECURITY DEFINER: verified live, all 16
+-- routines that reference these six are prosecdef = true, so they execute as the
+-- postgres owner and never consult the caller's EXECUTE bit. Verified in the
+-- repository that the browser calls only next_cycle_count_number
+-- (src/pages/CycleCounts.tsx:155) and next_job_number
+-- (src/pages/JobDetail.tsx:1861), which KEEP their grant; and that no code path
+-- inserts into `invoices` directly, so the invoice_number column DEFAULT is only
+-- ever evaluated inside a SECURITY DEFINER routine.
+--
+-- service_role keeps EXECUTE throughout; only `authenticated` is narrowed.
+-- ---------------------------------------------------------------------------
+REVOKE EXECUTE ON FUNCTION public.next_application_record_number() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION public.next_commission_payment_number() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION public.next_delivery_number() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION public.next_invoice_number(text) FROM authenticated;
+REVOKE EXECUTE ON FUNCTION public.next_po_number() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION public.next_return_number() FROM authenticated;
 
 DO $postflight$
 DECLARE
@@ -604,14 +664,27 @@ BEGIN
       RAISE EXCEPTION 'POSTFLIGHT: % gates after its advisory lock', v_name;
     END IF;
 
-    IF NOT has_function_privilege('authenticated', v_proc.oid, 'EXECUTE') THEN
-      RAISE EXCEPTION 'POSTFLIGHT: authenticated lost EXECUTE on % -- the two browser call sites would break', v_name;
+    -- Grants are now asserted in BOTH directions, per generator. The two the
+    -- browser calls must KEEP EXECUTE or those screens break; the other six must
+    -- have LOST it, otherwise the revoke above silently did nothing and the
+    -- direct-call hole is still open while this block reports success.
+    IF v_name IN ('next_cycle_count_number', 'next_job_number') THEN
+      IF NOT has_function_privilege('authenticated', v_proc.oid, 'EXECUTE') THEN
+        RAISE EXCEPTION 'POSTFLIGHT: authenticated lost EXECUTE on % -- its browser call site would break', v_name;
+      END IF;
+    ELSE
+      IF has_function_privilege('authenticated', v_proc.oid, 'EXECUTE') THEN
+        RAISE EXCEPTION 'POSTFLIGHT: authenticated still holds EXECUTE on % -- the revoke did not take, so it stays directly callable', v_name;
+      END IF;
     END IF;
     IF has_function_privilege('anon', v_proc.oid, 'EXECUTE') THEN
       RAISE EXCEPTION 'POSTFLIGHT: anon must not hold EXECUTE on %', v_name;
     END IF;
+    IF NOT has_function_privilege('service_role', v_proc.oid, 'EXECUTE') THEN
+      RAISE EXCEPTION 'POSTFLIGHT: service_role lost EXECUTE on % -- the revoke was too broad', v_name;
+    END IF;
   END LOOP;
 
-  RAISE NOTICE 'POSTFLIGHT OK: 8 number generators gated, grants preserved';
+  RAISE NOTICE 'POSTFLIGHT OK: 8 number generators gated; direct EXECUTE kept for the 2 browser callers, revoked from the other 6';
 END;
 $postflight$;

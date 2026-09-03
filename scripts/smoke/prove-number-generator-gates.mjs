@@ -12,9 +12,14 @@
  *      service_role, revoked from PUBLIC and anon. A deactivated profile and an
  *      entity_recipient can call all eight and get a number back.
  *   B. The migration applies, and its own postflight block passes.
- *   C. ACL PRESERVATION. The load-bearing assumption of this migration is that
- *      CREATE OR REPLACE keeps the existing grants. Per-function ACLs are
- *      captured before and after and must be byte-identical.
+ *   C. ACL SHAPE. CREATE OR REPLACE keeps the existing grants, and the migration
+ *      then deliberately REVOKES direct `authenticated` EXECUTE from the six
+ *      generators the browser never calls. Per-function ACLs are captured before
+ *      and after and checked for that exact shape in both directions: the two
+ *      browser callers unchanged, the other six having lost authenticated,
+ *      none holding anon, all keeping service_role. ("Byte-identical" was the
+ *      right check until the revoke existed and is now the wrong one -- it would
+ *      have passed while the revoke silently did nothing.)
  *   D. AFTER state. Full 7-principal x 8-generator matrix against the expected
  *      allow/deny table, plus the unauthenticated case.
  *   E. EXECUTE still works for the real `authenticated` role, which is what the
@@ -466,12 +471,39 @@ try {
   const aclBefore = captureAcls();
   psql(migration); // includes the migration's own postflight assertions
   const aclAfter = captureAcls();
-  assert.deepEqual(
-    aclAfter,
-    aclBefore,
-    `ACL changed across CREATE OR REPLACE.\nbefore:\n${aclBefore.join('\n')}\nafter:\n${aclAfter.join('\n')}`,
-  );
-  console.log('\n--- C. ACL preservation ---');
+
+  // The migration now deliberately narrows six of the eight, so "byte-identical
+  // ACLs" is the WRONG assertion -- it would fail on the intended change and,
+  // worse, an earlier version of it would have passed while the revoke silently
+  // did nothing. Assert the intended SHAPE per generator instead, in both
+  // directions: the two the browser calls keep authenticated, the other six must
+  // have lost it, none may hold anon, and all keep service_role.
+  const aclFailures = [];
+  for (const name of GENERATORS) {
+    const before = aclBefore.find((l) => l.startsWith(`${name}|`));
+    const after = aclAfter.find((l) => l.startsWith(`${name}|`));
+    assert.ok(before && after, `no ACL captured for ${name}`);
+
+    const keepsAuthenticated = name === 'next_cycle_count_number' || name === 'next_job_number';
+    const hasAuth = /\bauthenticated=[^,]*X/.test(after);
+    const hasAnon = /\banon=[^,]*X/.test(after);
+    const hasService = /\bservice_role=[^,]*X/.test(after);
+
+    if (keepsAuthenticated) {
+      if (!hasAuth) aclFailures.push(`${name}: browser caller lost authenticated EXECUTE -- its screen would break\n  ${after}`);
+      if (after !== before) aclFailures.push(`${name}: ACL changed but this generator must be untouched\n  before: ${before}\n  after:  ${after}`);
+    } else {
+      if (hasAuth) aclFailures.push(`${name}: authenticated still holds EXECUTE -- the revoke did not take\n  ${after}`);
+      if (!/\bauthenticated=[^,]*X/.test(before)) {
+        aclFailures.push(`${name}: authenticated did NOT hold EXECUTE before, so the revoke proves nothing here\n  before: ${before}`);
+      }
+    }
+    if (hasAnon) aclFailures.push(`${name}: anon holds EXECUTE\n  ${after}`);
+    if (!hasService) aclFailures.push(`${name}: service_role lost EXECUTE -- revoke was too broad\n  ${after}`);
+  }
+  assert.equal(aclFailures.length, 0, `ACL shape wrong after the migration:\n${aclFailures.join('\n')}`);
+
+  console.log('\n--- C. ACL: kept for the 2 browser callers, revoked from the other 6 ---');
   for (const line of aclAfter) console.log(`  ${line}`);
 
   // ---- C2. FIDELITY: strip the gate back out, must equal the live body ----
@@ -538,7 +570,18 @@ SELECT string_agg(p.proname || '=' ||
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
  WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY[${GENERATORS.map((g) => `'${g}'`).join(',')}]);`);
   console.log(`\n--- E. EXECUTE authenticated/anon ---\n  ${execCheck}`);
-  assert.ok(!/=false\//.test(execCheck), `authenticated lost EXECUTE somewhere: ${execCheck}`);
+  // Expect the NARROWED shape, not "all eight true". Written as an exact
+  // expected string so a generator silently moving between the two groups fails
+  // here rather than being absorbed by a looser predicate.
+  const expectedExec = GENERATORS.map((g) => {
+    const keeps = g === 'next_cycle_count_number' || g === 'next_job_number';
+    return `${g}=${keeps ? 'true' : 'false'}/false`;
+  }).join(' ');
+  assert.equal(
+    execCheck,
+    expectedExec,
+    `EXECUTE shape wrong (authenticated/anon per generator).\nexpected: ${expectedExec}\nactual:   ${execCheck}`,
+  );
   assert.ok(!/\/true/.test(execCheck), `anon gained EXECUTE somewhere: ${execCheck}`);
 
   // A live browser call goes through the authenticated role, not superuser.
@@ -557,14 +600,61 @@ $probe$;`, { allowFailure: true });
   assert.match(authText, /AS_AUTHENTICATED:CC-\d{4}-\d{5}/, `browser-shaped call failed:\n${authText}`);
   console.log(`  ${authText.match(/AS_AUTHENTICATED:[^\n\r]*/)[0]} (role=authenticated, as CycleCounts.tsx does)`);
 
+  // The driver hole, proven closed at the grant layer rather than argued. An
+  // active driver passes the in-body role gate on next_invoice_number -- that is
+  // deliberate, because auto-invoice on their assigned delivery needs it -- so
+  // the ONLY thing stopping a driver advancing invoice sequences by direct RPC
+  // is that `authenticated` can no longer execute it at all. Assert the refusal
+  // is a privilege error, not the gate: the gate would have let this through.
+  const deniedDirect = psql(`
+SET client_min_messages TO NOTICE;
+DO $probe$
+DECLARE v_result text;
+BEGIN
+  SET LOCAL ROLE authenticated;
+  PERFORM set_config('request.jwt.claims', '{"sub":"${PRINCIPALS.driver}"}', true);
+  BEGIN
+    EXECUTE 'SELECT public.next_invoice_number(''chemical_sale'')' INTO v_result;
+    RAISE NOTICE 'DIRECT_CALL OK:%', v_result;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'DIRECT_CALL ERR:%', SQLERRM;
+  END;
+END
+$probe$;`, { allowFailure: true });
+  const deniedText = `${deniedDirect.stdout || ''}\n${deniedDirect.stderr || ''}`;
+  assert.match(
+    deniedText,
+    /DIRECT_CALL ERR:[^\n\r]*permission denied/i,
+    `an active driver could still call next_invoice_number directly as authenticated -- the revoke is not holding:\n${deniedText}`,
+  );
+  console.log(`  ${deniedText.match(/DIRECT_CALL [^\n\r]*/)[0]} (active driver, direct call — refused by privilege)`);
+
   // ---- F. Mutation tests: each guard must actually fire -------------------
   console.log('\n--- F. Mutation tests (each postflight guard must fire) ---');
   const mutations = [
     {
-      name: 'authenticated loses EXECUTE',
-      setup: `REVOKE EXECUTE ON FUNCTION public.next_po_number() FROM authenticated;`,
-      undo: `GRANT EXECUTE ON FUNCTION public.next_po_number() TO authenticated;`,
-      expect: /authenticated lost EXECUTE/,
+      // Targets a BROWSER caller. It used to target next_po_number, but that
+      // generator now legitimately has authenticated revoked, so the old form
+      // asserted a state the migration itself creates and would never fire.
+      name: 'a browser caller loses EXECUTE',
+      setup: `REVOKE EXECUTE ON FUNCTION public.next_cycle_count_number() FROM authenticated;`,
+      undo: `GRANT EXECUTE ON FUNCTION public.next_cycle_count_number() TO authenticated;`,
+      expect: /authenticated lost EXECUTE on next_cycle_count_number/,
+    },
+    {
+      // The other direction, and the one that matters for the driver hole: if
+      // the revoke silently fails to take, the postflight must say so instead of
+      // reporting success over a still-callable generator.
+      name: 'a non-browser generator keeps direct EXECUTE',
+      setup: `GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO authenticated;`,
+      undo: `REVOKE EXECUTE ON FUNCTION public.next_invoice_number(text) FROM authenticated;`,
+      expect: /authenticated still holds EXECUTE on next_invoice_number/,
+    },
+    {
+      name: 'service_role loses EXECUTE',
+      setup: `REVOKE EXECUTE ON FUNCTION public.next_po_number() FROM service_role;`,
+      undo: `GRANT EXECUTE ON FUNCTION public.next_po_number() TO service_role;`,
+      expect: /service_role lost EXECUTE/,
     },
     {
       name: 'anon gains EXECUTE',
@@ -747,7 +837,7 @@ END $m$;`);
   );
   assert.match(
     `${refused.stdout || ''}\n${refused.stderr || ''}`,
-    /PREFLIGHT: public\.next_return_number is neither the reviewed pre-image/,
+    /PREFLIGHT: public\.next_return_number matches none of the three accepted bodies/,
     'the drifted body was refused, but not by the preflight',
   );
   console.log('  caught: the preflight refuses to overwrite a drifted body');
@@ -783,7 +873,7 @@ END $m$;`);
   );
   assert.match(
     `${lookalike.stdout || ''}\n${lookalike.stderr || ''}`,
-    /PREFLIGHT: public\.next_po_number is neither the reviewed pre-image/,
+    /PREFLIGHT: public\.next_po_number matches none of the three accepted bodies/,
     'the look-alike gated body was refused, but not by the preflight',
   );
   console.log('  caught: a DIFFERENT gate is not accepted as "already applied"');
