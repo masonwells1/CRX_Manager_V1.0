@@ -78,7 +78,7 @@ assertions, and removing procedure recognition makes that exact proof fail.
 
 The renewed SEC-01 review found that PostgreSQL Unicode-escaped parameter names
 could conceal an actor-shaped input from the guard. In particular,
-`U&"p_\\0075ser_id"` resolves to `p_user_id`, while the routine body can refer to
+`U&"p_\0075ser_id"` resolves to `p_user_id`, while the routine body can refer to
 the same input as `$1`. Unicode-named inputs on mutating `SECURITY DEFINER`
 routines now fail closed and must prove actor binding through their exact
 positional alias (or use the existing explicit exemption). Named, positional,
