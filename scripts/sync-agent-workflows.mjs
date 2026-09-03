@@ -68,17 +68,52 @@ function buildExpected() {
   expected.set("README.md", `# Codex Agent Workflows\n\nThis directory is generated from \`.claude/skills/\` and \`.claude/commands/\`.\n\n- Edit the Claude source files.\n- Run \`node scripts/sync-agent-workflows.mjs --write\`.\n- Verify with \`node scripts/sync-agent-workflows.mjs --check\`.\n- Shared hook implementations stay in \`.claude/hooks/\`; Codex invokes them through \`.codex/hooks.json\`.\n`);
 
   const managed = [...expected.keys()].sort();
-  expected.set("generated-manifest.json", `${JSON.stringify({ version: 1, managed }, null, 2)}\n`);
+  // Union of what we own now, what the last sync owned, and every importer
+  // directory previously recorded - see previousManifest() for why this must
+  // survive the wholesale rewrite of `managed`.
+  const prior = previousManifest();
+  const owned = new Set(prior.ownedImporterDirs);
+  for (const key of [...managed, ...prior.managed]) {
+    const dir = importerDirOf(key);
+    if (dir) owned.add(dir);
+  }
+  const ownedImporterDirs = [...owned].sort();
+  expected.set(
+    "generated-manifest.json",
+    `${JSON.stringify({ version: 1, managed, ownedImporterDirs }, null, 2)}\n`,
+  );
   return expected;
 }
 
-function previousManagedFiles(targetRoot = TARGET_ROOT) {
+// The manifest carries TWO kinds of memory, and they expire differently.
+//
+// `managed` is the current file list: it is rewritten wholesale on every --write,
+// so it only ever describes the last sync.
+//
+// `ownedImporterDirs` is durable and MONOTONIC. Deleting a canonical `.claude`
+// command named `source-command-*` makes --write prune its mirror and then
+// rewrite `managed` without it; the directory itself survives if anything else is
+// left inside, and a `managed`-only memory would forget we ever owned it - the
+// next --check would wave the survivor through as importer litter while its stale
+// instructions stayed under .agents/. Carrying the DIRECTORY forward keeps
+// ownership across that rewrite. It grows only when a canonical command is itself
+// named `source-command-*` (normally never, so the list is normally empty), and a
+// stale entry only ever makes the check stricter - a genuine importer directory
+// reusing that exact name fails loudly instead of being exempted.
+function previousManifest(targetRoot = TARGET_ROOT) {
   try {
     const parsed = JSON.parse(readFileSync(path.join(targetRoot, "generated-manifest.json"), "utf8"));
-    return Array.isArray(parsed.managed) ? parsed.managed : [];
+    return {
+      managed: Array.isArray(parsed.managed) ? parsed.managed : [],
+      ownedImporterDirs: Array.isArray(parsed.ownedImporterDirs) ? parsed.ownedImporterDirs : [],
+    };
   } catch {
-    return [];
+    return { managed: [], ownedImporterDirs: [] };
   }
+}
+
+function previousManagedFiles(targetRoot = TARGET_ROOT) {
+  return previousManifest(targetRoot).managed;
 }
 
 export function writeExpected(expected, targetRoot = TARGET_ROOT) {
@@ -151,7 +186,11 @@ export function writeExpected(expected, targetRoot = TARGET_ROOT) {
 //      "importer litter", and stale instructions would survive `--check`. It
 //      also fixes the sibling case: when `skills/source-command-demo/SKILL.md`
 //      IS generated, a hand-added `manual.md` beside it stays drift, because
-//      ownership is decided per DIRECTORY, not per file;
+//      ownership is decided per DIRECTORY, not per file. "Previously" means the
+//      manifest's DURABLE `ownedImporterDirs`, not just its current `managed`
+//      list: `--write` rewrites `managed` wholesale, so reading only that would
+//      forget the directory one sync after the canonical command was deleted —
+//      exactly when a survivor inside it still needs catching;
 //   3. not tracked or staged in git — the exemption is for untracked
 //      working-tree litter. Once someone `git add -A`s the importer output it is
 //      becoming part of the repo, and mangled instructions must fail the parity
@@ -166,10 +205,15 @@ function importerDirOf(relativePath) {
 }
 
 export function classifyExtras(extraRelativePaths, options = {}) {
-  const { expectedKeys = [], previouslyManaged = [], trackedPaths = [] } = options;
+  const {
+    expectedKeys = [],
+    previouslyManaged = [],
+    previouslyOwnedDirs = [],
+    trackedPaths = [],
+  } = options;
 
   // Any directory this generator owns now, or owned before, is OURS.
-  const ownedDirs = new Set();
+  const ownedDirs = new Set(previouslyOwnedDirs);
   for (const key of [...expectedKeys, ...previouslyManaged]) {
     const dir = importerDirOf(key);
     if (dir) ownedDirs.add(dir);
@@ -215,11 +259,13 @@ function checkExpected(expected) {
   const actualFiles = walkFiles(TARGET_ROOT)
     .map((file) => unix(path.relative(TARGET_ROOT, file)))
     .filter((relative) => !relative.startsWith("session-state/"));
+  const prior = previousManifest();
   const { extras, foreignDirs } = classifyExtras(
     actualFiles.filter((relative) => !expected.has(relative)),
     {
       expectedKeys: [...expected.keys()],
-      previouslyManaged: previousManagedFiles(),
+      previouslyManaged: prior.managed,
+      previouslyOwnedDirs: prior.ownedImporterDirs,
       trackedPaths: gitKnownTargetPaths(),
     },
   );

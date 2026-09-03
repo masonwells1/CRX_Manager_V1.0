@@ -224,6 +224,25 @@ try {
       "staged or tracked importer files must fail the check",
     );
 
+    // (d) Ownership must SURVIVE a --write that rewrites the manifest. Sequence
+    //     Codex found: a generated source-command-demo/ also holds an extra
+    //     manual.md; the canonical command is deleted; --write prunes SKILL.md
+    //     and rewrites `managed` without the directory. On the next --check,
+    //     `previouslyManaged` no longer mentions it, so (a) cannot fire and the
+    //     surviving manual.md would be waved through as litter. The durable
+    //     `ownedImporterDirs` is what still names it.
+    const afterRewrite = classifyExtras(["skills/source-command-demo/manual.md"], {
+      expectedKeys: ["README.md"],
+      previouslyManaged: [],
+      previouslyOwnedDirs: ["source-command-demo"],
+    });
+    assert.deepEqual(afterRewrite.foreignDirs, [], "durable ownership outlives the manifest rewrite");
+    assert.deepEqual(
+      afterRewrite.extras,
+      ["skills/source-command-demo/manual.md"],
+      "a file left in a formerly generated directory is still drift after --write",
+    );
+
     // ...and the untracked twin of (c) still passes, so the fix did not simply
     // delete the exemption.
     const untracked = classifyExtras(["skills/source-command-ship/SKILL.md"]);
