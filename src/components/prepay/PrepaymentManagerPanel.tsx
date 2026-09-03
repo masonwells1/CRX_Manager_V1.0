@@ -387,7 +387,16 @@ export default function PrepaymentManagerPanel() {
     setShowConfirm(false);
 
     try {
-      const applyKey = applyPrepayIdem.getKey();
+      // F1: scoped by customer. This key is now RETAINED across an ambiguous reply so
+      // the retry can replay, but the panel lists every customer and applying to B
+      // without leaving the page would otherwise reuse A's unresolved key —
+      // check_idempotency matches on key plus operation only and would hand back A's
+      // receipt while the screen reported it against B. getKeyFor/resetKeyFor take the
+      // scope explicitly, so an in-flight attempt cannot be re-scoped by a re-render.
+      // p_customer_id is the only part of this payload a retry can vary, so the
+      // customer id binds the request completely (Codex round-4 MEDIUM).
+      const applyScope = confirmCustomer.id;
+      const applyKey = applyPrepayIdem.getKeyFor(applyScope);
       const { data, error } = await supabase.rpc('apply_remaining_prepayments', {
         p_customer_id: confirmCustomer.id,
         p_performed_by: profile.id,
@@ -395,7 +404,7 @@ export default function PrepaymentManagerPanel() {
       });
       if (error) throw error;
       const result = assertRpcResult<{ applied_count: number; applied_cents: number; remaining_prepay_cents: number }>(data, 'apply_remaining_prepayments');
-      applyPrepayIdem.resetKey();
+      applyPrepayIdem.resetKeyFor(applyScope);
       // Audit #27: surface prepay application in activity feed.
       if (profile && result.applied_count > 0) {
         await logActivity({

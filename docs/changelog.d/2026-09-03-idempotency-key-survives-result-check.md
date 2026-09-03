@@ -20,33 +20,42 @@ was applied twice: a duplicate invoice, a double-allocated payment, a double cre
 `assertRpcResult` rejects only `null`/`undefined`; it does not validate shape. A path
 needing a real shape check must do it itself and retire the key after it.
 
-## What changed — 16 call sites across 8 files
+## What changed — 14 changes across 7 files
 
-Deliberately narrow. The reorder makes the client **retain** the key, which is only safe
-when the key is bound to what the RPC actually targets. Every site below satisfies that:
+Deliberately narrow, and narrowed twice more by review. The reorder makes the client
+**retain** the key, which is only safe when the key binds **everything a retry can
+vary** — not merely the record the RPC names. `check_idempotency` matches on key plus
+operation and returns the cached result *without looking at the new payload*, so a
+retained key on an RPC that also carries free text or quantities replays the FIRST
+payload while the screen reports the edited one. Every site below clears that bar:
 
-- **`OrderDetail`** — cancel order, void order, split invoicing, create invoice. Plus
+- **`OrderDetail`** — cancel order, split invoicing, create invoice. Plus
   two **click-level repairs**: `onCreateInvoiceClick` and the Cancel Order button each
   minted a fresh key per click. `create_invoice_from_order` takes only
   `(p_order_id, p_salesman_id, p_invoice_type, p_idempotency_key)` and `cancel_order`
   only `(p_order_id, p_performed_by, p_idempotency_key)`, so neither payload can vary
   between attempts and a per-click reset only removed duplicate protection. The old
   comment claiming "date/notes vary" was wrong on both counts.
-- **`DeliveryDetail`** — cancel, void, complete, create follow-up.
+- **`DeliveryDetail`** — create follow-up ONLY. Its payload is exactly
+  `(p_original_delivery_id, p_performed_by, p_idempotency_key)`. Cancel, void and
+  complete stay in `main`'s order: they carry free-text reasons and, for complete, the
+  signature, per-item quantities and issue notes, none of which a route-id scope binds.
 - **`InvoiceDetail`** — `save_invoice` is now validated **unconditionally**: it returns
   the invoice id for EDITS as well as creates, and validating only the `isNew` arm left
   every edit retiring its key on an empty reply and reporting "saved". Plus transfer to
   scheduling.
 - **`FieldApplicationInvoice`** — delete invoices, transfer to scheduling.
-- **`FieldStop`**, **`Returns`**, **`PrepaymentManagerPanel`**, **`MonthEndClose`**.
+- **`Returns`**, **`PrepaymentManagerPanel`**, **`MonthEndClose`**. The individual
+  prepayment apply is additionally scoped **by customer** via `getKeyFor`: the panel
+  lists every customer, so an unscoped retained key would hand customer A's receipt to
+  customer B.
 
 **Record scoping.** Retaining a key is unsafe if it can follow the user to a different
 record. Detail pages do **not** remount when the route id changes (every `<x>/:id` route
-in `src/App.tsx` is rendered without a `key` prop), so 10 keys on `OrderDetail`,
-`DeliveryDetail`, `InvoiceDetail` and `FieldApplicationInvoice` are now scoped to the
-route id via the hook's `intentScope` — same record retries under the same key, each
-record gets its own. `InvoiceDetail`'s `saveIdem` was already record-scoped and was left
-alone.
+in `src/App.tsx` is rendered without a `key` prop), so 8 keys are now record-scoped via
+the hook's `intentScope` / `getKeyFor` — the same record retries under the same key, and
+each record gets its own. `InvoiceDetail`'s `saveIdem` was already record-scoped and was
+left alone.
 
 ## What is deliberately NOT fixed
 
@@ -60,19 +69,29 @@ clear B's staged allocations without applying them.
 Reverted and tracked: `QuoteBuilder`, `BlendTicketDetail`, `PrepayWorkspacePanel`,
 `Deliveries` (batch cancel), `Invoices` (batch void/delete), `PaymentAllocation`,
 `FinanceChargePreviewModal`, `Quotes`, `DeliveryRemainders`, `NewOrder`,
-`QuickDeliveryModal`, `FieldSetup`. Plus `JobDetail` (4 sites, owned by a concurrent
+`QuickDeliveryModal`, `FieldSetup`. Plus `JobDetail` (6 sites, owned by a concurrent
 session). Fixing them needs the key bound to the **request payload**, which is the
 `fingerprintIntentPayload` approach from PR #535 — not the URL.
 
+**Reverted after round 3:** `FieldStop` (it does not remount stop-to-stop, and the file's
+own stale-route guard proves it) and `OrderDetail`'s `void_order` (it sends a free-text
+reason, so the route id does not bind it).
+
+**Reverted after round 4:** `DeliveryDetail`'s complete, cancel and void. The HIGH was
+`complete_delivery`, which sends the signature, per-item quantities, issue type and issue
+notes — all editable before a retry, none bound by a route-id scope. Cancel and void
+carry the same problem through their free-text reasons.
+
 **Also still open:** the original sweep matched `resetKey()` / `resetKeyFor(` literally
-and therefore missed **aliased** resets from destructured hooks. `QuoteBuilder.tsx:1522`
-(`resetSaveQuoteIdempotencyKey()` before the assert on 1523) still carries the F1 defect
-on `save_quote`, and `CustomerDetail`, `ProductDetail`, `PurchaseOrderDetail` and
-`JobDetail` use the same aliased form and were never examined.
+and therefore missed **aliased** resets from destructured hooks. The guard now resolves
+aliases, which surfaced live defects in `QuoteBuilder` (`save_quote`) and `CustomerDetail`
+×2 (`save_customer`). It also produced two **false positives** the round-4 review
+corrected — `BulkTicketUpload` and `ManualTicketCreate` are correct code, pinned only so
+the scan stays honest. Neither the real defects nor the false positives are money paths.
 
 ## ⚠️ A `resetKey()` inside an `if (error)` branch is CORRECT
 
-`QuickDeliveryModal.tsx:392`, `InvoiceDetail.tsx:815` and `Returns.tsx:406` retire the
+`QuickDeliveryModal`, `InvoiceDetail` and `Returns` retire the
 key **before** the assert and are **verified correct**: they sit behind
 `getIdempotencyMismatchResult` (the server returned a committed receipt, so the outcome
 is known and the app reopens the committed record) or `isDefinitiveRpcRejection` (the
@@ -85,12 +104,19 @@ duplicate recovery.
   failure envelope, lost-response replay, success, changed intent) plus repo-wide guards
   against a new reset-before-assert, a fixed-payload key retired from a click handler,
   and an unscoped retained key on a page that can switch records. Guards mutation-tested
-  — each defect reintroduced, confirmed red at the exact line, restored.
+  — each defect reintroduced, confirmed red at the exact line, restored. The known-broken
+  files are **identity-pinned**, not count-pinned: round 4 showed a count alone lets a new
+  defect be swapped in as an old one is removed. Correcting the pin's filter also revealed
+  a sixth `JobDetail` site that the previous version had been dropping.
 - **Real-browser proof** on the running `OrderDetail`: with an ambiguous reply, the retry
   reused the key; with the pre-fix behavior restored, the same flow sent two different
   keys. For the record scoping: A(ambiguous) → B → back to A produced key1, key2, key1
   with the component confirmed still mounted across the route change.
-- `typecheck`, `lint`, `test` (348 files / 4937 tests), `build` — all green.
-- Reviewed by Codex `gpt-5.6-sol` at high effort over two rounds. Round 1 found 2 HIGH —
-  including a cross-record replay **introduced by the first version of this fix**. Round
-  2 found the generalisation unsafe, which is why the scope is now narrow.
+- `typecheck`, `lint`, `test`, `build` — all green, and CI green on the candidate commit.
+- Reviewed by Codex `gpt-5.6-sol` at high effort over four rounds; every round found real
+  defects **in this change**. Round 1 (2 HIGH) included a cross-record replay *introduced
+  by the first version of this fix*. Round 2 (6 HIGH) found the whole generalisation
+  unsafe, which is why twelve pages were reverted. Round 3 (3 HIGH) rejected `FieldStop`
+  and `void_order`. Round 4 (1 HIGH) rejected three of the four `DeliveryDetail` actions
+  and found three defects in the guard itself. The narrowness of this change is the
+  review's doing, not the plan's.

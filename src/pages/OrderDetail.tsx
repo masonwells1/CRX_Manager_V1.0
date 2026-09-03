@@ -708,15 +708,25 @@ export default function OrderDetail() {
       if (error) throw error;
       // F1 DELIBERATELY NOT FIXED HERE — left in main's (defective) order.
       //
-      // Moving this reset after the assert would make the client RETAIN the key, and
-      // void_order is NOT bound to the route record: it sends order.id plus the
-      // free-text voidReason above. voidOrderIdem carries no record scope, this page
-      // survives order-to-order navigation, and the void modal can stay open across
-      // that change so the opening-click reset is bypassed. A retained key could then
-      // replay order A's void receipt against order B (Codex round-3 HIGH).
+      // Moving this reset after the assert would make the client RETAIN the key, and a
+      // retained key here is exposed to TWO distinct hazards. Keep them separate — the
+      // first has a cheap fix, the second does not (Codex round-4 LOW).
       //
-      // Binding it needs the REQUEST PAYLOAD (order id + reason), not the route id —
-      // tracked with the other payload-bound work in docs/manual/KNOWN_ISSUES.md.
+      //   1. CROSS-RECORD. voidOrderIdem carries no record scope, this page survives
+      //      order-to-order navigation, and the void modal can stay open across that
+      //      change so the opening-click reset is bypassed — so order A's void receipt
+      //      could replay against order B (Codex round-3 HIGH). A route-id scope, the
+      //      one used for cancel/split/create-invoice above, WOULD close this.
+      //
+      //   2. SAME-ORDER, CHANGED REASON. void_order also sends the free-text
+      //      voidReason, and check_idempotency matches on key plus operation without
+      //      looking at the new payload. So even correctly scoped to one order, a retry
+      //      after editing the reason replays the first receipt and the UI reports a
+      //      reason that was never recorded. Only binding the REQUEST PAYLOAD
+      //      (fingerprintIntentPayload) closes this one.
+      //
+      // Because (2) needs payload binding anyway, this site waits for that work rather
+      // than taking the scope alone — tracked in docs/manual/KNOWN_ISSUES.md.
       voidOrderIdem.resetKey();
       const voided = assertRpcResult<{
         inventory_products_restored?: number;

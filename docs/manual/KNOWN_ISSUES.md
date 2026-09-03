@@ -802,12 +802,20 @@ branches are references, not merge candidates — every fix must be re-derived o
 `claude/money-screens-idempotency-key-582a41`, PR #584). Read the "still open" list below before
 assuming any screen is covered.
 
-**Fixed: 16 sites across 8 files.** Only where the key is bound to what the RPC actually targets —
-`OrderDetail`, `DeliveryDetail`, `InvoiceDetail`, `FieldApplicationInvoice`, `FieldStop`,
-`Returns`, `PrepaymentManagerPanel`, `MonthEndClose`. Ten keys on the four detail pages are also
-scoped to the route id via the hook's `intentScope`, because detail pages do NOT remount on a
-route-id change (every `<x>/:id` route in `src/App.tsx` is rendered without a `key` prop) and a
-retained unscoped key would otherwise replay record A's receipt against record B.
+**Fixed: 14 changes across 7 files** — 11 reset reorders, 1 assert repair, 2 click-level repairs, in
+`OrderDetail`, `DeliveryDetail`, `InvoiceDetail`, `FieldApplicationInvoice`, `Returns`,
+`PrepaymentManagerPanel`, `MonthEndClose`. Eight keys are also given a record scope via the hook's
+`intentScope` / `getKeyFor`, because detail pages do NOT remount on a route-id change (every
+`<x>/:id` route in `src/App.tsx` is rendered without a `key` prop) and a retained unscoped key
+would otherwise replay record A's receipt against record B.
+
+**The bar a site had to clear, tightened twice by review.** It is not enough that the key names the
+right record: the scope must bind **everything a retry can vary**. `check_idempotency` matches on
+key plus operation only and returns the cached result *without looking at the new payload*, so a
+retained key on an RPC that also carries free text or quantities replays the FIRST payload while the
+screen reports the edited one. That is why `complete_delivery` (signature, per-item quantities,
+issue notes) and the free-text `cancel_delivery` / `void_delivery` / `void_order` are NOT fixed
+here, and why `apply_remaining_prepayments` is scoped by customer rather than left page-wide.
 
 **STILL OPEN — do not assume these are fixed.** Twelve pages were REVERTED to `main` after the
 round-2 `gpt-5.6-sol` review, because reordering the reset makes the client RETAIN the key and on
@@ -818,20 +826,28 @@ where batch B receives batch A's receipt, reports success, and clears B's staged
 without applying them. Open: `QuoteBuilder`, `BlendTicketDetail`, `PrepayWorkspacePanel`,
 `Deliveries` (batch cancel), `Invoices` (batch void/delete), `PaymentAllocation`,
 `FinanceChargePreviewModal`, `Quotes`, `DeliveryRemainders`, `NewOrder`, `QuickDeliveryModal`,
-`FieldSetup`, plus `JobDetail` (4 sites, owned by a concurrent session). **Fix shape:** bind the
+`FieldSetup`, plus `JobDetail` (6 sites, owned by a concurrent session — five were pinned until
+round 4 corrected the guard's filter, which had been dropping the sixth), plus `FieldStop` and
+three of the four `DeliveryDetail` actions (see round 3 / round 4 below). **Fix shape:** bind the
 key to the REQUEST PAYLOAD — the `fingerprintIntentPayload` approach from PR #535 — not to the
-route. Enumerated in `src/__tests__/idempotency-reset-order.test.ts` (`KNOWN_UNFIXED`), which fails
-if a NEW site appears.
+route. Enumerated in `src/__tests__/idempotency-reset-order.test.ts` (`KNOWN_UNFIXED_SITES`), which
+fails if a site is added, removed, or substituted.
 
 **ALSO OPEN — the original sweep missed an entire class, now enumerated.** It matched
 `resetKey()` / `resetKeyFor(` literally and never saw **aliased** resets from destructured hooks
 (`const { resetKey: resetXKey } = useIdempotencyKey(...)`). The guard now resolves aliases per file
-and the class is counted, which surfaced four sites no sweep or review had listed:
-`QuoteBuilder.tsx:1522` (`resetSaveQuoteIdempotencyKey()` before the assert on 1523 — live F1 on
-`save_quote`), `CustomerDetail.tsx:782` and `:796` (`save_customer`; named by the round-3 review),
-and `BulkTicketUpload.tsx:253` plus `ManualTicketCreate.tsx:492` (found ONLY by the alias
-resolution). None of the last four is a money path. Any re-sweep must match the destructured alias,
-not the method name.
+and the class is counted, which surfaced sites no sweep or review had listed. **Real defects:**
+`QuoteBuilder` (`resetSaveQuoteIdempotencyKey` before the assert — live F1 on `save_quote`) and
+`CustomerDetail` ×2 (`save_customer` — one plain reset-before-assert, and one that releases the key
+on `!error` alone, which does not rule out the null reply this whole class is about). Neither is a
+money path. **Scanner FALSE POSITIVES, corrected by the round-4 review:**
+`BulkTicketUpload` (`resetUploadKey` lives in `finishCommittedUpload()`, reached only once the
+ticket is committed — the scanner pairs it with an unrelated non-blocking `functions.invoke()`
+above it) and `ManualTicketCreate` (`resetCreateKey` runs inside `if (!lookup.data)`, i.e. after a
+lookup PROVED the row does not exist — the same definitive-rejection shape already allowed for
+`Returns`). Both stay pinned so the scan stays honest, but they are **correct code, not defects**.
+Any re-sweep must match the destructured alias, not the method name — and must not assume a
+scanner hit is a bug.
 
 **Reverted after round 3, in addition to the twelve above.** `FieldStop` — it does NOT remount
 stop-to-stop (`App.tsx:285` has no `key`, and `fetchStop` carries an explicit stale-route guard for
@@ -841,25 +857,52 @@ against stop B. And ONE site inside the otherwise-fixed `OrderDetail`: `void_ord
 order-to-order navigation so its opening-click reset is bypassed — it stays in main's order until it
 can be payload-bound.
 
-**Guard strength (corrected).** `KNOWN_UNFIXED` is now **count-pinned per file**, not a whole-file
-exemption: `src/__tests__/idempotency-reset-order.test.ts` fails if the number of unexcused sites in
-any listed file moves in EITHER direction, so a NEW defect in an already-listed file cannot be
-absorbed silently. Mutation-tested. The earlier wording here claimed that protection before it
-existed. Two residuals remain stated in the test body rather than assumed away: the scanner matches
-LINE ORDER and cannot bind a call, its reset and its assert to the same control-flow branch, and the
-record-scoping check proves a declaration contains a route-id scope, not that the RPC sends that id.
+**Reverted after round 4 — three of the four `DeliveryDetail` actions.** The round-4 HIGH:
+`complete_delivery` sends `p_signed_by`, `p_quantities`, `p_issue_type` and `p_issue_notes`, all
+live UI state a driver can edit before retrying, so a route-scoped retained key would apply the
+first payload's quantities and signature while the screen reported the edited ones — wrong stock and
+a wrong signer on a delivery record. `cancel_delivery` and `void_delivery` carry the same problem
+through their free-text reasons, and the assert throws *before* the modal is closed and the reason
+cleared, so the field really is editable on retry. Only `create_followup_delivery` survives: its
+payload is exactly `(p_original_delivery_id, p_performed_by, p_idempotency_key)`, so the route id
+binds it completely. `apply_remaining_prepayments` was the mirror-image finding and was **fixed
+rather than reverted** — it is now scoped by customer id via `getKeyFor`, because the panel lists
+every customer and an unscoped retained key would hand customer A's receipt to customer B.
+
+**Guard strength (corrected twice — read this before trusting the guard).** `KNOWN_UNFIXED_SITES`
+is now **identity-pinned per file**: each listed file is pinned to the sorted list of reset
+identifiers the scanner finds in it, and `src/__tests__/idempotency-reset-order.test.ts` fails if a
+site is added, removed, **or substituted**. Round 3 replaced whole-file exemptions with a per-file
+count; round 4 showed the count alone still let a defect be swapped in as another was removed, with
+the total unmoved — so the earlier claim here that "a new defect cannot be absorbed" was false as
+written. Mutation-tested both ways: adding a site moves the list, and renaming one site's key to
+another's fails while the count stays at 2. Round 4 also found the pin was excusing any hit the
+classifier labelled at all, even a reason the file never declared; it now excuses only reasons
+declared in `ALLOWED_REASONS`, which is how the sixth `JobDetail` site appeared.
+
+**Residuals, stated rather than assumed away.** (a) The scanner matches LINE ORDER; `exitsBranch` is
+a textual heuristic that reads only lines starting with `throw`/`return`, so it can still launder
+across sibling branches and can wrongly flag a safe reset after an early-exit error branch. (b)
+Alias resolution handles only a DIRECT `{ resetKey: name }` destructure in the same file — a second
+rename, a wrapper function, a cross-file alias, an optional call or computed member access stays
+invisible. (c) The identity pin uses the key's own name, so two sites calling the SAME key's reset
+are not told apart. (d) The record-scoping check proves a declaration contains a route-id scope, not
+that the RPC sends that id or that the payload carries nothing else. Closing (a) and (b) needs an
+AST, not a line scan.
 
 **Historical note on the original attempt:** 39 call sites
 across 20 files were reordered, plus two click-level repairs in
 `OrderDetail.tsx` (`onCreateInvoiceClick` and the Cancel Order button — both RPCs take a payload
 that cannot vary between attempts, so a per-click reset only removed duplicate protection).
 **The Cancel Order defect was found by driving the real screen; the unit tests and the static guard
-both passed over it.** Proof: `src/__tests__/idempotency-reset-order.test.ts` (10 tests + a
-repo-wide guard, both mutation-tested), and a real-browser run where the retry reused the key while
-the pre-fix behavior sent two different keys. Three sites are verified-correct and were NOT changed
-— a `resetKey()` inside an `if (error)` recovery branch (`QuickDeliveryModal.tsx:392`,
-`InvoiceDetail.tsx:815`, `Returns.tsx:406`) is intended, and "fixing" them breaks duplicate
-recovery. **Two follow-ups remain open:** (a) `JobDetail.tsx` carries 4 sites of the same class,
+both passed over it.** Proof: `src/__tests__/idempotency-reset-order.test.ts` (13 tests — 5
+behavioral plus 8 repo-wide guards, mutation-tested), and a real-browser run where the retry reused
+the key while the pre-fix behavior sent two different keys. Three sites are verified-correct and
+were NOT changed — a `resetKey()` inside an `if (error)` recovery branch in
+`QuickDeliveryModal.tsx`, `InvoiceDetail.tsx` and `Returns.tsx` is intended, and "fixing" them
+breaks duplicate recovery. (Line numbers are deliberately omitted: earlier revisions of this entry
+pinned line numbers that went stale within the same PR.) **Two follow-ups remain open:**
+(a) `JobDetail.tsx` carries 6 sites of the same class,
 excluded because a concurrent session owned the file; (b) the `voidOrderIdem` / `updateOrderIdem`
 click resets need a scoped key rather than deletion, because `void_order` takes a free-text
 `p_reason` and `update_order_items` takes `p_items` — real intent rotation, same shape as

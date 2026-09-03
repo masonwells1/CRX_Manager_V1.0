@@ -190,44 +190,98 @@ const ALLOWED_REASONS: Record<string, Reason[]> = {
  * deliberately deferred, written down" — if that is not true, fix the site instead.
  */
 /**
- * COUNT-PINNED, not file-exempted (Codex round-3 MEDIUM). A whole-file exemption
- * cannot fail: any NEW reset-before-assert added to one of these files would be
- * absorbed silently, which reads as coverage while providing none. Each file is
- * therefore pinned to the exact number of known sites, and the guard fails if the
- * count moves in EITHER direction — up means a new defect, down means a site was
- * fixed and the pin should be lowered (or the file removed).
+ * IDENTITY-PINNED, not count-pinned and not file-exempted.
+ *
+ * Round 3 replaced whole-file exemptions with a per-file COUNT, because an exemption
+ * cannot fail — a new defect in a listed file was absorbed silently while reading as
+ * coverage. Round 4 showed the count is still too weak: cardinality alone lets a real
+ * defect be SWAPPED IN as an existing one is removed, and the total never moves
+ * (Codex round-4 MEDIUM). Each file is therefore pinned to the sorted list of the
+ * RESET IDENTIFIERS the scanner finds in it. Adding, removing, or substituting a site
+ * changes that list and fails the guard.
+ *
+ * RESIDUAL, stated rather than implied: the identifier is the key's own name, so two
+ * distinct sites that call the SAME key's reset are not told apart, and a swap between
+ * them would still pass. Narrowing that further needs an AST, not a line scan.
  */
-const KNOWN_UNFIXED_SITE_COUNTS: Record<string, number> = {
-  'src/pages/JobDetail.tsx': 5,
-  'src/pages/QuoteBuilder.tsx': 6,
-  'src/pages/BlendTicketDetail.tsx': 6,
-  'src/components/prepay/PrepayWorkspacePanel.tsx': 1,
-  'src/components/invoices/FinanceChargePreviewModal.tsx': 1,
-  'src/components/deliveries/QuickDeliveryModal.tsx': 1,
-  'src/pages/Deliveries.tsx': 1,
-  'src/pages/DeliveryRemainders.tsx': 1,
-  'src/pages/Invoices.tsx': 2,
-  'src/pages/NewOrder.tsx': 1,
-  'src/pages/PaymentAllocation.tsx': 1,
-  'src/pages/Quotes.tsx': 1,
-  'src/pages/FieldSetup.tsx': 1,
+const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
+  // JobDetail shows SIX, not the five round 3 pinned. The sixth was being dropped by
+  // the old filter, which excused any classified hit even when the file declares no
+  // allowed reason — exactly the hole round 4 found.
+  'src/pages/JobDetail.tsx': [
+    'assignIdem.resetKey',
+    'completeJobIdem.resetKey',
+    'completeJobIdem.resetKey',
+    'saveJobIdem.resetKey',
+    'saveRecipeIdem.resetKey',
+    'transferJobIdem.resetKey',
+  ],
+  'src/pages/QuoteBuilder.tsx': [
+    'closeAppliedIdem.resetKey',
+    'closeShortIdem.resetKey',
+    'drawDownIdem.resetKey',
+    'fromTemplateIdem.resetKey',
+    'resetSaveQuoteIdempotencyKey',
+    'rolloverIdem.resetKey',
+  ],
+  'src/pages/BlendTicketDetail.tsx': [
+    'approveIdem.resetKey',
+    'createOrderIdem.resetKey',
+    'linkIdem.resetKey',
+    'linkIdem.resetKey',
+    'rejectIdem.resetKey',
+    'unlinkIdem.resetKey',
+  ],
+  'src/components/prepay/PrepayWorkspacePanel.tsx': ['batchApplyIdem.resetKey'],
+  'src/components/invoices/FinanceChargePreviewModal.tsx': ['financeChargeIdem.resetKey'],
+  // QuickDeliveryModal is ALSO allowlisted for 'recovery': its correct recovery reset
+  // is excused per-site and only the defective one is pinned here.
+  'src/components/deliveries/QuickDeliveryModal.tsx': ['quickDeliveryIdem.resetKey'],
+  'src/pages/Deliveries.tsx': ['batchCancelIdem.resetKey'],
+  'src/pages/DeliveryRemainders.tsx': ['followupIdem.resetKey'],
+  'src/pages/Invoices.tsx': ['batchDeleteIdem.resetKey', 'batchVoidIdem.resetKey'],
+  'src/pages/NewOrder.tsx': ['createOrderIdem.resetKey'],
+  'src/pages/PaymentAllocation.tsx': ['allocatePaymentIdem.resetKey'],
+  'src/pages/Quotes.tsx': ['duplicateQuoteIdem.resetKey'],
+  'src/pages/FieldSetup.tsx': ['saveFieldIdem.resetKey'],
   // Reverted after round 3: FieldStop does NOT remount stop-to-stop (App.tsx:285 has
   // no key), so retaining an unscoped complete_delivery key could replay stop A's
   // receipt against stop B.
-  'src/pages/FieldStop.tsx': 1,
+  'src/pages/FieldStop.tsx': ['completeIdem.resetKey'],
   // OrderDetail is mostly FIXED — this pins the ONE site deliberately left in main's
   // order: void_order sends order.id plus a free-text reason, so it needs payload
   // binding rather than route-id scoping.
-  'src/pages/OrderDetail.tsx': 1,
+  'src/pages/OrderDetail.tsx': ['voidOrderIdem.resetKey'],
+  // DeliveryDetail is partly fixed: create_followup_delivery is route-bound and was
+  // reordered; complete/cancel/void send mutable payload fields (signature, quantities,
+  // issue notes, free-text reasons) that a route-id scope does not bind, so they stay
+  // in main's order pending fingerprintIntentPayload (Codex round-4 HIGH/MEDIUM).
+  'src/pages/DeliveryDetail.tsx': [
+    'cancelIdem.resetKey',
+    'completeIdem.resetKey',
+    'voidIdem.resetKey',
+  ],
   // ALIASED-RESET CLASS, invisible until this guard learned to resolve destructured
-  // names. CustomerDetail was named by the round-3 review; BulkTicketUpload and
-  // ManualTicketCreate were found only by the alias resolution and had never been
-  // enumerated by any sweep or review. None is a money path.
-  'src/pages/CustomerDetail.tsx': 2,
-  'src/components/blendtickets/BulkTicketUpload.tsx': 1,
-  'src/components/blendtickets/ManualTicketCreate.tsx': 1,
+  // names. Both CustomerDetail sites are real: :782 releases the key on `!error`
+  // alone, which does not rule out a null reply, and :796 is a plain
+  // reset-before-assert on save_customer. Not a money path.
+  'src/pages/CustomerDetail.tsx': [
+    'resetSaveCustomerIdempotencyKey',
+    'resetSaveCustomerIdempotencyKey',
+  ],
+  // SCANNER FALSE POSITIVES, pinned so the scan stays honest rather than being
+  // silently filtered (Codex round-4 MEDIUM). Both are correct code:
+  // BulkTicketUpload's reset lives in finishCommittedUpload(), reached only once the
+  // ticket is committed — the scanner pairs it with the unrelated non-blocking
+  // functions.invoke() above it. ManualTicketCreate's reset runs inside
+  // `if (!lookup.data)`, i.e. after a lookup PROVED the row does not exist, which is
+  // the same definitive-rejection shape already allowed for Returns.tsx. Listing a
+  // file here means "the scanner flags it and this PR does not change it", NOT
+  // "these are defects" — see the reasons above for which is which.
+  'src/components/blendtickets/BulkTicketUpload.tsx': ['resetUploadKey'],
+  'src/components/blendtickets/ManualTicketCreate.tsx': ['resetCreateKey'],
 };
-const KNOWN_UNFIXED = new Set(Object.keys(KNOWN_UNFIXED_SITE_COUNTS));
+const KNOWN_UNFIXED = new Set(Object.keys(KNOWN_UNFIXED_SITES));
 
 /** Classify one hit from the surrounding source, or null if nothing excuses it. */
 function classify(lines: string[], lineNo: number): Reason | null {
@@ -243,6 +297,14 @@ function classify(lines: string[], lineNo: number): Reason | null {
   // the marker and the reset proves the reset is in a DIFFERENT branch and the marker
   // is merely nearby. Without this, the correct recovery reset in QuickDeliveryModal
   // laundered the buggy one ~11 lines below it (Codex round-3 MEDIUM).
+  //
+  // This is a TEXTUAL heuristic over fixed windows, not a parser (Codex round-4
+  // MEDIUM). `exitsBranch` recognises only a line STARTING with `throw` or `return`:
+  // it does not read braces, `else`, an inline exit later in a line, a `break`, a
+  // `continue`, or a helper that throws on the caller's behalf. So it can still
+  // launder across sibling branches, and it can refuse a genuinely safe reset that
+  // happens to follow an early-exit error branch. It narrows the laundering hole; it
+  // does not close it. A real fix is an AST walk.
   const lastIndexMatching = (arr: string[], re: RegExp): number => {
     for (let i = arr.length - 1; i >= 0; i -= 1) if (re.test(arr[i])) return i;
     return -1;
@@ -299,13 +361,43 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  * The literal `resetKey()` spelling is invisible to a plain scan, which is how a live
  * `save_customer` defect at CustomerDetail.tsx:796 escaped the original 249-site sweep
  * entirely (Codex round-3 HIGH). Aliases are resolved per file and matched as well.
+ *
+ * WHAT THIS DOES NOT CATCH (Codex round-4 MEDIUM — stated so the guard is not trusted
+ * past its reach): only a DIRECT destructure in the same file, `{ resetKey: name }`.
+ * A second rename of that name, a wrapper function that calls it, an alias imported
+ * from another module, an optional call, computed member access, and a hook result
+ * stored in a variable and passed elsewhere all remain invisible. Plain
+ * `idem.resetKey()` member calls are caught by RESET regardless. Closing the rest
+ * needs an AST and a resolver, not a line scan.
  */
+function aliasNames(source: string): string[] {
+  return [...new Set(
+    [...source.matchAll(/\bresetKeyFor\s*:\s*(\w+)|\bresetKey\s*:\s*(\w+)/g)]
+      .map((m) => m[1] ?? m[2])
+      .filter((n): n is string => Boolean(n)),
+  )];
+}
+
 function aliasResetPattern(source: string): RegExp | null {
-  const names = [...source.matchAll(/\bresetKeyFor\s*:\s*(\w+)|\bresetKey\s*:\s*(\w+)/g)]
-    .map((m) => m[1] ?? m[2])
-    .filter(Boolean);
+  const names = aliasNames(source);
   if (names.length === 0) return null;
-  return new RegExp(`\\b(${[...new Set(names)].join('|')})\\s*\\(`);
+  return new RegExp(`\\b(${names.join('|')})\\s*\\(`);
+}
+
+/**
+ * Identity of one flagged site: the name of the key whose reset was matched.
+ *
+ * Pinning cardinality alone lets a new defect be swapped in as an old one is removed
+ * (Codex round-4 MEDIUM). The identifier is stable under reformatting and line moves,
+ * unlike a line number, and changes when a DIFFERENT key's reset appears.
+ */
+function siteIdentifier(line: string, names: string[]): string {
+  const member = line.match(/([A-Za-z_$][\w$]*)\s*\.\s*(resetKeyFor|resetKey)\s*\(/);
+  if (member) return `${member[1]}.${member[2]}`;
+  for (const name of names) {
+    if (new RegExp(`\\b${name}\\s*\\(`).test(line)) return name;
+  }
+  return line.trim().slice(0, 60);
 }
 
 function findResetBeforeAssert(file: string): number[] {
@@ -328,7 +420,11 @@ function findResetBeforeAssert(file: string): number[] {
   return hits;
 }
 
-describe('F1 guard — no money screen retires its key before the reply is checked', () => {
+// TITLE SAYS WHAT IT PROVES (Codex round-4 MEDIUM). The earlier wording — "no money
+// screen retires its key before the reply is checked" — claimed repo-wide coverage
+// while the implementation skips every file in KNOWN_UNFIXED_SITES. Those files are
+// not verified clean; they are pinned to the exact sites the scanner already finds.
+describe('F1 guard — resets are verified outside the pinned files, and the pinned files cannot drift', () => {
   const files = walk('src').map((f) => f.replace(/\\/g, '/'));
 
   it('scans a meaningful number of source files', () => {
@@ -338,7 +434,7 @@ describe('F1 guard — no money screen retires its key before the reply is check
     expect(withResets.length).toBeGreaterThan(30);
   });
 
-  it('every reset that precedes its reply check has a VERIFIED reason', () => {
+  it('every reset OUTSIDE the pinned files that precedes its reply check has a VERIFIED reason', () => {
     const offenders: string[] = [];
     for (const file of files) {
       if (KNOWN_UNFIXED.has(file)) continue;
@@ -361,17 +457,29 @@ describe('F1 guard — no money screen retires its key before the reply is check
     expect(offenders).toEqual([]);
   });
 
-  it('every known-unfixed file has EXACTLY its pinned number of sites', () => {
+  it('every known-unfixed file flags EXACTLY its pinned sites', () => {
     // The point of the pin: a NEW reset-before-assert in one of these files must FAIL
-    // rather than be absorbed by a whole-file exemption.
-    const actual: Record<string, number> = {};
-    for (const file of Object.keys(KNOWN_UNFIXED_SITE_COUNTS)) {
-      const lines = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
-      // Count only sites with NO verified reason — a recovery-branch or
-      // throw-on-error reset in these files is correct and must not inflate the pin.
-      actual[file] = findResetBeforeAssert(file).filter((n) => classify(lines, n) === null).length;
+    // rather than be absorbed by a whole-file exemption OR hidden by a swap that keeps
+    // the count the same (Codex round-4 MEDIUM).
+    const actual: Record<string, string[]> = {};
+    for (const file of Object.keys(KNOWN_UNFIXED_SITES)) {
+      const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+      const lines = source.split('\n');
+      const names = aliasNames(source);
+      const allowed = ALLOWED_REASONS[file] ?? [];
+      // Exclude a site ONLY for a reason this file actually declares. Filtering on
+      // "classify returned anything" let a new defect that merely sat near an
+      // onClick=, a recovery marker or an unrelated .throwOnError() drop out of the
+      // pin while the total held (Codex round-4 MEDIUM).
+      actual[file] = findResetBeforeAssert(file)
+        .filter((n) => {
+          const reason = classify(lines, n);
+          return !(reason && allowed.includes(reason));
+        })
+        .map((n) => siteIdentifier(lines[n - 1] ?? '', names))
+        .sort();
     }
-    expect(actual).toEqual(KNOWN_UNFIXED_SITE_COUNTS);
+    expect(actual).toEqual(KNOWN_UNFIXED_SITES);
   });
 
   it('no allowlist entry is stale', () => {
@@ -461,9 +569,15 @@ describe('F1 guard — no money screen retires its key before the reply is check
    * record A's receipt against record B.
    *
    * SCOPE OF THIS PR, narrowed 2026-09-03 after the round-2 Codex review found the
-   * generalisation unsafe. A key is only listed here when the route id it is scoped by
-   * is the SAME value the RPC targets:
-   *   - DeliveryDetail — cancel/void/complete/create_followup all send the route id.
+   * generalisation unsafe, and narrowed AGAIN after round 4. A key is only listed here
+   * when the route id is the WHOLE of what a retry can vary — not merely the record
+   * the RPC names. Round 4's HIGH: complete_delivery also sends the signature,
+   * per-item quantities and issue notes, so a route-scoped retained key would replay
+   * the FIRST payload while the screen reported the edited one. Route scope binds the
+   * record; it does not bind the payload.
+   *   - DeliveryDetail — create_followup_delivery ONLY. Its payload is exactly
+   *     (p_original_delivery_id, p_performed_by, p_idempotency_key). cancel, void and
+   *     complete send mutable free-text or quantity fields and stay in main's order.
    *   - InvoiceDetail — transfer_invoice_to_job sends the route id. saveIdem is absent
    *     because it is already record-scoped via its second argument.
    *   - FieldApplicationInvoice — delete_invoices sends [id] and
@@ -480,7 +594,7 @@ describe('F1 guard — no money screen retires its key before the reply is check
    * the request payload, not the URL — see docs/manual/KNOWN_ISSUES.md.
    */
   const RECORD_SCOPED_KEYS: Record<string, string[]> = {
-    'src/pages/DeliveryDetail.tsx': ['cancelIdem', 'followupIdem', 'completeIdem', 'voidIdem'],
+    'src/pages/DeliveryDetail.tsx': ['followupIdem'],
     'src/pages/InvoiceDetail.tsx': ['transferToSchedulingIdem'],
     'src/pages/FieldApplicationInvoice.tsx': ['deleteIdem', 'transferToSchedulingIdem'],
   };
