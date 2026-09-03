@@ -3,7 +3,8 @@ name: CodeRabbit final review gate
 # `pull_request_target` ONLY. Do NOT add `pull_request_review` (or any other
 # pull-request event) back to this workflow.
 #
-# This job holds `issues: write`, and it is allowed to hold it because
+# This job holds write scopes (`issues: write`, `pull-requests: write`), and it
+# is allowed to hold them because
 # `pull_request_target` selects the workflow YAML from the DEFAULT BRANCH — the
 # pull request cannot supply the steps that run. `pull_request_review` does not
 # behave that way: it selects the YAML from the PULL REQUEST's own ref, so a PR
@@ -28,7 +29,17 @@ permissions:
   checks: read
   contents: read
   issues: write
-  pull-requests: read
+  # MUST be `write`, not `read`. The gate's labels and its one `@coderabbitai
+  # review` comment live on a PULL REQUEST, and GitHub gates the
+  # `/issues/{n}/labels` endpoints on the **Pull requests** permission whenever
+  # the target number is a pull request — `issues: write` does not reach them.
+  # With `pull-requests: read` every `issues.removeLabel` call 403s with
+  # "Resource not accessible by integration" before it can even report that the
+  # label was absent (removeLabelIfPresent only tolerates 404). That made the
+  # gate fail on EVERY pull-request event repo-wide from #516 until 2026-09-03,
+  # so no candidate was ever reviewed. Pinned by the test
+  # `the gate's own label and comment writes are actually granted`.
+  pull-requests: write
   statuses: read
 
 concurrency:
