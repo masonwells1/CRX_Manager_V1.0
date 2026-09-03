@@ -22,6 +22,7 @@ import {
   classifyExtras,
   gitEnvironment,
   isEntryPoint,
+  previousManifest,
   writeExpected,
 } from "./sync-agent-workflows.mjs";
 
@@ -363,6 +364,59 @@ try {
       ["managed", "version"],
       "the manifest carries only `version` and `managed`",
     );
+  }
+
+  // (i) Valid JSON of the WRONG SHAPE is not an answer either. previousManifest()
+  //     used to read `parsed.managed` off whatever parsed, fall back to `[]` when
+  //     it was not an array, and still report `known: true` - so `[]`,
+  //     `"text"` or `{"managed":"invalid"}` all read as a confident "nothing was
+  //     managed". checkExpected() ands `prior.known` into `trackingKnown`, so
+  //     that confident-but-wrong empty is what hands a corrupt manifest the
+  //     importer exemption for every source-command-* directory. It must fail
+  //     closed, exactly like the unparseable branch (CodeRabbit, PR #565).
+  {
+    const shapeRoot = path.join(targetRoot, "manifest-shapes");
+    mkdirSync(shapeRoot, { recursive: true });
+    const manifestPath = path.join(shapeRoot, "generated-manifest.json");
+    const write = (text) => writeFileSync(manifestPath, text);
+
+    // No manifest at all stays a real answer: nothing has been generated yet.
+    assert.deepEqual(previousManifest(shapeRoot), { managed: [], known: true });
+
+    for (const [label, text] of [
+      ["unparseable", "{not json"],
+      ["a top-level array", "[]"],
+      ["a top-level string", '"text"'],
+      ["a top-level null", "null"],
+      ["a top-level number", "7"],
+      ["managed as a string", '{"version":1,"managed":"invalid"}'],
+      ["managed as an object", '{"version":1,"managed":{}}'],
+      ["managed missing", '{"version":1}'],
+      ["managed holding non-strings", '{"version":1,"managed":["ok.md",42]}'],
+    ]) {
+      write(text);
+      assert.deepEqual(
+        previousManifest(shapeRoot),
+        { managed: [], known: false },
+        `${label} must report the record as UNAVAILABLE, not as an empty managed list`,
+      );
+    }
+
+    // ...and the real shape still answers, so this did not simply disable the
+    // provenance source it is guarding.
+    write('{"version":1,"managed":["skills/demo/SKILL.md"]}\n');
+    assert.deepEqual(previousManifest(shapeRoot), {
+      managed: ["skills/demo/SKILL.md"],
+      known: true,
+    });
+    write('{"version":1,"managed":[]}\n');
+    assert.deepEqual(
+      previousManifest(shapeRoot),
+      { managed: [], known: true },
+      "a well-formed manifest with an empty managed list is a real answer",
+    );
+
+    rmSync(shapeRoot, { recursive: true, force: true });
   }
 } finally {
   rmSync(targetRoot, { recursive: true, force: true });

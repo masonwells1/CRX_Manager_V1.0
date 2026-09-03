@@ -100,20 +100,29 @@ function buildExpected() {
 //
 //   - NO manifest at all: a real answer. Nothing generated yet. `known: true`.
 //   - a manifest that EXISTS but cannot be parsed: NOT an answer. `known: false`.
+//   - a manifest that PARSES but is not the shape this writer emits (`[]`,
+//     `"text"`, `{"managed":"invalid"}`, a `managed` holding non-strings): also
+//     NOT an answer. Reading `parsed.managed` off those yields `undefined` or a
+//     non-array, and answering that with an empty list is the fail-open shape
+//     again - a corrupt manifest would read as a confident "nothing was managed"
+//     and buy the importer exemption at exactly the moment the record is
+//     unusable (CodeRabbit, PR #565). `known: false`, same as unparseable.
 //
 // Callers must fail closed on `known: false`.
-function previousManifest(targetRoot = TARGET_ROOT) {
+export function previousManifest(targetRoot = TARGET_ROOT) {
   const file = path.join(targetRoot, "generated-manifest.json");
   if (!existsSync(file)) return { managed: [], known: true };
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    return {
-      managed: Array.isArray(parsed.managed) ? parsed.managed : [],
-      known: true,
-    };
+    parsed = JSON.parse(readFileSync(file, "utf8"));
   } catch {
     return { managed: [], known: false };
   }
+  const isPlainObject = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+  if (!isPlainObject || !Array.isArray(parsed.managed) || !parsed.managed.every((entry) => typeof entry === "string")) {
+    return { managed: [], known: false };
+  }
+  return { managed: parsed.managed, known: true };
 }
 
 function previousManagedFiles(targetRoot = TARGET_ROOT) {
@@ -357,7 +366,7 @@ function checkExpected(expected) {
     console.error("NOTE git could not report which .agents/ paths are tracked; the importer-directory exemption is withheld and any such files are reported as drift.");
   }
   if (!prior.known) {
-    console.error("NOTE generated-manifest.json exists but could not be parsed, so the record of what the last sync generated is unavailable; the importer-directory exemption is withheld and any such files are reported as drift.");
+    console.error("NOTE generated-manifest.json exists but is unreadable or is not the { version, managed: string[] } shape this generator writes, so the record of what the last sync generated is unavailable; the importer-directory exemption is withheld and any such files are reported as drift.");
   }
   for (const extra of extras) {
     mismatches.push(`${extra} is not generated from .claude`);
