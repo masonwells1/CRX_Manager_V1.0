@@ -602,7 +602,21 @@ async function reconcileLabelEvent({
   return { status: 'ignored', reason: `${reasonPrefix}.no_gate_state` };
 }
 
-async function collectCheckBlockers({ github, owner, repo, headSha, config, core }) {
+// `selfRunId` is THIS workflow run. Its own check run is `in_progress` for as
+// long as it is doing the evaluating, and evaluateChecks() blocks on any check
+// that is not completed — so without this the gate blocks on itself, every time,
+// and the ready-label path can never succeed:
+//
+//   CodeRabbit final review was not requested: final-review-gate: in_progress/no conclusion
+//
+// Observed on PR #563, run 33716013321, 2026-09-03 — the first candidate ever to
+// reach this code (the crash fixed in #573 was standing in front of it). The
+// exclusion is by RUN ID, not by name: a run id identifies exactly one run, so
+// this can never quietly excuse a different workflow that happens to share a job
+// name. A concurrent second run of this same workflow keeps its own id and is
+// still treated as a blocker, which is correct — that one really is a pending
+// check that has not finished.
+async function collectCheckBlockers({ github, owner, repo, headSha, config, core, selfRunId = null }) {
   const [checkRuns, statuses] = await Promise.all([
     // NO mapFn. `checks.listForRef` returns a NAMESPACED list envelope
     // (`{ total_count, check_runs }`), and Octokit's paginate normalizes that
@@ -628,16 +642,24 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config, core
       { owner, repo, ref: headSha, per_page: 100 },
     ),
   ]);
+  // Drop THIS run's own check before anything evaluates it. Done here rather
+  // than in evaluateChecks so the shape guard there still sees the raw list and
+  // a malformed entry is still reported, not silently filtered away.
+  const observedCheckRuns = Array.isArray(checkRuns) && selfRunId !== null
+    ? checkRuns.filter((check) => !(
+      check && typeof check === 'object' && actionRunId(check.details_url) === Number(selfRunId)
+    ))
+    : checkRuns;
   await attachRequiredWorkflowProvenance({
     github,
     owner,
     repo,
-    checkRuns,
+    checkRuns: observedCheckRuns,
     requiredChecks: config.requiredChecks,
     core,
   });
   return evaluateChecks({
-    checkRuns,
+    checkRuns: observedCheckRuns,
     statuses,
     requiredChecks: config.requiredChecks,
     ignoredChecks: config.ignoredChecks,
@@ -814,6 +836,7 @@ async function runGate({ github, context, core, config, attemptState }) {
     headSha: expectedHeadSha,
     config,
     core,
+    selfRunId: context.runId,
   });
   if (blockers.length > 0) {
     return blockCandidate({
@@ -844,6 +867,7 @@ async function runGate({ github, context, core, config, attemptState }) {
       headSha: expectedHeadSha,
       config,
       core,
+      selfRunId: context.runId,
     }),
   ]);
   const confirmationReasons = validatePullRequest(
@@ -925,6 +949,7 @@ async function runGate({ github, context, core, config, attemptState }) {
         headSha: expectedHeadSha,
         config,
         core,
+        selfRunId: context.runId,
       }),
     ]);
   } catch (finalSnapshotError) {
@@ -1044,6 +1069,7 @@ async function runGate({ github, context, core, config, attemptState }) {
         headSha: expectedHeadSha,
         config,
         core,
+        selfRunId: context.runId,
       }),
     ]);
   } catch (postCommentSnapshotError) {
