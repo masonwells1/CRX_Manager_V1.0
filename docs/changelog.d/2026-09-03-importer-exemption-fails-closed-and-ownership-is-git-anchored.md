@@ -35,10 +35,12 @@ exemption.
 
 ## Also fixed in passing
 
-Both git invocations now go through one helper that strips inherited `GIT_DIR`, `GIT_WORK_TREE`, and
-`GIT_INDEX_FILE`. This check runs inside the pre-commit hook, where those are set and point at the
-hook's own view - inheriting them makes `git -C <root>` a lie, a failure mode this repo has hit
-before in fixture tests.
+Both git invocations now go through one helper. This check runs inside the pre-commit hook, where git
+exports its own repository redirects: `GIT_DIR` and `GIT_WORK_TREE` are absolute and outrank
+`git -C <root>`, so the helper strips them - a failure mode this repo has hit before in fixture
+tests. It does **not** strip `GIT_INDEX_FILE`; a repository-local value is preserved so the check
+reads the candidate index a partial commit is actually committing. See the
+`2026-09-03-ownership-provenance-reads-the-right-index-and-every-parent` entry.
 
 ## Verification
 

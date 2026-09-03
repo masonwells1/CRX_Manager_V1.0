@@ -22,7 +22,6 @@ import {
   classifyExtras,
   gitEnvironment,
   isEntryPoint,
-  ownershipRevisions,
   writeExpected,
 } from "./sync-agent-workflows.mjs";
 
@@ -230,24 +229,32 @@ try {
       "staged or tracked importer files must fail the check",
     );
 
-    // (d) Ownership must SURVIVE a --write that rewrites the manifest. Sequence
-    //     Codex found: a generated source-command-demo/ also holds an extra
-    //     manual.md; the canonical command is deleted; --write prunes SKILL.md
-    //     and rewrites `managed` without the directory. On the next --check,
-    //     `previouslyManaged` no longer mentions it, so (a) cannot fire and the
-    //     surviving manual.md would be waved through as litter. The durable
-    //     `ownedImporterDirs` is what still names it.
+    // (d) DELIBERATELY NOT COVERED, and pinned here so the gap is visible.
+    //     Sequence Codex found: a generated source-command-demo/ also holds an
+    //     extra manual.md; the canonical command is deleted; --write prunes
+    //     SKILL.md and rewrites `managed` without the directory. On the next
+    //     --check, `previouslyManaged` no longer mentions it, so (a) cannot fire
+    //     and the surviving manual.md IS waved through as litter.
+    //
+    //     A durable `ownedImporterDirs` field used to cover this, reconstructed
+    //     from the git index, HEAD and every merge parent. That layer drew a
+    //     review finding every round without converging - eight across eight
+    //     rounds, one of them introduced by the fix for the round before it - so
+    //     Mason cut it on 2026-09-03. Nothing in .claude/ is named
+    //     `source-command-*`, so this sequence cannot occur today; the cost if it
+    //     ever did is an unreferenced instruction file under .agents/.
     const afterRewrite = classifyExtras(["skills/source-command-demo/manual.md"], {
       expectedKeys: ["README.md"],
       previouslyManaged: [],
-      previouslyOwnedDirs: ["source-command-demo"],
     });
-    assert.deepEqual(afterRewrite.foreignDirs, [], "durable ownership outlives the manifest rewrite");
     assert.deepEqual(
-      afterRewrite.extras,
-      ["skills/source-command-demo/manual.md"],
-      "a file left in a formerly generated directory is still drift after --write",
+      afterRewrite.foreignDirs,
+      ["source-command-demo"],
+      "ACCEPTED GAP: once --write rewrites `managed`, a formerly generated directory is treated as litter",
     );
+    assert.deepEqual(afterRewrite.extras, []);
+    // Case (b) above already pins the half that still holds: while the canonical
+    // command exists, a hand-added sibling beside its adapter is still drift.
 
     // (e) UNKNOWN tracking state must not buy an exemption. gitKnownTargetPaths
     //     used to answer a git failure with an empty list, which reads as
@@ -267,15 +274,15 @@ try {
     );
 
     // (f) The SAME shape, from the other provenance source. A manifest that
-    //     exists but cannot be parsed means the ownership record is
-    //     UNAVAILABLE, not empty; conflating the two would hand a corrupt
-    //     manifest the exemption for every importer directory. checkExpected()
-    //     ands both signals together, so this is the identical withholding.
+    //     exists but cannot be parsed means the record of what the last sync
+    //     generated is UNAVAILABLE, not empty; conflating the two would hand a
+    //     corrupt manifest the exemption for every importer directory.
+    //     checkExpected() ands both signals together, so this is the identical
+    //     withholding.
     const manifestUnavailable = classifyExtras(["skills/source-command-ship/SKILL.md"], {
-      previouslyOwnedDirs: [],
       trackingKnown: false, // gitKnown.known && prior.known, with prior unusable
     });
-    assert.deepEqual(manifestUnavailable.foreignDirs, [], "an unreadable ownership record grants no exemption");
+    assert.deepEqual(manifestUnavailable.foreignDirs, [], "an unreadable manifest grants no exemption");
     assert.deepEqual(
       manifestUnavailable.extras,
       ["skills/source-command-ship/SKILL.md"],
@@ -343,25 +350,19 @@ try {
     assert.equal(unresolvable.GIT_INDEX_FILE, undefined);
   }
 
-  // (h) Durable ownership must survive a merge that resolves the manifest to the
-  //     current branch. The incoming side's `ownedImporterDirs` exists only in
-  //     MERGE_HEAD at that moment; consulting just the index and HEAD discards it
-  //     permanently and re-classifies the orphaned directory as importer litter
-  //     (Codex P2, PR #565). MERGE_HEAD holds one SHA per line, so an octopus
-  //     merge contributes every parent - `git show MERGE_HEAD:` would take only
-  //     the first.
+  // (h) The manifest records `managed` and nothing else. The durable
+  //     `ownedImporterDirs` field - and with it the git index / HEAD /
+  //     MERGE_HEAD reconstruction that kept it honest - was cut on 2026-09-03.
+  //     Pinned here so a future change cannot quietly reintroduce the field
+  //     without also reintroducing the eight findings' worth of provenance
+  //     handling it needs to be safe.
   {
+    const manifest = JSON.parse(readFileSync(path.join(targetRoot, "generated-manifest.json"), "utf8"));
     assert.deepEqual(
-      ownershipRevisions([]),
-      [":", "HEAD:"],
-      "with no merge in progress the index and HEAD are the whole ancestry",
+      Object.keys(manifest).sort(),
+      ["managed", "version"],
+      "the manifest carries only `version` and `managed`",
     );
-    assert.deepEqual(ownershipRevisions(["aaa111", "bbb222"]), [
-      ":",
-      "HEAD:",
-      "aaa111:",
-      "bbb222:",
-    ], "every merge parent contributes ownership, not just the first");
   }
 } finally {
   rmSync(targetRoot, { recursive: true, force: true });

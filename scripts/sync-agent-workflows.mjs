@@ -68,61 +68,51 @@ function buildExpected() {
   expected.set("README.md", `# Codex Agent Workflows\n\nThis directory is generated from \`.claude/skills/\` and \`.claude/commands/\`.\n\n- Edit the Claude source files.\n- Run \`node scripts/sync-agent-workflows.mjs --write\`.\n- Verify with \`node scripts/sync-agent-workflows.mjs --check\`.\n- Shared hook implementations stay in \`.claude/hooks/\`; Codex invokes them through \`.codex/hooks.json\`.\n`);
 
   const managed = [...expected.keys()].sort();
-  // Union of what we own now, what the last sync owned, and every importer
-  // directory previously recorded - see previousManifest() for why this must
-  // survive the wholesale rewrite of `managed`.
-  const prior = previousManifest();
-  const owned = durableOwnedImporterDirs();
-  for (const key of [...managed, ...prior.managed]) {
-    const dir = importerDirOf(key);
-    if (dir) owned.add(dir);
-  }
-  const ownedImporterDirs = [...owned].sort();
   expected.set(
     "generated-manifest.json",
-    `${JSON.stringify({ version: 1, managed, ownedImporterDirs }, null, 2)}\n`,
+    `${JSON.stringify({ version: 1, managed }, null, 2)}\n`,
   );
   return expected;
 }
 
-// The manifest carries TWO kinds of memory, and they expire differently.
+// The manifest records `managed`: the file list from the last --write. It is
+// rewritten wholesale each time, so it describes the last sync and nothing older.
 //
-// `managed` is the current file list: it is rewritten wholesale on every --write,
-// so it only ever describes the last sync.
+// It used to carry a second, DURABLE `ownedImporterDirs` field so that deleting a
+// canonical `.claude` command named `source-command-*` could not make --check
+// forget the directory had ever been ours. That field is gone (Mason's decision,
+// 2026-09-03). Recovering it reliably meant reading the git index, HEAD, and every
+// merge parent, and each provenance source added its own way of answering
+// "I don't know" with the most permissive value - eight review findings across
+// eight rounds, all in that layer, one of them introduced by the fix for the round
+// before it. The exemption's real job is to stop imported adapters from blocking
+// commits, and `managed` plus the staged-path check does that without a git
+// archaeology layer.
 //
-// `ownedImporterDirs` is durable and MONOTONIC. Deleting a canonical `.claude`
-// command named `source-command-*` makes --write prune its mirror and then
-// rewrite `managed` without it; the directory itself survives if anything else is
-// left inside, and a `managed`-only memory would forget we ever owned it - the
-// next --check would wave the survivor through as importer litter while its stale
-// instructions stayed under .agents/. Carrying the DIRECTORY forward keeps
-// ownership across that rewrite. It grows only when a canonical command is itself
-// named `source-command-*` (normally never, so the list is normally empty), and a
-// stale entry only ever makes the check stricter - a genuine importer directory
-// reusing that exact name fails loudly instead of being exempted.
-// `known` separates the two cases a bare empty result used to conflate:
+// KNOWINGLY GIVEN UP: delete a canonical command whose name starts with
+// `source-command-` while some other file remains in its mirror directory, and the
+// survivor is classified as importer litter instead of drift. Nothing in .claude/
+// is named that way today, and the cost is a stale instruction file sitting
+// unreferenced under .agents/ - not wrong behavior in the app.
 //
-//   - NO manifest at all: a real answer. Nothing has been generated yet, so
-//     nothing is owned, and the exemption may apply. `known: true`.
-//   - a manifest that EXISTS but cannot be read or parsed: NOT an answer. The
-//     ownership record is unavailable, not empty. `known: false`.
+// `known` stays, because it costs nothing and guards the same trap in the one
+// source that remains:
 //
-// Returning `[]` for both is the same defect this module has now produced three
-// times: a check that cannot determine something answers with the most
-// permissive value, and a corrupt manifest would silently hand every importer
-// directory the exemption. Callers must fail closed on `known: false`.
+//   - NO manifest at all: a real answer. Nothing generated yet. `known: true`.
+//   - a manifest that EXISTS but cannot be parsed: NOT an answer. `known: false`.
+//
+// Callers must fail closed on `known: false`.
 function previousManifest(targetRoot = TARGET_ROOT) {
   const file = path.join(targetRoot, "generated-manifest.json");
-  if (!existsSync(file)) return { managed: [], ownedImporterDirs: [], known: true };
+  if (!existsSync(file)) return { managed: [], known: true };
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8"));
     return {
       managed: Array.isArray(parsed.managed) ? parsed.managed : [],
-      ownedImporterDirs: Array.isArray(parsed.ownedImporterDirs) ? parsed.ownedImporterDirs : [],
       known: true,
     };
   } catch {
-    return { managed: [], ownedImporterDirs: [], known: false };
+    return { managed: [], known: false };
   }
 }
 
@@ -187,79 +177,6 @@ function ownGitDir() {
 function git(args) {
   const env = gitEnvironment(process.env, { commonDir: ownGitDir() });
   return spawnSync("git", ["-C", ROOT, ...args], { encoding: "utf8", env });
-}
-
-// Ownership must not be shrinkable by editing the one file that records it.
-//
-// previousManifest() reads the WORKING TREE, and buildExpected() regenerates the
-// manifest from what it read there - so the `ownedImporterDirs` field certifies
-// itself. Drop a name from it by hand, or lose one to a careless merge
-// resolution, and --check reproduces the reduced set, compares it against the
-// reduced file, finds them equal, and passes. The survivor in that directory is
-// then classified as importer litter again: exactly the silent widening the
-// field exists to prevent (Codex P2, PR #565).
-//
-// So anchor it outside that file: union the working tree with the git INDEX and
-// HEAD blobs. Ownership can then only ever grow. A dropped name is restored into
-// `expected`, the working-tree manifest no longer matches, and --check reports
-// `generated-manifest.json is stale` - a loud failure with a one-command remedy
-// instead of a quiet loss of coverage.
-//
-// The index and HEAD are not the whole ancestry. During an unfinished merge the
-// INCOMING side's ownership lives only in MERGE_HEAD: resolve the manifest
-// conflict in favor of the current branch and every name the other branch
-// recorded is gone for good, silently, exactly when a directory is most likely
-// to have lost its canonical source (Codex P2, PR #565). Read the merge parents
-// too. MERGE_HEAD holds one SHA per line, so an octopus merge contributes all of
-// its parents rather than just the first, which `git show MERGE_HEAD:` would.
-export function mergeParentRevisions() {
-  const located = git(["rev-parse", "--git-path", "MERGE_HEAD"]);
-  if (located.status !== 0 || !located.stdout) return [];
-  const file = path.resolve(ROOT, located.stdout.trim());
-  if (!existsSync(file)) return [];
-  try {
-    return readFileSync(file, "utf8")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-// Ownership sources, in the order they are consulted. Pure so the merge-parent
-// contribution can be asserted without staging a real conflicted merge.
-export function ownershipRevisions(mergeHeads = []) {
-  return [":", "HEAD:", ...mergeHeads.map((sha) => `${sha}:`)];
-}
-
-function gitManifestOwnedDirs(targetRoot = TARGET_ROOT) {
-  const rel = unix(
-    path.join(path.relative(ROOT, targetRoot) || ".agents", "generated-manifest.json"),
-  );
-  const out = new Set();
-  for (const rev of ownershipRevisions(mergeParentRevisions())) {
-    const result = git(["show", `${rev}${rel}`]);
-    if (result.status !== 0 || !result.stdout) continue;
-    try {
-      const parsed = JSON.parse(result.stdout);
-      if (Array.isArray(parsed.ownedImporterDirs)) {
-        for (const dir of parsed.ownedImporterDirs) out.add(dir);
-      }
-    } catch {
-      // An unparseable blob records no ownership. It cannot SHRINK the set -
-      // the working tree and the other revision are still unioned in.
-    }
-  }
-  return out;
-}
-
-// Every importer directory this generator has ever owned, from any source git or
-// the working tree can still see.
-function durableOwnedImporterDirs(targetRoot = TARGET_ROOT) {
-  const owned = gitManifestOwnedDirs(targetRoot);
-  for (const dir of previousManifest(targetRoot).ownedImporterDirs) owned.add(dir);
-  return owned;
 }
 
 export function writeExpected(expected, targetRoot = TARGET_ROOT) {
@@ -333,10 +250,12 @@ export function writeExpected(expected, targetRoot = TARGET_ROOT) {
 //      also fixes the sibling case: when `skills/source-command-demo/SKILL.md`
 //      IS generated, a hand-added `manual.md` beside it stays drift, because
 //      ownership is decided per DIRECTORY, not per file. "Previously" means the
-//      manifest's DURABLE `ownedImporterDirs`, not just its current `managed`
-//      list: `--write` rewrites `managed` wholesale, so reading only that would
-//      forget the directory one sync after the canonical command was deleted —
-//      exactly when a survivor inside it still needs catching;
+//      manifest's `managed` list, which `--write` rewrites wholesale — so this
+//      memory lasts until the next sync, not forever. Making it durable required
+//      reconstructing ownership from the git index, HEAD and every merge parent,
+//      and that layer produced a review finding every round without converging;
+//      it was cut on 2026-09-03 (Mason's call). See previousManifest() for what
+//      is knowingly given up;
 //   3. not tracked or staged in git — the exemption is for untracked
 //      working-tree litter. Once someone `git add -A`s the importer output it is
 //      becoming part of the repo, and mangled instructions must fail the parity
@@ -359,15 +278,14 @@ export function classifyExtras(extraRelativePaths, options = {}) {
   const {
     expectedKeys = [],
     previouslyManaged = [],
-    previouslyOwnedDirs = [],
     trackedPaths = [],
     // Whether git could actually be consulted. False means "unknown", and an
     // unknown tracking state must never buy an exemption - see condition (3).
     trackingKnown = true,
   } = options;
 
-  // Any directory this generator owns now, or owned before, is OURS.
-  const ownedDirs = new Set(previouslyOwnedDirs);
+  // Any directory this generator owns now, or owned at the last sync, is OURS.
+  const ownedDirs = new Set();
   for (const key of [...expectedKeys, ...previouslyManaged]) {
     const dir = importerDirOf(key);
     if (dir) ownedDirs.add(dir);
@@ -428,7 +346,6 @@ function checkExpected(expected) {
     {
       expectedKeys: [...expected.keys()],
       previouslyManaged: prior.managed,
-      previouslyOwnedDirs: [...durableOwnedImporterDirs()],
       trackedPaths: gitKnown.paths,
       // The exemption needs BOTH provenance sources to have actually answered.
       // Either one reporting "unknown" withholds it - see previousManifest()
@@ -440,7 +357,7 @@ function checkExpected(expected) {
     console.error("NOTE git could not report which .agents/ paths are tracked; the importer-directory exemption is withheld and any such files are reported as drift.");
   }
   if (!prior.known) {
-    console.error("NOTE generated-manifest.json exists but could not be parsed, so the ownership record is unavailable; the importer-directory exemption is withheld and any such files are reported as drift.");
+    console.error("NOTE generated-manifest.json exists but could not be parsed, so the record of what the last sync generated is unavailable; the importer-directory exemption is withheld and any such files are reported as drift.");
   }
   for (const extra of extras) {
     mismatches.push(`${extra} is not generated from .claude`);
