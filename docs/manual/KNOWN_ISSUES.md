@@ -259,6 +259,41 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (prevention rule) 2026-09-03 — a `LOCK TABLE` does not serialize the OLD body of the function a migration replaces
+
+**Severity: the specific instance is CLOSED and unrealised; the RULE is open and applies to every
+future migration of this shape.** Accepted by Mason on 2026-09-03 — see that date's entry in
+`docs/manual/DECISION_LOG.md` for the decision and its limits.
+
+`20260831160000` and `20260831233000` both take `LOCK TABLE public.idempotency_keys IN SHARE ROW
+EXCLUSIVE MODE` and then check for legacy unbound receipts before replacing
+`reverse_receiving_record` / the Section 9 RPCs. The exact-SHA `gpt-5.6-sol` review of PR #535
+returned a HIGH on this, correctly:
+
+**`SHARE ROW EXCLUSIVE` does not conflict with `ACCESS SHARE`.** The old function body's opening
+plain `SELECT` on `idempotency_keys` passes straight through the migration's lock. Only its final
+`INSERT` conflicts. So a legacy call already in flight can clear the migration's preflight, execute
+the entire old body — without the new closed-period, active-vendor-bill or audit-snapshot
+protections — delete the receiving record and its photos, and block only at the very end, resuming
+after the migration commits and leaving an unbound receipt that no later migration rechecks.
+
+**The rule.** A migration that replaces a function whose OLD body writes to a table the migration
+locks is NOT serialized against that old body. Everything the old body does before its first
+conflicting write runs unprotected. Moving the `LOCK TABLE` earlier in the file does not help.
+Such a migration needs a quiesced rollout: stop the relevant traffic, drain in-flight executions,
+apply, verify no unbound receipts or orphaned deletions appeared, then restore traffic — plus a
+concurrency proof exercising a legacy call that has already passed its receipt lookup when the
+migration starts.
+
+**Why the specific instance is closed.** The window was never entered. At both applies
+(2026-09-03 02:39Z and 12:47Z) there was zero application activity, verified three independent
+ways: `idempotency_keys` had 0 rows created that day against 52 total whose newest was 2026-08-18
+(the table is not purged, so this is real absence rather than missing evidence),
+`financial_audit_log` had 0 rows since 2026-09-02 12:00Z, and `receiving_records` had 0 rows
+created since 2026-06-10. Both migrations are applied and must not be edited.
+
+---
+
 ## OPEN 2026-09-03 — four migrations applied live on 2026-09-03 have no file on `main`
 
 **Severity: LOW while it lasts — live is HEALTHY. This is a source-of-truth gap, not a defect.**

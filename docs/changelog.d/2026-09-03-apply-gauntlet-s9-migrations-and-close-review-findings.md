@@ -29,6 +29,26 @@ layer's value, and the stored fingerprint ends as the outer 9-field one, which i
 compares against. The inner check can only ever see NULL, because a pre-existing receipt makes the
 outer layer return or raise first, and the advisory lock on the key is held for the transaction.
 
+### Accepted residual: the exact-SHA Codex review's HIGH on the apply window
+
+The `gpt-5.6-sol` push-proof review of `1e1c645e9` returned `CODEX_PROOF_VERDICT: BLOCKERS` with one
+HIGH, and it is correct: `SHARE ROW EXCLUSIVE` does not conflict with `ACCESS SHARE`, so the old
+`reverse_receiving_record` body's opening plain `SELECT` on `idempotency_keys` passes through the
+migration's `LOCK TABLE`. A legacy reversal already in flight could clear the preflight, run the old
+body unprotected, delete the receiving record and photos, and block only at its final receipt
+`INSERT`.
+
+Mason accepted this on 2026-09-03 as a closed residual rather than a remediation, because it
+describes the rollout procedure (not the code), an applied migration must never be edited, and the
+window was demonstrably never entered — zero application activity at both applies, verified via
+`idempotency_keys` (0 rows that day, 52 total, newest 2026-08-18, table not purged),
+`financial_audit_log` (0 rows since 2026-09-02 12:00Z) and `receiving_records` (0 since
+2026-06-10). The durable output is a prevention rule in `docs/manual/KNOWN_ISSUES.md` and the
+decision record in `docs/manual/DECISION_LOG.md`: a migration that replaces a function whose OLD
+body writes to a table the migration locks is not serialized against that old body, and needs a
+quiesced rollout plus a concurrency proof covering a legacy call that has already passed its
+receipt lookup.
+
 ## Frontend fixes (review findings that were genuinely still open)
 
 - `src/pages/CycleCounts.tsx` — failed item writes are now keyed by their owning cycle count. A
