@@ -2719,11 +2719,12 @@ function readAttrsAndBody(text, fromIdx) {
   return null;
 }
 
-/** Return SECURITY DEFINER/INVOKER changes made by separate ALTER statements.
- * PostgreSQL applies the last mode after CREATE, so looking only at the CREATE
- * attributes would misclassify the final callable. Signature overloads are
- * deliberately collapsed to the routine name: inspecting an extra same-named
- * definition is safer than missing the elevated overload. */
+/** Return SECURITY DEFINER/INVOKER changes made by top-level ALTER statements.
+ * The caller must supply a mask whose quoted/procedural bodies are blanked:
+ * an ALTER stored in a routine body is deferred until that routine is called
+ * and therefore cannot prove that a top-level CREATE finished as INVOKER.
+ * PostgreSQL applies the last executed mode after CREATE, so looking only at
+ * the CREATE attributes would still misclassify a real top-level demotion. */
 function alteredRoutineSecurityModes(structuralSql) {
   const altered = [];
   const head = new RegExp(
@@ -2795,6 +2796,23 @@ function beforeTopLevelDefault(argument) {
   return text.trim();
 }
 
+/** An unqualified custom type is not a stable routine identity: SET search_path
+ * can make identical source spellings resolve to different overloads. Built-in
+ * pg_catalog types remain safe in their ordinary unqualified form; every custom
+ * type must carry its schema so CREATE and ALTER can be compared exactly. */
+function normalizedUnambiguousRoutineIdentityType(rawType) {
+  const sourceType = String(rawType || "").trim();
+  const type = sourceType
+    .replace(/\s+/g, " ")
+    .replace(/\s*([(),.\[\]])\s*/g, "$1");
+  if (!type) return null;
+  if (!type.includes('"') && isBuiltInSqlCastTypeName(type)) return type.toLowerCase();
+  const arrays = type.match(/(?:\[\])+$/)?.[0] || "";
+  const base = type.slice(0, type.length - arrays.length);
+  const qualified = normalizedQualifiedIdentifier(base);
+  return qualified?.includes(".") ? qualified + arrays : null;
+}
+
 /** Normalize CREATE parameters or ALTER identity arguments into a conservative
  * comparable type list. An unusual unnamed multi-word CREATE type may refuse
  * to match and require manual review; it cannot make a different overload look
@@ -2813,9 +2831,9 @@ function normalizedRoutineIdentityArgs(argsText, createDefinition) {
       if (named) argument = argument.slice(named[0].length).trim();
     }
     if (!argument) return null;
-    types.push(
-      argument.toLowerCase().replace(/\s+/g, " ").replace(/\s*([(),.\[\]])\s*/g, "$1")
-    );
+    const normalizedType = normalizedUnambiguousRoutineIdentityType(argument);
+    if (normalizedType === null) return null;
+    types.push(normalizedType);
   }
   return types.join(",");
 }
@@ -2859,9 +2877,19 @@ try {
     masked,
     blankComments(content)
   );
-  const alteredSecurityModes = masked === null
+  const executableSecurityModes = masked === null
     ? []
     : alteredRoutineSecurityModes(masked);
+  const topLevelSecurityModeIndexes = new Set((callNameMasked === null
+    ? []
+    : alteredRoutineSecurityModes(callNameMasked)
+  ).map(({ index }) => index));
+  // Any readable DEFINER elevation is dangerous, including dynamic SQL. An
+  // INVOKER demotion is trusted only when it is top-level and executes as part
+  // of the migration itself rather than being stored for a later code path.
+  const alteredSecurityModes = executableSecurityModes.filter((altered) =>
+    altered.mode === "DEFINER" || topLevelSecurityModeIndexes.has(altered.index)
+  );
   const hasRollbackControl = masked !== null &&
     hasRollbackCapableTransactionControl(masked);
   const createdRoutines = [];
@@ -3072,10 +3100,13 @@ try {
     }
     const params = content.slice(paramsOpen + 1, parsed.end - 1);
     const maskedParams = parsed.params;
+    const identityParams = callNameMasked === null
+      ? maskedParams
+      : callNameMasked.slice(paramsOpen + 1, parsed.end - 1);
     const createdRoutine = {
       kind: routineKind,
       name: normalizedRoutineName,
-      signature: normalizedRoutineIdentityArgs(maskedParams, true),
+      signature: normalizedRoutineIdentityArgs(identityParams, true),
     };
     createdRoutines.push(createdRoutine);
     const attrs = rest.attrs;

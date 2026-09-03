@@ -3123,6 +3123,41 @@ r = runHook(
 ok(!isDeny(r), "ALTER FUNCTION SECURITY INVOKER overrides an earlier CREATE SECURITY DEFINER mode");
 
 r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "conditionally_demoted") +
+  `\nCREATE OR REPLACE PROCEDURE public.defer_invoker_demotion()
+LANGUAGE SQL
+AS $procedure$
+  ALTER FUNCTION public.conditionally_demoted(uuid) SECURITY INVOKER;
+$procedure$;`
+);
+ok(isDeny(r), "a deferred procedural INVOKER ALTER cannot demote a top-level SECURITY DEFINER create");
+
+r = runHook(
+  "SET search_path = s1, pg_catalog;\n" +
+  fn(MUTATION, "p_performed_by actor_id", "SECURITY DEFINER")
+    .replace("test_fn", "shadowed_type_overload") +
+  "\nSET search_path = s2, pg_catalog;\n" +
+  fn("BEGIN RETURN NULL; END;", "p_performed_by actor_id", "SECURITY INVOKER")
+    .replace("test_fn", "shadowed_type_overload") +
+  "\nALTER FUNCTION public.shadowed_type_overload(actor_id) SECURITY INVOKER;"
+);
+ok(isDeny(r), "schema-distinct unqualified custom types cannot collapse into one ALTER identity");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by s1.actor_id", "SECURITY DEFINER")
+    .replace("test_fn", "qualified_custom_type") +
+  "\nALTER FUNCTION public.qualified_custom_type(s1.actor_id) SECURITY INVOKER;"
+);
+ok(!isDeny(r), "a top-level INVOKER ALTER can match an explicitly schema-qualified custom type");
+
+r = runHook(
+  fn(MUTATION, 'p_performed_by s1."ActorId"', "SECURITY DEFINER")
+    .replace("test_fn", "quoted_custom_type") +
+  '\nALTER FUNCTION public.quoted_custom_type(s1."actorid") SECURITY INVOKER;'
+);
+ok(isDeny(r), "case-distinct quoted custom types cannot collapse into one ALTER identity");
+
+r = runHook(
   "BEGIN;\n" +
   fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "rolled_back_demotion") +
   "\nSAVEPOINT mode_flip;" +
