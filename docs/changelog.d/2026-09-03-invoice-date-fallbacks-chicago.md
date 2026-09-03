@@ -35,7 +35,10 @@ repository's settled idiom (~2026-07-10 rule).
 Preflight pins each installed body to exactly its live md5 (fresh apply) or the file's own
 candidate md5 (identical replay) — never a marker — and refuses `PREFLIGHT_BODY_DRIFT` otherwise;
 the split-invoice body is live with CRLF, so its pin is that CRLF md5 and the file installs the LF
-form. Pins, four replacements and postflight share one transaction. Postflight asserts each
+form. The supported clean-rebuild baseline holds that same text with LF endings
+(`4a05478da4a8d6601eefd4aed5c0ab3b`), so that LF preimage is a third accepted starting body — a
+disaster-recovery rebuild must reach the replacement, not be refused for line endings. That arm
+came out of the gpt-5.6-sol exact-SHA review (round 1, HIGH) and is proven in the container. Pins, four replacements and postflight share one transaction. Postflight asserts each
 candidate md5, no CR bytes, the expected `CURRENT_DATE` count, at least one Chicago conversion,
 SECURITY DEFINER with `search_path=public, pg_temp`, and one overload. `CREATE OR REPLACE` keeps
 each function's ACL. No data is rewritten, no row deleted, no grant moves.

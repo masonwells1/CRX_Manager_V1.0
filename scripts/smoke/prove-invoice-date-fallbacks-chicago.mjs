@@ -12,10 +12,12 @@
  * bodies from a byte-exact fixture, and never reads a DB URL.
  *
  * WHAT IT PROVES, in order:
- *   1. the four installed live bodies hash to ALL FOUR live pins the candidate names in
- *      its own PREFLIGHT_BODY_DRIFT messages (the pins are read from the file, not
- *      re-typed here), including the CRLF form of the split-invoice body -- the same
- *      check the migration's preflight performs on production;
+ *   1. the untouched clean-rebuild baseline holds the split-invoice body as exactly the LF
+ *      preimage the candidate accepts (1a); the four installed live bodies hash to ALL FOUR
+ *      live pins the candidate names in its own PREFLIGHT_BODY_DRIFT messages (the pins
+ *      are read from the file, not re-typed here), including the CRLF form of the
+ *      split-invoice body (1b); and the candidate APPLIES over the baseline (LF) form of
+ *      that body, so a disaster-recovery rebuild is not refused (1c);
  *   2. BEFORE the candidate, with the session clock set to a zone whose calendar day
  *      differs from Chicago's at this instant, save_invoice with no invoice_date stamps
  *      the SESSION day (the defect), so the behavioural test below discriminates;
@@ -156,10 +158,12 @@ const candidateSql = readFileSync(CANDIDATE, 'utf8');
 assert.equal(candidateSql.includes('\r'), false, 'candidate must be LF');
 const pins = {};
 for (const fn of FUNCS) {
-  const m = new RegExp(`PREFLIGHT_BODY_DRIFT: public\\.${fn} live body md5 is %, expected ([0-9a-f]{32}) \\(the reviewed starting body\\) or ([0-9a-f]{32}) \\(this file`).exec(candidateSql);
+  const m = new RegExp(`PREFLIGHT_BODY_DRIFT: public\\.${fn} live body md5 is %, expected ([0-9a-f]{32}) \\(the reviewed starting body as installed on production\\)(?:, ([0-9a-f]{32}) \\(the same text with LF line endings[^)]*\\))? or ([0-9a-f]{32}) \\(this file`).exec(candidateSql);
   assert.ok(m, `candidate does not pin ${fn}`);
-  pins[fn] = { live: m[1], candidate: m[2] };
+  pins[fn] = { live: m[1], lfPreimage: m[2] ?? m[1], candidate: m[3] };
 }
+assert.notEqual(pins._save_field_app_split_invoice_impl.lfPreimage, pins._save_field_app_split_invoice_impl.live,
+  'the split body is CRLF on live, so the candidate must name a distinct LF preimage for the clean-rebuild baseline');
 // The candidate bodies are the text between each function's $function$ delimiters.
 for (const fn of FUNCS) {
   const start = candidateSql.indexOf(`CREATE OR REPLACE FUNCTION public.${fn}(`);
@@ -258,6 +262,15 @@ try {
   }
   log(`PHASE 1: baseline restored and ${stopIdx} post-baseline migrations replayed (schema brought forward to ${path.basename(migrations[stopIdx - 1])})`);
 
+  // The UNTOUCHED replayed catalog's split-invoice body: the clean-rebuild baseline holds
+  // the same text as production with LF endings. Capture it byte for byte before anything
+  // is installed, and check it is exactly the LF preimage the candidate accepts.
+  const untouchedSplitDef = functionDef('_save_field_app_split_invoice_impl');
+  const untouchedSplitMd5 = bodyMd5('_save_field_app_split_invoice_impl');
+  assert.equal(untouchedSplitMd5, pins._save_field_app_split_invoice_impl.lfPreimage,
+    `the untouched baseline split body hashes to ${untouchedSplitMd5}, not the candidate's LF preimage pin ${pins._save_field_app_split_invoice_impl.lfPreimage}`);
+  log('PHASE 1a: the untouched clean-rebuild baseline holds the split body as the exact LF preimage the candidate accepts');
+
   // Install production's exact starting bodies, byte for byte (CR preserved).
   copy(LIVE_BODIES, 'live-bodies.sql');
   apply('live-bodies.sql');
@@ -266,6 +279,21 @@ try {
   const splitHasCr = scalar(`SELECT position(E'\\r' IN p.prosrc) > 0 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '_save_field_app_split_invoice_impl'`);
   assert.equal(splitHasCr, 't', 'the split-invoice body must carry CRLF like production (the pin is its CRLF md5)');
   log('PHASE 1b: all four live bodies installed byte-exact and hash to the candidate\'s live pins (split body CRLF, as live)');
+
+  // PHASE 1c: the DISASTER-RECOVERY path. A clean rebuild reaches this migration with the
+  // split body in its baseline (LF) form -- gpt-5.6-sol's HIGH on the first review round:
+  // a preflight that accepted only the CRLF production body would refuse that rebuild.
+  // Put the untouched baseline text back (captured above, byte for byte), apply, and
+  // require the replacement to land; then restore the live state for the phases below.
+  psql(untouchedSplitDef);
+  assert.equal(bodyMd5('_save_field_app_split_invoice_impl'), pins._save_field_app_split_invoice_impl.lfPreimage, 'baseline split body not restored');
+  copyMigrationText(candidateSql, 'candidate.sql', workDir);
+  const drApply = apply('candidate.sql');
+  assert.match(`${drApply.stdout}\n${drApply.stderr}`, /POSTFLIGHT_OK/, 'the candidate must apply over the clean-rebuild baseline form of the split body');
+  for (const fn of FUNCS) assert.equal(bodyMd5(fn), pins[fn].candidate, `${fn} not at its candidate pin after the baseline-form apply`);
+  apply('live-bodies.sql');
+  assert.deepEqual(bodyState(), before, 'live state not restored after the baseline-form apply');
+  log('PHASE 1c: the candidate applies over the clean-rebuild baseline (LF) form of the split body -- disaster recovery is not refused; live state restored');
 
   psql(`
     ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned_until timestamptz;
@@ -290,7 +318,6 @@ try {
   psql(driftedDef);
   const drifted = bodyState();
   assert.notEqual(drifted[FUNCS[0]], pins[FUNCS[0]].live, 'drift did not change the body');
-  copyMigrationText(candidateSql, 'candidate.sql', workDir);
   applyExpectFail('candidate.sql', 'PREFLIGHT_BODY_DRIFT');
   assert.deepEqual(bodyState(), drifted, 'a refused apply must leave every body exactly as it found it');
   psql(originalDef);
@@ -353,7 +380,7 @@ try {
   log('PHASE 7a: a candidate that leaves CURRENT_DATE in the split season fallback aborts in POSTFLIGHT_CURRENT_DATE with nothing installed');
 
   // PHASE 7b: removing one function's drift pin must make that drift go unrefused.
-  const pinBlock = new RegExp(`  IF v_row\\.body_md5 <> '${pins[FUNCS[0]].live}' AND v_row\\.body_md5 <> '${pins[FUNCS[0]].candidate}' THEN\\n[^\\n]*\\n  END IF;\\n`);
+  const pinBlock = new RegExp(`  IF v_row\\.body_md5 <> '${pins[FUNCS[0]].live}'(?: AND v_row\\.body_md5 <> '[0-9a-f]{32}')? AND v_row\\.body_md5 <> '${pins[FUNCS[0]].candidate}' THEN\\n[^\\n]*\\n  END IF;\\n`);
   assert.match(candidateSql, pinBlock, 'could not locate the drift pin block for the first function');
   const mutantB = candidateSql.replace(pinBlock, '');
   assert.notEqual(mutantB, candidateSql, 'mutant B did not remove the pin block');

@@ -38,10 +38,13 @@
 --   _price_order_below_cost_impl_20260810        live 775317b102a0cd211418773aa409d510 -> candidate bad627af481b79da93e5afbb1a3bc181
 --   _save_invoice_lineage_unaware_impl_20260827  live 45e63ffc8e821467bcca056cad535163 -> candidate e1f1e0e641bd22f23505a7afc4384b2b
 --   _save_field_app_invoice_impl_20260714        live a44110b8398943fc6e450e776a7d7098 -> candidate bf900b8bd31439b9fa2963b161e107ca
---   _save_field_app_split_invoice_impl           live 263dee1e74eab819f36dafbe59a5ba5e (CRLF body live) -> candidate 9288b8fb410f33b7c7d46ecfb76306fa
+--   _save_field_app_split_invoice_impl           live 263dee1e74eab819f36dafbe59a5ba5e (CRLF body live; LF preimage 4a05478da4a8d6601eefd4aed5c0ab3b) -> candidate 9288b8fb410f33b7c7d46ecfb76306fa
 -- The _save_field_app_split_invoice_impl body is live with CRLF line endings (it was
--- applied through a channel that kept them); its pin is the md5 of that CRLF text, and
--- this file installs the LF form (postflight asserts no CR bytes remain).
+-- applied through a channel that kept them); its pin is the md5 of that CRLF text. The
+-- supported clean-rebuild baseline holds the SAME text with LF endings, so that LF
+-- preimage is accepted too -- a disaster-recovery rebuild must reach the replacement, not
+-- be refused for line endings (gpt-5.6-sol exact-SHA review 2026-09-03, HIGH). Any other
+-- body is drift. This file installs the LF form (postflight asserts no CR bytes remain).
 --
 -- PROOF: scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs (throwaway PostgreSQL 17
 -- container on the supported schema baseline): pins reproduce, drift refused, apply,
@@ -70,7 +73,7 @@ BEGIN
     RAISE EXCEPTION 'PREFLIGHT_SECDEF: public._price_order_below_cost_impl_20260810 is not SECURITY DEFINER; the reviewed header is. Reconcile before applying.';
   END IF;
   IF v_row.body_md5 <> '775317b102a0cd211418773aa409d510' AND v_row.body_md5 <> 'bad627af481b79da93e5afbb1a3bc181' THEN
-    RAISE EXCEPTION 'PREFLIGHT_BODY_DRIFT: public._price_order_below_cost_impl_20260810 live body md5 is %, expected 775317b102a0cd211418773aa409d510 (the reviewed starting body) or bad627af481b79da93e5afbb1a3bc181 (this file''s own body, for a replay). It changed out of band since review; diff and re-review, do not apply.', v_row.body_md5;
+    RAISE EXCEPTION 'PREFLIGHT_BODY_DRIFT: public._price_order_below_cost_impl_20260810 live body md5 is %, expected 775317b102a0cd211418773aa409d510 (the reviewed starting body as installed on production) or bad627af481b79da93e5afbb1a3bc181 (this file''s own body, for a replay). It changed out of band since review; diff and re-review, do not apply.', v_row.body_md5;
   END IF;
 
   -- _save_invoice_lineage_unaware_impl_20260827
@@ -89,7 +92,7 @@ BEGIN
     RAISE EXCEPTION 'PREFLIGHT_SECDEF: public._save_invoice_lineage_unaware_impl_20260827 is not SECURITY DEFINER; the reviewed header is. Reconcile before applying.';
   END IF;
   IF v_row.body_md5 <> '45e63ffc8e821467bcca056cad535163' AND v_row.body_md5 <> 'e1f1e0e641bd22f23505a7afc4384b2b' THEN
-    RAISE EXCEPTION 'PREFLIGHT_BODY_DRIFT: public._save_invoice_lineage_unaware_impl_20260827 live body md5 is %, expected 45e63ffc8e821467bcca056cad535163 (the reviewed starting body) or e1f1e0e641bd22f23505a7afc4384b2b (this file''s own body, for a replay). It changed out of band since review; diff and re-review, do not apply.', v_row.body_md5;
+    RAISE EXCEPTION 'PREFLIGHT_BODY_DRIFT: public._save_invoice_lineage_unaware_impl_20260827 live body md5 is %, expected 45e63ffc8e821467bcca056cad535163 (the reviewed starting body as installed on production) or e1f1e0e641bd22f23505a7afc4384b2b (this file''s own body, for a replay). It changed out of band since review; diff and re-review, do not apply.', v_row.body_md5;
   END IF;
 
   -- _save_field_app_invoice_impl_20260714
@@ -108,7 +111,7 @@ BEGIN
     RAISE EXCEPTION 'PREFLIGHT_SECDEF: public._save_field_app_invoice_impl_20260714 is not SECURITY DEFINER; the reviewed header is. Reconcile before applying.';
   END IF;
   IF v_row.body_md5 <> 'a44110b8398943fc6e450e776a7d7098' AND v_row.body_md5 <> 'bf900b8bd31439b9fa2963b161e107ca' THEN
-    RAISE EXCEPTION 'PREFLIGHT_BODY_DRIFT: public._save_field_app_invoice_impl_20260714 live body md5 is %, expected a44110b8398943fc6e450e776a7d7098 (the reviewed starting body) or bf900b8bd31439b9fa2963b161e107ca (this file''s own body, for a replay). It changed out of band since review; diff and re-review, do not apply.', v_row.body_md5;
+    RAISE EXCEPTION 'PREFLIGHT_BODY_DRIFT: public._save_field_app_invoice_impl_20260714 live body md5 is %, expected a44110b8398943fc6e450e776a7d7098 (the reviewed starting body as installed on production) or bf900b8bd31439b9fa2963b161e107ca (this file''s own body, for a replay). It changed out of band since review; diff and re-review, do not apply.', v_row.body_md5;
   END IF;
 
   -- _save_field_app_split_invoice_impl
@@ -126,8 +129,8 @@ BEGIN
   IF NOT v_row.prosecdef THEN
     RAISE EXCEPTION 'PREFLIGHT_SECDEF: public._save_field_app_split_invoice_impl is not SECURITY DEFINER; the reviewed header is. Reconcile before applying.';
   END IF;
-  IF v_row.body_md5 <> '263dee1e74eab819f36dafbe59a5ba5e' AND v_row.body_md5 <> '9288b8fb410f33b7c7d46ecfb76306fa' THEN
-    RAISE EXCEPTION 'PREFLIGHT_BODY_DRIFT: public._save_field_app_split_invoice_impl live body md5 is %, expected 263dee1e74eab819f36dafbe59a5ba5e (the reviewed starting body) or 9288b8fb410f33b7c7d46ecfb76306fa (this file''s own body, for a replay). It changed out of band since review; diff and re-review, do not apply.', v_row.body_md5;
+  IF v_row.body_md5 <> '263dee1e74eab819f36dafbe59a5ba5e' AND v_row.body_md5 <> '4a05478da4a8d6601eefd4aed5c0ab3b' AND v_row.body_md5 <> '9288b8fb410f33b7c7d46ecfb76306fa' THEN
+    RAISE EXCEPTION 'PREFLIGHT_BODY_DRIFT: public._save_field_app_split_invoice_impl live body md5 is %, expected 263dee1e74eab819f36dafbe59a5ba5e (the reviewed starting body as installed on production), 4a05478da4a8d6601eefd4aed5c0ab3b (the same text with LF line endings, as the clean-rebuild baseline holds it) or 9288b8fb410f33b7c7d46ecfb76306fa (this file''s own body, for a replay). It changed out of band since review; diff and re-review, do not apply.', v_row.body_md5;
   END IF;
 
   RAISE NOTICE 'PREFLIGHT_OK: all four bodies match their reviewed pins; the replacements may proceed.';
