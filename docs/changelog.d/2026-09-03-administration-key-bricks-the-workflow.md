@@ -33,11 +33,11 @@ and is superseded here.
 Found independently by PR #569, and verified from live run logs rather than from prose.
 The real fix for the repo-wide gate failure was `pull-requests: write` (PR #570).
 
-### Open follow-up, not fixed here
+### Follow-up — CLOSED by #571 while this branch was in review
 
 #570 pinned its own fix with the test `the gate's own label and comment writes are
-actually granted`, but the companion test from #569 — `every declared permission is a key
-GitHub Actions actually accepts` — is **not on `main`**. Nothing currently prevents the
-zero-job bricking class from recurring. That test sits in #569, which is `CONFLICTING`
-and otherwise duplicates the already-merged permission fix. **Salvage the one test; do
-not re-land the permission change.**
+actually granted`, but the companion guard — a test that every declared permission is a
+key GitHub Actions actually accepts — was missing, so nothing prevented the zero-job
+bricking class from recurring. **#571 landed exactly that test**, and this branch merged
+it at `bb260f562`. The follow-up is closed; do not re-open it, and do not re-land #569's
+permission change, which #570 already made.
