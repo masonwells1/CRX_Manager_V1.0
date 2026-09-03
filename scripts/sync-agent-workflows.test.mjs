@@ -243,8 +243,26 @@ try {
       "a file left in a formerly generated directory is still drift after --write",
     );
 
+    // (e) UNKNOWN tracking state must not buy an exemption. gitKnownTargetPaths
+    //     used to answer a git failure with an empty list, which reads as
+    //     "nothing is tracked" - the most permissive answer available, handed
+    //     out at exactly the moment the check can no longer tell whether the
+    //     importer output had been staged. It now reports `known: false` and the
+    //     exemption is withheld (CodeRabbit, PR #565).
+    const trackingUnknown = classifyExtras(["skills/source-command-ship/SKILL.md"], {
+      trackedPaths: [],
+      trackingKnown: false,
+    });
+    assert.deepEqual(trackingUnknown.foreignDirs, [], "unknown tracking state grants no exemption");
+    assert.deepEqual(
+      trackingUnknown.extras,
+      ["skills/source-command-ship/SKILL.md"],
+      "when git cannot be consulted, importer paths are reported as drift",
+    );
+
     // ...and the untracked twin of (c) still passes, so the fix did not simply
-    // delete the exemption.
+    // delete the exemption. An empty tracked list with `known: true` is a real
+    // answer - nothing staged yet - and must still exempt.
     const untracked = classifyExtras(["skills/source-command-ship/SKILL.md"]);
     assert.deepEqual(untracked.foreignDirs, ["source-command-ship"]);
     assert.deepEqual(untracked.extras, [], "untracked importer litter is still exempt");

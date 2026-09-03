@@ -72,7 +72,7 @@ function buildExpected() {
   // directory previously recorded - see previousManifest() for why this must
   // survive the wholesale rewrite of `managed`.
   const prior = previousManifest();
-  const owned = new Set(prior.ownedImporterDirs);
+  const owned = durableOwnedImporterDirs();
   for (const key of [...managed, ...prior.managed]) {
     const dir = importerDirOf(key);
     if (dir) owned.add(dir);
@@ -114,6 +114,63 @@ function previousManifest(targetRoot = TARGET_ROOT) {
 
 function previousManagedFiles(targetRoot = TARGET_ROOT) {
   return previousManifest(targetRoot).managed;
+}
+
+// git, with any inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE stripped. This
+// check runs inside the pre-commit hook, where those variables are set and point
+// at the hook's own view - inheriting them makes `-C ROOT` a lie and has already
+// broken fixture tests in this repo.
+function git(args) {
+  const env = { ...process.env };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  env.MSYS_NO_PATHCONV = "1";
+  return spawnSync("git", ["-C", ROOT, ...args], { encoding: "utf8", env });
+}
+
+// Ownership must not be shrinkable by editing the one file that records it.
+//
+// previousManifest() reads the WORKING TREE, and buildExpected() regenerates the
+// manifest from what it read there - so the `ownedImporterDirs` field certifies
+// itself. Drop a name from it by hand, or lose one to a careless merge
+// resolution, and --check reproduces the reduced set, compares it against the
+// reduced file, finds them equal, and passes. The survivor in that directory is
+// then classified as importer litter again: exactly the silent widening the
+// field exists to prevent (Codex P2, PR #565).
+//
+// So anchor it outside that file: union the working tree with the git INDEX and
+// HEAD blobs. Ownership can then only ever grow. A dropped name is restored into
+// `expected`, the working-tree manifest no longer matches, and --check reports
+// `generated-manifest.json is stale` - a loud failure with a one-command remedy
+// instead of a quiet loss of coverage.
+function gitManifestOwnedDirs(targetRoot = TARGET_ROOT) {
+  const rel = unix(
+    path.join(path.relative(ROOT, targetRoot) || ".agents", "generated-manifest.json"),
+  );
+  const out = new Set();
+  for (const rev of [":", "HEAD:"]) {
+    const result = git(["show", `${rev}${rel}`]);
+    if (result.status !== 0 || !result.stdout) continue;
+    try {
+      const parsed = JSON.parse(result.stdout);
+      if (Array.isArray(parsed.ownedImporterDirs)) {
+        for (const dir of parsed.ownedImporterDirs) out.add(dir);
+      }
+    } catch {
+      // An unparseable blob records no ownership. It cannot SHRINK the set -
+      // the working tree and the other revision are still unioned in.
+    }
+  }
+  return out;
+}
+
+// Every importer directory this generator has ever owned, from any source git or
+// the working tree can still see.
+function durableOwnedImporterDirs(targetRoot = TARGET_ROOT) {
+  const owned = gitManifestOwnedDirs(targetRoot);
+  for (const dir of previousManifest(targetRoot).ownedImporterDirs) owned.add(dir);
+  return owned;
 }
 
 export function writeExpected(expected, targetRoot = TARGET_ROOT) {
@@ -194,7 +251,12 @@ export function writeExpected(expected, targetRoot = TARGET_ROOT) {
 //   3. not tracked or staged in git — the exemption is for untracked
 //      working-tree litter. Once someone `git add -A`s the importer output it is
 //      becoming part of the repo, and mangled instructions must fail the parity
-//      check rather than ride in silently.
+//      check rather than ride in silently. This condition FAILS CLOSED: if git
+//      cannot be consulted the tracking state is unknown, so no directory is
+//      exempted at all and the litter is reported as ordinary drift. It used to
+//      fail open — a git failure read as "nothing is tracked", which is the most
+//      permissive possible answer and would have exempted staged adapters at
+//      exactly the moment the check could no longer tell (CodeRabbit, PR #565).
 //
 // Together these keep the invariant the exemption could otherwise break:
 // `.agents/` is generated solely from `.claude/`.
@@ -210,6 +272,9 @@ export function classifyExtras(extraRelativePaths, options = {}) {
     previouslyManaged = [],
     previouslyOwnedDirs = [],
     trackedPaths = [],
+    // Whether git could actually be consulted. False means "unknown", and an
+    // unknown tracking state must never buy an exemption - see condition (3).
+    trackingKnown = true,
   } = options;
 
   // Any directory this generator owns now, or owned before, is OURS.
@@ -224,29 +289,37 @@ export function classifyExtras(extraRelativePaths, options = {}) {
   const foreignDirs = new Set();
   for (const relative of extraRelativePaths) {
     const dir = importerDirOf(relative);
-    if (dir && !ownedDirs.has(dir) && !tracked.has(relative)) foreignDirs.add(dir);
+    if (dir && trackingKnown && !ownedDirs.has(dir) && !tracked.has(relative)) foreignDirs.add(dir);
     else extras.push(relative);
   }
   return { extras, foreignDirs: [...foreignDirs].sort() };
 }
 
 // Paths under .agents/ that git already knows about (tracked or staged), as
-// TARGET_ROOT-relative unix paths. Failure to run git is treated as "nothing is
-// tracked", which only ever makes the check MORE permissive about litter — never
-// less permissive about real drift, which is decided by `expected` alone.
+// TARGET_ROOT-relative unix paths, plus whether git could be consulted at all.
+//
+// `known: false` means the answer is UNKNOWN, not "nothing is tracked". Those
+// are opposite defaults: the latter is the most permissive reading possible and
+// would hand the exemption to every importer path precisely when the check can
+// no longer tell whether they had been staged. Callers must fail closed on it.
+//
+// An empty result with `known: true` is a real answer - nothing is tracked yet -
+// and still allows the exemption.
 function gitKnownTargetPaths(targetRoot = TARGET_ROOT) {
   const rel = unix(path.relative(ROOT, targetRoot)) || ".agents";
   const out = new Set();
+  let known = true;
   for (const args of [["ls-files", "-z", "--", rel], ["diff", "--cached", "--name-only", "-z", "--", rel]]) {
-    const r = spawnSync("git", ["-C", ROOT, ...args], { encoding: "utf8" });
-    if (r.status !== 0 || !r.stdout) continue;
+    const r = git(args);
+    if (r.status !== 0) { known = false; continue; }
+    if (!r.stdout) continue;
     for (const line of r.stdout.split("\0")) {
       if (!line) continue;
       const withinTarget = unix(path.relative(rel, line));
       if (withinTarget && !withinTarget.startsWith("..")) out.add(withinTarget);
     }
   }
-  return [...out];
+  return { paths: [...out], known };
 }
 
 function checkExpected(expected) {
@@ -260,15 +333,20 @@ function checkExpected(expected) {
     .map((file) => unix(path.relative(TARGET_ROOT, file)))
     .filter((relative) => !relative.startsWith("session-state/"));
   const prior = previousManifest();
+  const gitKnown = gitKnownTargetPaths();
   const { extras, foreignDirs } = classifyExtras(
     actualFiles.filter((relative) => !expected.has(relative)),
     {
       expectedKeys: [...expected.keys()],
       previouslyManaged: prior.managed,
-      previouslyOwnedDirs: prior.ownedImporterDirs,
-      trackedPaths: gitKnownTargetPaths(),
+      previouslyOwnedDirs: [...durableOwnedImporterDirs()],
+      trackedPaths: gitKnown.paths,
+      trackingKnown: gitKnown.known,
     },
   );
+  if (!gitKnown.known) {
+    console.error("NOTE git could not report which .agents/ paths are tracked; the importer-directory exemption is withheld and any such files are reported as drift.");
+  }
   for (const extra of extras) {
     mismatches.push(`${extra} is not generated from .claude`);
   }
