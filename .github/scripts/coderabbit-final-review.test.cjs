@@ -403,6 +403,7 @@ function makeHarness({
   workflowRunFailure = false,
   review = undefined,
   removeLabelFailures = [],
+  runId = 909090,
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -576,6 +577,9 @@ function makeHarness({
   const context = {
     actor: 'masonwells1',
     eventName,
+    // This workflow run's own id. The gate excludes its own still-running check
+    // from the blocking set; without a value here that exclusion is untestable.
+    runId,
     repo: { owner: 'masonwells1', repo: 'FarmRx' },
     payload: {
       action,
@@ -639,6 +643,65 @@ test('omitting the quiet-period option invokes the production 30-second confirma
 
   assert.equal(result.status, 'requested');
   assert.deepEqual(waits, [30_000]);
+});
+
+// ── the gate must not block on its OWN still-running check ───────────────────
+// While the gate evaluates, its own check run is `in_progress`, and
+// evaluateChecks blocks on anything not completed. Without an exclusion the gate
+// blocks on itself every single time and the ready-label path can never succeed:
+//
+//   CodeRabbit final review was not requested: final-review-gate: in_progress/no conclusion
+//
+// Observed on PR #563, run 33716013321 (2026-09-03) — the first candidate ever to
+// reach this code, the #573 crash having stood in front of it until an hour
+// earlier. Excluded by RUN ID, never by name: a run id identifies exactly one
+// run, so this cannot quietly excuse a different workflow sharing a job name.
+function inProgressCheck(name, runId) {
+  return {
+    id: 77,
+    app: { id: 15368 },
+    name,
+    status: 'in_progress',
+    conclusion: null,
+    created_at: '2026-08-30T11:59:00Z',
+    details_url: `https://github.com/masonwells1/FarmRx/actions/runs/${runId}/job/1`,
+    workflow_id: 4242,
+    workflow_path: '.github/workflows/ci.yml',
+  };
+}
+
+test("the gate's own in-progress check does not block it", async () => {
+  const harness = makeHarness({
+    runId: 909090,
+    checkRuns: [completedCheck('foundation'), inProgressCheck('final-review-gate', 909090)],
+  });
+  const result = await execute(harness);
+
+  assert.equal(
+    result.status,
+    'requested',
+    'the gate must ignore its own in-progress check — otherwise it blocks on itself and no candidate can ever be reviewed',
+  );
+  assert.deepEqual(harness.failures, []);
+});
+
+// CONTROL — the exclusion must be narrow. An in-progress check from ANY OTHER
+// run is a real pending check and must still block, including a second
+// concurrent run of this same workflow (different id, same name). Without this,
+// "ignore anything called final-review-gate" would pass the test above while
+// letting a genuinely unfinished check through.
+test('an in-progress check from a different run still blocks', async () => {
+  const harness = makeHarness({
+    runId: 909090,
+    checkRuns: [completedCheck('foundation'), inProgressCheck('final-review-gate', 424242)],
+  });
+  const result = await execute(harness);
+
+  assert.notEqual(
+    result.status,
+    'requested',
+    'a still-running check belonging to a different run is a real blocker, whatever it is called',
+  );
 });
 
 test('green frozen candidate posts exactly one review command and records the request', async () => {
