@@ -275,6 +275,12 @@ BEGIN
     IF SQLERRM LIKE 'COMMISSION_SETTLEMENT_PAYMENT_DATE_BEFORE_ORDER:%' THEN v_failed := true; ELSE RAISE; END IF;
   END;
   IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_FAIL: payout before commission order_date was created'; END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.commission_payments
+     WHERE payment_number = 'E2E-COMM-HIST-BACKDATE-' || v_suffix
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected pre-order payout leaked a payment header';
+  END IF;
 
   v_payment := public.create_commission_payment(
     ARRAY[v_commission], 'check', 'E2E-COMM-HIST-' || v_suffix,

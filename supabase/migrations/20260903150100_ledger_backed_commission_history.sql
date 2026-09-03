@@ -726,7 +726,7 @@ BEGIN
           AND p.polname = expected.policy_name
           AND p.polcmd = 'r'
           AND p.polroles = ARRAY['authenticated'::regrole::oid]
-          AND pg_get_expr(p.polqual, p.polrelid) = 'is_admin()'
+          AND pg_get_expr(p.polqual, p.polrelid) IN ('is_admin()', 'public.is_admin()')
           AND p.polwithcheck IS NULL
         WHERE p.oid IS NULL
      ) THEN
@@ -2231,7 +2231,7 @@ BEGIN
          AND p.polname = 'commission_history_cutover_admin_select'
          AND p.polcmd = 'r'
          AND p.polroles = ARRAY['authenticated'::regrole::oid]
-         AND pg_get_expr(p.polqual, p.polrelid) = 'is_admin()'
+         AND pg_get_expr(p.polqual, p.polrelid) IN ('is_admin()', 'public.is_admin()')
      ) OR EXISTS (
        SELECT 1 FROM pg_class c
        CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
@@ -2333,7 +2333,7 @@ BEGIN
     LEFT JOIN pg_policy p ON p.polrelid = expected.table_oid AND p.polname = expected.policy_name
     WHERE p.oid IS NULL OR p.polcmd <> 'r'
       OR p.polroles <> ARRAY['authenticated'::regrole::oid]
-      OR pg_get_expr(p.polqual, p.polrelid) <> 'is_admin()'
+      OR pg_get_expr(p.polqual, p.polrelid) NOT IN ('is_admin()', 'public.is_admin()')
       OR p.polwithcheck IS NOT NULL
   ) OR EXISTS (
     SELECT 1
