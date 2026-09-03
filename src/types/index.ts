@@ -1388,6 +1388,8 @@ export interface Commission {
   paid_date: string | null;
   paid_note: string | null;
   deleted_at: string | null;
+  cancelled_at: string | null;
+  cancelled_amount_cents: number | null;
   created_at: string;
 }
 
@@ -3445,6 +3447,8 @@ export interface CommissionPayment {
   payment_date: string;
   posted_by: string | null;
   posted_at: string | null;
+  voided_by: string | null;
+  voided_at: string | null;
   notes: string | null;
   season: number | null;
   created_by: string | null;

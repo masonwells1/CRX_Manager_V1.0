@@ -941,7 +941,7 @@ export default function QuoteBuilder() {
       Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
       toast('warning', 'Quote loaded, but version history could not be refreshed.');
     } else {
-      setQuoteVersions((versionsData || []) as QuoteVersion[]);
+      setQuoteVersions((versionsData || []) as unknown as QuoteVersion[]);
     }
 
     setLoading(false);
@@ -2228,7 +2228,7 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
-    setQuoteVersions((data || []) as QuoteVersion[]);
+    setQuoteVersions((data || []) as unknown as QuoteVersion[]);
   }, [quoteId]);
 
   const handleRestoreVersion = async (versionId: string) => {
