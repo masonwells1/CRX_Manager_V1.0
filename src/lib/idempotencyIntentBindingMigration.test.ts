@@ -93,10 +93,19 @@ describe('payload-bound idempotency migration', () => {
 
     const assertAt = invoiceDetail.indexOf("const savedId = assertRpcResult<string>(data, 'save_invoice');");
     expect(assertAt).toBeGreaterThan(-1);
-    // The save-path reset must follow the assert (the earlier reset at the
+    // The save-path reset must follow the assert (the earlier reset in the
     // committed-receipt recovery branch is intentionally before it and is not this one).
+    //
+    // RESIDUAL, stated rather than assumed away: this proves a reset EXISTS after the
+    // assert — NOT that none precedes it. Exactly one earlier reset is expected today
+    // (the recovery branch), so the count is pinned; a NEW early reset on the save path
+    // would otherwise slip through silently.
     const resetAfter = invoiceDetail.indexOf('saveIdem.resetKey();', assertAt);
     expect(resetAfter).toBeGreaterThan(assertAt);
+    expect(
+      (invoiceDetail.match(/saveIdem\.resetKey\(\);/g) ?? []).length,
+      'unexpected saveIdem.resetKey() count — a new early reset on the save path would be invisible to the positional check above',
+    ).toBe(2);
   });
 
   it('resets quick-delivery form state on both success and reconciliation', () => {
