@@ -133,6 +133,46 @@ test('the gate\'s own label and comment writes are actually granted', () => {
   );
 });
 
+// GitHub accepts only this fixed set of keys in an Actions `permissions:` block.
+// An unknown key does not warn and does not degrade: it makes the workflow file
+// UNLOADABLE, and GitHub reports that as a zero-job run whose name is the file
+// path — which reads like an unrelated infrastructure blip, not a syntax error.
+// PR #563 added `administration: read` here (a GITHUB_TOKEN cannot hold repository
+// administration at all) and this suite stayed green, because every other test
+// reads the workflow as TEXT and never validates the key names. Run 33696773987
+// is that break observed live: it would have replaced a broken gate with no gate.
+// Sourced from the GitHub Actions `permissions` reference; extend the set only for
+// a key GitHub documents, never to make a failing workflow load.
+const ACTIONS_PERMISSION_KEYS = new Set([
+  'actions', 'attestations', 'checks', 'contents', 'deployments', 'discussions',
+  'id-token', 'issues', 'models', 'packages', 'pages', 'pull-requests',
+  'repository-projects', 'security-events', 'statuses',
+]);
+
+test('every declared permission is a key GitHub Actions actually accepts', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+  const permissionsBlock = workflow.match(/\npermissions:\r?\n([\s\S]*?)\r?\n(?=\S)/);
+  assert.ok(permissionsBlock, 'workflow must declare a top-level `permissions:` block');
+  // Deliberately broader than the `[a-z-]+` matcher above: this test has to SEE a
+  // malformed key in order to reject it, so it must not filter one out first.
+  const declared = permissionsBlock[1]
+    .split(/\r?\n/)
+    .filter((line) => /^ {2}[^#\s]/.test(line))
+    .map((line) => line.trim().split(/:\s*/)[0]);
+  assert.ok(declared.length > 0, 'permissions block must declare at least one scope');
+
+  assert.deepEqual(
+    declared.filter((key) => !ACTIONS_PERMISSION_KEYS.has(key)),
+    [],
+    'an unknown permissions key makes this workflow file unloadable — GitHub reports it '
+    + 'as a zero-job startup failure, not as a syntax error, so the gate silently stops '
+    + 'running instead of failing visibly',
+  );
+});
+
 test('the gate refuses to run on any event other than pull_request_target', async () => {
   const harness = makeHarness({ eventName: 'pull_request_review', action: 'submitted' });
   const result = await execute(harness);
@@ -367,6 +407,7 @@ function makeHarness({
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
   const timeline = [];
+  const errors = [];
   const failures = [];
   const notices = [];
   let pullIndex = 0;
@@ -413,7 +454,11 @@ function makeHarness({
           }
           const sequence = checkRunsSequence || [checkRuns];
           const current = sequence[Math.min(checkRunsIndex++, sequence.length - 1)];
-          return { data: { check_runs: current } };
+          // The REAL envelope, `total_count` included. The paginate mock below
+          // normalizes it the way Octokit does; both halves are needed, because
+          // an envelope with no `total_count` would not trip normalization and
+          // the mock would keep modelling a contract that does not exist.
+          return { data: { total_count: current.length, check_runs: current } };
         },
       },
       issues: {
@@ -501,9 +546,31 @@ function makeHarness({
         },
       },
     },
+    // Models Octokit's paginate, INCLUDING normalizePaginatedListResponse.
+    //
+    // This mock used to hand the mapFn the raw envelope, so
+    // `(response) => response.data.check_runs` looked correct here and returned
+    // `undefined` in production — the gate then died on `check.app?.id` with
+    // "Cannot read properties of undefined (reading 'app')" the first time any
+    // PR reached the ready-label path (#563, run 33707346152). A mock that
+    // encodes the wrong contract cannot catch a bug caused by that contract.
+    //
+    // Real behaviour: for a namespaced list envelope (has `total_count`, has no
+    // `url`), Octokit REPLACES `response.data` with the inner array before the
+    // mapFn runs.
     paginate: async (method, params, map) => {
       const response = await method(params);
-      return map ? map(response) : response.data;
+      const data = response.data;
+      const isNamespacedList = data
+        && typeof data === 'object'
+        && !Array.isArray(data)
+        && 'total_count' in data
+        && !('url' in data);
+      const normalized = isNamespacedList
+        ? data[Object.keys(data).find((key) => Array.isArray(data[key]))]
+        : data;
+      const normalizedResponse = { ...response, data: normalized };
+      return map ? map(normalizedResponse) : normalizedResponse.data;
     },
   };
   const context = {
@@ -520,6 +587,10 @@ function makeHarness({
     },
   };
   const core = {
+    // `@actions/core` exposes `error`, and the gate uses it to emit the stack of
+    // an internal crash as a run annotation. Captured separately from notices so
+    // a test can assert the stack was actually written.
+    error: (message) => errors.push(message),
     notice: (message) => notices.push(message),
     setFailed: (message) => failures.push(message),
     warning: (message) => notices.push(message),
@@ -529,6 +600,7 @@ function makeHarness({
     comments,
     context,
     core,
+    errors,
     failures,
     github,
     liveLabels,
@@ -579,6 +651,93 @@ test('green frozen candidate posts exactly one review command and records the re
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.deepEqual(harness.failures, []);
+});
+
+// Hardening for the class of bug the check_runs pagination crash belonged to,
+// deliberately fail-CLOSED. An unreadable list entry must BLOCK the candidate,
+// never be filtered away: a dropped row is a row that cannot block, so silently
+// discarding a malformed check run could let the gate conclude "every required
+// check is green" when a required check was never seen. That is a security
+// property of the paid-review gate, not a tidy-up. It also turns an opaque
+// TypeError into something an operator can act on.
+test('an unreadable check-run entry blocks the candidate instead of crashing the gate', async () => {
+  const harness = makeHarness({ checkRuns: [completedCheck('foundation'), undefined] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  // Blocked as a candidate, NOT reported as an unexpected internal failure.
+  assert.match(harness.failures[0], /final review was not requested/);
+  assert.match(harness.failures[0], /check-run listing returned 1 unreadable entry/);
+  assert.equal(harness.failures.join('\n').includes('gate failed unexpectedly'), false);
+  assert.deepEqual(harness.errors, []);
+});
+
+test('a null commit-status entry also blocks the candidate', async () => {
+  const harness = makeHarness({ statuses: [commitStatus('Vercel'), null] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.match(harness.failures[0], /commit-status listing returned 1 unreadable entry/);
+});
+
+// The same rule at the exported unit, where the list shapes can be stated
+// directly. Every loop in evaluateChecks reads a field off its entry, so this is
+// the one place the rule belongs.
+test('evaluateChecks blocks on an unreadable list entry rather than dropping it', () => {
+  const green = { checkRuns: [], statuses: [], requiredChecks: [], ignoredChecks: [] };
+  assert.deepEqual(evaluateChecks(green), []);
+
+  assert.deepEqual(
+    evaluateChecks({ ...green, checkRuns: [undefined] }),
+    ['check-run listing returned 1 unreadable entry'],
+  );
+  assert.deepEqual(
+    evaluateChecks({ ...green, checkRuns: [null, 'not-an-object'] }),
+    ['check-run listing returned 2 unreadable entries'],
+  );
+  assert.deepEqual(
+    evaluateChecks({ ...green, statuses: [undefined] }),
+    ['commit-status listing returned 1 unreadable entry'],
+  );
+  // A non-array is the other shape a mis-mapped paginate can hand back.
+  assert.deepEqual(
+    evaluateChecks({ ...green, checkRuns: undefined }),
+    ['check-run listing did not return an array (received undefined)'],
+  );
+  // Critically: a required check is NOT silently treated as satisfied because
+  // the list was unreadable. The unreadable entry is the whole verdict, and it
+  // is a blocker.
+  const withRequired = evaluateChecks({
+    checkRuns: [undefined],
+    statuses: [],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: IGNORED_CHECKS,
+  });
+  assert.deepEqual(withRequired, ['check-run listing returned 1 unreadable entry']);
+});
+
+// The swallowed stack is what made the 2026-09-03 crash expensive to find:
+// `setFailed` reported only "Cannot read properties of undefined (reading
+// 'app')", which names neither file nor line.
+test('an unexpected gate failure records the stack trace, not just the message', async () => {
+  const harness = makeHarness({ pullFailuresAt: [1] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.errors.length, 1);
+  assert.match(harness.errors[0], /crashed internally/);
+  assert.match(harness.errors[0], /pull snapshot 1 failed/);
+  // A stack, not a bare message: it must name a file and a line number.
+  assert.match(harness.errors[0], /coderabbit-final-review\.test\.cjs:\d+/);
+  // And the operator-facing failure must say a re-label is the retry, because
+  // the handler clears the ready label precisely so that re-label can fire an
+  // event at all.
+  assert.match(harness.failures[0], /internal gate error, not a blocked candidate/);
+  assert.match(harness.failures[0], new RegExp(`re-apply ${READY_LABEL}`));
 });
 
 test('duplicate ready events never post a second review command', async () => {
