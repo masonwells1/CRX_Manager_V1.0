@@ -24,8 +24,11 @@ The systemic conclusion holds — 6 human replies across 1,437 threads — but i
 One finding Codex missed, recorded as the second remediation priority: `#336` and `#575` are
 the same hole from two sides. Both migration gates go soft on *pending* unapplied migrations,
 so a reviewed migration can be edited afterward to add an unprotected table with a forgeable
-actor and both gates report pass. A pending migration
-(`20260903150000_job_chemicals_persist_driver.sql`) is live on `main` as of this date.
+actor and both gates report pass. The operational rule: any edit to a pending migration after
+its review is unchecked, so re-mint the exact-SHA proof and re-verify the blob rather than
+trusting the gates. (The first draft cited `20260903150000_job_chemicals_persist_driver.sql` as
+a live pending example; it applied the same day at ledger `20260903153402`, verified read-only.
+The gate gap is unaffected — only that illustration was stale.)
 
 Recommended order: `#198` invoice due dates first — it is live, customer-facing, and
 contradicts the approved spec at `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`.
