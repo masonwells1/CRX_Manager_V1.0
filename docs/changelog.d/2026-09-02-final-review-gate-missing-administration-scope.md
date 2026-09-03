@@ -62,9 +62,13 @@ been exercised and has never 403'd. The scope was a prediction reasoned from the
 symptom, and the symptom had a different cause.
 
 The speculative grant has been dropped from this branch — see
-`2026-09-03-drop-speculative-administration-scope.md`. The ready-label path
-remains unexercised end to end; if the first genuine review request 403s there,
-the error text names the endpoint and the scope can be added with evidence.
+`2026-09-03-drop-speculative-administration-scope.md`, which also records why the
+scope must never be re-added: `administration` is a GitHub *App* permission and is
+not a valid key in an Actions `permissions:` block at all, so declaring it makes
+the workflow **unloadable** and produces a zero-job run (observed on this branch,
+run `33696773987`). The call it was meant to enable needs only Metadata read,
+which every workflow token already holds — run `33704559392` reached that check
+and returned a real verdict with no such scope.
 
 ### Scope note
 
