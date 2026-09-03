@@ -1,12 +1,12 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-03 for migration-ledger facts (F06 authoring read).** A read-only read on
-2026-09-03 records **990 ledger rows**, live `max(version)` **`20260903025854`**, and latest applied
-authored name `20260831212415_guard_cycle_count_completion_revision`; the F06 migration
-`20260903150000_job_chemicals_persist_driver` is authored on its branch and **NOT applied** (live
-`job_chemicals` has no `driver` column; `save_job` is the 20260820120000 body, md5
-`227ab7b6bc2023724adf6952a221d2a8`, single overload). The 2026-09-01 reading below is retained as
-provenance. A read-only capture on 2026-09-01 recorded **980 ledger rows**
+**Last verified: 2026-09-03 15:34 UTC for migration-ledger facts (F06 post-apply read).** A
+read-only read immediately after the F06 apply records **993 ledger rows**, live `max(version)`
+**`20260903153402`**, and latest applied authored name `20260903150000_job_chemicals_persist_driver`
+(ledger version `20260903153402`); live `job_chemicals.driver` exists as nullable text with no
+default, CHECK `job_chemicals_driver_chk` is installed, and `save_job` is the F06 body (md5
+`18d08d5f40aea91fe13ac3e5a686c549`, marker `chem_unit_invariant_v3`, single overload). The
+2026-09-01 reading below is retained as provenance. A read-only capture on 2026-09-01 recorded **980 ledger rows**
 and effective ordering high-water **`20260826222000`** (authored name
 `20260826222000_correct_ap_aging_due_date_buckets`). The two Section 9 AP migrations
 `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
@@ -954,7 +954,7 @@ A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-rec
 duplicates one of #449's fixes — delete it rather than continuing it.
 
 
-## FIXED IN CODE 2026-09-03, MIGRATION PENDING LIVE APPLY — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
+## RESOLVED 2026-09-03 (code merged in PR #582, migration applied live 15:34 UTC as ledger version `20260903153402`) — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
 **Fix (2026-09-03).** The driver is now PERSISTED, exactly as the "clean fix" below asked
 for. Migration `20260903150000_job_chemicals_persist_driver.sql` adds nullable
@@ -970,10 +970,14 @@ paths write — are still left exactly as saved; instead, `chemRowDefects` now m
 `CHEM_QUANTITY_ZERO_BUT_EXPECTED` per line, so the disagreement is shown on the row and the
 save is refused in the browser rather than rolling back at the server. Container proof
 (`scripts/smoke/prove-save-job-persist-driver.mjs`: T1–T66 + D1–D8, 13 mutants) and browser
-proof are recorded in `docs/changelog.d/2026-09-03-f06-job-chemicals-driver.md`. **Until the
-migration is applied live, the on-screen mirror is the whole fix in production** and every
-line still reloads as driver-unknown. The heuristic recovery below stays reverted. The
-original entry is kept as the diagnosis.
+proof are recorded in `docs/changelog.d/2026-09-03-f06-job-chemicals-driver.md`. **The
+migration was applied live on 2026-09-03 at 15:34 UTC** (ledger version `20260903153402`,
+verified by SELECT afterwards: `driver` nullable text with no default, the exact CHECK, `save_job`
+md5 `18d08d5f40aea91fe13ac3e5a686c549` with the v3 marker; apply evidence in
+`docs/changelog.d/2026-09-03-f06-migration-applied-live.md`). From that moment every save records
+the typed side; the 4 rows saved before the apply keep a NULL driver until they are re-typed, and
+the on-screen mirror covers them. The heuristic recovery below stays reverted. The original entry
+is kept as the diagnosis.
 
 **Plain English.** Open a saved job, change the acres, and a chemical line keeps both numbers it was
 saved with. A line saved as **1.5 pt/ac, quantity 150, over 100 acres** still reads 1.5 and 150 at

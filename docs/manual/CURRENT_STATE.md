@@ -1,16 +1,17 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-03 for the migration ledger (F06 authoring read); 2026-09-01 (post
-return-credit chain) for schema shape.** A read-only read on 2026-09-03 records **990 ledger rows**,
-live `max(version)` **`20260903025854`**, latest applied authored name
-`20260831212415_guard_cycle_count_completion_revision`. The F06 migration
-`20260903150000_job_chemicals_persist_driver` (nullable `job_chemicals.driver` + `save_job`
-re-emission, marker `chem_unit_invariant_v3`) is authored on its branch and **NOT applied**: live
-`job_chemicals` still has no `driver` column and `save_job` is the 20260820120000 body (md5
-`227ab7b6bc2023724adf6952a221d2a8`, single overload). The schema-shape statement that follows is
-unchanged by that read. Schema shape comes from the live introspection that regenerated
-`.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
-columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
+**Last verified: 2026-09-03 15:34 UTC for the migration ledger and for schema shape (F06
+post-apply read and registry regeneration).** A read-only read immediately after the F06 apply
+records **993 ledger rows**, live `max(version)` **`20260903153402`**, latest applied authored name
+`20260903150000_job_chemicals_persist_driver` (ledger version `20260903153402`). The F06 migration
+(nullable `job_chemicals.driver` + `save_job` re-emission, marker `chem_unit_invariant_v3`) is
+**APPLIED**: live `job_chemicals.driver` is nullable text with no default and is not generated,
+`job_chemicals_driver_chk` reads `CHECK (((driver IS NULL) OR (driver = ANY (ARRAY['rate'::text,
+'qty'::text]))))`, and `save_job` is the F06 body (md5 `18d08d5f40aea91fe13ac3e5a686c549`, single
+overload, v3 marker present, v2 token absent). Schema shape comes from the live introspection that
+regenerated `.claude/schema-registry.json` right after that apply — columns, CHECK constraints,
+generated columns, sequences and NOT NULL sets for all 157 public tables; the only schema delta
+against the previous 2026-09-03 regeneration is the `driver` column and its CHECK. It does **not** include a fresh
 read of individual routine bodies or their grants beyond the functions this chain touched, which
 were verified separately and are recorded below; the superseded 2026-08-27 11:43:53 UTC capture
 remains the last full routine-body reading.
