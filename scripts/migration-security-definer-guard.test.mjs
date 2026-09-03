@@ -57,6 +57,19 @@ test('fails closed for search-path-sensitive targets and quoted role lookalikes'
   assert.deepEqual(securityDefinerMissingAnonRevokes(quotedRoles), ['post_return_credit']);
 });
 
+test('does not treat quoted SQL identifiers as executable ACL commands', () => {
+  const counterfeit = `${definition()}\nSELECT 1 AS "REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;";`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(counterfeit), ['post_return_credit']);
+});
+
+test('resets ACL state after DROP and tracks SECURITY DEFINER procedures', () => {
+  const recreated = `${definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;')}\nDROP FUNCTION public.post_return_credit(uuid);\n${definition()}`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(recreated), ['post_return_credit']);
+  const procedure = 'CREATE PROCEDURE public.escalate_proc(p_id uuid) LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN NULL; END; $$;';
+  assert.deepEqual(securityDefinerMissingAnonRevokes(procedure), ['escalate_proc']);
+  assert.deepEqual(securityDefinerMissingAnonRevokes(`${procedure}\nREVOKE ALL ON PROCEDURE public.escalate_proc(uuid) FROM PUBLIC, anon;`), []);
+});
+
 test('does not demand an anon revoke for invoker-security functions', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.safe_fn() RETURNS void LANGUAGE sql AS $$ SELECT; $$;'), []);
 });

@@ -2,9 +2,9 @@
 // inherited PUBLIC and CRX's explicit anon EXECUTE grants. Unknown syntax and
 // unterminated SQL fail closed rather than becoming an ACL bypass.
 export const CREATE_FN_ANY = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
-const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
-const SECURITY_DEFINER_ALTER = /ALTER\s+(?:FUNCTION|ROUTINE)\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
-const SECURITY_DEFINER_ROUTINE_HEADER = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION|ALTER\s+(?:FUNCTION|ROUTINE))\s+/gi;
+const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+const SECURITY_DEFINER_ALTER = /ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+const SECURITY_DEFINER_ROUTINE_HEADER = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)|ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE))\s+/gi;
 
 function blank(out, count) { return out + ' '.repeat(count); }
 
@@ -58,7 +58,11 @@ function executableSql(sql) {
         end++;
       }
       if (end === src.length) return null;
-      out += src.slice(i, end + 1); i = end + 1; continue;
+      // A quoted identifier is executable syntax, but its contents are not SQL
+      // keywords. Break action words without losing deterministic identity for a
+      // matching quoted routine declaration and ACL target.
+      out += src.slice(i, end + 1).replace(/\b(?:REVOKE|GRANT|CREATE|ALTER|DROP|SECURITY)\b/gi, (word) => `\u0001${word.slice(1)}`);
+      i = end + 1; continue;
     }
     out += ch; i++;
   }
@@ -96,14 +100,14 @@ function canonicalSignature(name, args, declaration = false, quoted = false) {
 
 function aclEvents(sql) {
   const events = [];
-  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+FUNCTION\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
   for (const match of sql.matchAll(re)) {
     const open = match.index + match[0].length - 1;
     const args = balanced(sql, open);
     if (!args) return null;
     const roles = /^\s+(?:FROM|TO)\s+([^;]+);/i.exec(sql.slice(args.end));
     if (!roles || /\b(?:WITH|GROUP|ROLE)\b/i.test(roles[1])) return null;
-    events.push({ action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2])), roles: roles[1].split(',').map((role) => {
+    events.push({ index: match.index, action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2])), roles: roles[1].split(',').map((role) => {
       const value = role.trim();
       if (/^public$/i.test(value)) return 'public';
       if (/^anon$/i.test(value)) return 'anon';
@@ -114,6 +118,19 @@ function aclEvents(sql) {
   // can restore effective execution without appearing in a function-specific
   // event. The producer has no live ACL graph, so reject them rather than guess.
   if ((sql.match(/\b(?:GRANT|REVOKE)\b/gi) || []).length !== events.length) return null;
+  return events;
+}
+
+function dropRoutineEvents(sql) {
+  const events = [];
+  const re = /\bDROP\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:IF\s+EXISTS\s+)?(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+  for (const match of sql.matchAll(re)) {
+    const open = match.index + match[0].length - 1;
+    const args = balanced(sql, open);
+    if (!args) return null;
+    events.push({ index: match.index, signature: canonicalSignature(match[1] || match[2], args.text, false, Boolean(match[1])) });
+  }
+  if ((sql.match(/\bDROP\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b/gi) || []).length !== events.length) return null;
   return events;
 }
 
@@ -132,7 +149,7 @@ export function securityDefinerMissingAnonRevokes(sql) {
       return ['unparseable-security-definer-sql'];
     }
   }
-  const required = new Map();
+  const lifecycle = [];
   for (let index = 0; index < declarations.length; index++) {
     const { match: declaration, kind } = declarations[index];
     const args = balanced(executable, declaration.index + declaration[0].length - 1);
@@ -140,17 +157,29 @@ export function securityDefinerMissingAnonRevokes(sql) {
     const end = executable.indexOf(';', args.end);
     const name = declaration[1] || declaration[2];
     const definition = executable.slice(declaration.index, end === -1 ? executable.length : end);
-    if (/\bSECURITY\s+DEFINER\b/i.test(definition)) required.set(canonicalSignature(name, args.text, kind === 'create', Boolean(declaration[1])), name.replaceAll('""', '"'));
+    if (/\bSECURITY\s+DEFINER\b/i.test(definition)) lifecycle.push({
+      index: declaration.index,
+      action: 'declare',
+      signature: canonicalSignature(name, args.text, kind === 'create', Boolean(declaration[1])),
+      name: name.replaceAll('""', '"'),
+    });
   }
-  const events = aclEvents(executable);
-  if (events === null) return ['unparseable-security-definer-sql'];
-  const state = new Map([...required.keys()].map((signature) => [signature, new Map()]));
-  for (const event of events) {
-    const roles = state.get(event.signature);
-    if (!roles) continue;
-    for (const role of event.roles) if (role === 'public' || role === 'anon') roles.set(role, event.action === 'revoke');
+  const acl = aclEvents(executable);
+  const drops = dropRoutineEvents(executable);
+  if (acl === null || drops === null) return ['unparseable-security-definer-sql'];
+  lifecycle.push(...acl.map(({ action, ...event }) => ({ ...event, action: 'acl', aclAction: action })), ...drops.map((event) => ({ ...event, action: 'drop' })));
+  lifecycle.sort((a, b) => a.index - b.index);
+  const state = new Map();
+  for (const event of lifecycle) {
+    if (event.action === 'declare') state.set(event.signature, { name: event.name, roles: new Map() });
+    else if (event.action === 'drop') state.delete(event.signature);
+    else {
+      const routine = state.get(event.signature);
+      if (!routine) continue;
+      for (const role of event.roles) if (role === 'public' || role === 'anon') routine.roles.set(role, event.aclAction === 'revoke');
+    }
   }
-  return [...required.entries()]
-    .filter(([signature]) => state.get(signature).get('public') !== true || state.get(signature).get('anon') !== true)
-    .map(([, name]) => name);
+  return [...state.values()]
+    .filter(({ roles }) => roles.get('public') !== true || roles.get('anon') !== true)
+    .map(({ name }) => name);
 }
