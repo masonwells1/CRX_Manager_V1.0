@@ -75,7 +75,7 @@ and one-shot validations the gate exists to enforce.
 **The proof, because this is the part worth keeping.** The workflow file did not exist on `main`
 at all, and a run of it still appeared and succeeded:
 
-```
+```text
 event=pull_request_review
 head_sha=8ddcd9aeea...                              # the PR's commit
 head_branch=codex/coderabbit-ready-label-20260830   # the PR's branch
