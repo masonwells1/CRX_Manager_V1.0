@@ -86,11 +86,18 @@ export default function DeliveryDetail() {
   const { role, profile } = useAuth();
   const { toast } = useToast();
   const editIdem = useIdempotencyKey('edit_delivery', profile?.id || '');
-  const cancelIdem = useIdempotencyKey('cancel_delivery', profile?.id || '');
-  const followupIdem = useIdempotencyKey('create_followup_delivery', profile?.id || '');
+  // F1: the four keys whose post-RPC reset moved after assertRpcResult are scoped by
+  // the route id. Retaining a key across an ambiguous reply is the point of that fix,
+  // but this component does NOT remount when the route id changes (App.tsx renders it
+  // without a key, effects are keyed on [id]) and line ~787 navigates straight to a
+  // DIFFERENT delivery after create_followup_delivery. Unscoped, a retained key could
+  // therefore replay delivery A's receipt against delivery B. Scoping keeps
+  // retry-under-the-same-key per delivery while minting a fresh key per record.
+  const cancelIdem = useIdempotencyKey('cancel_delivery', profile?.id || '', id ?? '');
+  const followupIdem = useIdempotencyKey('create_followup_delivery', profile?.id || '', id ?? '');
   const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
-  const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
-  const voidIdem = useIdempotencyKey('void_delivery', profile?.id || '');
+  const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '', id ?? '');
+  const voidIdem = useIdempotencyKey('void_delivery', profile?.id || '', id ?? '');
   const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
   const createInvoiceIdem = useIdempotencyKey('create_invoice_for_unbilled_delivery', profile?.id || '');
   const fileInputRef = useRef<HTMLInputElement>(null);

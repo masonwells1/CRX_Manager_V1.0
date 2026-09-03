@@ -39,13 +39,20 @@ export function BlendTicketDetail() {
   const { toast } = useToast();
   const ocrThresholds = useOCRThresholds();
   const saveIdem = useIdempotencyKey('save_blend_ticket', profile?.id || '');
-  const linkIdem = useIdempotencyKey('link_blend_ticket_to_order', profile?.id || '');
-  const unlinkIdem = useIdempotencyKey('unlink_blend_ticket_from_order', profile?.id || '');
-  const createOrderIdem = useIdempotencyKey('create_order_from_blend_ticket', profile?.id || '');
+  // F1: scoped by the route id. These five keys' post-RPC resets moved after
+  // assertRpcResult, so they survive an ambiguous reply — and this component does NOT
+  // remount when the route id changes (App.tsx renders it without a key) while line
+  // ~1103 navigates to a DIFFERENT blend ticket (the duplicate warning). Unscoped, a
+  // retained key could replay ticket A's receipt against ticket B. The two batch keys
+  // are scoped the same way: per-route rotation is strictly safer than none, and the
+  // same-record retry guarantee is unaffected.
+  const linkIdem = useIdempotencyKey('link_blend_ticket_to_order', profile?.id || '', id ?? '');
+  const unlinkIdem = useIdempotencyKey('unlink_blend_ticket_from_order', profile?.id || '', id ?? '');
+  const createOrderIdem = useIdempotencyKey('create_order_from_blend_ticket', profile?.id || '', id ?? '');
   const appRecordIdem = useIdempotencyKey('create_application_record_from_blend_ticket', profile?.id || '');
   const fieldsIdem = useIdempotencyKey('save_blend_ticket_fields', profile?.id || '');
-  const approveIdem = useIdempotencyKey('batch_approve_blend_tickets', profile?.id || '');
-  const rejectIdem = useIdempotencyKey('batch_reject_blend_tickets', profile?.id || '');
+  const approveIdem = useIdempotencyKey('batch_approve_blend_tickets', profile?.id || '', id ?? '');
+  const rejectIdem = useIdempotencyKey('batch_reject_blend_tickets', profile?.id || '', id ?? '');
 
   const [ticket, setTicket] = useState<BlendTicket | null>(null);
   const [images, setImages] = useState<BlendTicketImage[]>([]);

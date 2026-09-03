@@ -336,6 +336,51 @@ describe('F1 guard — no money screen retires its key before the reply is check
     }
   });
 
+  /**
+   * Every key whose post-RPC reset this change moved, on a page that can navigate to a
+   * DIFFERENT record of the same type while staying mounted, must be record-scoped.
+   *
+   * Retaining the key across an ambiguous reply is the point of F1 — but on a detail
+   * page that does not remount when the route id changes (every `<x>/:id` route in
+   * src/App.tsx is rendered without a `key` prop), an unscoped retained key can replay
+   * record A's receipt against record B. Reachability was established per page from the
+   * navigation calls, NOT assumed: DeliveryDetail navigates to another delivery after
+   * create_followup_delivery, QuoteBuilder to another quote after
+   * create_quote_from_template / rollover_quote_to_season, InvoiceDetail to another
+   * invoice on save and on committed-receipt reconciliation, BlendTicketDetail to the
+   * duplicate ticket, FieldApplicationInvoice to another field-app invoice.
+   *
+   * PaymentAllocation, DeliveryRemainders and MonthEndClose are deliberately absent:
+   * none is mounted on an `:id` route, so there is no record identity to carry.
+   * InvoiceDetail's saveIdem is absent because it is already scoped via its second
+   * argument.
+   */
+  const RECORD_SCOPED_KEYS: Record<string, string[]> = {
+    'src/pages/DeliveryDetail.tsx': ['cancelIdem', 'followupIdem', 'completeIdem', 'voidIdem'],
+    'src/pages/QuoteBuilder.tsx': [
+      'fromTemplateIdem', 'rolloverIdem', 'drawDownIdem', 'closeAppliedIdem', 'closeShortIdem',
+    ],
+    'src/pages/InvoiceDetail.tsx': ['transferToSchedulingIdem'],
+    'src/pages/BlendTicketDetail.tsx': [
+      'linkIdem', 'unlinkIdem', 'createOrderIdem', 'approveIdem', 'rejectIdem',
+    ],
+    'src/pages/FieldApplicationInvoice.tsx': ['deleteIdem', 'transferToSchedulingIdem'],
+  };
+
+  it('keys retained on a page that can switch records are bound to the route id', () => {
+    for (const [file, keys] of Object.entries(RECORD_SCOPED_KEYS)) {
+      const src = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+      for (const key of keys) {
+        const decl = src.match(new RegExp(`const ${key} = useIdempotencyKey\\([\\s\\S]{0,200}?\\);`));
+        expect(decl, `${file}: ${key} declaration not found — renamed or removed?`).not.toBeNull();
+        expect(
+          /id\s*\?\?\s*''/.test(decl![0]),
+          `${file}: ${key} retains its key across an ambiguous reply but is NOT scoped by the route id — record A's receipt could replay against record B. Declaration: ${decl![0].replace(/\s+/g, ' ')}`,
+        ).toBe(true);
+      }
+    }
+  });
+
   it('the order-scoped keys are bound to the route id, not just operation+user', () => {
     // Codex HIGH (F1): OrderDetail does NOT remount when the route id changes, so an
     // unscoped key could replay order A's receipt against order B once the per-click

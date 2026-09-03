@@ -112,7 +112,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // its source job. This is the editor a TRANSFERRED field invoice actually opens in
   // (a transferred invoice has a job_id but NO field_app_locations, so the #24
   // discriminator routes it here, not to the per-acre FieldApplicationInvoice).
-  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
+  // F1: scoped by the route id — its post-RPC reset moved after assertRpcResult, and
+  // this component does NOT remount when the route id changes (App.tsx renders it
+  // without a key) while lines ~820/~838 navigate to a DIFFERENT invoice. saveIdem
+  // above is already record-scoped via its second argument, so only this one needed it.
+  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '', id ?? '');
   // #28/U16b: Unpost — reverse a posting on a posted field-application or chemical-sale
   // invoice (returns it to the editable Unposted list). The RPC is type-agnostic.
   // #28/FIX 4: per-invoice AND per-group key cache so a retry reuses the same key while a

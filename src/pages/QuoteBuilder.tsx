@@ -236,8 +236,13 @@ export default function QuoteBuilder() {
   const firedConvertSideEffects = useRef<Set<string>>(new Set());
   const plannedHoldsIdem = useIdempotencyKey('create_planned_holds', profile?.id || '');
   const saveTemplateIdem = useIdempotencyKey('save_quote_template', profile?.id || '');
-  const fromTemplateIdem = useIdempotencyKey('create_quote_from_template', profile?.id || '');
-  const rolloverIdem = useIdempotencyKey('rollover_quote_to_season', profile?.id || '');
+  // F1: scoped by the route id. These five keys' post-RPC resets moved after
+  // assertRpcResult, so they now survive an ambiguous reply — and this component does
+  // NOT remount when the route id changes (App.tsx renders it without a key), while
+  // lines ~1624/~1648 navigate straight to a DIFFERENT quote. Unscoped, a retained key
+  // could replay quote A's receipt against quote B.
+  const fromTemplateIdem = useIdempotencyKey('create_quote_from_template', profile?.id || '', id ?? '');
+  const rolloverIdem = useIdempotencyKey('rollover_quote_to_season', profile?.id || '', id ?? '');
   // Version idempotency is quote-specific. Reusing one key after navigating
   // between Quotes could otherwise replay a version created for another Quote.
   const {
@@ -255,10 +260,10 @@ export default function QuoteBuilder() {
     `${profile?.id || ''}:${id || ''}`,
   );
   const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
-  const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
+  const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '', id ?? '');
   const emailQuoteIdem = useIdempotencyKey('send_email_quote', profile?.id || '');
-  const closeAppliedIdem = useIdempotencyKey('close_quote_as_applied', profile?.id || '');
-  const closeShortIdem = useIdempotencyKey('close_quote_as_short', profile?.id || '');
+  const closeAppliedIdem = useIdempotencyKey('close_quote_as_applied', profile?.id || '', id ?? '');
+  const closeShortIdem = useIdempotencyKey('close_quote_as_short', profile?.id || '', id ?? '');
 
   // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
   // quantities into an order; the quote stays open with the remaining balance.

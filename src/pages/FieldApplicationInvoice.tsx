@@ -172,9 +172,13 @@ export default function FieldApplicationInvoice() {
   // and the server dedup never double-applies.
   const billingKeysRef = useRef<Record<string, string>>({});
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
-  const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
+  // F1: scoped by the route id — these two keys' post-RPC resets moved after
+  // assertRpcResult, and this component does NOT remount when the route id changes
+  // (App.tsx renders both invoices/field-app/:id and .../new without a key) while line
+  // ~1710 navigates to a DIFFERENT field-app invoice.
+  const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '', id ?? '');
   // #27: reverse "Transfer to Scheduling" — push a job-built invoice back to its job.
-  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
+  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '', id ?? '');
   // #28: Unpost — reverse a posting (posted/overdue -> unposted) right on this screen.
   // Per-invoice key cache (keyed by invoice id) for the SINGLE-invoice path.
   // FIX 4 (Wave 2a): a SPLIT GROUP routes through the atomic unpost_invoice_group under
