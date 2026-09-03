@@ -9,13 +9,31 @@ import { assertRpcResult } from '../lib/db';
  * F1 — the idempotency key must outlive the result check.
  *
  * A mutating RPC's reply is only known-good once assertRpcResult has accepted it.
- * Retiring the key before that check means an AMBIGUOUS reply — a null or malformed
+ * Retiring the key before that check means an AMBIGUOUS reply — an empty (null)
  * success payload after the server may already have committed — leaves the user's
  * retry travelling under a FRESH key, which the server cannot replay, so the work
  * is applied twice (a duplicate invoice, a double-allocated payment, a double credit).
  *
  * Part 1 proves the semantics on the real hook + the real assertRpcResult.
  * Part 2 is a repo-wide guard so the ordering cannot silently regress.
+ *
+ * KNOWN LIMITS OF THIS FILE — stated rather than papered over, because a guard that
+ * is trusted beyond its reach is worse than one whose blind spots are written down
+ * (all three raised by the Codex gpt-5.6-sol review of this change, 2026-09-03):
+ *
+ *  1. `assertRpcResult` rejects only null/undefined — it does NOT validate shape, so
+ *     "the reply is verified" means "not empty", not "well-formed". A path needing a
+ *     real shape check must do it itself and retire the key after it (see
+ *     MonthEndClose's Array.isArray check).
+ *  2. Part 2 matches on LINE ORDER and cannot bind a call, its reset and its assert to
+ *     the same control-flow branch. A reset in an `else` arm whose sibling arm asserts
+ *     will pass. That exact shape was a live HIGH in InvoiceDetail's edit path, and it
+ *     was caught by REVIEW, not by this guard — which is why the per-RPC shape pin in
+ *     src/lib/idempotencyIntentBindingMigration.test.ts also exists.
+ *  3. Part 1 models the corrected call-site sequence; it does not execute any
+ *     production handler, so it cannot detect branch placement or click-level
+ *     rotation. Those are covered by Part 2's source checks and by driving the real
+ *     screen in a browser.
  */
 
 // ---------------------------------------------------------------------------
@@ -118,24 +136,37 @@ describe('F1 — the key survives until the reply is confirmed', () => {
 // ---------------------------------------------------------------------------
 
 /**
- * Sites where retiring the key BEFORE assertRpcResult is correct and intended,
- * because the reset sits inside an `if (error)` recovery branch:
+ * Every hit is classified by a reason that is VERIFIED FROM THE SOURCE, not merely
+ * asserted in a list. Codex (LOW, 2026-09-03) noted the first version suppressed by
+ * whole file, so any future bug added to an allowlisted file would have been hidden.
+ * A file now only excuses the reasons it declares, and each hit must independently
+ * exhibit that reason:
  *
- *  - getIdempotencyMismatchResult(...) returned a committed receipt: the server said
- *    "this key is already bound to a committed result, here it is". The outcome is
- *    KNOWN, so the key is properly retired and the app reopens the committed record
- *    instead of creating a duplicate.
- *  - isDefinitiveRpcRejection(error): the server definitively refused, nothing
- *    committed, so the key is safely retired.
- *
- * Verified by reading each site. "Fixing" these breaks duplicate recovery on quick
- * deliveries, invoice save and returns.
+ *  - `recovery`  — the reset sits in an `if (error)` recovery branch. Two intended
+ *    flavors: `getIdempotencyMismatchResult` returned a COMMITTED receipt (the outcome
+ *    is known, so the key is properly retired and the app reopens the committed record
+ *    rather than duplicating it), or `isDefinitiveRpcRejection` (server definitively
+ *    refused, nothing committed). "Fixing" these breaks duplicate recovery.
+ *  - `throw-on-error` — the RPC RETURNS void and is called with `.throwOnError()`, so
+ *    the promise rejects on any error and the reset is only reachable on success.
+ *    There is no payload to assert.
+ *  - `intent-rotation` — the reset runs from a JSX `onClick`/`onChange`, deliberately
+ *    minting a new key because the payload genuinely varies with what the user typed.
+ *  - `doc-comment` — the hook's own usage example, not executable code.
  */
-const RECOVERY_BRANCH_ALLOWLIST = new Set([
-  'src/components/deliveries/QuickDeliveryModal.tsx',
-  'src/pages/InvoiceDetail.tsx',
-  'src/pages/Returns.tsx',
-]);
+type Reason = 'recovery' | 'throw-on-error' | 'intent-rotation' | 'doc-comment';
+
+const ALLOWED_REASONS: Record<string, Reason[]> = {
+  'src/hooks/useIdempotencyKey.ts': ['doc-comment'],
+  'src/components/deliveries/QuickDeliveryModal.tsx': ['recovery'],
+  'src/pages/Returns.tsx': ['recovery'],
+  'src/pages/InvoiceDetail.tsx': ['recovery', 'throw-on-error'],
+  'src/pages/CycleCounts.tsx': ['throw-on-error'],
+  'src/pages/FieldApplicationInvoice.tsx': ['throw-on-error'],
+  'src/pages/Fields.tsx': ['throw-on-error'],
+  'src/pages/VendorBillDetail.tsx': ['throw-on-error'],
+  'src/pages/SupplierPricing.tsx': ['intent-rotation'],
+};
 
 /**
  * JobDetail.tsx carries 4 sites of this same class. They are deliberately EXCLUDED
@@ -144,6 +175,22 @@ const RECOVERY_BRANCH_ALLOWLIST = new Set([
  * reports honestly rather than pretending the file is clean.
  */
 const KNOWN_UNFIXED = new Set(['src/pages/JobDetail.tsx']);
+
+/** Classify one hit from the surrounding source, or null if nothing excuses it. */
+function classify(lines: string[], lineNo: number): Reason | null {
+  const self = lines[lineNo - 1] ?? '';
+  const above = lines.slice(Math.max(0, lineNo - 9), lineNo - 1).join('\n');
+  const callWindow = lines.slice(Math.max(0, lineNo - 16), lineNo - 1).join('\n');
+  const handlerWindow = lines.slice(Math.max(0, lineNo - 4), lineNo).join('\n');
+
+  if (/^\s*(\*|\/\/)/.test(self)) return 'doc-comment';
+  if (/getIdempotencyMismatchResult|isDefinitiveRpcRejection|committed[A-Za-z]*(Id|Result)/.test(above)) {
+    return 'recovery';
+  }
+  if (/\.throwOnError\(\)/.test(callWindow)) return 'throw-on-error';
+  if (/onClick=|onChange=/.test(handlerWindow)) return 'intent-rotation';
+  return null;
+}
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -158,6 +205,16 @@ const TOKEN = /resetKey\(\)|resetKeyFor\(|assertRpcResult|checkMutationResult|\.
 const RESET = /resetKey\(\)|resetKeyFor\(/;
 const ASSERT = /assertRpcResult|checkMutationResult/;
 
+/**
+ * Reports every reset that follows a mutating call with NO assert in between.
+ *
+ * STRENGTHENED 2026-09-03 (Codex MEDIUM, F1). The first version only reported a reset
+ * when it also found an assert within the following 20 lines — so a reset with **no
+ * assert at all** passed silently, which is precisely the shape of the live HIGH this
+ * review found in InvoiceDetail's edit arm. Requiring a trailing assert made the guard
+ * blind to the worst case, so that condition is gone: a reset reached from a call
+ * without an intervening assert is reported, full stop.
+ */
 function findResetBeforeAssert(file: string): number[] {
   const lines = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
   const hits: number[] = [];
@@ -165,11 +222,9 @@ function findResetBeforeAssert(file: string): number[] {
   lines.forEach((line, i) => {
     if (!TOKEN.test(line)) return;
     if (RESET.test(line)) {
-      if (last !== 'CALL') return;
-      // An assert further down that belongs to THIS statement sequence.
-      const ahead = lines.slice(i + 1, i + 21);
-      const assertAt = ahead.findIndex((l) => ASSERT.test(l));
-      if (assertAt >= 0) hits.push(i + 1);
+      // A reset that is NOT preceded by a verified reply is a hit, whether or not an
+      // assert happens to appear later.
+      if (last === 'CALL') hits.push(i + 1);
       return;
     }
     last = ASSERT.test(line) ? 'ASSERT' : 'CALL';
@@ -187,36 +242,55 @@ describe('F1 guard — no money screen retires its key before the reply is check
     expect(withResets.length).toBeGreaterThan(30);
   });
 
-  it('reports reset-before-assert ONLY at documented sites', () => {
+  it('every reset that precedes its reply check has a VERIFIED reason', () => {
     const offenders: string[] = [];
     for (const file of files) {
+      if (KNOWN_UNFIXED.has(file)) continue;
       const hits = findResetBeforeAssert(file);
       if (hits.length === 0) continue;
-      if (RECOVERY_BRANCH_ALLOWLIST.has(file) || KNOWN_UNFIXED.has(file)) continue;
-      offenders.push(`${file}:${hits.join(',')}`);
+      const lines = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
+      const allowed = ALLOWED_REASONS[file] ?? [];
+      for (const lineNo of hits) {
+        const reason = classify(lines, lineNo);
+        // Per-SITE verification: an allowlisted file only excuses the reasons it
+        // declares, and only for hits that actually exhibit one of them.
+        if (reason && allowed.includes(reason)) continue;
+        offenders.push(
+          `${file}:${lineNo} (${reason ?? 'no reason found'}${
+            reason && !allowed.includes(reason) ? ` — not declared for this file` : ''
+          }) :: ${(lines[lineNo - 1] ?? '').trim().slice(0, 90)}`,
+        );
+      }
     }
     expect(offenders).toEqual([]);
   });
 
-  it('the allowlisted recovery sites really are inside an error branch', () => {
-    // Mutation-proofing: the allowlist must not become a place to hide real bugs.
-    for (const file of RECOVERY_BRANCH_ALLOWLIST) {
+  it('no allowlist entry is stale', () => {
+    // An allowlist that no longer matches anything is dead weight that would silently
+    // excuse a future bug in that file. Every declared file must still produce hits,
+    // and every declared reason must still be exhibited by at least one of them.
+    for (const [file, reasons] of Object.entries(ALLOWED_REASONS)) {
+      const hits = findResetBeforeAssert(file);
+      expect(hits.length, `${file} is allowlisted but has no reset-before-assert sites`).toBeGreaterThan(0);
       const lines = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
-      for (const lineNo of findResetBeforeAssert(file)) {
-        const above = lines.slice(Math.max(0, lineNo - 8), lineNo).join('\n');
-        expect(
-          /getIdempotencyMismatchResult|isDefinitiveRpcRejection|committed[A-Za-z]*(Id|Result)/.test(above),
-          `${file}:${lineNo} is allowlisted but shows no recovery-branch marker above it`,
-        ).toBe(true);
+      const seen = new Set(hits.map((n) => classify(lines, n)));
+      for (const reason of reasons) {
+        expect(seen.has(reason), `${file} declares '${reason}' but no site exhibits it`).toBe(true);
       }
     }
   });
 
   it('the create-invoice click path no longer mints a key per click', () => {
+    // FAIL-CLOSED (Codex MEDIUM, F1): the first version sliced on unchecked indexOf
+    // results, so renaming or deleting the handler produced an empty string that
+    // trivially passed. Both offsets are now asserted to exist.
     const src = readFileSync('src/pages/OrderDetail.tsx', 'utf8').replace(/\r\n/g, '\n');
-    const click = src.slice(src.indexOf('const onCreateInvoiceClick'));
-    const body = click.slice(0, click.indexOf('\n  };'));
-    expect(body).not.toMatch(/createInvoiceIdem\.resetKey\(\)/);
+    const start = src.indexOf('const onCreateInvoiceClick');
+    expect(start, 'onCreateInvoiceClick handler not found — did it get renamed?').toBeGreaterThan(-1);
+    const rest = src.slice(start);
+    const end = rest.indexOf('\n  };');
+    expect(end, 'could not find the end of onCreateInvoiceClick').toBeGreaterThan(-1);
+    expect(rest.slice(0, end)).not.toMatch(/createInvoiceIdem\.resetKey\(\)/);
   });
 
   /**
@@ -231,16 +305,49 @@ describe('F1 guard — no money screen retires its key before the reply is check
    * p_reason) and updateOrderIdem (update_order_items takes p_items). Those resets
    * encode real intent rotation; the correct fix is a scoped key, tracked separately.
    */
-  it('no fixed-payload money action retires its key from a click handler', () => {
-    const src = readFileSync('src/pages/OrderDetail.tsx', 'utf8').replace(/\r\n/g, '\n');
-    for (const idem of ['cancelOrderIdem', 'createInvoiceIdem']) {
-      for (const line of src.split('\n')) {
-        if (!line.includes(`${idem}.resetKey()`)) continue;
+  /**
+   * Every reset of a fixed-payload key must sit directly after that RPC's verified
+   * reply — which is a positive property, not the absence of an `onClick` on the same
+   * line. STRENGTHENED 2026-09-03 (Codex MEDIUM, F1): matching `onClick` lexically on
+   * the reset's own line let a multiline handler, or an onClick calling a helper that
+   * resets, pass. Requiring a matching assert above each reset rejects all three, and
+   * requiring at least one reset per key means deleting the call cannot pass either.
+   */
+  const FIXED_PAYLOAD_KEYS: Array<[string, string]> = [
+    ['cancelOrderIdem', 'cancel_order'],
+    ['createInvoiceIdem', 'create_invoice_from_order'],
+    ['splitInvoiceIdem', 'create_split_invoices_from_order'],
+  ];
+
+  it('every fixed-payload key is retired only after its own RPC reply is verified', () => {
+    const lines = readFileSync('src/pages/OrderDetail.tsx', 'utf8').replace(/\r\n/g, '\n').split('\n');
+    for (const [idem, rpc] of FIXED_PAYLOAD_KEYS) {
+      const resets = lines
+        .map((l, i) => [l, i] as const)
+        .filter(([l]) => l.includes(`${idem}.resetKey()`));
+      expect(resets.length, `${idem}.resetKey() not found — renamed or deleted?`).toBeGreaterThan(0);
+      for (const [line, i] of resets) {
+        const above = lines.slice(Math.max(0, i - 25), i).join('\n');
         expect(
-          /onClick=|onClick\s*:/.test(line),
-          `${idem}.resetKey() must not run from a click handler: ${line.trim()}`,
-        ).toBe(false);
+          above.includes(`'${rpc}'`) && /assertRpcResult/.test(above),
+          `${idem}.resetKey() at line ${i + 1} is not preceded by a verified ${rpc} reply: ${line.trim()}`,
+        ).toBe(true);
       }
+    }
+  });
+
+  it('the order-scoped keys are bound to the route id, not just operation+user', () => {
+    // Codex HIGH (F1): OrderDetail does NOT remount when the route id changes, so an
+    // unscoped key could replay order A's receipt against order B once the per-click
+    // reset was removed. The third argument is the hook's intentScope.
+    const src = readFileSync('src/pages/OrderDetail.tsx', 'utf8').replace(/\r\n/g, '\n');
+    for (const [idem] of FIXED_PAYLOAD_KEYS) {
+      const decl = src.match(new RegExp(`const ${idem} = useIdempotencyKey\\([^)]*\\)`));
+      expect(decl, `${idem} declaration not found`).not.toBeNull();
+      expect(
+        /id\s*\?\?\s*''/.test(decl![0]),
+        `${idem} must be scoped by the route id: ${decl![0]}`,
+      ).toBe(true);
     }
   });
 });

@@ -77,9 +77,26 @@ describe('payload-bound idempotency migration', () => {
     expect(migration).toContain("v_actor_role = 'driver' AND v_cached_driver_id IS DISTINCT FROM v_actor");
   });
 
-  it('validates every new-invoice result before reporting success', () => {
-    expect(invoiceDetail).toContain("if (isNew) {\n          const savedId = assertRpcResult<string>(data, 'save_invoice');");
+  it('validates every save_invoice result before reporting success', () => {
+    // STRENGTHENED 2026-09-03 (Codex HIGH, F1). This previously pinned the literal
+    // "if (isNew) {\n  const savedId = assertRpcResult<string>(data, 'save_invoice');",
+    // which only proved the CREATE arm was validated. save_invoice RETURNS the invoice
+    // id for edits as well, so an EDIT with a null reply fell through the unvalidated
+    // else arm, retired its idempotency key and reported "saved" — exactly the F1
+    // failure mode this file exists to prevent. The old pin was satisfied by the buggy
+    // shape, so it is replaced by the stronger property rather than relaxed:
+    // the reply must be validated UNCONDITIONALLY, and before the key is retired.
+    expect(invoiceDetail).toContain("const savedId = assertRpcResult<string>(data, 'save_invoice');");
     expect(invoiceDetail).not.toContain('if (isNew && data)');
+    // The assert must not be nested inside an isNew-only branch.
+    expect(invoiceDetail).not.toMatch(/if \(isNew\)\s*\{\s*\n\s*const savedId = assertRpcResult/);
+
+    const assertAt = invoiceDetail.indexOf("const savedId = assertRpcResult<string>(data, 'save_invoice');");
+    expect(assertAt).toBeGreaterThan(-1);
+    // The save-path reset must follow the assert (the earlier reset at the
+    // committed-receipt recovery branch is intentionally before it and is not this one).
+    const resetAfter = invoiceDetail.indexOf('saveIdem.resetKey();', assertAt);
+    expect(resetAfter).toBeGreaterThan(assertAt);
   });
 
   it('resets quick-delivery form state on both success and reconciliation', () => {

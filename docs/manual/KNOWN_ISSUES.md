@@ -798,7 +798,10 @@ re-confirming findings F1–F3 of `docs/audits/2026-09-01-no-pr-branch-dispositi
 the three was tracked here before; each lived only on a branch 150–690 commits behind `main`. The
 branches are references, not merge candidates — every fix must be re-derived on current `main`.
 
-**F1 — CLOSED 2026-09-03** (branch `claude/money-screens-idempotency-key-582a41`). 39 call sites
+**F1 — MOSTLY FIXED 2026-09-03, two instances still OPEN** (branch
+`claude/money-screens-idempotency-key-582a41`; not "closed" — the same defect class remains
+live in `JobDetail.tsx` and in two click-reset designs, both listed at the end of this entry).
+39 call sites
 across 20 files now retire the key only after `assertRpcResult`, plus two click-level repairs in
 `OrderDetail.tsx` (`onCreateInvoiceClick` and the Cancel Order button — both RPCs take a payload
 that cannot vary between attempts, so a per-click reset only removed duplicate protection).
@@ -813,6 +816,24 @@ excluded because a concurrent session owned the file; (b) the `voidOrderIdem` / 
 click resets need a scoped key rather than deletion, because `void_order` takes a free-text
 `p_reason` and `update_order_items` takes `p_items` — real intent rotation, same shape as
 `VendorBillDetail`'s existing `getKeyFor(voidBillScope)`.
+
+**Codex `gpt-5.6-sol` (high) round 1 on that branch returned BLOCKED — 2 HIGH, 3 MEDIUM, 3 LOW —
+and both HIGHs were real.** (a) **Removing the per-click reset opened cross-order replay**:
+`OrderDetail` does not remount when the route id changes (`App.tsx` renders it without a `key`,
+effects are keyed on `[id]`, and `activeOrderIdRef` exists precisely to guard the stale in-flight
+fetch), so the hook's key map survives an order-to-order navigation. The per-click reset had been
+incidentally rotating it. Fixed by scoping `cancelOrderIdem`, `createInvoiceIdem` and
+`splitInvoiceIdem` to the route id via the hook's `intentScope`, which keeps retry-under-the-same-key
+for the same order while minting a fresh key per order. (b) **`save_invoice` returns the invoice id
+for EDITS as well as creates**, and the reply was validated only in the `isNew` arm, so every edit
+retired its key on an empty reply and reported "saved" — the original F1 mode, preserved. The assert
+is now unconditional. The MEDIUMs were: `assertRpcResult` rejects only null/undefined and does not
+validate shape (so `MonthEndClose`'s `Array.isArray` check now runs BEFORE the reset, and the
+ambiguous branch deliberately keeps the key); the repo-wide guard ignored a reset with no assert at
+all; and both click guards were fail-open. **Lesson worth keeping: the repo-wide guard matches line
+order and cannot bind a call, its reset and its assert to the same control-flow branch — a reset in
+an `else` arm whose sibling arm asserts still passes, which is exactly how HIGH (b) survived it.
+That limit is now written into the test file rather than assumed away.**
 
 **F1 (original report) — idempotency key discarded before the RPC result is checked (money paths).** On `main`,
 `src/pages/OrderDetail.tsx` calls `resetKey()` at lines 596, 698, 891 and 906 **before**

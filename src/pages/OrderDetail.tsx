@@ -65,11 +65,22 @@ export default function OrderDetail() {
   const { runWithBelowCostApproval } = useBelowCostApproval();
   const updateOrderIdem = useIdempotencyKey('update_order_items', profile?.id || '');
   const voidOrderIdem = useIdempotencyKey('void_order', profile?.id || '');
-  const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '');
-  const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
+  // F1: scoped by order id. This component does NOT remount when the route id
+  // changes (App.tsx renders it without a key, the effects are keyed on [id], and
+  // activeOrderIdRef exists precisely to guard the stale in-flight fetch), so the
+  // hook's key map survives an order-to-order navigation. These three actions no
+  // longer retire their key on click, so without the scope an ambiguous result on
+  // order A could replay A's receipt after the user navigated to order B —
+  // reporting B cancelled without cancelling it, or opening A's invoice. Scoping
+  // keeps retry-under-the-same-key for the SAME order while minting a fresh key
+  // per order.
+  const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '', id ?? '');
+  const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '', id ?? '');
   const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
   const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
-  const splitInvoiceIdem = useIdempotencyKey('create_split_invoices_from_order', profile?.id || '');
+  // F1: order-scoped for the same reason as cancelOrderIdem / createInvoiceIdem —
+  // this is the other half of the Create Invoice click path.
+  const splitInvoiceIdem = useIdempotencyKey('create_split_invoices_from_order', profile?.id || '', id ?? '');
   // Latest order id the route is showing — older in-flight fetches bail (M6 stale guard).
   const activeOrderIdRef = useRef<string | undefined>(undefined);
   // Per-target idempotency keys for "post all drafts" (M7) — keyed by standalone

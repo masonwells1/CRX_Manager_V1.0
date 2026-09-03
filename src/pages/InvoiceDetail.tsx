@@ -823,17 +823,20 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           }
           throw error;
         }
-        // The key must outlive the result check: assertRpcResult throws on a null or
-        // malformed success payload the server may already have committed, and a retry
-        // has to travel under the SAME key so save_invoice can replay it.
+        // The key must outlive the result check: assertRpcResult rejects a null reply
+        // the server may already have committed, and the retry has to travel under the
+        // SAME key so save_invoice can replay it.
+        //
+        // save_invoice RETURNS the invoice id for edits as well as creates, so the
+        // reply is validated unconditionally. Validating only the isNew arm left every
+        // EDIT retiring its key on a null reply and reporting "saved" — the original F1
+        // failure mode, preserved (Codex HIGH, 2026-09-03).
+        const savedId = assertRpcResult<string>(data, 'save_invoice');
+        saveIdem.resetKey();
+        legacySaveIntentRef.current = null;
         if (isNew) {
-          const savedId = assertRpcResult<string>(data, 'save_invoice');
-          saveIdem.resetKey();
-          legacySaveIntentRef.current = null;
           navigate(`/invoices/${savedId}`, { replace: true });
         } else {
-          saveIdem.resetKey();
-          legacySaveIntentRef.current = null;
           await fetchInvoice(id!);
         }
         return 'saved';

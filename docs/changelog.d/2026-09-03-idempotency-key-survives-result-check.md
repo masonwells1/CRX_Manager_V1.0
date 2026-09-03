@@ -12,11 +12,15 @@ A mutating RPC's reply is only known-good once `assertRpcResult()` has accepted 
 rpc() -> if (error) throw -> resetKey()  <-- too early -> assertRpcResult()
 ```
 
-`assertRpcResult` throws on a null or malformed success payload — the **ambiguous reply**,
-where the server may already have committed but the client cannot tell. Because the key was
-already gone, the user's natural retry travelled under a **fresh** key, which the server
-cannot replay, so the work was applied twice: a duplicate invoice, a double-allocated
-payment, a double-credited return.
+`assertRpcResult` throws on an empty success payload — the **ambiguous reply**, where the
+server may already have committed but the client cannot tell. Because the key was already
+gone, the user's natural retry travelled under a **fresh** key, which the server cannot
+replay, so the work was applied twice: a duplicate invoice, a double-allocated payment, a
+double-credited return.
+
+Note on scope of that check: `assertRpcResult` rejects only `null`/`undefined`; it does not
+validate shape. A path that needs a real shape check must perform it itself and retire the
+key after it — see the `Array.isArray` fix in `MonthEndClose.tsx` below.
 
 ## What changed
 

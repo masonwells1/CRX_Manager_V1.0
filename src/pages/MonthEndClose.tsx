@@ -354,8 +354,18 @@ export default function MonthEndClose() {
       if (error) throw error;
 
       const statements = assertRpcResult<DetailedStatementData[]>(data, 'generate_batch_statements');
+      // assertRpcResult only rejects null/undefined, so the ARRAY check below is this
+      // path's real validation of the reply — the key is retired after it, not before,
+      // or a non-null non-array response would lose its replay key (Codex MEDIUM, F1).
+      if (!statements || !Array.isArray(statements)) {
+        // Ambiguous reply: the run may have committed server-side. KEEP the key so a
+        // retry replays instead of generating a second batch.
+        toast('error', 'generate_batch_statements returned an unexpected response — retry to reconcile it.');
+        setGenerating(false);
+        return;
+      }
       generateStatementsIdem.resetKey();
-      if (!statements || !Array.isArray(statements) || statements.length === 0) {
+      if (statements.length === 0) {
         toast('info', 'No customers have outstanding balances');
         setGenerating(false);
         return;
