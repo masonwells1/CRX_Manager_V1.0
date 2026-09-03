@@ -580,6 +580,56 @@ try {
     );
   }
 
+  // ── round 8 (SEC-002): cmd.exe's caret and the POSIX backslash escape ──────
+  // Codex HIGH on the exact-SHA proof of fd72af13e. Round 4 stripped the
+  // characters a shell DELETES while building a word — but only PowerShell's:
+  // quotes and the backtick. cmd.exe deletes `^` the same way, so
+  // `cmd /c "echo x > .claude/hooks/codex-push-^lib.mjs"` writes the protected
+  // file while the token the guard examined still carried the caret. A POSIX
+  // shell (Git Bash here) does the same with an unquoted backslash. The set is
+  // now the UNION of every shell's no-ops; the backslash, being also Windows'
+  // separator, gets its own deleted view.
+  const CARET = String.fromCharCode(94);
+  for (const command of [
+    `cmd /c "echo x > .claude/hooks/codex-push-${CARET}lib.mjs"`,
+    `echo x > .claude/hooks/codex-push-${CARET}lib.mjs`,
+    `cmd /c "echo x > .claude/hooks/codex-bot-review-${CARET}lib.mjs"`,
+    `Set-Content .codex/${CARET}hooks.json -Value ""`,
+    // The caret can land in the directory part too.
+    `cmd /c "echo x > .cla${CARET}ude/hooks/codex-push-lib.mjs"`,
+    // POSIX: an unquoted backslash before an ordinary character is deleted.
+    "echo x > .claude/hooks/codex-push-\\lib.mjs",
+    "cp /tmp/evil.mjs .claude/hooks/codex-bot-review-\\lib.mjs",
+    // ...and the two escapes combined with a quote splice, all in one word.
+    `echo x > .claude/hooks/codex-push-${CARET}l""ib.mjs`,
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a caret or backslash escape spliced into a protected path must be refused: ${command}`,
+    );
+  }
+  // Still a read, still allowed.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: `cmd /c "type .claude/hooks/codex-push-${CARET}lib.mjs"` } }).blocked,
+    false,
+    "a caret-spliced READ stays allowed; only mutation is refused",
+  );
+  // NEAR-MISS CANARIES. A backslash-SEPARATED Windows path to an unrelated file
+  // must not fuse into a protected one when backslashes are deleted, and
+  // whitespace-separated fragments are still two arguments.
+  for (const innocent of [
+    'Set-Content .claude\\hooks\\some-other-lib.mjs -Value ""',
+    'Set-Content out.txt -Value ".claude\\hooks\\" "codex-push-lib.mjs"',
+    `Set-Content out.txt -Value ".claude/hooks/" ${CARET} "codex-push-lib.mjs"`,
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: innocent } }).blocked,
+      false,
+      `deleting escape characters must not fabricate a protected path: ${innocent}`,
+    );
+  }
+
   const botLibPush = makeRepo(".claude/hooks/codex-bot-review-lib.mjs", "export const ordinary = true;\n");
   assert.equal(
     evaluatePush(botLibPush.repo).blocked,
@@ -980,6 +1030,63 @@ try {
   });
   assert.equal(controlAttempts > 0, true, "CONTROL: the advisory IS reached once every hard gate has passed");
   assert.equal(controlVerdict.blocked, false, "a failed advisory lookup fails OPEN — it prints a notice and allows");
+
+  // ── round 8 (SEC-001): a CHAINED merge must not run #1's advisory before ──
+  // ── #2's hard checks ─────────────────────────────────────────────────────
+  // Codex HIGH on the exact-SHA proof of fd72af13e. Running the advisory at
+  // the allow point of ONE merge was not enough: `gh pr merge 123 && gh pr merge
+  // 456` gates each segment in turn, so #123's (clean, green, proof-backed)
+  // advisory ran before #456's objection check. A slow GitHub there could kill
+  // the hook before #456 was ever examined, and a killed hook denies nothing —
+  // so #456 would merge over CHANGES_REQUESTED. The advisory for #123 must not
+  // be reached at all when a later segment is going to be denied.
+  let chainedAttempts = 0;
+  const chainedGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      chainedAttempts += 1;
+      throw new Error("advisory lookup for the first merge reached before the second merge's hard denial");
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    // The stub tells the PRs apart by the selector `gh pr view <n>` carries.
+    if (Array.isArray(args) && args.includes("456")) {
+      return JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" });
+    }
+    return mainPrJson;
+  };
+  const chainedVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash && gh pr merge 456 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: chainedGh,
+  });
+  assert.equal(chainedVerdict.blocked, true, "the second merge's objection denies the whole command");
+  assert.match(String(chainedVerdict.reason), /CHANGES_REQUESTED/, "the denial is the objection, not an advisory or a fail-open notice");
+  assert.equal(
+    chainedAttempts,
+    0,
+    "the FIRST merge's advisory lookup is never reached when a LATER merge fails a hard gate — an in-loop advisory could starve that gate",
+  );
+  // CONTROL for the chained case: when every merge in the chain is clean, the
+  // advisory IS reached for each of them — deferral is not deletion.
+  let chainedControlAttempts = 0;
+  const chainedControlGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      chainedControlAttempts += 1;
+      throw new Error("advisory unavailable"); // fail-open
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  const chainedControlVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash && gh pr merge 456 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: chainedControlGh,
+  });
+  assert.equal(chainedControlVerdict.blocked, false, "CONTROL: two clean merges are allowed");
+  assert.equal(chainedControlAttempts, 2, "CONTROL: the advisory runs once per merge AFTER both cleared their hard gates — deferred, not dropped");
   // --auto MUST NOT exempt an active objection (Codex High finding, PR #559).
   // Every other gate exempts auto because GitHub holds the merge until its own
   // requirements are met; the requirement that covered this one was the required

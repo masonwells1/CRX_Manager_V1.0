@@ -194,11 +194,18 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // `.claude/hooks/x.mjs.` all open the protected file and were allowed. Anchors
   // unchanged; the pushLib transform is still identity. Output taken from the
   // producer test's printed candidate, never hand-computed.
-  codexGuard: "91a9cd4b10dc49120676cb01a77849e4b2877681",
+  // Re-pinned again 2026-09-03 (Codex round 8, two HIGHs on the exact-SHA proof
+  // of fd72af13e): SEC-001 — the Codex App advisory lookup is now DEFERRED past
+  // every merge segment in a command and run under one shared deadline, so a
+  // chained `gh pr merge 1 && gh pr merge 2` cannot let #1's advisory starve #2's
+  // hard gates; SEC-002 — the shell no-op set gained cmd.exe's caret and a
+  // backslash-deleted view for the POSIX escape. Anchors unchanged; the pushLib
+  // transform is still identity. Output from the producer test's candidate.
+  codexGuard: "a6ddfb81edf46002d596e2de356a91c387abf525",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "f9ccb410bc19b193be656c91b367617655e520cf",
+  codexGuard: "af78094716d8ab2c5bf61d868be6b01d29dd2093",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

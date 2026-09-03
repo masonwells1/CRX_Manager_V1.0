@@ -178,15 +178,32 @@ function protectedHarnessPathMentioned(value) {
 // it with Resolve-Path on two forms, both allowed at the time — a backtick
 // escape and an empty double-quoted string, each spliced into the middle of
 // `.claude/hooks/codex-push-lib.mjs`.
-const SHELL_WORD_NOOP_RE = /[`"']/g;
+//
+// Codex round 8 (SEC-002) added cmd.exe's caret: `echo x > codex-push-^lib.mjs`
+// under `cmd /c` drops the `^` and writes the protected file. The set is the
+// UNION of every shell's word-building no-ops — PowerShell's backtick, cmd's
+// caret, and the quotes all three share — because the guard cannot know which
+// interpreter will run the text. A literal caret in a PowerShell path is a
+// different file that this over-blocks, which is the safe direction.
+const SHELL_WORD_NOOP_RE = /[`"'^]/g;
+// A POSIX shell (Git Bash on this box) deletes an unquoted backslash and keeps
+// the next character, so `codex-push-\lib.mjs` opens `codex-push-lib.mjs`. The
+// backslash is ALSO Windows' separator, so it cannot join the no-op set above —
+// `.claude\hooks\x` must still read as a path. It gets its own view instead:
+// with every backslash deleted, the POSIX escape collapses while a
+// backslash-separated Windows path merely stops matching in THIS view and is
+// still caught by the two views that keep it.
+const POSIX_ESCAPE_RE = /\\/g;
 
 function commandPathTokens(command) {
   const raw = String(command || "");
-  // Two views of the same command. The first splits on quotes so a quoted path
-  // is examined rather than skipped; the second REMOVES them so an intra-word
-  // splice collapses back to the path the shell will actually open. Both are
-  // needed: neither view alone covers the other's case.
-  const views = [raw, raw.replace(SHELL_WORD_NOOP_RE, "")];
+  // Three views of the same command. The first splits on quotes so a quoted
+  // path is examined rather than skipped; the second REMOVES shell no-op
+  // characters so an intra-word splice collapses back to the path the shell
+  // will actually open; the third additionally deletes backslashes for the
+  // POSIX-escape case. All are needed: no view alone covers the others' cases.
+  const dequoted = raw.replace(SHELL_WORD_NOOP_RE, "");
+  const views = [raw, dequoted, dequoted.replace(POSIX_ESCAPE_RE, "")];
   const tokens = [];
   for (const view of views) {
     for (const token of view.split(/[\s"'`,;()|&<>]+/)) {
@@ -810,13 +827,16 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   });
   if (mainVerdict.blocked) return mainVerdict;
 
-  // ALLOW point. Every hard denial above — objection, green pipeline, risky-diff
-  // classification and the exact-SHA proof — has already had its chance, so the
-  // advisory lookup can spend what is left of the hook budget here without being
-  // able to starve any of them.
-  const advisory = codexAppAdvisory({ request, repoDir, runGh });
-  if (advisory) return advisory;
-  return mainVerdict;
+  // ALLOW point for THIS merge. Every hard denial above — objection, green
+  // pipeline, risky-diff classification and the exact-SHA proof — has had its
+  // chance. The advisory lookup is NOT run here (Codex round 8, SEC-001): a
+  // command can carry several merges, and an advisory for the first one that
+  // ran before the second one's hard checks could exhaust the hook budget
+  // before those checks did — a killed hook denies nothing, so the second
+  // merge would proceed with failed CI, an objection, or no proof. The caller
+  // collects this request and runs every advisory only after EVERY merge in
+  // the command has cleared its hard gates, under one shared deadline.
+  return { blocked: false, advisoryRequest: request };
 }
 
 // The Codex GitHub App's own review — mirror of pr-merge-guard.mjs.
@@ -831,7 +851,11 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
 // third of the hook's 15s so the notices below can still be written.
 const CODEX_ADVISORY_BUDGET_MS = 5_000;
 
-function codexAppAdvisory({ request, repoDir, runGh }) {
+// `deadlineMs` is SHARED across every merge in one command (Codex round 8,
+// SEC-001): the caller computes it once and passes the same value to each
+// deferred lookup, so N chained merges spend one budget between them rather
+// than N budgets in series.
+function codexAppAdvisory({ request, repoDir, runGh, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS }) {
   let codexVerdict = null;
   try {
     const metaArgs = ["pr", "view"];
@@ -841,7 +865,6 @@ function codexAppAdvisory({ request, repoDir, runGh }) {
     const meta = JSON.parse(runGh(metaArgs, repoDir));
     const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
     if (slug && Number.isInteger(meta?.number)) {
-      const deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS;
       const node = collectCodexThreads((cursor) => {
         const args = [
           "api", "graphql",
@@ -1035,6 +1058,9 @@ export function evaluateProductionAction({
   // Split on single `|` too (Codex round-4): `git push a | git push b` runs
   // BOTH pushes in a shell pipeline, so every pipeline stage is a segment.
   const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  // Merge requests that cleared every hard gate; their advisory lookups run
+  // together at the very end, after the push segments too (Codex round 8).
+  const deferredAdvisories = [];
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ───────────
@@ -1100,6 +1126,9 @@ export function evaluateProductionAction({
         runGh,
       });
       if (result.blocked) return result;
+      // Cleared every hard gate. Its advisory lookup is DEFERRED until every
+      // merge in this command has done the same (Codex round 8, SEC-001).
+      if (result.advisoryRequest) deferredAdvisories.push(result.advisoryRequest);
       continue;
     }
     if (ghApiMutates(segment)) {
@@ -1151,6 +1180,17 @@ export function evaluateProductionAction({
     return denied("Production deployments, edge-function deploys, and live migration commands remain blocked for Codex.");
   }
 
+  // ALLOW point for the whole command. Every merge and push segment above has
+  // cleared its hard gates, so the advisory, fail-open Codex App lookups can
+  // spend what is left of the hook budget here without being able to starve
+  // any of them — including a LATER merge's gates, which is what running the
+  // advisory inside the loop allowed (Codex round 8, SEC-001). One deadline is
+  // shared by every lookup so N merges cannot multiply the budget.
+  const advisoryDeadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS;
+  for (const request of deferredAdvisories) {
+    const advisory = codexAppAdvisory({ request, repoDir: actionRepoDir, runGh, deadlineMs: advisoryDeadlineMs });
+    if (advisory) return advisory;
+  }
   return { blocked: false };
 }
 

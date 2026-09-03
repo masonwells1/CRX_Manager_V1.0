@@ -338,7 +338,10 @@ eq(
 //   * REACHABILITY — the advisory is still actually invoked, or this is the dead
 //     code the original pin existed to prevent (it sat behind the Codex guard's
 //     approval deny and never ran for any PR without a formal approval).
-const codexAdvisoryCallAt = codexGuardSource.indexOf("codexAppAdvisory({ request");
+// Measured at the CALL, not the definition: `function codexAppAdvisory({ request`
+// matches the same prefix and now sits textually before the call, so a bare
+// indexOf would measure the wrong thing and pass no matter where the call lands.
+const codexAdvisoryCallAt = codexGuardSource.indexOf("const advisory = codexAppAdvisory({ request");
 const codexVerdictMatch = codexGuardSource.match(
   /if \((?:!pullRequestApproved\(pullRequest\)|pullRequestReviewBlocked\(pullRequest\))\)/,
 );
@@ -372,35 +375,79 @@ ok(
   && /if \(advisory\) return advisory;/.test(codexGuardSource),
   "the Codex guard still ACTS on the advisory verdict — defining it without returning it is the dead code this pin exists to catch",
 );
+// DEFERRED PAST THE WHOLE COMMAND (Codex round 8, SEC-001). Running last within
+// one merge was not enough: `gh pr merge 1 && gh pr merge 2` gates each segment
+// in turn, so an advisory for #1 run inside the loop still preceded #2's hard
+// checks. The call must sit AFTER the segment loop, and the per-merge gate must
+// hand its request back rather than call the advisory itself.
+const codexSegmentLoopAt = codexGuardSource.indexOf("for (const segment of commandSegments)");
+ok(codexSegmentLoopAt > 0, "the Codex guard's segment loop is present to order");
+ok(
+  codexAdvisoryCallAt > codexSegmentLoopAt,
+  "MUST RUN AFTER EVERY MERGE: the Codex guard's advisory call sits after the segment loop, not inside the per-merge gate",
+);
+ok(
+  /return \{ blocked: false, advisoryRequest: request \};/.test(codexGuardSource),
+  "the per-merge gate returns its request for deferral instead of running the advisory itself",
+);
+ok(
+  /deferredAdvisories\.push\(result\.advisoryRequest\)/.test(codexGuardSource),
+  "the segment loop actually queues the returned request — a gate that hands it back to a caller that drops it is the dead code this pin exists to catch",
+);
+ok(
+  /const advisoryDeadlineMs = Date\.now\(\) \+ CODEX_ADVISORY_BUDGET_MS;/.test(codexGuardSource)
+  && /deadlineMs: advisoryDeadlineMs/.test(codexGuardSource),
+  "one deadline is computed once and shared by every deferred lookup, so N merges cannot multiply the budget",
+);
 
 // The Claude guard now defines codexAdvisory() above gateRequest, so ordering
 // must be measured at the CALL SITES. Measuring the definition would compare the
 // wrong thing and pass no matter where the call lands.
-const claudeAdvisoryCalls = [...guardSource.matchAll(/codexAdvisory\(request\);/g)].map((m) => m.index);
+//
+// Since Codex round 8 the two allow points QUEUE the request and a single call
+// site after the request loop drains the queue. So the pins are: both allow
+// points still push (or one path silently skips the check), the one call site
+// sits after the loop, and the queue is the same object on both ends.
+const claudeQueuePushes = [...guardSource.matchAll(/advisoryQueue\.push\(request\);/g)].map((m) => m.index);
+const claudeAdvisoryCalls = [...guardSource.matchAll(/codexAdvisory\(request, advisoryDeadlineMs\);/g)].map((m) => m.index);
 const claudeGreenAt = guardSource.indexOf("green-pipeline requirement");
 const claudeProofAt = guardSource.indexOf("require the fresh, bound Codex proof");
+const claudeRequestLoopAt = guardSource.indexOf("for (const request of requests) gateRequest(request);");
+eq(
+  claudeQueuePushes.length,
+  2,
+  "the Claude guard queues the advisory at BOTH allow points (non-risky, and risky-with-valid-proof) — one push site means the other path silently skips the check",
+);
 eq(
   claudeAdvisoryCalls.length,
-  2,
-  "the Claude guard invokes the advisory at BOTH allow points (non-risky, and risky-with-valid-proof) — one call site means the other path silently skips the check",
+  1,
+  "the Claude guard drains the advisory queue from exactly ONE call site — a second, in-loop call would reintroduce the chained-merge starvation",
 );
-ok(claudeGreenAt > 0 && claudeProofAt > 0, "both Claude-guard hard gates are present to order");
+ok(claudeGreenAt > 0 && claudeProofAt > 0 && claudeRequestLoopAt > 0, "both Claude-guard hard gates and the request loop are present to order");
 ok(
-  claudeAdvisoryCalls.every((at) => at > claudeGreenAt),
-  "MUST RUN LAST: every Claude-guard advisory call follows the green-pipeline deny",
+  claudeQueuePushes.every((at) => at > claudeGreenAt),
+  "MUST RUN LAST: every Claude-guard allow point follows the green-pipeline deny",
 );
-// The proof gate is reachable only on the RISKY path, so only the second call
+ok(
+  claudeAdvisoryCalls[0] > claudeRequestLoopAt,
+  "MUST RUN AFTER EVERY MERGE: the Claude guard drains the advisory queue only after the loop has gated every request",
+);
+ok(
+  /const advisoryDeadlineMs = Date\.now\(\) \+ CODEX_ADVISORY_BUDGET_MS;/.test(guardSource),
+  "the Claude guard computes one shared deadline for the whole queue",
+);
+// The proof gate is reachable only on the RISKY path, so only the second push
 // site sits after it — the first returns ALLOW before the proof section exists
-// to run. Asserting "every call follows the proof gate" would be wrong, not
+// to run. Asserting "every push follows the proof gate" would be wrong, not
 // stricter: it would demand the non-risky path wait on a gate that never applies.
 const claudeRiskyClassifyAt = guardSource.indexOf("risky-diff classification");
 ok(claudeRiskyClassifyAt > 0, "the Claude guard's risky-diff classification is present to order");
 ok(
-  claudeAdvisoryCalls[0] > claudeRiskyClassifyAt,
+  claudeQueuePushes[0] > claudeRiskyClassifyAt,
   "MUST RUN LAST: the non-risky allow point follows the risky-diff classification, which denies (fail closed) when the diff cannot be read",
 );
 ok(
-  claudeAdvisoryCalls[1] > claudeProofAt,
+  claudeQueuePushes[1] > claudeProofAt,
   "MUST RUN LAST: the risky allow point follows the exact-SHA proof gate",
 );
 

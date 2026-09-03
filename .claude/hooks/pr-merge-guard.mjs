@@ -197,7 +197,14 @@ function listWorktreesFromProjectDir() {
 // Do not move it earlier "so the reader sees it first".
 const CODEX_ADVISORY_BUDGET_MS = 12_000;
 
-function codexAdvisory(request) {
+// DEFERRED PAST EVERY MERGE IN THE COMMAND (Codex round 8, SEC-001). Running
+// last within ONE merge was not enough: `gh pr merge 1 && gh pr merge 2` gates
+// each request in turn, so an advisory for #1 that ran before #2's hard checks
+// could still exhaust the hook budget before those checks — and a killed hook
+// denies nothing. gateRequest() therefore only QUEUES a request that cleared
+// its hard gates; the queue is drained after the loop, and every lookup shares
+// the one `deadlineMs` the caller computed, so N merges spend one budget.
+function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS) {
   let codexVerdict = null;
   try {
     const metaArgs = ["pr", "view"];
@@ -207,7 +214,6 @@ function codexAdvisory(request) {
     const meta = JSON.parse(gh(metaArgs));
     const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
     if (slug && Number.isInteger(meta?.number)) {
-      const deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS;
       const node = collectCodexThreads((cursor) => {
         const args = [
           "api", "graphql",
@@ -361,10 +367,11 @@ function gateRequest(request) {
       deny(`PR MERGE GATE: could not inspect this pull request's full diff for money/security risk, so the merge is denied (fail closed). ${error?.message || error}`);
     }
   }
-  // ALLOW point 1 — nothing risky. Every hard denial above has had its chance,
-  // so the advisory lookup can spend what is left of the hook budget here.
+  // ALLOW point 1 — nothing risky. Every hard denial above has had its chance
+  // for THIS request; the advisory lookup is queued, not run, so a later merge
+  // in the same command still reaches its own hard denials first.
   if (risky.length === 0 && !contentFlagged) {
-    codexAdvisory(request);
+    advisoryQueue.push(request);
     return;
   }
 
@@ -403,9 +410,9 @@ function gateRequest(request) {
     } catch { /* unreadable directory means no proof HERE — keep looking */ }
   }
   // ALLOW point 2 — risky, but the exact-SHA proof validated. Same reasoning as
-  // ALLOW point 1: this is the last thing between here and returning ALLOW.
+  // ALLOW point 1: queued, drained only after every request has been gated.
   if (valid) {
-    codexAdvisory(request);
+    advisoryQueue.push(request);
     return;
   }
 
@@ -427,5 +434,13 @@ function gateRequest(request) {
   );
 }
 
+// Requests that cleared every hard gate. Drained only after the loop below has
+// gated EVERY request — see codexAdvisory() for why (Codex round 8, SEC-001).
+const advisoryQueue = [];
 for (const request of requests) gateRequest(request);
+// ALLOW point for the whole command: every merge has cleared its hard denials,
+// so the advisory lookups can spend what is left of the hook budget here. One
+// deadline is shared across the queue so N merges cannot multiply the budget.
+const advisoryDeadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS;
+for (const request of advisoryQueue) codexAdvisory(request, advisoryDeadlineMs);
 passthrough();
