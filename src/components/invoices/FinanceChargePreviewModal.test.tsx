@@ -15,9 +15,15 @@ const { mockRpc, mockToast } = vi.hoisted(() => {
   return { mockRpc, mockToast };
 });
 
-vi.mock('../../lib/db', () => ({
+vi.mock('../../lib/db', async () => ({
   supabase: { rpc: mockRpc },
   assertRpcResult: (data: unknown) => data,
+  // The REAL sanitizeError, never a stub. A stub shaped
+  // `e instanceof Error ? e.message : …` would re-implement the defect this
+  // screen was fixed for and pass against a regressed product.
+  sanitizeError: (await vi.importActual<typeof import('../../lib/errorSanitizer')>(
+    '../../lib/errorSanitizer',
+  )).sanitizeError,
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({
@@ -237,13 +243,24 @@ describe('FinanceChargePreviewModal', () => {
     expect(mockToast).toHaveBeenCalledWith('error', 'Select at least one customer');
   });
 
-  it('handles preview fetch error', async () => {
-    mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'DB error' } });
+  // ASSERTION DELIBERATELY CHANGED (H5 follow-up). This previously asserted
+  // `stringContaining('Failed')`, which passed only because the modal was showing
+  // its canned literal 'Failed to load finance charge preview' INSTEAD of the
+  // server's reason. postgrest-js resolves a non-throwing rpc error as a PLAIN
+  // OBJECT, so `err instanceof Error` was false and the old ternary discarded the
+  // real explanation. The test agreed with the bug and so could never catch it.
+  it('surfaces the server reason verbatim when the preview fetch fails', async () => {
+    const reason = 'Finance charge preview is unavailable while the period is closing.';
+    mockRpc.mockResolvedValueOnce({
+      data: null,
+      error: { message: reason, details: null, hint: null, code: 'P0001' },
+    });
     render(<FinanceChargePreviewModal {...defaultProps} />);
 
     await waitFor(() => {
-      expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Failed'));
+      expect(mockToast).toHaveBeenCalledWith('error', reason);
     });
+    expect(mockToast).not.toHaveBeenCalledWith('error', 'Failed to load finance charge preview');
   });
 
   it('calls onClose when Cancel clicked', async () => {

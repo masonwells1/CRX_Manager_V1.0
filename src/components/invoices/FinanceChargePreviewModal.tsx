@@ -16,7 +16,7 @@ import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../../lib/db';
+import { sanitizeError, supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import type { FinanceChargePreview } from '../../types';
@@ -57,7 +57,7 @@ export default function FinanceChargePreviewModal({
       setSelected(new Set(rows.map((r) => r.customer_id)));
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'FinanceChargePreviewModal.fetchPreview' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to load finance charge preview');
+      toast('error', sanitizeError(err));
     }
     setLoading(false);
   }, [asOfDate, toast]);
@@ -123,7 +123,7 @@ export default function FinanceChargePreviewModal({
       onSuccess();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'FinanceChargePreviewModal.handleGenerate' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to generate finance charges');
+      toast('error', sanitizeError(err));
     }
     setGenerating(false);
   };

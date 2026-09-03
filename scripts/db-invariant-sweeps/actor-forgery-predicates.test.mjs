@@ -530,6 +530,302 @@ BEGIN
   INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
 END;
 $body$;
+
+-- ---------------------------------------------------------------------------
+-- The four LEGITIMATE guard styles live code actually uses (2026-09-02 triage).
+-- Every one of these binds the caller identity and refuses on mismatch; the
+-- predicate credited none of them while it demanded one exact spelling, which
+-- is what took the live sweep from 1 row to 56. They must NOT be reported.
+-- ---------------------------------------------------------------------------
+
+-- Style 1: the actor local is bound in the DECLARE initializer rather than by a
+-- separate assignment statement. 17 live routines.
+CREATE FUNCTION public.actor_declare_init_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid := auth.uid();
+BEGIN
+  IF p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- Style 2: null-tolerant refusal with the <> spelling. The parameter is
+-- attribution-only when omitted and must match the caller when supplied.
+-- 10 live routines.
+CREATE FUNCTION public.actor_null_tolerant_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid;
+BEGIN
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF p_actor_source IS NOT NULL AND p_actor_source <> v_actor THEN
+    RAISE EXCEPTION 'Actor mismatch';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- Style 3: prose refusal message, no canonical token anywhere. 6 live routines.
+CREATE FUNCTION public.actor_prose_message_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid := auth.uid();
+BEGIN
+  IF p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- Style 4: canonical token with a descriptive suffix, and a semicolon INSIDE the
+-- message. The semicolon is the point: the refusal-statement match may only be
+-- safe because the lexer masks the literal first. 5 live routines use this form.
+CREATE FUNCTION public.actor_prefixed_message_refusal_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH: caller is not the actor; refusing';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- ---------------------------------------------------------------------------
+-- CANARIES for the loosening itself. Accepting four message spellings and two
+-- binding forms must not degrade into "anything shaped like an IF counts".
+-- Each of these is a near-miss of a style above and must STILL be reported.
+-- ---------------------------------------------------------------------------
+
+-- Compares against the caller correctly but only RAISEs a NOTICE, so execution
+-- continues and the actor still reaches the sink. Message-agnostic matching must
+-- not drop the requirement that the statement be RAISE EXCEPTION.
+CREATE FUNCTION public.actor_notice_not_exception_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE NOTICE 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- DECLARE initializer that binds the local to the PARAMETER instead of
+-- auth.uid(), so the comparison is always false and the refusal can never fire.
+-- Accepting the initializer form must not mean accepting any initializer.
+CREATE FUNCTION public.actor_selfbound_declare_init_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid := p_actor_source;
+BEGIN
+  IF p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- Null-tolerant shape compared against a fresh random uuid rather than the
+-- caller identity: refuses every caller-supplied actor and attributes nothing,
+-- but proves nothing about the caller. The null-tolerant prefix must not be a
+-- way to smuggle in an arbitrary right-hand side.
+CREATE FUNCTION public.actor_null_tolerant_wrong_identity_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS NOT NULL AND p_actor_source <> gen_random_uuid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- ---------------------------------------------------------------------------
+-- Fixtures from the exact-SHA Codex review of c1beab619.
+-- ---------------------------------------------------------------------------
+
+-- HIGH #1. An ISOLATED dynamic audit write: the whole INSERT lives inside a
+-- string literal, so the lexer masks financial_audit_log out of the analysed
+-- source, and the actor arrives via USING rather than inside a call.
+--
+-- This deliberately carries NO other statement. actor_dynamic_audit_sink_forward
+-- above also has a PERFORM public.forward_actor(p_actor_source) immediately
+-- before its EXECUTE, and that unrelated call satisfies the callable-forwarding
+-- arm -- so that fixture would keep passing even with the dynamic-sink arm
+-- removed, which is exactly how this gap survived review. Nothing here can
+-- satisfy any arm except raw-source correlation.
+CREATE FUNCTION public.actor_dynamic_audit_sink_only(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  EXECUTE 'INSERT INTO public.financial_audit_log(actor_user_id) VALUES ($1)' USING p_actor_source;
+END;
+$body$;
+
+-- HIGH #2. A TEXT actor cast to uuid on its way into the immutable ledger. The
+-- first draft of the type gate dropped every non-uuid built-in from candidacy,
+-- which removed this shape from the sweep entirely.
+CREATE FUNCTION public.actor_text_cast_audit_forward(p_performed_by text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_performed_by::uuid);
+END;
+$body$;
+
+-- P1. A BARE inequality refusal. Textually it looks like a correct guard, but
+-- p_actor_source <> auth.uid() evaluates to NULL when the actor argument is
+-- NULL, so the IF never fires and the refusal never raises. Accepting the
+-- inequality spelling without a null guard credits a guard that cannot refuse --
+-- same defect class as actor_selfbound_declare_init_forward. Must be REPORTED.
+CREATE FUNCTION public.actor_bare_inequality_forward(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source <> auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- P1. The local is bound to auth.uid() and then OVERWRITTEN with a
+-- caller-controlled value before the refusal reads it, so the comparison proves
+-- nothing. Ordering alone would credit this. Must be REPORTED.
+CREATE FUNCTION public.actor_poisoned_local_before_refusal(p_actor_source uuid, p_target_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid;
+BEGIN
+  v_actor := auth.uid();
+  v_actor := p_target_id;
+  IF p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+CREATE FUNCTION public.financial_audit_log_probe() RETURNS void
+LANGUAGE plpgsql AS $body$
+BEGIN
+  PERFORM 1;
+END;
+$body$;
+
+-- ---------------------------------------------------------------------------
+-- Round 2 of the exact-SHA Codex review, on 39a3d817f. All three are shapes the
+-- BASE predicate reports and the rewrite had stopped reporting.
+-- ---------------------------------------------------------------------------
+
+-- HIGH. A TEXT actor used in a role lookup, never cast to uuid and never compared
+-- to auth.uid(). The type gate accepted only uuid, user-defined types, or a
+-- parameter the body visibly casts — so this left candidacy entirely. The gate is
+-- now gone; base reports this and so must we.
+CREATE FUNCTION public.actor_text_role_lookup(p_user_id text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_role text;
+BEGIN
+  SELECT role INTO v_role FROM public.profiles WHERE id::text = p_user_id;
+  RETURN v_role = 'admin';
+END;
+$body$;
+
+-- HIGH. A benign VISIBLE mention of the ledger beside a MASKED dynamic write.
+-- The previous gate required financial_audit_log to be absent from the entire
+-- lexed body, so this one harmless probe call switched detection off completely.
+CREATE FUNCTION public.actor_visible_probe_plus_dynamic_write(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  PERFORM public.financial_audit_log_probe();
+  EXECUTE 'INSERT INTO public.financial_audit_log(actor_user_id) VALUES ($1)' USING p_actor_source;
+END;
+$body$;
+
+-- Round 4 HIGH. The null-tolerant guard passes trivially when the caller sends
+-- NULL, and the identity then falls through to p_target_id, which the caller also
+-- controls and which does NOT match the actor name pattern -- so it is not a
+-- candidate in its own right and nothing else reports it.
+--
+-- This is the canary for a finding that was DECLINED once, on the reasoning that
+-- the fallback value "would be its own candidate row". It would not. Must be
+-- REPORTED.
+CREATE FUNCTION public.actor_null_fallback_to_other_param(p_actor_source uuid, p_target_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid := auth.uid();
+BEGIN
+  IF p_actor_source IS NOT NULL AND p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id)
+  VALUES (coalesce(p_actor_source, p_target_id));
+END;
+$body$;
+
+-- The control that keeps the arm narrow: the SAFE house pattern, where the
+-- fallback is the caller identity rather than another parameter. Four live
+-- routines look like this. Must NOT be reported.
+CREATE FUNCTION public.actor_null_fallback_to_auth_uid(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_actor uuid := auth.uid();
+BEGIN
+  IF p_actor_source IS NOT NULL AND p_actor_source IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id)
+  VALUES (coalesce(p_actor_source, auth.uid()));
+END;
+$body$;
+
+-- Round 3 P1. SELECT ... INTO is an assignment path the rebinding rule did not
+-- read: the canonical refusal passes, then the actor parameter is overwritten
+-- from a caller-controlled row before it reaches the sink. Recorded as an open
+-- residual in the 2026-09-01 cap entry. Must be REPORTED.
+CREATE FUNCTION public.actor_into_rebound_param_forward(p_actor_source uuid, p_target_id uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+BEGIN
+  IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  SELECT p_target_id INTO p_actor_source;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- Round 3 P1. A legal quoted identifier containing a control-flow keyword. The
+-- refusal sits inside IF false THEN and can never run, but "END IF" as an
+-- identifier balances the block counts, so the unreachable refusal was credited
+-- and everything after it vanished from analysis. Must be REPORTED.
+CREATE FUNCTION public.actor_quoted_identifier_block_spoof(p_actor_source uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE "END IF" integer := 1;
+BEGIN
+  IF false THEN
+    IF p_actor_source IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH';
+    END IF;
+  END IF;
+  PERFORM public.forward_actor(p_actor_source);
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor_source);
+END;
+$body$;
+
+-- HIGH. Authorization derived from a forgeable actor through DYNAMIC SQL. The
+-- lexer masks the string, so neither the role arm nor any other lexed arm sees
+-- it; the general predicate had no raw-source fallback at all.
+CREATE FUNCTION public.actor_dynamic_role_authorization(p_actor_source uuid) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER AS $body$
+DECLARE v_role text;
+BEGIN
+  EXECUTE 'SELECT role FROM public.profiles WHERE id = $1' INTO v_role USING p_actor_source;
+  RETURN v_role = 'admin';
+END;
+$body$;
 `);
 
   const forgedActor = '00000000-0000-0000-0000-000000000001';
@@ -588,6 +884,24 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_backslash_guard_forward',
     'actor_word_adjacent_escape_forward',
     'actor_unreachable_refusal_forward',
+    // Canaries for the 2026-09-02 shape-matching loosening. Each is a near-miss
+    // of a style the predicate now accepts; if one of these stops being reported,
+    // the credit rule has gone from "recognises the real guard shapes" to
+    // "accepts anything shaped like an IF".
+    'actor_notice_not_exception_forward',
+    'actor_selfbound_declare_init_forward',
+    'actor_null_tolerant_wrong_identity_forward',
+    // Codex P1s on c1beab619: a guard that cannot fire, and a guard reading a
+    // local that was poisoned after it was bound.
+    'actor_bare_inequality_forward',
+    'actor_poisoned_local_before_refusal',
+    // Codex round 3: INTO as an assignment path, and a quoted identifier
+    // balancing the control-flow counts around an unreachable refusal.
+    'actor_into_rebound_param_forward',
+    'actor_quoted_identifier_block_spoof',
+    // Codex round 4: a null actor falling through to another caller-controlled
+    // parameter. Declined once, wrongly.
+    'actor_null_fallback_to_other_param',
   ]) {
     assert.ok(
       generalRows.some((row) => row.startsWith(`${routine}(`) && row.endsWith('|p_actor_source')),
@@ -603,6 +917,15 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
     'actor_safe_local_refusal_forward',
     'actor_closed_block_then_refusal',
     'actor_named_argument_forward',
+    // The four legitimate live guard styles (2026-09-02 triage). Pinned here so
+    // a future tightening cannot quietly retake the live sweep from 1 row to 56.
+    'actor_declare_init_refusal_forward',
+    'actor_null_tolerant_refusal_forward',
+    'actor_prose_message_refusal_forward',
+    'actor_prefixed_message_refusal_forward',
+    // Keeps the round-4 arm narrow: falling back to the CALLER identity is the
+    // safe house pattern and must stay clear.
+    'actor_null_fallback_to_auth_uid',
   ]) {
     assert.ok(
       !generalRows.some((row) => row.startsWith(`${routine}(`)),
@@ -613,6 +936,35 @@ SELECT public.actor_quoted_set_config_forgery('${forgedActor}');`);
       `financial predicate must stop at the executable uncaught refusal in ${routine}: ${financialRows.join(', ')}`,
     );
   }
+  // ── Codex c1beab619 HIGH #1 and #2, asserted against the FINANCIAL predicate ──
+  // These two are audit-ledger shapes. The general predicate has no
+  // financial_audit_log arm and is not expected to report them, so asserting the
+  // must-report loop's both-predicates rule would be asserting the wrong thing.
+  for (const routine of [
+    'actor_dynamic_audit_sink_only',
+    'actor_text_cast_audit_forward',
+    // Codex round 2: one benign VISIBLE ledger reference must not switch dynamic
+    // detection off for the masked write beside it.
+    'actor_visible_probe_plus_dynamic_write',
+  ]) {
+    assert.ok(
+      financialRows.some((row) => row.startsWith(`${routine}(`)),
+      `financial predicate must catch ${routine} — forged authorship reaching the immutable ` +
+        `ledger is this predicate's whole remit: ${financialRows.join(', ')}`,
+    );
+  }
+
+  // Codex round 2, general predicate: base coverage that the lexer removed.
+  // A text actor in a role lookup (no cast anywhere) and authorization derived
+  // from a forgeable actor through dynamic SQL.
+  for (const routine of ['actor_text_role_lookup', 'actor_dynamic_role_authorization']) {
+    assert.ok(
+      generalRows.some((row) => row.startsWith(`${routine}(`)),
+      `general predicate must catch ${routine} — the base predicate reports it and the ` +
+        `rewrite must not lose that: ${generalRows.join(', ')}`,
+    );
+  }
+
   console.log('ACTOR_FORGERY_PREDICATES_TEST_PASS');
 } finally {
   if (CONTAINER.startsWith(PREFIX)) {

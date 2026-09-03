@@ -51,6 +51,12 @@ WITH RECURSIVE cand AS (
     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
     AND coalesce(p.proargmodes[a.ordinality], 'i'::"char") IN ('i', 'b', 'v')
     AND a.argname ~* '^p_\w*by$|^p_actor|^p_user'
+    -- NO TYPE GATE, mirroring actor-forgery.sql. Two attempts to narrow candidacy
+    -- by parameter type were both rejected as HIGH false negatives by the
+    -- exact-SHA Codex reviews; the second still missed `CAST(x AS uuid)`, a text
+    -- actor forwarded to a text-accepting helper, and casts performed inside
+    -- dynamic SQL. Candidacy is the region the base predicate defined — the name
+    -- pattern — and nothing narrows it.
 ), src_rows AS (
   -- Lex each routine ONCE. A routine with two actor-shaped parameters used to
   -- be lexed once per parameter, and the whole prosrc rode along in recursive
@@ -126,8 +132,17 @@ WITH RECURSIVE cand AS (
   WHERE l.scan_pos <= l.src_len
     AND NOT l.lex_error
 ), lexed AS (
+  -- Whitespace runs collapsed to a single space ONCE, here (mirror of
+  -- actor-forgery.sql). The lexer masks each comment and string literal to a
+  -- whitespace run of the same LENGTH, and a message-agnostic refusal pattern
+  -- backtracks across those runs badly enough to time the sweep out against the
+  -- live catalog. Bounding the quantifiers instead is not available: PostgreSQL
+  -- caps bounded-repeat expansion and rejects the pattern. Masked content is
+  -- content-free, so collapsing it changes no token the analysis reads.
   SELECT cand.oid, cand.proname, cand.args, cand.argname, cand.argname_pattern,
-         cand.argument_position, cand.actor_is_uuid, l.executable_src, l.lex_error,
+         cand.argument_position, cand.actor_is_uuid,
+         regexp_replace(l.executable_src, '\s+', ' ', 'g') AS executable_src,
+         l.lex_error,
          -- Raw, unlexed source. Used ONLY for the sink-PRESENCE test below.
          -- The lexer masks string and dollar-quoted bodies, so a dynamic write
          -- (EXECUTE 'INSERT INTO financial_audit_log ...') vanishes from
@@ -139,19 +154,37 @@ WITH RECURSIVE cand AS (
   FROM lexer l
   JOIN cand ON cand.oid = l.oid
   WHERE l.lex_error OR l.scan_pos > l.src_len
+  -- Fence: keeps the whitespace collapse above from being re-run per reference.
+  OFFSET 0
 ), guarded AS (
   SELECT lexed.*,
+         shape.refusal_authuid,
+         shape.refusal_vactor,
          actor_is_uuid
          AND executable_src ~* (
            '^\s*\mDECLARE\M.*?\mv_actor\M\s+(?:pg_catalog\s*\.\s*)?uuid\M'
            || '(?:\s+NOT\s+NULL)?[^;]*;.*?\mBEGIN\M'
          )
-         AND executable_src ~* (
-           '\mv_actor\M\s*:=\s*auth\s*\.\s*uid\s*\(\s*\)\s*;.*?'
-           || '\mIF\M\s*\(*\s*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
-           || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M\s*\)*\s*'
-           || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
-         ) AS has_bound_local_refusal,
+         -- Mirror of actor-forgery.sql: the actor local may be bound by a DECLARE
+         -- initializer or by an assignment statement, and the binding must still
+         -- precede the refusal -- enforced by comparing match POSITIONS, because
+         -- bridging the two patterns with `.*?` is quadratic. Kept INLINE in the
+         -- AND chain, not hoisted to a LATERAL: a LATERAL is evaluated for every
+         -- row, which ran the refusal scan against all 129 live candidates
+         -- including a 75KB body and timed the sweep out.
+         AND regexp_instr(executable_src, shape.binding_re, 1, 1, 0, 'i') > 0
+         AND regexp_instr(executable_src, shape.refusal_vactor, 1, 1, 0, 'i')
+             > regexp_instr(executable_src, shape.binding_re, 1, 1, 0, 'i')
+         -- Mirror of actor-forgery.sql: no re-assignment of v_actor between its
+         -- auth.uid() binding and the refusal, or the refusal compares the actor
+         -- against a caller-poisoned local and proves nothing. Codex P1.
+         AND substr(
+               executable_src,
+               regexp_instr(executable_src, shape.binding_re, 1, 1, 1, 'i'),
+               greatest(regexp_instr(executable_src, shape.refusal_vactor, 1, 1, 0, 'i')
+                        - regexp_instr(executable_src, shape.binding_re, 1, 1, 1, 'i'), 0)
+             ) !~* '\mv_actor\M\s*:?='
+           AS has_bound_local_refusal,
          -- Mirror of actor-forgery.sql. A PL/pgSQL IN parameter is a writable
          -- local, so a stash-then-rebind makes the canonical refusal unfireable
          -- while the stashed caller value reaches the audit sink. Pinned to
@@ -161,11 +194,56 @@ WITH RECURSIVE cand AS (
          -- `:?=` because PL/pgSQL accepts both `:=` and plain `=` as the
          -- assignment operator. Statement pinning is what makes accepting `=`
          -- safe. Mirror of actor-forgery.sql.
-         executable_src ~* (
+         (executable_src ~* (
            '(?:;|\mBEGIN\M|\mTHEN\M|\mELSE\M|\mLOOP\M|\mDECLARE\M|^)\s*(?:<<[^>]*>>\s*)?'
            || '\m' || argname_pattern || '\M\s*(?:\[[^\]]*\])?\s*:?='
-         ) AS has_actor_rebinding
+         )
+         -- `INTO` is an assignment path too (mirror of actor-forgery.sql).
+         -- `SELECT … INTO p_performed_by` / `EXECUTE … INTO v_actor` overwrite the
+         -- actor exactly as `:=` does. Recorded as an open residual in the
+         -- 2026-09-01 cap entry and re-raised by the exact-SHA Codex review.
+         OR executable_src ~* (
+           '\mINTO\M\s*(?:\mSTRICT\M\s*)?(?:[[:alpha:]_][[:alnum:]_$]*\s*,\s*){0,8}'
+           || '\m' || argname_pattern || '\M'
+         )
+         OR executable_src ~* (
+           '\mINTO\M\s*(?:\mSTRICT\M\s*)?(?:[[:alpha:]_][[:alnum:]_$]*\s*,\s*){0,8}\mv_actor\M'
+         )) AS has_actor_rebinding
   FROM lexed
+  CROSS JOIN LATERAL (
+    SELECT '(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)' AS actor_ref
+  ) ref
+  CROSS JOIN LATERAL (
+    -- Mirror of actor-forgery.sql. Refusal credited by SHAPE, not by one exact
+    -- message literal (Mason's 2026-09-02 decision): live code uses four
+    -- spellings and two binding forms. `[(\s]`/`[\s)]` rather than the ambiguous
+    -- `\s*\(*\s*`, both to avoid catastrophic backtracking once the trailing
+    -- literal no longer anchors the match, and so the read guard's `identifier(`
+    -- heuristic does not read a class member as a function name.
+    -- Mirror of actor-forgery.sql: `<>`/`!=` accepted ONLY behind an explicit
+    -- `<actor> IS NOT NULL AND` guard, because a bare `p_actor <> auth.uid()`
+    -- yields NULL for a NULL actor and the refusal never fires. `IS DISTINCT
+    -- FROM` is NULL-safe and stays acceptable on its own.
+    SELECT '\mIF\M[(\s]*'
+           || '(?:'
+           ||   '(?:' || ref.actor_ref || '\s+IS\s+NOT\s+NULL\s+AND[(\s]+' || ref.actor_ref
+           ||     '(?:\s+IS\s+DISTINCT\s+FROM\s+|\s*(?:<>|!=)\s*))'
+           ||   '|'
+           ||   '(?:' || ref.actor_ref || '\s+IS\s+DISTINCT\s+FROM\s+)'
+           || ')' AS refusal_head,
+           '[\s)]*\mTHEN\M\s*\mRAISE\s+EXCEPTION\M[^;]*;' AS refusal_tail
+  ) frag
+  CROSS JOIN LATERAL (
+    -- String assembly only -- no scanning happens here, so this stays a LATERAL.
+    -- `\M\s*(?:` not `\M(?:` in binding_re so the live-data read guard does not
+    -- parse the identifier-then-paren as a function call and refuse the statement.
+    SELECT frag.refusal_head || 'auth\s*\.\s*uid\s*\(\s*\)' || frag.refusal_tail AS refusal_authuid,
+           frag.refusal_head || '\mv_actor\M' || frag.refusal_tail AS refusal_vactor,
+           '(?:\mv_actor\M\s+(?:pg_catalog\s*\.\s*)?uuid\M\s*(?:NOT\s+NULL\s*)?:=\s*auth\s*\.\s*uid\s*\(\s*\)\s*;'
+           || '|\mv_actor\M\s*:=\s*auth\s*\.\s*uid\s*\(\s*\)\s*;)' AS binding_re
+  ) shape
+  -- Fence, same reason as the one at the end of `analyzed`.
+  OFFSET 0
 ), analyzed AS (
   SELECT guarded.*,
          CASE
@@ -199,21 +277,22 @@ WITH RECURSIVE cand AS (
          END AS pre_refusal_src
   FROM guarded
   CROSS JOIN LATERAL (
-    SELECT regexp_replace(
-             executable_src,
-             '('
-               || '\mIF\M\s*\(*\s*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
-               || '\s+IS\s+DISTINCT\s+FROM\s+auth\s*\.\s*uid\s*\(\s*\)\s*\)*\s*'
-               || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
-               || CASE WHEN has_bound_local_refusal THEN
-                    '|\mIF\M\s*\(*\s*(?:\m' || argname_pattern || '\M|\$' || argument_position || '\M)'
-                    || '\s+IS\s+DISTINCT\s+FROM\s+v_actor\M\s*\)*\s*'
-                    || '\mTHEN\M\s*\mRAISE\s+EXCEPTION\s+''ACTOR_MISMATCH''[^;]*;'
-                  ELSE '' END
-             || ').*$',
-             '',
-             'is'
-           ) AS prefix
+    -- Same shape fragments the credit test uses, so a refusal can never be
+    -- accepted by one and rejected by the other. Prefix taken by match position
+    -- rather than by `(RE).*$`, which forces a to-end-of-body match attempt at
+    -- every candidate position -- the other half of the live timeout.
+    SELECT CASE WHEN hit.pos > 0 THEN left(executable_src, hit.pos - 1)
+                ELSE executable_src END AS prefix
+    FROM (
+      SELECT regexp_instr(
+               executable_src,
+               '(' || refusal_authuid
+                   || CASE WHEN has_bound_local_refusal THEN '|' || refusal_vactor
+                      ELSE '' END
+               || ')',
+               1, 1, 0, 'i'
+             ) AS pos
+    ) hit
   ) stripped
   CROSS JOIN LATERAL (
     -- The matched refusal statement: from where the strip began through the
@@ -224,21 +303,50 @@ WITH RECURSIVE cand AS (
            ) AS stmt
   ) refusal
   CROSS JOIN LATERAL (
-    SELECT array_length(regexp_split_to_array(upper(stripped.prefix), '\mIF\M'), 1) - 1 AS if_tokens,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mEND\s+IF\M'), 1) - 1 AS end_if,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mLOOP\M'), 1) - 1 AS loop_tokens,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mEND\s+LOOP\M'), 1) - 1 AS end_loop,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mCASE\M'), 1) - 1 AS case_tokens,
-           array_length(regexp_split_to_array(upper(stripped.prefix), '\mEND\s+CASE\M'), 1) - 1 AS end_case,
-           array_length(regexp_split_to_array(upper(refusal.stmt), '\mIF\M'), 1) - 1 AS stmt_if,
-           array_length(regexp_split_to_array(upper(refusal.stmt), '\mLOOP\M'), 1) - 1 AS stmt_loop,
-           array_length(regexp_split_to_array(upper(refusal.stmt), '\mCASE\M'), 1) - 1 AS stmt_case
+    -- Quoted identifiers BLANKED before counting control-flow tokens (mirror of
+    -- actor-forgery.sql). A legal `DECLARE "END IF" integer;` inside
+    -- `IF false THEN …` otherwise balances the prefix, credits an unreachable
+    -- refusal, and deletes the rest of the body from analysis. Open on PR #449
+    -- and never closed there.
+    SELECT array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mIF\M'), 1) - 1 AS if_tokens,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mEND\s+IF\M'), 1) - 1 AS end_if,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mLOOP\M'), 1) - 1 AS loop_tokens,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mEND\s+LOOP\M'), 1) - 1 AS end_loop,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mCASE\M'), 1) - 1 AS case_tokens,
+           array_length(regexp_split_to_array(upper(blockscan.prefix_src), '\mEND\s+CASE\M'), 1) - 1 AS end_case,
+           array_length(regexp_split_to_array(upper(blockscan.stmt_src), '\mIF\M'), 1) - 1 AS stmt_if,
+           array_length(regexp_split_to_array(upper(blockscan.stmt_src), '\mLOOP\M'), 1) - 1 AS stmt_loop,
+           array_length(regexp_split_to_array(upper(blockscan.stmt_src), '\mCASE\M'), 1) - 1 AS stmt_case
+    FROM (
+      SELECT regexp_replace(stripped.prefix, '"(?:[^"]|"")*"', ' ', 'g') AS prefix_src,
+             regexp_replace(refusal.stmt, '"(?:[^"]|"")*"', ' ', 'g') AS stmt_src
+    ) blockscan
   ) blocks
+  -- OPTIMIZATION FENCE -- load-bearing (mirror of actor-forgery.sql).
+  -- `pre_refusal_src` is referenced by several arms in the final WHERE. A plain
+  -- CTE is inlined by PostgreSQL 12+ and the expression re-evaluated per
+  -- reference, so each row re-ran the refusal scan and the six IF/LOOP/CASE
+  -- splits once per arm. `AS MATERIALIZED` is the clearer spelling but the
+  -- live-data read guard parses `MATERIALIZED (` as a function call and refuses
+  -- the statement, which would make this predicate unrunnable through the MCP
+  -- path `run-sweeps.mjs` uses. `OFFSET 0` is the same fence with no clash.
+  OFFSET 0
 )
 SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
 FROM analyzed
 WHERE lex_error OR
+      -- NULL-ACTOR FALLBACK TO ANOTHER CALLER-CONTROLLED PARAMETER (mirror of
+      -- actor-forgery.sql). Scanned over the WHOLE body, since the danger sits
+      -- after the credited guard. A null-tolerant refusal proves nothing when the
+      -- caller passes NULL, and `coalesce(p_user_id, p_target_id)` then stamps the
+      -- ledger from a parameter the caller also controls — one that does not match
+      -- the actor name pattern, so it is not a candidate in its own right.
+      -- Raised by the exact-SHA Codex review, declined once on reasoning that was
+      -- wrong, fixed here. Narrow by design: a fallback to another PARAMETER, not
+      -- every coalesce; `coalesce(p_performed_by, auth.uid())` stays clear.
+      executable_src ~* ('coalesce\s*\(\s*(\m' || argname_pattern || '\M|\$' || argument_position
+                         || '\M)\s*,\s*\mp_[[:alnum:]_$]') OR
       -- Reportable on its own, scoped to this predicate's audit-log remit: a
       -- routine that writes financial_audit_log AND overwrites its own actor
       -- parameter cannot be cleared by reading its refusal, and the value that
@@ -249,6 +357,44 @@ WHERE lex_error OR
       -- scope while its actor parameter stayed visible.
       (raw_src ~* 'financial_audit_log' AND has_actor_rebinding) OR
       pre_refusal_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)') OR
+      -- RAW-SOURCE correlation, restored from the base predicate (Codex HIGH,
+      -- exact-SHA review of c1beab619). The lexed arm above cannot see a DYNAMIC
+      -- audit write, because the whole statement lives inside a string literal
+      -- that the lexer masks:
+      --
+      --   EXECUTE 'INSERT INTO public.financial_audit_log(actor_user_id) VALUES ($1)'
+      --     USING p_performed_by;
+      --
+      -- `financial_audit_log` vanishes from executable_src, and `USING
+      -- p_performed_by` is not inside a callable expression, so neither the lexed
+      -- arm nor the forwarding arm below fires and the routine is cleared. The
+      -- base predicate on `main` reports it, because it correlates the table name
+      -- and the actor on RAW source within one statement. That coverage was lost
+      -- when the lexer arrived in PR #449 and is restored here rather than
+      -- documented as a residual -- forged authorship reaching the immutable
+      -- financial ledger is the exact class this predicate exists to catch.
+      --
+      -- Gated on NO CREDITED REFUSAL, not on the sink being globally invisible.
+      --
+      -- Draft 1 was an unconditional raw correlation and reported
+      -- actor_safe_refusal_forward, which legitimately stamps its actor parameter
+      -- AFTER a credited refusal that already proved it equals auth.uid().
+      --
+      -- Draft 2 fixed that by requiring `executable_src !~* 'financial_audit_log'`
+      -- — sink absent from the whole lexed body — and the Codex review rejected it
+      -- as a HIGH: ANY unrelated visible mention switches the arm off. A single
+      -- `PERFORM public.financial_audit_log_probe();` beside a masked
+      -- `EXECUTE 'INSERT INTO financial_audit_log …' USING p_actor` restores the
+      -- blind spot, and nothing else reports that shape.
+      --
+      -- A global-absence test is the wrong shape of question. What actually makes
+      -- the raw correlation safe is that the routine has no credited refusal to
+      -- clear it: `pre_refusal_src` is only left equal to the full body when
+      -- nothing was credited (or the analysis failed closed). That holds
+      -- regardless of how many benign references the body carries, and it still
+      -- exempts a routine whose refusal was credited.
+      (pre_refusal_src IS NOT DISTINCT FROM executable_src
+       AND raw_src ~* ('financial_audit_log[^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)')) OR
       (raw_src ~* 'financial_audit_log' AND
        pre_refusal_src ~* ('(?:(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\.\s*)*(?:"(?:[^"]|"")*"|[[:alpha:]_][[:alnum:]_$]*)\s*\([^;]*(\m' || argname_pattern || '\M|\$' || argument_position || '\M)'))
 ORDER BY violation_key;

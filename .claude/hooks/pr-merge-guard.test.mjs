@@ -13,6 +13,7 @@ import {
   proofSearchDirs,
   pullRequestApproved,
   pullRequestChecksGreen,
+  pullRequestReviewBlocked,
 } from "./codex-push-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -81,6 +82,19 @@ ok(!pullRequestApproved({ reviewDecision: "CHANGES_REQUESTED" }), "CHANGES_REQUE
 ok(!pullRequestApproved({ reviewDecision: null }), "null verdict fails closed");
 ok(!pullRequestApproved({}), "missing field fails closed — a PR view that never asked for it is not an approval");
 ok(!pullRequestApproved(undefined), "undefined PR fails closed");
+
+// ── pullRequestReviewBlocked (Mason, 2026-09-02) ─────────────────────────────
+// main no longer requires an approval, so ONLY an active objection blocks a
+// merge. These pin both halves: what still denies, and what deliberately does
+// not — a regression that re-blocked REVIEW_REQUIRED or null would restore the
+// exact deadlock the protection change removed.
+ok(pullRequestReviewBlocked({ reviewDecision: "CHANGES_REQUESTED" }), "CHANGES_REQUESTED blocks the merge");
+ok(pullRequestReviewBlocked({ reviewDecision: "changes_requested" }), "case-insensitive");
+ok(!pullRequestReviewBlocked({ reviewDecision: "APPROVED" }), "APPROVED does not block");
+ok(!pullRequestReviewBlocked({ reviewDecision: "REVIEW_REQUIRED" }), "REVIEW_REQUIRED no longer blocks");
+ok(!pullRequestReviewBlocked({ reviewDecision: null }), "null (no review required) does not block");
+ok(!pullRequestReviewBlocked({}), "missing field does not block — gateRequest already denied an unfetchable PR");
+ok(!pullRequestReviewBlocked(undefined), "undefined PR does not block here");
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
 eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge"), { selector: "12", repo: "o/r", auto: false }, "REST merge endpoint parses");
@@ -245,6 +259,24 @@ ok(
 ok(
   /function\s+listWorktreesFromProjectDir\b[\s\S]{0,600}?["'`]worktree["'`][\s\S]{0,200}?--porcelain/.test(guardSource),
   "listWorktreesFromProjectDir actually shells out to `git worktree list --porcelain`",
+);
+
+// ── the objection check must never be exempt for --auto (Codex High, PR #559) ─
+// Every other gate in this gateRequest() exempts auto-merge, because GitHub holds
+// a queued auto-merge until its own requirements are met. The requirement that
+// used to cover THIS one was main's required review — and the 2026-09-02 change
+// removed it. With no required review GitHub will complete a queued auto-merge on
+// a PR carrying CHANGES_REQUESTED, so re-adding an auto exemption here reopens a
+// hole created by the same commit that removed the server-side floor. Pinned at
+// the source level because gateRequest() is not exported and the live path needs
+// a real `gh`; the behavioural twin is wired on the Codex side, which injects gh.
+ok(
+  /if\s*\(\s*pullRequestReviewBlocked\(\s*pr\s*\)\s*\)/.test(guardSource),
+  "the CHANGES_REQUESTED denial is reached unconditionally",
+);
+ok(
+  !/request\.auto[^\n]*pullRequestReviewBlocked/.test(guardSource),
+  "the CHANGES_REQUESTED denial is NOT gated on request.auto - --auto must never merge over an objection",
 );
 ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
 

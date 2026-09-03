@@ -1,5 +1,11 @@
 # Actor-binding SQL reader — review-cap continuation handoff
 
+> **SUPERSEDED — historical record.** This document belongs to PR #373, which was **closed
+> unmerged**. Actor-binding hardening continued and is live work as of 2026-09-02 in **open PR #449**
+> (`codex/actor-binding-mixed-notation-repair-20260810`); that PR, not this handoff, is the current
+> state. The three migrations referenced here are staged on `main` under
+> `scripts/.staging-migrations/` and are **not applied**. Preserved for its review-cap reasoning.
+
 ## WHERE
 
 - Repository: `C:\CRX_Manager` / `masonwells1/CRX_Manager_V1.0`

@@ -11,7 +11,7 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { sanitizeError, supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import HelpTip from '../components/ui/HelpTip';
@@ -122,7 +122,7 @@ export default function DeliveryRemainders() {
       navigate(`/deliveries/${followupResult.delivery_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_followup_delivery' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to create follow-up delivery');
+      toast('error', sanitizeError(err));
     }
     setCreating(null);
   };
