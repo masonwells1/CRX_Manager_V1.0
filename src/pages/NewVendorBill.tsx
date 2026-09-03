@@ -226,8 +226,15 @@ export default function NewVendorBill() {
         // intent argument whenever a pending record exists), the confirmation fields
         // never reach the server, and the operator re-triggers this same branch
         // forever with no way to tell why. Say so instead of looping in silence.
+        //
+        // Read the survivor through getUnresolvedIntent(), NOT the unresolvedIntent
+        // state field: that field still holds its render-time value inside this
+        // handler, so it is null on the first failure and this branch would never
+        // run. classifyFailure() also cannot be distinguished by its return value
+        // here — it reports 'definitive' both when it deleted the record and when
+        // another claimant kept it alive.
         await createBillIntent.classifyFailure(error);
-        if (createBillIntent.unresolvedIntent) {
+        if (createBillIntent.getUnresolvedIntent()) {
           setOverageMessage(
             'This bill is still open in another tab, so the overage confirmation cannot be attached yet. '
             + 'Finish or close that tab, then try again.',

@@ -124,4 +124,24 @@ describe('gauntlet caller-side safety guards', () => {
       expect(purchaseOrder, `${idem} must not use a bare getKey()`).not.toContain(`${idem}.getKey()`);
     }
   });
+
+  // The PO-overage branch runs entirely inside one save handler: beginIntent(),
+  // the RPC rejection, classifyFailure(), then the decision. `unresolvedIntent`
+  // is React state and still holds its render-time value (null) at that point,
+  // so branching on it makes the "another claimant holds this bill" message dead
+  // code and the confirmed retry silently drops p_confirm_po_overage. The
+  // classifyFailure() return value cannot substitute: it reports 'definitive'
+  // both when the record was deleted and when a peer kept it alive.
+  it('detects a surviving vendor-bill intent from the ref, not from render-time state', () => {
+    const page = source('src/pages/NewVendorBill.tsx');
+    const hook = source('src/hooks/useUncertainMutationIntent.ts');
+
+    expect(hook).toContain('const getUnresolvedIntent = useCallback(() => intentRef.current, []);');
+    expect(page).toContain('await createBillIntent.classifyFailure(error);');
+    expect(page).toContain('if (createBillIntent.getUnresolvedIntent()) {');
+    expect(
+      page,
+      'the overage branch must not read the stale unresolvedIntent state field',
+    ).not.toContain('if (createBillIntent.unresolvedIntent) {');
+  });
 });

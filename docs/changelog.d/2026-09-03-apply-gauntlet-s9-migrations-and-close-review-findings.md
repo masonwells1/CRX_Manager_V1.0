@@ -81,3 +81,36 @@ their source only on this unmerged branch. Live is healthy — all four added op
 that `main` does not reference — and it closes when this PR merges. **This is the fourth occurrence
 of that class**; the 2026-08-13 entry already records that the prevention gap is open because
 nothing reconciles the live ledger against tracked migration files automatically.
+
+## Fixed: the PO-overage guard could not fire
+
+Codex and CodeRabbit independently flagged the same defect in this PR's own vendor-bill change, from
+opposite directions. `NewVendorBill.tsx`'s PO-overage branch runs entirely inside one save handler:
+`beginIntent()`, the RPC rejection, `classifyFailure()`, then the decision. It branched on
+`createBillIntent.unresolvedIntent`, which is `useState` — inside that handler it still holds its
+render-time value, `null`. So the "this bill is open in another tab" message was **dead code in
+exactly the case it was written for**: the operator instead got the ordinary reason prompt, confirmed
+it, and the retry reused the surviving intent with `p_confirm_po_overage` stripped, looping with no
+explanation.
+
+`classifyFailure()`'s return value cannot substitute. `deleteCoordinatedRecord()` returning
+`{deleted:false, current:<pending>}` falls through to `return 'definitive'` — identical to the healthy
+delete — so the disposition genuinely cannot discriminate. The ref is the only correct read.
+
+- `useUncertainMutationIntent.ts` — added `getUnresolvedIntent()`, reading `intentRef.current`.
+  `applyRecord()` writes that ref synchronously, so it is correct in the same tick that
+  `classifyFailure()` resolves. The state field remains for rendering.
+- `NewVendorBill.tsx` — the branch reads the accessor, commented with the trap *and* why the
+  disposition cannot be used, so the next reader does not "simplify" it back.
+
+Both mutation-tested. Pointing the accessor at the state field turns the new
+`useUncertainMutationIntent` test red with `expected null to deeply equal { amount: 100 }`; reverting
+the call site turns the new `gauntletFrontendSafetyGuards` source contract red. The hook test models
+the component closure — it captures `result.current` before `beginIntent()` and reads both forms
+inside one `act()` — because asserting after `act()` flushes the state update and hides the bug.
+
+**Review-thread status is not evidence about code.** These threads read 39 unresolved / 18 not
+outdated; triaging every substantive one against current source resolved that to six already fixed,
+one real, and two pre-existing judgment calls on the commission report. Comment anchors surviving
+means GitHub does not mark a genuinely-fixed thread outdated, so "unresolved" over-reports and
+"outdated" under-reports at the same time.

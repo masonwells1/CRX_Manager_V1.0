@@ -96,6 +96,47 @@ describe('useUncertainMutationIntent', () => {
     expect(result.current.isIntentLocked).toBe(true);
   });
 
+  it('reports a retained intent to the handler that is still running, not just to the next render', async () => {
+    // Models NewVendorBill's PO-overage branch: one handler calls beginIntent(),
+    // gets a definitive rejection, calls classifyFailure(), and must then decide
+    // whether the pending record survived — all before React re-renders. Reading
+    // the unresolvedIntent STATE field there returns the render-time value (null),
+    // so the survivor is invisible and the confirmation retry silently drops its
+    // p_confirm_po_overage fields. getUnresolvedIntent() reads the ref instead.
+    const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>({
+      operation: 'create_vendor_bill',
+      userId: 'admin-same-tick-read',
+      surface: 'new-vendor-bill',
+      scope: 'bill-same-tick-read',
+    }));
+
+    // Captured at the render that STARTS the save, exactly like a component closure.
+    const handler = result.current;
+    expect(handler.unresolvedIntent).toBeNull();
+
+    let staleStateRead: { amount: number } | null = null;
+    let currentRefRead: { amount: number } | null = null;
+    await act(async () => {
+      await handler.beginIntent({ amount: 100 });
+      // Break durable claim release so classifyFailure RETAINS the record, which
+      // is the "another claimant still holds it" case the branch must detect.
+      Object.defineProperty(globalThis, 'indexedDB', {
+        configurable: true,
+        writable: true,
+        value: undefined,
+      });
+      await handler.classifyFailure({ code: '23514', message: 'validation failed' });
+      staleStateRead = handler.unresolvedIntent;
+      currentRefRead = handler.getUnresolvedIntent();
+    });
+
+    // The state field is stale inside the handler — this is the trap, asserted so
+    // nobody "simplifies" the call site back to it.
+    expect(staleStateRead).toBeNull();
+    // The accessor sees the survivor immediately.
+    expect(currentRefRead).toEqual({ amount: 100 });
+  });
+
   it('keeps an intent mismatch locked until the caller reconciles the receipt', async () => {
     const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>());
     await act(async () => result.current.beginIntent({ amount: 100 }));
