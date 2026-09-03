@@ -9,17 +9,23 @@ ordering high-water. Read ordering from the authored NAME, not from `version` �
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
 high-water" rule compared against it silently skips files authored `20260831*`.
 
-**Disk-vs-live drift, confirmed 2026-09-03:** five migrations are applied live with **no file in this
-repository** — `20260831160000_harden_receiving_reversal_and_ap_reporting`,
+**Disk-vs-live drift, confirmed 2026-09-03 — OWNED BY PR #535, NOT AN ORPHAN.** Six `20260831*`
+migrations are applied live with **no file on `main`**:
+`20260831160000_harden_receiving_reversal_and_ap_reporting`,
 `20260831161000_require_cumulative_po_bill_confirmation`,
 `20260831162000_fail_closed_historical_commission_balance`,
-`20260831212415_guard_cycle_count_completion_revision`, and
+`20260831212415_guard_cycle_count_completion_revision`,
+`20260831233000_bind_section9_replays_to_intent`, and
 `20260831235900_serialize_gauntlet_write_boundaries`. `main`'s newest tracked migration is
-`20260827041500`. This is the same class of gap PR #371 closed on 2026-08-11 and that reopened on
-2026-08-12 (see the recovery note in `docs/reference/migration-history.md`); it is open again, five
-files wide, and is not owned by any current task. Until it closes, `main` does not describe
-production, and any migration whose safety argument rests on "the live body equals the last committed
-body" must verify against live rather than against disk.
+`20260827041500`. **All six DO have files on PR #535's branch
+`codex/gauntlet-s9-safety-20260831`** — verified 2026-09-03 with `git ls-tree` against that branch,
+6/6 present — so merging #535 closes the drift completely and there is nothing to adopt or
+reconstruct. Do not go hunting for missing files; check that branch first.
+
+The consequence still bites until #535 merges: `main` does not describe production, so any migration
+whose safety argument rests on "the live body equals the last committed body" must verify against
+**live**, not against disk. `20260903160000` does exactly that — it pins md5 hashes read from live
+`pg_proc.prosrc` rather than diffing against tracked files.
 
 This header supersedes the 2026-09-01 ledger figures below; its non-ledger observations still stand.
 

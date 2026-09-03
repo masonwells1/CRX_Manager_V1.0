@@ -68,12 +68,13 @@ const ALLOWED = {
  * project rhyzpcqhnizqbxphqdkr on 2026-09-03, after
  * 20260831235900_serialize_gauntlet_write_boundaries applied.
  *
- * These pins are what makes the migration's fidelity claim falsifiable. Five
- * migrations applied on 2026-08-31 have no file in this repository, so `main`
- * alone cannot show the state the bodies were re-emitted from; the proof strips
- * the added gate back out of each applied body and requires the remainder to
- * hash to these values. Any real drift -- a dropped comment, a changed regex, a
- * reverted upstream fix -- fails here instead of reaching production.
+ * These pins are what makes the migration's fidelity claim falsifiable. Six
+ * migrations applied on 2026-08-31 have no file on `main` (they are carried by
+ * PR #535's branch codex/gauntlet-s9-safety-20260831 and land when it merges),
+ * so `main` alone cannot show the state the bodies were re-emitted from. The
+ * proof strips the added gate back out of each applied body and requires the
+ * remainder to hash to these values. Any real drift -- a dropped comment, a
+ * changed regex, a reverted upstream fix -- fails here, not in production.
  *
  * Hashed over TRAILING-WHITESPACE-NORMALIZED text, i.e.
  *   md5(regexp_replace(prosrc, '[ \t]+$', '', 'gn'))

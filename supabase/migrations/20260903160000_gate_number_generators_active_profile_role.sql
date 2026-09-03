@@ -63,9 +63,11 @@
 -- the gate back out of each applied body and requires the remainder to match the
 -- live prosrc md5 read on 2026-09-03, so any accidental drift fails the proof.
 -- The live bodies were read AFTER 20260831235900_serialize_gauntlet_write_boundaries
--- applied; note that migration, and four others from 2026-08-31, are applied live
--- but have no file in this repository (real disk-vs-live drift, tracked
--- separately), so `main` alone cannot show the state these were read from.
+-- applied. That migration and five other 2026-08-31 files are applied live but
+-- absent from `main`; all six are carried by PR #535's branch
+-- codex/gauntlet-s9-safety-20260831, so merging it closes the gap. Until then
+-- `main` alone cannot show the state these bodies were read from, which is
+-- exactly why the pins above are taken from live rather than from disk.
 
 CREATE OR REPLACE FUNCTION public.next_application_record_number()
 RETURNS text

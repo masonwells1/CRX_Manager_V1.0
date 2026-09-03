@@ -414,28 +414,9 @@ describe.skipIf(!isLiveDB)('Live DB: CHECK Constraint Values', () => {
 
 // ─── Known Function Overloads (intentional) ──────────────────────────
 // Functions that legitimately have multiple overloads in pg_proc.
-//
-// EMPTIED 2026-09-03. Both former entries were stale and this list was failing
-// against production, because the test below requires every named function to
-// actually have MORE THAN ONE version. A live read on 2026-09-03 returns
-// overload_count = 1 for both:
-//   * next_invoice_number — the zero-arg version was dropped by
-//     20260526151856_execute_full_codebase_ultra_review.sql; only
-//     next_invoice_number(p_invoice_type text) remains. The comment that used to
-//     sit here ("no-args version (column default) + type-aware version") was
-//     doubly wrong: the column DEFAULT on invoices.invoice_number passes an
-//     argument — next_invoice_number('field_application'::text) — so it calls the
-//     type-aware version, not a zero-arg one. Keeping the name here also
-//     contradicted schemaIntegrity.test.ts, which lists it in
-//     FUNCTIONS_MUST_NOT_HAVE_OVERLOADS, and contradicted the postflight in
-//     20260903160000_gate_number_generators_active_profile_role.sql, which
-//     aborts unless exactly one version exists.
-//   * check_rate_limit — also a single version live.
-//
-// Leave this empty unless a function genuinely needs multiple signatures. An
-// entry here is an exemption from the overload check that caught 40+ bugs in
-// March 2026, so it must name a real, verified overload.
-const KNOWN_OVERLOADED_FUNCTIONS: string[] = [];
+// next_invoice_number: no-args version (column default) + type-aware version
+
+const KNOWN_OVERLOADED_FUNCTIONS = ['next_invoice_number', 'check_rate_limit'];
 
 // ─── Live DB: Idempotency Body Check (PR-19, 2026-05-10) ───────────────
 // schemaIntegrity.test.ts maintains a list of mutating RPCs that MUST use
