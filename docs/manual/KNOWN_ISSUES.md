@@ -295,7 +295,183 @@ inside one PR is the known non-terminating pattern, and each round costs another
 shared ~2/hour allowance. The hard gate defined in `AGENTS.md` — the exact-SHA `gpt-5.6-sol`
 high-effort proof — returned CLEAN on the merged head with "Nothing required remains".
 
-## OPEN 2026-09-02 (writer IDENTIFIED; opened 2026-08-31) — the Codex CLI `/import` writes 24 corrupted `source-command-*` adapters
+## OPEN 2026-09-03 — thirteen recorded limitations in `sync-agent-workflows.mjs`, from the pre-merge whole-branch review
+
+**Source:** `gpt-5.6-sol` at high reasoning effort, run read-only over the complete PR #565 diff
+(`origin/main...HEAD`) in an isolated workspace before merge. It returned `FINDINGS` with one
+BLOCKER and five HIGH. Mason's call, in chat, 2026-09-03: fix the two claims that were FALSE,
+record the rest, merge.
+
+**Why these are recorded rather than fixed.** This is internal build tooling — it mirrors
+instruction files from `.claude/` into `.agents/` and fails a commit when they drift. No
+customer, money, inventory, or database path touches it. Every finding below needs an actor who
+can already write the working tree, the git index, or filesystem links inside the repository —
+an actor who can already edit any file directly, so none of them is an escalation. Against that,
+eleven consecutive review rounds on this one file each produced a narrow fix that shipped a new
+edge; the deciding factor is that stopping is worth more than the next narrow patch.
+
+**BLOCKER as reported — filesystem links defeat containment.** `writeExpected()` proves
+containment with `path.relative()`, which is LEXICAL only. Replace `.agents/skills/demo` with a
+Windows junction and a stale manifest entry deletes through it via `rmSync`, or an expected entry
+overwrites through it via `writeFileSync`. The round-10 comment at the prune loop says an entry
+that "does not resolve to a path strictly inside targetRoot is skipped" — read as `realpath`,
+that claims more than the code does; it is a lexical check. Recorded, not fixed.
+
+**HIGH:**
+
+- `walkFiles()` skips entries that are neither regular files nor directories, so an extra
+  SYMLINK vanishes from the drift sweep; and an expected symlink whose external target holds
+  matching text is followed by `readFileSync` and passes `--check`.
+- `gitEnvironment()` discards a legitimate `GIT_INDEX_FILE` that lives outside the repository
+  git directory, after which git reads the DEFAULT index and the result is still reported
+  `known: true` — confident, from the wrong index. A cross-drive path or a path through a
+  junction can also pass the lexical containment test.
+- The staged-path check compares with a case-sensitive `Set`. On Windows, stage
+  `skills/source-command-x/SKILL.md` then case-rename the working-tree leaf to `skill.md`
+  without updating the index: git reports one spelling, disk enumeration the other, the lookup
+  misses, and the exemption is granted. Unicode-normalization aliases have the same shape.
+
+**MEDIUM:**
+
+- A shape-valid manifest can name files the generator never owned — `{"version":1,"managed":
+  ["session-state/local-state.json"]}` is accepted and deletes that file on `--write`. Extra
+  top-level properties are also accepted, despite the comment claiming the exact emitted schema.
+- Case- or Unicode-equivalent expected paths collide on Windows (`skills/Foo/SKILL.md` versus a
+  `foo` command), so one overwrites the other and `--check` can never pass.
+- A source path changing from a directory to a file leaves an empty directory after pruning, and
+  the subsequent write throws — so the documented `--write` repair cannot repair it.
+- The fail-closed wiring is not regression-protected: the tests pass `trackingKnown: false`
+  directly and never exercise `gitKnown.known && prior.known`, so deleting either signal from
+  `checkExpected()` would restore a fail-open path with the suite still green.
+
+**LOW:**
+
+- The no-durable-ownership pin (case (h)) reads a manifest its own fixture supplies, so
+  reintroducing `ownedImporterDirs` in `buildExpected()` would not turn it red.
+- Case (j) never reaches the prune loop, because `previousManifest()` rejects its fixtures
+  first — so removing the delete-site containment check leaves it green. The layer-isolation
+  evidence in `docs/changelog.d/2026-09-03-manifest-entry-must-not-delete-outside-target-root.md`
+  came from a MANUAL run with the first layer disabled; it was real, but it is not reproducible
+  from the repository. There is also no positive test proving a valid stale managed file IS
+  removed.
+- The `source-command-` prefix is treated as provenance: any hand-made untracked
+  `skills/source-command-anything/` directory gets the exemption and is reported as
+  importer-written and "safe to delete".
+- `--check` decodes targets as UTF-8, so invalid bytes become U+FFFD and can compare equal to
+  canonical source containing a literal U+FFFD. The write path compares bytes and is unaffected.
+
+**Operative rule.** Do not open a round 13 to patch one of these in isolation. If this file is
+revisited, the worthwhile change is structural — resolve real paths before writing or deleting,
+and compare paths case-insensitively on Windows — with tests for each, not another narrow
+pattern. Two claims found FALSE by the same review were corrected before merge: the
+admission-rule comment in `.claude/hooks/autopilot-intent-reminder.mjs`, and the understated
+consequence in the index-only entry below.
+
+## OPEN (ACCEPTED — WONTFIX by decision) 2026-09-03 — `--write` overwrites an UNUSABLE manifest after pruning nothing
+
+**Mason's call, in chat, 2026-09-03.** Round 12 on PR #565, raised by the Codex PR reviewer
+against `a31b92b1e`. Real, and partly widened by this PR's own round-10 fix — recorded here
+rather than patched, on the same reasoning as the entry below it.
+
+**The gap.** `previousManagedFiles()` returns `previousManifest(targetRoot).managed` and drops
+the `known` flag. So `--write` cannot distinguish "the last sync generated nothing" from "the
+record is unusable" — both yield an empty list, both prune nothing — and `--write` then
+overwrites `generated-manifest.json` with the current set regardless. If the unusable manifest
+owned an adapter that is no longer generated, that file survives on disk while the only record
+naming it is erased. Every later `--check` reports it as `is not generated from .claude`, and
+the remedy those runs print — `--write` — cannot remove it, because the ownership record is
+gone.
+
+**Why it is accepted, not fixed.**
+
+1. **The stale-mirror behavior is PRE-EXISTING.** The old reader answered a corrupt manifest
+   with `managed: []` too, so it also pruned nothing. Round 10 did not create this path.
+2. **What round 10 changed is only the SIZE of the affected set.** Requiring an own `version`
+   equal to `MANIFEST_VERSION` means a manifest from a different generator version — e.g.
+   `{"version":2,"managed":[…]}` — now reads as unavailable where it used to be read and
+   pruned. That widening is the honest cost of refusing to parse an unknown schema on a guess,
+   and refusing is the right trade: the alternative is trusting a shape this generator did not
+   write, in a list that feeds a delete.
+3. **The reviewer's proposed remedy is the wrong shape.** "Abort the write when provenance is
+   unavailable" collides with the fact that `--write` is exactly what an operator reaches for
+   when the manifest is broken. Refusing to run there reads as a dead end unless the error also
+   names the escape, which is a new failure mode in the function that had already produced
+   eleven rounds of findings — each fix shipping a new edge.
+
+**Recovery, if it ever happens.** One sentence: delete `.agents/generated-manifest.json` and
+re-run `node scripts/sync-agent-workflows.mjs --write`. With no manifest present,
+`previousManifest()` returns `{ managed: [], known: true }` — a real answer, not an unknown —
+so the write proceeds normally and the tree is rebuilt. The surviving stale file is then
+removed by hand, which is the same manual step the drift report already asks for.
+
+**What still holds.** `--check` is not fooled: it still reports the stale file as drift and
+still withholds the importer exemption while provenance is unknown, printing the operator note
+naming `generated-manifest.json`. Nothing is silently accepted; the cost is that the printed
+remedy is incomplete for this one case.
+
+**Operative rule.** Do not patch this as "abort on `known: false`". If it is reopened, the
+change must keep `--write` usable as the repair path — an error that names deleting the
+manifest, or a warning that lets the write proceed — and must come with a test proving the
+repair path still works from a corrupt manifest.
+
+## OPEN (ACCEPTED — WONTFIX by decision) 2026-09-03 — the `.agents/` drift sweep reads the DISK, so an index-only adapter is never examined
+
+**Mason's call, in chat, 2026-09-03.** Round 11 of findings in
+`scripts/sync-agent-workflows.mjs` on PR #565. Real, reproduced by the reviewer, and
+deliberately not fixed.
+
+**The gap.** `checkExpected()` builds its candidate list with `walkFiles(TARGET_ROOT)` — the
+working tree. A file that exists only in the git index is therefore never classified. Sequence:
+the Codex CLI `/import` writes `.agents/skills/source-command-<name>/SKILL.md`; someone stages
+it; the working-tree copy is then deleted WITHOUT staging that deletion; `git commit` runs. The
+candidate tree carries the adapter, but it is absent from `actualFiles`, so `--check` never sees
+it and the parity gate passes. A mangled adapter lands in the repository.
+
+**CORRECTED 2026-09-03, same day.** The first version of this entry described the cost as "one
+stale mangled instruction file … not wrong behavior in the app". That **understated it**, and
+Mason approved accepting the gap on that description, so the correction is recorded here rather
+than quietly edited. A later `gpt-5.6-sol` review of the whole branch made the point: the
+sequence is not limited to a leftover importer copy. Whatever is staged is what lands, so
+**arbitrary content can be placed into `.agents/skills/`** — the namespace that exists
+specifically to be read as Codex agent instructions — and the parity gate will not see it. The
+scope is also broader than the importer region: ANY path under `.agents/` that is in the index
+and absent from disk escapes the sweep, not only `source-command-*` ones.
+
+What that does and does not mean. It is **not** a remote or unprivileged path: it takes an
+actor that can already stage into the index and commit, which is an actor that can already
+write any file in the repository. So it is not an escalation. But "an unreferenced stale file"
+was the wrong frame — the honest frame is that this gate does not see index-only content, and
+agent-instruction files are exactly what the gate was added to police.
+
+**Why it is accepted, not fixed.**
+
+1. **The consequence class was already accepted knowingly** — an unpoliced file in the
+   `.agents/` mirror, like the gap pinned by test case (d) when the durable ownership layer was
+   cut on 2026-09-03 — and the actor required already has repository write access, so nothing
+   here is reachable by someone who could not already do worse directly.
+2. **The obvious fix trades a contrived hole for a false positive on an ordinary action.**
+   Unioning `gitKnownTargetPaths()` into the sweep would also pull in staged DELETIONS, because
+   `git diff --cached --name-only` reports them. A legitimate `git rm` of a non-generated file
+   under `.agents/` would then be reported as drift and block the commit. A correct fix needs a
+   `--diff-filter` that excludes deletions specifically — another subtlety in the exact function
+   that had already produced ten rounds of findings, each one narrow and each one shipping a new
+   edge.
+3. **The trigger is contrived.** It needs a partial commit that stages an import and then
+   removes the file from disk without staging the removal.
+
+**What still holds — do not read this as "staged adapters ride in free."** An adapter that is
+staged AND present on disk is caught: `classifyExtras()` condition (3) refuses the importer
+exemption for any tracked-or-staged path, and that check fails closed when git cannot be
+consulted. The candidate index is also honored — `gitEnvironment()` preserves a
+repository-local `GIT_INDEX_FILE`, so `git commit <paths>` is inspected against the temporary
+index git actually built. Only the index-only-and-absent-from-disk case is uncovered.
+
+**Operative rule.** Do not reopen this as a narrow patch. If it is ever reopened, it needs the
+staged-deletion filter and a test that proves a legitimate `git rm` still passes — not just a
+test that the adapter is caught. The comment at the `actualFiles` sweep in
+`scripts/sync-agent-workflows.mjs` records the same decision at the point of the gap.
+
+## OPEN 2026-09-02 (writer IDENTIFIED; commit blocker FIXED; opened 2026-08-31) — the Codex CLI `/import` writes 24 corrupted `source-command-*` adapters
 
 **Identified 2026-09-01.** Twenty-four untracked directories named
 `.agents/skills/source-command-<name>/SKILL.md` appeared in six worktrees under
@@ -377,20 +553,25 @@ into `codex.exe`. Evidence:
 (`skip_external_agent*`, `disable_external_agent*`, `*import*enabled/disabled/skip`); there is none.
 The trigger cannot be turned off from our side, so any durable fix must be ours.
 
-**Severity has increased since this entry was first written: it now BLOCKS COMMITS.**
-`sync-agent-workflows.mjs --check` rejects all 24 as "not generated from `.claude`", failing the
-pre-commit workflow-parity gate. Verified live 2026-09-02 — the check fails in `C:/CRX_Manager`, so
-every commit in the main checkout is blocked while the directories are present. **`.gitignore` does
-not help:** the checker walks the filesystem via `readdirSync`, not the git index. The candidate fix
-is therefore to make the parity checker treat `source-command-*` as foreign and ignore it, as its own
-reviewed change.
+**It blocked commits until 2026-09-02.** `sync-agent-workflows.mjs --check` rejected all 24 as "not
+generated from `.claude`", failing the pre-commit workflow-parity gate, so every commit in
+`C:/CRX_Manager` was blocked while the directories were present. **`.gitignore` does not help:** the
+checker walks the filesystem via `readdirSync`, not the git index.
 
-**Status:** quarantined (NOT deleted) out of
-`.claude/worktrees/permission-grants-claude-codex-9f7108` to the session scratchpad; still present
-in the other five worktrees. **Do not run `sync-agent-workflows.mjs --write` as a cleanup** — it
-would mutate tracked files repo-wide in an unreviewed change and destroy the evidence. Deleting the
-24 untracked duplicates is the candidate fix, as its own reviewed change, once someone identifies
-what invokes the migrator and stops it running again.
+**Resolved for the commit blocker (2026-09-02):** `checkExpected()` now classifies any
+`skills/source-command-<name>/…` path the generator does not itself emit as foreign — reported on
+every run, excluded from the verdict. Proven against all 24 real directories: `--check` prints the
+warning and PASSes, `npm run agent-health` surfaces the same line, and a stray file outside an
+importer directory still FAILs. See `docs/changelog.d/2026-09-02-quarantine-codex-import-adapters.md`.
+
+**Still open:** the importer keeps writing them. There is no off-switch, so the directories
+reappear after any future `/import`. They are inert (nothing invokes them) and now harmless to the
+toolchain, but the mangled text remains a hazard if a human or agent ever reads one as instructions.
+
+**Status:** present and VISIBLE in `C:/CRX_Manager` by Mason's 2026-09-02 decision — keep them
+visible rather than mute them; do not delete them. **Do not run `sync-agent-workflows.mjs --write`
+as a cleanup** — it would mutate tracked files repo-wide in an unreviewed change and destroy the
+evidence.
 
 ## OPEN 2026-08-31 — `git config core.hooksPath` disables EVERY husky gate in one allowlisted command
 
