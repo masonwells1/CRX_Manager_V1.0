@@ -71,7 +71,7 @@ function executableSql(sql) {
       // A quoted identifier is executable syntax, but its contents are not SQL
       // keywords. Break action words without losing deterministic identity for a
       // matching quoted routine declaration and ACL target.
-      out += src.slice(i, end + 1).replace(/\b(?:REVOKE|GRANT|CREATE|ALTER|DROP|SECURITY|DO)\b/gi, (word) => `\u0001${word.slice(1)}`);
+      out += src.slice(i, end + 1).replace(/\b(?:REVOKE|GRANT|CREATE|ALTER|DROP|SECURITY|DO|BEGIN)\b/gi, (word) => `\u0001${word.slice(1)}`);
       i = end + 1; continue;
     }
     out += ch; i++;
@@ -202,6 +202,10 @@ export function securityDefinerMissingAnonRevokes(sql) {
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
     ...executable.matchAll(SECURITY_DEFINER_ALTER).map((match) => ({ match, kind: 'alter' })),
   ].sort((a, b) => a.match.index - b.match.index);
+  // SQL-standard routines can hold a body directly in BEGIN ATOMIC … END,
+  // without a string delimiter for executableSql to blank. Until the parser
+  // models that body boundary, no ACL-looking text inside it can be trusted.
+  if (declarations.length > 0 && /\bBEGIN\s+ATOMIC\b/i.test(executable)) return ['unparseable-security-definer-sql'];
   const declarationOffsets = new Set(declarations.map(({ match }) => match.index));
   for (const header of executable.matchAll(SECURITY_DEFINER_ROUTINE_HEADER)) {
     const end = executable.indexOf(';', header.index + header[0].length);

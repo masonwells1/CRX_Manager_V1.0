@@ -102,6 +102,14 @@ test('fails closed for ACL suffixes, quoted semicolons, and routine ownership ch
   );
 });
 
+test('fails closed when a BEGIN ATOMIC routine body contains an apparent revoke', () => {
+  const atomicBody = `${definition()}
+CREATE PROCEDURE public.decoy_acl() LANGUAGE SQL BEGIN ATOMIC
+  REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;
+END;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(atomicBody), ['unparseable-security-definer-sql']);
+});
+
 test('does not demand an anon revoke for invoker-security functions', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.safe_fn() RETURNS void LANGUAGE sql AS $$ SELECT; $$;'), []);
 });
