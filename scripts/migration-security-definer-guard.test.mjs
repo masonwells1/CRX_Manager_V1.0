@@ -78,6 +78,10 @@ test('fails closed for quoted grant recipients and dynamic DO-block ACL changes'
   assert.deepEqual(securityDefinerMissingAnonRevokes(dynamicGrant), ['unparseable-security-definer-sql']);
   const languageFirst = `${safe}\nDO LANGUAGE plpgsql $$ BEGIN EXECUTE 'GRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon'; END; $$;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(languageFirst), ['unparseable-security-definer-sql']);
+  const directGrantAll = `${safe}\nDO $$ BEGIN GRANT ALL ON FUNCTION public.post_return_credit(uuid) TO anon; END; $$;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(directGrantAll), ['unparseable-security-definer-sql']);
+  const directGrantAllPrivileges = `${safe}\nDO $$ BEGIN GRANT ALL PRIVILEGES ON FUNCTION public.post_return_credit(uuid) TO anon; END; $$;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(directGrantAllPrivileges), ['unparseable-security-definer-sql']);
 });
 
 test('fails closed for quoted schema and argument-type identities', () => {

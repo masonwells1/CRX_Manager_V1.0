@@ -50,11 +50,12 @@ function executableSql(sql) {
         const end = close + tag[0].length;
         // Dynamic SQL in a DO block can alter ACLs without leaving an
         // analyzable GRANT/REVOKE statement. Lex its body recursively so an
-        // EXECUTE keyword inside a quoted diagnostic string is inert, while a
-        // real PL/pgSQL EXECUTE fails this static proof closed.
+        // EXECUTE or direct ACL statements inside a quoted diagnostic string
+        // are inert, while real PL/pgSQL dynamic SQL or ACL changes fail this
+        // static proof closed.
         if (/\bDO\b[^;]*$/i.test(out)) {
           const doBody = executableSql(src.slice(i + tag[0].length, close));
-          if (doBody === null || /\bEXECUTE\b/i.test(doBody)) return null;
+          if (doBody === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(doBody)) return null;
         }
         out = blank(out, end - i); i = end; continue;
       }
