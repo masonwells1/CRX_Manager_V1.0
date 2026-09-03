@@ -121,8 +121,8 @@ export default function Quotes() {
         toast('error', `Failed to duplicate quote: ${error.message}`);
         return;
       }
-      duplicateQuoteIdem.resetKey();
       const dupResult = assertRpcResult<{ quote_id: string; quote_number: string }>(result, 'duplicate_quote');
+      duplicateQuoteIdem.resetKey();
       toast('success', `Quote duplicated as ${dupResult.quote_number}`);
       navigate(`/quotes/${dupResult.quote_id}`);
     } catch (err: unknown) {

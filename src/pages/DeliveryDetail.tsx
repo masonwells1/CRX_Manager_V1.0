@@ -624,13 +624,13 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
-      cancelIdem.resetKey();
       const cancelData = assertRpcResult<{
         items_restored?: number;
         draft_invoices_cancelled?: number;
         draft_invoices_voided?: number;
         posted_invoices_flagged?: number;
       }>(cancelResult, 'cancel_delivery');
+      cancelIdem.resetKey();
       // Show detailed summary toast with cascade info
       const parts: string[] = ['Delivery cancelled.'];
       if ((cancelData.items_restored ?? 0) > 0) parts.push(`Inventory restored for ${cancelData.items_restored} item(s).`);
@@ -659,8 +659,8 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
-      voidIdem.resetKey();
       const voidData = assertRpcResult<{ posted_invoices_exist?: boolean }>(voidResult, 'void_delivery');
+      voidIdem.resetKey();
       const parts: string[] = [`Delivery ${delivery.delivery_number} voided.`];
       if (voidData.posted_invoices_exist) {
         parts.push('Warning: posted invoices linked to this order require manual review.');
@@ -781,8 +781,8 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
-      followupIdem.resetKey();
       const result = assertRpcResult<{ delivery_id: string; delivery_number: string; item_count: number }>(data, 'create_followup_delivery');
+      followupIdem.resetKey();
       toast('success', `Follow-up delivery ${result.delivery_number} created with ${result.item_count} items`);
       navigate(`/deliveries/${result.delivery_id}`);
     }
@@ -883,8 +883,8 @@ export default function DeliveryDetail() {
     try {
       const { data: completeResult, error } = await supabase.rpc('complete_delivery', rpcParams);
       if (error) throw error;
-      completeIdem.resetKey();
       assertRpcResult(completeResult, 'complete_delivery');
+      completeIdem.resetKey();
 
       // Upload signature image if provided. The delivery has ALREADY completed
       // (complete_delivery succeeded above), so a failed upload must NOT abort

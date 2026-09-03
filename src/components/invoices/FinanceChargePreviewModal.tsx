@@ -111,8 +111,8 @@ export default function FinanceChargePreviewModal({
       };
       const { data, error } = await supabase.rpc('generate_finance_charges', params);
       if (error) throw error;
-      financeChargeIdem.resetKey();
       const result = assertRpcResult<{ charges_generated: number; details: unknown[] }>(data, 'generate_finance_charges');
+      financeChargeIdem.resetKey();
       if (result.charges_generated === 0) {
         toast('info', 'No finance charges were generated');
       } else {

@@ -611,7 +611,23 @@ re-confirming findings F1–F3 of `docs/audits/2026-09-01-no-pr-branch-dispositi
 the three was tracked here before; each lived only on a branch 150–690 commits behind `main`. The
 branches are references, not merge candidates — every fix must be re-derived on current `main`.
 
-**F1 — idempotency key discarded before the RPC result is checked (money paths).** On `main`,
+**F1 — CLOSED 2026-09-03** (branch `claude/money-screens-idempotency-key-582a41`). 39 call sites
+across 20 files now retire the key only after `assertRpcResult`, plus two click-level repairs in
+`OrderDetail.tsx` (`onCreateInvoiceClick` and the Cancel Order button — both RPCs take a payload
+that cannot vary between attempts, so a per-click reset only removed duplicate protection).
+**The Cancel Order defect was found by driving the real screen; the unit tests and the static guard
+both passed over it.** Proof: `src/__tests__/idempotency-reset-order.test.ts` (10 tests + a
+repo-wide guard, both mutation-tested), and a real-browser run where the retry reused the key while
+the pre-fix behavior sent two different keys. Three sites are verified-correct and were NOT changed
+— a `resetKey()` inside an `if (error)` recovery branch (`QuickDeliveryModal.tsx:392`,
+`InvoiceDetail.tsx:815`, `Returns.tsx:406`) is intended, and "fixing" them breaks duplicate
+recovery. **Two follow-ups remain open:** (a) `JobDetail.tsx` carries 4 sites of the same class,
+excluded because a concurrent session owned the file; (b) the `voidOrderIdem` / `updateOrderIdem`
+click resets need a scoped key rather than deletion, because `void_order` takes a free-text
+`p_reason` and `update_order_items` takes `p_items` — real intent rotation, same shape as
+`VendorBillDetail`'s existing `getKeyFor(voidBillScope)`.
+
+**F1 (original report) — idempotency key discarded before the RPC result is checked (money paths).** On `main`,
 `src/pages/OrderDetail.tsx` calls `resetKey()` at lines 596, 698, 891 and 906 **before**
 `assertRpcResult(...)`; the 2026-08-02 branch `codex/idempotency-reset-order-hardening-20260802`
 found the same shape across ~22 files (cancel/void order, split invoicing, invoice creation,

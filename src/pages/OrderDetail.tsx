@@ -593,7 +593,6 @@ export default function OrderDetail() {
             p_idempotency_key: cancelKey,
           });
           if (error) throw error;
-          cancelOrderIdem.resetKey();
           const result = assertRpcResult<{
             success: boolean;
             mode?: 'full_cancel' | 'remainder_closed';
@@ -606,6 +605,7 @@ export default function OrderDetail() {
             posted_invoices_flagged: number;
             paid_commissions_flagged: number;
           }>(cancelResult, 'cancel_order');
+          cancelOrderIdem.resetKey();
           // Show summary toast with cascade details
           if (result && result.success) {
             const remainderClosed = result.mode === 'remainder_closed';
@@ -695,7 +695,6 @@ export default function OrderDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      voidOrderIdem.resetKey();
       const voided = assertRpcResult<{
         inventory_products_restored?: number;
         commissions_cancelled?: number;
@@ -703,6 +702,7 @@ export default function OrderDetail() {
         posted_invoices_flagged?: number;
         paid_commissions_flagged?: number;
       }>(voidResult, 'void_order');
+      voidOrderIdem.resetKey();
 
       const parts: string[] = ['Order voided.'];
       if ((voided.inventory_products_restored ?? 0) > 0)
@@ -888,8 +888,8 @@ export default function OrderDetail() {
             p_idempotency_key: splitKey,
           });
           if (error) throw error;
-          splitInvoiceIdem.resetKey();
           const ids = assertRpcResult<string[]>(data, 'create_split_invoices_from_order');
+          splitInvoiceIdem.resetKey();
           if (!ids || ids.length === 0) {
             throw new Error('No split invoices were generated — the order has no billable (positive) amount allocated to a customer.');
           }
@@ -903,8 +903,8 @@ export default function OrderDetail() {
           p_idempotency_key: invoiceKey,
         });
         if (error) throw error;
-        createInvoiceIdem.resetKey();
         const invoiceId = assertRpcResult<string>(data, 'create_invoice_from_order');
+        createInvoiceIdem.resetKey();
         navigate(`/invoices/${invoiceId}`);
       },
       toast,
@@ -934,8 +934,23 @@ export default function OrderDetail() {
   );
 
   const onCreateInvoiceClick = () => {
-    // Codex P2 fix: reset key per invoice-creation attempt (date/notes vary).
-    createInvoiceIdem.resetKey();
+    // F1 click-level repair: do NOT retire the key here.
+    //
+    // The previous comment claimed "date/notes vary" per attempt, but neither RPC on
+    // this path accepts a date or a note: create_invoice_from_order takes only
+    // (p_order_id, p_salesman_id, p_invoice_type, p_idempotency_key) and
+    // create_split_invoices_from_order the same shape. Every field is fixed for this
+    // screen, so two clicks are always the SAME intent — never a new one.
+    //
+    // Minting a fresh key per click therefore bought nothing and cost duplicate
+    // protection: after an ambiguous reply (server committed, response lost or the
+    // payload failed assertRpcResult) the user's natural retry travelled under a new
+    // key, so the server could not replay and issued a SECOND invoice. Holding the key
+    // lets create_invoice_from_order return the original invoice id instead.
+    //
+    // The key is retired after assertRpcResult confirms the reply (see
+    // handleCreateInvoice), which is what makes a later, genuinely new invoice a new
+    // intent.
     if (hasPendingDelivery) {
       setInvoiceWarnOpen(true);
       return;
@@ -1366,7 +1381,11 @@ export default function OrderDetail() {
                 dropdown of choices that always fail. */}
             {isAdmin && (order.status === 'confirmed' || order.status === 'partially_fulfilled') && (
               <button
-                onClick={() => { cancelOrderIdem.resetKey(); setPendingStatus('cancelled'); setStatusConfirmOpen(true); }}
+                // F1: no per-open reset. cancel_order takes only
+                // (p_order_id, p_performed_by, p_idempotency_key) — nothing varies
+                // between attempts, so reopening this dialog is the SAME intent and a
+                // fresh key would let an ambiguous first attempt cancel twice.
+                onClick={() => { setPendingStatus('cancelled'); setStatusConfirmOpen(true); }}
                 className="text-xs text-red-500 hover:text-red-700 underline"
               >
                 {order.status === 'partially_fulfilled' ? 'Cancel Remaining Quantity' : 'Cancel Order'}

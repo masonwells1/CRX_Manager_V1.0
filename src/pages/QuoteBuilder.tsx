@@ -1619,8 +1619,8 @@ export default function QuoteBuilder() {
       p_idempotency_key: ftIdemKey,
     });
     if (error) { toast('error', 'Failed to create from template'); return; }
-    fromTemplateIdem.resetKey();
     const result = assertRpcResult<{ quote_id: string; quote_number: string }>(data, 'create_quote_from_template');
+    fromTemplateIdem.resetKey();
     navigate(`/quotes/${result.quote_id}`);
   };
 
@@ -1642,8 +1642,8 @@ export default function QuoteBuilder() {
       }
       return;
     }
-    rolloverIdem.resetKey();
     const result = assertRpcResult<{ quote_id: string; quote_number: string; season: number; remainder_rollover: boolean }>(data, 'rollover_quote_to_season');
+    rolloverIdem.resetKey();
     toast('success', `Rolled over to season ${result.season} — ${result.quote_number}`);
     navigate(`/quotes/${result.quote_id}`);
   };
@@ -1797,8 +1797,8 @@ export default function QuoteBuilder() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      closeAppliedIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; active_jobs_remaining?: number; warnings?: string[] }>(data, 'close_quote_as_applied');
+      closeAppliedIdem.resetKey();
       setStatus((result.status as QuoteStatus) || 'closed_by_application');
       const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'closed as fulfilled by application');
       setIsDirty(false);
@@ -1843,8 +1843,8 @@ export default function QuoteBuilder() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      closeShortIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; warnings?: string[] }>(data, 'close_quote_as_short');
+      closeShortIdem.resetKey();
       setStatus((result.status as QuoteStatus) || 'closed_short');
       const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'closed short');
       setIsDirty(false);
@@ -2437,8 +2437,8 @@ export default function QuoteBuilder() {
         p_idempotency_key: drawDownIdem.getKey(),
       }, reason)));
       if (error) throw error;
-      drawDownIdem.resetKey();
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[]; fully_drawn?: boolean }>(data, 'draw_down_quote');
+      drawDownIdem.resetKey();
       toast('success', `Order ${result.order_number || ''} created${result.fully_drawn ? ' — booking fully drawn' : ' — booking stays open'}`);
       if (result.warnings && result.warnings.length > 0) {
         result.warnings.forEach((w) => toast('warning', `Inventory: ${w}`));

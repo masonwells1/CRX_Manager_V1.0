@@ -353,8 +353,8 @@ export default function MonthEndClose() {
       });
       if (error) throw error;
 
-      generateStatementsIdem.resetKey();
       const statements = assertRpcResult<DetailedStatementData[]>(data, 'generate_batch_statements');
+      generateStatementsIdem.resetKey();
       if (!statements || !Array.isArray(statements) || statements.length === 0) {
         toast('info', 'No customers have outstanding balances');
         setGenerating(false);

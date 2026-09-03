@@ -1950,8 +1950,8 @@ export default function FieldApplicationInvoice() {
         p_idempotency_key: deleteKey,
       });
       if (error) throw error;
-      deleteIdem.resetKey();
       const deleted = assertRpcResult<number>(data, 'delete_invoices');
+      deleteIdem.resetKey();
       if (deleted < 1) {
         throw new Error('Invoice could not be deleted — it may be posted/paid or already removed.');
       }
@@ -2362,8 +2362,8 @@ export default function FieldApplicationInvoice() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      transferToSchedulingIdem.resetKey();
       const result = assertRpcResult<{ job_id: string; job_number: string }>(data, 'transfer_invoice_to_job');
+      transferToSchedulingIdem.resetKey();
       // The invoice is now cancelled and the form holds stale, deleted contents —
       // clear the unsaved-changes guard so leaving doesn't prompt, then go to the job.
       setDirty(false);

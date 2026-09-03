@@ -529,8 +529,8 @@ export default function NewOrder() {
 
         if (error) throw error;
 
-        createOrderIdem.resetKey();
         const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(data, 'create_direct_order');
+        createOrderIdem.resetKey();
         const orderId = result.order_id;
 
         clearDraft();

@@ -541,8 +541,8 @@ export default function Returns() {
           p_idempotency_key: cancelKey,
         });
         if (error) throw mapReturnPolicyRpcError(error);
-        cancelIdem.resetKeyFor(cancelScope);
         const result = assertRpcResult<{ was_received: boolean; reversed_count: number; skipped_count: number }>(data, 'cancel_return');
+        cancelIdem.resetKeyFor(cancelScope);
         if (result.was_received && result.reversed_count > 0) {
           toast('info', `Inventory restock reversed for ${result.reversed_count} item(s).`);
         }
