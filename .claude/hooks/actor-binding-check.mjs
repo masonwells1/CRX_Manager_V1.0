@@ -791,7 +791,9 @@ function historicalPgCronJobViewAliases(targetPath) {
   const migrationDir = path.dirname(absoluteTarget);
   const currentName = path.basename(absoluteTarget);
   const priorNames = readdirSync(migrationDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql") && entry.name < currentName)
+    .filter((entry) =>
+      entry.isFile() && entry.name.toLowerCase().endsWith(".sql") && entry.name < currentName
+    )
     .map((entry) => entry.name)
     .sort();
   let aliases = new Set();
@@ -1702,6 +1704,58 @@ function hasActorMismatchRaiseException(rawAction, structuralAction, actorParam)
   return false;
 }
 
+/** PL/pgSQL `ALIAS FOR` creates another writable name for the same storage as
+ * its source parameter. Keep this closure deliberately narrower than
+ * actorForwardingReferences(): ordinary copied locals carry taint but do not
+ * rebind the parameter, while an alias assignment changes the guarded value
+ * itself. An opaque Unicode alias name cannot be matched safely later, so the
+ * caller fails closed instead of pretending that spelling is immutable. */
+function actorAliasReferences(structuralBody, actorReferences) {
+  const references = new Set(actorReferences);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const source of [...references]) {
+      const aliasRe = new RegExp(
+        `(?:^|[;\\n]|\\bDECLARE\\b)\\s*(${SQL_IDENTIFIER_PATTERN})\\s+` +
+          `ALIAS\\s+FOR${SQL_KEYWORD_IDENTIFIER_GAP}(?:${actorReferencePattern(source)})` +
+          `(?=\\s*(?:;|\\n|$))`,
+        "gi"
+      );
+      let alias;
+      while ((alias = aliasRe.exec(structuralBody)) !== null) {
+        const normalized = normalizedQualifiedIdentifier(alias[1]);
+        if (normalized === null) return null;
+        if (references.has(normalized)) continue;
+        references.add(normalized);
+        changed = true;
+      }
+    }
+  }
+  return [...references];
+}
+
+/** A PostgreSQL procedure call can assign an OUT/INOUT result back into the
+ * caller variable supplied at that argument position. This hook has no live
+ * catalog and its same-file routine identity metadata intentionally does not
+ * model argument modes, overload resolution, defaults, or variadics. Treat an
+ * actor spelling anywhere inside a real CALL argument list as writable. Calls
+ * that do not pass the actor remain outside this bounded fail-closed rule. */
+function callMayRebindActorReference(structuralBody, reference) {
+  const actor = new RegExp(actorReferencePattern(reference), "gi");
+  let match;
+  while ((match = actor.exec(structuralBody)) !== null) {
+    const prefix = structuralBody.slice(0, match.index);
+    const statementStart = prefix.lastIndexOf(";") + 1;
+    const statementPrefix = prefix.slice(statementStart);
+    const controlPrefix = blankQuotedControlIdentifiers(statementPrefix);
+    if (controlPrefix === null) return true;
+    if (!/\bCALL\b/i.test(controlPrefix)) continue;
+    if (unmatchedOpenParens(prefix).some((open) => open >= statementStart)) return true;
+  }
+  return false;
+}
+
 /** The refusal proof is about a NAME, but a PL/pgSQL parameter is an ordinary
  * mutable local: `p_performed_by := p_target_id;` after a passing guard makes
  * every downstream stamp of that name carry a value auth.uid() never approved.
@@ -1722,8 +1776,11 @@ function hasActorReferenceRebinding(structuralBody, actorReferences) {
   const opaqueUnicodeTarget =
     `(?:${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*)?${SQL_UNICODE_IDENTIFIER_PATTERN}`;
   if (hasIntoAssignmentTarget(structuralBody, opaqueUnicodeTarget)) return true;
-  for (const reference of actorReferences) {
+  const writableReferences = actorAliasReferences(structuralBody, actorReferences);
+  if (writableReferences === null) return true;
+  for (const reference of writableReferences) {
     const ref = actorReferencePattern(reference);
+    if (callMayRebindActorReference(structuralBody, reference)) return true;
     if (hasIntoAssignmentTarget(structuralBody, `${blockQualifier}${ref}`)) return true;
     const rebindings = [
       new RegExp(

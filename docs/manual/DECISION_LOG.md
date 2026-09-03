@@ -7,6 +7,24 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — authorize exact-review alias, CALL, and history repairs in PR #449; keep the broader cap
+
+**Source:** Mason's in-chat direction on 2026-09-03 after the replacement exact-SHA review:
+"continue fixing issues".
+
+**Decision.** PR #449 may close three reproduced final-candidate bypasses. A PL/pgSQL
+`ALIAS FOR` name is another writable spelling of the guarded actor parameter, so rebinding that
+alias invalidates an earlier refusal. A procedure `CALL` that receives the actor or its alias is
+treated as possible `OUT`/`INOUT` rebinding because this write-time reader cannot prove external
+procedure modes and overload resolution. Calls without an actor argument remain compatible.
+Historical persistent `cron.job` alias discovery accepts mixed-case `.sql` extensions just as the
+current-file scope already does, while retaining the existing raw lexical ordering.
+
+**Boundary.** These are narrow exact-review repairs, not a reopening of general SQL parsing or
+cross-routine analysis. The hook does not attempt catalog resolution for procedure argument modes,
+and a safe unusual actor-bearing `CALL` continues to use the reviewed file-level exemption. The
+2026-09-01 best-effort cap remains operative.
+
 ## 2026-09-03 — authorize exact-review final-mode repairs in PR #449; keep the broader cap
 
 **Source:** Mason's in-chat direction on 2026-09-03 after the exact-SHA reviewer blocked the

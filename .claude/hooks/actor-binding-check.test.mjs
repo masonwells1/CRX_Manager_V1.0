@@ -1138,10 +1138,24 @@ writeFileSync(
   path.join(crossMigrationDir, "20260807000001_create_cron_job_facade.sql"),
   "CREATE VIEW persistent_cron_job_facade AS SELECT * FROM cron.job;\n"
 );
+writeFileSync(
+  path.join(crossMigrationDir, "20260807000000_create_uppercase_cron_job_facade.SQL"),
+  "CREATE VIEW uppercase_history_cron_job_facade AS SELECT * FROM cron.job;\n"
+);
 const crossMigrationTarget = path.join(
   crossMigrationDir,
   "20260807000002_update_cron_job_facade.sql"
 );
+r = runHook(`UPDATE public.uppercase_history_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, crossMigrationTarget);
+ok(isDeny(r), "an uppercase .SQL migration remains in the persistent cron.job alias history");
+
+r = runHook(`UPDATE public.uppercase_history_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, crossMigrationTarget);
+ok(!isDeny(r), "an uppercase .SQL historical alias keeps a direct harmless command allowed");
+
 r = runHook(`UPDATE public.persistent_cron_job_facade
 SET command = $job$${UNBOUND_DDL}$job$
 WHERE jobid = 42;`, crossMigrationTarget);
@@ -3451,6 +3465,55 @@ for (const [label, rebind] of [
 r = runHook(fn("BEGIN\n" + GUARD_LINE + "\n" +
   "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;"));
 ok(!isDeny(r), "the canonical direct-parameter refusal is still ALLOWED");
+
+r = runHook(fn(
+  "DECLARE\n  v_actor ALIAS FOR p_performed_by;\nBEGIN\n" + GUARD_LINE + "\n" +
+  "  v_actor := p_target_id;\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;",
+  "p_performed_by uuid, p_target_id uuid"
+));
+ok(isDeny(r), "an ALIAS FOR actor spelling cannot rebind the guarded parameter after refusal");
+
+r = runHook(fn(
+  "DECLARE\n  v_actor ALIAS FOR $1;\nBEGIN\n" + GUARD_LINE + "\n" +
+  "  SELECT p_target_id INTO v_actor;\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES ($1);\nEND;",
+  "p_performed_by uuid, p_target_id uuid"
+));
+ok(isDeny(r), "a positional ALIAS FOR actor spelling cannot receive an INTO overwrite");
+
+r = runHook(fn(
+  "DECLARE\n  v_actor ALIAS FOR p_performed_by;\nBEGIN\n" + GUARD_LINE + "\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (v_actor);\nEND;"
+));
+ok(!isDeny(r), "a guarded actor alias with no reassignment remains ALLOWED");
+
+const INOUT_ACTOR_REPLACER = `CREATE OR REPLACE PROCEDURE public.replace_guarded_actor(INOUT p_value uuid)
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $replace$
+BEGIN
+  p_value := auth.uid();
+END
+$replace$;`;
+
+for (const [label, call] of [
+  ["direct actor argument", "CALL public.replace_guarded_actor(p_performed_by);"],
+  ["positional actor argument", "CALL public.replace_guarded_actor($1);"],
+  ["named actor argument", "CALL public.replace_guarded_actor(p_value => p_performed_by);"],
+]) {
+  r = runHook(`${INOUT_ACTOR_REPLACER}\n${fn(
+    "BEGIN\n" + GUARD_LINE + "\n  " + call + "\n" +
+    "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;"
+  )}`);
+  ok(isDeny(r), `a post-refusal CALL with a ${label} is BLOCKED as possible OUT/INOUT rebinding`);
+}
+
+r = runHook(fn(
+  "BEGIN\n" + GUARD_LINE + "\n" +
+  "  CALL public.refresh_unrelated_cache(p_target_id);\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;",
+  "p_performed_by uuid, p_target_id uuid"
+));
+ok(!isDeny(r), "a post-refusal CALL with no actor argument does not invalidate the guard");
 
 // A non-first INTO target is not suspicious by itself. The actor may appear in
 // the output list while the guarded actor parameter remains untouched.
