@@ -128,7 +128,24 @@ export function canonicalizeGuardPath(value) {
       else if (!rooted) segments.push("..");
       continue;
     }
-    segments.push(segment);
+    // Windows IGNORES trailing periods and spaces in a path segment: the Win32
+    // path normalizer strips them before the file system sees the name, so
+    // `.claude./hooks/x.mjs`, `.claude/hooks./x.mjs` and `.claude/hooks/x.mjs.`
+    // all open `.claude/hooks/x.mjs` (probe-confirmed with Get-Item on every
+    // spelling, 2026-09-03). Codex round 7 wrote through exactly those aliases
+    // and was allowed, because this canonicalizer only knew about `.`/`..` and
+    // drive prefixes. Windows trims only ONE trailing period from an interior
+    // segment but every trailing period and space from the last; stripping all
+    // of them from every segment is deliberately over-inclusive, which is the
+    // safe direction for a deny-guard. A segment that is NOTHING but periods
+    // and spaces (`...`, `.. `, `. .`) is dropped outright: Windows refuses to
+    // resolve those at all (probe-confirmed), and on POSIX they are literal
+    // names, never a parent hop — so dropping one can only shorten the path
+    // toward a protected suffix, again the deny direction. The exact `.`/`..`
+    // spellings are handled ABOVE this line and never reach the strip.
+    const trimmed = segment.replace(/[. ]+$/, "");
+    if (trimmed === "") continue;
+    segments.push(trimmed);
   }
   return (rooted ? "/" : "") + segments.join("/");
 }

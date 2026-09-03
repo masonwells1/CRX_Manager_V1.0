@@ -187,11 +187,18 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // into codexAppAdvisory() with a 5s deadline. An advisory, fail-open lookup
   // running first could exhaust the 15s hook budget, and a PreToolUse hook killed
   // mid-call emits nothing — which does not deny.
-  codexGuard: "447378b10dd2f5bb8383c25ee5dc1551c6bb6477",
+  // Re-pinned 2026-09-03 (Codex round 7, exact-SHA proof of the merged-up head):
+  // canonicalizeGuardPath now strips trailing periods and spaces from every
+  // path segment, the way the Win32 path normalizer does before the file system
+  // sees a name. `.claude./hooks/x.mjs`, `.claude/hooks./x.mjs` and
+  // `.claude/hooks/x.mjs.` all open the protected file and were allowed. Anchors
+  // unchanged; the pushLib transform is still identity. Output taken from the
+  // producer test's printed candidate, never hand-computed.
+  codexGuard: "91a9cd4b10dc49120676cb01a77849e4b2877681",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "2cc037a2df5cbd239addc2e843f2da073ffdb3e2",
+  codexGuard: "f9ccb410bc19b193be656c91b367617655e520cf",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

@@ -499,6 +499,87 @@ try {
     "whitespace-separated quoted fragments are NOT concatenation and must stay allowed",
   );
 
+  // ── round 7: Windows ignores trailing periods and spaces in a segment ──────
+  // Codex HIGH, PR #563 round 7 (exact-SHA proof of the merged-up head). The
+  // Win32 path normalizer strips trailing periods and spaces from a segment
+  // before the file system sees it, so `.claude./hooks/x.mjs`,
+  // `.claude/hooks./x.mjs` and `.claude/hooks/x.mjs.` all open
+  // `.claude/hooks/x.mjs` — probe-confirmed with Get-Item on each spelling.
+  // The canonicalizer knew `.`/`..` and drive prefixes and nothing else, so
+  // every one of these resolved to a protected file and returned blocked:false.
+  // These are the exact payloads Codex demonstrated, plus the trailing-space
+  // and multi-period forms Windows treats the same way.
+  for (const alias of [
+    ".claude./hooks/codex-bot-review-lib.mjs",
+    ".claude/hooks./codex-bot-review-lib.mjs",
+    ".claude/hooks/codex-bot-review-lib.mjs.",
+    ".claude/hooks/codex-bot-review-lib.mjs...",
+    ".claude/hooks/codex-bot-review-lib.mjs. .",
+    ".codex./hooks/production-action-guard.mjs",
+    ".codex/hooks.json.",
+    "scripts./write-codex-push-proof.mjs",
+    "package.json.",
+    ".claude./hooks/../hooks./codex-push-lib.mjs.",
+    "C:.claude./hooks/codex-push-lib.mjs.",
+  ]) {
+    for (const tool of ["Write", "Edit", "apply_patch"]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: tool, toolInput: { file_path: alias } }).blocked,
+        true,
+        `${tool} must strip Windows trailing periods/spaces and block: ${alias}`,
+      );
+    }
+  }
+  assert.equal(canonicalizeGuardPath(".claude./hooks./x.mjs."), ".claude/hooks/x.mjs", "trailing periods vanish from every segment");
+  assert.equal(canonicalizeGuardPath(".claude/hooks/x.mjs. ."), ".claude/hooks/x.mjs", "trailing period/space mixes vanish too");
+  assert.equal(canonicalizeGuardPath("a/.../b"), "a/b", "an all-period segment is dropped (over-inclusive by design)");
+  // `.. ` is NOT a parent hop: Windows refuses to resolve a segment made only
+  // of periods and spaces (probe-confirmed), and POSIX reads it as a literal
+  // name. Dropping it shortens the path toward a protected suffix, which is
+  // the deny direction, and — the part that matters — the exact `..` above
+  // still hops, so the strip never eats a real parent reference.
+  assert.equal(canonicalizeGuardPath("a/b/.. /c"), "a/b/c", "a period/space-only segment is dropped, not mistaken for `..`");
+  assert.equal(canonicalizeGuardPath("a/b/../c"), "a/c", "the exact `..` still hops to the parent");
+  assert.equal(canonicalizeGuardPath("../x.mjs."), "../x.mjs", "a leading `..` survives the strip in a relative path");
+  // The shell channel, with the two mutation forms Codex used.
+  for (const command of [
+    'Set-Content .claude./hooks/codex-bot-review-lib.mjs -Value ""',
+    'Set-Content .claude/hooks./codex-bot-review-lib.mjs -Value ""',
+    'Set-Content .claude/hooks/codex-bot-review-lib.mjs. -Value ""',
+    "echo x > .claude/hooks/codex-bot-review-lib.mjs.",
+    'Set-Content -Path ".claude/hooks/codex-push-lib.mjs..." -Value ""',
+    "rm .codex./hooks.json",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a Windows trailing-period alias must be refused: ${command}`,
+    );
+  }
+  // A read through a trailing-period alias is still just a read.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "cat .claude/hooks/codex-bot-review-lib.mjs." } }).blocked,
+    false,
+    "reading through a trailing-period alias stays allowed; only mutation is refused",
+  );
+  // NEAR-MISS CANARIES. Only TRAILING periods are Windows no-ops: an interior
+  // period is part of the name, and a real suffix after the protected name is a
+  // different file. A strip that reached into the middle of a segment, or a
+  // matcher loosened to "protected name appears somewhere", would pass every
+  // positive case above while blocking these.
+  for (const innocent of [
+    ".claude/hooks/codex-push-lib..mjs",
+    ".claude/hooks/codex-push-lib.mjs.bak",
+    ".claude/hooks/codex-bot-review-lib.test.mjs.",
+    "scripts/write-codex-push-proof.test.mjs.",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: innocent } }).blocked,
+      false,
+      `an interior period or a real suffix is a different file and must stay editable: ${innocent}`,
+    );
+  }
+
   const botLibPush = makeRepo(".claude/hooks/codex-bot-review-lib.mjs", "export const ordinary = true;\n");
   assert.equal(
     evaluatePush(botLibPush.repo).blocked,
