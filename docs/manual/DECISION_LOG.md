@@ -29,8 +29,11 @@ procedure for an apply that already completed, and an applied migration must nev
 the window was demonstrably never entered: at both applies (2026-09-03 02:39Z and 12:47Z) there was
 zero app activity. Verified three independent ways — `idempotency_keys` had **0** rows created that
 day against 52 total whose newest was 2026-08-18 (so the table is not purged; that is real absence,
-not missing evidence), `financial_audit_log` had **0** rows since 2026-09-02 12:00Z, and
-`receiving_records` had **0** rows created since 2026-06-10.
+not missing evidence), `financial_audit_log` had **0** rows since 2026-09-02 12:00Z (226 rows total,
+newest 2026-08-19 06:00:00Z), and `receiving_records`' newest row is 2026-06-10 20:58:54Z out of 130
+— nothing created after it. State that boundary precisely: a `created_at >= '2026-06-10'` query
+returns **1**, not 0, because the newest row falls on that date. Nearly three months of no receiving
+activity, let alone inside a lock window measured in seconds.
 
 **The operative rule this implies — apply it to future migrations, which is the whole point of
 accepting rather than dismissing:** when a migration replaces a function whose OLD body writes to a

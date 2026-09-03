@@ -42,8 +42,9 @@ Mason accepted this on 2026-09-03 as a closed residual rather than a remediation
 describes the rollout procedure (not the code), an applied migration must never be edited, and the
 window was demonstrably never entered — zero application activity at both applies, verified via
 `idempotency_keys` (0 rows that day, 52 total, newest 2026-08-18, table not purged),
-`financial_audit_log` (0 rows since 2026-09-02 12:00Z) and `receiving_records` (0 since
-2026-06-10). The durable output is a prevention rule in `docs/manual/KNOWN_ISSUES.md` and the
+`financial_audit_log` (226 rows, 0 since 2026-09-02 12:00Z) and `receiving_records` (130 rows,
+newest 2026-06-10 20:58:54Z, nothing after it — a `>= '2026-06-10'` query returns 1, not 0, because
+the newest row falls on that date). The durable output is a prevention rule in `docs/manual/KNOWN_ISSUES.md` and the
 decision record in `docs/manual/DECISION_LOG.md`: a migration that replaces a function whose OLD
 body writes to a table the migration locks is not serialized against that old body, and needs a
 quiesced rollout plus a concurrency proof covering a legacy call that has already passed its

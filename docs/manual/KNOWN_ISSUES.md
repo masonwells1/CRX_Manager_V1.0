@@ -289,8 +289,12 @@ migration starts.
 (2026-09-03 02:39Z and 12:47Z) there was zero application activity, verified three independent
 ways: `idempotency_keys` had 0 rows created that day against 52 total whose newest was 2026-08-18
 (the table is not purged, so this is real absence rather than missing evidence),
-`financial_audit_log` had 0 rows since 2026-09-02 12:00Z, and `receiving_records` had 0 rows
-created since 2026-06-10. Both migrations are applied and must not be edited.
+`financial_audit_log` had 0 rows since 2026-09-02 12:00Z (226 total, newest 2026-08-19 06:00:00Z),
+and `receiving_records`' newest row is 2026-06-10 20:58:54Z out of 130, with nothing created after
+it. **Note the boundary before you think you have found a contradiction:** a
+`created_at >= '2026-06-10'` query returns 1, not 0, because the newest row falls on that date. The
+non-empty totals on all three tables are what make this real absence rather than missing
+instrumentation. Both migrations are applied and must not be edited.
 
 ---
 
