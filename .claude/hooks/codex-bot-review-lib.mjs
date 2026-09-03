@@ -139,11 +139,28 @@ query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
 // single-page read (CRX-REV-002): on a PR with more than 100 threads the
 // unresolved one could sit on a page nobody fetched, and the gate would report
 // "nothing standing" while something was.
-export function collectCodexThreads(runQuery) {
+// `deadlineMs` is an ABSOLUTE epoch-millisecond cap on the whole walk, checked
+// before every request including the first. Exceeding it THROWS rather than
+// returning what has been read so far: a partial read is indistinguishable from
+// a clean one, and this predicate's callers turn a throw into their fail-open
+// notice. Returning early with `nodes` would instead report "nothing standing"
+// while a finding sat on an unfetched page — the exact defect CRX-REV-002 fixed.
+//
+// It exists because this lookup runs inside a PreToolUse hook with a hard outer
+// timeout (15s for the Codex guard, 30s for Claude's). A hook killed mid-call
+// emits nothing, and a PreToolUse hook that emits nothing does NOT deny — so an
+// unbounded advisory lookup is a fail-open on every HARD gate that would have
+// run after it (PR #502 established this class; Codex round 6 found this
+// instance). The callers additionally run this only after their hard denials,
+// so the ordering does not depend on this budget being right.
+export function collectCodexThreads(runQuery, { deadlineMs = null, now = Date.now } = {}) {
   let cursor = null;
   let headRefOid = "";
   const nodes = [];
   for (let page = 0; page < CODEX_THREAD_MAX_PAGES; page += 1) {
+    if (deadlineMs !== null && now() >= deadlineMs) {
+      throw new Error("codex-bot review lookup exceeded its time budget before it could finish paging");
+    }
     const pr = runQuery(cursor);
     if (!pr) break;
     if (!headRefOid) headRefOid = String(pr.headRefOid || "");

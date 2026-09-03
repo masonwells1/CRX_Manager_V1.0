@@ -318,39 +318,135 @@ eq(
 );
 
 // ── gate ORDERING, pinned on both guards ─────────────────────────────────────
-// A check placed after a deny that fires first is dead code, and the tests above
-// (which only assert the code EXISTS) all stay green while it never runs. That
-// is not hypothetical: the first cut of this change sat after the Codex guard's
-// approval deny, so it was unreachable for any PR without a formal approval —
-// caught by review, not by this suite, which is why the ordering is pinned here.
-const codexCheckAt = codexGuardSource.indexOf("the Codex GitHub App's own review");
-// The review-verdict deny is matched by EITHER predicate name. main's PR #560
-// migrated this gate from `!pullRequestApproved` to `pullRequestReviewBlocked`
-// while this branch was open; pinning one spelling would make the ordering test
-// silently stop testing ordering the next time the predicate is renamed, which
-// is the same class of decorative check this file exists to prevent.
+// This pin was INVERTED on 2026-09-03 by Codex round 6, and the reason matters
+// more than the direction.
+//
+// It originally required the App-review check to run FIRST, so an unanswered
+// review comment would be the message the reader got rather than "wait for CI".
+// That reasoning was about message quality. The cost was a security hole: this
+// lookup is advisory, fail-open, and costs up to four `gh` calls each capped at
+// 10s, against hook budgets of 15s (Codex) and 30s (Claude). A PreToolUse hook
+// killed mid-call emits nothing, and a hook that emits nothing does NOT deny —
+// the class PR #502 established. So a slow GitHub could starve every HARD
+// denial that came after it: CHANGES_REQUESTED, the green pipeline, the
+// risky-diff classification, and the exact-SHA Sol proof.
+//
+// The advisory therefore runs LAST, at the points where the alternative is
+// returning ALLOW anyway. Both properties are pinned below, because each one
+// alone is satisfiable by a broken guard:
+//   * ordering — every hard denial precedes the advisory, so none can be starved;
+//   * REACHABILITY — the advisory is still actually invoked, or this is the dead
+//     code the original pin existed to prevent (it sat behind the Codex guard's
+//     approval deny and never ran for any PR without a formal approval).
+const codexAdvisoryCallAt = codexGuardSource.indexOf("codexAppAdvisory({ request");
 const codexVerdictMatch = codexGuardSource.match(
   /if \((?:!pullRequestApproved\(pullRequest\)|pullRequestReviewBlocked\(pullRequest\))\)/,
 );
 ok(codexVerdictMatch, "the Codex guard still has a review-verdict deny to order against");
 const codexApprovalAt = codexVerdictMatch.index;
 const codexGreenAt = codexGuardSource.indexOf("if (!pullRequestChecksGreen(pullRequest))");
-ok(codexCheckAt > 0 && codexApprovalAt > 0 && codexGreenAt > 0, "all three Codex-guard gates are present to order");
+const codexProofAt = codexGuardSource.indexOf("gateMainChange({");
 ok(
-  codexCheckAt < codexApprovalAt,
-  "MUST RUN FIRST: the Codex guard's App-review check precedes its review-verdict deny, or it is unreachable whenever that deny fires",
+  codexAdvisoryCallAt > 0 && codexApprovalAt > 0 && codexGreenAt > 0 && codexProofAt > 0,
+  "all four Codex-guard gates are present to order",
 );
 ok(
-  codexCheckAt < codexGreenAt,
-  "MUST RUN FIRST: the Codex guard's App-review check precedes its green-pipeline deny",
+  codexAdvisoryCallAt > codexApprovalAt,
+  "MUST RUN LAST: the Codex guard's advisory lookup follows its review-verdict deny, or a slow GitHub can starve that deny and the hook denies nothing",
+);
+ok(
+  codexAdvisoryCallAt > codexGreenAt,
+  "MUST RUN LAST: the Codex guard's advisory lookup follows its green-pipeline deny",
+);
+ok(
+  codexAdvisoryCallAt > codexProofAt,
+  "MUST RUN LAST: the Codex guard's advisory lookup follows the exact-SHA proof gate",
+);
+// REACHABILITY — the advisory must be invoked on the allow path, not merely defined.
+ok(
+  /if \(mainVerdict\.blocked\) return mainVerdict;/.test(codexGuardSource),
+  "the Codex guard returns a hard denial before reaching the advisory",
+);
+ok(
+  /const advisory = codexAppAdvisory\(/.test(codexGuardSource)
+  && /if \(advisory\) return advisory;/.test(codexGuardSource),
+  "the Codex guard still ACTS on the advisory verdict — defining it without returning it is the dead code this pin exists to catch",
 );
 
-const claudeCheckAt = guardSource.indexOf("the Codex GitHub App's review");
+// The Claude guard now defines codexAdvisory() above gateRequest, so ordering
+// must be measured at the CALL SITES. Measuring the definition would compare the
+// wrong thing and pass no matter where the call lands.
+const claudeAdvisoryCalls = [...guardSource.matchAll(/codexAdvisory\(request\);/g)].map((m) => m.index);
 const claudeGreenAt = guardSource.indexOf("green-pipeline requirement");
-ok(claudeCheckAt > 0 && claudeGreenAt > 0, "both Claude-guard gates are present to order");
+const claudeProofAt = guardSource.indexOf("require the fresh, bound Codex proof");
+eq(
+  claudeAdvisoryCalls.length,
+  2,
+  "the Claude guard invokes the advisory at BOTH allow points (non-risky, and risky-with-valid-proof) — one call site means the other path silently skips the check",
+);
+ok(claudeGreenAt > 0 && claudeProofAt > 0, "both Claude-guard hard gates are present to order");
 ok(
-  claudeCheckAt < claudeGreenAt,
-  "MUST RUN FIRST: the Claude guard's App-review check precedes the green-pipeline deny, so an unanswered review comment is the message the reader gets",
+  claudeAdvisoryCalls.every((at) => at > claudeGreenAt),
+  "MUST RUN LAST: every Claude-guard advisory call follows the green-pipeline deny",
+);
+// The proof gate is reachable only on the RISKY path, so only the second call
+// site sits after it — the first returns ALLOW before the proof section exists
+// to run. Asserting "every call follows the proof gate" would be wrong, not
+// stricter: it would demand the non-risky path wait on a gate that never applies.
+const claudeRiskyClassifyAt = guardSource.indexOf("risky-diff classification");
+ok(claudeRiskyClassifyAt > 0, "the Claude guard's risky-diff classification is present to order");
+ok(
+  claudeAdvisoryCalls[0] > claudeRiskyClassifyAt,
+  "MUST RUN LAST: the non-risky allow point follows the risky-diff classification, which denies (fail closed) when the diff cannot be read",
+);
+ok(
+  claudeAdvisoryCalls[1] > claudeProofAt,
+  "MUST RUN LAST: the risky allow point follows the exact-SHA proof gate",
+);
+
+// ── the lookup is BOUNDED, on both guards ────────────────────────────────────
+// Ordering alone stops the advisory from starving a hard denial. The deadline is
+// what stops it from burning the whole hook budget and killing the process
+// before it can print its own notices.
+for (const [label, source] of [["Claude", guardSource], ["Codex", codexGuardSource]]) {
+  const budgetMatch = source.match(/const CODEX_ADVISORY_BUDGET_MS = ([\d_]+);/);
+  ok(budgetMatch, `the ${label} guard declares an advisory time budget`);
+  const budgetMs = Number(budgetMatch[1].replace(/_/g, ""));
+  // Hook budgets: 15s for the Codex guard (.codex/hooks.json), 30s for the
+  // Claude guard (.claude/settings.json). Half is the ceiling, so the hard gates
+  // and the notices always have room left.
+  const hookBudgetMs = label === "Codex" ? 15_000 : 30_000;
+  ok(
+    budgetMs > 0 && budgetMs <= hookBudgetMs / 2,
+    `the ${label} guard's advisory budget (${budgetMs}ms) must stay at or under half its ${hookBudgetMs}ms hook timeout`,
+  );
+  ok(
+    /collectCodexThreads\([\s\S]{0,2000}?\{ deadlineMs \}\)/.test(source),
+    `the ${label} guard actually PASSES the deadline to collectCodexThreads — declaring a budget it never applies is decoration`,
+  );
+}
+
+// The deadline must THROW, never return a partial read: a truncated walk that
+// reports "nothing standing" is indistinguishable from a clean one.
+let deadlineThrew = false;
+try {
+  collectCodexThreads(() => ({ headRefOid: "a".repeat(40), reviewThreads: { nodes: [], pageInfo: {} } }), {
+    deadlineMs: 1_000,
+    now: () => 2_000,
+  });
+} catch {
+  deadlineThrew = true;
+}
+ok(deadlineThrew, "an exceeded deadline THROWS (callers turn that into their fail-open notice) rather than returning a partial read as clean");
+
+// …and a deadline in the future does not interfere with an ordinary walk.
+eq(
+  collectCodexThreads(() => ({ headRefOid: "b".repeat(40), reviewThreads: { nodes: [], pageInfo: {} } }), {
+    deadlineMs: 10_000,
+    now: () => 1_000,
+  }).headRefOid,
+  "b".repeat(40),
+  "a deadline that has not passed leaves the walk untouched",
 );
 
 console.log(`codex-bot-review-lib: ${pass} assertions passed`);

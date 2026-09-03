@@ -757,15 +757,64 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "so the merge cannot be bound to the base it will actually land on and is denied (fail closed)."
     );
   }
-  // ── the Codex GitHub App's own review — mirror of pr-merge-guard.mjs ───────
-  // Added 2026-09-02 alongside the Claude-side check. Wiring it on only one side
-  // would mean a merge driven from Codex skips a gate a merge driven from Claude
-  // gets, which is exactly the asymmetry AGENTS.md forbids leaving undeclared.
-  //
-  // Runs BEFORE the green-pipeline check so an unanswered review comment is the
-  // message the reader gets, rather than "wait for CI". Fails OPEN on any error:
-  // see the header of codex-bot-review-lib.mjs for why this one predicate does
-  // not fail closed like its neighbours here.
+  // The Codex GitHub App's review is read at the ALLOW point below, not here.
+  // It is advisory, fail-open, and costs up to four gh calls against a
+  // 15-SECOND hook budget (.codex/hooks.json) — four capped-at-10s calls can
+  // outlive the hook on their own. A PreToolUse hook killed mid-call emits
+  // nothing, and emitting nothing does NOT deny, so running it here would let a
+  // slow GitHub starve every hard denial below it: CHANGES_REQUESTED, the green
+  // pipeline, the risky-diff classification and the exact-SHA proof. Codex round
+  // 6 found this; PR #502 established the class. See codexAppAdvisory().
+
+  // Main's PR #560 migrated this gate from "no approval" to "an active
+  // objection", matching the Claude side. Taking main's predicate: the denial
+  // text below already describes CHANGES_REQUESTED, so keeping !approved here
+  // would guard a message that does not match its condition.
+  if (pullRequestReviewBlocked(pullRequest)) {
+    return denied(
+      "CODEX PRODUCTION GATE: GitHub reports reviewDecision=CHANGES_REQUESTED — a reviewer has open " +
+      "objections on this pull request. Mason removed main's required-approval rule on 2026-09-02, which " +
+      "did not authorize merging over a review that asked for changes. Fix every real finding and push it; " +
+      "a genuine nitpick may be dismissed with a one-line reason in the thread. Merge only after that."
+    );
+  }
+  if (!pullRequestChecksGreen(pullRequest)) {
+    return denied(
+      "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
+    );
+  }
+  const mainVerdict = gateMainChange({
+    repoDir,
+    sourceSha: pullRequest.headRefOid,
+    // Bind the proof AND the risk diff to GitHub's real base, not local origin/main.
+    authoritativeBaseSha: pullRequest.baseRefOid,
+    nowMs,
+    runGit,
+  });
+  if (mainVerdict.blocked) return mainVerdict;
+
+  // ALLOW point. Every hard denial above — objection, green pipeline, risky-diff
+  // classification and the exact-SHA proof — has already had its chance, so the
+  // advisory lookup can spend what is left of the hook budget here without being
+  // able to starve any of them.
+  const advisory = codexAppAdvisory({ request, repoDir, runGh });
+  if (advisory) return advisory;
+  return mainVerdict;
+}
+
+// The Codex GitHub App's own review — mirror of pr-merge-guard.mjs.
+//
+// Wiring it on only one side would mean a merge driven from Codex skips a gate a
+// merge driven from Claude gets, which is exactly the asymmetry AGENTS.md forbids
+// leaving undeclared.
+//
+// Returns a denial verdict, or null when nothing blocks. Fails OPEN on any
+// error: see the header of codex-bot-review-lib.mjs for why this one predicate
+// does not fail closed like its neighbours here. The 5s budget is deliberately a
+// third of the hook's 15s so the notices below can still be written.
+const CODEX_ADVISORY_BUDGET_MS = 5_000;
+
+function codexAppAdvisory({ request, repoDir, runGh }) {
   let codexVerdict = null;
   try {
     const metaArgs = ["pr", "view"];
@@ -775,6 +824,7 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     const meta = JSON.parse(runGh(metaArgs, repoDir));
     const slug = String(meta?.url || "").match(/[/]([^/]+)[/]([^/]+)[/]pull[/]/);
     if (slug && Number.isInteger(meta?.number)) {
+      const deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS;
       const node = collectCodexThreads((cursor) => {
         const args = [
           "api", "graphql",
@@ -787,7 +837,7 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
         // Omit `after` on the first page — see the Claude-side note.
         if (cursor) args.push("-F", `after=${cursor}`);
         return JSON.parse(runGh(args, repoDir))?.data?.repository?.pullRequest;
-      });
+      }, { deadlineMs });
       if (node.headRefOid) codexVerdict = evaluateCodexBotReview(node);
     }
   } catch {
@@ -819,34 +869,7 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "comment `@codex review` and read the result before merging anything non-trivial.\n",
     );
   }
-
-  // Main's PR #560 migrated this gate from "no approval" to "an active
-  // objection", matching the Claude side. Taking main's predicate: the denial
-  // text below already describes CHANGES_REQUESTED, so keeping !approved here
-  // would guard a message that does not match its condition. The App-review
-  // block above stays ahead of it — that ordering is the point of this PR, and
-  // it is pinned by tests in codex-bot-review-lib.test.mjs.
-  if (pullRequestReviewBlocked(pullRequest)) {
-    return denied(
-      "CODEX PRODUCTION GATE: GitHub reports reviewDecision=CHANGES_REQUESTED — a reviewer has open " +
-      "objections on this pull request. Mason removed main's required-approval rule on 2026-09-02, which " +
-      "did not authorize merging over a review that asked for changes. Fix every real finding and push it; " +
-      "a genuine nitpick may be dismissed with a one-line reason in the thread. Merge only after that."
-    );
-  }
-  if (!pullRequestChecksGreen(pullRequest)) {
-    return denied(
-      "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
-    );
-  }
-  return gateMainChange({
-    repoDir,
-    sourceSha: pullRequest.headRefOid,
-    // Bind the proof AND the risk diff to GitHub's real base, not local origin/main.
-    authoritativeBaseSha: pullRequest.baseRefOid,
-    nowMs,
-    runGit,
-  });
+  return null;
 }
 
 export function evaluateProductionAction({

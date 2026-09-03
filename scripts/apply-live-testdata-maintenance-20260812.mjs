@@ -182,11 +182,16 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // the shell deletes while building a word, not ones it splits on, so treating
   // them as separators let an intra-word splice break a protected path into two
   // harmless tokens.
-  codexGuard: "0d15dec22f8c137e90831268dd8df2425369299f",
+  // Re-pinned 2026-09-03 (Codex round 6): the Codex GitHub App advisory lookup
+  // moved from BEFORE the hard denials to the allow point after them, extracted
+  // into codexAppAdvisory() with a 5s deadline. An advisory, fail-open lookup
+  // running first could exhaust the 15s hook budget, and a PreToolUse hook killed
+  // mid-call emits nothing — which does not deny.
+  codexGuard: "447378b10dd2f5bb8383c25ee5dc1551c6bb6477",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "03a8cc11d2bf5d05268795d606b4d9c236ea73cf",
+  codexGuard: "2cc037a2df5cbd239addc2e843f2da073ffdb3e2",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

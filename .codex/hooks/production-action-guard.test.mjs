@@ -830,6 +830,75 @@ try {
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
   }).blocked, true, "CHANGES_REQUESTED still denies - never merge over an unresolved objection");
+
+  // ── a slow advisory lookup must not be able to starve a HARD denial ────────
+  // Codex round 6 (PR #563). The Codex GitHub App lookup is advisory and
+  // fail-open, and it costs up to four `gh` calls each capped at 10s against a
+  // 15-SECOND hook budget. A PreToolUse hook killed mid-call emits nothing, and a
+  // hook that emits nothing does NOT deny (the class PR #502 established). While
+  // that lookup ran FIRST, a slow GitHub could kill this hook before the
+  // objection, green-pipeline, risky-diff and exact-SHA-proof denials ever ran —
+  // and the merge would proceed.
+  //
+  // This is the behavioural pin, not a source-order one: the graphql call THROWS
+  // if it is reached, so any regression that moves the advisory back in front of
+  // a hard denial fails here rather than in production.
+  // The advisory resolves the PR's owner/name/number from a `--json number,url`
+  // call before it can issue the GraphQL read. A stub that omits those fields
+  // makes the advisory short-circuit, and then "graphql was never reached" proves
+  // nothing about ordering — it would hold even with the advisory running first.
+  // So both stubs below answer that lookup properly; only the ORDER decides
+  // whether the throw is hit.
+  const advisoryMetaJson = JSON.stringify({
+    number: 123,
+    url: "https://github.com/masonwells1/CRX_Manager_V1.0/pull/123",
+  });
+  const isAdvisoryMetaCall = (args) => Array.isArray(args) && args.includes("number,url");
+  let advisoryAttempts = 0;
+  const hangingAdvisoryGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      advisoryAttempts += 1;
+      throw new Error("advisory lookup reached before a hard denial");
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" });
+  };
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: hangingAdvisoryGh,
+  }).blocked, true, "the objection still denies even though the advisory lookup would fail");
+  assert.equal(
+    advisoryAttempts,
+    0,
+    "the advisory lookup is NOT reached before the objection deny — if it were, a slow GitHub could kill the hook and deny nothing",
+  );
+
+  // CONTROL — without this the assertion above passes just as happily against a
+  // guard that never calls the advisory at all, which is the dead-code failure
+  // the ordering pin was originally written to prevent. On a clean, green,
+  // proof-backed merge the advisory IS reached.
+  writeProof(risky.repo, valid);
+  let controlAttempts = 0;
+  const controlGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      controlAttempts += 1;
+      throw new Error("advisory unavailable"); // fail-open: a notice, never a deny
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  const controlVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: controlGh,
+  });
+  assert.equal(controlAttempts > 0, true, "CONTROL: the advisory IS reached once every hard gate has passed");
+  assert.equal(controlVerdict.blocked, false, "a failed advisory lookup fails OPEN — it prints a notice and allows");
   // --auto MUST NOT exempt an active objection (Codex High finding, PR #559).
   // Every other gate exempts auto because GitHub holds the merge until its own
   // requirements are met; the requirement that covered this one was the required
