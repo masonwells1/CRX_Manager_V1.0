@@ -325,6 +325,7 @@ export default function Reports() {
     // The RPC's cutoff and future-date guard are Chicago-business-day based.
     // A viewer in another timezone must not accidentally ask for Chicago tomorrow.
     const asOf = endDate || todayInBusinessTz();
+    setCommBalanceData([]);
     const { data, error } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
     if (error) { toast('error', `Commission balance failed: ${error.message}`); return; }
     setCommBalanceData(assertRpcResult<CommissionBalanceRow[]>(data, 'get_commission_balance_report'));
