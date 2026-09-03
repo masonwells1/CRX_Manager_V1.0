@@ -393,6 +393,24 @@ try {
       ["managed as an object", '{"version":1,"managed":{}}'],
       ["managed missing", '{"version":1}'],
       ["managed holding non-strings", '{"version":1,"managed":["ok.md",42]}'],
+      // The version must be present and EXACT, or a manifest written by some other
+      // generator is parsed on a guess and treated as authoritative (Codex, PR #565).
+      ["version missing", '{"managed":[]}'],
+      ["version null", '{"version":null,"managed":[]}'],
+      ["version from a future writer", '{"version":2,"managed":[]}'],
+      ["version as a string", '{"version":"1","managed":[]}'],
+      // Every entry is joined onto the target root and passed to rmSync() by --write,
+      // so an entry that can ESCAPE that root is not merely odd, it is a delete outside
+      // .agents/. `managed: ["../package.json"]` used to prune a repository file.
+      ["a parent-escaping entry", '{"version":1,"managed":["../package.json"]}'],
+      ["a deep parent-escaping entry", '{"version":1,"managed":["skills/../../package.json"]}'],
+      ["a windows-separator entry", '{"version":1,"managed":["..\\\\.git\\\\index"]}'],
+      ["a posix-absolute entry", '{"version":1,"managed":["/etc/passwd"]}'],
+      ["a drive-absolute entry", '{"version":1,"managed":["C:/Windows/system32/drivers/etc/hosts"]}'],
+      ["an empty entry", '{"version":1,"managed":[""]}'],
+      ["a dot segment", '{"version":1,"managed":["./README.md"]}'],
+      ["a doubled separator", '{"version":1,"managed":["skills//SKILL.md"]}'],
+      ["a NUL in an entry", '{"version":1,"managed":["README.md\\u0000.evil"]}'],
     ]) {
       write(text);
       assert.deepEqual(
@@ -416,7 +434,63 @@ try {
       "a well-formed manifest with an empty managed list is a real answer",
     );
 
+    // An INHERITED `managed` must not satisfy the check. With Object.prototype
+    // polluted anywhere in the process, a bare property read on `{"version":1}`
+    // returns the inherited array and the record reads as authoritative-and-empty
+    // (Codex, PR #565). `Object.hasOwn` is what closes it.
+    write('{"version":1}');
+    Object.defineProperty(Object.prototype, "managed", {
+      value: [],
+      configurable: true,
+      enumerable: false,
+      writable: true,
+    });
+    try {
+      assert.deepEqual(
+        previousManifest(shapeRoot),
+        { managed: [], known: false },
+        "an inherited `managed` must not make a schema-invalid manifest authoritative",
+      );
+    } finally {
+      delete Object.prototype.managed;
+    }
+    assert.equal(({}).managed, undefined, "the prototype fixture must be torn down");
+
     rmSync(shapeRoot, { recursive: true, force: true });
+  }
+
+  // (j) --write PRUNES by deleting `path.join(targetRoot, entry)` for every manifest
+  //     entry no longer generated. An entry that escapes the target root therefore
+  //     deletes a file outside .agents/ - `managed: ["../package.json"]` removed a
+  //     repository file (Codex, PR #565). Two layers now stop it: previousManifest()
+  //     refuses the manifest outright, and the prune loop independently re-checks
+  //     containment because a delete does not get to assume its caller validated.
+  //     Asserted end to end on a real file outside the target root.
+  {
+    const escapeRoot = mkdtempSync(path.join(os.tmpdir(), "crx-sync-escape-"));
+    const targetInside = path.join(escapeRoot, "agents");
+    mkdirSync(targetInside, { recursive: true });
+    const outsider = path.join(escapeRoot, "package.json");
+    writeFileSync(outsider, '{"name":"must-survive"}\n');
+    writeFileSync(
+      path.join(targetInside, "generated-manifest.json"),
+      '{"version":1,"managed":["../package.json","skills/../../package.json"]}\n',
+    );
+
+    writeExpected(
+      new Map([
+        ["README.md", "readme\n"],
+        ["generated-manifest.json", '{"version":1,"managed":[]}\n'],
+      ]),
+      targetInside,
+    );
+
+    assert.equal(
+      readFileSync(outsider, "utf8"),
+      '{"name":"must-survive"}\n',
+      "a manifest entry that escapes the target root must never delete a file outside it",
+    );
+    rmSync(escapeRoot, { recursive: true, force: true });
   }
 } finally {
   rmSync(targetRoot, { recursive: true, force: true });

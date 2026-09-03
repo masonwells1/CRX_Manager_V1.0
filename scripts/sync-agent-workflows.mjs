@@ -70,10 +70,15 @@ function buildExpected() {
   const managed = [...expected.keys()].sort();
   expected.set(
     "generated-manifest.json",
-    `${JSON.stringify({ version: 1, managed }, null, 2)}\n`,
+    `${JSON.stringify({ version: MANIFEST_VERSION, managed }, null, 2)}\n`,
   );
   return expected;
 }
+
+// Bumped only when the manifest's shape changes. previousManifest() requires an
+// EXACT match, so a manifest written by a newer or older generator reads as
+// unavailable rather than being parsed on a guess.
+const MANIFEST_VERSION = 1;
 
 // The manifest records `managed`: the file list from the last --write. It is
 // rewritten wholesale each time, so it describes the last sync and nothing older.
@@ -118,11 +123,31 @@ export function previousManifest(targetRoot = TARGET_ROOT) {
   } catch {
     return { managed: [], known: false };
   }
+  // `hasOwn` on both keys, not a bare property read: with `Object.prototype.managed`
+  // set anywhere in the process, `{"version":1}` would otherwise inherit an array and
+  // read as an authoritative empty record (Codex, PR #565).
   const isPlainObject = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
-  if (!isPlainObject || !Array.isArray(parsed.managed) || !parsed.managed.every((entry) => typeof entry === "string")) {
+  if (
+    !isPlainObject
+    || !Object.hasOwn(parsed, "version") || parsed.version !== MANIFEST_VERSION
+    || !Object.hasOwn(parsed, "managed") || !Array.isArray(parsed.managed)
+    || !parsed.managed.every(isSafeManagedEntry)
+  ) {
     return { managed: [], known: false };
   }
   return { managed: parsed.managed, known: true };
+}
+
+// Every `managed` entry is joined onto the target root and handed to rmSync() by
+// --write, so "is it a string" is not a sufficient check: `../package.json` resolves
+// out of .agents/ and deletes a repository file, and on Windows `..\.git\index` reaches
+// the git index (Codex, PR #565). Entries are WRITTEN as unix relative paths, so demand
+// exactly that shape - anything else means the record is not one this generator wrote.
+function isSafeManagedEntry(entry) {
+  if (typeof entry !== "string" || entry.length === 0) return false;
+  if (entry.includes("\\") || entry.includes("\0")) return false;
+  if (entry.startsWith("/") || /^[A-Za-z]:/.test(entry)) return false;
+  return entry.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
 function previousManagedFiles(targetRoot = TARGET_ROOT) {
@@ -191,7 +216,15 @@ function git(args) {
 export function writeExpected(expected, targetRoot = TARGET_ROOT) {
   const expectedNames = new Set(expected.keys());
   for (const stale of previousManagedFiles(targetRoot)) {
-    if (!expectedNames.has(stale)) rmSync(path.join(targetRoot, stale), { force: true });
+    if (expectedNames.has(stale)) continue;
+    const target = path.join(targetRoot, stale);
+    // A SECOND, independent containment check. previousManifest() already rejects a
+    // manifest holding an escaping entry, but this line DELETES, and a delete does not
+    // get to assume its caller validated. Anything that does not resolve to a path
+    // strictly inside targetRoot is skipped, not removed.
+    const within = path.relative(targetRoot, target);
+    if (!within || within.startsWith("..") || path.isAbsolute(within)) continue;
+    rmSync(target, { force: true });
   }
   for (const [relative, content] of expected) {
     const target = path.join(targetRoot, relative);
@@ -366,7 +399,7 @@ function checkExpected(expected) {
     console.error("NOTE git could not report which .agents/ paths are tracked; the importer-directory exemption is withheld and any such files are reported as drift.");
   }
   if (!prior.known) {
-    console.error("NOTE generated-manifest.json exists but is unreadable or is not the { version, managed: string[] } shape this generator writes, so the record of what the last sync generated is unavailable; the importer-directory exemption is withheld and any such files are reported as drift.");
+    console.error(`NOTE generated-manifest.json exists but is unreadable, or is not the { version: ${MANIFEST_VERSION}, managed: <relative unix paths> } shape this generator writes, so the record of what the last sync generated is unavailable; the importer-directory exemption is withheld and any such files are reported as drift.`);
   }
   for (const extra of extras) {
     mismatches.push(`${extra} is not generated from .claude`);
