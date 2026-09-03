@@ -407,6 +407,7 @@ function makeHarness({
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
   const timeline = [];
+  const errors = [];
   const failures = [];
   const notices = [];
   let pullIndex = 0;
@@ -586,6 +587,10 @@ function makeHarness({
     },
   };
   const core = {
+    // `@actions/core` exposes `error`, and the gate uses it to emit the stack of
+    // an internal crash as a run annotation. Captured separately from notices so
+    // a test can assert the stack was actually written.
+    error: (message) => errors.push(message),
     notice: (message) => notices.push(message),
     setFailed: (message) => failures.push(message),
     warning: (message) => notices.push(message),
@@ -595,6 +600,7 @@ function makeHarness({
     comments,
     context,
     core,
+    errors,
     failures,
     github,
     liveLabels,
@@ -645,6 +651,93 @@ test('green frozen candidate posts exactly one review command and records the re
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.deepEqual(harness.failures, []);
+});
+
+// Hardening for the class of bug the check_runs pagination crash belonged to,
+// deliberately fail-CLOSED. An unreadable list entry must BLOCK the candidate,
+// never be filtered away: a dropped row is a row that cannot block, so silently
+// discarding a malformed check run could let the gate conclude "every required
+// check is green" when a required check was never seen. That is a security
+// property of the paid-review gate, not a tidy-up. It also turns an opaque
+// TypeError into something an operator can act on.
+test('an unreadable check-run entry blocks the candidate instead of crashing the gate', async () => {
+  const harness = makeHarness({ checkRuns: [completedCheck('foundation'), undefined] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  // Blocked as a candidate, NOT reported as an unexpected internal failure.
+  assert.match(harness.failures[0], /final review was not requested/);
+  assert.match(harness.failures[0], /check-run listing returned 1 unreadable entry/);
+  assert.equal(harness.failures.join('\n').includes('gate failed unexpectedly'), false);
+  assert.deepEqual(harness.errors, []);
+});
+
+test('a null commit-status entry also blocks the candidate', async () => {
+  const harness = makeHarness({ statuses: [commitStatus('Vercel'), null] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.comments, []);
+  assert.match(harness.failures[0], /commit-status listing returned 1 unreadable entry/);
+});
+
+// The same rule at the exported unit, where the list shapes can be stated
+// directly. Every loop in evaluateChecks reads a field off its entry, so this is
+// the one place the rule belongs.
+test('evaluateChecks blocks on an unreadable list entry rather than dropping it', () => {
+  const green = { checkRuns: [], statuses: [], requiredChecks: [], ignoredChecks: [] };
+  assert.deepEqual(evaluateChecks(green), []);
+
+  assert.deepEqual(
+    evaluateChecks({ ...green, checkRuns: [undefined] }),
+    ['check-run listing returned 1 unreadable entry'],
+  );
+  assert.deepEqual(
+    evaluateChecks({ ...green, checkRuns: [null, 'not-an-object'] }),
+    ['check-run listing returned 2 unreadable entries'],
+  );
+  assert.deepEqual(
+    evaluateChecks({ ...green, statuses: [undefined] }),
+    ['commit-status listing returned 1 unreadable entry'],
+  );
+  // A non-array is the other shape a mis-mapped paginate can hand back.
+  assert.deepEqual(
+    evaluateChecks({ ...green, checkRuns: undefined }),
+    ['check-run listing did not return an array (received undefined)'],
+  );
+  // Critically: a required check is NOT silently treated as satisfied because
+  // the list was unreadable. The unreadable entry is the whole verdict, and it
+  // is a blocker.
+  const withRequired = evaluateChecks({
+    checkRuns: [undefined],
+    statuses: [],
+    requiredChecks: REQUIRED_CHECKS,
+    ignoredChecks: IGNORED_CHECKS,
+  });
+  assert.deepEqual(withRequired, ['check-run listing returned 1 unreadable entry']);
+});
+
+// The swallowed stack is what made the 2026-09-03 crash expensive to find:
+// `setFailed` reported only "Cannot read properties of undefined (reading
+// 'app')", which names neither file nor line.
+test('an unexpected gate failure records the stack trace, not just the message', async () => {
+  const harness = makeHarness({ pullFailuresAt: [1] });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.errors.length, 1);
+  assert.match(harness.errors[0], /crashed internally/);
+  assert.match(harness.errors[0], /pull snapshot 1 failed/);
+  // A stack, not a bare message: it must name a file and a line number.
+  assert.match(harness.errors[0], /coderabbit-final-review\.test\.cjs:\d+/);
+  // And the operator-facing failure must say a re-label is the retry, because
+  // the handler clears the ready label precisely so that re-label can fire an
+  // event at all.
+  assert.match(harness.failures[0], /internal gate error, not a blocked candidate/);
+  assert.match(harness.failures[0], new RegExp(`re-apply ${READY_LABEL}`));
 });
 
 test('duplicate ready events never post a second review command', async () => {

@@ -112,7 +112,35 @@ function statusMatchesIgnoredPolicy(status, ignored) {
     && normalize(status.creator?.login) === normalize(ignored.creator);
 }
 
+// A list entry that is not an object cannot be evaluated, and it must never be
+// silently dropped. A discarded row is a row that cannot BLOCK, so filtering one
+// away could let the gate conclude "every required check is green" while a
+// required check was never actually seen — a fail-OPEN on the paid-review gate.
+// Reporting it as a blocker fails CLOSED and, unlike a TypeError, says what
+// happened.
+function malformedEntryBlockers(entries, kind) {
+  if (!Array.isArray(entries)) {
+    return [`${kind} listing did not return an array (received ${typeof entries})`];
+  }
+  const malformed = entries.filter((entry) => !entry || typeof entry !== 'object').length;
+  return malformed > 0
+    ? [`${kind} listing returned ${malformed} unreadable entr${malformed === 1 ? 'y' : 'ies'}`]
+    : [];
+}
+
 function evaluateChecks({ checkRuns, statuses, requiredChecks, ignoredChecks = [] }) {
+  // Before anything reads a field off an entry. Every loop below assumes an
+  // object, and the 2026-09-03 gate crash was that assumption meeting a list
+  // holding `undefined`. The cause is fixed in collectCheckBlockers; this is the
+  // rule that keeps the NEXT malformed list a readable blocker instead of an
+  // opaque "Cannot read properties of undefined" that takes the gate down
+  // repo-wide. One place, not two, so the two cannot drift.
+  const shapeBlockers = [
+    ...malformedEntryBlockers(checkRuns, 'check-run'),
+    ...malformedEntryBlockers(statuses, 'commit-status'),
+  ];
+  if (shapeBlockers.length > 0) return shapeBlockers;
+
   const ignoredConfigBlockers = ignoredChecks
     .map(ignoredCheckConfigBlocker)
     .filter(Boolean);
@@ -333,7 +361,16 @@ async function attachRequiredWorkflowProvenance({
   // Every check from the GitHub Actions app needs workflow provenance, not
   // only required checks. Otherwise a passing job in another workflow can
   // collapse a same-name failed optional security check.
-  const candidates = checkRuns.filter((check) => workflowAppIds.has(Number(check.app?.id)));
+  // `check?.app`, not `check.app?` — the optional chain has to start at the
+  // ELEMENT. `check.app?.id` guards a nullish `app` on an object that EXISTS; an
+  // undefined element throws before the `?.` is ever reached. That is the literal
+  // line the gate died on. This runs BEFORE evaluateChecks, so it is what carries
+  // an unreadable list far enough for evaluateChecks to block it with a readable
+  // reason instead of the gate dying here. Load-bearing, not decorative:
+  // reverting it to `check.app?.id` turns `an unreadable check-run entry blocks
+  // the candidate instead of crashing the gate` red (measured — that one test,
+  // not the whole set; the commit-status case never reaches this line).
+  const candidates = checkRuns.filter((check) => workflowAppIds.has(Number(check?.app?.id)));
 
   await Promise.all(candidates.map(async (check) => {
     if (check.workflow_id && check.workflow_path) return;
@@ -1093,6 +1130,18 @@ async function run(args) {
     const { owner, repo } = context.repo;
     const pullNumber = context.payload.pull_request.number;
     const headSha = context.payload.pull_request.head.sha;
+    // Log the STACK before any recovery work. `setFailed` below reports only
+    // `error.message`, and a bare "Cannot read properties of undefined (reading
+    // 'app')" names neither the file nor the line: the repo-wide gate crash of
+    // 2026-09-03 (PR #563, run 33707346152) cost hours of bisecting for want of
+    // these few frames. Emit it first so it survives even if the recovery path
+    // below throws on its way out.
+    core.error(
+      'CodeRabbit final review gate crashed internally (this is a bug in the gate, not a '
+      + `problem with the pull request): ${unexpectedError && unexpectedError.stack
+        ? unexpectedError.stack
+        : String(unexpectedError)}`,
+    );
     let verificationSucceeded = false;
     let commandCommentExists = false;
 
@@ -1142,6 +1191,15 @@ async function run(args) {
       };
     }
 
+    // READY_LABEL is cleared deliberately, on an internal crash included. It
+    // LOOKS like the gate is discarding the operator's intent on its own bug,
+    // and it was raised as a possible defect — but leaving the label attached
+    // would WEDGE the pull request: GitHub fires no `labeled` event for a label
+    // that is already present, so an operator could never retry by re-applying
+    // it (see removeLabelsIndependently). Clearing it is what MAKES the retry
+    // possible. The defect this crash exposed was never the clearing; it was
+    // that the run said nothing useful about why. Hence the stack above and the
+    // operator note below, not a preserved label that triggers nothing.
     const labelsToClear = verificationSucceeded
       ? [REQUESTED_LABEL, READY_LABEL]
       : [READY_LABEL];
@@ -1154,7 +1212,12 @@ async function run(args) {
     const cleanupNote = cleanupFailures.length > 0
       ? `; workflow label cleanup failed for ${cleanupFailures.join('; ')} — remove the labels by hand before relabelling`
       : '';
-    core.setFailed(`CodeRabbit final review gate failed unexpectedly (${unexpectedError.message}); ${markerNote}${cleanupNote}`);
+    core.setFailed(
+      `CodeRabbit final review gate failed unexpectedly (${unexpectedError.message}); `
+      + `${markerNote}${cleanupNote}. This is an internal gate error, not a blocked candidate — `
+      + 'the full stack trace is in this run\'s error annotation; fix the gate, then re-apply '
+      + `${READY_LABEL} to retry.`,
+    );
     return { status: 'blocked', reason: unexpectedError.message };
   }
 }
