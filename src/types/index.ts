@@ -3108,6 +3108,13 @@ export interface JobChemical {
   // appears in the application_records legal product_data (flagged customer_supplied).
   customer_supplied: boolean;
   sort_order: number;
+  // F06 (2026-09-03): which field the operator TYPED on this line — 'rate' (quantity was
+  // derived as rate × acres) or 'qty' (the total was typed and the rate back-solved).
+  // null = unknown (rows saved before the column existed, and rows written by the
+  // close-quote and recipe paths). The grid re-derives the OTHER side on an acreage change
+  // only when this is set; a null row is left exactly as saved. Column added by migration
+  // 20260903150000; optional here so a build against the pre-apply schema still types.
+  driver?: 'rate' | 'qty' | null;
   // Joined
   product?: Product;
 }

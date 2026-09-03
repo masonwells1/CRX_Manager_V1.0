@@ -2769,6 +2769,30 @@ function migrationsAwaitingTypeRegeneration(): Set<string> {
   if (missingSources.length > 0) {
     throw new Error(`Pending migration-history rows lack checked-in migration sources: ${missingSources.join(', ')}`);
   }
+  // Drift in the OTHER direction. The pre-2026-09-03 guard compared the whole
+  // PENDING APPLY row set against this constant, so a new pending migration that
+  // nobody registered failed loudly. Matching on status alone had to go (applied
+  // rows stop saying PENDING APPLY), but dropping the reverse check with it would
+  // have been a silent weakening — so it is restored here, narrowed to the case
+  // that actually matters.
+  //
+  // Only a pending migration whose timestamp sorts at or below the registry
+  // high-water needs registering: above it, the `timestamp > highWater` arm of the
+  // discovery rule already covers the RPCs. F06's 20260903150000 is exactly that
+  // benign case and must NOT be forced into this constant — the old whole-set
+  // comparison would have demanded it and been wrong.
+  const highWater = registryMigrationHighWater();
+  const unregisteredBelowHighWater = lines
+    .map((line) => line.match(/^\|\s*\d+\s*\|\s*(\d{14})\s*\|\s*\*\*PENDING APPLY\b/i)?.[1])
+    .filter((timestamp): timestamp is string => Boolean(timestamp))
+    .filter((timestamp) => timestamp <= highWater && !timestamps.has(timestamp));
+  if (unregisteredBelowHighWater.length > 0) {
+    throw new Error(
+      'Pending migration(s) sort at or below the registry high-water '
+      + `${highWater} but are not registered in MIGRATIONS_AWAITING_TYPE_REGENERATION, so their `
+      + `RPCs would be dropped from the mutator inventory: ${unregisteredBelowHighWater.join(', ')}`,
+    );
+  }
   return timestamps;
 }
 
