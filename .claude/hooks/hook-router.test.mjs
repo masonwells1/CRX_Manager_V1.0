@@ -48,9 +48,19 @@ try {
   ok(output?.hookSpecificOutput?.additionalContext.includes("HOLD LATCHED"), "hold rule remains stateful and visible");
   ok(existsSync(path.join(temp, ".claude", "session-state", "hold.json")), "hold router writes the original latch");
 
+  // `overnight` REMINDS but never LATCHES (Mason, 2026-09-02, after five review
+  // rounds on PR #565 — the narrowed pattern kept freezing ordinary questions,
+  // ending with `what is overnight?`). The reminder half is the part that still
+  // matters here: a genuine "run this overnight" is still told to arm autopilot.
   output = run(PROMPT, { prompt: "run this overnight" }, { projectDir: temp });
   ok(output?.hookSpecificOutput?.additionalContext.includes("autopilot reminder"), "Claude prompt router preserves autopilot reminder");
-  ok(existsSync(path.join(temp, ".claude", "session-state", "OVERNIGHT-INTENT.flag")), "Claude autopilot reminder preserves intent flag");
+  ok(!existsSync(path.join(temp, ".claude", "session-state", "OVERNIGHT-INTENT.flag")), "the word overnight must NOT latch the intent flag");
+
+  // ...but the router must still carry the latch for an unambiguous request, or
+  // removing the word would have quietly disabled the handshake end to end.
+  output = run(PROMPT, { prompt: "im going to bed, keep working" }, { projectDir: temp });
+  ok(output?.hookSpecificOutput?.additionalContext.includes("autopilot reminder"), "Claude prompt router reminds on a real hands-free request");
+  ok(existsSync(path.join(temp, ".claude", "session-state", "OVERNIGHT-INTENT.flag")), "Claude autopilot reminder preserves intent flag for a real request");
 
   output = run(PROMPT, { prompt: "run this overnight" }, { surface: "codex", projectDir: temp });
   eq(output, null, "Codex router does not acquire Claude-only autopilot behavior");

@@ -25,6 +25,88 @@ money regression. Mason chose the loud gate.
 **What this forbids/implies:** do not revive the suffix-based exemption or re-open it as "just
 skip `.md`". A docs-only PR the gate flags is merged by Mason on green CI or waits for a proof.
 
+## 2026-09-02 (later) — `overnight` is REMOVED from the freeze list; the narrowing is abandoned
+
+**Source:** Mason's in-chat decision on 2026-09-02, put to him after a fourth review round proved
+the narrowed pattern still froze ordinary questions. He chose removal — which is what he had asked
+for originally, before the narrowing was proposed to him.
+
+**Decision.** `overnight` no longer appears in the `strong` list of
+`.claude/hooks/autopilot-intent-reminder.mjs` in any form. This **supersedes the two entries below
+it** from earlier the same day, which are kept as the record of why the narrowing was attempted.
+
+**Why.** Three attempts to keep the word as a narrowed pattern were each defeated by a phrasing the
+previous round had not considered: the bare word, then punctuation-as-terminator
+(`investigate the overnight: flag behavior`), then general prepositions
+(`overnight in the documentation is misspelled`), and finally nominal use at a sentence end —
+`what is overnight?`, raised as P1 by Codex and Major by CodeRabbit, and confirmed by running the
+real hook. That last one is the ORIGINAL defect, not a marginal case: asking a question about the
+feature still froze the session for 45 minutes with no exit but arming autopilot.
+
+A guard written as a text pattern over free-form input does not converge. Same shape as the
+`git clean` carve-out (six rounds) and the same judgement as removing the Governed Autonomous
+Software Factory, which went partly because "casual words like 'factory' or 'overnight' flipped
+governed state".
+
+**What was given up, knowingly.** `run this overnight` alone no longer latches the handshake. The
+`triggers` list still matches the bare word, so it still injects the arm-autopilot reminder — the
+pre-latch behaviour, not a silent loss. A missed latch costs a reminder; a false latch costs a
+45-minute lockout whose only exit is the thing the handshake exists to prevent.
+
+**Operative rule.** Do not reintroduce `overnight` to `strong` in any form. Every phrasing the
+removed patterns once accepted is pinned as non-latching in `prompt-hooks.test.mjs`, and
+`hook-router.test.mjs` pins both halves end to end — the word reminding but not latching, and a
+real request (`im going to bed, keep working`) still latching. A genuinely new class of failure —
+the latch firing from something other than prompt text — is a different matter.
+
+## 2026-09-02 — `overnight` is a topic word, not a freeze signal (SUPERSEDED by the entry above)
+
+**Source:** Mason's in-chat approval on 2026-09-02 ("yes drop the word overnight from the freeze
+list"), after the defect froze the same session twice inside ten minutes.
+
+**Decision.** The bare `/overnight/` is removed from the `strong` list in
+`.claude/hooks/autopilot-intent-reminder.mjs` and replaced with a lookahead that fires only on the
+adverbial use — `overnight` ending its phrase, as in "run this overnight". A plain deletion was
+implemented first and rejected by `hook-router.test.mjs:53`, which already pinned "run this
+overnight" as a latching request: dropping the word wholesale would have dropped that coverage too.
+
+**Why.** The latch writes `OVERNIGHT-INTENT.flag`, and `unattended-autopilot.mjs` then blocks
+Bash/Write/Edit for 45 minutes. `review-proof-guard.mjs` refuses every command that would clear the
+flag — PR #548 established that this has no shell escape *by design*, after two `gpt-5.6-sol`
+reviews returned BLOCKERS on a sanctioned clear-script and Mason removed it. So a false latch leaves
+arming autopilot as the only unblocked path, which is precisely the failure the handshake exists to
+prevent. #548 corrected the misleading deny message but did not touch the word list that causes the
+false latch.
+
+A bare noun is the one shape that can appear in a question *about* the feature. It fired on "i
+think the overnight flag is gettign worked on you might investigate" and again on the approval to
+make this very change. This is also not a new observation: the Governed Autonomous Software Factory
+was removed on 2026-08-07 partly because "casual words like 'factory' or 'overnight' flipped
+governed state".
+
+**Operative rule.** A pattern is admitted to `strong` only if it is a phrase Mason can be USING but
+not NAMING — first-person, imperative, or (for `overnight`) grammatically adverbial, so it cannot
+occur in a question about autopilot. Split by grammar, never by a list of banned phrasings.
+
+The `overnight` test needs **two** signals and CodeRabbit proved on PR #565 that one is not enough:
+a lone lookahead let `investigate the overnight: flag behavior` through (a colon read as a
+terminator when it introduced a noun), while tightening that lookahead dropped real requests like
+`work overnight for me`. So it now requires NOT-NAMED (no determiner or quoting word immediately
+before — the closed half, since determiners are a fixed set and nouns are not) AND ADVERBIAL (ends
+the phrase, or the next word opens a clause). Each covers the other's gap, which is why the follower
+set can afford to be generous. `this`/`that` are deliberately not determiners here.
+
+Where the two disagree, prefer MISSING a real request: a miss degrades to the arm-autopilot reminder
+`triggers` still injects, while a false freeze can only be escaped by arming autopilot. But a miss
+is not free either — an unattended run then stalls for permission later, which is the original
+complaint — so do not narrow it further without re-running the end-to-end proof.
+
+Do not restore a bare `/overnight/`, and do not "simplify" either half away. `prompt-hooks.test.mjs`
+pins every direction (the two verbatim freezing prompts and six noun-modifier mentions must not
+latch; four hands-free phrasings and seven adverbial `overnight` requests must),
+`hook-router.test.mjs:53` independently pins "run this overnight", and each half has a mutation that
+reddens a case the other half cannot catch.
+
 ## 2026-09-02 — the CodeRabbit gate is `pull_request_target`-ONLY; never add a review trigger
 
 **Source:** Mason's in-chat approval on 2026-09-02 ("yes remove it and take it through"), after the
@@ -47,7 +129,7 @@ and one-shot validations the gate exists to enforce.
 **The proof, because this is the part worth keeping.** The workflow file did not exist on `main`
 at all, and a run of it still appeared and succeeded:
 
-```
+```text
 event=pull_request_review
 head_sha=8ddcd9aeea...                              # the PR's commit
 head_branch=codex/coderabbit-ready-label-20260830   # the PR's branch

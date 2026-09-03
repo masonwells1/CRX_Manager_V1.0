@@ -193,6 +193,152 @@ ok(existsSync(path.join(hbProj, ".claude", "session-state", "hold.json")),
   "the same wording TYPED by Mason still latches the hold");
 rmSync(hbProj, { recursive: true, force: true });
 
+// ── 2026-09-02: naming autopilot must not FREEZE the session ─────────────
+// autopilot-intent-reminder.mjs latches OVERNIGHT-INTENT.flag on a "strong"
+// phrase, and unattended-autopilot.mjs then blocks Bash/Write/Edit for 45
+// minutes. review-proof-guard.mjs refuses every command that would clear the
+// flag (PR #548 confirmed there is deliberately no shell escape), so a false
+// latch leaves arming autopilot as the only unblocked path — the exact failure
+// the handshake exists to prevent.
+//
+// `/overnight/` was a bare topic word in that list. It froze a session twice in
+// ten minutes: on a request to INVESTIGATE the flag, and on the approval to
+// remove it. Both verbatim prompts are pinned below.
+//
+// The negative controls are what make this a guard rather than a deletion: put
+// /overnight/ back and case 1 goes red; delete the `strong` list entirely and
+// cases 2-4 go red. Neither mutation can pass both halves.
+{
+  const flagOf = (dir) => path.join(dir, ".claude", "session-state", "OVERNIGHT-INTENT.flag");
+  const latches = (prompt) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "crx-intent-"));
+    const r = spawnSync(process.execPath, [path.join(__dirname, "autopilot-intent-reminder.mjs")], {
+      input: JSON.stringify({ prompt }),
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+    });
+    eq(r.status, 0, `autopilot-intent-reminder exits 0 on: ${prompt.slice(0, 40)}`);
+    const latched = existsSync(flagOf(dir));
+    const reminded = r.stdout.includes("autopilot-arm.mjs");
+    rmSync(dir, { recursive: true, force: true });
+    return { latched, reminded };
+  };
+
+  // 1. Mason NAMING the feature — the two verbatim prompts that froze the
+  //    session on 2026-09-02. Must not latch, and must still remind: the topic
+  //    is autopilot, so surfacing the arm instructions is still correct.
+  for (const naming of [
+    "yes fix codex folder , and i think the overnight flag is gettign worked on you might investigate",
+    "yes drop the word overnight from the freeze list",
+  ]) {
+    const got = latches(naming);
+    ok(!got.latched, `naming the feature must not FREEZE the session: "${naming.slice(0, 45)}..."`);
+    ok(got.reminded, "...but the arm-autopilot reminder still fires");
+  }
+
+  // 2. Negative controls: Mason USING the feature must still latch. These are
+  //    first-person/imperative phrases that cannot appear in a question ABOUT
+  //    autopilot, which is the admission rule the `strong` list documents.
+  for (const using of [
+    "im going to bed, keep working",
+    "run it all night and dont stop",
+    "keep going while im asleep",
+  ]) {
+    ok(latches(using).latched, `a real hands-free request must still latch: "${using}"`);
+  }
+
+  // 2b. `hands.?free` was REMOVED from `strong` on 2026-09-03 (Mason's call). It
+  //     is the feature's NAME, so it failed the admission rule outright: it
+  //     matched questions about the feature and even NEGATIONS of a request.
+  //     Seven of seven question/negation probes latched before the removal. Same
+  //     defect as the bare `overnight`, same remedy.
+  //
+  //     What is given up, stated plainly: `run this hands-free` no longer
+  //     latches. `triggers` still matches the phrase, so it still reminds — the
+  //     pre-latch behaviour, not a silent loss. A miss costs a reminder; a false
+  //     latch costs a 45-minute lockout whose only exit is arming autopilot.
+  for (const handsFree of [
+    // questions ABOUT the feature - the defect
+    "What does hands-free mode do?",
+    "is hands-free mode documented anywhere",
+    // negations of a request - the same defect, inverted
+    "Do not run this hands-free",
+    "never run this hands free",
+    // ...and the genuine request, knowingly downgraded to reminder-only
+    "run this hands-free until morning",
+  ]) {
+    const got = latches(handsFree);
+    ok(!got.latched, `hands-free must never latch, in any role: "${handsFree}"`);
+    ok(got.reminded, "...but the arm-autopilot reminder still fires");
+  }
+
+  // 2c. KNOWN RESIDUAL, pinned rather than narrowed away. The three surviving
+  //     `strong` entries are plain substring patterns with no notion of quoting
+  //     or negation, so a prompt that QUOTES one while discussing this guard
+  //     still latches. That is a real false positive and it is NOT fixed here:
+  //     four attempts to narrow `overnight` by grammar were each defeated by a
+  //     phrasing the round before had not considered, and the settled answer is
+  //     that a pattern is either a usage phrase or it is removed - not narrowed a
+  //     fifth time. These assert the CURRENT behaviour so nobody reads the
+  //     admission-rule comment as a stronger promise than the code makes.
+  for (const metaDiscussion of [
+    'Does saying "going to bed" arm autopilot?',
+    "the going to bed phrase is in the strong list, right?",
+    "why does run it all night latch but overnight does not",
+  ]) {
+    ok(
+      latches(metaDiscussion).latched,
+      `ACCEPTED RESIDUAL: quoting a usage phrase while discussing the guard still latches: "${metaDiscussion}"`,
+    );
+  }
+
+  // 3. `overnight` NEVER latches, in any grammatical role (Mason, 2026-09-02,
+  //    after five review rounds). Three attempts to keep it as a narrowed
+  //    pattern were each defeated by a phrasing the previous round had not
+  //    considered, ending with `what is overnight?` — the original defect, not a
+  //    marginal case. Every prompt below is a shape one of those attempts
+  //    ACCEPTED as a request; they are pinned as non-latching so no future
+  //    "improvement" can reintroduce the pattern without turning this red.
+  //
+  //    What is deliberately given up: the first four are genuine hands-free
+  //    requests that no longer latch. `triggers` still matches the bare word, so
+  //    they still get the arm-autopilot reminder — a miss costs a reminder,
+  //    while a false latch costs a 45-minute lockout whose only exit is arming.
+  for (const nonLatching of [
+    // once treated as requests
+    "run this overnight",
+    "run it overnight and dont ask me",
+    "work overnight for me",
+    "keep working overnight through the morning",
+    // round 4 false positives (Codex P1 + CodeRabbit Major) that forced the removal
+    "what is overnight?",
+    "can you explain overnight?",
+    "the feature is called overnight.",
+    "overnight, my report is wrong",
+    "overnight, tonight's deployment is delayed",
+  ]) {
+    const got = latches(nonLatching);
+    ok(!got.latched, `overnight must never latch, in any role: "${nonLatching}"`);
+    ok(got.reminded, "...but the arm-autopilot reminder still fires");
+  }
+
+  // 4. The mentions that started this, still non-latching. Kept from the earlier
+  //    rounds so the removal is pinned from both directions.
+  for (const naming of [
+    "why does the overnight flag keep firing",
+    "explain the overnight handshake to me",
+    "run the overnight bug hunt report past me first",
+    "investigate the overnight: flag behavior",
+    "drop the word overnight from the freeze list",
+    "overnight flag is broken again",
+    "overnight in the documentation is misspelled",
+    "the note about overnight on line 40 is wrong",
+    "grep for overnight to see where it fires",
+  ]) {
+    ok(!latches(naming).latched, `overnight as a noun modifier must not freeze: "${naming}"`);
+  }
+}
+
 // ── 2026-08-26: the REAL cross-session payloads, end to end ──────────────
 // The unit assertions above prove the predicate; this runs the ACTUAL hook
 // process against the verbatim shapes from the incident and checks the real
