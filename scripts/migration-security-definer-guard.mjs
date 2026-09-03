@@ -2,8 +2,8 @@
 // inherited PUBLIC and CRX's explicit anon EXECUTE grants. Unknown syntax and
 // unterminated SQL fail closed rather than becoming an ACL bypass.
 export const CREATE_FN_ANY = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
-const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
-const SECURITY_DEFINER_ALTER = /ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+const SECURITY_DEFINER_ALTER = /ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
 const SECURITY_DEFINER_ROUTINE_HEADER = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)|ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE))\s+/gi;
 
 function blank(out, count) { return out + ' '.repeat(count); }
@@ -31,6 +31,7 @@ function executableSql(sql) {
       out = blank(out, end - i); i = end; continue;
     }
     if (ch === "'" || escape) {
+      if (/\bDO\b[^;]*$/i.test(out)) return null;
       let end = i + (escape ? 2 : 1);
       while (end < src.length) {
         if (escape && src[end] === '\\') { end += 2; continue; }
@@ -51,7 +52,7 @@ function executableSql(sql) {
         // analyzable GRANT/REVOKE statement. Lex its body recursively so an
         // EXECUTE keyword inside a quoted diagnostic string is inert, while a
         // real PL/pgSQL EXECUTE fails this static proof closed.
-        if (/\bDO\s*$/i.test(out)) {
+        if (/\bDO\b[^;]*$/i.test(out)) {
           const doBody = executableSql(src.slice(i + tag[0].length, close));
           if (doBody === null || /\bEXECUTE\b/i.test(doBody)) return null;
         }
@@ -97,6 +98,7 @@ function splitArgs(args) {
 }
 
 function canonicalSignature(name, args, declaration = false, quoted = false) {
+  if (args.includes('"')) return null;
   const types = splitArgs(args).map((arg) => {
     let value = arg.replace(/\bDEFAULT\b[\s\S]*$/i, '').replace(/\s*=\s*[\s\S]*$/, '').trim();
     if (declaration) value = value.replace(/^(?:IN|OUT|INOUT|VARIADIC)\s+/i, '').replace(/^(?:p_[A-Za-z0-9_]*|arg_[A-Za-z0-9_]*)\s+/i, '');
@@ -108,16 +110,18 @@ function canonicalSignature(name, args, declaration = false, quoted = false) {
 
 function aclEvents(sql) {
   const events = [];
-  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
   for (const match of sql.matchAll(re)) {
     const open = match.index + match[0].length - 1;
     const args = balanced(sql, open);
     if (!args) return null;
     const roles = /^\s+(?:FROM|TO)\s+([^;]+);/i.exec(sql.slice(args.end));
     if (!roles || /\b(?:WITH|GROUP|ROLE)\b/i.test(roles[1])) return null;
+    const signature = canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2]));
+    if (!signature) return null;
     const roleNames = roles[1].split(',').map((role) => role.trim());
     if (roleNames.some((role) => role.includes('"'))) return null;
-    events.push({ index: match.index, action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2])), roles: roleNames.map((value) => {
+    events.push({ index: match.index, action: match[1].toLowerCase(), signature, roles: roleNames.map((value) => {
       if (/^public$/i.test(value)) return 'public';
       if (/^anon$/i.test(value)) return 'anon';
       return null;
@@ -132,12 +136,14 @@ function aclEvents(sql) {
 
 function dropRoutineEvents(sql) {
   const events = [];
-  const re = /\bDROP\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:IF\s+EXISTS\s+)?(?:"?public"?\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+  const re = /\bDROP\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:IF\s+EXISTS\s+)?(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
   for (const match of sql.matchAll(re)) {
     const open = match.index + match[0].length - 1;
     const args = balanced(sql, open);
     if (!args) return null;
-    events.push({ index: match.index, signature: canonicalSignature(match[1] || match[2], args.text, false, Boolean(match[1])) });
+    const signature = canonicalSignature(match[1] || match[2], args.text, false, Boolean(match[1]));
+    if (!signature) return null;
+    events.push({ index: match.index, signature });
   }
   if ((sql.match(/\bDROP\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b/gi) || []).length !== events.length) return null;
   return events;
@@ -166,10 +172,12 @@ export function securityDefinerMissingAnonRevokes(sql) {
     const end = executable.indexOf(';', args.end);
     const name = declaration[1] || declaration[2];
     const definition = executable.slice(declaration.index, end === -1 ? executable.length : end);
+    const signature = canonicalSignature(name, args.text, kind === 'create', Boolean(declaration[1]));
+    if (!signature) return ['unparseable-security-definer-sql'];
     if (/\bSECURITY\s+DEFINER\b/i.test(definition)) lifecycle.push({
       index: declaration.index,
       action: 'declare',
-      signature: canonicalSignature(name, args.text, kind === 'create', Boolean(declaration[1])),
+      signature,
       name: name.replaceAll('""', '"'),
     });
   }

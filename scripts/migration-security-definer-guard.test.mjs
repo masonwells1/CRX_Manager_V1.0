@@ -76,6 +76,15 @@ test('fails closed for quoted grant recipients and dynamic DO-block ACL changes'
   assert.deepEqual(securityDefinerMissingAnonRevokes(quotedGrant), ['unparseable-security-definer-sql']);
   const dynamicGrant = `${safe}\nDO $$ BEGIN EXECUTE 'GRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon'; END; $$;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(dynamicGrant), ['unparseable-security-definer-sql']);
+  const languageFirst = `${safe}\nDO LANGUAGE plpgsql $$ BEGIN EXECUTE 'GRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon'; END; $$;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(languageFirst), ['unparseable-security-definer-sql']);
+});
+
+test('fails closed for quoted schema and argument-type identities', () => {
+  const schemaDecoy = `${definition()}\nREVOKE ALL ON FUNCTION "PUBLIC".post_return_credit(uuid) FROM PUBLIC, anon;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(schemaDecoy), ['unparseable-security-definer-sql']);
+  const quotedType = 'CREATE FUNCTION public.type_decoy("Domain") RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public.type_decoy("Domain") FROM PUBLIC, anon;';
+  assert.deepEqual(securityDefinerMissingAnonRevokes(quotedType), ['unparseable-security-definer-sql']);
 });
 
 test('does not demand an anon revoke for invoker-security functions', () => {
