@@ -2,7 +2,8 @@
 // inherited PUBLIC and CRX's explicit anon EXECUTE grants. Unknown syntax and
 // unterminated SQL fail closed rather than becoming an ACL bypass.
 export const CREATE_FN_ANY = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
-const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+const SECURITY_DEFINER_ALTER = /ALTER\s+FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
 
 function blank(out, count) { return out + ' '.repeat(count); }
 
@@ -77,25 +78,26 @@ function splitArgs(args) {
   return parts;
 }
 
-function canonicalSignature(name, args, declaration = false) {
+function canonicalSignature(name, args, declaration = false, quoted = false) {
   const types = splitArgs(args).map((arg) => {
     let value = arg.replace(/\bDEFAULT\b[\s\S]*$/i, '').replace(/\s*=\s*[\s\S]*$/, '').trim();
     if (declaration) value = value.replace(/^(?:IN|OUT|INOUT|VARIADIC)\s+/i, '').replace(/^(?:p_[A-Za-z0-9_]*|arg_[A-Za-z0-9_]*)\s+/i, '');
     return value.replace(/\s+/g, ' ').replaceAll('"', '').toLowerCase();
   });
-  return `${name.toLowerCase()}(${types.join(',')})`;
+  const canonicalName = quoted ? `quoted:${name.replaceAll('""', '"')}` : `bare:${name.toLowerCase()}`;
+  return `${canonicalName}(${types.join(',')})`;
 }
 
 function aclEvents(sql) {
   const events = [];
-  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
+  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+FUNCTION\s+(?:"?public"?\s*\.\s*)?(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
   for (const match of sql.matchAll(re)) {
     const open = match.index + match[0].length - 1;
     const args = balanced(sql, open);
     if (!args) return null;
     const roles = /^\s+(?:FROM|TO)\s+([^;]+);/i.exec(sql.slice(args.end));
     if (!roles || /\b(?:WITH|GROUP|ROLE)\b/i.test(roles[1])) return null;
-    events.push({ action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text), roles: roles[1].split(',').map((r) => r.trim().replaceAll('"', '').toLowerCase()) });
+    events.push({ action: match[1].toLowerCase(), signature: canonicalSignature(match[2] || match[3], args.text, false, Boolean(match[2])), roles: roles[1].split(',').map((r) => r.trim().replaceAll('"', '').toLowerCase()) });
   }
   // Schema-wide grants, default privileges, and unfamiliar GRANT/REVOKE forms
   // can restore effective execution without appearing in a function-specific
@@ -107,15 +109,19 @@ function aclEvents(sql) {
 export function securityDefinerMissingAnonRevokes(sql) {
   const executable = executableSql(sql);
   if (executable === null) return ['unparseable-security-definer-sql'];
-  const declarations = [...executable.matchAll(SECURITY_DEFINER_CREATE)];
+  const declarations = [
+    ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
+    ...executable.matchAll(SECURITY_DEFINER_ALTER).map((match) => ({ match, kind: 'alter' })),
+  ].sort((a, b) => a.match.index - b.match.index);
   const required = new Map();
   for (let index = 0; index < declarations.length; index++) {
-    const declaration = declarations[index];
+    const { match: declaration, kind } = declarations[index];
     const args = balanced(executable, declaration.index + declaration[0].length - 1);
     if (!args) return ['unparseable-security-definer-sql'];
-    const end = declarations[index + 1]?.index ?? executable.length;
+    const end = executable.indexOf(';', args.end);
     const name = declaration[1] || declaration[2];
-    if (/\bSECURITY\s+DEFINER\b/i.test(executable.slice(declaration.index, end))) required.set(canonicalSignature(name, args.text, true), name);
+    const definition = executable.slice(declaration.index, end === -1 ? executable.length : end);
+    if (/\bSECURITY\s+DEFINER\b/i.test(definition)) required.set(canonicalSignature(name, args.text, kind === 'create', Boolean(declaration[1])), name.replaceAll('""', '"'));
   }
   const events = aclEvents(executable);
   if (events === null) return ['unparseable-security-definer-sql'];

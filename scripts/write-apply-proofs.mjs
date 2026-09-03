@@ -82,6 +82,25 @@ mkdirSync(stateDir, { recursive: true });
 // a hands-free apply pass the two-reviewer requirement on say-so).
 const REQUIRED_REVIEWERS = ['rls-security-reviewer', 'migration-drift-reviewer'];
 
+function protectedGitEnv() {
+  const env = {};
+  for (const name of ['SystemRoot', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR']) {
+    if (process.env[name]) env[name] = process.env[name];
+  }
+  env.GIT_NO_REPLACE_OBJECTS = '1';
+  env.GIT_CONFIG_NOSYSTEM = '1';
+  env.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  env.GIT_TERMINAL_PROMPT = '0';
+  env.GCM_INTERACTIVE = 'never';
+  env.GIT_OPTIONAL_LOCKS = '0';
+  env.GIT_ATTR_NOSYSTEM = '1';
+  const systemPath = process.platform === 'win32'
+    ? path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows', 'System32')
+    : '/usr/bin:/bin';
+  env.PATH = `${path.dirname(fixedGitExecutable())}${path.delimiter}${systemPath}`;
+  return env;
+}
+
 // The candidate must never supply the instructions that decide whether it is
 // safe. Read both reviewer charters from protected origin/main with the same
 // fixed Git binary used by the push-proof snapshotter. Reviewer children run
@@ -91,7 +110,7 @@ function trustedReviewerPolicy() {
   const git = fixedGitExecutable();
   const base = spawnSync(git, ['--no-replace-objects', 'rev-parse', 'origin/main^{commit}'], {
     cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
-    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_NO_REPLACE_OBJECTS: '1' },
+    env: protectedGitEnv(),
   });
   const commit = String(base.stdout || '').trim();
   if (base.status !== 0 || !/^[a-f0-9]{40}$/i.test(commit)) throw new Error('could not resolve protected origin/main reviewer policy');
@@ -100,7 +119,7 @@ function trustedReviewerPolicy() {
     const relative = `.claude/agents/${reviewer}.md`;
     const result = spawnSync(git, ['--no-replace-objects', 'show', `${commit}:${relative}`], {
       cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
-      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_NO_REPLACE_OBJECTS: '1' },
+      env: protectedGitEnv(),
     });
     if (result.status !== 0 || !result.stdout) throw new Error(`could not read protected reviewer charter ${relative}`);
     charters.set(reviewer, String(result.stdout));
@@ -166,7 +185,6 @@ function extractTsDeclaration(ts, name) {
 // qualified forms: `foo(`, `public.foo(`, and `"public"."foo"(`. A migration can
 // use all three repository-supported spellings. The trailing parenthesis keeps an
 // unrelated schema-qualified declaration from being mistaken for an unqualified one.
-const CREATE_FN_LINE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/i;
 
 function createFnRegexFor(name) {
   return new RegExp(
@@ -179,12 +197,6 @@ for (const name of names) {
     console.error(`invalid migration basename: ${JSON.stringify(name)} — pass one migration name without a path or .sql suffix.`);
     process.exit(1);
   }
-}
-
-function functionInvocationRegex(name) {
-  // The leading boundary rejects another schema (for example `private.foo(...)`)
-  // while accepting an unqualified public call, `public.foo(...)`, and quoted SQL.
-  return new RegExp(`(?:^|[^\\w.])(?:"?public"?\\s*\\.\\s*)?"?${name}"?\\s*\\(`, 'i');
 }
 
 function frontendRpcCallSites(name, snapshot) {
@@ -303,7 +315,6 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
   // tell them apart if the bundle shows the grants AND the calling function's guard
   // prologue. State facts only — never a suggested verdict.
   if (fnNames.length) {
-    const allFiles = snapshot.paths('supabase/migrations/', (relative) => relative.endsWith('.sql'));
     const sections = [];
     for (const name of fnNames) {
       const lines = [];
@@ -318,46 +329,13 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
         'the live posture from these lines alone.',
       );
       lines.push(grants.length ? grants.map((l) => '  ' + l.trim()).join('\n') : '  (none in this file)');
-      // (b) Call sites in OTHER migrations, newest first, with the calling function
-      //     and that function's guard prologue.
-      const sites = [];
-      for (const file of [...allFiles].reverse()) {
-        const text = snapshot.text(file);
-        const fileLines = text.split(/\r?\n/);
-        for (let i = 0; i < fileLines.length; i += 1) {
-          const line = fileLines[i];
-          if (!functionInvocationRegex(name).test(line)) continue;
-          // Skip catalog assertions and DDL — they are not invocations.
-          if (/regprocedure|has_function_privilege|pg_proc|pg_get_|^\s*(REVOKE|GRANT|ALTER|DROP|CREATE)\b/i.test(line)) continue;
-          // Walk back to the enclosing function definition.
-          let caller = null;
-          for (let j = i; j >= 0; j -= 1) {
-            const m = CREATE_FN_LINE.exec(fileLines[j]);
-            if (m) { caller = { name: m[1], at: j }; break; }
-          }
-          if (!caller) continue;
-          // The guard prologue: the first lines after BEGIN, where actor/role checks live.
-          let begin = -1;
-          for (let j = caller.at; j < Math.min(fileLines.length, caller.at + 200); j += 1) {
-            if (/^\s*BEGIN\s*$/.test(fileLines[j])) { begin = j; break; }
-          }
-          const declare = fileLines.slice(caller.at, begin > 0 ? begin : caller.at + 1)
-            .filter((l) => /v_actor|auth\.uid\(\)/.test(l));
-          const prologue = begin > 0 ? fileLines.slice(begin, begin + 12) : [];
-          sites.push([
-            `  call site: ${path.basename(file)}:${i + 1}`,
-            `    inside function: public.${caller.name}`,
-            `    invocation: ${line.trim()}`,
-            declare.length ? `    actor binding: ${declare.map((l) => l.trim()).join(' | ')}` : '    actor binding: (none found in DECLARE)',
-            prologue.length ? '    prologue after BEGIN:\n' + prologue.map((l) => '      ' + l).join('\n') : '',
-          ].filter(Boolean).join('\n'));
-        }
-        // No cap: a silent truncation reads to the reviewer as "these are all the
-        // callers", which is exactly how an unsafe second or third caller can be
-        // misclassified as private (Codex H1, 2026-09-01).
-      }
-      lines.push(`CALL SITES of ${name} across migrations (newest first):`);
-      lines.push(sites.length ? sites.join('\n') : '  (no invocation found — it may be called only from application code or not at all)');
+      // (b) Internal-caller evidence used to be found by raw line matching. That
+      // treated comments and strings as executable calls and could misclassify an
+      // RPC as private. Until this producer has a full PostgreSQL body parser,
+      // withhold that claim entirely: unknown callers are a blocker, never proof
+      // of a safe authenticated wrapper.
+      lines.push(`CALL SITES of ${name} across migrations:`);
+      lines.push('  (intentionally unavailable — raw SQL text cannot prove executable caller bodies; treat exposure as unverified)');
       const frontendSites = frontendRpcCallSites(name, snapshot);
       lines.push(`FRONTEND RPC CALL SITES of ${name} in src/:`);
       lines.push(frontendSites.length ? frontendSites.join('\n') : '  (no frontend RPC call found)');

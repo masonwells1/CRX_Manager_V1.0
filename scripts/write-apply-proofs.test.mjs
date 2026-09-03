@@ -28,12 +28,12 @@ test('evidence preserves unqualified functions and their frontend RPC callers', 
   assert.match(evidence, /frontend RPC: src\/components\/receiving\/QuickReceivePanel\.tsx/);
 });
 
-test('evidence retains every caller in a migration file', () => {
+test('evidence fails closed rather than treating raw SQL text as executable callers', () => {
   const evidence = printedEvidence('20260812115237_enforce_below_cost_admin_approval');
 
   assert.match(evidence, /CALL SITES of _begin_below_cost_money_write across migrations/);
-  assert.match(evidence, /inside function: public\.create_direct_order/);
-  assert.match(evidence, /inside function: public\.duplicate_quote/);
+  assert.match(evidence, /intentionally unavailable/);
+  assert.doesNotMatch(evidence, /inside function: public\.create_direct_order/);
 });
 
 test('proof production fails closed when SECURITY DEFINER lacks an anon revoke', () => {

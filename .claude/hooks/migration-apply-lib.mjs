@@ -31,6 +31,7 @@ import { sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.m
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
 import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
+import { fixedGitExecutable } from "../../scripts/write-codex-push-proof.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 export const REQUIRED_CODEX_EFFORT = "high";
@@ -48,6 +49,25 @@ export const MAIN_REF_MAX_AGE_MS = PROOF_MAX_AGE_MS;
 // timeouts are therefore a fail-open on a live migration apply, not a courtesy.
 // (CodeRabbit, PR #502.)
 export const GIT_CALL_TIMEOUT_MS = 1_500;
+
+function protectedGitEnv() {
+  const env = {};
+  for (const name of ["SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR"]) {
+    if (process.env[name]) env[name] = process.env[name];
+  }
+  env.GIT_NO_REPLACE_OBJECTS = "1";
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  env.GIT_TERMINAL_PROMPT = "0";
+  env.GCM_INTERACTIVE = "never";
+  env.GIT_OPTIONAL_LOCKS = "0";
+  env.GIT_ATTR_NOSYSTEM = "1";
+  const systemPath = process.platform === "win32"
+    ? path.join(env.SystemRoot || env.WINDIR || "C:\\Windows", "System32")
+    : "/usr/bin:/bin";
+  env.PATH = `${path.dirname(fixedGitExecutable())}${path.delimiter}${systemPath}`;
+  return env;
+}
 
 /**
  * Milliseconds since this checkout last fetched from origin, or null when that
@@ -873,8 +893,8 @@ export function evaluateMigrationApply({
     });
   } catch { /* unreadable active evidence is never a valid proof */ }
   if (reviewerPolicyCommit === undefined) try {
-    protectedReviewerPolicyCommit = execFileSync("git", ["rev-parse", "origin/main^{commit}"], {
-      cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"],
+    protectedReviewerPolicyCommit = execFileSync(fixedGitExecutable(), ["--no-replace-objects", "rev-parse", "origin/main^{commit}"], {
+      cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], env: protectedGitEnv(),
     }).trim();
   } catch { /* an unverifiable protected policy never authorizes an apply */ }
   const freshCleanProofNames = [];

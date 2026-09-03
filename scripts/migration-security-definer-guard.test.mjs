@@ -37,6 +37,15 @@ test('fails closed for quoted names and unsupported ACL forms that can restore e
   );
 });
 
+test('tracks ALTER FUNCTION SECURITY DEFINER and keeps quoted identities distinct', () => {
+  const altered = 'ALTER FUNCTION public.escalate(uuid) SECURITY DEFINER;';
+  assert.deepEqual(securityDefinerMissingAnonRevokes(altered), ['escalate']);
+  const quoted = 'CREATE FUNCTION public."Case"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."case"() FROM PUBLIC, anon;';
+  assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['Case']);
+  const escaped = 'CREATE FUNCTION public."danger""name"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."danger""name"() FROM PUBLIC, anon;';
+  assert.deepEqual(securityDefinerMissingAnonRevokes(escaped), []);
+});
+
 test('does not demand an anon revoke for invoker-security functions', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.safe_fn() RETURNS void LANGUAGE sql AS $$ SELECT; $$;'), []);
 });
