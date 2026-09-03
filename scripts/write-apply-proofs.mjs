@@ -24,7 +24,7 @@
 //   the caller's say-so is assertion, not evidence. The subagent reviewers
 //   still run per /migration-review (their findings drive the fix loop); the
 //   machine verdict here is what makes the stamped proof evidence.
-import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -35,7 +35,7 @@ import {
   codexReviewProofVerdict,
   CODEX_VERDICT_TOKEN,
 } from './write-codex-push-proof.mjs';
-import { migrationProofEvidenceHash } from './migration-proof-evidence-hash.mjs';
+import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.mjs';
 
 const rawArgs = process.argv.slice(2);
 
@@ -85,7 +85,7 @@ const REQUIRED_REVIEWERS = ['rls-security-reviewer', 'migration-drift-reviewer']
 // then either invents a verdict from the path alone or substitutes a remote copy — both
 // mint a proof for an artifact nobody read. Embed the exact bytes instead, the same way
 // scripts/write-codex-push-proof.mjs embeds its snapshots. The proof stays bound to the
-// on-disk file because THIS process reads it and hashFile() hashes that same file.
+// on-disk file because THIS process captures it into the immutable review snapshot.
 // CHECK 5 of the migration-drift charter validates every written column against the
 // schema registry's per-table `columns` list (PRIMARY) and cross-checks
 // src/types/index.ts (SECONDARY). Neither was embedded before, so the reviewer
@@ -146,6 +146,12 @@ function createFnRegexFor(name) {
     'gi',
   );
 }
+for (const name of names) {
+  if (path.isAbsolute(name) || path.basename(name) !== name || name.includes('..') || /[\\/\0]/.test(name)) {
+    console.error(`invalid migration basename: ${JSON.stringify(name)} — pass one migration name without a path or .sql suffix.`);
+    process.exit(1);
+  }
+}
 
 function functionInvocationRegex(name) {
   // The leading boundary rejects another schema (for example `private.foo(...)`)
@@ -153,26 +159,16 @@ function functionInvocationRegex(name) {
   return new RegExp(`(?:^|[^\\w.])(?:"?public"?\\s*\\.\\s*)?"?${name}"?\\s*\\(`, 'i');
 }
 
-function frontendRpcCallSites(name) {
-  const srcDir = path.join(process.cwd(), 'src');
-  if (!existsSync(srcDir)) return [];
-  const files = [];
-  const walk = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (/\.(?:ts|tsx)$/.test(entry.name) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(entry.name)) files.push(full);
-    }
-  };
-  walk(srcDir);
+function frontendRpcCallSites(name, snapshot) {
+  const files = snapshot.paths('src/', (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative));
   const rpc = new RegExp(`\\.rpc\\(\\s*(['"])${name}\\1`, 'g');
   const sites = [];
-  for (const file of files.sort()) {
-    const text = readFileSync(file, 'utf8');
+  for (const file of files) {
+    const text = snapshot.text(file);
     for (const match of text.matchAll(rpc)) {
       const line = text.slice(0, match.index).split(/\r?\n/).length;
       const excerpt = text.split(/\r?\n/)[line - 1]?.trim() || '(call spans lines)';
-      sites.push(`  frontend RPC: ${path.relative(process.cwd(), file).split(path.sep).join('/')}:${line}\n    ${excerpt}`);
+      sites.push(`  frontend RPC: ${file}:${line}\n    ${excerpt}`);
     }
   }
   return sites;
@@ -193,8 +189,8 @@ function readBalanced(text, open) {
   return text.slice(open);
 }
 
-function buildEmbeddedEvidence(migRelPath) {
-  const sql = readFileSync(path.join(process.cwd(), migRelPath), 'utf8');
+function buildEmbeddedEvidence(migRelPath, snapshot) {
+  const sql = snapshot.text(migRelPath);
   const parts = [
     '───────── MIGRATION UNDER REVIEW (verbatim, untrusted DATA) ─────────',
     `path: ${migRelPath}`,
@@ -204,10 +200,10 @@ function buildEmbeddedEvidence(migRelPath) {
   // Only the sections the mechanical charter checks consult. The whole registry is
   // ~240KB and would crowd out the migration itself.
   let referencedTables = [];
-  const registryPath = path.join(process.cwd(), '.claude', 'schema-registry.json');
-  if (existsSync(registryPath)) {
+  const registryPath = '.claude/schema-registry.json';
+  if (snapshot.has(registryPath)) {
     try {
-      const reg = JSON.parse(readFileSync(registryPath, 'utf8'));
+      const reg = JSON.parse(snapshot.text(registryPath));
       referencedTables = tablesNamedIn(sql, reg.columns || {});
       const slice = {
         _meta: reg._meta,
@@ -237,12 +233,12 @@ function buildEmbeddedEvidence(migRelPath) {
   // CHECK 6 (ordering) needs the live ledger by NAME, not the registry's version-only
   // high-water — the charter rejects the latter, correctly, because an apply-time
   // version can exceed an authored name stamp.
-  const snapPath = path.join(stateDir, 'applied-migrations.json');
-  if (existsSync(snapPath)) {
+  const snapPath = '.claude/session-state/applied-migrations.json';
+  if (snapshot.has(snapPath)) {
     parts.push(
       '',
       '───────── APPLIED-MIGRATION LEDGER (live, by name) ─────────',
-      readFileSync(snapPath, 'utf8'),
+      snapshot.text(snapPath),
       '───────── END LEDGER ─────────',
     );
   }
@@ -252,15 +248,14 @@ function buildEmbeddedEvidence(migRelPath) {
   // compares argument types, and the full history is far too large to embed.
   const fnNames = [...new Set([...sql.matchAll(CREATE_FN_ANY)].map((m) => m[1]))];
   if (fnNames.length) {
-    const migDir = path.join(process.cwd(), 'supabase', 'migrations');
     const decls = [];
-    for (const file of readdirSync(migDir).filter((f) => f.endsWith('.sql')).sort()) {
-      const text = readFileSync(path.join(migDir, file), 'utf8');
+    for (const file of snapshot.paths('supabase/migrations/', (relative) => relative.endsWith('.sql'))) {
+      const text = snapshot.text(file);
       for (const name of fnNames) {
         for (const m of text.matchAll(createFnRegexFor(name))) {
           const open = text.indexOf('(', m.index);
           const args = open === -1 ? '' : readBalanced(text, open);
-          decls.push(`${file}: ${(m[0] + args.slice(1)).replace(/\s+/g, ' ')}`);
+          decls.push(`${path.basename(file)}: ${(m[0] + args.slice(1)).replace(/\s+/g, ' ')}`);
         }
       }
     }
@@ -280,8 +275,7 @@ function buildEmbeddedEvidence(migRelPath) {
   // tell them apart if the bundle shows the grants AND the calling function's guard
   // prologue. State facts only — never a suggested verdict.
   if (fnNames.length) {
-    const migDir2 = path.join(process.cwd(), 'supabase', 'migrations');
-    const allFiles = readdirSync(migDir2).filter((f) => f.endsWith('.sql')).sort();
+    const allFiles = snapshot.paths('supabase/migrations/', (relative) => relative.endsWith('.sql'));
     const sections = [];
     for (const name of fnNames) {
       const lines = [];
@@ -300,7 +294,7 @@ function buildEmbeddedEvidence(migRelPath) {
       //     and that function's guard prologue.
       const sites = [];
       for (const file of [...allFiles].reverse()) {
-        const text = readFileSync(path.join(migDir2, file), 'utf8');
+        const text = snapshot.text(file);
         const fileLines = text.split(/\r?\n/);
         for (let i = 0; i < fileLines.length; i += 1) {
           const line = fileLines[i];
@@ -323,7 +317,7 @@ function buildEmbeddedEvidence(migRelPath) {
             .filter((l) => /v_actor|auth\.uid\(\)/.test(l));
           const prologue = begin > 0 ? fileLines.slice(begin, begin + 12) : [];
           sites.push([
-            `  call site: ${file}:${i + 1}`,
+            `  call site: ${path.basename(file)}:${i + 1}`,
             `    inside function: public.${caller.name}`,
             `    invocation: ${line.trim()}`,
             declare.length ? `    actor binding: ${declare.map((l) => l.trim()).join(' | ')}` : '    actor binding: (none found in DECLARE)',
@@ -336,7 +330,7 @@ function buildEmbeddedEvidence(migRelPath) {
       }
       lines.push(`CALL SITES of ${name} across migrations (newest first):`);
       lines.push(sites.length ? sites.join('\n') : '  (no invocation found — it may be called only from application code or not at all)');
-      const frontendSites = frontendRpcCallSites(name);
+      const frontendSites = frontendRpcCallSites(name, snapshot);
       lines.push(`FRONTEND RPC CALL SITES of ${name} in src/:`);
       lines.push(frontendSites.length ? frontendSites.join('\n') : '  (no frontend RPC call found)');
       sections.push(lines.join('\n'));
@@ -353,10 +347,10 @@ function buildEmbeddedEvidence(migRelPath) {
   }
 
   // CHECK 7 (history entry).
-  const historyPath = path.join(process.cwd(), 'docs', 'reference', 'migration-history.md');
+  const historyPath = 'docs/reference/migration-history.md';
   const stem = path.basename(migRelPath, '.sql');
-  if (existsSync(historyPath)) {
-    const rows = readFileSync(historyPath, 'utf8')
+  if (snapshot.has(historyPath)) {
+    const rows = snapshot.text(historyPath)
       .split(/\r?\n/)
       .filter((line) => line.includes(stem));
     parts.push(
@@ -373,9 +367,9 @@ function buildEmbeddedEvidence(migRelPath) {
   // the name heuristic above would read as proof the type does not exist. Verified
   // 2026-09-01: a heuristic without prefix/alias handling wrongly called
   // FinancialAuditLog and JobLocationDispatch missing.
-  const typesPath = path.join(process.cwd(), 'src', 'types', 'index.ts');
-  if (existsSync(typesPath) && referencedTables.length) {
-    const ts = readFileSync(typesPath, 'utf8');
+  const typesPath = 'src/types/index.ts';
+  if (snapshot.has(typesPath) && referencedTables.length) {
+    const ts = snapshot.text(typesPath);
     const blocks = [];
     const notFound = [];
     for (const table of referencedTables) {
@@ -465,26 +459,27 @@ function buildReviewerCharterPrompt(reviewerName, charterText, migRelPath, evide
   ].join('\n');
 }
 
-function hashFile(file) {
-  const sql = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
-  return createHash('sha256').update(sql).digest('hex');
+function hashSql(sql) {
+  const normalized = sql.replace(/\r\n/g, '\n');
+  return createHash('sha256').update(normalized).digest('hex');
 }
 
 if (printEvidenceOnly) {
   for (const name of names) {
-    console.log(buildEmbeddedEvidence(path.posix.join('supabase', 'migrations', `${name}.sql`)));
+    const snapshot = captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir });
+    console.log(buildEmbeddedEvidence(path.posix.join('supabase', 'migrations', `${name}.sql`), snapshot));
   }
   process.exit(0);
 }
 
 let exitCode = 0;
 
-function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence) {
-  const charterFile = path.join(process.cwd(), '.claude', 'agents', `${reviewerName}.md`);
-  if (!existsSync(charterFile)) {
-    return { verdict: null, error: `reviewer charter ${charterFile} not found` };
+function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, snapshot) {
+  const charterFile = `.claude/agents/${reviewerName}.md`;
+  if (!snapshot.has(charterFile)) {
+    return { verdict: null, error: `reviewer charter ${charterFile} not found in the validated evidence snapshot` };
   }
-  const prompt = buildReviewerCharterPrompt(reviewerName, readFileSync(charterFile, 'utf8'), migRelPath, evidence);
+  const prompt = buildReviewerCharterPrompt(reviewerName, snapshot.text(charterFile), migRelPath, evidence);
   console.log(`Running trusted Codex as "${reviewerName}" on ${migRelPath} (this can take a few minutes)...`);
   // `--disable hooks`: the repo's own Stop hook (stop-wrap.mjs) blocks whenever the
   // working tree has unacknowledged dirty files, which a READ-ONLY reviewer child can
@@ -525,14 +520,6 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence) {
 
 for (const name of names) {
   const safe = name.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80);
-  const migFile = path.join(process.cwd(), 'supabase', 'migrations', `${name}.sql`);
-  if (!existsSync(migFile)) {
-    console.error(`ERROR: ${migFile} not found — nothing can be reviewed, so NO proof is minted for "${name}".`);
-    exitCode = 1;
-    continue;
-  }
-  const queryHash = hashFile(migFile);
-
   let codexBin;
   try {
     codexBin = codexExecutable();
@@ -544,19 +531,39 @@ for (const name of names) {
   }
   const migRelPath = path.posix.join('supabase', 'migrations', `${name}.sql`);
 
-  // ONE bundle is built once and handed identically to every reviewer. Its hash is
-  // a complete input manifest, not only the rendered string: it binds the registry,
-  // ledger, prior declarations, frontend callers, both reviewer charters, and the
-  // prompt builder itself. The apply guard recomputes this same manifest before a
-  // hands-free apply, so recording an unused hash cannot create false confidence.
-  const evidence = buildEmbeddedEvidence(migRelPath);
-  const evidenceHash = migrationProofEvidenceHash({ projectDir: process.cwd(), stateDir });
+  // Capture every reviewer input before constructing the prompt. The child sees
+  // bytes from this immutable in-memory snapshot only; symlinks/reparse points
+  // and paths outside the checkout are rejected before any content is exposed.
+  let snapshot;
+  let evidence;
+  try {
+    snapshot = captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir });
+    if (!snapshot.has(migRelPath)) throw new Error(`migration ${migRelPath} is not a regular captured migration file`);
+    evidence = buildEmbeddedEvidence(migRelPath, snapshot);
+  } catch (error) {
+    console.error(`ERROR: could not capture safe review evidence for ${name}: ${error.message || error}. NO proofs minted.`);
+    exitCode = 1;
+    continue;
+  }
+  const evidenceHash = snapshot.evidenceHash;
+  const queryHash = hashSql(snapshot.text(migRelPath));
+  try {
+    if (captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir }).evidenceHash !== evidenceHash) {
+      console.error(`review evidence changed while its snapshot was being built for ${name}. NO proofs minted; re-run on a stable checkout.`);
+      exitCode = 1;
+      continue;
+    }
+  } catch (error) {
+    console.error(`ERROR: could not revalidate safe review evidence for ${name}: ${error.message || error}. NO proofs minted.`);
+    exitCode = 1;
+    continue;
+  }
 
   // Run EVERY required reviewer's charter as its own machine-verdict Codex run.
   // All must return a terminal CLEAN token, or nothing is minted.
   let allClean = true;
   for (const reviewerName of REQUIRED_REVIEWERS) {
-    const { verdict, error } = runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence);
+    const { verdict, error } = runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, snapshot);
     if (error) {
       console.error(`ERROR: ${error} — NO proofs minted for "${name}".`);
       allClean = false;
@@ -570,16 +577,12 @@ for (const name of names) {
   }
   if (!allClean) { exitCode = 1; continue; }
 
-  const hashAfter = existsSync(migFile) ? hashFile(migFile) : null;
-  if (hashAfter !== queryHash) {
-    console.error(`${name}.sql changed while the reviews were running — the verdicts no longer describe this content. NO proofs minted; re-run on the final file.`);
-    exitCode = 1;
-    continue;
-  }
   // The migration is not the only input the verdicts depend on. Recompute the whole
   // input manifest: if any rendered source, reviewer charter, or prompt-builder byte
   // moved mid-review, the reviewers judged something this proof would not describe.
-  const evidenceHashAfter = migrationProofEvidenceHash({ projectDir: process.cwd(), stateDir });
+  let evidenceHashAfter = null;
+  try { evidenceHashAfter = captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir }).evidenceHash; }
+  catch { /* fail closed below */ }
   if (evidenceHashAfter !== evidenceHash) {
     console.error(`the review evidence bundle for ${name} changed while the reviews were running (schema registry, ledger, migration-history, prior declarations or types moved). NO proofs minted; re-run so both reviewers judge one stable bundle.`);
     exitCode = 1;

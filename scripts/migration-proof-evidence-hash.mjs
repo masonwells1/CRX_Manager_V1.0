@@ -1,27 +1,62 @@
-// Deterministic fingerprint of every repository input the migration-proof reviewer
-// can see or that defines how the parent constructs its prompt. This is deliberately
-// a superset of the rendered evidence bundle: a harmless extra invalidates a stale
-// proof, while an omitted input could leave a reviewed prompt silently outdated.
+// Capture and fingerprint every repository input that migration-proof reviewers
+// can see. The capture is the immutable in-memory source of the prompt; the
+// hash is calculated from that same capture, never from a later working-tree read.
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
-function walk(root, predicate) {
-  if (!existsSync(root)) return [];
+const normal = (value) => value.replaceAll('\\', '/');
+
+function contained(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function framed(hash, value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value), 'utf8');
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64BE(BigInt(bytes.length));
+  hash.update(length).update(bytes);
+}
+
+function safeStat(rootReal, full, { optional = false } = {}) {
+  let stat;
+  try { stat = lstatSync(full); }
+  catch (error) {
+    if (optional && error?.code === 'ENOENT') return null;
+    if (error?.code === 'ENOENT') throw new Error(`required migration-proof input is missing: ${full}`);
+    throw error;
+  }
+  if (stat.isSymbolicLink()) throw new Error(`migration-proof input is a symlink or reparse point: ${full}`);
+  const resolved = realpathSync(full);
+  if (!contained(rootReal, resolved)) throw new Error(`migration-proof input resolves outside the checkout: ${full}`);
+  return stat;
+}
+
+function safeWalk(rootReal, root, predicate) {
+  const start = safeStat(rootReal, root, { optional: true });
+  if (!start) return [];
+  if (!start.isDirectory()) throw new Error(`migration-proof evidence path is not a directory: ${root}`);
   const files = [];
   const visit = (dir) => {
+    const stat = safeStat(rootReal, dir);
+    if (!stat.isDirectory()) throw new Error(`migration-proof evidence path is not a directory: ${dir}`);
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) visit(full);
-      else if (predicate(entry.name)) files.push(full);
+      const child = safeStat(rootReal, full);
+      if (child.isDirectory()) visit(full);
+      else if (child.isFile() && predicate(entry.name)) files.push(full);
+      else if (!child.isFile()) throw new Error(`migration-proof evidence contains an unsupported filesystem entry: ${full}`);
     }
   };
   visit(root);
   return files;
 }
 
-export function migrationProofEvidenceHash({ projectDir, stateDir = path.join(projectDir, '.claude', 'session-state') }) {
-  const root = path.resolve(projectDir);
+function collectPaths(root, stateDir) {
+  const rootReal = realpathSync(root);
+  const relativeStateDir = path.relative(root, stateDir);
+  if (!contained(root, stateDir)) throw new Error(`migration-proof state directory is outside the checkout: ${stateDir}`);
   const inputs = new Set([
     '.claude/schema-registry.json',
     '.claude/agents/rls-security-reviewer.md',
@@ -30,27 +65,51 @@ export function migrationProofEvidenceHash({ projectDir, stateDir = path.join(pr
     'src/types/index.ts',
     'scripts/write-apply-proofs.mjs',
     'scripts/migration-proof-evidence-hash.mjs',
+    normal(path.join(relativeStateDir, 'applied-migrations.json')),
   ]);
-  const ledger = path.relative(root, path.join(stateDir, 'applied-migrations.json')).replaceAll('\\', '/');
-  inputs.add(ledger);
-  for (const file of walk(path.join(root, 'supabase', 'migrations'), (name) => name.endsWith('.sql'))) {
-    inputs.add(path.relative(root, file).replaceAll('\\', '/'));
+  for (const file of safeWalk(rootReal, path.join(root, 'supabase', 'migrations'), (name) => name.endsWith('.sql'))) {
+    inputs.add(normal(path.relative(root, file)));
   }
-  for (const file of walk(path.join(root, 'src'), (name) => /\.(?:ts|tsx)$/.test(name) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(name))) {
-    inputs.add(path.relative(root, file).replaceAll('\\', '/'));
+  for (const file of safeWalk(rootReal, path.join(root, 'src'), (name) => /\.(?:ts|tsx)$/.test(name) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(name))) {
+    inputs.add(normal(path.relative(root, file)));
   }
+  return { rootReal, paths: [...inputs].sort() };
+}
 
-  const hash = createHash('sha256');
-  hash.update('CRX_MIGRATION_PROOF_EVIDENCE_INPUTS_V1\0');
-  for (const relative of [...inputs].sort()) {
+export function captureMigrationProofEvidence({ projectDir, stateDir = path.join(projectDir, '.claude', 'session-state') }) {
+  const root = path.resolve(projectDir);
+  const resolvedStateDir = path.resolve(stateDir);
+  const { rootReal, paths } = collectPaths(root, resolvedStateDir);
+  const files = new Map();
+  for (const relative of paths) {
     const full = path.resolve(root, relative);
-    hash.update(relative).update('\0');
-    if (!existsSync(full)) {
-      hash.update('ABSENT\0');
-      continue;
-    }
-    hash.update(readFileSync(full));
-    hash.update('\0');
+    const stat = safeStat(rootReal, full, { optional: true });
+    files.set(relative, stat ? readFileSync(full) : null);
   }
-  return hash.digest('hex');
+  const hash = createHash('sha256');
+  framed(hash, 'CRX_MIGRATION_PROOF_EVIDENCE_INPUTS_V2');
+  for (const relative of paths) {
+    const bytes = files.get(relative);
+    framed(hash, relative);
+    framed(hash, bytes === null ? 'ABSENT' : 'PRESENT');
+    if (bytes !== null) framed(hash, bytes);
+  }
+  const evidenceHash = hash.digest('hex');
+  return {
+    evidenceHash,
+    has(relative) { return files.get(normal(relative)) !== null && files.has(normal(relative)); },
+    text(relative) {
+      const bytes = files.get(normal(relative));
+      if (bytes === undefined || bytes === null) throw new Error(`captured migration-proof input is absent: ${relative}`);
+      return bytes.toString('utf8');
+    },
+    paths(prefix, predicate = () => true) {
+      const normalPrefix = normal(prefix);
+      return paths.filter((relative) => relative.startsWith(normalPrefix) && files.get(relative) !== null && predicate(relative));
+    },
+  };
+}
+
+export function migrationProofEvidenceHash(options) {
+  return captureMigrationProofEvidence(options).evidenceHash;
 }
