@@ -98,7 +98,9 @@ flaw was proven on PR #516 rather than argued. Shipped in #516 (`f2307fbf9`).
 and nothing else. Do **not** add `pull_request_review`, or any other pull-request event, back to
 it — and do not re-litigate this as a missing feature.
 
-**Why.** The job holds `issues: write`. That is only defensible because `pull_request_target`
+**Why.** The job holds write scopes — `issues: write` and, since 2026-09-03, `pull-requests: write`
+(the labels and the one review comment live on a pull request, and GitHub gates those endpoints on
+the *Pull requests* permission; see the 2026-09-03 changelog entry). That is only defensible because `pull_request_target`
 selects the workflow YAML from the DEFAULT BRANCH, so a pull request cannot supply the steps that
 run. `pull_request_review` does not behave that way: it selects the YAML from the PULL REQUEST's
 own ref. Checking out the default branch inside the job does not rescue it, because the step doing

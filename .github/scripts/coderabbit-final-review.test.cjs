@@ -84,6 +84,55 @@ test('no pull-request event other than pull_request_target triggers this privile
   );
 });
 
+// The gate writes labels and one comment, and both live on a PULL REQUEST.
+// GitHub gates `/issues/{n}/labels` on the **Pull requests** permission when the
+// target number is a pull request, so `issues: write` alone is not enough:
+// `issues.removeLabel` 403s with "Resource not accessible by integration", and
+// removeLabelIfPresent only swallows 404, so the gate throws on every event.
+// That is exactly what happened repo-wide from #516 until 2026-09-03 — the
+// declared permissions read `pull-requests: read`, every run was red, and no
+// candidate was ever reviewed. This test is the hard guard on that regression:
+// downgrading either scope back to `read` must fail here, not in production.
+// It also pins the write surface CLOSED — a new write scope on this privileged
+// `pull_request_target` job has to be added here deliberately.
+test('the gate\'s own label and comment writes are actually granted', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+  const permissionsBlock = workflow.match(/\npermissions:\r?\n([\s\S]*?)\r?\n(?=\S)/);
+  assert.ok(permissionsBlock, 'workflow must declare a top-level `permissions:` block');
+  const scopes = new Map(
+    permissionsBlock[1]
+      .split(/\r?\n/)
+      .filter((line) => /^ {2}[a-z-]+:/.test(line))
+      .map((line) => {
+        const [name, level] = line.trim().split(/:\s*/);
+        return [name, level];
+      }),
+  );
+
+  assert.equal(
+    scopes.get('pull-requests'),
+    'write',
+    'the gate labels and comments on pull requests; `pull-requests: read` makes every '
+    + 'issues.removeLabel/createComment call 403 and fails the gate on every event',
+  );
+  assert.equal(
+    scopes.get('issues'),
+    'write',
+    'label endpoints are issues-namespaced; keep the issues scope writable alongside it',
+  );
+
+  const writeScopes = [...scopes].filter(([, level]) => level === 'write').map(([name]) => name);
+  assert.deepEqual(
+    writeScopes.sort(),
+    ['issues', 'pull-requests'],
+    'this job runs on the privileged pull_request_target trigger; its write surface must '
+    + 'stay confined to the labels and comment it manages',
+  );
+});
+
 test('the gate refuses to run on any event other than pull_request_target', async () => {
   const harness = makeHarness({ eventName: 'pull_request_review', action: 'submitted' });
   const result = await execute(harness);
