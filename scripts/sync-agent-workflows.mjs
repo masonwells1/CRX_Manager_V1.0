@@ -100,15 +100,29 @@ function buildExpected() {
 // named `source-command-*` (normally never, so the list is normally empty), and a
 // stale entry only ever makes the check stricter - a genuine importer directory
 // reusing that exact name fails loudly instead of being exempted.
+// `known` separates the two cases a bare empty result used to conflate:
+//
+//   - NO manifest at all: a real answer. Nothing has been generated yet, so
+//     nothing is owned, and the exemption may apply. `known: true`.
+//   - a manifest that EXISTS but cannot be read or parsed: NOT an answer. The
+//     ownership record is unavailable, not empty. `known: false`.
+//
+// Returning `[]` for both is the same defect this module has now produced three
+// times: a check that cannot determine something answers with the most
+// permissive value, and a corrupt manifest would silently hand every importer
+// directory the exemption. Callers must fail closed on `known: false`.
 function previousManifest(targetRoot = TARGET_ROOT) {
+  const file = path.join(targetRoot, "generated-manifest.json");
+  if (!existsSync(file)) return { managed: [], ownedImporterDirs: [], known: true };
   try {
-    const parsed = JSON.parse(readFileSync(path.join(targetRoot, "generated-manifest.json"), "utf8"));
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
     return {
       managed: Array.isArray(parsed.managed) ? parsed.managed : [],
       ownedImporterDirs: Array.isArray(parsed.ownedImporterDirs) ? parsed.ownedImporterDirs : [],
+      known: true,
     };
   } catch {
-    return { managed: [], ownedImporterDirs: [] };
+    return { managed: [], ownedImporterDirs: [], known: false };
   }
 }
 
@@ -341,11 +355,17 @@ function checkExpected(expected) {
       previouslyManaged: prior.managed,
       previouslyOwnedDirs: [...durableOwnedImporterDirs()],
       trackedPaths: gitKnown.paths,
-      trackingKnown: gitKnown.known,
+      // The exemption needs BOTH provenance sources to have actually answered.
+      // Either one reporting "unknown" withholds it - see previousManifest()
+      // and gitKnownTargetPaths().
+      trackingKnown: gitKnown.known && prior.known,
     },
   );
   if (!gitKnown.known) {
     console.error("NOTE git could not report which .agents/ paths are tracked; the importer-directory exemption is withheld and any such files are reported as drift.");
+  }
+  if (!prior.known) {
+    console.error("NOTE generated-manifest.json exists but could not be parsed, so the ownership record is unavailable; the importer-directory exemption is withheld and any such files are reported as drift.");
   }
   for (const extra of extras) {
     mismatches.push(`${extra} is not generated from .claude`);

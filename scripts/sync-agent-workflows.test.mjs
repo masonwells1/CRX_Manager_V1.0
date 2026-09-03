@@ -260,6 +260,22 @@ try {
       "when git cannot be consulted, importer paths are reported as drift",
     );
 
+    // (f) The SAME shape, from the other provenance source. A manifest that
+    //     exists but cannot be parsed means the ownership record is
+    //     UNAVAILABLE, not empty; conflating the two would hand a corrupt
+    //     manifest the exemption for every importer directory. checkExpected()
+    //     ands both signals together, so this is the identical withholding.
+    const manifestUnavailable = classifyExtras(["skills/source-command-ship/SKILL.md"], {
+      previouslyOwnedDirs: [],
+      trackingKnown: false, // gitKnown.known && prior.known, with prior unusable
+    });
+    assert.deepEqual(manifestUnavailable.foreignDirs, [], "an unreadable ownership record grants no exemption");
+    assert.deepEqual(
+      manifestUnavailable.extras,
+      ["skills/source-command-ship/SKILL.md"],
+      "a corrupt manifest reports importer paths as drift instead of exempting them",
+    );
+
     // ...and the untracked twin of (c) still passes, so the fix did not simply
     // delete the exemption. An empty tracked list with `known: true` is a real
     // answer - nothing staged yet - and must still exempt.
