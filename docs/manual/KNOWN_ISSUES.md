@@ -4,8 +4,8 @@
 capture records **992 ledger rows**, 985 distinct names, live `max(version)` `20260903124741`, and
 effective ordering high-water **`20260831235900`** (authored name
 `20260831235900_serialize_gauntlet_write_boundaries`). The F06 source migration
-`20260903150000_job_chemicals_persist_driver` is now on `main`; its earlier 2026-09-03 read found
-it not yet applied, so live state must be refreshed before either pending migration is applied.
+`20260903150000_job_chemicals_persist_driver` is now on `main`; the latest read-only 2026-09-03
+check confirms it is still not applied, so it must land before the higher-stamped commission migration.
 The 2026-09-01 reading below is retained as provenance. The two Section 9 AP migrations
 `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
 `20260826222000_correct_ap_aging_due_date_buckets` were applied live on 2026-09-01 under Mason's explicit

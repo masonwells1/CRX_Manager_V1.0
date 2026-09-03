@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -115,6 +115,99 @@ function applySql(source, { allowFailure = false } = {}) {
   const ownsTransaction = /^[ \t]*BEGIN[ \t]*;/mi.test(source);
   const executable = ownsTransaction ? source : `BEGIN;\n${source}\nCOMMIT;`;
   return psql(executable, { allowFailure });
+}
+
+function startPsql(sql) {
+  const child = spawn('docker', [
+    'exec', '-i', NAME, 'psql', '-U', 'postgres', '-d', 'postgres',
+    '-X', '-q', '-v', 'ON_ERROR_STOP=1',
+  ], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stdin.end(sql);
+  return { child, output: () => `${stdout}\n${stderr}` };
+}
+
+async function waitForOutput(handle, token, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!handle.output().includes(token) && Date.now() < deadline) {
+    if (handle.child.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.match(handle.output(), new RegExp(token), `holder did not reach ${token}:\n${handle.output()}`);
+}
+
+async function waitForExit(handle, timeoutMs = 10_000) {
+  if (handle.child.exitCode !== null) return handle.child.exitCode;
+  return await Promise.race([
+    new Promise((resolve) => handle.child.once('exit', resolve)),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('psql holder did not exit')), timeoutMs)),
+  ]);
+}
+
+async function proveWriterLockConflict(candidateSource, expectedToBlock) {
+  const match = candidateSource.match(
+    /LOCK TABLE public\.commission_payments,[\s\S]*?public\.commissions\s+IN ([A-Z ]+) MODE;/,
+  );
+  assert.ok(match, 'candidate lock statement is missing or unparseable');
+  const holder = startPsql(`
+BEGIN;
+LOCK TABLE public.commission_payments,
+           public.commission_payment_items,
+           public.commissions
+  IN ${match[1]} MODE;
+\\echo COMMISSION_HISTORY_LOCK_HELD
+SELECT pg_sleep(2);
+ROLLBACK;
+`);
+  await waitForOutput(holder, 'COMMISSION_HISTORY_LOCK_HELD');
+
+  const writers = [
+    ['commission payment posting', "UPDATE public.commission_payments SET status = 'posted' WHERE false"],
+    ['commission payment-item insertion', 'INSERT INTO public.commission_payment_items (commission_payment_id, commission_id, amount) SELECT NULL, NULL, 0 WHERE false'],
+    ['commission cancellation', "UPDATE public.commissions SET status = 'cancelled' WHERE false"],
+  ];
+  for (const [label, statement] of writers) {
+    const writer = psql(`
+BEGIN;
+SET LOCAL lock_timeout = '400ms';
+${statement};
+ROLLBACK;
+`, { allowFailure: true });
+    const output = `${writer.stdout || ''}\n${writer.stderr || ''}`;
+    if (expectedToBlock) {
+      assert.notEqual(writer.status, 0, `${label} did not block`);
+      assert.match(output, /canceling statement due to lock timeout/, `${label} blocked for the wrong reason:\n${output}`);
+    } else {
+      assert.equal(writer.status, 0, `${label} should not block under weakened lock:\n${output}`);
+    }
+  }
+
+  assert.equal(await waitForExit(holder), 0, `holder failed:\n${holder.output()}`);
+}
+
+function extractFunctionBody(source, functionName) {
+  const declaration = `CREATE OR REPLACE FUNCTION public.${functionName}`;
+  const declarationIndex = source.indexOf(declaration);
+  assert.ok(declarationIndex >= 0, `missing function declaration: ${functionName}`);
+  const delimiter = '$function$';
+  const bodyStart = source.indexOf(delimiter, declarationIndex) + delimiter.length;
+  const bodyEnd = source.indexOf(delimiter, bodyStart);
+  assert.ok(bodyStart >= delimiter.length && bodyEnd > bodyStart, `unterminated function body: ${functionName}`);
+  return source.slice(bodyStart, bodyEnd);
+}
+
+function extractFunctionStatement(source, functionName) {
+  const declaration = `CREATE OR REPLACE FUNCTION public.${functionName}`;
+  const declarationIndex = source.indexOf(declaration);
+  assert.ok(declarationIndex >= 0, `missing function declaration: ${functionName}`);
+  const statementEnd = source.indexOf('$function$;', declarationIndex);
+  assert.ok(statementEnd > declarationIndex, `unterminated function statement: ${functionName}`);
+  return source.slice(declarationIndex, statementEnd + '$function$;'.length);
 }
 
 function applyMigration(local, index) {
@@ -269,6 +362,35 @@ try {
     applyMigration(local, index);
   });
 
+  const candidateSource = readFileSync(MIGRATION_PATH, 'utf8');
+  for (const functionName of [
+    '_void_commission_payment_intent_impl_20260809',
+    'get_commission_balance_report',
+    'get_commission_payment_detail_report',
+    'stamp_commission_cancellation_history',
+  ]) {
+    const body = extractFunctionBody(candidateSource, functionName);
+    console.log(
+      `COMMISSION_HISTORY_CANDIDATE_BODY ${functionName} bytes=${Buffer.byteLength(body)} md5=${createHash('md5').update(body).digest('hex')}`,
+    );
+  }
+  const constraintCatalog = psql(`
+\\pset format unaligned
+\\pset tuples_only on
+SELECT conname || '=' || pg_get_constraintdef(oid)
+  FROM pg_constraint
+ WHERE conname IN (
+   'commissions_cancelled_amount_cents_non_negative_chk',
+   'commissions_cancellation_history_pair_chk',
+   'commission_payments_void_history_chk',
+   'commissions_commission_amount_whole_cents_chk',
+   'commission_payments_total_amount_whole_cents_chk',
+   'commission_payment_items_amount_whole_cents_chk'
+ )
+ ORDER BY conname;
+`);
+  console.log(`COMMISSION_HISTORY_CONSTRAINT_CATALOG\n${constraintCatalog.stdout.trim()}`);
+
   const smoke = psql(readFileSync(SMOKE_PATH, 'utf8'), { allowFailure: true });
   const smokeOutput = `${smoke.stdout || ''}\n${smoke.stderr || ''}`;
   assert.notEqual(smoke.status, 0, 'rollback smoke unexpectedly committed');
@@ -279,7 +401,7 @@ try {
   );
   console.log('COMMISSION_HISTORY_REAL_PATH_PASS create_post_report_void_report rollback=true');
 
-  const candidate = readFileSync(MIGRATION_PATH, 'utf8');
+  const candidate = candidateSource;
   const lockIndex = candidate.indexOf('LOCK TABLE public.commission_payments,');
   const preconditionIndex = candidate.indexOf('DO $precondition$');
   assert.ok(lockIndex >= 0, 'candidate is missing the cheap-window writer lock');
@@ -287,8 +409,94 @@ try {
     lockIndex < preconditionIndex,
     'candidate reads the cheap-window precondition before blocking concurrent writers',
   );
+  await proveWriterLockConflict(candidate, true);
+  console.log('COMMISSION_HISTORY_CONCURRENT_WRITERS_BLOCKED tables=3');
+  const weakenedLock = candidate.replace(
+    'IN SHARE ROW EXCLUSIVE MODE;',
+    'IN ACCESS SHARE MODE;',
+  );
+  assert.notEqual(weakenedLock, candidate, 'lock-mode mutation did not change the candidate');
+  await proveWriterLockConflict(weakenedLock, false);
+  console.log('COMMISSION_HISTORY_MUTATION_REJECTED non_conflicting_lock_mode writers_were_not_blocked');
+
   applySql(candidate);
   console.log('COMMISSION_HISTORY_IDEMPOTENT_REAPPLY_PASS');
+
+  const hotfixedVoid = extractFunctionStatement(
+    candidate.replace(
+      'v_actor := auth.uid();',
+      'v_actor := auth.uid();\n  PERFORM 1; -- MUTATION: marker-preserving hotfix',
+    ),
+    '_void_commission_payment_intent_impl_20260809',
+  );
+  assert.notEqual(
+    hotfixedVoid,
+    extractFunctionStatement(candidate, '_void_commission_payment_intent_impl_20260809'),
+    'void preimage mutation did not change the function',
+  );
+  applySql(hotfixedVoid);
+  expectCandidateFailure(
+    candidate,
+    'COMMISSION_HISTORY_REPLAY_DRIFT: candidate function bodies or trust attributes differ',
+    'marker_preserving_void_hotfix',
+  );
+  applySql(extractFunctionStatement(candidate, '_void_commission_payment_intent_impl_20260809'));
+
+  const partialColumns = `
+BEGIN;
+ALTER TABLE public.commissions DROP COLUMN cancelled_at CASCADE;
+${candidate}
+COMMIT;
+`;
+  expectCandidateFailure(
+    partialColumns,
+    'COMMISSION_HISTORY_SCHEMA_DRIFT: expected none or all four history columns',
+    'partial_four_column_replay',
+  );
+
+  const weakNamedConstraint = `
+BEGIN;
+ALTER TABLE public.commissions DROP CONSTRAINT commissions_commission_amount_whole_cents_chk;
+ALTER TABLE public.commissions
+  ADD CONSTRAINT commissions_commission_amount_whole_cents_chk CHECK (TRUE);
+${candidate}
+COMMIT;
+`;
+  expectCandidateFailure(
+    weakNamedConstraint,
+    'COMMISSION_HISTORY_REPLAY_DRIFT: required CHECK definition differs',
+    'same_named_check_true',
+  );
+
+  psql(`
+CREATE TEMP TABLE commission_money_predicate_probe (
+  amount numeric CHECK (amount IS NULL OR (
+    amount = ROUND(amount, 2)
+    AND amount > '-Infinity'::numeric
+    AND amount < 'Infinity'::numeric
+  ))
+);
+INSERT INTO commission_money_predicate_probe VALUES (10.00);
+DO $money$
+DECLARE
+  v_value numeric;
+BEGIN
+  FOREACH v_value IN ARRAY ARRAY[10.005::numeric, 'NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric]
+  LOOP
+    BEGIN
+      INSERT INTO commission_money_predicate_probe VALUES (v_value);
+      RAISE EXCEPTION 'MONEY_PREDICATE_ACCEPTED_INVALID: %', v_value;
+    EXCEPTION WHEN check_violation THEN
+      NULL;
+    END;
+  END LOOP;
+  IF (SELECT count(*) FROM commission_money_predicate_probe) <> 1 THEN
+    RAISE EXCEPTION 'MONEY_PREDICATE_PROBE_ROWCOUNT';
+  END IF;
+END
+$money$;
+`);
+  console.log('COMMISSION_HISTORY_MONEY_PREDICATE_PASS rejected=10.005,NaN,Infinity,-Infinity');
 
   psql(`
 CREATE FUNCTION public.get_commission_balance_report(p_decoy text)
@@ -328,12 +536,18 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
     candidate,
     'recipient-name mutation did not change the candidate',
   );
-  applySql(mutableRecipientName);
+  applySql([
+    extractFunctionStatement(mutableRecipientName, 'get_commission_balance_report'),
+    extractFunctionStatement(mutableRecipientName, 'get_commission_payment_detail_report'),
+  ].join('\n'));
   expectSmokeFailure(
     'SMOKE_FAIL: mutable profile name rewrote aggregate history',
     'mutable_recipient_name_history',
   );
-  applySql(candidate);
+  applySql([
+    extractFunctionStatement(candidate, 'get_commission_balance_report'),
+    extractFunctionStatement(candidate, 'get_commission_payment_detail_report'),
+  ].join('\n'));
 
   const splitRecipientAggregate = candidate.replace(
     `GROUP BY e.recipient_user_id,
@@ -348,12 +562,12 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
     candidate,
     'recipient-grouping mutation did not change the candidate',
   );
-  applySql(splitRecipientAggregate);
+  applySql(extractFunctionStatement(splitRecipientAggregate, 'get_commission_balance_report'));
   expectSmokeFailure(
     'SMOKE_FAIL: one recipient split into 2 aggregate rows after rename',
     'recipient_name_split_aggregate',
   );
-  applySql(candidate);
+  applySql(extractFunctionStatement(candidate, 'get_commission_balance_report'));
 
   const mutableCustomerName = candidate.replace(
     "COALESCE(NULLIF(cm.customer_name, ''), customer.farm_name, '[Unknown customer]'::text)",
@@ -364,12 +578,12 @@ RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
     candidate,
     'customer-name mutation did not change the candidate',
   );
-  applySql(mutableCustomerName);
+  applySql(extractFunctionStatement(mutableCustomerName, 'get_commission_payment_detail_report'));
   expectSmokeFailure(
     'SMOKE_FAIL: mutable order/customer labels rewrote payment detail history',
     'mutable_customer_name_history',
   );
-  applySql(candidate);
+  applySql(extractFunctionStatement(candidate, 'get_commission_payment_detail_report'));
 
   const wrongForeignKey = `
 BEGIN;
@@ -385,7 +599,7 @@ COMMIT;
   assert.notEqual(wrongFkResult.status, 0, 'wrong foreign key mutation unexpectedly succeeded');
   assert.match(
     wrongFkOutput,
-    /COMMISSION_HISTORY_POSTCOND: voided_by foreign key is missing or has the wrong target/,
+    /COMMISSION_HISTORY_REPLAY_DRIFT: FK, trigger, or grant boundary differs/,
     `wrong foreign key failed for the wrong reason:\n${wrongFkOutput}`,
   );
   console.log('COMMISSION_HISTORY_MUTATION_REJECTED wrong_voided_by_fk');

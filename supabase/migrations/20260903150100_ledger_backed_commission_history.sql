@@ -35,6 +35,8 @@ DO $precondition$
 DECLARE
   v_history_columns integer;
   v_cancelled_count bigint;
+  v_report_body_md5 text;
+  v_void_body_md5 text;
 BEGIN
   SELECT count(*)
     INTO v_history_columns
@@ -120,6 +122,160 @@ BEGIN
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
   ) THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_VOID_TRUST_DRIFT: existing void implementation owner or security contract is not the reviewed one';
+  END IF;
+
+  SELECT md5(prosrc)
+    INTO v_report_body_md5
+    FROM pg_proc
+   WHERE oid = 'public.get_commission_balance_report(date)'::regprocedure;
+  SELECT md5(prosrc)
+    INTO v_void_body_md5
+    FROM pg_proc
+   WHERE oid = 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'::regprocedure;
+
+  IF v_history_columns = 0 THEN
+    -- Populated fresh apply: only the exact live functions reviewed on
+    -- 2026-09-03 may be replaced. An empty schema rebuild may also start from
+    -- the tracked pre-refusal report body because the live refusal migration's
+    -- source has not landed yet. This prevents a later hotfix with the same
+    -- trust attributes from being silently overwritten in production.
+    IF (
+         EXISTS (SELECT 1 FROM public.commissions)
+         AND v_report_body_md5 <> '0ea6b39cc91141362461598e3ab91294'
+       ) OR (
+         NOT EXISTS (SELECT 1 FROM public.commissions)
+         AND v_report_body_md5 NOT IN (
+           '0ea6b39cc91141362461598e3ab91294',
+           'db37145a51829352d4178bba5da6a1c3'
+         )
+       ) OR v_void_body_md5 <> '60246ff3ed8168f8b69bfc201de6ccbb' THEN
+      RAISE EXCEPTION
+        'COMMISSION_HISTORY_PREIMAGE_DRIFT: report md5 %, void md5 %',
+        v_report_body_md5, v_void_body_md5;
+    END IF;
+
+    IF EXISTS (
+      SELECT 1 FROM pg_proc
+       WHERE pronamespace = 'public'::regnamespace
+         AND proname IN ('get_commission_payment_detail_report', 'stamp_commission_cancellation_history')
+    ) OR EXISTS (
+      SELECT 1 FROM pg_trigger
+       WHERE tgrelid = 'public.commissions'::regclass
+         AND tgname = 'trg_commissions_stamp_cancellation_history'
+         AND NOT tgisinternal
+    ) OR EXISTS (
+      SELECT 1 FROM pg_constraint
+       WHERE conname IN (
+         'commission_payments_voided_by_fkey',
+         'commissions_cancelled_amount_cents_non_negative_chk',
+         'commissions_cancellation_history_pair_chk',
+         'commission_payments_void_history_chk',
+         'commissions_commission_amount_whole_cents_chk',
+         'commission_payments_total_amount_whole_cents_chk',
+         'commission_payment_items_amount_whole_cents_chk'
+       )
+       AND conrelid IN (
+         'public.commissions'::regclass,
+         'public.commission_payments'::regclass,
+         'public.commission_payment_items'::regclass
+       )
+    ) THEN
+      RAISE EXCEPTION 'COMMISSION_HISTORY_SCHEMA_DRIFT: fresh apply found pre-existing candidate artifacts';
+    END IF;
+  ELSE
+    -- Replay is allowed only over this exact candidate. Merely finding four
+    -- same-named columns is not proof that history was installed safely.
+    IF v_report_body_md5 <> '3f652b4f46ce1b584e933de12eeda701'
+       OR v_void_body_md5 <> '985fb1a42ab3b4d911c68898c14ce637'
+       OR NOT EXISTS (
+         SELECT 1 FROM pg_proc
+          WHERE oid = 'public.get_commission_payment_detail_report(date)'::regprocedure
+            AND proowner = 'postgres'::regrole
+            AND prosecdef
+            AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+            AND md5(prosrc) = 'a4f1091ee4a557d4053243c37eb7560d'
+       ) OR NOT EXISTS (
+         SELECT 1 FROM pg_proc
+          WHERE oid = 'public.stamp_commission_cancellation_history()'::regprocedure
+            AND proowner = 'postgres'::regrole
+            AND NOT prosecdef
+            AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+            AND md5(prosrc) = 'd1b9a4c61618e4f20bc6c5b736d7f445'
+       ) THEN
+      RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: candidate function bodies or trust attributes differ';
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+        FROM (VALUES
+          ('commission_payments', 'voided_at', 'timestamp with time zone'),
+          ('commission_payments', 'voided_by', 'uuid'),
+          ('commissions', 'cancelled_at', 'timestamp with time zone'),
+          ('commissions', 'cancelled_amount_cents', 'bigint')
+        ) expected(table_name, column_name, data_type)
+        LEFT JOIN information_schema.columns c
+          ON c.table_schema = 'public'
+         AND c.table_name = expected.table_name
+         AND c.column_name = expected.column_name
+       WHERE c.column_name IS NULL
+          OR c.data_type <> expected.data_type
+          OR c.is_nullable <> 'YES'
+          OR c.column_default IS NOT NULL
+          OR c.is_generated <> 'NEVER'
+          OR c.is_identity <> 'NO'
+    ) THEN
+      RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: history column shape differs';
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+        FROM (VALUES
+          ('public.commissions'::regclass, 'commissions_cancelled_amount_cents_non_negative_chk', 'CHECK (((cancelled_amount_cents IS NULL) OR (cancelled_amount_cents >= 0)))'),
+          ('public.commissions'::regclass, 'commissions_cancellation_history_pair_chk', 'CHECK ((((cancelled_at IS NULL) AND (cancelled_amount_cents IS NULL)) OR ((cancelled_at IS NOT NULL) AND (cancelled_amount_cents IS NOT NULL))))'),
+          ('public.commission_payments'::regclass, 'commission_payments_void_history_chk', 'CHECK ((((status = ''voided''::text) AND (voided_at IS NOT NULL) AND (voided_by IS NOT NULL)) OR ((status <> ''voided''::text) AND (voided_at IS NULL) AND (voided_by IS NULL))))'),
+          ('public.commissions'::regclass, 'commissions_commission_amount_whole_cents_chk', 'CHECK (((commission_amount IS NULL) OR ((commission_amount = round(commission_amount, 2)) AND (commission_amount > ''-Infinity''::numeric) AND (commission_amount < ''Infinity''::numeric))))'),
+          ('public.commission_payments'::regclass, 'commission_payments_total_amount_whole_cents_chk', 'CHECK (((total_amount IS NULL) OR ((total_amount = round(total_amount, 2)) AND (total_amount > ''-Infinity''::numeric) AND (total_amount < ''Infinity''::numeric))))'),
+          ('public.commission_payment_items'::regclass, 'commission_payment_items_amount_whole_cents_chk', 'CHECK (((amount IS NULL) OR ((amount = round(amount, 2)) AND (amount > ''-Infinity''::numeric) AND (amount < ''Infinity''::numeric))))')
+        ) expected(table_oid, constraint_name, definition)
+        LEFT JOIN pg_constraint c
+          ON c.conrelid = expected.table_oid
+         AND c.conname = expected.constraint_name
+         AND c.contype = 'c'
+         AND c.convalidated
+         AND pg_get_constraintdef(c.oid) = expected.definition
+       WHERE c.oid IS NULL
+    ) THEN
+      RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: required CHECK definition differs';
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint c
+       WHERE c.conrelid = 'public.commission_payments'::regclass
+         AND c.conname = 'commission_payments_voided_by_fkey'
+         AND c.contype = 'f'
+         AND c.confrelid = 'public.profiles'::regclass
+         AND c.convalidated
+         AND c.confupdtype = 'a'
+         AND c.confdeltype = 'a'
+         AND c.confmatchtype = 's'
+    ) OR NOT EXISTS (
+      SELECT 1 FROM pg_trigger
+       WHERE tgrelid = 'public.commissions'::regclass
+         AND tgname = 'trg_commissions_stamp_cancellation_history'
+         AND NOT tgisinternal
+         AND tgenabled = 'O'
+    ) OR has_function_privilege('anon', 'public.get_commission_balance_report(date)', 'EXECUTE')
+       OR has_function_privilege('anon', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
+       OR NOT has_function_privilege('authenticated', 'public.get_commission_balance_report(date)', 'EXECUTE')
+       OR NOT has_function_privilege('authenticated', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
+       OR NOT has_function_privilege('service_role', 'public.get_commission_balance_report(date)', 'EXECUTE')
+       OR NOT has_function_privilege('service_role', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
+       OR has_function_privilege('authenticated', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
+       OR has_function_privilege('service_role', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
+       OR has_function_privilege('authenticated', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
+       OR has_function_privilege('service_role', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE') THEN
+      RAISE EXCEPTION 'COMMISSION_HISTORY_REPLAY_DRIFT: FK, trigger, or grant boundary differs';
+    END IF;
   END IF;
 END
 $precondition$;
@@ -647,7 +803,11 @@ BEGIN
      AND c.table_name = expected.table_name
      AND c.column_name = expected.column_name
      AND c.data_type = expected.data_type
-   WHERE c.column_name IS NULL;
+   WHERE c.column_name IS NULL
+      OR c.is_nullable <> 'YES'
+      OR c.column_default IS NOT NULL
+      OR c.is_generated <> 'NEVER'
+      OR c.is_identity <> 'NO';
 
   IF v_bad_columns <> 0 THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: % history column(s) missing or wrong type', v_bad_columns;
@@ -668,6 +828,10 @@ BEGIN
        AND c.conname = 'commission_payments_voided_by_fkey'
        AND c.contype = 'f'
        AND c.confrelid = 'public.profiles'::regclass
+       AND c.convalidated
+       AND c.confupdtype = 'a'
+       AND c.confdeltype = 'a'
+       AND c.confmatchtype = 's'
        AND c.conkey = ARRAY[
          (SELECT attnum::smallint
             FROM pg_attribute
@@ -702,8 +866,12 @@ BEGIN
      OR has_function_privilege('anon', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.get_commission_balance_report(date)', 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.get_commission_balance_report(date)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.get_commission_payment_detail_report(date)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE') THEN
+     OR has_function_privilege('service_role', 'public.stamp_commission_cancellation_history()', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: function grant boundary drift';
   END IF;
 
@@ -713,6 +881,7 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+       AND md5(prosrc) = '3f652b4f46ce1b584e933de12eeda701'
        AND prosrc LIKE '%PERFORM public.require_admin()%'
        AND prosrc LIKE '%commission_payment_items%'
        AND prosrc LIKE '%posted_at AT TIME ZONE ''America/Chicago''%'
@@ -723,6 +892,7 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+       AND md5(prosrc) = 'a4f1091ee4a557d4053243c37eb7560d'
        AND prosrc LIKE '%PERFORM public.require_admin()%'
        AND prosrc LIKE '%commission_payment_items%'
        AND prosrc LIKE '%posted_at AT TIME ZONE ''America/Chicago''%'
@@ -730,8 +900,10 @@ BEGIN
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc
      WHERE oid = 'public.stamp_commission_cancellation_history()'::regprocedure
+       AND proowner = 'postgres'::regrole
        AND NOT prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+       AND md5(prosrc) = 'd1b9a4c61618e4f20bc6c5b736d7f445'
        AND prosrc LIKE '%ROUND(OLD.commission_amount, 2) * 100%'
        AND prosrc LIKE '%NEW.order_number%'
        AND prosrc LIKE '%NEW.customer_name%'
@@ -742,6 +914,7 @@ BEGIN
        AND proowner = 'postgres'::regrole
        AND prosecdef
        AND proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+       AND md5(prosrc) = '985fb1a42ab3b4d911c68898c14ce637'
        AND prosrc LIKE '%voided_at = transaction_timestamp()%'
        AND prosrc LIKE '%voided_by = v_actor%'
   ) THEN
@@ -751,18 +924,19 @@ BEGIN
   IF EXISTS (
     SELECT 1
       FROM (VALUES
-        ('public.commissions'::regclass, 'commissions_cancelled_amount_cents_non_negative_chk'),
-        ('public.commissions'::regclass, 'commissions_cancellation_history_pair_chk'),
-        ('public.commissions'::regclass, 'commissions_commission_amount_whole_cents_chk'),
-        ('public.commission_payments'::regclass, 'commission_payments_void_history_chk'),
-        ('public.commission_payments'::regclass, 'commission_payments_total_amount_whole_cents_chk'),
-        ('public.commission_payment_items'::regclass, 'commission_payment_items_amount_whole_cents_chk')
-      ) expected(table_oid, constraint_name)
+        ('public.commissions'::regclass, 'commissions_cancelled_amount_cents_non_negative_chk', 'CHECK (((cancelled_amount_cents IS NULL) OR (cancelled_amount_cents >= 0)))'),
+        ('public.commissions'::regclass, 'commissions_cancellation_history_pair_chk', 'CHECK ((((cancelled_at IS NULL) AND (cancelled_amount_cents IS NULL)) OR ((cancelled_at IS NOT NULL) AND (cancelled_amount_cents IS NOT NULL))))'),
+        ('public.commissions'::regclass, 'commissions_commission_amount_whole_cents_chk', 'CHECK (((commission_amount IS NULL) OR ((commission_amount = round(commission_amount, 2)) AND (commission_amount > ''-Infinity''::numeric) AND (commission_amount < ''Infinity''::numeric))))'),
+        ('public.commission_payments'::regclass, 'commission_payments_void_history_chk', 'CHECK ((((status = ''voided''::text) AND (voided_at IS NOT NULL) AND (voided_by IS NOT NULL)) OR ((status <> ''voided''::text) AND (voided_at IS NULL) AND (voided_by IS NULL))))'),
+        ('public.commission_payments'::regclass, 'commission_payments_total_amount_whole_cents_chk', 'CHECK (((total_amount IS NULL) OR ((total_amount = round(total_amount, 2)) AND (total_amount > ''-Infinity''::numeric) AND (total_amount < ''Infinity''::numeric))))'),
+        ('public.commission_payment_items'::regclass, 'commission_payment_items_amount_whole_cents_chk', 'CHECK (((amount IS NULL) OR ((amount = round(amount, 2)) AND (amount > ''-Infinity''::numeric) AND (amount < ''Infinity''::numeric))))')
+      ) expected(table_oid, constraint_name, definition)
       LEFT JOIN pg_constraint c
         ON c.conrelid = expected.table_oid
        AND c.conname = expected.constraint_name
        AND c.contype = 'c'
        AND c.convalidated
+       AND pg_get_constraintdef(c.oid) = expected.definition
      WHERE c.oid IS NULL
   ) THEN
     RAISE EXCEPTION 'COMMISSION_HISTORY_POSTCOND: required validated money constraint missing';
