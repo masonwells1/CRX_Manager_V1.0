@@ -176,7 +176,7 @@
     },
     "govern_invoice_order_money_lifecycle": {
       "chain": "smoke-govern-invoice-order-money-lifecycle.sql",
-      "description": "Invoice/order lifecycle closeout: binds invoice creation/posting/cancellation retries, preserves completed-delivery recovery, closes only the undelivered remainder of partially fulfilled orders, locks customer/product source lineage, blocks terminal-order invoice rewrites and direct invoice DML, filters reversed transaction history, and proves every rejected path leaves its money/inventory lineage unchanged. Self-contained fixtures and terminal rollback.",
+      "description": "Invoice/order lifecycle closeout: binds invoice creation/posting/cancellation retries; proves direct and batch posting derive system due dates from the America/Chicago posting date with non-Net-30 terms; proves unpost/repost clears and recalculates system dates while preserving explicit overrides; preserves completed-delivery recovery with posting-date terms; closes only the undelivered remainder of partially fulfilled orders; locks customer/product source lineage; blocks terminal-order invoice rewrites and direct invoice DML; filters reversed transaction history; and proves rejected paths leave money/inventory lineage unchanged. Self-contained fixtures and terminal rollback.",
       "covers": [
         "create_invoice_from_order",
         "post_invoice",
@@ -759,7 +759,7 @@
     },
     "save_field_app_invoice": {
       "chain": "smoke-field-app-split-penny-exact.sql",
-      "description": "Field-app parity and save/post serialization: a multi-customer field auto-splits into ONE invoice PER billing customer sharing an invoice_group_id; the split is PENNY-EXACT on an INDIVISIBLE total (price 1501c, rate 0.01, 1/3-2/3 split -> A=500c + B=1001c = 1501c odd); invoice_shares and acres tie exactly; an idempotent retry creates no duplicate; save/group-post serialize on the immutable group ID before ordered row locking; and a save after real group posting is rejected before invoice lines can change.",
+      "description": "Field-app parity and save/post serialization: a multi-customer field auto-splits into ONE invoice PER billing customer sharing an invoice_group_id; the split is PENNY-EXACT on an INDIVISIBLE total (price 1501c, rate 0.01, 1/3-2/3 split -> A=500c + B=1001c = 1501c odd); invoice_shares and acres tie exactly; an idempotent retry creates no duplicate; save/group-post serialize on the immutable group ID before ordered row locking; group posting replaces prefilled system dates from one Chicago posting date using each member's Net 15 / Net 45 terms; and a save after posting is rejected before invoice lines can change.",
       "covers": [
         "save_field_app_invoice",
         "preview_field_app_invoice_split",
@@ -793,7 +793,7 @@
     },
     "transfer_job_to_invoice": {
       "chain": "smoke-transfer_job_invoice_machine_fee.sql",
-      "description": "Job->field-invoice billing (REQUIRES 20260619140000): forged actor -> ACTOR_MISMATCH (G3); a job with application_service_id gets ONE is_application_fee line (price_source 'tier') + the service FK on the invoice; a FLAT/unrated chemical line still bills; per-customer fee rate in split jobs (a grower's customer_application_rates override is honored — Codex P1); totals + shares reconcile in single / same-rate-split / different-rate-split cases. Pre-apply the chain FAILS (live body has no fee line). NOTE: the prior full start_job->complete->post->void loop chain file is absent; this chain certifies transfer_job_to_invoice's fee+actor behavior.",
+      "description": "Job->field-invoice billing (REQUIRES 20260619140000): forged actor -> ACTOR_MISMATCH (G3); a job with application_service_id gets ONE is_application_fee line (price_source 'tier') + the service FK on the invoice; a FLAT/unrated chemical line still bills; per-customer fee rate in split jobs (a grower's customer_application_rates override is honored — Codex P1); totals + shares reconcile; transferred single and split invoices retain system due-date provenance despite the legacy non-null +30 stamp; and direct/group posting replaces that stamp from one Chicago posting date using customer Net 15 / Net 45 terms. Terminal rollback.",
       "covers": [
         "transfer_job_to_invoice"
       ],
@@ -847,7 +847,7 @@
     },
     "unpost_invoice_group": {
       "chain": "smoke-unpost-invoice-group.sql",
-      "description": "Field-app remediation Wave 2a FIX 4 (REQUIRES 20260629170000): ALL-OR-NOTHING split-group unpost. Proves through the REAL unpost_invoice_group: HAPPY (a posted 2-member split group unposts in ONE call — both members posted->unposted, posted_by/at cleared, one invoice_unposted audit row per member, one invoice_group_unposted activity row); ALL-OR-NOTHING (a posted group where one member is PAID/money-applied -> the whole call RAISES the money-guard error and NOTHING changes — both still posted, 0 unpost audit rows; no half-unpost reachable); ROLE GATE (an applicator caller -> 'admin or sales role required'); ACTOR GATE (forged p_performed_by -> ACTOR_MISMATCH, no mutation); GRANTS (anon has NO EXECUTE, authenticated does). Self-contained fixtures.",
+      "description": "Field-app remediation Wave 2a FIX 4 (REQUIRES 20260629170000): ALL-OR-NOTHING split-group unpost. Proves through real group post/unpost: HAPPY (both members post together, the system member derives Chicago Net 15 while an explicit date is preserved, both unpost together, posting stamps clear, only the system due date clears, audit rows are written); ALL-OR-NOTHING (one paid member makes the whole call fail without mutation); ROLE and ACTOR gates; idempotency binding; and EXECUTE grants. Self-contained fixtures and terminal rollback.",
       "covers": [
         "unpost_invoice_group"
       ],

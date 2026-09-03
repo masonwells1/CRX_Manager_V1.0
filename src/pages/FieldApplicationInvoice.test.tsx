@@ -30,6 +30,9 @@ const {
   mockUseUnsavedChanges,
   mockBlockerReset,
   mockBlockerProceed,
+  mockBuildInvoicePdfDataFromRow,
+  mockDownloadInvoicePdf,
+  mockGenerateInvoicePdf,
 } = vi.hoisted(() => {
   const mockRpc = vi.fn();
   const mockFrom = vi.fn();
@@ -39,7 +42,22 @@ const {
   const mockUseUnsavedChanges = vi.fn();
   const mockBlockerReset = vi.fn();
   const mockBlockerProceed = vi.fn();
-  return { mockFrom, mockRpc, mockToast, mockNavigate, mockUseParams, mockUseUnsavedChanges, mockBlockerReset, mockBlockerProceed };
+  const mockBuildInvoicePdfDataFromRow = vi.fn();
+  const mockDownloadInvoicePdf = vi.fn();
+  const mockGenerateInvoicePdf = vi.fn();
+  return {
+    mockFrom,
+    mockRpc,
+    mockToast,
+    mockNavigate,
+    mockUseParams,
+    mockUseUnsavedChanges,
+    mockBlockerReset,
+    mockBlockerProceed,
+    mockBuildInvoicePdfDataFromRow,
+    mockDownloadInvoicePdf,
+    mockGenerateInvoicePdf,
+  };
 });
 
 vi.mock('../lib/db', () => ({
@@ -56,6 +74,12 @@ vi.mock('../lib/db', () => ({
 
 vi.mock('../lib/sentry', () => ({
   Sentry: { captureException: vi.fn() },
+}));
+
+vi.mock('../lib/invoicePdf', () => ({
+  buildInvoicePdfDataFromRow: mockBuildInvoicePdfDataFromRow,
+  downloadInvoicePdf: mockDownloadInvoicePdf,
+  generateInvoicePdf: mockGenerateInvoicePdf,
 }));
 
 vi.mock('../lib/activityLogger', () => ({
@@ -160,6 +184,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockUseParams.mockReturnValue({ id: undefined });
   mockRpc.mockResolvedValue({ data: null, error: null });
+  mockBuildInvoicePdfDataFromRow.mockResolvedValue({ invoice_number: 'INV-TEST' });
+  mockDownloadInvoicePdf.mockResolvedValue(undefined);
+  mockGenerateInvoicePdf.mockResolvedValue({});
   mockUseUnsavedChanges.mockReturnValue({
     state: 'unblocked',
     reset: mockBlockerReset,
@@ -388,7 +415,10 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
 });
 
 describe('FieldApplicationInvoice — existing single invoice (no group)', () => {
-  beforeEach(() => {
+  const setupExistingInvoice = (
+    dueDateSource: 'system' | 'explicit' | 'legacy' = 'system',
+    dueDate = '2026-05-29',
+  ) => {
     mockUseParams.mockReturnValue({ id: 'inv-solo' });
     mockFrom.mockImplementation(
       makeFromMock({
@@ -399,6 +429,9 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
               invoice_number: 'INV-1001',
               invoice_type: 'field_application',
               invoice_date: '2026-04-29',
+              due_date: dueDate,
+              due_date_source: dueDateSource,
+              payment_terms: 'Net 30',
               header_notes: '',
               status: 'draft',
               application_service_id: null,
@@ -412,7 +445,20 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
         invoice_shares: { data: [] },
       }),
     );
+  };
+
+  beforeEach(() => {
+    setupExistingInvoice();
   });
+
+  const mockSuccessfulSave = () => {
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'save_field_app_invoice') {
+        return Promise.resolve({ data: { invoice_ids: ['inv-solo'], invoice_group_id: null }, error: null });
+      }
+      return Promise.resolve({ data: { success: true }, error: null });
+    });
+  };
 
   it('renders Post button and routes through post_invoice (NOT post_invoice_group) when no group_id', async () => {
     await renderPage();
@@ -436,6 +482,69 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
     await renderPage();
     await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
     expect(screen.queryByText(/part of a/i)).not.toBeInTheDocument();
+  });
+
+  it.each(['explicit', 'legacy'] as const)(
+    'preserves an equal-to-terms %s due date as a custom date',
+    async (source) => {
+      setupExistingInvoice(source);
+      mockSuccessfulSave();
+      await renderPage();
+      await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
+
+      expect(screen.getByLabelText('Payment Terms')).toHaveValue('Custom date…');
+      expect(screen.getByLabelText('Due Date')).toHaveValue('2026-05-29');
+
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+      await waitFor(() => {
+        const billingCall = mockRpc.mock.calls.find((call) => call[0] === 'update_field_app_invoice_billing');
+        expect(billingCall?.[1]).toMatchObject({ p_due_date: '2026-05-29' });
+      });
+    },
+  );
+
+  it('clears an editable system due date so posting will re-derive it', async () => {
+    mockSuccessfulSave();
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
+
+    expect(screen.getByLabelText('Payment Terms')).toHaveValue('Net 30');
+    expect(screen.queryByLabelText('Due Date')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    await waitFor(() => {
+      const billingCall = mockRpc.mock.calls.find((call) => call[0] === 'update_field_app_invoice_billing');
+      expect(billingCall?.[1]).toHaveProperty('p_due_date', undefined);
+    });
+  });
+
+  it('prints an editable system date as pending instead of deriving from invoice_date', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Print$/i }));
+
+    await waitFor(() => expect(mockBuildInvoicePdfDataFromRow).toHaveBeenCalledOnce());
+    expect(mockBuildInvoicePdfDataFromRow.mock.calls[0][0]).toMatchObject({
+      status: 'draft',
+      due_date: undefined,
+      due_date_source: 'system',
+    });
+  });
+
+  it.each(['explicit', 'legacy'] as const)('prints the exact draft %s due date', async (source) => {
+    setupExistingInvoice(source);
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Print$/i }));
+
+    await waitFor(() => expect(mockBuildInvoicePdfDataFromRow).toHaveBeenCalledOnce());
+    expect(mockBuildInvoicePdfDataFromRow.mock.calls[0][0]).toMatchObject({
+      status: 'draft',
+      due_date: '2026-05-29',
+      due_date_source: source,
+    });
   });
 });
 

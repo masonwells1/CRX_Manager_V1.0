@@ -20,6 +20,8 @@
 --   P6  — SAVE/POST SERIALIZATION: the public save owns a row-lock/recheck
 --          wrapper, and a save attempted after real group posting is rejected
 --          before any invoice child rows are rebuilt.
+--   P7  — GROUP DUE DATES: system dates on both members are replaced from the
+--          common Chicago posting date using each customer's invoice terms.
 --
 -- Ends in RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'.
 -- ============================================================================
@@ -27,6 +29,7 @@ DO $smoke$
 DECLARE
   v_admin uuid;
   v_sfx   text := substr(gen_random_uuid()::text,1,8);
+  v_chicago_posting_date date := (now() AT TIME ZONE 'America/Chicago')::date;
   v_cust_a uuid; v_cust_b uuid;
   v_field uuid;
   v_prod uuid;
@@ -234,7 +237,30 @@ BEGIN
     END IF;
   END;
 
+  UPDATE invoices
+     SET payment_terms = CASE customer_id
+           WHEN v_cust_a THEN 'Net 15'
+           ELSE 'Net 45'
+         END,
+         due_date = invoice_date + 30,
+         due_date_source = 'system'
+   WHERE id = ANY(v_ids);
+
   PERFORM post_invoice_group(v_group, v_admin, 'smoke-split-post-' || v_sfx);
+  IF EXISTS (
+    SELECT 1
+      FROM invoices
+     WHERE id = ANY(v_ids)
+       AND (
+         due_date_source IS DISTINCT FROM 'system'
+         OR due_date IS DISTINCT FROM (
+           v_chicago_posting_date
+           + CASE customer_id WHEN v_cust_a THEN 15 ELSE 45 END
+         )
+       )
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(P7): group posting did not derive each system due date from Chicago posting date and terms';
+  END IF;
   SELECT count(*) INTO v_item_count
   FROM invoice_items
   WHERE invoice_id = ANY(v_ids);

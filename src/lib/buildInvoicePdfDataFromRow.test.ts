@@ -30,19 +30,36 @@ interface PerTable {
   invoice_items?: Array<Record<string, unknown>>;
   invoice_shares?: Array<Record<string, unknown>>;
   invoices?: Record<string, unknown> | null; // the #33 billing re-fetch
+  invoiceResponses?: Array<{
+    data: Record<string, unknown> | null;
+    error: Record<string, unknown> | null;
+  }>;
 }
 
+let invoiceSelects: string[] = [];
+
 function installFromMock(per: PerTable) {
+  let invoiceResponseIndex = 0;
   mockFrom.mockImplementation((table: string) => {
     const chain: Record<string, unknown> = {};
-    chain.select = vi.fn().mockReturnValue(chain);
+    chain.select = vi.fn((columns: string) => {
+      if (table === 'invoices') invoiceSelects.push(columns);
+      return chain;
+    });
     chain.eq = vi.fn().mockReturnValue(chain);
     // customers + invoices terminate on .maybeSingle(); items/shares on .order()/await.
-    chain.maybeSingle = vi.fn().mockResolvedValue({
-      data: table === 'customers' ? per.customers ?? null
-        : table === 'invoices' ? per.invoices ?? null
-        : null,
-      error: null,
+    chain.maybeSingle = vi.fn().mockImplementation(() => {
+      if (table === 'invoices' && per.invoiceResponses) {
+        const response = per.invoiceResponses[invoiceResponseIndex];
+        invoiceResponseIndex += 1;
+        return Promise.resolve(response);
+      }
+      return Promise.resolve({
+        data: table === 'customers' ? per.customers ?? null
+          : table === 'invoices' ? per.invoices ?? null
+          : null,
+        error: null,
+      });
     });
     const arrayData =
       table === 'invoice_items' ? per.invoice_items ?? []
@@ -80,6 +97,7 @@ function listRow(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  invoiceSelects = [];
 });
 
 describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
@@ -99,6 +117,7 @@ describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
         header_notes: 'Header from DB',
         footer_notes: 'Footer from DB',
         due_date: '2026-06-30',
+        due_date_source: 'system',
       },
     });
 
@@ -108,6 +127,7 @@ describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
     expect(data.payment_terms).toBe('Net 15');         // invoice override wins over customer default
     expect(data.purchase_order_ref).toBe('PO-555');
     expect(data.due_date).toBe('2026-06-30');
+    expect(data.due_date_source).toBe('system');
     expect(data.header_notes).toBe('Header from DB');
     expect(data.footer_notes).toBe('Footer from DB');
   });
@@ -178,5 +198,151 @@ describe('buildInvoicePdfDataFromRow — #33 list-print re-fetch', () => {
     expect(data.discount_earned_cents).toBe(0);
     expect(data.payment_terms).toBeUndefined(); // cleared, no customer default either
     expect(data.purchase_order_ref).toBeUndefined();
+  });
+
+  it.each(['draft', 'unposted'])('suppresses a persisted stale system date for a %s list PDF', async (status) => {
+    installFromMock({
+      customers: { payment_terms: 'Net 30' },
+      invoice_items: [],
+      invoice_shares: [],
+      invoices: {
+        due_date: '2026-06-30',
+        due_date_source: 'system',
+        payment_terms: 'Net 30',
+      },
+    });
+
+    const data = await buildInvoicePdfDataFromRow(listRow({ status }));
+
+    expect(data.due_date).toBeUndefined();
+    expect(data.due_date_source).toBe('system');
+  });
+
+  it.each(['explicit', 'legacy'] as const)('preserves a draft %s date for a list PDF', async (source) => {
+    installFromMock({
+      customers: { payment_terms: 'Net 30' },
+      invoice_items: [],
+      invoice_shares: [],
+      invoices: {
+        due_date: '2026-06-30',
+        due_date_source: source,
+        payment_terms: 'Net 30',
+      },
+    });
+
+    const data = await buildInvoicePdfDataFromRow(listRow({ status: 'draft' }));
+
+    expect(data.due_date).toBe('2026-06-30');
+    expect(data.due_date_source).toBe(source);
+  });
+
+  it('preserves the stamped system date after posting', async () => {
+    installFromMock({
+      customers: { payment_terms: 'Net 30' },
+      invoice_items: [],
+      invoice_shares: [],
+      invoices: {
+        due_date: '2026-06-30',
+        due_date_source: 'system',
+        payment_terms: 'Net 30',
+      },
+    });
+
+    const data = await buildInvoicePdfDataFromRow(listRow({ status: 'posted' }));
+
+    expect(data.due_date).toBe('2026-06-30');
+    expect(data.due_date_source).toBe('system');
+  });
+
+  it.each([
+    {
+      code: 'PGRST204',
+      message: "Could not find the 'due_date_source' column of 'invoices' in the schema cache",
+    },
+    {
+      code: '42703',
+      message: 'column invoices.due_date_source does not exist',
+    },
+  ])('retries without only due_date_source for a pre-migration $code response', async (error) => {
+    installFromMock({
+      customers: { payment_terms: 'Customer default' },
+      invoice_items: [],
+      invoice_shares: [],
+      invoiceResponses: [
+        { data: null, error },
+        {
+          data: {
+            discount_earned_cents: 2500,
+            payment_terms: 'Net 15',
+            purchase_order_ref: 'PO-LEGACY',
+            due_date: '2026-06-30',
+            header_notes: 'legacy header',
+            footer_notes: 'legacy footer',
+          },
+          error: null,
+        },
+      ],
+    });
+
+    const data = await buildInvoicePdfDataFromRow(listRow({ status: 'draft' }));
+
+    expect(invoiceSelects).toHaveLength(2);
+    expect(invoiceSelects[0]).toContain('due_date_source');
+    expect(invoiceSelects[1]).not.toContain('due_date_source');
+    expect(invoiceSelects[1]).toContain('due_date');
+    expect(data.discount_earned_cents).toBe(2500);
+    expect(data.payment_terms).toBe('Net 15');
+    expect(data.purchase_order_ref).toBe('PO-LEGACY');
+    expect(data.due_date).toBe('2026-06-30');
+    expect(data.due_date_source).toBeUndefined();
+    expect(data.header_notes).toBe('legacy header');
+    expect(data.footer_notes).toBe('legacy footer');
+  });
+
+  it.each([
+    {
+      code: 'PGRST204',
+      message: "Could not find the 'other_column' column of 'invoices' in the schema cache",
+    },
+    {
+      code: '42501',
+      message: 'permission denied for table invoices',
+    },
+    {
+      code: 'NETWORK',
+      message: 'request failed',
+    },
+  ])('does not hide or retry an unrelated billing fetch error ($code)', async (error) => {
+    installFromMock({
+      customers: {},
+      invoice_items: [],
+      invoice_shares: [],
+      invoiceResponses: [{ data: null, error }],
+    });
+
+    await expect(buildInvoicePdfDataFromRow(listRow())).rejects.toMatchObject(error);
+    expect(invoiceSelects).toHaveLength(1);
+  });
+
+  it('surfaces an error from the compatibility retry', async () => {
+    const fallbackError = { code: '42501', message: 'permission denied for table invoices' };
+    installFromMock({
+      customers: {},
+      invoice_items: [],
+      invoice_shares: [],
+      invoiceResponses: [
+        {
+          data: null,
+          error: {
+            code: 'PGRST204',
+            message: "Could not find the 'due_date_source' column of 'invoices' in the schema cache",
+          },
+        },
+        { data: null, error: fallbackError },
+      ],
+    });
+
+    await expect(buildInvoicePdfDataFromRow(listRow())).rejects.toMatchObject(fallbackError);
+    expect(invoiceSelects).toHaveLength(2);
   });
 });

@@ -4474,6 +4474,7 @@ export type Database = {
           discount_date: string | null
           discount_earned_cents: number
           due_date: string | null
+          due_date_source: string
           end_humidity_pct: number | null
           end_temp_f: number | null
           end_weather_source: string | null
@@ -4541,6 +4542,7 @@ export type Database = {
           discount_date?: string | null
           discount_earned_cents?: number
           due_date?: string | null
+          due_date_source?: string
           end_humidity_pct?: number | null
           end_temp_f?: number | null
           end_weather_source?: string | null
@@ -4608,6 +4610,7 @@ export type Database = {
           discount_date?: string | null
           discount_earned_cents?: number
           due_date?: string | null
+          due_date_source?: string
           end_humidity_pct?: number | null
           end_temp_f?: number | null
           end_weather_source?: string | null

@@ -38,7 +38,15 @@ vi.mock('jspdf-autotable', () => ({
   }),
 }));
 
-import { generateInvoicePdf, downloadInvoicePdf, generateBatchInvoicePdf, groupReturnCreditDisplayItems, mapInvoicePdfItem } from './invoicePdf';
+import {
+  generateInvoicePdf,
+  downloadInvoicePdf,
+  generateBatchInvoicePdf,
+  groupReturnCreditDisplayItems,
+  invoicePdfDueDateLabel,
+  mapInvoicePdfItem,
+  normalizeInvoicePdfDueDate,
+} from './invoicePdf';
 import type { InvoicePdfData, InvoicePdfItem, InvoicePdfShare } from './invoicePdf';
 
 // ── Test Data Factories ─────────────────────────────────────────────────
@@ -83,6 +91,7 @@ function makeInvoiceData(overrides: Partial<InvoicePdfData> = {}): InvoicePdfDat
     invoice_number: 'INV-2026-0001',
     invoice_date: '2026-03-01',
     due_date: '2026-04-01',
+    due_date_source: 'system',
     invoice_type: 'field_application',
     status: 'posted',
     customer_name: 'Smith Farm',
@@ -112,6 +121,58 @@ function makeInvoiceData(overrides: Partial<InvoicePdfData> = {}): InvoicePdfDat
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
+
+describe('invoice PDF due-date provenance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDoc.lastAutoTable = { finalY: 300 };
+  });
+
+  it.each(['draft', 'unposted'])('%s system dates stay pending even when a stale date exists', (status) => {
+    expect(normalizeInvoicePdfDueDate(status, 'system', '2026-04-01')).toBeUndefined();
+    expect(invoicePdfDueDateLabel({ status, due_date: '2026-04-01', due_date_source: 'system' }))
+      .toBe('Set when posted');
+  });
+
+  it.each([
+    ['draft', 'explicit', '2026-04-01'],
+    ['unposted', 'legacy', '2026-04-02'],
+    ['posted', 'system', '2026-04-03'],
+  ] as const)('preserves a %s/%s authoritative date', (status, source, dueDate) => {
+    expect(normalizeInvoicePdfDueDate(status, source, dueDate)).toBe(dueDate);
+    expect(invoicePdfDueDateLabel({ status, due_date: dueDate, due_date_source: source }))
+      .toMatch(/^04\/0[1-3]\/2026$/);
+  });
+
+  it.each(['current', 'legacy'] as const)(
+    'renders "Set when posted" in the %s layout instead of a draft system calendar date',
+    async (format) => {
+      await generateInvoicePdf(makeInvoiceData({
+        status: 'draft',
+        due_date: '2026-04-01',
+        due_date_source: 'system',
+        options: {
+          format,
+          show_shares: true,
+          show_price_per_acre: true,
+          show_epa_registration: true,
+        },
+      }));
+
+      const renderedText = mockDoc.text.mock.calls.map(([value]) => value);
+      expect(renderedText).toContain('Set when posted');
+      expect(renderedText).not.toContain('04/01/2026');
+      if (format === 'current') {
+        expect(mockDoc.text).toHaveBeenCalledWith(
+          'Set when posted',
+          expect.any(Number),
+          expect.any(Number),
+          { align: 'right' },
+        );
+      }
+    },
+  );
+});
 
 describe('groupReturnCreditDisplayItems', () => {
   it('shows one customer line while preserving the exact summed credit', () => {

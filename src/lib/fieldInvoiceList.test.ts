@@ -42,6 +42,7 @@ const baseRaw = (over: Partial<RawFieldInvoiceRow>): RawFieldInvoiceRow => ({
   pricing_pending: false,
   invoice_date: '2026-06-10',
   due_date: null,
+  due_date_source: 'system',
   purchase_order_ref: null,
   header_notes: null,
   footer_notes: null,

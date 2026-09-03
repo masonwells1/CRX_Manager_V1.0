@@ -10,7 +10,7 @@
  * Sprint 12: Invoice & Statement PDF Redesign
  */
 
-import type { InvoicePrintOptions } from '../types';
+import type { InvoiceDueDateSource, InvoicePrintOptions } from '../types';
 import { supabase } from './db';
 import { computeTotalDiluentGallons, formatGallons } from './fieldAppDiluent';
 import { COMPANY_TAGLINE_HEADER, COMPANY_LEGAL_NAME } from './companyInfo';
@@ -159,6 +159,7 @@ export interface InvoicePdfData {
   invoice_number: string;
   invoice_date: string;
   due_date?: string;
+  due_date_source?: InvoiceDueDateSource | null;
   invoice_type: string;
   status: string;
   customer_name: string;
@@ -224,6 +225,7 @@ interface InvoiceRowForPdf {
   invoice_number: string;
   invoice_date: string;
   due_date?: string | null;
+  due_date_source?: InvoiceDueDateSource | null;
   invoice_type?: string | null;
   status?: string | null;
   customer_id: string;
@@ -257,6 +259,77 @@ interface InvoiceRowForPdf {
   prepay_applied_cents?: number | null;
   write_off_cents?: number | null;
   balance_cents: number;
+}
+
+interface InvoiceBillingRowForPdf {
+  discount_earned_cents?: number | null;
+  discount_date?: string | null;
+  payment_terms?: string | null;
+  purchase_order_ref?: string | null;
+  header_notes?: string | null;
+  footer_notes?: string | null;
+  due_date?: string | null;
+  due_date_source?: InvoiceDueDateSource | null;
+  diluent_rate_gpa?: number | null;
+  total_acres?: number | null;
+  invoice_group_id?: string | null;
+}
+
+const INVOICE_PDF_BILLING_COLUMNS =
+  'discount_earned_cents, discount_date, payment_terms, purchase_order_ref, header_notes, footer_notes, due_date, due_date_source, diluent_rate_gpa, total_acres, invoice_group_id';
+const LEGACY_INVOICE_PDF_BILLING_COLUMNS =
+  'discount_earned_cents, discount_date, payment_terms, purchase_order_ref, header_notes, footer_notes, due_date, diluent_rate_gpa, total_acres, invoice_group_id';
+
+function isMissingInvoiceDueDateSource(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  if (typeof candidate.code !== 'string' || typeof candidate.message !== 'string') return false;
+
+  const message = candidate.message.toLowerCase();
+  if (!message.includes('due_date_source')) return false;
+  if (candidate.code === '42703') return true;
+  return candidate.code === 'PGRST204'
+    && (message.includes('invoices') || message.includes('schema cache'));
+}
+
+async function loadInvoiceBillingForPdf(invoiceId: string): Promise<InvoiceBillingRowForPdf | null> {
+  const current = await supabase
+    .from('invoices')
+    .select(INVOICE_PDF_BILLING_COLUMNS)
+    .eq('id', invoiceId)
+    .maybeSingle();
+
+  if (!current.error) return current.data as InvoiceBillingRowForPdf | null;
+  if (!isMissingInvoiceDueDateSource(current.error)) throw current.error;
+
+  // During rollout, an older production schema may not yet
+  // expose due_date_source through PostgREST. Retry exactly once without only
+  // that column so list/email PDFs retain every pre-existing billing field.
+  // Any other error still fails closed instead of silently printing partial data.
+  const legacy = await supabase
+    .from('invoices')
+    .select(LEGACY_INVOICE_PDF_BILLING_COLUMNS)
+    .eq('id', invoiceId)
+    .maybeSingle();
+  if (legacy.error) throw legacy.error;
+  return legacy.data as InvoiceBillingRowForPdf | null;
+}
+
+/**
+ * A system due date is authoritative only after posting, when PostgreSQL stamps
+ * it from the Chicago posting date plus the effective terms. Draft/unposted rows
+ * can still carry a pre-migration date, but a customer PDF must not present that
+ * stale value as the date that will ultimately be due.
+ */
+export function normalizeInvoicePdfDueDate(
+  status: string | null | undefined,
+  source: InvoiceDueDateSource | null | undefined,
+  dueDate: string | null | undefined,
+): string | undefined {
+  if (source === 'system' && (status === 'draft' || status === 'unposted')) {
+    return undefined;
+  }
+  return dueDate || undefined;
 }
 
 /**
@@ -294,7 +367,7 @@ export async function buildInvoicePdfDataFromRow(
   inv: InvoiceRowForPdf,
   options?: InvoicePrintOptions
 ): Promise<InvoicePdfData> {
-  const [{ data: cust }, { data: items }, { data: shares }, { data: billing }] = await Promise.all([
+  const [{ data: cust }, { data: items }, { data: shares }, billing] = await Promise.all([
     supabase
       .from('customers')
       .select('billing_address, city, state, zip, account_number, payment_terms')
@@ -315,11 +388,7 @@ export async function buildInvoicePdfDataFromRow(
     // Re-fetching here covers every caller (lists, email, editor) in one place; the
     // caller-supplied value still WINS (see the `?? ` fallbacks below) so the in-editor
     // print of unsaved live form edits is unchanged.
-    supabase
-      .from('invoices')
-      .select('discount_earned_cents, discount_date, payment_terms, purchase_order_ref, header_notes, footer_notes, due_date, diluent_rate_gpa, total_acres, invoice_group_id')
-      .eq('id', inv.id)
-      .maybeSingle(),
+    loadInvoiceBillingForPdf(inv.id),
   ]);
 
   const custRow = cust as {
@@ -330,15 +399,14 @@ export async function buildInvoicePdfDataFromRow(
   // #33: the invoice's persisted billing fields, used ONLY when the caller did not
   // supply the field on `inv` (undefined). A caller that DID supply it — even as
   // null to intentionally clear it — keeps full control (live form wins).
-  const billingRow = billing as {
-    discount_earned_cents?: number | null; discount_date?: string | null;
-    payment_terms?: string | null; purchase_order_ref?: string | null;
-    header_notes?: string | null; footer_notes?: string | null; due_date?: string | null;
-    diluent_rate_gpa?: number | null; total_acres?: number | null; invoice_group_id?: string | null;
-  } | null;
+  const billingRow = billing;
   const pickPo = inv.purchase_order_ref !== undefined ? inv.purchase_order_ref : billingRow?.purchase_order_ref;
   const pickTerms = inv.payment_terms !== undefined ? inv.payment_terms : billingRow?.payment_terms;
   const pickDue = inv.due_date !== undefined ? inv.due_date : billingRow?.due_date;
+  const pickDueSource = inv.due_date_source !== undefined
+    ? inv.due_date_source
+    : billingRow?.due_date_source;
+  const pickStatus = inv.status || 'draft';
   const pickHeader = inv.header_notes !== undefined ? inv.header_notes : billingRow?.header_notes;
   const pickFooter = inv.footer_notes !== undefined ? inv.footer_notes : billingRow?.footer_notes;
   const pickDiscount = inv.discount_earned_cents !== undefined ? inv.discount_earned_cents : billingRow?.discount_earned_cents;
@@ -369,9 +437,10 @@ export async function buildInvoicePdfDataFromRow(
   return {
     invoice_number: inv.invoice_number,
     invoice_date: inv.invoice_date,
-    due_date: pickDue || undefined,
+    due_date: normalizeInvoicePdfDueDate(pickStatus, pickDueSource, pickDue),
+    due_date_source: pickDueSource ?? undefined,
     invoice_type: inv.invoice_type || 'field_application',
-    status: inv.status || 'draft',
+    status: pickStatus,
     customer_name: inv.customer_name,
     customer_address: custRow?.billing_address || undefined,
     customer_city: custRow?.city || undefined,
@@ -422,6 +491,17 @@ const fmtNum = (n: number, decimals = 4) =>
 
 const fmtDate = (d: string) =>
   new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+
+/** The one due-date label used by both invoice PDF layouts. */
+export function invoicePdfDueDateLabel(
+  data: Pick<InvoicePdfData, 'status' | 'due_date' | 'due_date_source'>,
+): string {
+  if (data.due_date_source === 'system'
+      && (data.status === 'draft' || data.status === 'unposted')) {
+    return 'Set when posted';
+  }
+  return data.due_date ? fmtDate(data.due_date) : 'On receipt';
+}
 
 // #2: one-line "Diluent / Carrier Water" string for the field-app PDF — the rate
 // per acre plus the derived total (rate x applied acres) when acres are known.
@@ -574,7 +654,17 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
   };
 
   drawInfoField('DATE', fmtDate(data.invoice_date), labelX, ry);
-  drawInfoField('DUE DATE', data.due_date ? fmtDate(data.due_date) : 'On receipt', rightX - 50, ry);
+  // The pending label is wider than a calendar date. Right-align this column
+  // against the info-card edge so "Set when posted" stays inside the print-safe
+  // margin without colliding with the date column.
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...GRAY);
+  doc.text('DUE DATE', rightX, ry, { align: 'right' });
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...CHARCOAL);
+  doc.text(invoicePdfDueDateLabel(data), rightX, ry + 12, { align: 'right' });
   ry += 30;
   if (data.account_number) {
     drawInfoField('ACCT #', data.account_number, labelX, ry);
@@ -817,7 +907,7 @@ async function generateLegacyInvoicePdf(data: InvoicePdfData) {
   if (data.account_number) metaLine('Account:', data.account_number);
   if (data.salesman_name) metaLine('Salesman:', data.salesman_name);
   if (data.purchase_order_ref) metaLine('PO Ref:', data.purchase_order_ref);
-  metaLine('Due Date:', data.due_date ? fmtDate(data.due_date) : 'On receipt');
+  metaLine('Due Date:', invoicePdfDueDateLabel(data));
   if (data.payment_terms) metaLine('Terms:', data.payment_terms);
 
   y = Math.max(billY, metaY) + 8;

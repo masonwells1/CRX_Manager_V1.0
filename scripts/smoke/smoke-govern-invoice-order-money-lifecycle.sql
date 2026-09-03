@@ -1,10 +1,12 @@
 -- Rollback-only chain for live ledger version 20260721014858, submitted as
 -- 20260721010000_govern_invoice_order_money_lifecycle.
 -- Exercises the partially delivered short-close, invoice recovery, retry binding,
--- terminal-order guards, and direct invoice-table DML revocation in one statement.
+-- due-date provenance transitions, terminal-order guards, and direct invoice-table
+-- DML revocation in one statement.
 DO $smoke$
 DECLARE
   v_suffix text := substr(md5(random()::text), 1, 8);
+  v_chicago_posting_date date := (now() AT TIME ZONE 'America/Chicago')::date;
   v_admin uuid := gen_random_uuid();
   v_customer uuid;
   v_other_customer uuid;
@@ -31,6 +33,10 @@ DECLARE
   v_bound_invoice uuid;
   v_bound_replay_invoice uuid;
   v_bound_other_invoice uuid;
+  v_batch_invoice_a uuid;
+  v_batch_invoice_b uuid;
+  v_due_transition_explicit uuid;
+  v_due_transition_legacy uuid;
   v_invoiced_order uuid;
   v_invoiced_item uuid;
   v_invoiced_delivery uuid;
@@ -457,13 +463,103 @@ BEGIN
 
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, status,
-    invoice_date, due_date, total_amount_cents, created_by
+    invoice_date, due_date, due_date_source, total_amount_cents, created_by
   ) VALUES (
     'E2E-LIFE-BOUND-OTHER-' || v_suffix, v_customer, 'misc_charge', 'draft',
-    current_date, current_date + 30, 0, v_admin
+    current_date, v_chicago_posting_date + 47, 'explicit', 0, v_admin
   ) RETURNING id INTO v_bound_other_invoice;
 
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date,
+    due_date_source, payment_terms, total_amount_cents, created_by
+  ) VALUES (
+    'E2E-LIFE-BATCH-A-' || v_suffix, v_customer, 'misc_charge', 'draft',
+    current_date, 'system', 'Net 15', 0, v_admin
+  ) RETURNING id INTO v_batch_invoice_a;
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date,
+    due_date_source, payment_terms, total_amount_cents, created_by
+  ) VALUES (
+    'E2E-LIFE-BATCH-B-' || v_suffix, v_customer, 'misc_charge', 'draft',
+    current_date, 'system', 'Net 45', 0, v_admin
+  ) RETURNING id INTO v_batch_invoice_b;
+
+  -- The public save must switch an existing explicit/legacy date back to system
+  -- provenance without exposing the CHECK constraint to an intermediate
+  -- non-system + NULL row. Replay of the exact request must remain idempotent.
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date,
+    due_date, due_date_source, total_amount_cents, created_by
+  ) VALUES (
+    'E2E-LIFE-DUE-EXPLICIT-' || v_suffix, v_customer, 'misc_charge', 'draft',
+    current_date, v_chicago_posting_date + 30, 'explicit', 0, v_admin
+  ) RETURNING id INTO v_due_transition_explicit;
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date,
+    due_date, due_date_source, total_amount_cents, created_by
+  ) VALUES (
+    'E2E-LIFE-DUE-LEGACY-' || v_suffix, v_customer, 'misc_charge', 'draft',
+    current_date, v_chicago_posting_date + 30, 'legacy', 0, v_admin
+  ) RETURNING id INTO v_due_transition_legacy;
+
+  v_invoice_id := public.save_invoice(
+    jsonb_build_object(
+      'id', v_due_transition_explicit,
+      'due_date', NULL,
+      'due_date_source', 'system'
+    ),
+    '[]'::jsonb,
+    'e2e-life-due-explicit-system-' || v_suffix
+  );
+  IF v_invoice_id IS DISTINCT FROM v_due_transition_explicit
+     OR (SELECT due_date FROM public.invoices WHERE id = v_due_transition_explicit) IS NOT NULL
+     OR (SELECT due_date_source FROM public.invoices WHERE id = v_due_transition_explicit)
+       IS DISTINCT FROM 'system' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: explicit-to-system save was not atomic';
+  END IF;
+  IF public.save_invoice(
+       jsonb_build_object(
+         'id', v_due_transition_explicit,
+         'due_date', NULL,
+         'due_date_source', 'system'
+       ),
+       '[]'::jsonb,
+       'e2e-life-due-explicit-system-' || v_suffix
+     ) IS DISTINCT FROM v_due_transition_explicit THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: explicit-to-system save did not replay exact result';
+  END IF;
+
+  v_invoice_id := public.save_invoice(
+    jsonb_build_object('id', v_due_transition_legacy, 'due_date', NULL),
+    '[]'::jsonb,
+    'e2e-life-due-legacy-system-' || v_suffix
+  );
+  IF v_invoice_id IS DISTINCT FROM v_due_transition_legacy
+     OR (SELECT due_date FROM public.invoices WHERE id = v_due_transition_legacy) IS NOT NULL
+     OR (SELECT due_date_source FROM public.invoices WHERE id = v_due_transition_legacy)
+       IS DISTINCT FROM 'system' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy caller transition to system was not atomic';
+  END IF;
+
+  -- A draft's accounting date may differ from the day the office posts it.
+  -- With no explicit due-date override, terms must age from the Chicago
+  -- posting date rather than from invoice_date.
+  UPDATE public.invoices
+     SET invoice_date = v_chicago_posting_date + 1,
+         due_date = NULL,
+         due_date_source = 'system',
+         payment_terms = 'Net 15'
+   WHERE id = v_bound_invoice;
   PERFORM public.post_invoice(v_bound_invoice, 'e2e-life-post-bound-' || v_suffix);
+  IF (SELECT due_date FROM public.invoices WHERE id = v_bound_invoice)
+       IS DISTINCT FROM v_chicago_posting_date + 15
+     OR (SELECT due_date_source FROM public.invoices WHERE id = v_bound_invoice)
+       IS DISTINCT FROM 'system'
+     OR (SELECT (posted_at AT TIME ZONE 'America/Chicago')::date
+           FROM public.invoices WHERE id = v_bound_invoice)
+       IS DISTINCT FROM v_chicago_posting_date THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: normal posting due date did not use the Chicago posting date';
+  END IF;
   PERFORM public.post_invoice(v_bound_invoice, 'e2e-life-post-bound-' || v_suffix);
   BEGIN
     PERFORM public.post_invoice(v_bound_other_invoice, 'e2e-life-post-bound-' || v_suffix);
@@ -475,6 +571,63 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong post-invoice binding error: %', v_err;
     END IF;
   END;
+
+  v_result := public.batch_post_invoices(
+    ARRAY[v_batch_invoice_a, v_batch_invoice_b],
+    'e2e-life-batch-due-' || v_suffix
+  );
+  IF COALESCE((v_result->>'success')::boolean, false) IS NOT TRUE
+     OR (SELECT due_date FROM public.invoices WHERE id = v_batch_invoice_a)
+       IS DISTINCT FROM v_chicago_posting_date + 15
+     OR (SELECT due_date FROM public.invoices WHERE id = v_batch_invoice_b)
+       IS DISTINCT FROM v_chicago_posting_date + 45 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: batch posting did not derive system due dates from Chicago posting date and terms';
+  END IF;
+
+  -- Unposting clears a system-generated date so a later post recalculates it.
+  PERFORM public.unpost_invoice(
+    v_bound_invoice, v_admin, 'e2e-life-unpost-system-due-' || v_suffix
+  );
+  IF (SELECT status FROM public.invoices WHERE id = v_bound_invoice)
+       IS DISTINCT FROM 'unposted'
+     OR (SELECT due_date FROM public.invoices WHERE id = v_bound_invoice) IS NOT NULL
+     OR (SELECT due_date_source FROM public.invoices WHERE id = v_bound_invoice)
+       IS DISTINCT FROM 'system' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unpost retained a system-generated due date';
+  END IF;
+  PERFORM public.post_invoice(
+    v_bound_invoice, 'e2e-life-repost-system-due-' || v_suffix
+  );
+  IF (SELECT due_date FROM public.invoices WHERE id = v_bound_invoice)
+       IS DISTINCT FROM v_chicago_posting_date + 15 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: repost did not recalculate the system due date';
+  END IF;
+
+  -- An explicit per-invoice due date is an override, not a terms default.
+  PERFORM public.post_invoice(
+    v_bound_other_invoice,
+    'e2e-life-post-explicit-due-' || v_suffix
+  );
+  IF (SELECT due_date FROM public.invoices WHERE id = v_bound_other_invoice)
+       IS DISTINCT FROM v_chicago_posting_date + 47
+     OR (SELECT due_date_source FROM public.invoices WHERE id = v_bound_other_invoice)
+       IS DISTINCT FROM 'explicit' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: normal posting replaced an explicit due date';
+  END IF;
+  PERFORM public.unpost_invoice(
+    v_bound_other_invoice, v_admin, 'e2e-life-unpost-explicit-due-' || v_suffix
+  );
+  IF (SELECT due_date FROM public.invoices WHERE id = v_bound_other_invoice)
+       IS DISTINCT FROM v_chicago_posting_date + 47 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unpost cleared an explicit due date';
+  END IF;
+  PERFORM public.post_invoice(
+    v_bound_other_invoice, 'e2e-life-repost-explicit-due-' || v_suffix
+  );
+  IF (SELECT due_date FROM public.invoices WHERE id = v_bound_other_invoice)
+       IS DISTINCT FROM v_chicago_posting_date + 47 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: repost replaced an explicit due date';
+  END IF;
 
   PERFORM public.void_invoice(
     v_bound_invoice, '[E2E] bound void', 'e2e-life-void-bound-' || v_suffix
@@ -1001,6 +1154,13 @@ BEGIN
   -- otherwise fulfilled parent orders were soft-deleted. Only the canonical
   -- writer/poster may recover that exact delivered quantity; no capability may
   -- remain after either wrapper returns.
+  -- Put the recovery terms on the customer before the trusted writer creates
+  -- the draft. Once that wrapper returns, the terminal-order trigger correctly
+  -- forbids ordinary edits to the draft because its short-lived capability is
+  -- gone; the canonical poster must still derive the system date from Net 45.
+  UPDATE public.customers
+     SET payment_terms = 'Net 45'
+   WHERE id = v_customer;
   INSERT INTO public.orders (
     order_number, customer_id, order_date, status, booking_draw, deleted_at
   ) VALUES (
@@ -1157,11 +1317,18 @@ BEGIN
   );
   IF (SELECT status FROM public.invoices WHERE id = v_deleted_recovery_invoice)
        IS DISTINCT FROM 'posted'
+     OR (SELECT due_date FROM public.invoices WHERE id = v_deleted_recovery_invoice)
+       IS DISTINCT FROM v_chicago_posting_date + 45
+     OR (SELECT due_date_source FROM public.invoices WHERE id = v_deleted_recovery_invoice)
+       IS DISTINCT FROM 'system'
+     OR (SELECT (posted_at AT TIME ZONE 'America/Chicago')::date
+           FROM public.invoices WHERE id = v_deleted_recovery_invoice)
+       IS DISTINCT FROM v_chicago_posting_date
      OR EXISTS (
        SELECT 1 FROM public.invoice_delivery_recovery_capabilities
         WHERE transaction_id = txid_current()
      ) THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: deleted fulfilled delivery recovery posting/capability cleanup failed';
+    RAISE EXCEPTION 'SMOKE_FAIL: recovery posting due date did not use the Chicago posting date or capability cleanup failed';
   END IF;
   BEGIN
     UPDATE public.invoice_items

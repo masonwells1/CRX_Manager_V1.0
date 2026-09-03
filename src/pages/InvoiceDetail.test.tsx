@@ -5,11 +5,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, intentKeys, nextIntentKey } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockToast, mockNavigate, mockDownloadInvoicePdf, intentKeys, nextIntentKey } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
   mockToast: vi.fn(),
   mockNavigate: vi.fn(),
+  mockDownloadInvoicePdf: vi.fn(),
   intentKeys: new Map<string, string>(),
   nextIntentKey: { value: 0 },
 }));
@@ -91,10 +92,13 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
 
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/invoicePdf', () => ({
-  downloadInvoicePdf: vi.fn(),
+  downloadInvoicePdf: mockDownloadInvoicePdf,
   generateInvoicePdf: vi.fn(),
   deriveFieldAppAppliedAcres: vi.fn(),
   groupReturnCreditDisplayItems: vi.fn((_invoiceType: string, items: unknown[]) => items),
+  mapInvoicePdfItem: vi.fn((item: unknown) => item),
+  normalizeInvoicePdfDueDate: vi.fn((status: string, source: string, dueDate: string | null | undefined) =>
+    source === 'system' && ['draft', 'unposted'].includes(status) ? undefined : dueDate || undefined),
 }));
 vi.mock('../lib/emailService', () => ({
   sendEmail: vi.fn(),
@@ -109,7 +113,10 @@ vi.mock('../lib/parseCents', () => ({
   parseDollarsToCents: vi.fn((v: string) => Math.round(parseFloat(v) * 100)),
 }));
 vi.mock('../components/invoices/WriteOffModal', () => ({ default: () => null }));
-vi.mock('../components/invoices/InvoicePrintDialog', () => ({ default: () => null }));
+vi.mock('../components/invoices/InvoicePrintDialog', () => ({
+  default: ({ open, onPrint }: { open: boolean; onPrint: () => void }) =>
+    open ? <button type="button" onClick={onPrint}>Confirm PDF Print</button> : null,
+}));
 
 import InvoiceDetail from './InvoiceDetail';
 
@@ -136,6 +143,7 @@ describe('InvoiceDetail', () => {
     vi.clearAllMocks();
     intentKeys.clear();
     nextIntentKey.value = 0;
+    mockDownloadInvoicePdf.mockResolvedValue(undefined);
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
   });
@@ -571,7 +579,13 @@ describe('InvoiceDetail', () => {
 });
 
 describe('InvoiceDetail — chemical-sale payment terms', () => {
-  const setupInvoice = (status: string, payment_terms: string | null = null, due_date: string | null = null, customerPaymentTerms: string | null = null) => {
+  const setupInvoice = (
+    status: string,
+    payment_terms: string | null = null,
+    due_date: string | null = null,
+    customerPaymentTerms: string | null = null,
+    due_date_source?: 'system' | 'explicit' | 'legacy',
+  ) => {
     let invoiceCalls = 0;
     const invoice = {
       id: 'inv-terms',
@@ -582,6 +596,7 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
       order_id: 'ord-1',
       invoice_date: '2026-03-15',
       due_date,
+      due_date_source,
       payment_terms,
       subtotal_cents: 10000,
       total_amount_cents: 10000,
@@ -604,6 +619,11 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
     });
   };
 
+  beforeEach(() => {
+    mockDownloadInvoicePdf.mockClear();
+    mockDownloadInvoicePdf.mockResolvedValue(undefined);
+  });
+
   it('shows the payment-terms picker on a draft invoice', async () => {
     setupInvoice('draft');
     renderInvoiceDetail('inv-terms');
@@ -614,7 +634,7 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
   });
 
   it('sends preset terms and explicitly clears due_date', async () => {
-    setupInvoice('draft', 'Net 30', '2026-04-14');
+    setupInvoice('draft', 'Net 30', '2026-04-14', null, 'system');
     mockIntentAwareRpc({ data: null, error: null });
     renderInvoiceDetail('inv-terms');
     await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
@@ -625,11 +645,12 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
       }));
       const saveCall = mockRpc.mock.calls.find(([name]) => name === 'save_invoice');
       expect(saveCall?.[1].p_invoice).toHaveProperty('due_date', null);
+      expect(saveCall?.[1].p_invoice).toHaveProperty('due_date_source', 'system');
     });
   });
 
   it('clears custom terms and explicitly clears due_date when switching to customer default', async () => {
-    setupInvoice('draft', 'Due 45 days after invoice', '2026-05-01');
+    setupInvoice('draft', 'Due 45 days after invoice', '2026-05-01', null, 'explicit');
     mockIntentAwareRpc({ data: null, error: null });
     renderInvoiceDetail('inv-terms');
     await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
@@ -645,28 +666,81 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
   });
 
   it('round-trips custom due date with the original custom terms text', async () => {
-    setupInvoice('draft', 'Due 45 days after invoice', '2026-05-01');
+    setupInvoice('draft', 'Due 45 days after invoice', '2026-05-01', null, 'explicit');
     mockIntentAwareRpc({ data: null, error: null });
     renderInvoiceDetail('inv-terms');
     await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => {
       expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.objectContaining({
-        p_invoice: expect.objectContaining({ payment_terms: 'Due 45 days after invoice', due_date: '2026-05-01' }),
+        p_invoice: expect.objectContaining({
+          payment_terms: 'Due 45 days after invoice',
+          due_date: '2026-05-01',
+          due_date_source: 'explicit',
+        }),
       }));
     });
   });
 
-  it('recognizes a stamped due date on reload and re-derives the preset', async () => {
-    setupInvoice('draft', 'Net 30', '2026-04-14');
+  it('uses provenance to recognize a system due date and re-derive the preset', async () => {
+    setupInvoice('draft', 'Net 30', '2026-04-14', null, 'system');
     renderInvoiceDetail('inv-terms');
     await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
     expect(screen.getByRole('combobox', { name: 'Payment Terms' })).toHaveValue('Net 30');
     expect(document.querySelector('#custom-due-date')).not.toBeInTheDocument();
   });
 
+  it('prints a draft system due date as pending rather than leaking the stored date', async () => {
+    setupInvoice('draft', 'Net 30', '2026-04-14', null, 'system');
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm PDF Print' }));
+
+    await waitFor(() => expect(mockDownloadInvoicePdf).toHaveBeenCalledOnce());
+    expect(mockDownloadInvoicePdf.mock.calls[0][0]).toMatchObject({
+      status: 'draft',
+      due_date: undefined,
+      due_date_source: 'system',
+    });
+  });
+
+  it.each(['explicit', 'legacy'] as const)('prints the exact draft %s due date', async (source) => {
+    setupInvoice('draft', 'Net 30', '2026-04-14', null, source);
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Payment Terms' })).toHaveValue('Custom date…'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm PDF Print' }));
+
+    await waitFor(() => expect(mockDownloadInvoicePdf).toHaveBeenCalledOnce());
+    expect(mockDownloadInvoicePdf.mock.calls[0][0]).toMatchObject({
+      status: 'draft',
+      due_date: '2026-04-14',
+      due_date_source: source,
+    });
+  });
+
+  it('prints the stamped system due date after posting', async () => {
+    setupInvoice('posted', 'Net 30', '2026-04-14', null, 'system');
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm PDF Print' }));
+
+    await waitFor(() => expect(mockDownloadInvoicePdf).toHaveBeenCalledOnce());
+    expect(mockDownloadInvoicePdf.mock.calls[0][0]).toMatchObject({
+      status: 'posted',
+      due_date: '2026-04-14',
+      due_date_source: 'system',
+    });
+  });
+
   it('uses the customer default terms to recognize a stamped due date when invoice terms are null', async () => {
-    setupInvoice('unposted', null, '2026-03-30', 'Net 15');
+    setupInvoice('unposted', null, '2026-03-30', 'Net 15', 'system');
     mockIntentAwareRpc({ data: null, error: null });
     renderInvoiceDetail('inv-terms');
     await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
@@ -675,12 +749,35 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => {
       expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.objectContaining({
-        p_invoice: expect.objectContaining({ payment_terms: null, due_date: null }),
+        p_invoice: expect.objectContaining({ payment_terms: null, due_date: null, due_date_source: 'system' }),
       }));
       const saveCall = mockRpc.mock.calls.find(([name]) => name === 'save_invoice');
       expect(saveCall?.[1].p_invoice.payment_terms).not.toBe('Custom');
     });
   });
+
+  it.each(['explicit', 'legacy'] as const)(
+    'preserves an equal-to-terms %s due date as a custom date',
+    async (source) => {
+      setupInvoice('draft', 'Net 30', '2026-04-14', null, source);
+      mockIntentAwareRpc({ data: null, error: null });
+      renderInvoiceDetail('inv-terms');
+      await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+
+      expect(screen.getByRole('combobox', { name: 'Payment Terms' })).toHaveValue('Custom date…');
+      expect(document.querySelector('#custom-due-date')).toHaveValue('2026-04-14');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => {
+        expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.objectContaining({
+          p_invoice: expect.objectContaining({
+            due_date: '2026-04-14',
+            due_date_source: source,
+          }),
+        }));
+      });
+    },
+  );
 
   it('does not apply stale customer terms after navigating to another invoice', async () => {
     const invoiceA = {
@@ -702,7 +799,15 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
       purchase_order_ref: '',
       created_at: '2026-03-15T00:00:00Z',
     };
-    const invoiceB = { ...invoiceA, id: 'inv-b', invoice_number: 'INV-B', customer_id: 'cust-b', payment_terms: 'Net 30', due_date: '2026-04-14' };
+    const invoiceB = {
+      ...invoiceA,
+      id: 'inv-b',
+      invoice_number: 'INV-B',
+      customer_id: 'cust-b',
+      payment_terms: 'Net 30',
+      due_date: '2026-04-14',
+      due_date_source: 'system',
+    };
     let invoiceCalls = 0;
     let customerCalls = 0;
     let resolveCustomerTerms!: (value: { data: { payment_terms: string }; error: null }) => void;

@@ -16,8 +16,17 @@ import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
-import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
-import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
+import type {
+  Invoice,
+  InvoiceType,
+  InvoiceStatus,
+  InvoiceDueDateSource,
+  Product,
+  Customer,
+  InvoiceShare,
+  InvoicePrintOptions,
+} from '../types';
+import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, normalizeInvoicePdfDueDate, type InvoicePdfData } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { withBelowCostReason } from '../lib/belowCostApproval';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
@@ -138,6 +147,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   });
   const [paymentTerms, setPaymentTerms] = useState('Customer default');
   const [customDueDate, setCustomDueDate] = useState('');
+  const [dueDateSource, setDueDateSource] = useState<InvoiceDueDateSource>('system');
   const [customTermsText, setCustomTermsText] = useState('');
   const isOrderlessMiscCharge = !isNew
     && invoice.invoice_type === 'misc_charge'
@@ -430,38 +440,37 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     const normalizedTerms = effectivePaymentTerms.toLowerCase();
     const isReceiptAlias = ['due on receipt', 'due upon receipt', 'receipt', 'immediately'].includes(normalizedTerms);
     const isPreset = ['Net 30', 'Net 15', 'Net 60', 'Due on receipt'].includes(effectivePaymentTerms);
-    const termDays = isReceiptAlias
-      ? 0
-      : (() => {
-          const match = /(\d+)/.exec(effectivePaymentTerms);
-          const parsed = match ? Number(match[1]) : NaN;
-          return Number.isFinite(parsed) && parsed >= 1 && parsed <= 365 ? parsed : 30;
-        })();
-    let stampedDate = '';
-    if (loadedInvoice.invoice_date) {
-      const stamped = new Date(`${loadedInvoice.invoice_date}T00:00:00Z`);
-      stamped.setUTCDate(stamped.getUTCDate() + termDays);
-      stampedDate = stamped.toISOString().slice(0, 10);
-    }
-    const isPostingStamp = loadedDueDate !== '' && loadedDueDate === stampedDate;
+    const rawDueDateSource = loadedInvoice.due_date_source;
+    // Rows loaded before this migration is deployed have no provenance field. A
+    // non-null date is therefore treated conservatively as legacy/custom instead
+    // of guessing from equality with invoice_date + terms. Equality is not proof
+    // of system intent: an operator can deliberately choose that same date.
+    const loadedDueDateSource: InvoiceDueDateSource =
+      rawDueDateSource === 'system' || rawDueDateSource === 'explicit' || rawDueDateSource === 'legacy'
+        ? rawDueDateSource
+        : loadedDueDate
+          ? 'legacy'
+          : 'system';
     const isEditableStatus = ['draft', 'unposted'].includes(loadedInvoice.status || '');
-    if (loadedDueDate && !isPostingStamp && isEditableStatus) {
+    const preservesStoredDueDate = loadedDueDate !== '' && loadedDueDateSource !== 'system';
+    if (preservesStoredDueDate && isEditableStatus) {
       setPaymentTerms('Custom date…');
       setCustomTermsText(loadedPaymentTerms);
       setCustomDueDate(loadedDueDate);
     } else if (isPreset) {
       setPaymentTerms(loadedPaymentTerms ? effectivePaymentTerms : 'Customer default');
       setCustomTermsText('');
-      setCustomDueDate(isPostingStamp && isEditableStatus ? '' : loadedDueDate);
+      setCustomDueDate(loadedDueDateSource === 'system' && isEditableStatus ? '' : loadedDueDate);
     } else if (isReceiptAlias) {
       setPaymentTerms('Due on receipt');
       setCustomTermsText('');
-      setCustomDueDate(isPostingStamp && isEditableStatus ? '' : loadedDueDate);
+      setCustomDueDate(loadedDueDateSource === 'system' && isEditableStatus ? '' : loadedDueDate);
     } else {
       setPaymentTerms(loadedPaymentTerms || 'Customer default');
       setCustomTermsText('');
-      setCustomDueDate(isPostingStamp && isEditableStatus ? '' : loadedDueDate);
+      setCustomDueDate(loadedDueDateSource === 'system' && isEditableStatus ? '' : loadedDueDate);
     }
+    setDueDateSource(loadedDueDateSource);
     setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
 
     // Fetch parent order for breadcrumb + related deliveries for cross-link
@@ -750,6 +759,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 ? customTermsText || 'Custom'
                 : paymentTerms,
           due_date: paymentTerms === 'Custom date…' ? customDueDate || null : null,
+          due_date_source: paymentTerms === 'Custom date…' ? dueDateSource : 'system',
           purchase_order_ref: invoice.purchase_order_ref || null,
           header_notes: invoice.header_notes || null,
           footer_notes: invoice.footer_notes || null,
@@ -1229,11 +1239,16 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       const derived = await deriveFieldAppAppliedAcres(id!, invoice.invoice_group_id ?? null);
       if (derived != null) diluentAcres = derived;
     }
+    const editableDueDate = ['draft', 'unposted'].includes(invoice.status || '')
+      && paymentTerms === 'Custom date…'
+      ? customDueDate
+      : invoice.due_date;
 
     return {
       invoice_number: invoice.invoice_number || 'DRAFT',
       invoice_date: invoice.invoice_date || localToday(),
-      due_date: invoice.due_date || undefined,
+      due_date: normalizeInvoicePdfDueDate(invoice.status, dueDateSource, editableDueDate),
+      due_date_source: dueDateSource,
       invoice_type: invoice.invoice_type || 'chemical_sale',
       status: invoice.status || 'draft',
       customer_name: customerName,
@@ -1717,8 +1732,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                     id="payment-terms"
                     value={paymentTerms}
                     onChange={(e) => {
-                      setPaymentTerms(e.target.value);
-                      if (e.target.value !== 'Custom date…') setCustomDueDate('');
+                      const nextTerms = e.target.value;
+                      setPaymentTerms(nextTerms);
+                      if (nextTerms === 'Custom date…') {
+                        if (dueDateSource === 'system') setDueDateSource('explicit');
+                      } else {
+                        setCustomDueDate('');
+                        setDueDateSource('system');
+                      }
                     }}
                     className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
@@ -1737,7 +1758,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       id="custom-due-date"
                       type="date"
                       value={customDueDate}
-                      onChange={(e) => setCustomDueDate(e.target.value)}
+                      onChange={(e) => {
+                        setCustomDueDate(e.target.value);
+                        setDueDateSource('explicit');
+                      }}
                       required
                       className="mt-2 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                     />

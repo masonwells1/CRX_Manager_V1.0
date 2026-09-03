@@ -81,6 +81,7 @@ import type {
   Field,
   CustomerShareResult,
   InvoiceStatus,
+  InvoiceDueDateSource,
   DeriveCustomerSharesResult,
   FieldAppInvoiceResult,
   PreviewFieldAppSplitResult,
@@ -224,6 +225,7 @@ export default function FieldApplicationInvoice() {
   // overwrite it with the picker's sentinel label.
   const [customTermsText, setCustomTermsText] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [dueDateSource, setDueDateSource] = useState<InvoiceDueDateSource>('system');
   const [footerNotes, setFooterNotes] = useState('');
   const [internalMemo, setInternalMemo] = useState(''); // internal_notes — NOT printed
   // #33: Discount Earned is owner-driven + DISPLAY-ONLY (it NEVER folds into the
@@ -825,9 +827,18 @@ export default function FieldApplicationInvoice() {
     setPoRef((invoice.purchase_order_ref as string | null) || '');
     const loadedPaymentTerms = (invoice.payment_terms as string | null) || '';
     const loadedDueDate = (invoice.due_date as string | null) || '';
-    // Picker mode from BOTH fields (CodeRabbit P1s on PR #195):
-    // - an explicit due_date on a draft/unposted invoice means a deliberate override —
-    //   show Custom mode with the date so a save round-trips it instead of erasing it;
+    const rawDueDateSource = invoice.due_date_source;
+    // A non-null row loaded before the provenance migration is treated as legacy.
+    // Never infer intent by comparing the date with invoice_date + terms: an
+    // operator can deliberately choose the exact same calendar date.
+    const loadedDueDateSource: InvoiceDueDateSource =
+      rawDueDateSource === 'system' || rawDueDateSource === 'explicit' || rawDueDateSource === 'legacy'
+        ? rawDueDateSource
+        : loadedDueDate
+          ? 'legacy'
+          : 'system';
+    // Picker mode comes from due_date_source plus payment terms:
+    // - explicit/legacy due dates on draft/unposted invoices are authoritative;
     // - receipt-form aliases the parser understands normalize to the preset;
     // - any other legacy free-text (e.g. 'Net 45') keeps its own picker entry (rendered
     //   dynamically) so it never gets reclassified as Custom and never demands a date.
@@ -835,30 +846,9 @@ export default function FieldApplicationInvoice() {
     const isReceiptAlias = ['due on receipt', 'due upon receipt', 'receipt', 'immediately'].includes(
       loadedPaymentTerms.trim().toLowerCase(),
     );
-    // An unposted invoice keeps the due_date the posting RPC stamped. If the stored
-    // date is exactly what the preset terms would stamp from invoice_date, it's a
-    // stamp — reload as the preset (clearing the date so a repost re-derives it),
-    // not as a deliberate Custom override (CodeRabbit P2 on PR #195).
-    // Mirror parse_payment_terms_days for ANY stored terms (incl. legacy 'Net 45' /
-    // 'net_30'), not just the three presets, so their posting stamps are recognized too.
-    const termDays = isReceiptAlias
-      ? 0
-      : (() => {
-          const m = /(\d+)/.exec(loadedPaymentTerms);
-          const n = m ? Number(m[1]) : NaN;
-          return Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
-        })();
-    const loadedInvoiceDate = (invoice.invoice_date as string) || '';
-    let stampedDate = '';
-    if (loadedInvoiceDate) {
-      const d = new Date(loadedInvoiceDate + 'T00:00:00Z');
-      d.setUTCDate(d.getUTCDate() + termDays);
-      stampedDate = d.toISOString().slice(0, 10);
-    }
-    const isPostingStamp = loadedDueDate !== '' && loadedDueDate === stampedDate;
     if (
       loadedDueDate &&
-      !isPostingStamp &&
+      loadedDueDateSource !== 'system' &&
       ['draft', 'unposted'].includes((invoice.status as string) || 'draft')
     ) {
       setPaymentTerms('Custom date…');
@@ -876,14 +866,14 @@ export default function FieldApplicationInvoice() {
       setPaymentTerms(loadedPaymentTerms || 'Net 30');
       setCustomTermsText('');
     }
-    // A recognized posting stamp on a still-editable invoice is NOT kept as local
-    // state: the print path would treat it as explicit and skip re-deriving after a
-    // transaction-date edit. Posted/locked invoices keep it for read-only display.
+    // System dates on still-editable invoices are cleared locally so a later post
+    // derives them again. Posted/locked invoices retain the stored date for display.
     setDueDate(
-      isPostingStamp && ['draft', 'unposted'].includes((invoice.status as string) || 'draft')
+      loadedDueDateSource === 'system' && ['draft', 'unposted'].includes((invoice.status as string) || 'draft')
         ? ''
         : loadedDueDate,
     );
+    setDueDateSource(loadedDueDateSource);
     setFooterNotes((invoice.footer_notes as string | null) || '');
     setInternalMemo((invoice.internal_notes as string | null) || '');
     setStatus((invoice.status as InvoiceStatus) || 'draft');
@@ -1665,7 +1655,9 @@ export default function FieldApplicationInvoice() {
             (paymentTerms === 'Custom date…' ? customTermsText || 'Custom' : paymentTerms) ||
             undefined,
           p_header_notes: notes || undefined,
-          p_due_date: paymentTerms === 'Custom date…' ? dueDate || undefined : undefined,
+          // This value/null boundary is the RPC's explicit custom/system intent.
+          // The migration preserves a legacy source when its date is unchanged.
+          p_due_date: dueDateSource === 'system' ? undefined : dueDate || undefined,
           p_footer_notes: footerNotes || undefined,
           p_internal_notes: internalMemo || undefined,
           p_discounts: discounts,
@@ -1999,33 +1991,11 @@ export default function FieldApplicationInvoice() {
         (paymentTerms === 'Custom date…' ? customTermsText || 'Custom' : paymentTerms) || null,
       header_notes: notes || null,
       footer_notes: footerNotes || null,
-      // Display-only: before posting the DB has no stamped due_date yet, and the PDF
-      // renders null as "On receipt" — which would contradict a printed "Net 30". Derive
-      // the same date the posting RPC will stamp (invoice_date + terms days) so a
-      // pre-posting print matches the eventual invoice. Server stamping stays authoritative.
-      due_date:
-        dueDate ||
-        (() => {
-          // Mirror the server's parse_payment_terms_days for ANY terms string so a
-          // pre-posting print (incl. legacy 'Net 45') matches the eventual stamp:
-          // receipt aliases -> 0; first digit run clamped 1..365; else default 30.
-          if (paymentTerms === 'Custom date…') return null;
-          const t = paymentTerms.trim().toLowerCase();
-          let days: number;
-          if (['due on receipt', 'due upon receipt', 'receipt', 'immediately'].includes(t)) {
-            days = 0;
-          } else {
-            const m = /(\d+)/.exec(paymentTerms);
-            const n = m ? Number(m[1]) : NaN;
-            days = Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
-          }
-          // A cleared transaction-date input falls back to today — the DB defaults
-          // invoice_date to CURRENT_DATE on save, so the print still matches.
-          const base = transactionDate || new Date().toLocaleDateString('en-CA');
-          const d = new Date(base + 'T00:00:00Z');
-          d.setUTCDate(d.getUTCDate() + days);
-          return d.toISOString().slice(0, 10);
-        })(),
+      // System dates do not exist authoritatively until posting; the shared PDF
+      // builder renders those draft/unposted rows as "Set when posted". Explicit
+      // and legacy dates remain printable exactly as entered/stored.
+      due_date: dueDate || undefined,
+      due_date_source: dueDateSource,
       // #33: Discount Earned for THIS invoice (the URL invoice), resolved from the
       // customer-keyed draft via the URL invoice's billed customer. Informational line
       // on the PDF — it does NOT change the Total/Balance math (passed through untouched).
@@ -2656,8 +2626,14 @@ export default function FieldApplicationInvoice() {
               id="payment-terms"
               value={paymentTerms}
               onChange={(e) => {
-                setPaymentTerms(e.target.value);
-                if (e.target.value !== 'Custom date…') setDueDate('');
+                const nextTerms = e.target.value;
+                setPaymentTerms(nextTerms);
+                if (nextTerms === 'Custom date…') {
+                  if (dueDateSource === 'system') setDueDateSource('explicit');
+                } else {
+                  setDueDate('');
+                  setDueDateSource('system');
+                }
                 setDirty(true);
               }}
               disabled={!canEditPaymentTerms}
@@ -2681,7 +2657,11 @@ export default function FieldApplicationInvoice() {
                 id="custom-due-date"
                 type="date"
                 value={dueDate}
-                onChange={(e) => { setDueDate(e.target.value); setDirty(true); }}
+                onChange={(e) => {
+                  setDueDate(e.target.value);
+                  setDueDateSource('explicit');
+                  setDirty(true);
+                }}
                 disabled={!canEditPaymentTerms}
                 required
                 className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"

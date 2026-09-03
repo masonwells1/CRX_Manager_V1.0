@@ -1724,6 +1724,7 @@ export interface BlendRecipeItem {
 
 export type InvoiceType = 'chemical_sale' | 'field_application' | 'misc_charge' | 'credit_memo';
 export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'paid' | 'overdue' | 'voided' | 'cancelled';
+export type InvoiceDueDateSource = 'system' | 'explicit' | 'legacy';
 
 export interface Invoice {
   id: string;
@@ -1761,6 +1762,9 @@ export interface Invoice {
   // Metadata
   invoice_date: string;
   due_date: string | null;
+  /** System dates recalculate from the Chicago posting date; explicit and
+   * pre-provenance legacy dates are preserved through post/unpost cycles. */
+  due_date_source: InvoiceDueDateSource;
   purchase_order_ref: string | null;
   header_notes: string | null;
   footer_notes: string | null;

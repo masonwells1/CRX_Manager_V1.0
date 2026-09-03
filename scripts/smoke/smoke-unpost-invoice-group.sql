@@ -6,7 +6,8 @@
 --
 --   P1  HAPPY — a posted split group (2 members, shared invoice_group_id) is
 --          unposted in ONE call: BOTH members flip posted -> unposted, posted_by/at
---          cleared, an 'invoice_unposted' audit row per member, one
+--          cleared, the system due date clears while the explicit date remains,
+--          an 'invoice_unposted' audit row per member, one
 --          'invoice_group_unposted' activity row.
 --   P2  ALL-OR-NOTHING — a posted split group where ONE member is PAID (money
 --          applied): unpost_invoice_group RAISES (money guard) and NOTHING changes
@@ -25,6 +26,7 @@ DO $smoke$
 DECLARE
   v_admin   uuid; v_appl uuid; v_forged uuid := gen_random_uuid();
   v_sfx     text := substr(gen_random_uuid()::text,1,8);
+  v_chicago_posting_date date := (now() AT TIME ZONE 'America/Chicago')::date;
   v_cust_a  uuid; v_cust_b uuid;
   v_grp     uuid := gen_random_uuid();
   v_grp2    uuid := gen_random_uuid();
@@ -37,18 +39,21 @@ BEGIN
   SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
   SELECT id INTO v_appl  FROM profiles WHERE role='applicator' AND is_active=true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL OR v_appl IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: need admin + applicator'; END IF;
-  INSERT INTO customers (farm_name) VALUES ('[SMOKE] UPG-A '||v_sfx) RETURNING id INTO v_cust_a;
-  INSERT INTO customers (farm_name) VALUES ('[SMOKE] UPG-B '||v_sfx) RETURNING id INTO v_cust_b;
+  INSERT INTO customers (farm_name, payment_terms) VALUES ('[SMOKE] UPG-A '||v_sfx, 'Net 15') RETURNING id INTO v_cust_a;
+  INSERT INTO customers (farm_name, payment_terms) VALUES ('[SMOKE] UPG-B '||v_sfx, 'Net 45') RETURNING id INTO v_cust_b;
 
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role','authenticated')::text, true);
 
   -- ── HAPPY GROUP: two members sharing invoice_group_id, both posted ─────────
-  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by, invoice_group_id)
-    VALUES ('[SMOKE] UPG-A-'||v_sfx, v_cust_a, 'field_application', 'draft', CURRENT_DATE, 120000, v_admin, v_grp) RETURNING id INTO v_inv_a;
-  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by, invoice_group_id)
-    VALUES ('[SMOKE] UPG-B-'||v_sfx, v_cust_b, 'field_application', 'draft', CURRENT_DATE, 80000, v_admin, v_grp) RETURNING id INTO v_inv_b;
-  PERFORM post_invoice(v_inv_a, '[SMOKE] upg-a-post-'||v_sfx);
-  PERFORM post_invoice(v_inv_b, '[SMOKE] upg-b-post-'||v_sfx);
+  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date_source, total_amount_cents, created_by, invoice_group_id)
+    VALUES ('[SMOKE] UPG-A-'||v_sfx, v_cust_a, 'field_application', 'draft', CURRENT_DATE, 'system', 120000, v_admin, v_grp) RETURNING id INTO v_inv_a;
+  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, due_date_source, total_amount_cents, created_by, invoice_group_id)
+    VALUES ('[SMOKE] UPG-B-'||v_sfx, v_cust_b, 'field_application', 'draft', CURRENT_DATE, v_chicago_posting_date + 47, 'explicit', 80000, v_admin, v_grp) RETURNING id INTO v_inv_b;
+  PERFORM post_invoice_group(v_grp, v_admin, '[SMOKE] upg-post-'||v_sfx);
+  IF (SELECT due_date FROM invoices WHERE id=v_inv_a) IS DISTINCT FROM v_chicago_posting_date + 15
+     OR (SELECT due_date FROM invoices WHERE id=v_inv_b) IS DISTINCT FROM v_chicago_posting_date + 47 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: group posting did not derive system and preserve explicit due dates';
+  END IF;
 
   v_res := unpost_invoice_group(v_grp, v_admin, '[SMOKE] upg-unpost-'||v_sfx);
   IF (v_res->>'success')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'SMOKE_FAIL: group unpost did not succeed'; END IF;
@@ -58,6 +63,10 @@ BEGIN
   IF v_n <> 2 THEN RAISE EXCEPTION 'SMOKE_FAIL: expected 2 members unposted, got %', v_n; END IF;
   SELECT count(*) INTO v_n FROM invoices WHERE invoice_group_id=v_grp AND (posted_by IS NOT NULL OR posted_at IS NOT NULL);
   IF v_n <> 0 THEN RAISE EXCEPTION 'SMOKE_FAIL: posted_by/at not cleared on % members', v_n; END IF;
+  IF (SELECT due_date FROM invoices WHERE id=v_inv_a) IS NOT NULL
+     OR (SELECT due_date FROM invoices WHERE id=v_inv_b) IS DISTINCT FROM v_chicago_posting_date + 47 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: group unpost did not clear system and preserve explicit due dates';
+  END IF;
   SELECT count(*) INTO v_n FROM financial_audit_log WHERE entity_id IN (v_inv_a, v_inv_b) AND operation_type='invoice_unposted';
   IF v_n <> 2 THEN RAISE EXCEPTION 'SMOKE_FAIL: expected 2 invoice_unposted audit rows, got %', v_n; END IF;
 
@@ -66,8 +75,7 @@ BEGIN
     VALUES ('[SMOKE] UPG-C-'||v_sfx, v_cust_a, 'field_application', 'draft', CURRENT_DATE, 60000, v_admin, v_grp2) RETURNING id INTO v_inv_c;
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by, invoice_group_id)
     VALUES ('[SMOKE] UPG-D-'||v_sfx, v_cust_b, 'field_application', 'draft', CURRENT_DATE, 40000, v_admin, v_grp2) RETURNING id INTO v_inv_d;
-  PERFORM post_invoice(v_inv_c, '[SMOKE] upg-c-post-'||v_sfx);
-  PERFORM post_invoice(v_inv_d, '[SMOKE] upg-d-post-'||v_sfx);
+  PERFORM post_invoice_group(v_grp2, v_admin, '[SMOKE] upg-cd-post-'||v_sfx);
   -- Apply money to D so it cannot be unposted.
   INSERT INTO allocation_sets (entity_type, entity_id, version, is_active, customer_id, total_payment_cents, total_allocated_cents)
     VALUES ('payment', gen_random_uuid(), 1, true, v_cust_b, 40000, 40000) RETURNING id INTO v_aset;
@@ -80,7 +88,7 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: group with a paid member was unposted (not all-or-nothing)';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF SQLERRM NOT LIKE '%payments, prepay, or write-offs%' THEN
+    IF SQLERRM NOT LIKE '%payments, prepay, write-offs, or applied credit%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: all-or-nothing raised the WRONG error: %', SQLERRM;
     END IF;
   END;
@@ -130,8 +138,7 @@ BEGIN
       VALUES ('[SMOKE] UPG-E-'||v_sfx, v_cust_a, 'field_application', 'draft', CURRENT_DATE, 30000, v_admin, v_grp3) RETURNING id INTO v_inv_e;
     INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, total_amount_cents, created_by, invoice_group_id)
       VALUES ('[SMOKE] UPG-F-'||v_sfx, v_cust_b, 'field_application', 'draft', CURRENT_DATE, 20000, v_admin, v_grp3) RETURNING id INTO v_inv_f;
-    PERFORM post_invoice(v_inv_e, '[SMOKE] upg-e-post-'||v_sfx);
-    PERFORM post_invoice(v_inv_f, '[SMOKE] upg-f-post-'||v_sfx);
+    PERFORM post_invoice_group(v_grp3, v_admin, '[SMOKE] upg-ef-post-'||v_sfx);
     BEGIN
       PERFORM unpost_invoice_group(v_grp3, v_admin, '[SMOKE] upg-unpost-'||v_sfx);  -- v_grp's key!
       RAISE EXCEPTION 'SMOKE_FAIL: cross-group key replay silently returned (wrong-group success)';
