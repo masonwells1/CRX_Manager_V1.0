@@ -30,6 +30,7 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { brotliDecompressSync } from 'node:zlib';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -167,7 +168,87 @@ function assertInputs() {
     8,
     'expected exactly 8 CREATE OR REPLACE FUNCTION statements',
   );
+  assertRebuildPathAccepted();
   return migration;
+}
+
+/**
+ * The REBUILD path must be accepted by the migration's preflight.
+ *
+ * A clean rebuild here does NOT replay every migration: it restores
+ * supabase/baselines/<high-water>_public_schema.sql.br and then replays only the
+ * migrations authored after that high-water mark. So the state a rebuild
+ * actually presents to this migration is the BASELINE body, not the body the
+ * oldest tracked migration wrote.
+ *
+ * This check exists because adversarial review (2026-09-03) reported a HIGH that
+ * the migration aborts a baseline restore, having computed the baseline's
+ * next_cycle_count_number md5 as f4e4391dc6f45ceb028ce3c4195a22dc against the
+ * migration's accepted b8d37b2ba9ef790eaa8fca8bacdb9f5f. The finding was a false
+ * positive: f4e4391d is the RAW body (701 chars) and b8d37b2b is the body with
+ * per-line trailing whitespace stripped (692 chars) -- a 9-character difference,
+ * on precisely the one generator documented as carrying trailing whitespace. The
+ * preflight normalizes before comparing, so it compares like with like.
+ *
+ * The reviewer's OBSERVATION was correct even though its conclusion was not:
+ * this proof derives its starting bodies from the candidate and so never touched
+ * the baseline at all, which is why nothing here could have contradicted the
+ * claim either way. That gap is what this closes -- the rebuild path is now
+ * ASSERTED against the real artifact rather than argued about.
+ */
+function assertRebuildPathAccepted() {
+  const manifestPath = path.join(ROOT, 'supabase', 'baselines', 'manifest.json');
+  if (!existsSync(manifestPath)) {
+    console.log('  (no baseline manifest — skipping the rebuild-path assertion)');
+    return;
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const highWater = manifest.migrations_high_water;
+  assert.ok(highWater, 'baseline manifest has no migrations_high_water');
+
+  const schemaFile = (manifest.restore_order || []).find((f) => f.includes('public_schema'));
+  assert.ok(schemaFile, 'baseline manifest restore_order has no public_schema artifact');
+  const schemaPath = path.join(ROOT, 'supabase', 'baselines', schemaFile);
+  assert.ok(existsSync(schemaPath), `baseline schema artifact missing: ${schemaPath}`);
+
+  const baselineSql = schemaPath.endsWith('.br')
+    ? brotliDecompressSync(readFileSync(schemaPath)).toString('utf8')
+    : readFileSync(schemaPath, 'utf8');
+
+  const failures = [];
+  // NOTE ON SCOPE: this compares the BASELINE body directly. That is correct
+  // only while no migration authored after `highWater` re-emits one of the eight
+  // — verified on 2026-09-03, the newest tracked definition of every generator
+  // predates the baseline. If a later migration ever re-emits one, a rebuild
+  // would present THAT body instead and this assertion would be checking the
+  // wrong bytes, so re-derive before trusting it.
+  for (const name of GENERATORS) {
+    const re = new RegExp(
+      `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:"?public"?\\.)?"?${name}"?\\s*\\([\\s\\S]*?AS\\s+(\\$[A-Za-z_]*\\$)([\\s\\S]*?)\\1`,
+      'g',
+    );
+    let m;
+    let body = null;
+    while ((m = re.exec(baselineSql)) !== null) body = m[2];
+    if (body === null) {
+      failures.push(`${name}: not found in the baseline schema artifact`);
+      continue;
+    }
+    const md5 = createHash('md5').update(body.replace(/[ \t]+$/gm, ''), 'utf8').digest('hex');
+    if (md5 !== LIVE_BODY_MD5[name]) {
+      failures.push(
+        `${name}: baseline body md5 ${md5} is not an accepted pre-image (expected ${LIVE_BODY_MD5[name]}) — a baseline restore would ABORT at this migration`,
+      );
+    }
+  }
+  assert.equal(
+    failures.length,
+    0,
+    `the migration's preflight would reject a clean baseline restore:\n${failures.join('\n')}`,
+  );
+  console.log(
+    `  rebuild path OK: all 8 baseline bodies (high-water ${highWater}) normalize to an accepted pre-image`,
+  );
 }
 
 /** The migration's postflight block, extracted so mutation tests can re-run it. */
