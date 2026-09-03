@@ -567,10 +567,24 @@ async function reconcileLabelEvent({
 
 async function collectCheckBlockers({ github, owner, repo, headSha, config, core }) {
   const [checkRuns, statuses] = await Promise.all([
+    // NO mapFn. `checks.listForRef` returns a NAMESPACED list envelope
+    // (`{ total_count, check_runs }`), and Octokit's paginate normalizes that
+    // before the mapFn ever sees it: `normalizePaginatedListResponse` replaces
+    // `response.data` with the inner array itself. So the obvious-looking
+    // `(response) => response.data.check_runs` reads a property off an ARRAY,
+    // yields `undefined` for every page, and paginate concatenates those into
+    // `[undefined, ...]`.
+    //
+    // The first thing to touch an element is `check.app?.id` in
+    // attachRequiredWorkflowProvenance, so the whole gate died with
+    // "Cannot read properties of undefined (reading 'app')" — observed on PR
+    // #563, run 33707346152, 2026-09-03. Nothing before that had reached this
+    // code: it is only called on the ready-label path, and no candidate had
+    // ever gotten far enough to request a review, so the CodeRabbit policy had
+    // never actually run end to end since #516.
     github.paginate(
       github.rest.checks.listForRef,
       { owner, repo, ref: headSha, filter: 'latest', per_page: 100 },
-      (response) => response.data.check_runs,
     ),
     github.paginate(
       github.rest.repos.listCommitStatusesForRef,
