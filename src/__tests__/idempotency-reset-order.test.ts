@@ -189,21 +189,45 @@ const ALLOWED_REASONS: Record<string, Reason[]> = {
  * Do NOT add a file here to make the suite pass. An entry means "known broken,
  * deliberately deferred, written down" — if that is not true, fix the site instead.
  */
-const KNOWN_UNFIXED = new Set([
-  'src/pages/JobDetail.tsx',
-  'src/pages/QuoteBuilder.tsx',
-  'src/pages/BlendTicketDetail.tsx',
-  'src/components/prepay/PrepayWorkspacePanel.tsx',
-  'src/components/invoices/FinanceChargePreviewModal.tsx',
-  'src/components/deliveries/QuickDeliveryModal.tsx',
-  'src/pages/Deliveries.tsx',
-  'src/pages/DeliveryRemainders.tsx',
-  'src/pages/Invoices.tsx',
-  'src/pages/NewOrder.tsx',
-  'src/pages/PaymentAllocation.tsx',
-  'src/pages/Quotes.tsx',
-  'src/pages/FieldSetup.tsx',
-]);
+/**
+ * COUNT-PINNED, not file-exempted (Codex round-3 MEDIUM). A whole-file exemption
+ * cannot fail: any NEW reset-before-assert added to one of these files would be
+ * absorbed silently, which reads as coverage while providing none. Each file is
+ * therefore pinned to the exact number of known sites, and the guard fails if the
+ * count moves in EITHER direction — up means a new defect, down means a site was
+ * fixed and the pin should be lowered (or the file removed).
+ */
+const KNOWN_UNFIXED_SITE_COUNTS: Record<string, number> = {
+  'src/pages/JobDetail.tsx': 5,
+  'src/pages/QuoteBuilder.tsx': 6,
+  'src/pages/BlendTicketDetail.tsx': 6,
+  'src/components/prepay/PrepayWorkspacePanel.tsx': 1,
+  'src/components/invoices/FinanceChargePreviewModal.tsx': 1,
+  'src/components/deliveries/QuickDeliveryModal.tsx': 1,
+  'src/pages/Deliveries.tsx': 1,
+  'src/pages/DeliveryRemainders.tsx': 1,
+  'src/pages/Invoices.tsx': 2,
+  'src/pages/NewOrder.tsx': 1,
+  'src/pages/PaymentAllocation.tsx': 1,
+  'src/pages/Quotes.tsx': 1,
+  'src/pages/FieldSetup.tsx': 1,
+  // Reverted after round 3: FieldStop does NOT remount stop-to-stop (App.tsx:285 has
+  // no key), so retaining an unscoped complete_delivery key could replay stop A's
+  // receipt against stop B.
+  'src/pages/FieldStop.tsx': 1,
+  // OrderDetail is mostly FIXED — this pins the ONE site deliberately left in main's
+  // order: void_order sends order.id plus a free-text reason, so it needs payload
+  // binding rather than route-id scoping.
+  'src/pages/OrderDetail.tsx': 1,
+  // ALIASED-RESET CLASS, invisible until this guard learned to resolve destructured
+  // names. CustomerDetail was named by the round-3 review; BulkTicketUpload and
+  // ManualTicketCreate were found only by the alias resolution and had never been
+  // enumerated by any sweep or review. None is a money path.
+  'src/pages/CustomerDetail.tsx': 2,
+  'src/components/blendtickets/BulkTicketUpload.tsx': 1,
+  'src/components/blendtickets/ManualTicketCreate.tsx': 1,
+};
+const KNOWN_UNFIXED = new Set(Object.keys(KNOWN_UNFIXED_SITE_COUNTS));
 
 /** Classify one hit from the surrounding source, or null if nothing excuses it. */
 function classify(lines: string[], lineNo: number): Reason | null {
@@ -213,10 +237,32 @@ function classify(lines: string[], lineNo: number): Reason | null {
   const handlerWindow = lines.slice(Math.max(0, lineNo - 4), lineNo).join('\n');
 
   if (/^\s*(\*|\/\/)/.test(self)) return 'doc-comment';
-  if (/getIdempotencyMismatchResult|isDefinitiveRpcRejection|committed[A-Za-z]*(Id|Result)/.test(above)) {
-    return 'recovery';
-  }
-  if (/\.throwOnError\(\)/.test(callWindow)) return 'throw-on-error';
+
+  // A recovery marker only excuses this reset if it is in the SAME branch. A
+  // recovery branch always exits with `throw` or `return`, so any such exit between
+  // the marker and the reset proves the reset is in a DIFFERENT branch and the marker
+  // is merely nearby. Without this, the correct recovery reset in QuickDeliveryModal
+  // laundered the buggy one ~11 lines below it (Codex round-3 MEDIUM).
+  const lastIndexMatching = (arr: string[], re: RegExp): number => {
+    for (let i = arr.length - 1; i >= 0; i -= 1) if (re.test(arr[i])) return i;
+    return -1;
+  };
+  const exitsBranch = (arr: string[], from: number): boolean =>
+    arr.slice(from + 1).some((l) => /^\s*(throw|return)\b/.test(l));
+
+  const aboveLines = above.split('\n');
+  const markerIdx = lastIndexMatching(
+    aboveLines,
+    /getIdempotencyMismatchResult|isDefinitiveRpcRejection|committed[A-Za-z]*(Id|Result)/,
+  );
+  if (markerIdx >= 0 && !exitsBranch(aboveLines, markerIdx)) return 'recovery';
+
+  // Same rule for fire-and-forget: an exit between the call and the reset means they
+  // are not the same statement sequence.
+  const callLines = callWindow.split('\n');
+  const throwIdx = lastIndexMatching(callLines, /\.throwOnError\(\)/);
+  if (throwIdx >= 0 && !exitsBranch(callLines, throwIdx)) return 'throw-on-error';
+
   if (/onClick=|onChange=/.test(handlerWindow)) return 'intent-rotation';
   return null;
 }
@@ -244,13 +290,34 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  * blind to the worst case, so that condition is gone: a reset reached from a call
  * without an intervening assert is reported, full stop.
  */
+/**
+ * Resets reached through a DESTRUCTURED ALIAS, e.g.
+ *   const { resetKey: resetSaveQuoteIdempotencyKey } = useIdempotencyKey(...)
+ *   ...
+ *   resetSaveQuoteIdempotencyKey();
+ *
+ * The literal `resetKey()` spelling is invisible to a plain scan, which is how a live
+ * `save_customer` defect at CustomerDetail.tsx:796 escaped the original 249-site sweep
+ * entirely (Codex round-3 HIGH). Aliases are resolved per file and matched as well.
+ */
+function aliasResetPattern(source: string): RegExp | null {
+  const names = [...source.matchAll(/\bresetKeyFor\s*:\s*(\w+)|\bresetKey\s*:\s*(\w+)/g)]
+    .map((m) => m[1] ?? m[2])
+    .filter(Boolean);
+  if (names.length === 0) return null;
+  return new RegExp(`\\b(${[...new Set(names)].join('|')})\\s*\\(`);
+}
+
 function findResetBeforeAssert(file: string): number[] {
-  const lines = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
+  const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+  const lines = source.split('\n');
+  const alias = aliasResetPattern(source);
+  const isReset = (l: string) => RESET.test(l) || (alias !== null && alias.test(l));
   const hits: number[] = [];
   let last: 'CALL' | 'ASSERT' | null = null;
   lines.forEach((line, i) => {
-    if (!TOKEN.test(line)) return;
-    if (RESET.test(line)) {
+    if (!TOKEN.test(line) && !(alias !== null && alias.test(line))) return;
+    if (isReset(line)) {
       // A reset that is NOT preceded by a verified reply is a hit, whether or not an
       // assert happens to appear later.
       if (last === 'CALL') hits.push(i + 1);
@@ -292,6 +359,19 @@ describe('F1 guard — no money screen retires its key before the reply is check
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('every known-unfixed file has EXACTLY its pinned number of sites', () => {
+    // The point of the pin: a NEW reset-before-assert in one of these files must FAIL
+    // rather than be absorbed by a whole-file exemption.
+    const actual: Record<string, number> = {};
+    for (const file of Object.keys(KNOWN_UNFIXED_SITE_COUNTS)) {
+      const lines = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
+      // Count only sites with NO verified reason — a recovery-branch or
+      // throw-on-error reset in these files is correct and must not inflate the pin.
+      actual[file] = findResetBeforeAssert(file).filter((n) => classify(lines, n) === null).length;
+    }
+    expect(actual).toEqual(KNOWN_UNFIXED_SITE_COUNTS);
   });
 
   it('no allowlist entry is stale', () => {
@@ -348,7 +428,13 @@ describe('F1 guard — no money screen retires its key before the reply is check
     ['splitInvoiceIdem', 'create_split_invoices_from_order'],
   ];
 
-  it('every fixed-payload key is retired only after its own RPC reply is verified', () => {
+  // CLAIM LIMITED to what this actually proves (Codex round-3 MEDIUM): it checks that
+  // the RPC name and an assertRpcResult BOTH appear in the 25 lines above each reset.
+  // Those tokens could belong to separate calls or branches, so this is a LEXICAL
+  // proximity check, not proof that the reset directly follows its own verified call.
+  // It is still worth keeping — it catches a reset moved away from its call entirely,
+  // and it fails closed when the key is renamed or deleted.
+  it('every fixed-payload key has its RPC name and an assert in the lines above it', () => {
     const lines = readFileSync('src/pages/OrderDetail.tsx', 'utf8').replace(/\r\n/g, '\n').split('\n');
     for (const [idem, rpc] of FIXED_PAYLOAD_KEYS) {
       const resets = lines
@@ -399,7 +485,13 @@ describe('F1 guard — no money screen retires its key before the reply is check
     'src/pages/FieldApplicationInvoice.tsx': ['deleteIdem', 'transferToSchedulingIdem'],
   };
 
-  it('keys retained on a page that can switch records are bound to the route id', () => {
+  // CLAIM LIMITED (Codex round-3 MEDIUM): this asserts the DECLARATION contains
+  // `id ?? ''`. It does NOT verify that the RPC sends that same id, that the handler
+  // uses this hook, or that no other mutable selector can become the target — those
+  // are properties of the call site, checked by reading it, not by this test. The list
+  // is also manually enumerated, so it cannot discover a page or key nobody added.
+  // What it does buy: a scoped key silently losing its scope fails immediately.
+  it('the enumerated record-scoped keys still declare a route-id scope', () => {
     for (const [file, keys] of Object.entries(RECORD_SCOPED_KEYS)) {
       const src = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
       for (const key of keys) {

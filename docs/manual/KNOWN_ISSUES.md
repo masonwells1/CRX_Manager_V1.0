@@ -823,13 +823,31 @@ key to the REQUEST PAYLOAD — the `fingerprintIntentPayload` approach from PR #
 route. Enumerated in `src/__tests__/idempotency-reset-order.test.ts` (`KNOWN_UNFIXED`), which fails
 if a NEW site appears.
 
-**ALSO OPEN — the original sweep missed an entire class.** It matched `resetKey()` /
-`resetKeyFor(` literally and never saw **aliased** resets from destructured hooks
-(`const { resetKey: resetXKey } = useIdempotencyKey(...)`). `QuoteBuilder.tsx:1522` calls
-`resetSaveQuoteIdempotencyKey()` before the assert on 1523 — the F1 defect, live, on `save_quote`.
-`CustomerDetail.tsx`, `ProductDetail.tsx`, `PurchaseOrderDetail.tsx` and `JobDetail.tsx` use the
-same aliased form and were never examined. Any re-sweep must match the destructured alias, not the
-method name.
+**ALSO OPEN — the original sweep missed an entire class, now enumerated.** It matched
+`resetKey()` / `resetKeyFor(` literally and never saw **aliased** resets from destructured hooks
+(`const { resetKey: resetXKey } = useIdempotencyKey(...)`). The guard now resolves aliases per file
+and the class is counted, which surfaced four sites no sweep or review had listed:
+`QuoteBuilder.tsx:1522` (`resetSaveQuoteIdempotencyKey()` before the assert on 1523 — live F1 on
+`save_quote`), `CustomerDetail.tsx:782` and `:796` (`save_customer`; named by the round-3 review),
+and `BulkTicketUpload.tsx:253` plus `ManualTicketCreate.tsx:492` (found ONLY by the alias
+resolution). None of the last four is a money path. Any re-sweep must match the destructured alias,
+not the method name.
+
+**Reverted after round 3, in addition to the twelve above.** `FieldStop` — it does NOT remount
+stop-to-stop (`App.tsx:285` has no `key`, and `fetchStop` carries an explicit stale-route guard for
+exactly that reason), so retaining an unscoped `complete_delivery` key could replay stop A's receipt
+against stop B. And ONE site inside the otherwise-fixed `OrderDetail`: `void_order` sends
+`order.id` plus a free-text `voidReason` rather than the route id, and the void modal can survive an
+order-to-order navigation so its opening-click reset is bypassed — it stays in main's order until it
+can be payload-bound.
+
+**Guard strength (corrected).** `KNOWN_UNFIXED` is now **count-pinned per file**, not a whole-file
+exemption: `src/__tests__/idempotency-reset-order.test.ts` fails if the number of unexcused sites in
+any listed file moves in EITHER direction, so a NEW defect in an already-listed file cannot be
+absorbed silently. Mutation-tested. The earlier wording here claimed that protection before it
+existed. Two residuals remain stated in the test body rather than assumed away: the scanner matches
+LINE ORDER and cannot bind a call, its reset and its assert to the same control-flow branch, and the
+record-scoping check proves a declaration contains a route-id scope, not that the RPC sends that id.
 
 **Historical note on the original attempt:** 39 call sites
 across 20 files were reordered, plus two click-level repairs in

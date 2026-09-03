@@ -706,6 +706,18 @@ export default function OrderDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      // F1 DELIBERATELY NOT FIXED HERE — left in main's (defective) order.
+      //
+      // Moving this reset after the assert would make the client RETAIN the key, and
+      // void_order is NOT bound to the route record: it sends order.id plus the
+      // free-text voidReason above. voidOrderIdem carries no record scope, this page
+      // survives order-to-order navigation, and the void modal can stay open across
+      // that change so the opening-click reset is bypassed. A retained key could then
+      // replay order A's void receipt against order B (Codex round-3 HIGH).
+      //
+      // Binding it needs the REQUEST PAYLOAD (order id + reason), not the route id —
+      // tracked with the other payload-bound work in docs/manual/KNOWN_ISSUES.md.
+      voidOrderIdem.resetKey();
       const voided = assertRpcResult<{
         inventory_products_restored?: number;
         commissions_cancelled?: number;
@@ -713,7 +725,6 @@ export default function OrderDetail() {
         posted_invoices_flagged?: number;
         paid_commissions_flagged?: number;
       }>(voidResult, 'void_order');
-      voidOrderIdem.resetKey();
 
       const parts: string[] = ['Order voided.'];
       if ((voided.inventory_products_restored ?? 0) > 0)

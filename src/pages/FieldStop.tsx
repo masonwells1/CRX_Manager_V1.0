@@ -332,8 +332,8 @@ export default function FieldStop() {
     try {
       const { data: result, error } = await supabase.rpc('complete_delivery', rpcParams);
       if (error) throw error;
-      assertRpcResult(result, 'complete_delivery');
       completeIdem.resetKey();
+      assertRpcResult(result, 'complete_delivery');
 
       // Signature image upload (PII — stored as a path, signed URL on demand).
       if (signatureDataUrl) {
