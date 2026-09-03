@@ -14,6 +14,35 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 
 ## 🔴 1. Owner actions (needs Mason — ranked by value unblocked)
 
+> ### ⏰ DEADLINE ITEM — test the pricing/repricing path before sales season
+>
+> **Added 2026-09-02 at Mason's request** ("this all needs tested before we start sales season —
+> I don't have time now"). Deferred deliberately; it is **not** blocked and **not** forgotten.
+>
+> **What needs testing:** the full bulk-reprice path end to end, with real eyes, on real costs —
+> Products → **"Pricing .xlsx"** → edit costs/margins in Excel → **"Review Pricing File"** →
+> preview → approve → confirm tier prices moved correctly on live products.
+>
+> **Why it is dated rather than "someday":** margins are computed from `products.current_cost`, and
+> that cost basis is stale. Verified live 2026-09-02 — of 604 `product_cost_basis` rows, **602 are
+> the original `migration_baseline` load** (`effective_from` 2026-03-04 → 2026-07-18); exactly one
+> came from a supplier price selection and one from a product-page override. **No cost of any kind
+> has moved since 2026-07-18.** Every margin, profitability, and commission figure is therefore
+> computed against costs up to six months old. Repricing into a season on stale costs is the
+> expensive version of this bug.
+>
+> **What is already proven, so nobody rebuilds it:** the tooling exists and works. A real round trip
+> ran on 2026-09-02 — exported a workbook, edited a cost and a price through Excel, parsed it back,
+> and both edits came through on the right rows with money preserved as exact decimals and Excel
+> formulas detected rather than silently applied. Repo tests pass (14). Both RPCs are live
+> (`preview_product_cost_basis_changes`, `apply_product_cost_basis_change_set`). Row cap is 5,000,
+> well above the ~604-product catalog. **The gap is adoption and a real-data test, not construction.**
+>
+> Usage to date: **one** workbook export and 4 changed rows, all on 2026-08-18.
+>
+> Detail: `docs/manual/KNOWN_ISSUES.md` and the item-4 label-data entry below (same catalog, same
+> data-entry bottleneck — worth doing in one sitting).
+
 1. ~~**Re-base the 18 negative-inventory products**~~ — **⏸ DEFERRED by Mason 2026-07-16**
    ("skip and don't worry about it for now"). The 18 rows (verified live:
    `inventory.quantity_available < 0`) stay as-is until he brings physical counts;

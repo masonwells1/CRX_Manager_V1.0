@@ -323,6 +323,36 @@ transfer-alignment and bounded-read corrections superseded that head.
 Acceptance remains bound to a fresh exact-SHA proof/review cycle for the
 current commit containing all bounded successor corrections.
 
+### `live-testdata-lib.mjs` read-side false positives (verified 2026-09-02)
+
+The call-detection in `live-testdata-lib.mjs` treats any `identifier(` as a function call and refuses
+the statement unless the name is a known read-only builtin. It does not distinguish a call from
+ordinary SQL syntax that merely ends in an identifier character before a parenthesis, so a series of
+**purely read-only** statements are refused. This is a pre-existing defect in the guard, not in the
+callers. The family is now five spellings deep:
+
+| Spelling | Refused as |
+|---|---|
+| `unnest(…) AS a(argname)` — a table alias with a column list | `a()` |
+| `WITH RECURSIVE lexer (oid, …) AS (…)` — a CTE column list | `lexer()` |
+| `AS MATERIALIZED (` — CTE materialization hint | `materialized()` |
+| `[\s(]` — a character class whose own `s` precedes the `(` | `s()` |
+| `\M(?:` — a regex word boundary before a non-capturing group | `m()` |
+
+Consequence: the `db-invariant-sweeps` actor-forgery predicates cannot be executed verbatim through
+`mcp__supabase__execute_sql`, the documented "Claude mode" path in `run-sweeps.mjs`. `main`'s copy is
+blocked too. Workarounds that preserve row selection are display/alias-only: give function FROM-items
+a bare alias (`unnest(x) WITH ORDINALITY AS named` yields `named.named`), alias the recursive CTE's
+columns in its anchor SELECT instead of in a column list, order character classes so `(` never
+follows an identifier character (`[(\s]`, not `[\s(]`), separate `\M` from `(?:` with `\s*`, and use
+an `OFFSET 0` fence rather than `AS MATERIALIZED`. `pg_get_function_identity_arguments` is also
+missing from `SQL_BUILTIN_FNS` while its siblings (`pg_get_functiondef`, `pg_get_constraintdef`,
+`pg_get_indexdef`, `pg_get_viewdef`, `pg_get_expr`) are present.
+
+**Do not route a blocked read through Codex's write-enabled Supabase connector to get around this** —
+that is cross-tool permission laundering. Ask Mason for the scoped `REAL-DATA-OK` the guard's own
+message names, or fix the guard deliberately.
+
 **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
 
 **Refresh schema registry after schema changes:** `node scripts/regenerate-schema-registry.mjs` (or ask Claude Code to do it via Supabase MCP).
