@@ -1,5 +1,16 @@
 # Invoice Due Dates — Net 30 default + per-invoice override (APPROVED spec)
 
+> **AMENDED 2026-09-03 — the terms run from the INVOICE DATE, not the posting date.** This
+> spec says "posting date + 30 days" and "compute from posting timestamp" below. That wording was
+> written when the two coincided (an invoice was drafted and posted the same day). Mason decided
+> on 2026-09-03 (`docs/manual/DECISION_LOG.md`, 2026-09-03 entry) that when an invoice is entered
+> later than its invoice date, the payment terms run from the **invoice date the customer reads**,
+> which is exactly what the shipped posting RPC does (`due_date = invoice_date + terms days`,
+> `20260702160000_a8_terms_to_due_date.sql`). Do NOT "correct" the code back to the posting date
+> on the strength of the sentences below. The genuine timezone rule still stands: `invoice_date`
+> itself must be the America/Chicago business date, which is what
+> `20260903170000_invoice_date_fallbacks_chicago.sql` enforces on the server-side fallbacks.
+
 **Status:** APPROVED by Mason 2026-07-16 (in-chat decision) — ready for a dedicated build session.
 **Decision:** "Net 30 normal, but I want an option to set it to Net 15, or even immediately,
 as well as an override / enter my own random time."

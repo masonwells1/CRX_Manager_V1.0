@@ -254,6 +254,27 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## SETTLED 2026-09-03 (basis) / FIXED IN CODE, MIGRATION PENDING LIVE APPLY (UTC fallbacks) — "invoice due dates derive from the invoice date, not the Chicago posting date"
+
+**Report (`codex-transaction-review`, 2026-09-03):** due dates derive from `invoice_date` rather
+than the America/Chicago posting date, so a late-evening invoice lands on the wrong day. Verified
+at HEAD and against the LIVE posting body: `_post_invoice_impl_20260714` stamps
+`due_date = COALESCE(due_date, invoice_date + terms days)` (`20260702160000_a8_terms_to_due_date.sql:133`).
+**Two separate issues in one report.** (1) *Basis:* Mason decided 2026-09-03 the terms run from
+the **invoice date** the customer reads (`DECISION_LOG.md`, 2026-09-03), so the posting RPC is
+correct as shipped and deliberately unchanged; the 2026-07-16 spec's "posting date" wording is
+amended. Exactly one live invoice differs between the bases (CS-2026-0119, backdated four months)
+and it stays due 2026-05-08 / overdue by that decision. (2) *Timezone:* affects **zero** live
+invoices — 0 of 3 posted invoices crossed the UTC/Chicago day boundary (both sides tested) and both
+invoice screens send the browser-local date. The only real hole is four server-side
+`invoice_date = CURRENT_DATE` fallbacks; migration `20260903170000_invoice_date_fallbacks_chicago.sql`
+moves them to the Chicago business day (container proof
+`scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs`). **Until that migration is applied live**,
+a save whose payload omits `invoice_date` between 7 pm and midnight Chicago would still be dated
+tomorrow — the clients never omit it today. Follow-up, not fixed: the split-invoice body's
+commission-record `CURRENT_DATE` (same class, outside the decision). Full record:
+`docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md`.
+
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
 The gate landed on `main` as `f2307fbf9` with these four items knowingly open. They were recorded
