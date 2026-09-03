@@ -173,11 +173,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // shell command that reaches a protected file through a `../` detour is
   // refused. The raw-string matcher let `.claude/hooks/../hooks/<file>` through
   // on every protected entry, not just the module that review was about.
-  codexGuard: "ed54ad39316af81a012fa8fefea3680e1858f7b0",
+  // codexGuard re-pinned again 2026-09-02 (PR #563, Codex HIGH round 3): the
+  // canonicalizer now drops a Windows drive-relative prefix, and the shell check
+  // canonicalizes every argument token instead of sniffing for `../` — Codex
+  // escaped the previous fix with an interior `./` and with `C:.claude/...`.
+  codexGuard: "a7571cf1d61593795b7e9503278ea8d0821aa2d1",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "f61ab8e00f3f38ffeee1b58a9f8637f465101760",
+  codexGuard: "0f59b25eab12dafd08b2cb6fff8b902e38019441",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

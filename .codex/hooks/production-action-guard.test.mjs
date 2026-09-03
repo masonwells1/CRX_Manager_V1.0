@@ -407,11 +407,37 @@ try {
   assert.equal(canonicalizeGuardPath("../outside/x.mjs"), "../outside/x.mjs", "a leading .. stays meaningful in a relative path");
   assert.equal(canonicalizeGuardPath("/a/../../b"), "/b", "cannot escape above a rooted path");
   assert.equal(canonicalizeGuardPath(""), "", "empty stays empty");
+  // Codex round 3 escapes: an interior `./` and a Windows DRIVE-RELATIVE alias
+  // (`C:.claude/...`, no slash after the colon) both wrote to protected files.
+  // The drive prefix left `.claude` preceded by `:`, which the protected anchor
+  // never matched. These are the exact payloads it demonstrated.
+  for (const alias of [
+    "C:.claude/hooks/codex-bot-review-lib.mjs",
+    "c:.claude/hooks/codex-push-lib.mjs",
+    "C:.codex/hooks.json",
+    "D:scripts/write-codex-push-proof.mjs",
+    "C:/repo/.claude/hooks/codex-push-lib.mjs",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: alias } }).blocked,
+      true,
+      `drive-qualified alias must be blocked: ${alias}`,
+    );
+  }
+  assert.equal(canonicalizeGuardPath("C:.claude/hooks/x.mjs"), ".claude/hooks/x.mjs", "a drive-RELATIVE prefix is dropped");
+  assert.equal(canonicalizeGuardPath("C:/repo/x.mjs"), "/repo/x.mjs", "a drive-ROOTED prefix keeps its root");
+
   // ...and the shell channel, which cannot be canonicalized as a single path.
   for (const command of [
     'echo x > .claude/hooks/../hooks/codex-bot-review-lib.mjs',
     'cp /tmp/evil.mjs .claude/hooks/../hooks/codex-push-lib.mjs',
     'Set-Content -Path .codex/hooks/../hooks/production-action-guard.mjs -Value ""',
+    // Interior `./` — walked past the first cut's `../`-only sniffing.
+    'Set-Content .claude/hooks/./codex-push-lib.mjs -Value ""',
+    'Set-Content scripts/./write-codex-push-proof.mjs -Value ""',
+    'Set-Content .codex/./hooks.json -Value ""',
+    'Set-Content -Path "C:.claude/hooks/codex-bot-review-lib.mjs" -Value ""',
+    'rm ./.claude/./hooks/codex-push-lib.mjs',
   ]) {
     assert.equal(
       evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,

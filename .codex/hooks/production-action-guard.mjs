@@ -107,10 +107,19 @@ function normalize(value) {
 export function canonicalizeGuardPath(value) {
   const raw = String(value || "").trim().replace(/\\/g, "/");
   if (!raw) return "";
-  const drive = /^[A-Za-z]:\//.exec(raw)?.[0] || "";
-  const rooted = drive !== "" || raw.startsWith("/");
+  // A Windows drive prefix is DROPPED, not preserved. `C:.claude/hooks/x.mjs`
+  // is drive-relative — no slash after the colon — so keeping the prefix left
+  // `.claude` preceded by `:`, which the protected-path anchor (`^` or a
+  // separator) never matches. Codex round 3 wrote to exactly that spelling and
+  // was allowed. Dropping the drive is deliberately over-inclusive: a path on
+  // another drive that happens to end in a protected suffix is refused. For a
+  // deny-guard that is the safe direction, and no legitimate workflow needs to
+  // write a harness file through a drive-qualified alias.
+  const driveMatch = /^([A-Za-z]:)(\/?)/.exec(raw);
+  const rooted = driveMatch ? driveMatch[2] === "/" : raw.startsWith("/");
+  const body = driveMatch ? raw.slice(driveMatch[0].length) : raw;
   const segments = [];
-  for (const segment of (drive ? raw.slice(drive.length) : raw).split("/")) {
+  for (const segment of body.split("/")) {
     if (segment === "" || segment === ".") continue;
     if (segment === "..") {
       // Above a rooted path there is nowhere to go, so drop it. In a relative
@@ -121,7 +130,7 @@ export function canonicalizeGuardPath(value) {
     }
     segments.push(segment);
   }
-  return (drive || (rooted ? "/" : "")) + segments.join("/");
+  return (rooted ? "/" : "") + segments.join("/");
 }
 
 function protectedHarnessPathMentioned(value) {
@@ -131,16 +140,32 @@ function protectedHarnessPathMentioned(value) {
   return PROTECTED_HARNESS_PATH_RE.test(raw) || PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(raw));
 }
 
-// A shell command is not one path, so it cannot simply be canonicalized. When a
-// mutating command carries a dot-segment AND names a protected file's basename,
-// what it will actually write is not statically knowable — so it is refused
-// rather than gated. Same stance the guard already takes on interpreter
-// arguments built by shell expansion.
-const PROTECTED_BASENAME_RE = /(?<![\w.-])(?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib|production-action-guard|codex-hook-adapter|run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs(?![\w.-])/i;
-export function commandHidesProtectedPathBehindDotSegments(command) {
-  const text = String(command || "").replace(/\\/g, "/");
-  if (!/(?:^|[\s"'`(=/])\.\.\//.test(text)) return false;
-  return PROTECTED_BASENAME_RE.test(text);
+// Does any argument of this command resolve to a protected harness file?
+//
+// The first cut sniffed for a literal `../` next to a protected basename. Codex
+// round 3 walked straight past it with an interior `./`
+// (`Set-Content .claude/hooks/./codex-push-lib.mjs`) and with a Windows
+// drive-relative alias (`C:.claude/hooks/…`) — because enumerating the spellings
+// of "somewhere else" never terminates.
+//
+// So this matches the SHAPE instead: split the command into candidate path
+// tokens, canonicalize each one, and test the result against the protected-path
+// matcher. `./`, `../`, `C:`-relative, backslashes, and any combination all
+// collapse to the same canonical string, so one rule covers spellings nobody has
+// thought of yet.
+function commandPathTokens(command) {
+  // Shell/PowerShell argument separators, plus the quote characters themselves
+  // so a quoted path is examined rather than skipped.
+  return String(command || "")
+    .split(/[\s"'`,;()|&<>]+/)
+    .filter(Boolean)
+    // `-Path=x`, `--file=x`, `Path:x` — keep the value, drop the flag name.
+    .map((token) => token.replace(/^[-/]{1,2}[A-Za-z][\w-]*[:=]/, ""))
+    .filter(Boolean);
+}
+export function commandTouchesProtectedHarnessPath(command) {
+  return commandPathTokens(command).some((token) =>
+    PROTECTED_HARNESS_PATH_RE.test(canonicalizeGuardPath(token)));
 }
 
 // scripts/apply-migration-file.mjs mutates the LIVE database. It was added
@@ -934,11 +959,11 @@ export function evaluateProductionAction({
   // PR #563 round 2). A command is not one path and cannot simply be
   // canonicalized, so a mutating command that carries a dot-segment AND names a
   // protected file is refused rather than gated.
-  if (shellMutatesPath && commandHidesProtectedPathBehindDotSegments(command)) {
+  if (shellMutatesPath && commandTouchesProtectedHarnessPath(command)) {
     return denied(
-      "CODEX PRODUCTION GATE: this mutating command reaches a protected harness file through a `../` " +
-      "path detour, so what it will actually write is not statically knowable. Spell the destination " +
-      "as a direct repository-relative path, or use the reviewed maintenance workflow with Mason's approval."
+      "CODEX PRODUCTION GATE: an argument of this mutating command resolves to a protected harness file " +
+      "once `.`/`..` segments and drive-relative prefixes are canonicalized, even though it is not spelled " +
+      "that way. Use the reviewed maintenance workflow with Mason's approval."
     );
   }
   if (isGitPush(command) && pushContextIsAmbiguous(command)) {
