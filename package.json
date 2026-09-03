@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "test:e2e": "playwright test",
@@ -48,6 +48,8 @@
     "check:docs": "node scripts/check-doc-drift.mjs",
     "check:agent-guidance": "node scripts/check-agent-guidance.mjs",
     "test:ci-scope": "node scripts/classify-ci-scope.test.mjs",
+    "test:migration-hard-rules": "node scripts/check-migration-hard-rules.test.mjs",
+    "check:migration-hard-rules": "node scripts/check-migration-hard-rules.mjs --audit-all",
     "check:phase3-private-artifacts": "node scripts/check-supplier-pricing-phase3-private-artifacts.mjs",
     "test:supplier-pricing-phase3c-packet": "node scripts/supplier-pricing-phase3-private-artifacts.test.mjs",
     "check:agent-workflows": "node scripts/check-agent-workflows.mjs",
