@@ -1,11 +1,15 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-03 for the migration ledger; schema shape re-read 2026-09-03 15:34 UTC by
-the live-introspection regeneration of `.claude/schema-registry.json` carried in PR #586 (F06
-post-apply) — the only delta against the 2026-09-01 reading is `job_chemicals.driver` and its CHECK,
-and F2's `20260903160000` will move it again the moment it applies, so re-run the regeneration then.**
+**Last verified: 2026-09-04 for the migration ledger (read-only `list_migrations` against project
+`rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-03 15:34 UTC by the live-introspection
+regeneration of `.claude/schema-registry.json` carried in PR #586 (F06 post-apply).** Three
+migrations have applied since that schema reading, so the registry's shape is now BEHIND live and a
+regeneration is outstanding — F2's `20260903160000_gate_number_generators_active_profile_role`
+(ledger version `20260904023121`), `20260903150100_ledger_backed_commission_history`
+(`20260903202611`), and `20260903230000_commission_report_snapshot_contract` (`20260904040643`).
+Recording the F2 apply and refreshing the registry is PR #594's lane, not this one.
 The current effective ordering high-water is the newest applied
-authored NAME: **`20260903150000_job_chemicals_persist_driver`**.
+authored NAME: **`20260903230000_commission_report_snapshot_contract`** (verified 2026-09-04).
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
