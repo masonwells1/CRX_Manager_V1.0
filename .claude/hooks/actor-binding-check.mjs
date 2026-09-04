@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// Forgeable-actor binding guard for CRX Manager (write-time half of the
-// actor-forgery / actor-forgery-fin-audit db-invariant sweeps).
+// Best-effort forgeable-actor binding guard for CRX Manager. This is a cheap
+// write-time speed bump for ordinary Write/Edit paths, not a security boundary;
+// exact-SHA review and CodeRabbit remain the load-bearing pre-merge controls.
+// See the 2026-09-01 capped-guard decision in docs/manual/DECISION_LOG.md.
 //
 // THE GAP THIS CLOSES
 //   Two sweep predicates (predicates/actor-forgery.sql and
 //   predicates/actor-forgery-fin-audit.sql) find SECURITY DEFINER functions that
 //   trust a caller-supplied actor parameter — but they only run against the LIVE
-//   catalog, i.e. AFTER the migration has been applied. Between writing the
-//   migration and applying it there was no gate at all, so the forgery shipped
-//   first and was detected second. This hook moves the same check to write time.
+//   catalog, i.e. AFTER the migration has been applied. This hook performs a
+//   narrower form of that check while supported Write/Edit tools author SQL.
 //
 // WHAT IT BLOCKS
 //   A migration file that CREATEs or REPLACEs a SECURITY DEFINER function which
@@ -44,11 +45,12 @@
 //     p_user_id as a filter is not an attribution risk).
 //   * SECURITY INVOKER functions are never flagged (RLS still applies to them).
 //   * The check is satisfied by the presence of the ACTOR_MISMATCH token anywhere
-//     in the body — it does not attempt to verify the guard is correct. That
-//     deeper verification is the sweeps' job; this hook only stops the
-//     no-guard-at-all case, which is the one that actually shipped.
+//     in the body — it does not attempt to verify the guard is correct. Exact-SHA
+//     review and CodeRabbit provide the deeper pre-merge review; the live sweeps
+//     add partial post-apply coverage for the limited sink shapes they recognize.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { applyEditsForAnalysis, toLF } from "./edit-splice-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -108,7 +110,27 @@ if (!filePath || !filePath.endsWith(".sql") || !filePath.includes("supabase/migr
   out("allow");
 }
 
-const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
+// Write carries the full file, while Edit/MultiEdit carries only fragments.
+// Reconstruct the full post-edit migration with the shared CRLF-safe helper so
+// the existing function header, parameters, and SECURITY DEFINER attribute stay
+// visible. If reconstruction is unavailable, retain the prior best-effort
+// fragment behavior; this capped hook deliberately remains fail-open.
+const input = payload?.tool_input || {};
+let content = input.content || input.new_string || "";
+const isFragmentEdit = typeof input.content !== "string" &&
+  (typeof input.old_string === "string" || Array.isArray(input.edits));
+if (isFragmentEdit) {
+  try {
+    if (existsSync(filePath)) {
+      content = applyEditsForAnalysis(readFileSync(filePath, "utf8"), input);
+    } else if (Array.isArray(input.edits)) {
+      content = input.edits.map((edit) => edit?.new_string || "").join("\n");
+    }
+  } catch {
+    // Keep the fragment. The hook is a best-effort speed bump, not a boundary.
+  }
+}
+content = toLF(content);
 if (!content) out("allow");
 
 if (/--\s*actor-binding-check:\s*exempt/i.test(content)) {
