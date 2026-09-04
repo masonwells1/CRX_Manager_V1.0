@@ -16,7 +16,7 @@ import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
 import { pctsToMicro } from '../lib/splitVectorMath';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
-import { localToday } from '../lib/dateUtils';
+import { todayInBusinessTz } from '../lib/dateUtils';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../lib/splitBillingSetting';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import UnitSelect from '../components/blendtickets/UnitSelect';
@@ -202,8 +202,16 @@ export default function FieldAppSplitInvoiceEditor() {
   const [jobOptions, setJobOptions] = useState<JobOption[]>([]);
 
   // Header + selection
-  // Local date (not toISOString, which rolls to tomorrow after ~6–7 PM Central) — Codex r2 #J.
-  const [invoiceDate, setInvoiceDate] = useState(() => localToday());
+  // Chicago BUSINESS date (2026-09-04). Two earlier revisions of this line were both wrong:
+  // toISOString() rolled to tomorrow after ~7 pm Central (Codex r2 #J), and localToday() — the fix
+  // that replaced it — follows the BROWSER's clock, so a salesman west of Chicago crossing
+  // October 1 still sends the wrong day. This date is not cosmetic here: it is always sent
+  // (:704), and _save_field_app_split_invoice_impl derives v_season from it when there is no
+  // source job, then uses that season for BOTH the customer_application_rates rate lookup and
+  // the invoice's season stamp. A wrong day at the boundary is a wrong PRICE, not just a wrong
+  // label. Same defect Codex raised as P2 on FieldApplicationInvoice/InvoiceDetail; this page was
+  // missed in that sweep and is fixed here.
+  const [invoiceDate, setInvoiceDate] = useState(() => todayInBusinessTz());
   const [headerNotes, setHeaderNotes] = useState('');
   const [sourceJobId, setSourceJobId] = useState('');
   const [fields, setFields] = useState<FieldPick[]>([]);

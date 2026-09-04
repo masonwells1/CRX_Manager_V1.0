@@ -171,13 +171,16 @@
   America/Chicago fallback never engages there, so this could only be fixed on the client: at
   19:30 Chicago on 2026-09-30 the page pre-filled 2026-10-01, and the server then correctly derived
   season 2027 from that wrong date. The date/season mismatch was closed; the wrong business DAY was
-  not. Now uses the project's existing `localToday()` (`src/lib/dateUtils.ts:16`), as
-  `InvoiceDetail.tsx:132` already did. The helper's own docstring documents this exact bug.
+  not. **Superseded 2026-09-04 by the round-3 review:** this first went to `localToday()`, which
+  returns the BROWSER's calendar date and is therefore still wrong for any user outside Chicago.
+  The shipped code uses `todayInBusinessTz()` (`src/lib/dateUtils.ts:66`) at every invoice-date
+  default; see `2026-09-04-invoice-date-defaults-business-timezone.md`.
   A stale comment nearby claiming the server defaults `invoice_date` to the UTC current date was
   corrected in the same change. The two other `toISOString()` uses in the file (`:856`, `:2027`) are
   UTC-anchored arithmetic on explicit date strings — internally consistent and deliberately left.
 - Frontend proof, run rather than asserted, at both the boundary and in a real browser:
-  - The shipped `localToday()` from `src/lib/dateUtils.ts` executed with the process clock pinned to
+  - (Round-2 evidence, kept for the record; `localToday()` was itself replaced in round 3.)
+    `localToday()` from `src/lib/dateUtils.ts` executed with the process clock pinned to
     America/Chicago at 2026-10-01T00:30:00Z (19:30 Chicago on 2026-09-30) returns **2026-09-30**
     (season 2026), where the expression it replaced returns **2026-10-01** (season 2027). Same at
     23:59 Chicago; they agree again at 00:01 on Oct 1, so the divergence is exactly the window.
@@ -196,6 +199,8 @@
   raises `cannot convert infinity to integer` instead of saving with a clock-derived season
   (confirmed read-only against live: `compute_season('infinity'::date)` raises). Fail-closed, not
   reachable from the date inputs, and left unguarded rather than changing the body for it.
-- The migration remains NOT APPLIED. A live apply goes through `scripts/apply-migration-file.mjs`
-  with fresh `write-apply-proofs.mjs` proofs and Mason's typed OK in the current conversation, per
-  the standing gate.
+- ~~The migration remains NOT APPLIED.~~ **APPLIED LIVE 2026-09-04 15:22 UTC**, ledger version
+  `20260904152221`, ledger 997 -> 998, under Mason's explicit in-chat OK and a same-session
+  `write-apply-proofs.mjs` mint. Full record in
+  `docs/changelog.d/2026-09-04-invoice-season-applied-live.md`. (The line above was written
+  pre-apply and is struck through rather than deleted so the sequence stays readable.)

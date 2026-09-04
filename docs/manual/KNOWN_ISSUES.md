@@ -275,7 +275,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## SETTLED 2026-09-03 (basis) / FIXED IN CODE, MIGRATION PENDING LIVE APPLY (UTC fallbacks) — "invoice due dates derive from the invoice date, not the Chicago posting date"
+## SETTLED 2026-09-03 (basis) / CLOSED 2026-09-04 — BOTH UTC-fallback migrations APPLIED LIVE — "invoice due dates derive from the invoice date, not the Chicago posting date"
 
 **Report (`codex-transaction-review`, 2026-09-03):** due dates derive from `invoice_date` rather
 than the America/Chicago posting date, so a late-evening invoice lands on the wrong day. Verified
@@ -312,7 +312,8 @@ dated 2026-09-30 (season 2026) while stamped `season = 2027`. Before the apply b
 therefore agreed with each other; making the date correct exposed the coupling. `season` drives
 `customer_application_rates` lookups and year-end statements. The correct pattern already exists in
 `_save_field_app_split_invoice_impl`, which derives the season from the same COALESCEd Chicago date.
-**FIXED IN CODE 2026-09-04, MIGRATION PENDING LIVE APPLY:**
+**FIXED IN CODE 2026-09-04 AND APPLIED LIVE THE SAME DAY** (ledger version `20260904152221`; see
+the CLOSED note above — this paragraph is the historical description of the defect):
 `supabase/migrations/20260904180000_invoice_season_follows_invoice_date.sql` re-emits both bodies
 with `compute_season(COALESCE(<payload invoice_date>, (now() AT TIME ZONE 'America/Chicago')::date))`,
 mirroring the split-invoice pattern. The pre-apply gate found a THIRD site the original residual did
@@ -381,6 +382,22 @@ only the **two** invoice-creating bodies it re-emits. These are the same class a
 *sources*, and superseded bodies are noise. Confirm which are the currently installed bodies before
 acting. Deliberately not folded into `20260904180000`: that file has a hard 2026-09-30 deadline and
 each additional md5-pinned body widens its blast radius.
+
+### Client-side season READS still follow the browser clock (reporting only, 2026-09-04)
+
+Separate from the server-side stamps above, and found by the adversarial sweep that caught the fifth
+invoice-date site. `src/utils/season.ts:14` `computeSeason(date = new Date())` uses `getMonth()` /
+`getFullYear()` — the BROWSER's clock — and is the default season for `ARaging.tsx:80`,
+`CropPrograms.tsx:55`, `FieldProfitability.tsx:62`, `YearEndSummaryDialog.tsx:26`,
+`ReportShell.tsx:20-29` and `FieldInvoices.tsx:44`. `AccountsReceivable.tsx:45` and
+`CustomerContextCard.tsx:46` similarly pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
+
+**None of these writes `invoice_date` or `season`** — they are report filters and as-of dates, so the
+worst case is a user outside Chicago briefly seeing the wrong season pre-selected in a report near
+the October 1 boundary, which they can change in the UI. Deliberately NOT changed alongside the
+invoice-date work: that change is about what gets STORED and priced, and widening it to every
+reporting default would have added untested surface to a deadline-bound money PR. Tracked so the
+next person does not mistake the invoice-date sweep for a whole-app one.
 
 ## OPEN 2026-09-04 — the field-app split PREVIEW prices from the UTC clock while SAVE prices from the invoice date
 

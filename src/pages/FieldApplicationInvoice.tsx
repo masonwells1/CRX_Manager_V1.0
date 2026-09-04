@@ -2034,9 +2034,12 @@ export default function FieldApplicationInvoice() {
             const n = m ? Number(m[1]) : NaN;
             days = Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
           }
-          // A cleared transaction-date input falls back to today — the server stamps
-          // invoice_date with the America/Chicago business date on save (migration
-          // 20260904160000, applied 2026-09-04), so the print still matches.
+          // A cleared transaction-date input falls back to today for THIS print calculation only.
+          // Note the server fallback does NOT rescue a cleared field on this page: the input has no
+          // `required` and no blank guard, so an empty box sends invoice_date: '' — and '' is not
+          // SQL NULL, so the COALESCE in the re-emitted body never fires and the ::date cast raises
+          // instead. That is fail-closed (nothing bad is stored), but it is a raised error, not a
+          // Chicago default. Do not read this line as "the server fills it in".
           const base = transactionDate || todayInBusinessTz();
           const d = new Date(base + 'T00:00:00Z');
           d.setUTCDate(d.getUTCDate() + days);
