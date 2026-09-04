@@ -1,5 +1,5 @@
 /**
- * Deliveries.shortageBadge.test.tsx — CRX draw-down tier split, P2.
+ * Deliveries.shortageBadge.test.tsx — page-level delivery safety regressions.
  *
  * The delivery list shows an amber warning triangle when a scheduled delivery
  * asks for more stock than the warehouse holds. It used to check each delivery
@@ -13,16 +13,21 @@
  * Out of scope, deliberately: this screen compares against `quantity_available`
  * at Main Warehouse and does not subtract prebooked stock. That is a separate,
  * pre-existing choice; only the per-line/per-product basis changed here.
+ *
+ * This file also drives the real Load Sheet button so delivery-item read failures
+ * and empty item sets cannot masquerade as a successfully generated warehouse PDF.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
-const { auth, mockFrom, mockRpc, mockToast, mockGenerateBatchDeliveryPdf, tables, queryResults } = vi.hoisted(() => ({
+const { auth, mockFrom, mockRpc, mockToast, mockCaptureException, mockGenerateBatchDeliveryPdf, tables, queryResults } = vi.hoisted(() => ({
+  // Keep the context value stable when Load Sheet toggles page loading state.
   auth: { role: 'admin', profile: { id: 'user-1', role: 'admin' }, deniedPages: [] },
   mockFrom: vi.fn(),
   mockRpc: vi.fn(() => Promise.resolve({ data: null, error: null })),
   mockToast: vi.fn(),
+  mockCaptureException: vi.fn(),
   mockGenerateBatchDeliveryPdf: vi.fn(() => Promise.resolve()),
   tables: { data: {} as Record<string, unknown[]> },
   queryResults: {
@@ -47,6 +52,7 @@ function buildChain(
     'lt', 'lte', 'like', 'ilike', 'is', 'in', 'not', 'or', 'and', 'match',
     'order', 'limit', 'offset', 'single', 'maybeSingle', 'returns', 'abortSignal',
   ]) self[m] = method;
+  // mockFrom creates a fresh chain for every query; each query selects once.
   self.select = (columns: unknown) => {
     result = selectResult?.(String(columns)) ?? { data: rows, error: null };
     return self;
@@ -69,7 +75,7 @@ vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => auth,
 }));
 vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
-vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
+vi.mock('../lib/sentry', () => ({ Sentry: { captureException: mockCaptureException } }));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/notificationTriggers', () => ({ notifyDeliveryCompleted: vi.fn() }));
 vi.mock('../lib/deliveryPdf', () => ({ generateBatchDeliveryPdf: mockGenerateBatchDeliveryPdf }));
@@ -170,16 +176,34 @@ describe('Deliveries warehouse load sheet', () => {
   });
 
   it('does not generate or report success when delivery items fail to load', async () => {
+    const itemReadError = { message: 'permission denied for table delivery_items' };
     queryResults.deliveryItemDetails = {
       data: null,
-      error: { message: 'items unavailable' },
+      error: itemReadError,
     };
     await renderDeliveries();
 
     fireEvent.click(screen.getByRole('button', { name: 'Load Sheet' }));
 
     await waitFor(() => {
-      expect(mockToast).toHaveBeenCalledWith('error', 'items unavailable');
+      expect(mockToast).toHaveBeenCalledWith('error', 'You do not have permission to perform this action');
+    });
+    expect(mockGenerateBatchDeliveryPdf).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Delivery receipt(s) generated');
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      itemReadError,
+      expect.objectContaining({ tags: expect.objectContaining({ action: 'print_load_sheet' }) }),
+    );
+  });
+
+  it('does not generate a blank load sheet when a delivery has no item rows', async () => {
+    queryResults.deliveryItemDetails = { data: [], error: null };
+    await renderDeliveries();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load Sheet' }));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith('error', 'No delivery items found for DEL-TIER-1');
     });
     expect(mockGenerateBatchDeliveryPdf).not.toHaveBeenCalled();
     expect(mockToast).not.toHaveBeenCalledWith('success', 'Delivery receipt(s) generated');
@@ -191,6 +215,12 @@ describe('Deliveries warehouse load sheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load Sheet' }));
 
     await waitFor(() => expect(mockGenerateBatchDeliveryPdf).toHaveBeenCalledTimes(1));
+    expect(mockGenerateBatchDeliveryPdf).toHaveBeenCalledWith([
+      expect.objectContaining({
+        delivery_number: 'DEL-TIER-1',
+        items: [expect.objectContaining({ product_name: 'Atrazine 4L', quantity: 6 })],
+      }),
+    ]);
     expect(mockToast).toHaveBeenCalledWith('success', 'Delivery receipt(s) generated');
   });
 });
