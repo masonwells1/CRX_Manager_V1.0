@@ -25,7 +25,7 @@ If no paths are provided, look at the most recently modified files under `supaba
 Run each of these against every file. For each violation, capture the file, line number, and a one-line explanation.
 
 ### CHECK 1 — SECURITY DEFINER missing `search_path`
-Pattern: any `CREATE OR REPLACE FUNCTION ... SECURITY DEFINER` block that does NOT include `SET search_path = public, pg_temp` (or equivalent) before the body.
+Pattern: any `CREATE OR REPLACE FUNCTION ... SECURITY DEFINER` block, or any `ALTER FUNCTION` / `ALTER ROUTINE` that changes a SECURITY DEFINER routine, whose final effective configuration cannot be shown to include `SET search_path = public, pg_temp` (or equivalent) before the body. Treat `RESET search_path`, `RESET ALL`, `SET search_path FROM CURRENT`, and any noncanonical path as unsafe.
 Severity: **BLOCKER** — search_path attacks let any authenticated user shadow `public` schema and own the function.
 
 ### CHECK 2 — Anon-executable SECURITY DEFINER

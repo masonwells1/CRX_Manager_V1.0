@@ -62,6 +62,18 @@ test('allows only the fixed SECURITY DEFINER search path on routine ALTERs', () 
     securityDefinerMissingAnonRevokes('ALTER FUNCTION public.existing(uuid) SET search_path = public, pg_temp;'),
     [],
   );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes('ALTER FUNCTION public.existing(uuid) RESET ALL;'),
+    ['unparseable-security-definer-sql'],
+  );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes('ALTER FUNCTION public.existing(uuid) SET search_path FROM CURRENT;'),
+    ['unparseable-security-definer-sql'],
+  );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes('ALTER FUNCTION public.existing(uuid) SET statement_timeout = 5000;'),
+    ['unparseable-security-definer-sql'],
+  );
 });
 
 test('fails closed for search-path-sensitive targets and quoted role lookalikes', () => {
@@ -110,6 +122,18 @@ test('normalizes PostgreSQL routine type aliases and rejects unmatched public AC
   );
   assert.deepEqual(
     securityDefinerMissingAnonRevokes(`${integerDefinition}\nREVOKE ALL ON FUNCTION public.alias_target(text) FROM PUBLIC, anon;`),
+    ['unparseable-security-definer-sql'],
+  );
+});
+
+test('excludes OUT-only parameters from PostgreSQL function identities', () => {
+  const withOutput = 'CREATE FUNCTION public.output_target(p_id uuid, OUT p_result text) RETURNS text LANGUAGE sql SECURITY DEFINER AS $$ SELECT NULL; $$;';
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${withOutput}\nREVOKE ALL ON FUNCTION public.output_target(uuid) FROM PUBLIC, anon;`),
+    [],
+  );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${withOutput}\nREVOKE ALL ON FUNCTION public.output_target(uuid, text) FROM PUBLIC, anon;`),
     ['unparseable-security-definer-sql'],
   );
 });

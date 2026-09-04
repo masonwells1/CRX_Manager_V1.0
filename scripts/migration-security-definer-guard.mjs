@@ -124,7 +124,7 @@ function isExecutableRoutineBody(text) {
     || /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(statement);
 }
 
-function unsafeRoutineAlterSearchPath(sql) {
+function unsafeRoutineAlterConfiguration(sql) {
   const headers = /\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b/gi;
   for (const header of sql.matchAll(headers)) {
     const end = statementEnd(sql, header.index);
@@ -132,9 +132,11 @@ function unsafeRoutineAlterSearchPath(sql) {
     const statement = sql.slice(header.index, end);
     // This source-level ACL guard has no catalog proof of an ALTER target's
     // current body or configuration. Changing an existing routine to SECURITY
-    // DEFINER, or resetting its search_path, therefore cannot mint a proof.
-    if (/\bSECURITY\s+DEFINER\b/i.test(statement) || /\bRESET\s+search_path\b/i.test(statement)) return true;
+    // DEFINER, or changing any routine configuration except the fixed safe
+    // path, therefore cannot mint a proof.
+    if (/\bSECURITY\s+DEFINER\b/i.test(statement) || /\bRESET\b/i.test(statement)) return true;
     const setPath = /\bSET\s+search_path\s*(?:TO|=)\s+([\s\S]*)$/i.exec(statement);
+    if (/\bSET\b/i.test(statement) && !setPath) return true;
     if (!setPath) continue;
     const entries = setPath[1].split(',').map((entry) => entry.trim().replace(/^'|'$/g, '').toLowerCase());
     // The CRX SECURITY DEFINER contract permits only this fixed, nonempty
@@ -156,10 +158,15 @@ function splitArgs(args) {
 
 function canonicalSignature(name, args, declaration = false, quoted = false) {
   if (args.includes('"')) return null;
-  const types = splitArgs(args).map((arg) => {
+  const types = splitArgs(args).flatMap((arg) => {
     let value = arg.replace(/\bDEFAULT\b[\s\S]*$/i, '').replace(/\s*=\s*[\s\S]*$/, '').trim();
-    if (declaration) value = value.replace(/^(?:IN|OUT|INOUT|VARIADIC)\s+/i, '').replace(/^(?:p_[A-Za-z0-9_]*|arg_[A-Za-z0-9_]*)\s+/i, '');
-    return canonicalType(value);
+    if (declaration) {
+      // PostgreSQL excludes OUT-only arguments from a routine's identity. INOUT
+      // arguments remain because callers provide their input value.
+      if (/^OUT\s+/i.test(value)) return [];
+      value = value.replace(/^(?:IN|INOUT|VARIADIC)\s+/i, '').replace(/^(?:p_[A-Za-z0-9_]*|arg_[A-Za-z0-9_]*)\s+/i, '');
+    }
+    return [canonicalType(value)];
   });
   const canonicalName = quoted ? `quoted:${name.replaceAll('""', '"')}` : `bare:${name.toLowerCase()}`;
   return `${canonicalName}(${types.join(',')})`;
@@ -264,7 +271,7 @@ function renameRoutineEvents(sql) {
 export function securityDefinerMissingAnonRevokes(sql) {
   const executable = executableSql(sql);
   if (executable === null) return ['unparseable-security-definer-sql'];
-  if (unsafeRoutineAlterSearchPath(executable)) return ['unparseable-security-definer-sql'];
+  if (unsafeRoutineAlterConfiguration(executable)) return ['unparseable-security-definer-sql'];
   if (/\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b[\s\S]*?\bOWNER\s+TO\b/i.test(executable)) return ['unparseable-security-definer-sql'];
   const declarations = [
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
