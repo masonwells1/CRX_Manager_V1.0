@@ -206,7 +206,7 @@ export default function FieldAppSplitInvoiceEditor() {
   // toISOString() rolled to tomorrow after ~7 pm Central (Codex r2 #J), and localToday() — the fix
   // that replaced it — follows the BROWSER's clock, so a salesman west of Chicago crossing
   // October 1 still sends the wrong day. This date is not cosmetic here: it is always sent
-  // (:704), and _save_field_app_split_invoice_impl derives v_season from it when there is no
+  // (:712), and _save_field_app_split_invoice_impl derives v_season from it when there is no
   // source job, then uses that season for BOTH the customer_application_rates rate lookup and
   // the invoice's season stamp. A wrong day at the boundary is a wrong PRICE, not just a wrong
   // label. Same defect Codex raised as P2 on FieldApplicationInvoice/InvoiceDetail; this page was

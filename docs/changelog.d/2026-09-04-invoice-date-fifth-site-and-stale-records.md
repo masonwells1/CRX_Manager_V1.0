@@ -9,7 +9,7 @@ waved off as redundant.
 
 ### The fifth site (the only one of the five that can pick a wrong RATE)
 
-`src/pages/FieldAppSplitInvoiceEditor.tsx:206` still defaulted its invoice date with `localToday()`
+`src/pages/FieldAppSplitInvoiceEditor.tsx:214` still defaulted its invoice date with `localToday()`
 — the browser's calendar date — and sends it unconditionally at `:712` as `p_invoice.invoice_date`
 to `save_field_app_split_invoice`. That is the very body this PR held up as the correct model:
 `_save_field_app_split_invoice_impl` sets
@@ -34,11 +34,22 @@ half-fix that the round-3 review rejected as insufficient on the other two pages
 hold **0 rows**. So the page is live and reachable from the sidebar but has never been used — a real
 bug, not an actively firing one.
 
-**The sweep is now exhaustive**, and stated as a checkable claim rather than a promise: exactly five
-sites write `invoice_date` into a save payload — `FieldApplicationInvoice.tsx:1528` and `:2003`
-(both from `transactionDate`), `FieldAppSplitInvoiceEditor.tsx:712`, and `InvoiceDetail.tsx:754` and
-`:1256`. All five now originate from `todayInBusinessTz()`. Every other `invoice_date` in `src/` is a
-read of a database row, a type declaration, or a test fixture.
+**The sweep is now exhaustive**, stated as two checkable claims. (An earlier draft of this file
+conflated them into one wrong sentence — it called PDF builders "save payloads" and omitted the one
+site that is actually a clock-derived default. Corrected after a second review caught it.)
+
+*Five clock-derived invoice-date DEFAULTS, all now `todayInBusinessTz()`:*
+`FieldApplicationInvoice.tsx:228` (initial `transactionDate`) and `:2043` (cleared-input fallback
+for the PDF due-date base); `InvoiceDetail.tsx:141` (new-invoice `invoice_date`) and `:1256` (PDF
+fallback); `FieldAppSplitInvoiceEditor.tsx:214` (initial `invoiceDate`).
+
+*Three sites that put `invoice_date` into a SAVE payload,* each fed by one of the above:
+`FieldApplicationInvoice.tsx:1528` (from `transactionDate`), `FieldAppSplitInvoiceEditor.tsx:712`
+(from `invoiceDate`), `InvoiceDetail.tsx:754` (from `invoice.invoice_date`, initialised at `:141`).
+`FieldApplicationInvoice.tsx:2003` and `InvoiceDetail.tsx:1256` are PDF data builders, not saves.
+
+Every other `invoice_date` in `src/` is a read of a database row, a type declaration, or a test
+fixture; no sixth clock-derived default exists.
 
 ### CI coverage for the boundary that actually matters
 
@@ -53,10 +64,24 @@ fail:
 
 | mutant | result |
 |---|---|
-| `BUSINESS_TIMEZONE` -> `'UTC'` | **5 of 11 fail** |
-| `BUSINESS_TIMEZONE` -> `'Etc/GMT+6'` (hardcoded -6, no DST) | **4 of 11 fail**, including both DST cases |
+| `BUSINESS_TIMEZONE` -> `'UTC'` | **6 of 11 fail** |
+| `BUSINESS_TIMEZONE` -> `'Etc/GMT+6'` (hardcoded -6, no DST) | **4 of 11 fail**, including the fall-back DST case |
 
-The helper was restored to `America/Chicago` and re-verified green (11/11) afterwards.
+**Honest limitation, and a correction.** A first draft of this table claimed the offset mutant killed
+"both DST cases". It does not: the **spring-forward** test is killed by neither mutant. It asserts
+that the calendar date does not move across a 02:00 local transition, which is true under any fixed
+offset too, so it is a regression guard rather than a discriminating one. It is kept for that
+purpose and is now labelled as such rather than credited with more than it does.
+
+The same review also caught the **fall-back test not straddling its own transition**: it asserted
+`05:59:59Z`/`06:00:00Z`, but Chicago falls back at 02:00 CDT = **07:00Z**, so both instants sat on
+the CDT side and crossed nothing. Corrected to `06:59:59Z`/`07:00:00Z` (the repeated hour), plus
+`04:59:59Z`/`05:00:00Z` to pin the midnight roll on the 25-hour day. That corrected test is one of
+the four the offset mutant now kills — before the fix it was dead weight that read as coverage.
+
+Verified TZ-independent, since CI runners are UTC and this machine is on Chicago time: 11/11 pass
+under the default clock and under `TZ=UTC` (confirmed effective — vitest's own start stamp shifted
+14:00 -> 19:00). The helper was restored to `America/Chicago` and re-verified green afterwards.
 
 ### Records that were shipping false
 
@@ -82,7 +107,7 @@ stamps, not prose. Its green never covered any of this.
 
 ### Also corrected
 
-- `src/pages/FieldApplicationInvoice.tsx:2036` - a comment claiming a cleared date input "falls back
+- `src/pages/FieldApplicationInvoice.tsx:2043` - a comment claiming a cleared date input "falls back
   to today [because] the server stamps invoice_date with the America/Chicago business date", which
   contradicted the comment this same PR wrote 1800 lines above it. The input has no `required` and
   no blank guard, so an empty box sends `invoice_date: ''`; `''` is not SQL NULL, so the `COALESCE`

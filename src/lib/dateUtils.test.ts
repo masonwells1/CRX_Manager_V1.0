@@ -54,9 +54,16 @@ describe('todayInBusinessTz', () => {
     });
 
     it('holds the date across the fall-back transition', () => {
-      // 2026-11-01 05:59:59Z = 00:59:59 CDT; 06:00:00Z = 01:00:00 CST. Same calendar day.
-      expect(todayInBusinessTz(new Date('2026-11-01T05:59:59Z'))).toBe('2026-11-01');
-      expect(todayInBusinessTz(new Date('2026-11-01T06:00:00Z'))).toBe('2026-11-01');
+      // Chicago falls back at 02:00 CDT on 2026-11-01, which is 07:00:00Z — NOT 06:00Z.
+      // 06:59:59Z = 01:59:59 CDT (offset -5); 07:00:00Z = 01:00:00 CST (offset -6), the repeated
+      // hour. These two instants straddle the actual transition; an earlier version of this test
+      // asserted 05:59:59Z/06:00:00Z, which sit on the same (CDT) side and crossed nothing.
+      expect(todayInBusinessTz(new Date('2026-11-01T06:59:59Z'))).toBe('2026-11-01');
+      expect(todayInBusinessTz(new Date('2026-11-01T07:00:00Z'))).toBe('2026-11-01');
+      // And the date must still roll at Central midnight on the 25-hour day, not 24h after the
+      // previous one: 05:00:00Z on 11-01 is 00:00:00 CDT, the first instant of the day.
+      expect(todayInBusinessTz(new Date('2026-11-01T04:59:59Z'))).toBe('2026-10-31');
+      expect(todayInBusinessTz(new Date('2026-11-01T05:00:00Z'))).toBe('2026-11-01');
     });
 
     it('uses the summer offset in CDT and the winter offset in CST at the same UTC hour', () => {

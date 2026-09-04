@@ -383,21 +383,39 @@ only the **two** invoice-creating bodies it re-emits. These are the same class a
 acting. Deliberately not folded into `20260904180000`: that file has a hard 2026-09-30 deadline and
 each additional md5-pinned body widens its blast radius.
 
-### Client-side season READS still follow the browser clock (reporting only, 2026-09-04)
+### OPEN 2026-09-04 — client-side season READS still follow the browser clock, including ONE SAFETY path
 
-Separate from the server-side stamps above, and found by the adversarial sweep that caught the fifth
-invoice-date site. `src/utils/season.ts:14` `computeSeason(date = new Date())` uses `getMonth()` /
-`getFullYear()` — the BROWSER's clock — and is the default season for `ARaging.tsx:80`,
-`CropPrograms.tsx:55`, `FieldProfitability.tsx:62`, `YearEndSummaryDialog.tsx:26`,
-`ReportShell.tsx:20-29` and `FieldInvoices.tsx:44`. `AccountsReceivable.tsx:45` and
-`CustomerContextCard.tsx:46` similarly pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
+Separate from the server-side stamps above. Found by the adversarial sweep that caught the fifth
+invoice-date site, then corrected by a second review that caught this entry itself understating the
+severity — it originally said "reporting only", which is **wrong**.
 
-**None of these writes `invoice_date` or `season`** — they are report filters and as-of dates, so the
-worst case is a user outside Chicago briefly seeing the wrong season pre-selected in a report near
-the October 1 boundary, which they can change in the UI. Deliberately NOT changed alongside the
-invoice-date work: that change is about what gets STORED and priced, and widening it to every
-reporting default would have added untested surface to a deadline-bound money PR. Tracked so the
-next person does not mistake the invoice-date sweep for a whole-app one.
+`src/utils/season.ts:14` `computeSeason(date = new Date())` uses `getMonth()` / `getFullYear()` —
+the BROWSER's clock, not Chicago's. None of its callers WRITES `season` or `invoice_date`, but one
+of them gates a safety warning:
+
+**The one that is not cosmetic — `src/pages/JobDetail.tsx:1342`.**
+`computeSeason(jobDate ? new Date(jobDate + 'T00:00:00') : new Date())` selects which season's
+`field_crop_history` row to read for the earliest harvest date, and that drives the
+**pre-harvest-interval (PHI) warning** on a chemical application. `jobDate` defaults to
+`localToday()` (`:344`), i.e. the browser clock. At the October 1 boundary a user outside Chicago
+can therefore query the WRONG season's harvest row; the query is written to degrade silently
+("No harvest row => no warning"), so the failure mode is a **suppressed PHI warning**, not a visible
+error. Narrow window and pre-existing, but it is a safety path, not a report filter, and a user
+cannot see that anything was skipped.
+
+**The cosmetic ones** — report/dialog defaults the user can change in the UI:
+`ARaging.tsx:80`, `CropPrograms.tsx:55`, `FieldProfitability.tsx:62`, `YearEndSummaryDialog.tsx:26`,
+`ReportShell.tsx:20-29`, `FieldInvoices.tsx:44`, `ApplicationRecords.tsx:36`, `Reports.tsx:94,98`,
+`SalesReports.tsx:29,33,100`. `AccountsReceivable.tsx:45` and `CustomerContextCard.tsx:46` similarly
+pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
+
+`FieldApplicationInvoice.tsx:520` is **fine** — it inherits `transactionDate`, which is now the
+Chicago business date.
+
+Deliberately NOT changed alongside the invoice-date work: that change is about what gets STORED and
+priced, and widening it would have added untested surface to a deadline-bound money PR. **Recommend
+fixing `JobDetail.tsx:1342` on its own merits**, ahead of the cosmetic ones. Tracked so the next
+person does not mistake the invoice-date sweep for a whole-app one.
 
 ## OPEN 2026-09-04 — the field-app split PREVIEW prices from the UTC clock while SAVE prices from the invoice date
 
