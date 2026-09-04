@@ -29,9 +29,14 @@ describe('isWholeCentDollarInput', () => {
     expect(isWholeCentDollarInput('-90071992547409.93', { allowNegative: true })).toBe(false);
   });
 
-  it('still accepts the largest exactly representable amount', () => {
-    // Boundary immediately below the limit must remain usable.
-    expect(isWholeCentDollarInput('90071992547409.90')).toBe(true);
+  it('accepts exactly the largest safe amount and rejects the next cent', () => {
+    // Number.MAX_SAFE_INTEGER is 9007199254740991 cents — i.e. $90071992547409.91,
+    // NOT .90. An earlier version of this test called .90 "the largest exactly
+    // representable amount", which left the real boundary untested and would have
+    // passed an off-by-one that rejected a legitimate maximum amount.
+    expect(parseDollarsToCentsSigned('90071992547409.91')).toBe(Number.MAX_SAFE_INTEGER);
+    expect(isWholeCentDollarInput('90071992547409.91')).toBe(true);
+    expect(isWholeCentDollarInput('90071992547409.92')).toBe(false);
   });
 });
 

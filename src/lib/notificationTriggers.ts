@@ -56,6 +56,11 @@ async function logNotificationFailure(
   }
 
   try {
+    // .throwOnError() matters here: Supabase RESOLVES with { error } rather than
+    // rejecting, so a plain await swallowed a failed insert entirely — the alert
+    // was lost AND no failure row and no Sentry breadcrumb recorded that it was
+    // lost. RETURNS void, so this is the fire-and-forget form; the catch below
+    // turns it back into a Sentry report.
     await supabase.rpc('log_failed_notification', {
       p_notification_type: notificationType,
       p_entity_type: entityType ?? undefined,
@@ -63,7 +68,7 @@ async function logNotificationFailure(
       p_error_message: errorMessage,
       p_payload: (payload ?? {}) as Json,
       p_idempotency_key: crypto.randomUUID(),
-    });
+    }).throwOnError();
   } catch (logErr) {
     // Last-resort: if even logging fails, report to Sentry — and swallow a
     // failure from the reporter itself, for the same reason as above.

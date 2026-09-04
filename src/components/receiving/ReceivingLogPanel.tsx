@@ -219,7 +219,17 @@ export default function ReceivingLogPanel() {
           // committed. Selection and the completed keys are left intact on
           // purpose: an unchanged retry replays the committed rows from their
           // stored receipts and continues at the row that failed.
-          if (completedScopes.length > 0) fetchData();
+          // Awaited in its own non-throwing block: an un-awaited refresh let
+          // runCriticalAction finish and re-enable the controls while the reversed
+          // rows were still on screen, and a refresh rejection became an unhandled
+          // one that replaced the real reversal error.
+          if (completedScopes.length > 0) {
+            try {
+              await fetchData();
+            } catch (refreshErr) {
+              Sentry.captureException(refreshErr);
+            }
+          }
           throw bulkErr;
         }
         // Retire only after the whole selection succeeds. If a later row

@@ -462,7 +462,18 @@ export default function CycleCounts() {
     // never saw. The refresh above has put the real numbers on screen; require a
     // second, explicit click now that they are visible. The next click matches,
     // because setActiveCount has advanced the reviewed baseline.
-    if (typeof reviewedRevision === 'number' && reviewedRevision !== countState.item_revision) {
+    // Fail CLOSED when the reviewed baseline is missing, not open. item_revision
+    // is optional on the type and the openDetail seed read can fail, and an
+    // earlier version skipped the comparison in that case — which silently
+    // restored the exact bug this guard exists to close. With no baseline we
+    // cannot know whether the refreshed rows are what the operator reviewed, so
+    // treat it the same as a mismatch. setActiveCount above has just stored the
+    // authoritative revision, so the next click has a baseline and proceeds.
+    if (typeof reviewedRevision !== 'number') {
+      toast('error', 'Could not confirm which quantities you reviewed. The list has been refreshed — review the quantities, then complete again.');
+      return null;
+    }
+    if (reviewedRevision !== countState.item_revision) {
       toast('error', 'These counts were changed somewhere else while this count was open. The list has been refreshed — review the updated quantities, then complete again.');
       return null;
     }
