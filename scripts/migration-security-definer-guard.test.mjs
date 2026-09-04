@@ -38,13 +38,13 @@ test('fails closed for quoted names and unsupported ACL forms that can restore e
   );
 });
 
-test('tracks ALTER FUNCTION SECURITY DEFINER and keeps quoted identities distinct', () => {
+test('tracks ALTER FUNCTION SECURITY DEFINER and fails closed for unmatched quoted identities', () => {
   const altered = 'ALTER FUNCTION public.escalate(uuid) SECURITY DEFINER;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(altered), ['escalate']);
   const routine = 'ALTER ROUTINE public.routine_escalate(uuid) SECURITY DEFINER;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(routine), ['routine_escalate']);
   const quoted = 'CREATE FUNCTION public."Case"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."case"() FROM PUBLIC, anon;';
-  assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['Case']);
+  assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['unparseable-security-definer-sql']);
   const escaped = 'CREATE FUNCTION public."danger""name"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."danger""name"() FROM PUBLIC, anon;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(escaped), []);
 });
@@ -110,6 +110,17 @@ DROP FUNCTION public.restore_acl();`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(helper), ['unparseable-security-definer-sql']);
 });
 
+test('fails closed for existing-routine grants and nonstandard string parsing', () => {
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes('GRANT EXECUTE ON FUNCTION public.existing_secdef(uuid) TO anon;'),
+    ['unparseable-security-definer-sql'],
+  );
+  const nonstandardStrings = String.raw`SET standard_conforming_strings = off;
+CREATE FUNCTION public.string_decoy() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;
+SELECT 'counterfeit \' REVOKE ALL ON FUNCTION public.string_decoy() FROM PUBLIC, anon;';`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(nonstandardStrings), ['unparseable-security-definer-sql']);
+});
+
 test('fails closed for quoted schema and argument-type identities', () => {
   const schemaDecoy = `${definition()}\nREVOKE ALL ON FUNCTION "PUBLIC".post_return_credit(uuid) FROM PUBLIC, anon;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(schemaDecoy), ['unparseable-security-definer-sql']);
@@ -140,7 +151,7 @@ test('does not demand an anon revoke for invoker-security functions', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.safe_fn() RETURNS void LANGUAGE sql AS $$ SELECT; $$;'), []);
 });
 
-test('the return-credit migration makes its anon revocations mechanically visible', () => {
+test('the return-credit migration fails closed rather than guessing ACL state for existing helpers', () => {
   const migration = readFileSync('supabase/migrations/20260827041100_rebuild_return_credit_cogs_reversal.sql', 'utf8');
-  assert.deepEqual(securityDefinerMissingAnonRevokes(migration), []);
+  assert.deepEqual(securityDefinerMissingAnonRevokes(migration), ['unparseable-security-definer-sql']);
 });

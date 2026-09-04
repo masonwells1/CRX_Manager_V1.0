@@ -26,9 +26,16 @@ test('evidence for the return-credit chain contains migration bytes and CHECK va
 test('evidence preserves unqualified functions and their frontend RPC callers', () => {
   const evidence = printedEvidence('20260430250000_field_app_workflow_phase13');
 
-  assert.match(evidence, /PRIOR DECLARATIONS of [^\n]*receive_po_items/);
+  assert.match(evidence, /ROUTINE DEFINITION AND ACL HISTORY of [^\n]*receive_po_items/);
   assert.match(evidence, /APPLICATION RPC CALL SITES of receive_po_items in src\/ and supabase\/functions\//);
   assert.match(evidence, /frontend RPC: src\/components\/receiving\/QuickReceivePanel\.tsx/);
+});
+
+test('evidence includes source history for existing routines changed by ALTER', () => {
+  const evidence = printedEvidence('20260319000000_fix_trigger_functions_search_path');
+  assert.match(evidence, /ROUTINE DEFINITION AND ACL HISTORY of [^\n]*_enforce_return_status_transition/);
+  assert.match(evidence, /ALTER FUNCTION public\._enforce_return_status_transition\(\) SET search_path/);
+  assert.match(evidence, /CREATE(?: OR REPLACE)? FUNCTION public\._enforce_return_status_transition\(/);
 });
 
 test('evidence includes edge-function callers and review launch permits its Git-free packet', () => {

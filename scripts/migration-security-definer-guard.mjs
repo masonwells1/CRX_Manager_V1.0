@@ -13,6 +13,11 @@ function blank(out, count) { return out + ' '.repeat(count); }
 // an apply-time ACL check. Null means malformed SQL and fails closed.
 function executableSql(sql) {
   const src = String(sql || ''); let out = '';
+  // The lightweight lexer below models PostgreSQL's default string rules. A
+  // migration can change those rules, making a backslash-escaped quote keep
+  // apparent GRANT/REVOKE text inside data. Until that mode is modelled, do not
+  // let any such migration supply ACL proof.
+  if (/\bSET\s+(?:(?:LOCAL|SESSION)\s+)?standard_conforming_strings\s*(?:TO|=)\s*'?(?:off|false|0)'?\b/i.test(src)) return null;
   for (let i = 0; i < src.length;) {
     const ch = src[i];
     const escape = (ch === 'e' || ch === 'E') && src[i + 1] === "'" && !/[A-Za-z0-9_$]/.test(src[i - 1] || '');
@@ -244,6 +249,18 @@ export function securityDefinerMissingAnonRevokes(sql) {
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
     ...executable.matchAll(SECURITY_DEFINER_ALTER).map((match) => ({ match, kind: 'alter' })),
   ].sort((a, b) => a.match.index - b.match.index);
+  // Keep all routines declared in this migration, not only SECURITY DEFINER
+  // ones. An ACL event for an undeclared routine may be changing an existing
+  // SECURITY DEFINER function, whose current body and ACL are not available to
+  // this narrow source parser; it must therefore block proof production.
+  const locallyDeclaredRoutines = new Set();
+  for (const declaration of executable.matchAll(SECURITY_DEFINER_CREATE)) {
+    const args = balanced(executable, declaration.index + declaration[0].length - 1);
+    if (!args) return ['unparseable-security-definer-sql'];
+    const signature = canonicalSignature(declaration[1] || declaration[2], args.text, true, Boolean(declaration[1]));
+    if (!signature) return ['unparseable-security-definer-sql'];
+    locallyDeclaredRoutines.add(signature);
+  }
   // SQL-standard routines can hold a body directly in BEGIN ATOMIC … END,
   // without a string delimiter for executableSql to blank. Until the parser
   // models that body boundary, no ACL-looking text inside it can be trusted.
@@ -298,15 +315,14 @@ export function securityDefinerMissingAnonRevokes(sql) {
     else {
       const routine = state.get(event.signature);
       // A grant/revoke to PUBLIC or anon that does not resolve to tracked
-      // state is not harmless: PostgreSQL type aliases and unsupported
-      // identity syntax can still select a declared SECURITY DEFINER routine
-      // of the same name. The proof producer has no catalog to disambiguate
-      // that overload, so never ignore the ACL event. A different routine name
-      // remains unrelated to this migration's declared SECURITY DEFINER state.
+      // state is not harmless: it may change an existing SECURITY DEFINER
+      // routine whose body and effective privileges are outside this migration.
+      // The proof producer has no catalog to disambiguate that target, so only
+      // an ACL for a routine explicitly declared in this migration is safe to
+      // classify as unrelated to its tracked SECURITY DEFINER state.
       if (!routine) {
-        const eventName = event.signature.slice(0, event.signature.indexOf('('));
-        const hasSameNamedRoutine = [...state.keys()].some((signature) => signature.slice(0, signature.indexOf('(')) === eventName);
-        if (hasSameNamedRoutine && event.roles.some((role) => role === 'public' || role === 'anon')) return ['unparseable-security-definer-sql'];
+        const touchesPublicExecution = event.roles.some((role) => role === 'public' || role === 'anon');
+        if (touchesPublicExecution && !locallyDeclaredRoutines.has(event.signature)) return ['unparseable-security-definer-sql'];
         continue;
       }
       for (const role of event.roles) if (role === 'public' || role === 'anon') routine.roles.set(role, event.aclAction === 'revoke');

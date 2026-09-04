@@ -40,7 +40,7 @@ import {
   safeReviewCaptureText,
 } from './write-codex-push-proof.mjs';
 import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.mjs';
-import { CREATE_FN_ANY, securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
+import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
 
 const rawArgs = process.argv.slice(2);
@@ -184,15 +184,60 @@ function extractTsDeclaration(ts, name) {
   return alias ? alias[0] : null;
 }
 
-// Matches CREATE [OR REPLACE] FUNCTION for an unqualified public name and both
-// qualified forms: `foo(`, `public.foo(`, and `"public"."foo"(`. A migration can
-// use all three repository-supported spellings. The trailing parenthesis keeps an
-// unrelated schema-qualified declaration from being mistaken for an unqualified one.
+const ROUTINE_REFERENCE_ANY = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?|ALTER\s+|(?:GRANT|REVOKE)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+)(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
 
-function createFnRegexFor(name) {
+function routineNamesIn(sql) {
+  return [...new Set([...sql.matchAll(ROUTINE_REFERENCE_ANY)].map((match) => match[1]))];
+}
+
+function statementEnd(text, start) {
+  for (let i = start; i < text.length; i += 1) {
+    if (text[i] === '-' && text[i + 1] === '-') {
+      i += 2; while (i < text.length && text[i] !== '\n' && text[i] !== '\r') i += 1;
+    } else if (text[i] === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) return text.length;
+      i = end + 1;
+    } else if (text[i] === "'") {
+      i += 1;
+      while (i < text.length) {
+        if (text[i] === "'" && text[i + 1] === "'") { i += 2; continue; }
+        if (text[i] === "'") break;
+        i += 1;
+      }
+    } else if (text[i] === '$') {
+      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text.slice(i));
+      if (tag) {
+        const close = text.indexOf(tag[0], i + tag[0].length);
+        if (close === -1) return text.length;
+        i = close + tag[0].length - 1;
+      }
+    } else if (text[i] === '"') {
+      i += 1;
+      while (i < text.length) {
+        if (text[i] === '"' && text[i + 1] === '"') { i += 2; continue; }
+        if (text[i] === '"') break;
+        i += 1;
+      }
+    } else if (text[i] === ';') return i;
+  }
+  return text.length;
+}
+
+function sqlStatements(text) {
+  const statements = []; let start = 0;
+  while (start < text.length) {
+    const end = statementEnd(text, start);
+    statements.push(text.slice(start, end + Number(end < text.length)));
+    start = end + 1;
+  }
+  return statements;
+}
+
+function routineHistoryRegexFor(name) {
   return new RegExp(
-    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:"?public"?\\s*\\.\\s*)?"?${name}"?\\s*\\(`,
-    'gi',
+    `\\b(?:CREATE\\s+(?:OR\\s+REPLACE\\s+)?|ALTER\\s+|(?:GRANT|REVOKE)\\s+(?:ALL(?:\\s+PRIVILEGES)?|EXECUTE)\\s+ON\\s+)(?:FUNCTION|PROCEDURE|ROUTINE)\\s+(?:"?public"?\\s*\\.\\s*)?"?${name}"?\\s*\\(`,
+    'i',
   );
 }
 for (const name of names) {
@@ -219,21 +264,6 @@ function applicationRpcCallSites(name, snapshot) {
     }
   }
   return sites;
-}
-
-// Read from the '(' at `open` through its matching ')'. A parameter list can itself
-// contain parentheses — numeric(10,2), DEFAULT (now()) — which the old [^)]* capture
-// truncated mid-signature.
-function readBalanced(text, open) {
-  let depth = 0;
-  for (let i = open; i < text.length; i += 1) {
-    if (text[i] === '(') depth += 1;
-    else if (text[i] === ')') {
-      depth -= 1;
-      if (depth === 0) return text.slice(open, i + 1);
-    }
-  }
-  return text.slice(open);
 }
 
 function buildEmbeddedEvidence(migRelPath, snapshot) {
@@ -290,29 +320,29 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
     );
   }
 
-  // CHECK 2 (overload collision) needs every prior declaration of the functions this
-  // migration defines. Ship the declaration lines rather than whole files: the charter
-  // compares argument types, and the full history is far too large to embed.
-  const fnNames = [...new Set([...sql.matchAll(CREATE_FN_ANY)].map((m) => m[1]))];
+  // Existing-routine security changes need the same source context as a new
+  // function: an ALTER SECURITY DEFINER or a direct ACL change can affect a
+  // routine whose body, search_path, and prior grant history live in older
+  // migrations. Include CREATE, ALTER, and routine ACL targets.
+  const fnNames = routineNamesIn(sql);
   if (fnNames.length) {
-    const decls = [];
+    const history = [];
     for (const file of snapshot.paths('supabase/migrations/', (relative) => relative.endsWith('.sql'))) {
       const text = snapshot.text(file);
       for (const name of fnNames) {
-        for (const m of text.matchAll(createFnRegexFor(name))) {
-          const open = text.indexOf('(', m.index);
-          const args = open === -1 ? '' : readBalanced(text, open);
-          decls.push(`${path.basename(file)}: ${(m[0] + args.slice(1)).replace(/\s+/g, ' ')}`);
-        }
+        const matchingStatements = sqlStatements(text).filter((statement) => routineHistoryRegexFor(name).test(statement));
+        for (const statement of matchingStatements) history.push(`${path.basename(file)}:\n${statement.trim()}`);
       }
     }
     parts.push(
       '',
-      `───────── PRIOR DECLARATIONS of ${fnNames.join(', ')} ─────────`,
-      'Every CREATE [OR REPLACE] FUNCTION for these names across supabase/migrations,',
-      'in filename order. Use this for the overload-collision check.',
-      decls.length ? decls.join('\n') : '(no prior declarations found)',
-      '───────── END PRIOR DECLARATIONS ─────────',
+      `───────── ROUTINE DEFINITION AND ACL HISTORY of ${fnNames.join(', ')} ─────────`,
+      'Every source-level CREATE, ALTER, GRANT, and REVOKE statement for these routine names',
+      'across supabase/migrations, in filename order. Use this to inspect existing routine',
+      'bodies, search_path changes, overloads, and ACL history. It is source history, NOT a',
+      'claim about the effective live ACL; if that distinction matters, report BLOCKERS.',
+      history.length ? history.join('\n\n') : '(no matching routine history found)',
+      '───────── END ROUTINE DEFINITION AND ACL HISTORY ─────────',
     );
   }
 
@@ -351,9 +381,9 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
     parts.push(
       '',
       '───────── EXPOSURE AND CALL SITES (facts only) ─────────',
-      'Grants and callers for each function this migration defines, so exposure can be',
-      'assessed from evidence rather than from the signature alone. Newest migration',
-      'wins where a function was redefined. This section asserts no conclusion.',
+      'Grants and callers for each routine this migration creates, alters, or changes ACLs for,',
+      'so exposure can be assessed from evidence rather than from the signature alone. This',
+      'section asserts no conclusion.',
       sections.join('\n\n'),
       '───────── END EXPOSURE AND CALL SITES ─────────',
     );
