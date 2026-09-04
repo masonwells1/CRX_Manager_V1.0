@@ -2,7 +2,7 @@
  * PaymentAllocation.test.tsx — Tests for the unified payment entry page
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({
@@ -87,6 +87,28 @@ describe('PaymentAllocation page', () => {
     await waitFor(() => {
       expect(screen.getByText('Method')).toBeInTheDocument();
     });
+  });
+
+  it('names a refused check amount right under the field while the actions stay disabled', async () => {
+    mockFrom.mockImplementation((table: string) => (table === 'customers'
+      ? buildChain({ data: [{ id: 'cust-1', farm_name: 'Acme Farm', account_number: 'A-1', prepay_balance_cents: 0 }], error: null })
+      : buildChain({ data: [], error: null })));
+    renderPayments();
+    fireEvent.change(await screen.findByPlaceholderText(/search by name/i), { target: { value: 'Ac' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Acme Farm/ }));
+
+    const amount = await screen.findByPlaceholderText('0.00');
+    fireEvent.change(amount, { target: { value: '12.345' } });
+    // Before the fix the refusal was invisible: null became 0, both action buttons were
+    // disabled, and the handler toasts could never fire (CodeRabbit on PR #588).
+    expect(screen.getByText('Enter an amount with no more than two decimal places.')).toBeInTheDocument();
+    expect(amount).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: /Auto-Allocate/ })).toBeDisabled();
+    expect(mockToast).not.toHaveBeenCalled();
+
+    fireEvent.change(amount, { target: { value: '12.34' } });
+    expect(screen.queryByText('Enter an amount with no more than two decimal places.')).not.toBeInTheDocument();
+    expect(amount).toHaveAttribute('aria-invalid', 'false');
   });
 });
 

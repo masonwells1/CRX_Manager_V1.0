@@ -52,7 +52,8 @@ const COMPACT_REANCHOR =
   "numeric-dollar columns keep exact numeric math and whole-cent constraints once clean, and " +
   "authoritative TypeScript rejects amounts with more than two fractional digits or applies one " +
   "approved exact decimal rounding rule before converting to integer cents; parseDollarsToCents() " +
-  "currently truncates excess precision and is insufficient without that validation; " +
+  "REFUSES more than two decimals by returning null (since 2026-09-03) — callers must check for " +
+  "null and show MONEY_PRECISION_MESSAGE, never coerce null to 0; " +
   "binary-floating-point rounding is prohibited for money; .update()/.delete() need " +
   "checkMutationResult; RPC usage needs assertRpcResult; SECURITY DEFINER functions need " +
   "SET search_path = public, pg_temp. Treat files changed before the compact as UNVERIFIED " +

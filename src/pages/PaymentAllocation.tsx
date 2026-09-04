@@ -489,9 +489,16 @@ export default function PaymentAllocation() {
                       placeholder="0.00"
                       value={checkAmountInput}
                       onChange={(e) => setCheckAmountInput(e.target.value)}
-                      className="w-full pl-10 pr-3 py-3 text-lg font-semibold bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      aria-invalid={checkAmountRefused}
+                      className={`w-full pl-10 pr-3 py-3 text-lg font-semibold bg-white border rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green ${checkAmountRefused ? 'border-red-400' : 'border-gray-200'}`}
                     />
                   </div>
+                  {/* A refused amount (more than two decimals) parses to null, so checkCents is
+                      0 and both action buttons stay disabled — the handler toasts can never
+                      fire. Say why right under the field instead (CodeRabbit on PR #588). */}
+                  {checkAmountRefused && (
+                    <p role="alert" className="mt-1 text-sm text-red-600">{MONEY_PRECISION_MESSAGE}</p>
+                  )}
                 </div>
                 <div className="flex gap-2 pt-6">
                   <Button

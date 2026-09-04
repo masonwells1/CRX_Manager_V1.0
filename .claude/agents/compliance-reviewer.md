@@ -38,11 +38,14 @@ For each violation capture: file, line number, severity, and a one-line fix. **C
   exception until exact `numeric` math is verified, existing values are finite whole cents, and an
   active finite whole-cent CHECK is present. Dirty or unconstrained columns remain findings.
   Display cents via `formatCents()` from `src/lib/money.ts`; use `formatUSD()` only for an
-  already-dollar display value. Money INPUT may use `parseDollarsToCents` (positive) /
-  `parseDollarsToCentsSigned` (the 3 vendor-bill callsites only) from `src/lib/parseCents.ts` only
-  after the input grammar rejects more than two fractional digits, or after one explicit approved
-  exact rounding rule is applied. Those legacy helpers currently truncate excess precision, so raw
-  use on an unconstrained input is a BLOCKER, not proof of compliance.
+  already-dollar display value. Money INPUT uses `parseDollarsToCents` (positive) /
+  `parseDollarsToCentsSigned` (the 3 vendor-bill callsites only) from `src/lib/parseCents.ts`.
+  Since 2026-09-03 (PR #588) both helpers REFUSE more than two fractional digits by returning
+  `null`; a caller that saves or does arithmetic on the result without a `null` check, or that
+  coerces `null` to `0` (`?? 0`, `|| 0`), is a BLOCKER — `0` is a real saved value at most
+  callsites (no credit limit, cleared override, $0 prepay). Callers show `MONEY_PRECISION_MESSAGE`
+  and stop. Any OTHER money parsing path must still reject more than two fractional digits or
+  apply one explicit approved exact rounding rule before converting to integer cents.
 
 ### CHECK 2 — Mutation result not checked  — HIGH
 - Any `supabase.from(...).update(...)` or `.delete(...)` whose result is not passed to `checkMutationResult(result, '<context>')` (imported from `../lib/db`).
