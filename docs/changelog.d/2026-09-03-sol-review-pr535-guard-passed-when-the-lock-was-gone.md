@@ -71,9 +71,10 @@ overage confirmation, negative/nonfinite cycle-count quantities, invalid commiss
 Two predicates did return rows — 19 `inventory` rows with negative `quantity_available` (all last
 touched 2026-07-02..2026-07-17, zero touched since the migrations went live), and PO item
 `e6559c38-4ae4-4899-b33c-a23e8900cec8` storing 227.5 received with no backing `receiving_records`.
-Neither was caused by this PR; both pre-date it. **Mason has since identified both as test data,
-not production defects** (relayed from another session; recorded as such rather than confirmed
-here). No action, and they are not a backlog item.
+Neither was caused by this PR; both pre-date it. **Mason confirmed directly on 2026-09-04 that
+both are test data, not production defects** — "just test data disregard it", said after being
+shown the actual product names and the PO. No action, and they are not a backlog item. Do not
+re-raise them.
 
 Worth keeping from that exchange: row age and financial shape are not evidence that data is real.
 These rows read as genuine — aged, unexplained, financially shaped, provenance-checked — and none
