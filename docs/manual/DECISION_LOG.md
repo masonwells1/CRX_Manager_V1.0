@@ -7,6 +7,18 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-04 — preserve quoted actor-parameter identity in PR #449; keep the broader cap
+
+**Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory
+replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** Actor-reference matching follows PostgreSQL identifier semantics: unquoted names fold
+to lowercase, while ordinary quoted ASCII names retain exact case. A refusal for `p_actor` cannot
+clear a distinct `"P_ACTOR"` input or collide with a same-spelled trusted local.
+
+**Boundary.** This seals quoted actor references inside the existing reader only. Unicode-escaped and
+non-ASCII quoted inputs remain positional-only, and the broader actor-name/dataflow cap is unchanged.
+
 ## 2026-09-04 — use final repeated CREATE search_path in PR #449; keep the broader cap
 
 **Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory

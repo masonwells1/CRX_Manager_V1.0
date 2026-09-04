@@ -2678,6 +2678,68 @@ ok(isDeny(r), "one guarded actor parameter cannot clear a second unguarded actor
 
 r = runHook(fn(`
   BEGIN
+    IF p_actor IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH: p_actor must equal auth.uid()';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES ("P_ACTOR");
+  END
+`, '"P_ACTOR" uuid, p_actor uuid'));
+ok(isDeny(r), "a lowercase actor refusal cannot clear a case-distinct quoted actor parameter");
+
+r = runHook(fn(`
+  DECLARE
+    p_actor uuid := auth.uid();
+  BEGIN
+    IF p_actor IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH: p_actor must equal auth.uid()';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES ("P_ACTOR");
+  END
+`, '"P_ACTOR" uuid'));
+ok(isDeny(r), "a trusted lowercase local cannot impersonate a case-distinct quoted actor parameter");
+
+const actorSealLookalike = [..."P_ACTOR"]
+  .map((char) => String.fromCharCode(0xe000 + char.charCodeAt(0)))
+  .join("");
+r = runHook(fn(`
+  DECLARE
+    "${actorSealLookalike}" uuid := auth.uid();
+  BEGIN
+    IF "P_ACTOR" IS DISTINCT FROM "${actorSealLookalike}" THEN
+      RAISE EXCEPTION 'P_ACTOR does not match authenticated user';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES ("P_ACTOR");
+  END
+`, '"P_ACTOR" uuid'));
+ok(isDeny(r), "a literal Private Use identifier cannot impersonate a sealed quoted actor name");
+
+r = runHook(fn(`
+  DECLARE
+    p_actor uuid := auth.uid();
+  BEGIN
+    IF "P_ACTOR" IS DISTINCT FROM p_actor THEN
+      RAISE EXCEPTION 'P_ACTOR does not match authenticated user';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES ("P_ACTOR");
+  END
+`, '"P_ACTOR" uuid'));
+ok(!isDeny(r), "an exact quoted actor comparison to a trusted lowercase local remains allowed");
+
+r = runHook(fn(`
+  DECLARE
+    p_actor uuid := auth.uid();
+  BEGIN
+    IF "P_ACTOR" IS DISTINCT FROM p_actor THEN
+      RAISE EXCEPTION 'P_ACTOR does not match authenticated user';
+    END IF;
+    "P_ACTOR" := p_target_id;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES ("P_ACTOR");
+  END
+`, '"P_ACTOR" uuid, p_target_id uuid'));
+ok(isDeny(r), "an exact quoted actor assignment invalidates its earlier refusal");
+
+r = runHook(fn(`
+  BEGIN
     IF p_created_by IS DISTINCT FROM auth.uid() THEN
       RAISE EXCEPTION 'p_created_by does not match authenticated user';
     END IF;

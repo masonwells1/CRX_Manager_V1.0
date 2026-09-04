@@ -994,6 +994,12 @@ multiple legal routine `SET search_path` options. PR #449 now evaluates that eff
 so an earlier explicit `pg_catalog` cannot hide a later unsafe path. This is ordered attribute
 handling, not a general CREATE parser, and the capped posture is unchanged.
 
+**Quoted actor-identity narrowing (authorized 2026-09-04).** PostgreSQL folds unquoted parameter
+names to lowercase but preserves quoted names exactly. PR #449 keeps those identities distinct, so
+a refusal for `p_actor` or a same-named trusted local cannot validate a separate `"P_ACTOR"` input.
+Unicode-escaped and non-ASCII quoted actor inputs remain positional-only; this does not widen the
+actor-name grammar or the broader capped posture.
+
 **What it does NOT catch, plus the one closed plumbing gap, stated so nobody re-derives it:**
 
 | Gap | Why it is open |

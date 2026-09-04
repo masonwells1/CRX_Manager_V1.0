@@ -112,13 +112,69 @@ function splitTopLevelArgs(argsText, sourceText = argsText) {
 // on: ^p_\w*by$ | ^p_actor | ^p_user.
 const ACTOR_PARAM_RE = /^p_\w*by$|^p_actor|^p_user/i;
 
-// Read the declared name out of one parameter entry, skipping a leading
-// IN/OUT/INOUT/VARIADIC mode keyword.
-function paramName(decl) {
+// Preserve PostgreSQL's quoted/unquoted identifier distinction for actor
+// matching. Every ASCII code unit inside a quoted identifier is mapped to a
+// same-length Private Use character. Regexes elsewhere intentionally use the
+// case-insensitive flag for SQL keywords; Private Use characters do not case
+// fold, so `"P_ACTOR"` and `"p_actor"` remain distinct without changing any
+// source indexes used by the control-flow reader.
+function sealQuotedIdentifiersForActorMatching(text) {
+  const source = String(text || "");
+  let out = "";
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] !== '"') {
+      out += source[i];
+      continue;
+    }
+    out += '"';
+    i++;
+    while (i < source.length) {
+      if (source[i] === '"') {
+        if (source[i + 1] === '"') {
+          out += '""';
+          i += 2;
+          continue;
+        }
+        out += '"';
+        break;
+      }
+      const code = source.charCodeAt(i);
+      out += code <= 0x7f ? String.fromCharCode(0xe000 + code) : source[i];
+      i++;
+    }
+  }
+  return out;
+}
+
+// Read the declared name and its actor-analysis reference out of one parameter
+// entry, skipping a leading IN/OUT/INOUT/VARIADIC mode keyword. Unquoted names
+// fold to lowercase as PostgreSQL does; ordinary quoted ASCII names retain
+// their exact spelling through the sealed reference above. Unicode-escaped or
+// non-ASCII quoted inputs stay positional-only because duplicating PostgreSQL's
+// Unicode identifier folding here would reopen the same collision class.
+function parameterIdentifier(decl) {
   const declaration = String(decl).trim().replace(/^(?:in|out|inout|variadic)\b\s*/i, "");
   const unicode = /^U&\s*"(?:[^"]|"")*"(?:\s+UESCAPE\s*'(?:[^']|'')*')?/i.exec(declaration);
-  if (unicode) return unicode[0];
-  return (declaration.split(/\s+/)[0] || "").replace(/^"|"$/g, "");
+  if (unicode) return { name: unicode[0], references: [], opaque: true };
+  const quoted = /^"(?:[^"]|"")*"/.exec(declaration);
+  if (quoted) {
+    const name = normalizedIdentifier(quoted[0]);
+    const opaque = name === null || /[^\x00-\x7f]/.test(name);
+    const sealed = opaque
+      ? null
+      : normalizedIdentifier(sealQuotedIdentifiersForActorMatching(quoted[0]));
+    return { name: name ?? quoted[0], references: sealed === null ? [] : [sealed], opaque };
+  }
+  const token = declaration.split(/\s+/)[0] || "";
+  const name = token.toLowerCase();
+  const quotedReference = normalizedIdentifier(
+    sealQuotedIdentifiersForActorMatching(`"${name.replace(/"/g, '""')}"`)
+  );
+  return {
+    name,
+    references: quotedReference === null ? [name] : [name, quotedReference],
+    opaque: false,
+  };
 }
 
 function paramMode(decl) {
@@ -142,15 +198,17 @@ function actorParameterDescriptors(maskedParams, rawParams, allowUnqualifiedUuid
   for (const [index, declaration] of declarations.entries()) {
     const mode = paramMode(declaration);
     if (mode === "out") continue;
-    const name = paramName(declaration);
-    const opaqueUnicodeName = /^U&/i.test(name);
-    if (!opaqueUnicodeName && !ACTOR_PARAM_RE.test(name)) continue;
+    const identifier = parameterIdentifier(declaration);
+    const { name } = identifier;
+    if (!identifier.opaque && !ACTOR_PARAM_RE.test(name)) continue;
     // PostgreSQL decodes U&\"...\" before name resolution. Rather than duplicate
     // that escape grammar and risk another lookalike bypass, conservatively
-    // require every Unicode-named input on a mutating definer routine to prove
-    // actor binding through its exact positional alias (or use exemption).
+    // require every opaque input on a mutating definer routine to prove actor
+    // binding through its exact positional alias (or use exemption).
     const position = index + 1;
-    const references = opaqueUnicodeName ? [`$${position}`] : [name, `$${position}`];
+    const references = identifier.opaque
+      ? [`$${position}`]
+      : [...identifier.references, `$${position}`];
     actors.push({
       name,
       references,
@@ -1717,10 +1775,11 @@ function hasOuterExceptionHandler(controlBody) {
 
 function hasRecognizedMutationBefore(structuralBody, beforeIndex, actorReferences = []) {
   const prefix = structuralBody.slice(0, beforeIndex);
-  const forwardingReferences = actorForwardingReferences(prefix, actorReferences);
-  if (hasActorCallableForwarding(prefix, forwardingReferences) ||
-      hasActorOperatorForwarding(prefix, forwardingReferences) ||
-      hasActorSymbolicOperatorForwarding(prefix, forwardingReferences)) return true;
+  const actorPrefix = sealQuotedIdentifiersForActorMatching(prefix);
+  const forwardingReferences = actorForwardingReferences(actorPrefix, actorReferences);
+  if (hasActorCallableForwarding(actorPrefix, forwardingReferences) ||
+      hasActorOperatorForwarding(actorPrefix, forwardingReferences) ||
+      hasActorSymbolicOperatorForwarding(actorPrefix, forwardingReferences)) return true;
   // A routine-level SET clause is not immutable: executable SET/RESET inside
   // PL/pgSQL can replace or remove search_path before the equality operator in
   // the actor refusal is resolved. Fail closed on that bounded pre-refusal
@@ -1919,6 +1978,7 @@ function hasEnforcedActorRefusal(
   if (!trustedUuid) return false;
   const structuralBody = maskSqlForCallNames(body);
   if (structuralBody === null) return false;
+  const actorStructuralBody = sealQuotedIdentifiersForActorMatching(structuralBody);
   // maskSqlForCallNames deliberately preserves quoted identifiers for relation
   // parsing. They are data to every control-flow read below: an alias named
   // "END LOOP" must not pop a real loop frame or seed a fake IF match.
@@ -1928,14 +1988,14 @@ function hasEnforcedActorRefusal(
   // are scoped to their own blocks and cannot bypass the already-run guard.
   if (hasOuterExceptionHandler(controlBody)) return false;
   // A refusal that guards a name the routine later re-binds proves nothing.
-  if (hasActorReferenceRebinding(structuralBody, actorReferences)) return false;
+  if (hasActorReferenceRebinding(actorStructuralBody, actorReferences)) return false;
   const ifRe = /\bIF\b[\s\S]*?\bTHEN\b[\s\S]*?\bEND\s+IF\b/gi;
   let block;
   while ((block = ifRe.exec(controlBody)) !== null) {
     const then = /\bTHEN\b/i.exec(block[0]);
     const endIf = /\bEND\s+IF\b/i.exec(block[0]);
     if (!then || !endIf || endIf.index <= then.index) continue;
-    const condition = structuralBody.slice(block.index + 2, block.index + then.index);
+    const condition = actorStructuralBody.slice(block.index + 2, block.index + then.index);
     const actionStart = block.index + then.index + then[0].length;
     const actionEnd = block.index + endIf.index;
     const bindings = stableAuthUidBindings(
@@ -3406,37 +3466,42 @@ try {
     if (actorParams.length === 0) continue;
 
     const commentBlankedBody = blankComments(body);
+    const actorMaskedBody = sealQuotedIdentifiersForActorMatching(maskedBody);
+    const actorCommentBlankedBody = sealQuotedIdentifiersForActorMatching(commentBlankedBody);
     const actorReferences = actorDescriptors.flatMap(({ references }) => references);
     const actorParamReference = actorReferences.map(actorReferencePattern).join("|");
     const actorForwardedInvocation = new RegExp(
       `\\b(?:CALL|PERFORM)\\b[^;]*?(?:${actorParamReference})`,
       "i"
     );
-    const maskedForwardingReferences = actorForwardingReferences(maskedBody, actorReferences);
-    const commentBlankedForwardingReferences = actorForwardingReferences(commentBlankedBody, actorReferences);
-    const actorForwardedCallable = hasActorCallableForwarding(maskedBody, maskedForwardingReferences) ||
-      hasActorCallableForwarding(commentBlankedBody, commentBlankedForwardingReferences);
-    const actorForwardedOperator = hasActorOperatorForwarding(maskedBody, maskedForwardingReferences) ||
-      hasActorOperatorForwarding(commentBlankedBody, commentBlankedForwardingReferences);
+    const maskedForwardingReferences = actorForwardingReferences(actorMaskedBody, actorReferences);
+    const commentBlankedForwardingReferences = actorForwardingReferences(
+      actorCommentBlankedBody,
+      actorReferences
+    );
+    const actorForwardedCallable = hasActorCallableForwarding(actorMaskedBody, maskedForwardingReferences) ||
+      hasActorCallableForwarding(actorCommentBlankedBody, commentBlankedForwardingReferences);
+    const actorForwardedOperator = hasActorOperatorForwarding(actorMaskedBody, maskedForwardingReferences) ||
+      hasActorOperatorForwarding(actorCommentBlankedBody, commentBlankedForwardingReferences);
     const actorForwardedSymbolicOperator = hasActorSymbolicOperatorForwarding(
-      maskedBody,
+      actorMaskedBody,
       maskedForwardingReferences
     ) || hasActorSymbolicOperatorForwarding(
-      commentBlankedBody,
+      actorCommentBlankedBody,
       commentBlankedForwardingReferences
     );
     const actorForwardedUserCast = hasActorUserDefinedCastForwarding(
-      maskedBody,
+      actorMaskedBody,
       maskedForwardingReferences
     ) || hasActorUserDefinedCastForwarding(
-      commentBlankedBody,
+      actorCommentBlankedBody,
       commentBlankedForwardingReferences
     );
     const actorLaunderedIntoOpaqueTarget = hasOpaqueUnicodeActorLaundering(
-      maskedBody,
+      actorMaskedBody,
       maskedForwardingReferences
     ) || hasOpaqueUnicodeActorLaundering(
-      commentBlankedBody,
+      actorCommentBlankedBody,
       commentBlankedForwardingReferences
     );
     const staticMutationRe = new RegExp(
@@ -3446,8 +3511,8 @@ try {
     const hasMutation = staticMutationRe.test(maskedBody) ||
       staticMutationRe.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody) ||
-      actorForwardedInvocation.test(maskedBody) ||
-      actorForwardedInvocation.test(commentBlankedBody) ||
+      actorForwardedInvocation.test(actorMaskedBody) ||
+      actorForwardedInvocation.test(actorCommentBlankedBody) ||
       actorForwardedCallable ||
       actorForwardedOperator ||
       actorForwardedSymbolicOperator ||
