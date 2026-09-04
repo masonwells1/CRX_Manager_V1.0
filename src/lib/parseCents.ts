@@ -11,6 +11,12 @@
  *   "-100"   → 10000   (sign stripped — positive semantics enforced)
  *   "1e5"    → 0       (scientific notation rejected)
  *   "1.2.3"  → 0       (multi-dot rejected)
+ *   "1.999"  → null    (more than two decimals REFUSED — see MONEY_PRECISION_MESSAGE)
+ *
+ * null is the only "refused" signal. It is deliberately not 0, because most
+ * callers save the returned number directly and a 0 has a real meaning at
+ * many of them (no credit limit, cleared price override, $0 prepay balance).
+ * Every caller checks for null before saving and shows MONEY_PRECISION_MESSAGE.
  *
  * Use `parseDollarsToCentsSigned` for the few fields that legitimately accept
  * negative input (vendor bill adjustment_cents, discount fields). Those are
@@ -22,9 +28,18 @@
  * then skips the credit check when limit ≤ 0. Making positive the default
  * closes that latent bypass.
  */
-export function parseDollarsToCents(input: string): number {
-  return Math.abs(parseDollarsToCentsSigned(input));
+export function parseDollarsToCents(input: string): number | null {
+  const signed = parseDollarsToCentsSigned(input);
+  return signed === null ? null : Math.abs(signed);
 }
+
+/**
+ * The one message every money input shows when a typed amount is REFUSED for
+ * carrying more than two fractional digits (Mason's 2026-09-03 decision:
+ * refuse, never round and never truncate). Callers must not save when the
+ * parser returns null; they show this and stop.
+ */
+export const MONEY_PRECISION_MESSAGE = 'Enter an amount with no more than two decimal places.';
 
 /**
  * Parse a dollar string into cents (integer), preserving leading minus signs
@@ -48,7 +63,7 @@ export function parseDollarsToCents(input: string): number {
  * Rejects scientific notation, multi-dot input (audit #20), and a minus sign
  * anywhere but the leading position (codex-driven hunt cycle 2).
  */
-export function parseDollarsToCentsSigned(input: string): number {
+export function parseDollarsToCentsSigned(input: string): number | null {
   if (!input || typeof input !== 'string') return 0;
   if (/[eE]/.test(input)) return 0;
   const cleaned = input.replace(/[^0-9.-]/g, '');
@@ -64,8 +79,16 @@ export function parseDollarsToCentsSigned(input: string): number {
   const absStr = sign === -1 ? cleaned.slice(1) : cleaned;
   if (absStr.includes('-')) return 0;
   const parts = absStr.split('.');
+  // REFUSED, not rounded and not truncated: more than two fractional digits
+  // means the operator typed a fraction of a cent ("1.999", "$12.345"). Until
+  // 2026-09-03 this truncated to 199 / 1234 cents, silently changing a typed
+  // money figure. Every caller must treat null as "do not save; show
+  // MONEY_PRECISION_MESSAGE" — a 0 here would be saved as a real $0 by a
+  // dozen screens (credit limit, prepay balance, price override), which is
+  // why refusal is null and never 0.
+  if ((parts[1] ?? '').length > 2) return null;
   const dollars = parseInt(parts[0] || '0', 10);
-  const centStr = (parts[1] || '00').substring(0, 2).padEnd(2, '0');
+  const centStr = (parts[1] || '00').padEnd(2, '0');
   const cents = parseInt(centStr, 10);
   return sign * (dollars * 100 + cents);
 }

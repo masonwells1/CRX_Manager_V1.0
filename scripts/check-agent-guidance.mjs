@@ -63,6 +63,11 @@ const validNegativeEqualityRule = "Supabase MCP assigns a fresh live version at 
 record(agents.split(/\r?\n/).length <= 140, "AGENTS.md stays lean", `${agents.split(/\r?\n/).length} lines`);
 record(claude.split(/\r?\n/).length <= 90, "CLAUDE.md stays lean", `${claude.split(/\r?\n/).length} lines`);
 record(claude.trimStart().startsWith("@AGENTS.md"), "CLAUDE.md imports AGENTS.md first");
+record(/## Owner Communication/.test(agents), "AGENTS.md defines the owner communication contract");
+record(/never have to nudge[\s\S]*Keep moving through authorized work/i.test(agents), "owner communication keeps authorized work moving without nudges");
+record(/what failed, what it means, and what the agent is trying next/i.test(agents), "owner communication makes failures explicit");
+record(/NEEDS MASON - ACTION REQUIRED[\s\S]*NEEDS MASON - DECISION REQUIRED/i.test(agents), "owner communication makes genuine stops unmistakable");
+record(/## Protected Delivery[\s\S]*\.claude\/commands\/ship\.md/.test(agents), "AGENTS.md routes volatile delivery mechanics to the ship workflow");
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(agents), "AGENTS.md has no volatile project counts");
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(claude), "CLAUDE.md has no volatile project counts");
 record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAUDE.md declares AGENTS.md canonical");

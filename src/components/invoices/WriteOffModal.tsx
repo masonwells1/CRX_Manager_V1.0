@@ -12,7 +12,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { sanitizeError, supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
-import { parseDollarsToCents } from '../../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
 
@@ -47,6 +47,10 @@ export default function WriteOffModal({
       return;
     }
     const amountCents = parseDollarsToCents(amount);
+    if (amountCents === null) {
+      toast('error', MONEY_PRECISION_MESSAGE);
+      return;
+    }
     if (amountCents <= 0) {
       toast('error', 'Enter a valid write-off amount');
       return;

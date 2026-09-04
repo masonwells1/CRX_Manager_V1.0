@@ -353,9 +353,23 @@ export default function MonthEndClose() {
       });
       if (error) throw error;
 
-      generateStatementsIdem.resetKey();
       const statements = assertRpcResult<DetailedStatementData[]>(data, 'generate_batch_statements');
-      if (!statements || !Array.isArray(statements) || statements.length === 0) {
+      // assertRpcResult only rejects null/undefined, so the ARRAY check below is this
+      // path's real validation of the reply, and the key is retired after it rather
+      // than before (Codex MEDIUM, F1).
+      //
+      // Scope note, corrected after Codex LOW: generate_batch_statements is STABLE,
+      // performs no writes and ignores p_idempotency_key entirely, so there is nothing
+      // here to double-apply and a retry simply recomputes. The ordering is kept for
+      // consistency with the other money paths, NOT because a duplicate is possible —
+      // do not read this block as evidence that this RPC commits anything.
+      if (!statements || !Array.isArray(statements)) {
+        toast('error', 'generate_batch_statements returned an unexpected response — please retry.');
+        setGenerating(false);
+        return;
+      }
+      generateStatementsIdem.resetKey();
+      if (statements.length === 0) {
         toast('info', 'No customers have outstanding balances');
         setGenerating(false);
         return;

@@ -5,7 +5,8 @@ import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import type { Product, UnitConversion } from '../../types';
 import { formatCents as fmt } from '../../lib/money';
-import { parseDollarsToCents } from '../../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
+import { useToast } from '../ui/Toast';
 import { toGallonOrLbEquivalent, fieldAppPricedQuantity } from '../../lib/chemCalculator';
 import { unitOptionsForForm, isKnownUnit } from '../../lib/units';
 import {
@@ -140,6 +141,7 @@ export default function FieldAppChemicalEntry({
   earliestHarvestDate = null,
   applicationDate = null,
 }: FieldAppChemicalEntryProps) {
+  const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PickerProduct[]>([]);
   const [showSearch, setShowSearch] = useState(false);
@@ -566,7 +568,15 @@ export default function FieldAppChemicalEntry({
                         min={0}
                         disabled={readOnly}
                         value={line.unit_price_cents ? (line.unit_price_cents / 100).toFixed(2) : ''}
-                        onChange={(e) => updateLine(line.id, { unit_price_cents: e.target.value ? parseDollarsToCents(e.target.value) : 0, manual_override: true })}
+                        onChange={(e) => {
+                          const cents = e.target.value ? parseDollarsToCents(e.target.value) : 0;
+                          // null = a third decimal digit was typed. Refuse the keystroke: the
+                          // controlled value stays at the last accepted price rather than
+                          // saving a $0 manual override — and say why, so the vanished
+                          // character is not mistaken for a typo.
+                          if (cents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
+                          updateLine(line.id, { unit_price_cents: cents, manual_override: true });
+                        }}
                         className="w-full pl-5 pr-2 py-1 border rounded text-right text-sm tabular-nums disabled:bg-gray-100 disabled:text-gray-500"
                         title={line.manual_override ? 'Manual price override' : 'Tier preview - final price computed per customer on save'}
                       />

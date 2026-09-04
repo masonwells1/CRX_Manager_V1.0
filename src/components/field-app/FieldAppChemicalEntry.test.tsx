@@ -135,6 +135,22 @@ describe('FieldAppChemicalEntry', () => {
     expect(next[0].manual_override).toBe(true);
   });
 
+  // Mason's 2026-09-03 decision: a price with more than two decimals is REFUSED.
+  // For a live-typing box that means the keystroke is ignored — the line keeps
+  // its last accepted price and NO $0 manual override is produced. Before this,
+  // "70.005" was truncated to 7000 cents and flagged as a manual override.
+  it('refuses a third decimal digit in the unit price: no change is emitted', async () => {
+    const onChange = vi.fn();
+    await renderEntry({ chemicals: [makeLine()], onChemicalsChange: onChange });
+
+    const priceInput = screen.getByDisplayValue('65.00');
+    fireEvent.change(priceInput, { target: { value: '70.005' } });
+
+    expect(onChange).not.toHaveBeenCalled();
+    // The box still shows the last accepted price.
+    expect(screen.getByDisplayValue('65.00')).toBeInTheDocument();
+  });
+
   it('Phase 1 footer banner reflects primaryCustomerTier prop (tells applicator whose tier is previewed)', async () => {
     const { rerender } = await renderEntry({ primaryCustomerTier: 1 });
     expect(screen.getByText(/Estimate using tier 1 pricing/)).toBeInTheDocument();

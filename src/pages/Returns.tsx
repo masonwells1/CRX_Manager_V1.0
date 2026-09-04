@@ -532,17 +532,30 @@ export default function Returns() {
     }
     await runCriticalAction({
       action: async () => {
-        const cancelScope = JSON.stringify([activeReturn.id, reason.trim()]);
+        // The scope and the REQUEST must use the same value. They did not: the scope
+        // trimmed the reason while p_reason sent it raw, and the server fingerprints
+        // (and stores) raw p_reason without normalising it. One local const now feeds
+        // the scope, the request and the audit line so they cannot drift apart.
+        //
+        // NOT A LIVE DEFECT, and do not let the next reader think it was (Codex
+        // round-6 LOW corrected round-5 MEDIUM): ReasonModal is the ONLY caller of
+        // handleCancel and it already calls onConfirm(trimmed), so a raw untrimmed
+        // reason never reached the request. This change is DEFENSIVE and
+        // runtime-equivalent today — it removes a latent trap for any future second
+        // caller that does not trim, which would otherwise let two different server
+        // intents share one client key.
+        const cancelReason = reason.trim();
+        const cancelScope = JSON.stringify([activeReturn.id, cancelReason]);
         const cancelKey = cancelIdem.getKeyFor(cancelScope);
         const { data, error } = await supabase.rpc('cancel_return', {
           p_return_id: activeReturn.id,
-          p_reason: reason,
+          p_reason: cancelReason,
           p_performed_by: profile.id,
           p_idempotency_key: cancelKey,
         });
         if (error) throw mapReturnPolicyRpcError(error);
-        cancelIdem.resetKeyFor(cancelScope);
         const result = assertRpcResult<{ was_received: boolean; reversed_count: number; skipped_count: number }>(data, 'cancel_return');
+        cancelIdem.resetKeyFor(cancelScope);
         if (result.was_received && result.reversed_count > 0) {
           toast('info', `Inventory restock reversed for ${result.reversed_count} item(s).`);
         }
@@ -551,7 +564,7 @@ export default function Returns() {
           // admin knows to reconcile manually.
           toast('warning', `${result.skipped_count} item(s) had a missing inventory row at cancel time — restock could not be reversed automatically. Reconcile manually.`);
         }
-        await logActivity({ event: 'return_cancelled', description: `Return ${activeReturn.return_number} cancelled: ${reason}`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
+        await logActivity({ event: 'return_cancelled', description: `Return ${activeReturn.return_number} cancelled: ${cancelReason}`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },
       toast,
       successMessage: 'Return cancelled',
