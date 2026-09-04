@@ -700,7 +700,7 @@ try {
   assert.equal(groupEdit.addedRate, RATE_NEXT, `the ADDED grower is priced at the invoice date's season: ${JSON.stringify(groupEdit)}`);
   assert.notEqual(groupEdit.existingRate, groupEdit.addedRate, 'this phase exists to record that the two rates DIFFER');
   assert.equal(groupEdit.groupId, groupEdit.addedGroupId, 'both invoices must really be in the same group, or this phase proves nothing');
-  log(`PHASE 6d: ACCEPTED CONSEQUENCE, observed -- on one application dated ${DATE_NEXT_SEASON} in ONE invoice group, the pre-existing grower is filed season ${groupEdit.existingSeason} at ${groupEdit.existingRate}c/acre and the newly added grower is filed season ${groupEdit.addedSeason} at ${groupEdit.addedRate}c/acre. Two growers, same application, different rates. OPEN OWNER DECISION.`);
+  log(`PHASE 6d: SETTLED OWNER DECISION, observed -- on one application dated ${DATE_NEXT_SEASON} in ONE invoice group, the pre-existing grower is filed season ${groupEdit.existingSeason} at ${groupEdit.existingRate}c/acre and the newly added grower is filed season ${groupEdit.addedSeason} at ${groupEdit.addedRate}c/acre. Two growers, same application, different rates. Mason chose on 2026-09-04 that each invoice is priced at its filed season and an edit never re-seasons an existing invoice.`);
 
   // PHASE 6e: the silent default-rate fallback (rls-security-reviewer M-A round 2). If no
   // customer_application_rates row exists for the season the invoice is FILED under, the fee
@@ -709,7 +709,7 @@ try {
   assert.equal(missingRate.season, SEASON_NOW, 'the edited invoice is still filed under the current season');
   assert.equal(missingRate.rate, RATE_DEFAULT,
     `with no rate row for the filed season the fee must fall back to the service default ${RATE_DEFAULT}: ${JSON.stringify(missingRate)}`);
-  log(`PHASE 6e: ACCEPTED CONSEQUENCE, observed -- with a rate row for season ${SEASON_NOW + 1} but NONE for the filed season ${missingRate.season}, the fee silently billed the service default ${missingRate.rate}c/acre instead of a negotiated rate. Pre-existing fallback, newly reachable. OPEN OWNER DECISION.`);
+  log(`PHASE 6e: SETTLED OWNER DECISION, observed -- with a rate row for season ${SEASON_NOW + 1} but NONE for the filed season ${missingRate.season}, the fee billed the service default ${missingRate.rate}c/acre. This pre-existing fallback is newly reachable; Mason chose on 2026-09-04 that pricing follows the invoice's filed season and edits never re-season existing invoices.`);
 
   // ---- PHASE 7: clock wiring, instrumented -----------------------------------------
   // Which clock feeds `season` when the caller supplies no date? The shim makes the
