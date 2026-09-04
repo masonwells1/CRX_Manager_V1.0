@@ -969,6 +969,12 @@ Historical persistent `cron.job` view-alias discovery now includes earlier migra
 with mixed or uppercase `.sql` extensions. These close reproduced exact-review bypasses without
 changing the broader capped posture.
 
+**Final lexical/path narrowing (authorized 2026-09-03).** CREATE-level quoted `"search_path"` and
+`SET search_path FROM CURRENT` now fail closed when operator safety cannot be proved. Adjacent quoted
+`UPDATE"cron"."job"SET` syntax remains inside delayed-command inspection, and migration path aliases
+containing `.`, `..`, or duplicate separators are normalized before the scope decision. These close
+the three reproduced exact-review payloads without changing the broader capped posture.
+
 **What it does NOT catch, stated so nobody re-derives it:**
 
 | Gap | Why it is open |

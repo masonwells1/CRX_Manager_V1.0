@@ -7,6 +7,18 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — close three exact-review lexical paths in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced three final-candidate blockers.
+
+**Decision.** The guard fails closed on quoted CREATE-level `"search_path"` and inherited CREATE
+`SET search_path FROM CURRENT`; recognizes an adjacent quoted `UPDATE"cron"."job"SET` boundary; and
+normalizes `.`, `..`, and duplicate path separators before deciding whether a file is a migration.
+
+**Boundary.** These repair the three reproduced lexical/path identities only. They do not add a SQL
+parser, broaden actor-name/dataflow discovery, or change the standing best-effort cap.
+
 ## 2026-09-03 — parse combined quoted search_path lists in PR #449; keep the broader cap
 
 **Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied

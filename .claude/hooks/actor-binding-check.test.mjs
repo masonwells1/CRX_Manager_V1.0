@@ -984,6 +984,10 @@ SET command = $job$${UNBOUND_DDL}$job$
 WHERE jobname = 'existing-job';`);
 ok(isDeny(r), "UPDATE cron.job.command cannot store delayed unbound actor DDL");
 
+r = runHook(`UPDATE"cron"."job"SET"command"=$job$${UNBOUND_DDL}$job$
+WHERE jobname = 'adjacent-existing-job';`);
+ok(isDeny(r), "adjacent quoted UPDATE and SET tokens cannot hide a cron.job command write");
+
 r = runHook(`UPDATE "cron"."job" AS existing
 SET "command" = $job$${UNBOUND_DDL}$job$
 WHERE existing.jobname = 'quoted-existing-job';`);
@@ -2176,6 +2180,21 @@ ok(isDeny(r), "quoted ALTER SET search_path is included in final routine state")
 r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
 ${searchPathActorRoutine("combined_create_path_actor", "'evil, pg_catalog'")}`);
 ok(isDeny(r), "a combined quoted CREATE search_path cannot hide a user schema before pg_catalog");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("quoted_create_path_actor").replace(
+  "SET search_path = public, pg_temp",
+  'SET "search_path" = evil, pg_catalog'
+)}`);
+ok(isDeny(r), "quoted CREATE-level search_path participates in operator safety");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+SET search_path = evil, pg_catalog;
+${searchPathActorRoutine("current_create_path_actor").replace(
+  "SET search_path = public, pg_temp",
+  "SET search_path FROM CURRENT"
+)}`);
+ok(isDeny(r), "CREATE SET search_path FROM CURRENT fails closed on inherited operator lookup");
 
 r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
 ${searchPathActorRoutine("combined_altered_path_actor")}
@@ -3703,6 +3722,9 @@ for (const scopePath of [
   "supabase/migrations/20260901000000_x.SQL",
   "Supabase/Migrations/20260901000000_x.sql",
   "SUPABASE/MIGRATIONS/20260901000000_x.SQL",
+  "supabase/./migrations/20260901000000_x.sql",
+  "supabase//migrations/20260901000000_x.sql",
+  "supabase/tmp/../migrations/20260901000000_x.sql",
 ]) {
   r = runHook(fn(MUTATION), scopePath);
   ok(isDeny(r), `${scopePath} is the same migration directory and is still inspected`);

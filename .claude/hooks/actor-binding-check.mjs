@@ -176,7 +176,7 @@ const filePath = (payload?.tool_input?.file_path || "").replace(/\\/g, "/");
 // the guard skipping it entirely, which is a scope hole rather than a style
 // preference. Compare case-insensitively; an out-of-scope path is still out of
 // scope under either casing.
-const scopePath = filePath.toLowerCase();
+const scopePath = path.posix.normalize(filePath).toLowerCase();
 if (!filePath || !scopePath.endsWith(".sql") || !scopePath.includes("supabase/migrations/")) {
   out("allow");
 }
@@ -582,12 +582,14 @@ function hasSchemaBeforeExplicitPgCatalog(structuralSql, statementOnly = false) 
   if (structuralSql === null || structuralSql === undefined) return false;
   const boundary = statementOnly ? "(?:^|;)\\s*" : "\\b";
   const searchPath = new RegExp(
-    `${boundary}SET\\s+(?:LOCAL\\s+)?search_path\\s*(?:=|TO)\\s*([^;]+)`,
+    `${boundary}SET\\s+(?:LOCAL\\s+|SESSION\\s+)?(?:"search_path"|search_path)\\s*` +
+      `(?:(FROM\\s+CURRENT)\\b|(?:=|TO)\\s*([^;]+))`,
     "gi"
   );
   let match;
   while ((match = searchPath.exec(structuralSql)) !== null) {
-    const entries = semanticSearchPathEntries(match[1]);
+    if (match[1]) return true;
+    const entries = semanticSearchPathEntries(match[2]);
     if (entries === null) return true;
     const catalogIndex = entries.indexOf("pg_catalog");
     if (catalogIndex > 0) return true;
@@ -1228,7 +1230,7 @@ function isPgCronCall(rawStmt) {
 function pgCronCommandWriteSites(callableSql) {
   const writeBoundary = '(?:^|[^\\w$.\"])';
   const relation = `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`;
-  const suffix = '(?:\\s*\\*)?(?=\\s|\\(|$)';
+  const suffix = '(?:\\s*\\*)?(?=\\s|\\(|$|(?:SET|USING)\\b)';
   const patterns = [
     ["COPY", new RegExp(`${writeBoundary}COPY\\s+(?:ONLY\\s+)?${relation}${suffix}`, "gi")],
     ["INSERT", new RegExp(
