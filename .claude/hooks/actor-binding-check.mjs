@@ -1412,7 +1412,7 @@ function actorReferencePattern(reference) {
 /** Read only PL/pgSQL's query/cursor INTO assignment lists. This deliberately
  * stays inside the capped guard's existing target grammar: it does not attempt
  * general SQL parsing or follow values through locals. The bounded repair is
- * that every target in a recognized SELECT/RETURNING/FETCH/EXECUTE list is
+ * that every target in a recognized SELECT/VALUES/RETURNING/FETCH/EXECUTE list is
  * inspected instead of only the first one. */
 function intoAssignmentTargetLists(structuralBody) {
   const targetLists = [];
@@ -1424,7 +1424,7 @@ function intoAssignmentTargetLists(structuralBody) {
   const rebindingTargetList = `${rebindingTarget}(?:\\s*,\\s*${rebindingTarget})*`;
   const patterns = [
     new RegExp(
-      `\\b(?:SELECT|RETURNING)\\b[^;]*?\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}` +
+      `\\b(?:SELECT|VALUES|RETURNING)\\b[^;]*?\\bINTO${SQL_KEYWORD_IDENTIFIER_GAP}` +
         `(?:STRICT${SQL_KEYWORD_IDENTIFIER_GAP})?(${rebindingTargetList})`,
       "gi"
     ),
@@ -1460,7 +1460,7 @@ function hasIntoAssignmentTarget(structuralBody, targetPattern) {
 /** A legacy guard may compare the actor parameter to a local v_actor-style
  * binding, but only when that local is initialized unconditionally from
  * auth.uid() exactly once and is not overwritten through assignment,
- * SELECT ... INTO, or GET [STACKED] DIAGNOSTICS. */
+ * SELECT/VALUES ... INTO, or GET [STACKED] DIAGNOSTICS. */
 function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid = true) {
   const prefix = structuralBody.slice(0, beforeIndex);
   const bindings = new Set();
@@ -1764,7 +1764,7 @@ function callMayRebindActorReference(structuralBody, reference) {
  * never re-bound anywhere in the routine. These are the same overwrite shapes
  * stableAuthUidBindings() refuses for a trusted auth.uid() local, applied in
  * the opposite direction: assignment (:= and PL/pgSQL's `=` spelling),
- * SELECT/FETCH ... INTO, a FOR/FOREACH loop target, and GET [STACKED]
+ * SELECT/VALUES/FETCH ... INTO, a FOR/FOREACH loop target, and GET [STACKED]
  * DIAGNOSTICS. A routine that genuinely needs to reassign its actor parameter
  * uses the file-level exempt marker and a manual review. */
 function hasActorReferenceRebinding(structuralBody, actorReferences) {

@@ -3416,6 +3416,7 @@ for (const [label, overwrite] of [
   ['SELECT ... INTO STRICT"v_actor"', '  SELECT p_target_id INTO STRICT"v_actor";'],
   ['SELECT ... INTO a second v_actor target',
     '  SELECT p_target_id, p_target_id INTO p_target_id, v_actor;'],
+  ['VALUES ... INTO v_actor', '  VALUES (p_target_id) INTO v_actor;'],
   ['FOR"v_actor" IN ... LOOP', '  FOR"v_actor" IN SELECT p_target_id LOOP NULL; END LOOP;'],
 ]) {
   r = runHook(fn(
@@ -3439,6 +3440,11 @@ for (const [label, rebind] of [
   ["SELECT ... INTO a second target", "  SELECT p_target_id, p_target_id INTO p_target_id, p_performed_by;"],
   ["SELECT ... INTO the second positional actor target",
     "  SELECT p_target_id, p_target_id INTO p_target_id, $1;"],
+  ["VALUES ... INTO the parameter", "  VALUES (p_target_id) INTO p_performed_by;"],
+  ["VALUES ... INTO a second target",
+    "  VALUES (p_target_id, p_target_id) INTO p_target_id, p_performed_by;"],
+  ["VALUES ... INTO the second positional actor target",
+    "  VALUES (p_target_id, p_target_id) INTO p_target_id, $1;"],
   ["SELECT ... INTO a first opaque Unicode actor target",
     '  SELECT p_target_id INTO U&"p_performed_b\\0079";'],
   ["SELECT ... INTO a second opaque Unicode actor target",
@@ -3524,6 +3530,14 @@ r = runHook(fn(
   "p_performed_by uuid, p_target_id uuid, p_spare_id uuid"
 ));
 ok(!isDeny(r), "an actor source with only non-actor INTO targets is still ALLOWED");
+
+r = runHook(fn(
+  "BEGIN\n" + GUARD_LINE + "\n" +
+  "  VALUES (p_performed_by, p_target_id) INTO p_target_id, p_spare_id;\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;",
+  "p_performed_by uuid, p_target_id uuid, p_spare_id uuid"
+));
+ok(!isDeny(r), "a VALUES actor source with only non-actor INTO targets is still ALLOWED");
 
 // ── ROUND 2: operator resolution and file scope ────────────────────────────
 // `SET search_path TO 'evil', 'pg_catalog'` is the spelling every CRX migration
