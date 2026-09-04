@@ -112,7 +112,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // its source job. This is the editor a TRANSFERRED field invoice actually opens in
   // (a transferred invoice has a job_id but NO field_app_locations, so the #24
   // discriminator routes it here, not to the per-acre FieldApplicationInvoice).
-  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
+  // F1: scoped by the route id — its post-RPC reset moved after assertRpcResult, and
+  // this component does NOT remount when the route id changes (App.tsx renders it
+  // without a key) while lines ~820/~838 navigate to a DIFFERENT invoice. saveIdem
+  // above is already record-scoped via its second argument, so only this one needed it.
+  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '', id ?? '');
   // #28/U16b: Unpost — reverse a posting on a posted field-application or chemical-sale
   // invoice (returns it to the editable Unposted list). The RPC is type-agnostic.
   // #28/FIX 4: per-invoice AND per-group key cache so a retry reuses the same key while a
@@ -823,11 +827,18 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           }
           throw error;
         }
+        // The key must outlive the result check: assertRpcResult rejects a null reply
+        // the server may already have committed, and the retry has to travel under the
+        // SAME key so save_invoice can replay it.
+        //
+        // save_invoice RETURNS the invoice id for edits as well as creates, so the
+        // reply is validated unconditionally. Validating only the isNew arm left every
+        // EDIT retiring its key on a null reply and reporting "saved" — the original F1
+        // failure mode, preserved (Codex HIGH, 2026-09-03).
+        const savedId = assertRpcResult<string>(data, 'save_invoice');
         saveIdem.resetKey();
         legacySaveIntentRef.current = null;
-
         if (isNew) {
-          const savedId = assertRpcResult<string>(data, 'save_invoice');
           navigate(`/invoices/${savedId}`, { replace: true });
         } else {
           await fetchInvoice(id!);
@@ -1008,8 +1019,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      transferToSchedulingIdem.resetKey();
       const result = assertRpcResult<{ job_id: string; job_number: string }>(data, 'transfer_invoice_to_job');
+      transferToSchedulingIdem.resetKey();
       setShowTransferToSchedulingModal(false);
       toast('success', `Invoice returned to scheduling — job ${result.job_number} reopened`);
       navigate(`/jobs/${result.job_id}`);

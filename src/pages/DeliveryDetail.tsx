@@ -87,7 +87,15 @@ export default function DeliveryDetail() {
   const { toast } = useToast();
   const editIdem = useIdempotencyKey('edit_delivery', profile?.id || '');
   const cancelIdem = useIdempotencyKey('cancel_delivery', profile?.id || '');
-  const followupIdem = useIdempotencyKey('create_followup_delivery', profile?.id || '');
+  // F1: create_followup_delivery is the ONLY retained key on this page, and it is
+  // scoped by the route id. Its payload is exactly (p_original_delivery_id,
+  // p_performed_by, p_idempotency_key) — nothing a retry can vary — so the route id
+  // fully binds the request. The scope is required because this component does NOT
+  // remount when the route id changes (App.tsx renders it without a key, effects are
+  // keyed on [id]) and the success path below navigates straight to a DIFFERENT
+  // delivery; unscoped, a retained key could replay delivery A's receipt against
+  // delivery B.
+  const followupIdem = useIdempotencyKey('create_followup_delivery', profile?.id || '', id ?? '');
   const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_delivery', profile?.id || '');
@@ -624,6 +632,17 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
+      // F1 DELIBERATELY NOT FIXED HERE — left in main's (defective) order.
+      //
+      // Moving this reset after the assert would make the client RETAIN the key, which
+      // is only safe when the key binds everything the RPC acts on. cancel_delivery
+      // also sends p_cancel_reason, free text the user can edit and retry: the assert
+      // throws before setCancelOpen(false)/setCancelReason('') below, so the modal
+      // stays open with the reason editable. check_idempotency matches on key plus
+      // operation only, so the retry would replay the FIRST cancellation's receipt and
+      // the UI would report the edited reason as recorded when it was not. Binding
+      // needs the request payload (PR #535's fingerprintIntentPayload), not a reorder
+      // (Codex round-4 MEDIUM).
       cancelIdem.resetKey();
       const cancelData = assertRpcResult<{
         items_restored?: number;
@@ -659,6 +678,11 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
+      // F1 DELIBERATELY NOT FIXED HERE — same reason as cancel_delivery above:
+      // void_delivery sends a free-text p_reason the user can edit before retrying, and
+      // check_idempotency matches on key plus operation only, so a retained key would
+      // replay the first void's receipt under a reason that was never recorded
+      // (Codex round-4 MEDIUM).
       voidIdem.resetKey();
       const voidData = assertRpcResult<{ posted_invoices_exist?: boolean }>(voidResult, 'void_delivery');
       const parts: string[] = [`Delivery ${delivery.delivery_number} voided.`];
@@ -771,22 +795,30 @@ export default function DeliveryDetail() {
     if (!profile) return;
     setCreatingFollowup(true);
 
-    const idemKey = followupIdem.getKey();
-    const { data, error } = await supabase.rpc('create_followup_delivery', {
-      p_original_delivery_id: id!,
-      p_performed_by: profile.id,
-      p_idempotency_key: idemKey,
-    });
-
-    if (error) {
-      toast('error', sanitizeError(error));
-    } else {
-      followupIdem.resetKey();
+    // F1 (Codex round 5): retaining the key past the assert is only worth anything if the
+    // user can still SPEND it. assertRpcResult throws on an ambiguous reply — the exact case
+    // the retained key exists for — and without finally, setCreatingFollowup(false) never ran,
+    // so the button stayed disabled and the only way out was to navigate away, which unmounts
+    // this page and drops the key. The retry then travelled under a FRESH key the server
+    // cannot replay, which is the duplicate F1 is meant to prevent. try/finally makes the
+    // retained key reachable, matching handleStartDelivery below.
+    try {
+      const idemKey = followupIdem.getKey();
+      const { data, error } = await supabase.rpc('create_followup_delivery', {
+        p_original_delivery_id: id!,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
       const result = assertRpcResult<{ delivery_id: string; delivery_number: string; item_count: number }>(data, 'create_followup_delivery');
+      followupIdem.resetKey();
       toast('success', `Follow-up delivery ${result.delivery_number} created with ${result.item_count} items`);
       navigate(`/deliveries/${result.delivery_id}`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    } finally {
+      setCreatingFollowup(false);
     }
-    setCreatingFollowup(false);
   };
 
   // ── Start Delivery (Confirm) ──────────────────────────────────────────
@@ -883,6 +915,16 @@ export default function DeliveryDetail() {
     try {
       const { data: completeResult, error } = await supabase.rpc('complete_delivery', rpcParams);
       if (error) throw error;
+      // F1 DELIBERATELY NOT FIXED HERE — left in main's (defective) order, and this is
+      // the strongest case on the page. complete_delivery sends p_signed_by,
+      // p_quantities, p_issue_type and p_issue_notes, all live UI state the driver can
+      // change before retrying. check_idempotency returns the cached result by key and
+      // operation WITHOUT looking at the new payload, so a retained key after an
+      // ambiguous reply would apply the first payload's quantities and signature while
+      // the screen reports the edited ones — silently wrong stock and a wrong signer on
+      // a delivery record. This is the same payload-binding defect that invalidated the
+      // FieldStop fix; it needs fingerprintIntentPayload, not a reorder (Codex round-4
+      // HIGH).
       completeIdem.resetKey();
       assertRpcResult(completeResult, 'complete_delivery');
 
