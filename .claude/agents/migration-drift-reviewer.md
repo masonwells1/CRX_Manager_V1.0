@@ -35,8 +35,25 @@ Example: if registry has `orders.status: [confirmed, partially_fulfilled, fulfil
 ### CHECK 2 — Function overload collision
 For each `CREATE OR REPLACE FUNCTION <name>(<args>)` in the migration:
 1. Search the entire `supabase/migrations/` directory for prior `CREATE OR REPLACE FUNCTION <name>(<different_args>)`.
+
+   **METHOD — mandatory, not a preference.** The complete repository, including all ~900
+   migration files, is ALREADY CHECKED OUT LOCALLY at your working directory. Answer this check
+   with a SMALL, BOUNDED number of local `Grep`/`Bash` searches — ideally ONE `grep -rnoiE` over
+   `supabase/migrations/` covering every function name at once. Do NOT read migration files one
+   at a time, and do NOT use any remote/GitHub file-reading tool (`fetch_blob` or similar) to
+   enumerate history: walking the corpus file-by-file over the network exhausts the run before
+   it reaches a verdict, and an unfinished review is worth less than a fast one. Measured
+   2026-09-03, the local one-pass grep answered this check in 0.17 s, where the per-file remote
+   walk died twice — after 598 and 751 fetches — with no verdict at all.
+
 2. If a previous definition with DIFFERENT argument types exists AND the new migration does NOT first `DROP FUNCTION` the old one, severity = **BLOCKER**.
 3. Postgres allows multiple overloads; the bug is when the caller expects to resolve to one but hits the other.
+4. Historical migration text shows what was AUTHORED, not what currently EXISTS — a later
+   `DROP` can have removed an overload the history still shows. So more than one authored
+   signature for a name is a **signal to confirm against the live catalog**, not a BLOCKER on
+   its own. You cannot query Supabase yourself: if the orchestrator has recorded a current
+   live `pg_proc` overload count for the affected functions in the task evidence, treat that
+   as authoritative over the historical text; if it has not, emit **HIGH** asking for it.
 
 ### CHECK 3 — `updated_at` on tables that lack it
 Read `tables_without_updated_at` from the schema registry. For each `UPDATE <table> SET ... updated_at` in the migration, if `<table>` is in that list, severity = **BLOCKER**.

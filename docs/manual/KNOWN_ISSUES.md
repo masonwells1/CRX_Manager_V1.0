@@ -1,14 +1,16 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-03 for the F2 entry and migration-ledger facts.** The ordering boundary is
+**Last verified: 2026-09-04 for the F2 entry and migration-ledger facts.** The ordering boundary is
 the newest applied authored NAME:
-**`20260903150000_job_chemicals_persist_driver`**. Read ordering from the NAME — it is what
+**`20260903160000_gate_number_generators_active_profile_role`** (F2, applied 2026-09-04 as ledger
+version `20260904023121`; it superseded `20260903150100_ledger_backed_commission_history`, which had
+in turn superseded `20260903150000_job_chemicals_persist_driver`). Read ordering from the NAME — it is what
 the ordering guard compares and it moves far less often than the counters. For provenance, the same
-read observed 993 ledger rows (986 distinct names) and `max(version)` `20260903153402`; **treat both
+read observed 995 ledger rows and `max(version)` `20260904023121`; **treat both
 of those as a point-in-time observation, not a fact** — any lane applying a migration moves them, so
 re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
-F2 item below was re-verified against live on this date (function bodies, grants, the
-`invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
+F2 item below was re-verified against live on this date (post-apply function bodies, grants, and a
+three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
 
@@ -829,7 +831,22 @@ these call sites. **Fix shape:** reorder every post-RPC reset after `assertRpcRe
 click-level reset, tests for transport failure / failure envelope / lost-response replay / success /
 changed intent. Money path → exact-SHA `gpt-5.6-sol` proof, then CodeRabbit.
 
-**F2 — `next_*_number` generators callable by any authenticated session with no active-profile or
+## RESOLVED 2026-09-04 (migration `20260903160000` APPLIED LIVE as ledger version `20260904023121`; code merged in PR #583, squash `3a6d52fc7`) — F2
+
+**Closed and proven live, not assumed.** All eight generators now raise `AUTH_REQUIRED` with no
+`auth.uid()` and `INSUFFICIENT_ROLE` unless the caller is an `is_active = true` profile in the
+allowed role set, gated **before** the advisory lock. Direct `authenticated` EXECUTE was revoked
+from the six the browser never calls; `next_cycle_count_number` and `next_job_number` keep it
+because `CycleCounts.tsx` and `JobDetail.tsx` call them directly. `anon` holds EXECUTE on none.
+**Observed on live 2026-09-04:** deactivated `sales_rep` → `INSUFFICIENT_ROLE`; unauthenticated →
+`AUTH_REQUIRED`; active `admin` → `CC-2026-00018`. Full apply and proof provenance is row 910 of
+`docs/reference/migration-history.md`. **Residual, filed to the F06 lane, NOT fixed here:**
+`src/pages/JobDetail.tsx:1861-1862` discards the RPC error, so a refused user sees a silently blank
+job-number field instead of a toast; `CycleCounts.tsx` handles the same refusal correctly. The
+original diagnosis is kept below.
+
+**F2 (ORIGINAL DIAGNOSIS — the hole described here is now closed) — `next_*_number` generators
+callable by any authenticated session with no active-profile or
 role gate.** Eight `SECURITY DEFINER` generators (`next_application_record_number`,
 `next_commission_payment_number`, `next_cycle_count_number`, `next_delivery_number`,
 `next_invoice_number`, `next_job_number`, `next_po_number`, `next_return_number`) grant `EXECUTE` to
