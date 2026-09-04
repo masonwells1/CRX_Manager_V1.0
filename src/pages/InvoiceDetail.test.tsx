@@ -105,9 +105,9 @@ vi.mock('../lib/dateUtils', () => ({
   localToday: vi.fn(() => '2026-03-16'),
   parseLocalDate: vi.fn((d: string) => new Date(d)),
 }));
-vi.mock('../lib/parseCents', () => ({
-  parseDollarsToCents: vi.fn((v: string) => Math.round(parseFloat(v) * 100)),
-}));
+// parseCents is deliberately NOT mocked: the real parser refuses more than two
+// decimals (null) and a rounding stand-in would let this page's refusal branches
+// pass whether or not they work (2026-09-03).
 vi.mock('../components/invoices/WriteOffModal', () => ({ default: () => null }));
 vi.mock('../components/invoices/InvoicePrintDialog', () => ({ default: () => null }));
 

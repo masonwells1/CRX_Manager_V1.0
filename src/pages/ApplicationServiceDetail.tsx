@@ -13,7 +13,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { supabase, checkMutationResult, assertRpcResult, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { Sentry } from '../lib/sentry';
 import {
   formatApplicationServiceCostDollars,
@@ -206,20 +206,31 @@ export default function ApplicationServiceDetail() {
   const handleSave = async () => {
     if (!form.name.trim()) { toast('error', 'Service name is required'); return; }
     if (!isAdmin) { toast('error', 'Only admins can manage application services'); return; }
+    // Both money fields are refused (null) on more than two decimals. Neither may
+    // reach the RPC as 0: that would reprice the service to $0/acre.
+    const defaultRateCents = parseDollarsToCents(form.default_rate_per_acre);
+    if (defaultRateCents === null) { toast('error', `Default rate: ${MONEY_PRECISION_MESSAGE}`); return; }
+    // NULL means "leave the cost alone" — it is NOT a synonym for zero. If the
+    // cost RPC failed on load, form.cost_per_acre is blank and would parse to
+    // 0, which would silently replace the real cost. Sending NULL carries the
+    // costKnown write-lock into the database instead of relying on the client
+    // to skip a second call. A refused (excess-precision) cost is NOT that null:
+    // it stops the save here so it can never overwrite the real cost.
+    let costCents: number | null = null;
+    if (costKnown) {
+      const parsedCost = parseDollarsToCents(form.cost_per_acre);
+      if (parsedCost === null) { toast('error', `Cost per acre: ${MONEY_PRECISION_MESSAGE}`); return; }
+      costCents = parsedCost;
+    }
     setSaving(true);
     try {
       const saved = await saveService({
         p_name: form.name.trim(),
-        p_default_rate_per_acre_cents: parseDollarsToCents(form.default_rate_per_acre),
+        p_default_rate_per_acre_cents: defaultRateCents,
         p_is_active: form.is_active,
         p_sort_order: parseInt(form.sort_order) || 0,
         p_vehicle_id: form.vehicle_id || null,
-        // NULL means "leave the cost alone" — it is NOT a synonym for zero. If the
-        // cost RPC failed on load, form.cost_per_acre is blank and would parse to
-        // 0, which would silently replace the real cost. Sending NULL carries the
-        // costKnown write-lock into the database instead of relying on the client
-        // to skip a second call.
-        p_cost_per_acre_cents: costKnown ? parseDollarsToCents(form.cost_per_acre) : null,
+        p_cost_per_acre_cents: costCents,
         p_service_id: isNew ? null : id!,
       });
       if (isNew) {
@@ -240,8 +251,10 @@ export default function ApplicationServiceDetail() {
     if (!newOverride.customer_id || !newOverride.rate) { toast('error', 'Customer and rate are required'); return; }
     const dup = overrides.find((o) => o.customer_id === newOverride.customer_id && o.season === (parseInt(newOverride.season) || currentSeason()));
     if (dup) { toast('error', 'This customer already has a rate for this season. Remove the existing one first.'); return; }
+    const overrideRateCents = parseDollarsToCents(newOverride.rate);
+    if (overrideRateCents === null) { toast('error', `Rate: ${MONEY_PRECISION_MESSAGE}`); return; }
     try {
-      const result = await supabase.from('customer_application_rates').insert({ customer_id: newOverride.customer_id, application_service_id: id!, rate_per_acre_cents: parseDollarsToCents(newOverride.rate), season: parseInt(newOverride.season) || currentSeason(), notes: newOverride.notes || null, created_by: profile?.id }).select('*, customer:customers(farm_name)').single();
+      const result = await supabase.from('customer_application_rates').insert({ customer_id: newOverride.customer_id, application_service_id: id!, rate_per_acre_cents: overrideRateCents, season: parseInt(newOverride.season) || currentSeason(), notes: newOverride.notes || null, created_by: profile?.id }).select('*, customer:customers(farm_name)').single();
       checkMutationResult(result, 'Add customer rate override');
       setOverrides((prev) => [result.data as CustomerApplicationRate, ...prev]);
       setNewOverride({ customer_id: '', rate: '', season: currentSeason().toString(), notes: '' });

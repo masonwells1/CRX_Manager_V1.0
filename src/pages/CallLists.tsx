@@ -11,7 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { assertRpcResult, supabase } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 
 type CallListKey = 'prepay' | 'no-recent-contact' | 'stale-quotes' | 'lapsed-products' | 'unassigned-accounts';
@@ -504,14 +504,24 @@ export default function CallLists() {
   // Only the SELECTED list's criterion is committed — a draft typed on another
   // list must not silently activate when that list is opened later (Sol 3.G r2).
   const applyCriteria = () => {
+    // Validate the prepay threshold BEFORE any state is cleared (Codex P2 on PR #588):
+    // a refused value must leave the currently applied list on screen. Clearing the
+    // rows first rendered "This call list is clear" for a list that was never re-queried.
+    // Blank falls back to the default; an explicit "0" is a legitimate show-everyone
+    // threshold and must NOT be coerced to the default. A threshold with more than two
+    // decimals is refused (null); it must not fall through to 0 either.
+    let prepayThresholdCents: number | null = null;
+    if (selectedList === 'prepay') {
+      const parsedThreshold = minPriorSpend.trim() === '' ? DEFAULT_MIN_PRIOR_SPEND_CENTS : parseDollarsToCents(minPriorSpend);
+      if (parsedThreshold === null) { toast('error', `Minimum prior spend: ${MONEY_PRECISION_MESSAGE}`); return; }
+      prepayThresholdCents = Math.max(0, parsedThreshold);
+    }
     requestSeq.current += 1;
     setRows([]);
     setPeekKey(null);
     setLoading(true);
-    // Blank falls back to the default; an explicit "0" is a legitimate
-    // show-everyone threshold and must NOT be coerced to the default.
     if (selectedList === 'prepay') {
-      const cents = minPriorSpend.trim() === '' ? DEFAULT_MIN_PRIOR_SPEND_CENTS : Math.max(0, parseDollarsToCents(minPriorSpend));
+      const cents = prepayThresholdCents ?? DEFAULT_MIN_PRIOR_SPEND_CENTS;
       if (cents === applied.minPriorSpendCents) void load();
       else updateQuery({ minPriorSpend: String(cents) });
     } else if (selectedList === 'no-recent-contact') {
