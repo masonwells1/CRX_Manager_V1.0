@@ -25,7 +25,7 @@ import { canRemoveSingleBoundary } from '../lib/fieldBoundaryState';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import { computeBounds } from '../hooks/useFitBounds';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import {
   buildBoundaryGeometry,
   billableAcres,
@@ -1270,7 +1270,12 @@ export default function FieldSetup() {
                                 value={split.price_override_cents != null ? (split.price_override_cents / 100).toFixed(2) : ''}
                                 onChange={(e) => {
                                   const val = e.target.value;
-                                  updateSplit(idx, 'price_override_cents', val ? parseDollarsToCents(val) : null);
+                                  const cents = val ? parseDollarsToCents(val) : null;
+                                  // A refused (excess-precision) price must not become null here:
+                                  // null means "no override" and would silently CLEAR the price
+                                  // override on save. Refuse the keystroke instead.
+                                  if (val && cents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
+                                  updateSplit(idx, 'price_override_cents', cents);
                                 }}
                                 min={0}
                                 step={0.01}

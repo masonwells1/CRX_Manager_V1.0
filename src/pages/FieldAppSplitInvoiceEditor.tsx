@@ -15,7 +15,7 @@ import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance
 import { Sentry } from '../lib/sentry';
 import { formatCents } from '../lib/money';
 import { pctsToMicro } from '../lib/splitVectorMath';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { localToday } from '../lib/dateUtils';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../lib/splitBillingSetting';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
@@ -139,11 +139,22 @@ function dollarsToCents(raw: string): number | null {
   // value into the save RPC. parseDollarsToCents is positive-only and returns cents.
   if (raw == null || raw.trim() === '') return null;
   const cents = parseDollarsToCents(raw);
+  // More than two decimals is refused by the parser (null). Surface it the same
+  // way as "not entered": validateForSave() then names the line and blocks the
+  // save, instead of a truncated price reaching the RPC.
+  if (cents === null) return null;
   // parseDollarsToCents is positive-only (it strips the sign). Preserve a leading minus so
   // downstream validation (`<= 0` / `< 0`) REJECTS a credit/negative instead of silently
   // flipping e.g. "-50.00" into a +$50 CHARGE (Codex r2 #C). Flat-fee credits aren't a
   // supported split-editor flow yet.
   return /^\s*-/.test(raw) ? -cents : cents;
+}
+
+/** True when the operator TYPED an amount the parser refuses (more than two decimals).
+ *  dollarsToCents() returns null for both "not entered" and "refused"; validateForSave()
+ *  checks this first so the operator is told the real cause (CodeRabbit on PR #588). */
+function hasExcessPrecision(raw: string): boolean {
+  return raw != null && raw.trim() !== '' && parseDollarsToCents(raw) === null;
 }
 
 /** A missing-function / schema-cache error means the split-billing migrations are not
@@ -490,6 +501,7 @@ export default function FieldAppSplitInvoiceEditor() {
         if (!(parseFloat(l.quantity) > 0)) return 'A chemical line has no quantity.';
         if (!l.rateUnit.trim()) return 'A chemical line needs a rate unit (e.g. oz, gal) so the price can be resolved.';
         if (l.overridePrice) {
+          if (hasExcessPrecision(l.unitPriceDollars)) return `A chemical line's override unit price: ${MONEY_PRECISION_MESSAGE}`;
           const c = dollarsToCents(l.unitPriceDollars);
           // Reject <= 0 (not just < 0): a malformed entry like "1e5" parses to 0 and must NOT
           // be accepted as a $0 override (would give product away) — Codex r2 #D.
@@ -505,6 +517,7 @@ export default function FieldAppSplitInvoiceEditor() {
           return 'A service line has an invalid acres value. Enter a positive number, or clear it to bill the full field acreage.';
         }
       } else if (l.line_kind === 'flat_fee') {
+        if (hasExcessPrecision(l.flatDollars)) return `A flat-fee line's amount: ${MONEY_PRECISION_MESSAGE}`;
         const c = dollarsToCents(l.flatDollars);
         if (c == null || c <= 0) return 'A flat-fee line needs a positive amount (credits aren’t supported here yet).';
         if (!l.description.trim()) return 'A flat-fee line needs a description.';
@@ -522,6 +535,7 @@ export default function FieldAppSplitInvoiceEditor() {
         if (l.line_kind !== 'flat_fee') {
           for (const s of l.shares) {
             if (s.override) {
+              if (hasExcessPrecision(s.overridePriceDollars)) return `A per-person price override: ${MONEY_PRECISION_MESSAGE}`;
               const oc = dollarsToCents(s.overridePriceDollars);
               if (oc == null || oc <= 0) return 'A per-person price override is on but has no valid positive amount.';
             }
