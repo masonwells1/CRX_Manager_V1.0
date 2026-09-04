@@ -717,6 +717,54 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
   });
 
   /**
+   * Blank out line comments, block comments and string/template literals, replacing their
+   * contents with spaces so byte offsets into the original text stay valid. A lexical guard
+   * check run over the result cannot be satisfied by prose that merely QUOTES the guard.
+   */
+  const stripCommentsAndStrings = (code: string): string => {
+    let out = '';
+    let i = 0;
+    while (i < code.length) {
+      const c = code[i];
+      const next = code[i + 1];
+      if (c === '/' && next === '/') {
+        while (i < code.length && code[i] !== '\n') {
+          out += ' ';
+          i += 1;
+        }
+        continue;
+      }
+      if (c === '/' && next === '*') {
+        const close = code.indexOf('*/', i + 2);
+        const end = close === -1 ? code.length : close + 2;
+        for (; i < end; i += 1) out += code[i] === '\n' ? '\n' : ' ';
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') {
+        out += ' ';
+        i += 1;
+        while (i < code.length && code[i] !== c) {
+          if (code[i] === '\\') {
+            out += '  ';
+            i += 2;
+            continue;
+          }
+          out += code[i] === '\n' ? '\n' : ' ';
+          i += 1;
+        }
+        if (i < code.length) {
+          out += ' ';
+          i += 1;
+        }
+        continue;
+      }
+      out += c;
+      i += 1;
+    }
+    return out;
+  };
+
+  /**
    * A route-id SCOPE is only sound while the request it covers targets that same route id.
    *
    * CodeRabbit round 2 (F1): OrderDetail's id effect refetches but never clears `order`, and
@@ -728,9 +776,15 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
    * own later retry would replay A's cached receipt.
    *
    * CLAIM LIMITED: this is a LEXICAL check that the equality guard appears between the handler
-   * and its RPC call. It does not execute the handler, does not prove React state timing, and
-   * cannot see a guard that is present but unreachable. What it buys is that deleting or
-   * loosening the guard, or moving the RPC call above it, fails immediately.
+   * and its RPC call, in EXECUTABLE code — comments and string literals are blanked first
+   * (CodeRabbit round 3), so prose quoting the guard no longer satisfies it. It still does not
+   * execute the handler, does not prove React state timing, and cannot see a guard that is
+   * present but unreachable. What it buys is that deleting or loosening the guard, replacing it
+   * with a comment, or moving the RPC call above it, fails immediately.
+   *
+   * The two offsets are located in the RAW source so the RPC name inside its string literal is
+   * still findable; a comment forging an earlier call site only SHRINKS the searched region and
+   * therefore fails closed.
    */
   it('consolidate refuses to act while the loaded order is not the route order', () => {
     const src = readFileSync('src/pages/OrderDetail.tsx', 'utf8').replace(/\r\n/g, '\n');
@@ -739,7 +793,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     const rpcAt = src.indexOf("supabase.rpc('consolidate_draft_invoices'", start);
     expect(rpcAt, 'consolidate_draft_invoices call not found inside the handler').toBeGreaterThan(start);
 
-    const preamble = src.slice(start, rpcAt);
+    const preamble = stripCommentsAndStrings(src.slice(start, rpcAt));
     expect(
       /if\s*\(\s*order\.id\s*!==\s*id\s*\)\s*return\s*;/.test(preamble),
       'handleConsolidateDrafts must refuse when the loaded order is not the route order — ' +
