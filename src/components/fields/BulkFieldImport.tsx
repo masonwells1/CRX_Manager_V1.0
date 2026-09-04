@@ -418,7 +418,14 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    for (const [fieldIndex, pf] of validFields.entries()) {
+    // Counts how many rows in THIS import already claimed each save_field identity.
+    // It replaces the row's file position in the scope below: a position moves when
+    // only the failed row is re-imported, but "the second copy of this content" does
+    // not. Two genuinely distinct rows carrying identical attributes still get
+    // separate keys, so they still become two fields.
+    const saveIdentityOccurrences = new Map<string, number>();
+
+    for (const pf of validFields) {
       try {
         // Pre-validate the FULL multi-part acreage against the server's 0.1–5000 band BEFORE
         // creating the field. Otherwise an out-of-band import creates a field that
@@ -431,13 +438,16 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           continue;
         }
 
-        const fieldPayload = {
+        // Everything save_field writes EXCEPT the geometry-derived acreage seed.
+        // Deriving fieldPayload from this (rather than listing the columns twice)
+        // keeps the intent identity automatically in step with the payload: a
+        // column added here joins the scope, and only total_acres is exempt.
+        const fieldIdentity = {
           customer_id: pf.customer_id,
           field_name: pf.field_name,
           legal_description: pf.legal_description,
           county: pf.county,
           state: pf.state || 'IL',
-          total_acres: pf.total_acres,
           fsa_farm_number: pf.fsa_farm_number,
           fsa_tract_number: pf.fsa_tract_number,
           fsa_field_number: pf.fsa_field_number,
@@ -447,36 +457,53 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           notes: pf.notes,
           is_active: true,
         };
+        // total_acres is a transient seed, NOT part of the identity: set_field_boundary
+        // overwrites it with the server-measured billable acreage a moment later
+        // (`total_acres = v_billable`), so the value save_field stores never survives
+        // and must never be able to mint a second field.
+        const fieldPayload = { ...fieldIdentity, total_acres: pf.total_acres };
 
-        // The ordered import row keeps every retry of THIS row on the same
-        // server-side intent, while a neighboring row gets a distinct key.
-        // Position and name alone are not enough to identify the work: a lost
-        // save_field response leaves this key cached (handleClose resets the
-        // modal's state but not the hook's scoped keys, and Fields.tsx keeps
-        // the component mounted), so a later import carrying the same row
-        // index, customer and field name but a DIFFERENT boundary would replay
-        // the earlier field_id and overwrite that existing field instead of
-        // creating the requested one. Fingerprinting the payload the key was
-        // minted for makes changed content mint a fresh key, while a true retry
-        // of unchanged content still replays.
-        const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}:${fingerprintIntentPayload([
-          fieldPayload,
-          pf.full_boundary_geojson,
-          pf.stated_acres ?? null,
-        ])}`;
+        // ── Per-STAGE intent scopes ──────────────────────────────────────────
+        // save_field COMMITS before set_field_boundary runs, so its scope must not
+        // carry anything the later stages own. It previously carried the row's file
+        // position, the boundary geometry and the stated acreage: if the boundary
+        // call failed and the operator corrected the geometry and re-imported just
+        // that row, the position AND the geometry both changed, a fresh key was
+        // minted, save_field ran again with p_field_id: null, and the retry created
+        // a SECOND field while the first, boundary-less one stayed orphaned — and
+        // fields_delete RLS is admin-only, so a sales_rep cannot clean that up.
+        //
+        // save_field's replay is the ONLY thing preventing that duplicate:
+        // check_idempotency is key-only (no actor or payload binding), and the live
+        // RPC cannot be handed a client-generated id instead — with a NULL id it
+        // INSERTs and lets Postgres pick, and with a non-null id it UPDATEs with no
+        // NOT FOUND check, so a made-up id would write nothing and still report
+        // success.
+        const saveIdentityDigest = fingerprintIntentPayload(fieldIdentity);
+        const saveOccurrence = saveIdentityOccurrences.get(saveIdentityDigest) ?? 0;
+        saveIdentityOccurrences.set(saveIdentityDigest, saveOccurrence + 1);
+        const saveScope = `import:save:${saveIdentityDigest}:#${saveOccurrence}`;
 
         const { data: fieldId, error: saveError } = await supabase.rpc('save_field', {
           p_field_id: (null as string | null) as string,
           p_field_payload: fieldPayload,
           p_billing_defaults: [],
           p_performed_by: profile.id,
-          p_idempotency_key: saveFieldIdem.getKeyFor(intentScope),
+          p_idempotency_key: saveFieldIdem.getKeyFor(saveScope),
         });
 
         if (saveError) {
           failed++;
           errors.push(`"${pf.field_name}": ${rpcAuthErrorMessage(saveError) ?? saveError.message}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
+          // Stages 2 and 3 own the geometry and the stated acreage, so each binds to
+          // the field save_field ACTUALLY returned plus its own exact payload —
+          // never to a sibling stage's data. A corrected boundary is real new work
+          // and correctly mints a fresh key here, while an unchanged retry of a lost
+          // response still replays onto the same field.
+          const boundaryScope = `import:boundary:${fieldId}:${fingerprintIntentPayload(pf.full_boundary_geojson)}`;
+          const overrideScope = `import:override:${fieldId}:${pf.stated_acres ?? 'none'}`;
+
           // Persist the boundary via the server-authoritative acreage RPC — it measures the
           // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
           // legacy boundary/centroid in sync, and sets measured_acres (the billable default).
@@ -486,7 +513,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               p_field_id: fieldId,
               p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
               p_performed_by: profile.id,
-              p_idempotency_key: setBoundaryIdem.getKeyFor(intentScope),
+              p_idempotency_key: setBoundaryIdem.getKeyFor(boundaryScope),
             });
             if (bErr) throw bErr;
             assertRpcResult(bData, 'set_field_boundary');
@@ -518,7 +545,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                     p_field_id: fieldId,
                     p_override_acres: pf.stated_acres,
                     p_performed_by: profile.id,
-                    p_idempotency_key: setOverrideAcresIdem.getKeyFor(intentScope),
+                    p_idempotency_key: setOverrideAcresIdem.getKeyFor(overrideScope),
                   });
                   if (ovErr) throw ovErr;
                   assertRpcResult(ovData, 'set_field_override_acres');
@@ -529,12 +556,21 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               }
             }
             success++;
-            // The full row pipeline completed, so a later import attempt is
-            // new intent. Do not rotate keys before the boundary/override
-            // steps finish or a lost response could create a duplicate field.
-            saveFieldIdem.resetKeyFor(intentScope);
-            setBoundaryIdem.resetKeyFor(intentScope);
-            setOverrideAcresIdem.resetKeyFor(intentScope);
+            // Retire at ROW completion, never per stage.
+            //
+            // save_field's key must NOT be retired at its own success: it is the
+            // only thing stopping a retry-after-boundary-failure from creating a
+            // second field, and that failure happens AFTER save_field has already
+            // committed. Retiring it here — once the boundary and any override have
+            // landed — means a later re-import of a finished row is new intent,
+            // while a retry of a half-finished row still replays onto the same field.
+            //
+            // Stages 2 and 3 are keyed on that same field id, so they retire with it.
+            // overrideScope may never have been minted (no stated acreage, or an
+            // out-of-band one); retiring an unminted scope is a no-op.
+            saveFieldIdem.resetKeyFor(saveScope);
+            setBoundaryIdem.resetKeyFor(boundaryScope);
+            setOverrideAcresIdem.resetKeyFor(overrideScope);
           }
         }
       } catch (err: unknown) {

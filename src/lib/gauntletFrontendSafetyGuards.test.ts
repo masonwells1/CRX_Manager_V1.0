@@ -30,18 +30,61 @@ describe('gauntlet caller-side safety guards', () => {
   it('keeps bulk field-import RPC intents stable per imported row and refuses re-entry', () => {
     const component = source('src/components/fields/BulkFieldImport.tsx');
     expect(component).toContain('uploadInFlightRef.current');
-    // The scope must bind the row's CONTENT, not just its position and name.
-    // A lost save_field response keeps the key cached while the modal stays
-    // mounted, so a position-only scope would let a later import of different
-    // geometry replay the earlier field_id and overwrite that field.
+    // ── Each RPC stage carries its OWN intent scope ──────────────────────
+    //
+    // These three RPCs previously SHARED one scope built from the row's file
+    // position plus the boundary geometry plus the stated acreage. save_field
+    // COMMITS before the other two run and consumes none of that, so when the
+    // boundary call failed and the operator corrected the geometry and
+    // re-imported just that row, the position AND the geometry both changed, a
+    // fresh key was minted, save_field ran again with p_field_id: null, and the
+    // retry created a SECOND field while the first, boundary-less one stayed
+    // orphaned (fields_delete RLS is admin-only — a sales_rep cannot remove it).
+    //
+    // save_field's scope is therefore built ONLY from the columns save_field
+    // itself writes. A per-identity occurrence counter replaces the file
+    // position: it keeps two genuinely identical rows on separate keys while
+    // staying stable when only the failed row is re-imported.
+    expect(component).toContain('const saveIdentityDigest = fingerprintIntentPayload(fieldIdentity);');
+    expect(component).toContain('const saveScope = `import:save:${saveIdentityDigest}:#${saveOccurrence}`;');
+    // total_acres is deliberately OUTSIDE the identity — set_field_boundary
+    // overwrites it with the server-measured billable acreage moments later, so
+    // the seeded value must never be able to mint a second field. Pinned as the
+    // spread that adds it back, so moving it into fieldIdentity fails here.
+    expect(component).toContain('const fieldPayload = { ...fieldIdentity, total_acres: pf.total_acres };');
+    expect(component).not.toMatch(/const fieldIdentity = \{[^}]*total_acres/);
+    // Stages 2 and 3 bind to the field id save_field ACTUALLY returned plus
+    // their own exact payload — never a sibling stage's data.
     expect(component).toContain(
-      'const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}:${fingerprintIntentPayload([',
+      'const boundaryScope = `import:boundary:${fieldId}:${fingerprintIntentPayload(pf.full_boundary_geojson)}`;',
     );
-    expect(component).toContain('pf.full_boundary_geojson,');
-    expect(component).toContain('pf.stated_acres ?? null,');
-    expect(component).toContain('saveFieldIdem.getKeyFor(intentScope)');
-    expect(component).toContain('setBoundaryIdem.getKeyFor(intentScope)');
-    expect(component).toContain('setOverrideAcresIdem.getKeyFor(intentScope)');
+    expect(component).toContain("const overrideScope = `import:override:${fieldId}:${pf.stated_acres ?? 'none'}`;");
+    expect(component).toContain('saveFieldIdem.getKeyFor(saveScope)');
+    expect(component).toContain('setBoundaryIdem.getKeyFor(boundaryScope)');
+    expect(component).toContain('setOverrideAcresIdem.getKeyFor(overrideScope)');
+    // No stage may fall back to one shared scope again.
+    expect(component).not.toContain('intentScope');
+
+    // ── Stage retirement, pinned as a PAIRING with the getKeyFor calls above ──
+    //
+    // The previous version of this test asserted only the three getKeyFor calls.
+    // Deleting all three resetKeyFor lines left it GREEN while every key leaked
+    // for the modal's lifetime — the assertion was satisfied by the half of the
+    // pairing that was never in doubt.
+    //
+    // One anchored match pins all three halves at once: each stage retires with
+    // its OWN scope, all three together, immediately after the row is counted a
+    // success. That placement is load-bearing. Retiring save_field's key at its
+    // own success instead would RE-CREATE the duplicate-field bug: save_field has
+    // already committed by the time the boundary call fails, so a retry would find
+    // the key gone, mint a fresh one, and insert a second field.
+    expect(component).toMatch(
+      /\n\s*success\+\+;\n(?:\s*\/\/[^\n]*\n)*\s*saveFieldIdem\.resetKeyFor\(saveScope\);\n\s*setBoundaryIdem\.resetKeyFor\(boundaryScope\);\n\s*setOverrideAcresIdem\.resetKeyFor\(overrideScope\);/,
+    );
+    // Exactly one retirement per stage, so none can ALSO be retired earlier.
+    expect(component.match(/saveFieldIdem\.resetKeyFor\(/g)).toHaveLength(1);
+    expect(component.match(/setBoundaryIdem\.resetKeyFor\(/g)).toHaveLength(1);
+    expect(component.match(/setOverrideAcresIdem\.resetKeyFor\(/g)).toHaveLength(1);
     // Both halves of the re-entry pairing, pinned SEPARATELY and anchored.
     //
     // This was previously a single whole-file toContain of
