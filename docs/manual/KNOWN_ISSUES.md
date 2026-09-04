@@ -975,6 +975,12 @@ changing the broader capped posture.
 containing `.`, `..`, or duplicate separators are normalized before the scope decision. These close
 the three reproduced exact-review payloads without changing the broader capped posture.
 
+**Runtime-order narrowing (authorized 2026-09-03).** A direct built-in `set_config` call before the
+actor refusal now invalidates its operator-safety proof. ALTER routine search-path text stored in
+pg_cron or another execution boundary is treated as security-relevant dynamic DDL and fails closed;
+a textually later safe top-level ALTER cannot claim to repair code that executes afterward. This does
+not model general branch or scheduler timing and does not change the broader capped posture.
+
 **What it does NOT catch, stated so nobody re-derives it:**
 
 | Gap | Why it is open |

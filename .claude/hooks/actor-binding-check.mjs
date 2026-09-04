@@ -1705,6 +1705,15 @@ function hasRecognizedMutationBefore(structuralBody, beforeIndex, actorReference
     "i"
   );
   if (runtimeSearchPathChange.test(prefix)) return true;
+  // set_config is the callable spelling of runtime GUC mutation. Any direct
+  // built-in call before the refusal fails closed because even a dynamically
+  // assembled first argument can replace search_path before operator lookup.
+  const setConfigCall = new RegExp(
+    `(?:^|[^\\w$.\"])(?:(?:"pg_catalog"|pg_catalog)\\s*\\.\\s*)?` +
+      `(?:"set_config"|set_config)\\s*\\(`,
+    "i"
+  );
+  if (setConfigCall.test(prefix)) return true;
   // A pre-guard control-flow exit can skip the identity check after evaluating
   // a side-effecting expression (for example RETURN helper(p_performed_by)).
   // Treat exits as disqualifying rather than trying to prove expressions pure.
@@ -1928,7 +1937,7 @@ function carriesRoutineHeader(payload) {
 
 function carriesSecurityRelevantRoutineDdl(payload) {
   if (carriesRoutineHeader(payload)) return true;
-  return /\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b[\s\S]*?\bSECURITY\s+DEFINER\b/i
+  return /\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b[\s\S]*?(?:\bSECURITY\s+DEFINER\b|\bSET\s+(?:"search_path"|search_path)(?=\s|=)|\bRESET\s+(?:"search_path"|search_path|ALL)(?=\s|;|$))/i
     .test(blankComments(payload));
 }
 

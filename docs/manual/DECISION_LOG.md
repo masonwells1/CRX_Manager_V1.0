@@ -7,6 +7,18 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — refuse runtime-ordered search_path poisoning in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced two final-candidate blockers.
+
+**Decision.** A direct built-in `set_config` call before the actor refusal invalidates that refusal's
+operator-safety proof. ALTER routine search-path text stored for later execution is security-relevant
+dynamic DDL and fails closed rather than being ordered lexically against top-level ALTER statements.
+
+**Boundary.** This does not evaluate procedural branches, scheduled execution time, or arbitrary
+configuration APIs. It closes the two reproduced runtime-order paths without changing the broader cap.
+
 ## 2026-09-03 — close three exact-review lexical paths in PR #449; keep the broader cap
 
 **Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied

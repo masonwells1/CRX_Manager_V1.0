@@ -2142,6 +2142,14 @@ ok(isDeny(r), "body-level RESET search_path before refusal fails closed");
 
 r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
 ${searchPathActorRoutine(
+    "body_set_config_actor",
+    "public, pg_temp",
+    "  SELECT pg_catalog.set_config('search_path', 'evil, pg_catalog', true) INTO v_previous;"
+  ).replace("BEGIN\n", "DECLARE v_previous text;\nBEGIN\n")}`);
+ok(isDeny(r), "body-level set_config before refusal cannot replace search_path operator lookup");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine(
     "body_reset_all_actor",
     "public, pg_temp",
     "  RESET ALL;"
@@ -2234,6 +2242,18 @@ ${searchPathActorRoutine("repaired_path_actor", "evil, pg_catalog")}
 ALTER FUNCTION public.repaired_path_actor(pg_catalog.uuid)
   SET search_path = public, pg_temp;`);
 ok(!isDeny(r), "a final safe ALTER search_path can repair unsafe CREATE attributes");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("delayed_path_actor")}
+SELECT cron.schedule(
+  'delayed-search-path-poison',
+  '* * * * *',
+  $job$ALTER FUNCTION public.delayed_path_actor(pg_catalog.uuid)
+    SET search_path = evil, pg_catalog;$job$
+);
+ALTER FUNCTION public.delayed_path_actor(pg_catalog.uuid)
+  SET search_path = public, pg_temp;`);
+ok(isDeny(r), "a delayed unsafe search_path ALTER cannot be repaired by a lexical later top-level ALTER");
 
 r = runHook(`${SHADOWED_UUID_SETUP}
 CREATE FUNCTION public.shadowed_actor_parameter(p_actor uuid) RETURNS void
