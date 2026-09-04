@@ -994,6 +994,13 @@ multiple legal routine `SET search_path` options. PR #449 now evaluates that eff
 so an earlier explicit `pg_catalog` cannot hide a later unsafe path. This is ordered attribute
 handling, not a general CREATE parser, and the capped posture is unchanged.
 
+**Top-level set_config ordering narrowing (authorized 2026-09-04).** A top-level
+`set_config('search_path', ...)` call now participates in the session order captured by a later
+`ALTER ... SET search_path FROM CURRENT`. Dynamic configuration names fail closed; a statically
+unrelated GUC is ignored, and a later explicit safe `SET search_path` repairs the state. This is one
+bounded callable addition to the existing SET/RESET model, not a general configuration interpreter,
+and the broader capped posture is unchanged.
+
 **Quoted actor-identity narrowing (authorized 2026-09-04).** PostgreSQL folds unquoted parameter
 names to lowercase but preserves quoted names exactly. PR #449 keeps those identities distinct, so
 a refusal for `p_actor` or a same-named trusted local cannot validate a separate `"P_ACTOR"` input.

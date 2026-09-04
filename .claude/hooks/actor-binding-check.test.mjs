@@ -2249,6 +2249,39 @@ ALTER FUNCTION public.current_path_actor(pg_catalog.uuid) SET search_path FROM C
 ok(!isDeny(r), "ALTER SET search_path FROM CURRENT uses the current top-level safe path");
 
 r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+SET search_path = public, pg_temp;
+SELECT pg_catalog.set_config('search_path', 'evil, pg_catalog', false);
+${searchPathActorRoutine("set_config_current_path_actor")}
+ALTER FUNCTION public.set_config_current_path_actor(pg_catalog.uuid)
+  SET search_path FROM CURRENT;`);
+ok(isDeny(r), "ALTER SET search_path FROM CURRENT cannot inherit a later top-level set_config poison");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+SET search_path = public, pg_temp;
+SELECT pg_catalog.set_config(lower('SEARCH_PATH'), 'evil, pg_catalog', false);
+${searchPathActorRoutine("dynamic_set_config_current_path_actor")}
+ALTER FUNCTION public.dynamic_set_config_current_path_actor(pg_catalog.uuid)
+  SET search_path FROM CURRENT;`);
+ok(isDeny(r), "dynamic top-level set_config names fail closed before FROM CURRENT");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+SET search_path = public, pg_temp;
+SELECT pg_catalog.set_config('search_path', 'evil, pg_catalog', false);
+SET search_path = public, pg_temp;
+${searchPathActorRoutine("repaired_set_config_current_path_actor", "evil, pg_catalog")}
+ALTER FUNCTION public.repaired_set_config_current_path_actor(pg_catalog.uuid)
+  SET search_path FROM CURRENT;`);
+ok(!isDeny(r), "a later explicit safe SET repairs top-level set_config session state");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+SET search_path = public, pg_temp;
+SELECT pg_catalog.set_config('application_name', 'actor-guard-test', false);
+${searchPathActorRoutine("unrelated_set_config_current_path_actor", "evil, pg_catalog")}
+ALTER FUNCTION public.unrelated_set_config_current_path_actor(pg_catalog.uuid)
+  SET search_path FROM CURRENT;`);
+ok(!isDeny(r), "a static unrelated top-level set_config does not poison search_path trust");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
 SET search_path TO 'evil, pg_catalog';
 ${searchPathActorRoutine("combined_current_path_actor")}
 ALTER FUNCTION public.combined_current_path_actor(pg_catalog.uuid) SET search_path FROM CURRENT;`);

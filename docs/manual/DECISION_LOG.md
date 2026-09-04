@@ -7,6 +7,19 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-04 — include top-level set_config in FROM CURRENT ordering for PR #449
+
+**Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory
+replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** Top-level `set_config` calls that name `search_path`, or whose configuration name is
+dynamic, invalidate session search-path trust for a later `ALTER ... SET search_path FROM CURRENT`.
+A later explicit safe `SET search_path` repairs the ordered state; a statically unrelated GUC does not
+change it.
+
+**Boundary.** This extends the existing bounded top-level SET/RESET order model by one callable form.
+It does not interpret arbitrary PostgreSQL configuration state or widen the actor/dataflow cap.
+
 ## 2026-09-04 — stop final-mode tracking across routine identity changes in PR #449
 
 **Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory

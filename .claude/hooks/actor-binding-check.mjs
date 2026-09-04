@@ -2920,15 +2920,19 @@ function alteredRoutineSearchPath(actionList) {
 }
 
 /** Resolve ALTER ... SET search_path FROM CURRENT from the migration's last
- * readable top-level session setting. With no preceding SET, or after RESET,
- * the inherited session value is unknown and therefore cannot prove safe
- * owner-rights operator resolution. */
+ * readable top-level session setting. The callable pg_catalog.set_config form
+ * participates in the same order: a direct search_path name, or an expression
+ * that could produce it, poisons the inherited state until a later explicit
+ * safe SET repairs it. With no preceding setting, or after RESET, the inherited
+ * session value is unknown and cannot prove safe owner-rights resolution. */
 function currentTopLevelSearchPathTrust(topLevelSql, sourceSql, beforeIndex) {
   const structural = String(topLevelSql || "").slice(0, beforeIndex);
   const settingRe = /(?:^|;)\s*(?:(SET)\s+(?:LOCAL\s+|SESSION\s+)?(?:"search_path"|search_path)\s*(?:=|TO)\s*|(RESET)\s+(?:"search_path"|search_path|ALL)(?=\s|;|$))/gi;
   let trust = null;
+  let latestSettingIndex = -1;
   let match;
   while ((match = settingRe.exec(structural)) !== null) {
+    latestSettingIndex = match.index;
     if (match[2]) {
       trust = false;
       continue;
@@ -2939,6 +2943,34 @@ function currentTopLevelSearchPathTrust(topLevelSql, sourceSql, beforeIndex) {
     trust = value !== "" && !/^DEFAULT\b/i.test(value) &&
       !hasSchemaBeforeExplicitPgCatalog(`SET search_path = ${value}`);
   }
+
+  // maskSqlForCallNames blanks string payloads but preserves their exact
+  // offsets, so callable discovery is structural while the first argument is
+  // recovered from source. A statically different GUC cannot affect
+  // search_path; an expression can, and therefore fails closed. Calls inside
+  // routine bodies and ordinary data strings are absent from this top-level
+  // mask. A later explicit SET remains a valid ordered repair.
+  const setConfigRe = new RegExp(
+    `(?:^|[^\\w$.\"])(?:(?:"pg_catalog"|pg_catalog)\\s*\\.\\s*)?` +
+      `(?:"set_config"|set_config)\\s*\\(`,
+    "gi"
+  );
+  let latestSearchPathSetConfigIndex = -1;
+  while ((match = setConfigRe.exec(structural)) !== null) {
+    const open = setConfigRe.lastIndex - 1;
+    const parsed = readBalancedParens(structural, open);
+    const rawArgs = parsed === null
+      ? []
+      : splitTopLevelArgs(
+          parsed.params,
+          sourceSql.slice(open + 1, parsed.end - 1)
+        );
+    const gucName = rawArgs.length === 0 ? null : directSqlStringPayload(rawArgs[0]);
+    if (gucName === null || /^search_path$/i.test(gucName.trim())) {
+      latestSearchPathSetConfigIndex = match.index;
+    }
+  }
+  if (latestSearchPathSetConfigIndex > latestSettingIndex) trust = false;
   return trust === true;
 }
 
