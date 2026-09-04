@@ -89,7 +89,7 @@ TZ='America/Chicago' date +%F
 
 Slug rules: lowercase kebab-case, under 50 characters, topic-specific.
 
-Use this structure. When Claude is the author (project `CLAUDE.md` routes "Durable handoff artifact" to this workflow), swap the roles: **Author:** Claude, **Intended reviewer:** the receiving session.
+Use this structure. When Claude is the author (project `CLAUDE.md` routes "Durable handoff" to this workflow), swap the roles: **Author:** Claude, **Intended reviewer:** the receiving session.
 
 ```markdown
 # Codex to Claude Handoff - <Topic>

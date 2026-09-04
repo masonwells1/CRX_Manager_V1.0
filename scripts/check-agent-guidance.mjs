@@ -108,7 +108,8 @@ record(/docs\/workflows\/AGENT_COLLABORATION\.md/.test(agents), "AGENTS.md route
 record(/Delegation, agent collaboration, or agent-surface changes/i.test(agents), "AGENTS.md routes delegation guidance on demand");
 record(/docs\/reference\/claude-model-tuning\.md/.test(claude), "CLAUDE.md routes model tuning on demand");
 const missingGuidance = routedGuidance.filter((relative) => !existsSync(path.join(ROOT, relative)));
-record(routedGuidance.length >= 15 && missingGuidance.length === 0, "every path in the AGENTS.md routing table resolves", missingGuidance.join(", "));
+record(routedGuidance.length >= 15, "AGENTS.md retains the complete task-routing table", `${routedGuidance.length} paths`);
+record(missingGuidance.length === 0, "every path in the AGENTS.md routing table resolves", missingGuidance.join(", "));
 record(
   existsSync(path.join(ROOT, ".claude/skills/graphify/SKILL.md")) &&
     existsSync(path.join(ROOT, ".agents/skills/graphify/SKILL.md")),

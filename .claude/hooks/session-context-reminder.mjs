@@ -60,7 +60,7 @@ const COMPACT_REANCHOR =
   "binary-floating-point rounding is prohibited for money; .update()/.delete() need " +
   "checkMutationResult; RPC usage needs assertRpcResult; SECURITY DEFINER functions need " +
   "SET search_path = public, pg_temp. Treat files changed before the compact as UNVERIFIED " +
-  "unless the summary says they were run and observed. Mason has zero coding experience — " +
+  "unless the summary says they were run and observed. Mason cannot read code or safely review a diff — " +
   "explain in plain English.";
 
 const SESSION_ONBOARDING =

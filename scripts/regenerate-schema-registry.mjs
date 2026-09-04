@@ -78,7 +78,7 @@
 //
 // CHEAPEST WORKFLOW:
 //   Open Claude Code in this repo and say: "regenerate the schema-registry from Supabase"
-//   (the /regen-schema-registry skill). Claude runs Q1–Q5 via MCP, assembles the input
+//   (the /regen-schema-registry skill). Claude runs Q1–Q6 via MCP, assembles the input
 //   JSON, and runs this script with --from-introspection.
 
 import { writeFileSync, readFileSync } from "node:fs";

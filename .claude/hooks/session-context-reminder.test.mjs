@@ -41,7 +41,7 @@ assert.equal(run(), startup);
 const compact = run("compact");
 assert.match(compact, /POST-COMPACT RULE RE-ANCHOR/);
 assert.match(compact, /money = exact whole cents/);
-assert.match(compact, /Mason has zero coding experience/);
+assert.match(compact, /Mason cannot read code or safely review a diff/);
 
 assert.equal(runRaw("{"), "");
 
