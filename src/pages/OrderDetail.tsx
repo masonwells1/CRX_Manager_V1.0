@@ -1075,6 +1075,13 @@ export default function OrderDetail() {
   // #4 billing cockpit: merge this order's draft invoices into one (Agvance pattern).
   const handleConsolidateDrafts = async () => {
     if (!order || !profile) return;
+    // F1 (CodeRabbit round 2): on A -> B navigation the route id is already B while
+    // `order` still holds A — the id effect refetches but never clears `order`, and
+    // `loading` is never reset to true, so this button stays live in that window.
+    // Acting there would send A's id under a key scoped to B, and B's own retry would
+    // then replay A's receipt. Refusing until the loaded order IS the route order makes
+    // the key's scope and the request's p_order_id provably one value.
+    if (order.id !== id) return;
     setConsolidating(true);
     try {
       const idem = consolidateIdem.getKey();

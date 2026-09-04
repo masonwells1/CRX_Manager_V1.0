@@ -65,6 +65,15 @@ the hook's `intentScope` / `getKeyFor` — the same record retries under the sam
 each record gets its own. `InvoiceDetail`'s `saveIdem` was already record-scoped and was
 left alone.
 
+A route-id scope is only sound while the request it covers targets that same route id.
+`consolidate_draft_invoices` is the one order action whose request sends the LOADED
+`order.id` rather than the route `id` — its siblings (update, cancel, create-invoice,
+split) all send `id`. Because OrderDetail's id effect refetches without clearing `order`,
+and `loading` is never reset to true, an A → B navigation leaves the button live over A's
+data while the route is already B; acting there would send A under a key scoped to B, and
+B's own retry would replay A's receipt. `handleConsolidateDrafts` now refuses until the
+loaded order IS the route order, so scope and `p_order_id` are provably one value.
+
 ## What is deliberately NOT fixed
 
 Twelve pages were reverted to `main` after the round-2 adversarial review. On each, the

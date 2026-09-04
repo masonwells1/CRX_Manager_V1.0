@@ -715,4 +715,36 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
       ).toBe(true);
     }
   });
+
+  /**
+   * A route-id SCOPE is only sound while the request it covers targets that same route id.
+   *
+   * CodeRabbit round 2 (F1): OrderDetail's id effect refetches but never clears `order`, and
+   * `loading` is only ever set false (line 98 initialises it true; nothing sets it true again),
+   * so on A -> B navigation the page keeps rendering A's data — button live — while the route
+   * id is already B. `consolidate_draft_invoices` is the one order action whose request sends
+   * the LOADED `order.id` rather than the route `id` (its siblings at update/cancel/create/
+   * split all send `id`), so in that window it would send A under a key scoped to B, and B's
+   * own later retry would replay A's cached receipt.
+   *
+   * CLAIM LIMITED: this is a LEXICAL check that the equality guard appears between the handler
+   * and its RPC call. It does not execute the handler, does not prove React state timing, and
+   * cannot see a guard that is present but unreachable. What it buys is that deleting or
+   * loosening the guard, or moving the RPC call above it, fails immediately.
+   */
+  it('consolidate refuses to act while the loaded order is not the route order', () => {
+    const src = readFileSync('src/pages/OrderDetail.tsx', 'utf8').replace(/\r\n/g, '\n');
+    const start = src.indexOf('const handleConsolidateDrafts');
+    expect(start, 'handleConsolidateDrafts not found — renamed or removed?').toBeGreaterThan(-1);
+    const rpcAt = src.indexOf("supabase.rpc('consolidate_draft_invoices'", start);
+    expect(rpcAt, 'consolidate_draft_invoices call not found inside the handler').toBeGreaterThan(start);
+
+    const preamble = src.slice(start, rpcAt);
+    expect(
+      /if\s*\(\s*order\.id\s*!==\s*id\s*\)\s*return\s*;/.test(preamble),
+      'handleConsolidateDrafts must refuse when the loaded order is not the route order — ' +
+        'its key is scoped by the route id while its request sends order.id, so a stale ' +
+        "order during navigation would send A's id under B's key and let B replay A's receipt.",
+    ).toBe(true);
+  });
 });
