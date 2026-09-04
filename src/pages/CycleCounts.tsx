@@ -500,6 +500,16 @@ export default function CycleCounts() {
         ? { ...previousCount, item_revision: countState.item_revision }
         : previousCount
     );
+    // Advance the ref WITH the state it takes precedence over. Because the read above
+    // prefers the ref, leaving it behind here pinned this client to a superseded
+    // revision permanently: after another client's edit the refresh adopts the new
+    // revision into state, but every later click kept reading the old one from the
+    // ref and repeated the same mismatch — completion wedged until a reload or
+    // another local write, which is strictly worse than the one extra click this ref
+    // was added to remove. The invariant the comment below relies on ("the next click
+    // matches, because the reviewed baseline has advanced") only holds if BOTH
+    // baselines advance together. Found by Codex on 1973add81.
+    latestItemRevisionRef.current.set(activeCount.id, countState.item_revision);
 
     // p_expected_item_revision fails closed only for a change that lands DURING
     // completion. A change that landed BEFORE the click would otherwise be

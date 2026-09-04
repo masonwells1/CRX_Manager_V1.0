@@ -156,6 +156,28 @@ describe('cycle count completion revision contract', () => {
     expect(page).toContain('latestItemRevisionRef = useRef(new Map<string, number>())');
   });
 
+  // Codex on 1973add81 caught this in the FIX above, not in the original code: because
+  // the read prefers the ref, a ref that is never advanced on the remote-refresh path
+  // pins the client to a superseded revision FOREVER. After another client's edit the
+  // refresh adopts the new revision into state, but every later click re-reads the old
+  // one from the ref and repeats the mismatch — completion wedged until a reload,
+  // strictly worse than the single extra click the ref was added to remove.
+  //
+  // The pairing therefore has THREE members, not two: write on local save, ADVANCE on
+  // remote adoption, read at completion. Pinning only the first and last is satisfied
+  // by the wedge.
+  it('advances the revision ref wherever it adopts an authoritative revision', () => {
+    expect(page).toContain('latestItemRevisionRef.current.set(activeCount.id, countState.item_revision)');
+    // Must sit with the state adoption it shadows: adopting into state while leaving
+    // the ref behind is the wedge itself.
+    const adoption = page.slice(page.indexOf('const items = await refreshCountItems(activeCount.id)'));
+    expectBefore(
+      adoption,
+      'item_revision: countState.item_revision',
+      'latestItemRevisionRef.current.set(activeCount.id, countState.item_revision)',
+    );
+  });
+
   it('keeps one public overload and exposes the revision to item-save callers', () => {
     expect(code).toContain('RENAME TO _complete_cycle_count_pre_revision_20260831');
     expect(code).toContain("'item_revision', v_item_revision");
