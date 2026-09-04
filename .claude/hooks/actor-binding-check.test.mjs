@@ -189,6 +189,28 @@ r = runHook(fn(
 ));
 ok(isDeny(r), "a later actor parameter keeps its exact PostgreSQL input position");
 
+const ARRAY_DEFAULT_POSITIONAL_ACTOR = `CREATE OR REPLACE FUNCTION public.array_default_actor(
+  p_labels text[] DEFAULT ARRAY['x','y'],
+  ${UNICODE_ACTOR_PARAMETER} uuid DEFAULT NULL,
+  p_decoy uuid DEFAULT NULL
+) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $wrapper$
+BEGIN
+  IF $3 IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO financial_audit_log (actor_user_id) VALUES ($2);
+END
+$wrapper$;
+GRANT EXECUTE ON FUNCTION public.array_default_actor(text[], uuid, uuid) TO authenticated;`;
+r = runHook(ARRAY_DEFAULT_POSITIONAL_ACTOR);
+ok(isDeny(r), "an ARRAY default comma cannot shift an opaque actor's PostgreSQL positional alias");
+
+r = runHook(ARRAY_DEFAULT_POSITIONAL_ACTOR
+  .replace("IF $3 IS DISTINCT FROM auth.uid()", "IF $2 IS DISTINCT FROM auth.uid()")
+  .replace("VALUES ($2)", "VALUES (auth.uid())"));
+ok(!isDeny(r), "an ARRAY default preserves a soundly bound later positional actor");
+
 r = runHook(fn(
   "BEGIN RETURN public.record_event_internal($10); END;",
   "p_performed_by uuid, p_2 uuid, p_3 uuid, p_4 uuid, p_5 uuid, p_6 uuid, p_7 uuid, p_8 uuid, p_9 uuid, p_10 uuid"

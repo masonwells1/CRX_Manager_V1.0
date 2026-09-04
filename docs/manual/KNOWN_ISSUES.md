@@ -1001,6 +1001,12 @@ unrelated GUC is ignored, and a later explicit safe `SET search_path` repairs th
 bounded callable addition to the existing SET/RESET model, not a general configuration interpreter,
 and the broader capped posture is unchanged.
 
+**ARRAY-default positional narrowing (authorized 2026-09-04).** Routine parameter splitting now
+keeps commas inside square-bracketed `ARRAY[...]` defaults within the same declaration. A preceding
+array default cannot shift a later opaque actor from `$2` to a decoy `$3` in the guard's model. This
+is delimiter bookkeeping in the existing reader, not a general PostgreSQL parser, and the broader
+capped posture remains unchanged.
+
 **Quoted actor-identity narrowing (authorized 2026-09-04).** PostgreSQL folds unquoted parameter
 names to lowercase but preserves quoted names exactly. PR #449 keeps those identities distinct, so
 a refusal for `p_actor` or a same-named trusted local cannot validate a separate `"P_ACTOR"` input.

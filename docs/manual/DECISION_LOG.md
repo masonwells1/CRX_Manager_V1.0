@@ -7,6 +7,18 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-04 — preserve positional actor numbering across ARRAY defaults in PR #449
+
+**Source:** Mason's continuing direction to get PR #449 clean and mergeable, applied after the
+mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** Top-level routine-parameter splitting tracks square-bracket nesting as well as
+parentheses. A comma inside a valid `ARRAY[...]` default therefore remains inside its declaration
+and cannot shift the `$n` alias assigned to a later actor parameter.
+
+**Boundary.** This is one bounded delimiter repair in the existing parameter reader. It does not
+add a PostgreSQL parser, widen actor-name/dataflow discovery, or change the broader best-effort cap.
+
 ## 2026-09-04 — include top-level set_config in FROM CURRENT ordering for PR #449
 
 **Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory

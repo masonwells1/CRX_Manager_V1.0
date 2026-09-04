@@ -84,8 +84,9 @@ function out(decision, reason) {
 }
 
 // Split a parameter list on top-level commas (ignoring commas inside nested
-// parens like numeric(10,2) or inside quoted defaults) so each entry is one
-// parameter declaration we can read a name off of.
+// parens like numeric(10,2), square-bracketed ARRAY constructors/subscripts,
+// or quoted defaults) so each entry is one parameter declaration we can read
+// a name off of.
 function splitTopLevelArgs(argsText, sourceText = argsText) {
   const args = [];
   let depth = 0;
@@ -97,8 +98,8 @@ function splitTopLevelArgs(argsText, sourceText = argsText) {
   if (structural.length !== source.length) return [];
   for (let i = 0; i < structural.length; i++) {
     const ch = structural[i];
-    if (ch === "(") { depth++; continue; }
-    if (ch === ")") { depth--; continue; }
+    if (ch === "(" || ch === "[") { depth++; continue; }
+    if (ch === ")" || ch === "]") { depth--; continue; }
     if (ch === "," && depth === 0) {
       args.push(source.slice(start, i));
       start = i + 1;
