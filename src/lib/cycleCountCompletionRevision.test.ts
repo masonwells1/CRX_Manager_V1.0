@@ -121,6 +121,41 @@ describe('cycle count completion revision contract', () => {
     );
   });
 
+  // CodeRabbit (2026-09-04, PR #535): a successful update_cycle_count_item only
+  // SCHEDULES setActiveCount, but the completion handler awaits the pending writes and
+  // then read its CAPTURED activeCount — so the operator's own just-saved edit left the
+  // reviewed revision on the pre-write value while the server had already advanced, and
+  // the check reported their own edit as a foreign change.
+  //
+  // Pin the two halves as a PAIR: the synchronous write into the ref, and the read of
+  // that ref for reviewedRevision. Pinning only the read would be satisfied by a ref
+  // nothing ever writes to; pinning only the write leaves the completion path free to
+  // go back to reading state.
+  it('takes the reviewed revision from the synchronous ref, not from captured state', () => {
+    expect(page).toContain('latestItemRevisionRef.current.set(item.cycle_count_id, result.item_revision)');
+    expect(page).toContain(
+      'latestItemRevisionRef.current.get(activeCount.id) ?? activeCount.item_revision',
+    );
+    // The write must be recorded BEFORE the scheduled state update, which is the whole
+    // point — a ref set after an await would inherit the same staleness.
+    //
+    // Scoped to the item-write success path. `setActiveCount((previousCount) =` is NOT
+    // unique in this file, so comparing raw indexOf positions matched an EARLIER
+    // unrelated call and failed a correct implementation.
+    const writeSuccess = page.slice(
+      page.indexOf('failedItemWritesRef.current.delete(failedItemWriteKey(item.cycle_count_id, itemId));'),
+    );
+    expect(writeSuccess).not.toHaveLength(0);
+    expectBefore(
+      writeSuccess,
+      'latestItemRevisionRef.current.set(item.cycle_count_id, result.item_revision)',
+      'setActiveCount((previousCount) =',
+    );
+    // Keyed per cycle count: this component outlives the detail modal, so an unkeyed
+    // revision would let count A decide count B's completion.
+    expect(page).toContain('latestItemRevisionRef = useRef(new Map<string, number>())');
+  });
+
   it('keeps one public overload and exposes the revision to item-save callers', () => {
     expect(code).toContain('RENAME TO _complete_cycle_count_pre_revision_20260831');
     expect(code).toContain("'item_revision', v_item_revision");

@@ -418,7 +418,26 @@ export default function PurchaseOrderDetail() {
         } else {
           responseData = assertRpcResult(data, 'receive_po_items');
         }
-        await receiveIntent.resolveIntent();
+        // POST-COMMIT, and it can reject: resolveIntent() writes to IndexedDB, which
+        // fails on quota, in a private window, or against a corrupted store. The
+        // protective block below existed for exactly this hazard but started one line
+        // too late, so a cleanup rejection reported a COMMITTED receive as failed and
+        // skipped the damaged-goods alert, the PDF and the refresh.
+        //
+        // Deliberately does NOT retire or rotate the key when this fails. A failed
+        // resolve leaves the intent PENDING, which is the safe direction: a later
+        // retry replays under the SAME key and reconciles against the committed
+        // receipt. Clearing the key here is what would let a retry mint a fresh one
+        // and receive the goods a second time.
+        try {
+          await receiveIntent.resolveIntent();
+        } catch (resolveErr) {
+          try {
+            Sentry.captureException(resolveErr);
+          } catch {
+            // Nothing left to report through; the receipt still stands.
+          }
+        }
         const receivingRecordIds = (responseData as { receiving_record_ids?: string[] } | null)?.receiving_record_ids || [];
         const damagedReceiptIntentIds = receivingRecordIds.length > 0 ? receivingRecordIds : [idemKey];
 

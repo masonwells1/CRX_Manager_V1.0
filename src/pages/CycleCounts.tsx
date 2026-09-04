@@ -105,6 +105,20 @@ export default function CycleCounts() {
   const pendingItemWritesRef = useRef(new Set<{ cycleCountId: string; promise: Promise<void> }>());
   const failedItemWritesRef = useRef(new Set<string>());
   const itemWriteIntentsRef = useRef(new Map<string, CycleCountWriteIntent>());
+  // Latest item_revision this client has SEEN ACKNOWLEDGED per cycle count.
+  //
+  // A successful update_cycle_count_item only SCHEDULES setActiveCount, and the
+  // completion handler reads its captured `activeCount` after awaiting the pending
+  // writes — so the operator's own just-saved edit left `reviewedRevision` on the
+  // pre-write value while the server had already advanced. The revision check then
+  // reported the operator's OWN edit as "someone else changed this" and made them
+  // review and click again. A ref updates synchronously and is not subject to React
+  // batching or to a stale closure, so it survives the await that state does not.
+  //
+  // Keyed by cycle count for the same reason the pending/failed write sets are:
+  // this component outlives the detail modal, so an unkeyed value would let count A's
+  // revision decide count B's completion.
+  const latestItemRevisionRef = useRef(new Map<string, number>());
   const itemWriteSequenceRef = useRef(0);
   const completionInFlightRef = useRef(false);
 
@@ -369,6 +383,11 @@ export default function CycleCounts() {
         itemWriteIntentsRef.current.delete(itemId);
       }
       failedItemWritesRef.current.delete(failedItemWriteKey(item.cycle_count_id, itemId));
+      // Record the acknowledged revision SYNCHRONOUSLY, before the setActiveCount
+      // below only schedules the same value. The completion handler reads this ref
+      // after awaiting pending writes, when the scheduled state update may not have
+      // been applied to its captured `activeCount` yet.
+      latestItemRevisionRef.current.set(item.cycle_count_id, result.item_revision);
       setActiveCount((previousCount) =>
         previousCount && previousCount.id === item.cycle_count_id
           ? { ...previousCount, item_revision: result.item_revision }
@@ -461,10 +480,17 @@ export default function CycleCounts() {
     }
 
     // Capture what the operator has actually reviewed BEFORE the refresh below
-    // overwrites it. Own edits keep this in sync (update_cycle_count_item stores
-    // the returned revision on activeCount), so a mismatch here means ANOTHER
-    // client changed an item.
-    const reviewedRevision = activeCount.item_revision;
+    // overwrites it, so a mismatch here means ANOTHER client changed an item.
+    //
+    // Prefer the ref over the captured `activeCount`: own edits acknowledge their
+    // revision into the ref synchronously, whereas setActiveCount only SCHEDULES it
+    // and this function has already awaited the pending writes above — its
+    // `activeCount` can still hold the pre-write value. Reading state here reported
+    // the operator's own just-saved edit as a foreign change. Falls back to state
+    // when this client has acknowledged no write for the count (nothing edited this
+    // session), which is the case the ref cannot know about.
+    const reviewedRevision =
+      latestItemRevisionRef.current.get(activeCount.id) ?? activeCount.item_revision;
 
     const items = await refreshCountItems(activeCount.id);
     if (!items) return null;
