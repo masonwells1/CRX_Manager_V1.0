@@ -702,11 +702,12 @@ export default function Deliveries() {
         // Build PdfDeliveryData for each delivery (same format as Receipt PDF)
         const pdfDataList = [];
         for (const del of rows) {
-          const { data: items } = await supabase
+          const { data: items, error: itemsError } = await supabase
             .from('delivery_items')
             .select('*, product:products(product_name)')
             .eq('delivery_id', del.id)
             .order('id');
+          if (itemsError) throw itemsError;
 
           const delAny = del as unknown as Record<string, unknown>;
           const custInfo = customerMap[del.customer_id] || { contact_name: null, phone: null, shipping_address: null, billing_address: null };
