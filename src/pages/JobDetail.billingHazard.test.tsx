@@ -115,13 +115,18 @@ const HAZARD_CHEM = {
   sort_order: 0,
 };
 
-function makeJob(chem: Record<string, unknown>, acres: number | number[] = 100) {
+function makeJob(
+  chem: Record<string, unknown>,
+  acres: number | string | Array<number | string> = 100,
+  applicatorId: string | null = null,
+) {
   const fieldAcres = Array.isArray(acres) ? acres : [acres];
   return {
     id: 'job-1',
     job_number: 'J-1001',
     job_date: '2026-08-19',
     customer_id: 'cust-1',
+    applicator_id: applicatorId,
     status: 'scheduled',
     customer: { farm_name: 'Farm Alpha' },
     vehicle: null,
@@ -196,7 +201,15 @@ function buildGatedByIdProductsChain(rows: unknown[], gate: Promise<void>): Reco
   return self;
 }
 
-function mountWith(chem: Record<string, unknown>, acres: number | number[] = 100) {
+function mountWith(
+  chem: Record<string, unknown>,
+  acres: number | string | Array<number | string> = 100,
+  licenseFixture?: {
+    applicator: { id: string; full_name: string; role: string; is_active: boolean };
+    license: { profile_id: string; expiry_date: string; is_active: boolean };
+    savedApplicatorId?: string | null;
+  },
+) {
   // One gate per mount, created BEFORE render so the by-id effect can only ever
   // observe the pending promise. `from('products')` is called more than once, so the
   // gate must be shared across those chains rather than created inside each.
@@ -206,9 +219,20 @@ function mountWith(chem: Record<string, unknown>, acres: number | number[] = 100
   labelLookupGated = true;
 
   mockFrom.mockImplementation((table: string) => {
-    if (table === 'jobs') return buildChain({ data: makeJob(chem, acres), error: null });
+    if (table === 'jobs') {
+      return buildChain({
+        data: makeJob(chem, acres, licenseFixture?.savedApplicatorId ?? null),
+        error: null,
+      });
+    }
     if (table === 'products') return buildGatedByIdProductsChain([DRY_PRODUCT], gate);
     if (table === 'unit_conversions') return buildChain({ data: UNIT_CONVERSIONS, error: null });
+    if (table === 'profile_public_view') {
+      return buildChain({ data: licenseFixture ? [licenseFixture.applicator] : [], error: null });
+    }
+    if (table === 'applicator_licenses') {
+      return buildChain({ data: licenseFixture ? [licenseFixture.license] : [], error: null });
+    }
     return buildChain({ data: [], error: null });
   });
   return render(
@@ -553,6 +577,103 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     const saveCall = mockRpc.mock.calls.find((c) => c[0] === 'save_job');
     const args = saveCall?.[1] as { p_fields: Array<Record<string, unknown>> };
     expect(args.p_fields.map((field) => field.acres_to_treat)).toEqual([1000000000000000.1, 0.2]);
+  }, 30000);
+
+  it('REFUSES a nonblank non-finite field acreage before save_job can run', async () => {
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0, unit: 'Lb', rate_per_acre: 0, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, '1e999');
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+
+    await waitFor(() => {
+      const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
+      expect(errors.some((m) => /field acreage.*finite, non-negative number/i.test(m))).toBe(true);
+    }, { timeout: 15000 });
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }, 30000);
+
+  it('REFUSES negative field acreage before save_job can run', async () => {
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0, unit: 'Lb', rate_per_acre: 0, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, '-1');
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(
+        'error',
+        expect.stringMatching(/field acreage.*finite, non-negative number/i),
+      );
+    }, { timeout: 15000 });
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }, 30000);
+
+  it.each([
+    ['non-finite', '1e999'],
+    ['negative', '-1'],
+  ])('keeps %s acreage blocked after an admin confirms the expired-license override', async (_case, acres) => {
+    // Reaching Assign Anyway proves the fail-closed guard remains inside performSave,
+    // where the override calls directly, rather than only in the initial save handler.
+    const expiredApplicator = {
+      id: 'app-expired', full_name: 'Expired Applicator', role: 'applicator', is_active: true,
+    };
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0, unit: 'Lb', rate_per_acre: 0, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, acres, {
+      applicator: expiredApplicator,
+      license: { profile_id: expiredApplicator.id, expiry_date: '2025-01-01', is_active: true },
+    });
+
+    const applicatorSelect = await waitFor(() => {
+      const found = screen.getAllByRole('combobox').find((element) => (
+        Array.from((element as HTMLSelectElement).options)
+          .some((option) => option.value === expiredApplicator.id)
+      ));
+      if (!found) throw new Error('applicator select not found');
+      return found as HTMLSelectElement;
+    }, { timeout: 15000 });
+    fireEvent.change(applicatorSelect, { target: { value: expiredApplicator.id } });
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    const assignAnyway = await screen.findByRole('button', { name: /assign anyway/i }, { timeout: 15000 });
+    fireEvent.click(assignAnyway);
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(
+        'error',
+        expect.stringMatching(/field acreage.*finite, non-negative number/i),
+      );
+    }, { timeout: 15000 });
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }, 30000);
+
+  it('normalizes an intentionally blank field acreage to 0 in the save_job payload', async () => {
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0, unit: 'Lb', rate_per_acre: 0, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, '');
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true),
+      { timeout: 15000 },
+    );
+    const saveCall = mockRpc.mock.calls.find((c) => c[0] === 'save_job');
+    const args = saveCall?.[1] as { p_fields: Array<Record<string, unknown>> };
+    expect(args.p_fields[0].acres_to_treat).toBe(0);
   }, 30000);
 
   /** Mount on the Locations tab with one reloaded 1.5 pt/ac / 150 pt line over 100 acres,

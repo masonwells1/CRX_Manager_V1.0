@@ -2358,6 +2358,21 @@ export default function JobDetail() {
   };
 
   const performSave = async (licenseOverride: boolean, overrideReasonForAudit?: string) => {
+    // This belongs inside performSave, before any state change or payload/RPC work: the
+    // expired-license override calls this function directly and must not bypass the same
+    // finite, non-negative acreage boundary. Intentional blanks retain the established
+    // payload meaning 0.
+    const hasInvalidFieldAcres = fieldRows.some((field) => {
+      const rawAcres = field.acres_to_treat.trim();
+      if (rawAcres === '') return false;
+      const parsedAcres = parseFloat(rawAcres);
+      return !Number.isFinite(parsedAcres) || parsedAcres < 0;
+    });
+    if (hasInvalidFieldAcres) {
+      toast('error', 'Field acreage must be a finite, non-negative number. Correct the acreage and save again.');
+      return;
+    }
+
     setSaving(true);
     try {
       const payload = {

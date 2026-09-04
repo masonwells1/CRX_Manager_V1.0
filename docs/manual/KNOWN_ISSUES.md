@@ -1021,16 +1021,17 @@ Keep this separate from the equal-unit exact-decimal fix, and replace the conver
 exact rational/decimal conversion in a focused follow-up.
 
 
-## OPEN 2026-09-04 — Non-finite job acreage serializes as null and receives no client pre-warning
+## OPEN 2026-09-04 — Invalid job acreage still needs a server-side refusal
 
 An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
-`null`. JobDetail has no dedicated finite-acreage save guard, while `save_job` currently
-coalesces a null `acres_to_treat` value to zero in its acreage sum and finite check. The browser
-can therefore skip its equal-unit chemical warning while the server reasons over a smaller
-acreage, leading to a late whole-save refusal or a null/zero acreage path rather than the named
-`JOB_ACRES_NOT_FINITE` refusal. Fix this in a focused client-plus-new-migration change: refuse
-non-finite field input before the RPC and make the server reject missing/null acreage before
-coalescing legitimate blanks to zero.
+`null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every
+nonblank non-finite or negative acreage at the top of `performSave`, including the
+expired-license override path, before saving state, payload work, or `save_job`. Intentional
+blank acreage retains its established payload meaning of zero. The live `save_job` function
+already refuses non-finite and negative field acreage before any write. The issue stays open
+because a missing acreage key or JSON-null acreage is still coalesced to zero; a separate forward
+migration must refuse those two cases authoritatively. The unrelated different-unit chemical
+conversion issue above also remains open.
 
 
 ## RESOLVED 2026-09-03 (code merged in PR #582, migration applied live 15:34 UTC as ledger version `20260903153402`) — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save

@@ -62,9 +62,10 @@ function exactDecimalText(value: ExactDecimal): string {
 
 /**
  * Exact total of the canonical numeric field values prepared for `p_fields`, or null when a
- * non-finite pre-serialization value cannot participate in this SQL-parity check. JSON turns
- * that value into null and save_job currently reads the null acreage as zero; JobDetail has
- * no dedicated client pre-warning for the mismatch. The residual is tracked in KNOWN_ISSUES.
+ * non-finite pre-serialization value cannot participate in this SQL-parity check. The only
+ * production caller, JobDetail, rejects that value before JSON serialization; save_job's
+ * missing/null handling remains tracked separately in KNOWN_ISSUES until the server guard is
+ * deployed.
  */
 export function sumAcresExact(fieldRows: { acres_to_treat: string }[]): string | null {
   const total = exactDecimalSum(payloadAcreValues(fieldRows));
@@ -80,8 +81,8 @@ export function sumAcresExact(fieldRows: { acres_to_treat: string }[]): string |
 export function sumAcres(fieldRows: { acres_to_treat: string }[]): number {
   const payloadValues = payloadAcreValues(fieldRows);
   // Preserve the pre-serialization Number result for existing display/calculator behavior.
-  // JSON later turns a non-finite value into null, which save_job currently reads as zero;
-  // the missing client/server acreage guard is tracked in KNOWN_ISSUES.
+  // JobDetail rejects a non-finite value before save; the exact helper above still returns
+  // null so non-save callers do not invent an exact acreage for an invalid input.
   const total = exactDecimalSum(payloadValues);
   if (total == null) {
     return payloadValues.reduce((sum, value) => sum + value, 0);
