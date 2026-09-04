@@ -10,9 +10,15 @@ records the half that landed and, in enough detail to resume, the half that did 
 else. The diff against `origin/main` is a strict addition: no rule was removed, no severity lowered.
 
 The paragraph makes the local search **mandatory rather than a preference**. The reviewer must
-answer CHECK 2 with a small, bounded number of local `Grep`/`Bash` searches — ideally one
-`grep -rnoiE` across `supabase/migrations/` covering every function name at once — and must NOT use
-a remote/GitHub file-reading tool (`fetch_blob` or similar) to walk history file by file.
+answer CHECK 2 with a small, bounded number of local `Grep`/`Bash` searches across
+`supabase/migrations/`, and must NOT use a remote/GitHub file-reading tool (`fetch_blob` or similar)
+to walk history file by file.
+
+**Superseded the same day** — see `2026-09-04-check2-two-phase-search-and-identifier-scrub.md`. As
+first written this paragraph prescribed a single `grep -rnoiE` pass, which prints only matched names
+and so cannot see the argument types or preceding `DROP FUNCTION` that steps 2 and 3 consume.
+CodeRabbit caught it on `21fec2b16`; the method is now two-phase (discover, then read the
+candidates). The measurement and the remote-enumeration ban below are unchanged.
 
 This is not a style note. Measured 2026-09-03, the local one-pass grep answered CHECK 2 in **0.17
 seconds**, while the per-file remote walk **died twice — after 598 and 751 fetches — producing no

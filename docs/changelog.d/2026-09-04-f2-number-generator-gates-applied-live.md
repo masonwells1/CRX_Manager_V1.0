@@ -34,9 +34,12 @@ opened and deleted around that one statement:
 
 | Principal | Result |
 | --- | --- |
-| deactivated `sales_rep` `38cdefbc` | `INSUFFICIENT_ROLE` |
+| deactivated `sales_rep` | `INSUFFICIENT_ROLE` |
 | unauthenticated (no `sub` claim) | `AUTH_REQUIRED` |
-| active `admin` `22c1fc50` | `CC-2026-00018` |
+| active `admin` | a cycle-count number issued normally |
+
+Account identifiers and the issued number are deliberately omitted: this repository is public, and
+the *outcome* of each case is the whole proof — the identity of the account it ran as adds nothing.
 
 Pre-apply gates: offline prover `NUMBER_GENERATOR_GATE_PROOF_PASS` with all 15 mutation tests
 firing on a disposable `postgres:17-alpine`; `rls-security-reviewer` and `migration-drift-reviewer`

@@ -7,6 +7,45 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — invoice payment terms run from the INVOICE DATE; the UTC hole is a separate, smaller issue
+
+**Source:** Mason's decision on 2026-09-03, put to him by the orchestrator session as one question
+with the concrete consequence stated (the one affected invoice keeps its invoice-date-based due date
+and stays flagged overdue; the row is named in the live ledger, not in this public repo),
+after this session's read-only investigation of a `codex-transaction-review` finding. The decision
+was relayed to the building session by the orchestrator; the live apply of the resulting migration
+still waits for Mason's typed OK in the applying session, as every apply does.
+
+**Decision.** When an invoice is entered later than its invoice date, the payment terms run from
+the **invoice date printed on the invoice**, not from the day it was posted in the system. The
+shipped posting RPC already does exactly this (`_post_invoice_impl_20260714`:
+`due_date = COALESCE(due_date, invoice_date + terms days)`, `20260702160000_a8_terms_to_due_date.sql:133`),
+so the posting RPC is **deliberately unchanged**, no invoice row is corrected, and the client is
+untouched. The 2026-07-16 spec's "posting date + 30 days" wording was written when the two dates
+coincided (same-day draft-and-post); the spec now carries an amendment saying so. **Do not
+"correct" the code back to the posting date** on the strength of that spec.
+
+**Two separate issues arrived in one report; keep them separate.** (1) The *basis* question above
+affected exactly one live invoice (invoice-dated roughly four months before it was posted; the
+invoice number and its dates are live business data and are deliberately not recorded here), and
+only because it was deliberately backdated by four months — not because of any timezone. (2) The
+*timezone* mechanism the report warned about — the live database clock is UTC, so a late-evening
+Chicago save is already "tomorrow" — affects **zero** live invoices: 0 of 3 posted invoices were
+posted across the UTC/Chicago day boundary (both sides tested read-only on 2026-09-03), and both
+invoice screens send the browser-local date rather than asking the server for one. The only real
+UTC hole is four server-side fallbacks that stamp `invoice_date = CURRENT_DATE` when a payload
+omits the date (`_price_order_below_cost_impl_20260810`, `_save_invoice_lineage_unaware_impl_20260827`,
+`_save_field_app_invoice_impl_20260714`, `_save_field_app_split_invoice_impl`); migration
+`20260904160000_invoice_date_fallbacks_chicago.sql` moves those to the America/Chicago business
+date per the ~2026-07-10 rule below. Anyone re-reading the original finding should not conclude
+the due-date code is still wrong.
+
+**What this forbids/implies:** the posting RPC's `invoice_date + terms` rule is settled; a future
+change to a posting-date basis is a new owner decision, not a bug fix. `invoice_date` must always
+be a Chicago business date on the server — a new `CURRENT_DATE` fallback for it is a bug. The
+split-invoice body's third `CURRENT_DATE` (a commission-record date) was outside this decision and
+is tracked as a follow-up in the changelog entry, not silently changed.
+
 ## 2026-09-03 — the risky-content gate stays loud; the parked prose exemption is retired
 
 **Source:** Mason's in-chat answer on 2026-09-03 ("yes to all three") to the question "leave the
@@ -557,18 +596,18 @@ compensating controls, and conflating them would overstate the defence:
 
 Note on (2): the incidental write-time coverage of `EXECUTE … USING` / `INSERT … RETURNING … INTO` — an
 unconditional `hasMutation` trigger rather than modelled taint — lives in **parked PR #449, not in the hook
-that is running**. The active `.claude/hooks/actor-binding-check.mjs` is 213 lines and contains no such
-trigger (PR #449's hardened rewrite is the ~3,000-line version referenced above), so today these forms are
-not caught at write time at all. Do not credit the running guard with them until #449 lands.
+that is running**. The active `.claude/hooks/actor-binding-check.mjs` contains no such trigger (PR #449's
+hardened rewrite is the much larger version referenced above), so today these forms are not caught at write
+time at all. Do not credit the running guard with them until #449 lands.
 
 Note on the tool path, which is wider than any residual listed above: the guard is registered under the
-matcher `"Write|Edit"` in **both** `.claude/settings.json` and `.codex/hooks.json`, so a migration created
-through Bash or PowerShell — `cat`, `tee`, a redirect, a generator script — is never presented to it, and
-`bash-safety.mjs` blocks only *modification* of an existing file under `supabase/migrations/`, not
+matcher `"Write|Edit|MultiEdit"` in **both** `.claude/settings.json` and `.codex/hooks.json`, so a migration
+created through Bash or PowerShell — `cat`, `tee`, a redirect, a generator script — is never presented to
+it, and `bash-safety.mjs` blocks only *modification* of an existing file under `supabase/migrations/`, not
 *creation* of a new one. Ordinary SQL bypasses the guard on tool choice alone. This is not a residual of the
 analysis; it is the analysis never running. The post-apply sweeps are unaffected — they read the live
 catalog and do not care which tool wrote the file. Any claim that this guard covers "every ordinary
-spelling" must be scoped to hooked `Write`/`Edit` calls.
+spelling" must be scoped to hooked `Write`/`Edit`/`MultiEdit` calls.
 
 Note on cross-routine delegation: a `SECURITY DEFINER` wrapper that accepts an actor parameter and
 delegates the write to a helper is allowed at write time — the guard only proceeds when the routine's own
@@ -577,13 +616,20 @@ either, because the wrapper carries neither predicate's cue in its own `prosrc` 
 the `has_function_privilege('authenticated', ...)` candidacy test. There is no fail-closed callable rule in
 the running hook; that belongs to parked PR #449.
 
-Note on the write path itself: the hook reads `tool_input.content || tool_input.new_string` and analyses that
-fragment alone — it does **not** reconstruct the full post-edit file the way `sql-safety.mjs`,
-`idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. An ordinary
-incremental `Edit` that inserts an unsafe write *inside* an existing function therefore carries no function
-header, no parameter list and no `SECURITY DEFINER` attribute in the analysed text, so the guard finds no
-candidate and allows it. This is the normal editing path, not an exotic one; the hook's own Edit-coverage
-test passes a whole function as `new_string` and so does not exercise it.
+Note on the write path itself, updated 2026-09-03: `Write` carries the full file; `Edit` and `MultiEdit`
+carry fragments. The hook now reconstructs the full post-edit file with `edit-splice-lib.mjs` before running
+its unchanged actor-pattern analysis. Before this maintenance, an ordinary incremental Edit that inserted
+an unsafe write inside an existing function carried no function header, parameter list, or `SECURITY
+DEFINER` attribute in the analyzed fragment and was allowed. That fragment-plumbing gap is closed for the
+supported Edit/MultiEdit paths; the lexical, rebinding, naming, delegation, and non-hooked-tool gaps remain.
+
+**2026-09-03 narrow maintenance update.** Mason prioritized the combined #575/#336 close-out after the
+PR-comment audit. The ordinary Edit plumbing gap above is now closed by reconstructing the full post-edit
+file with the repository's existing `edit-splice-lib.mjs`, including CRLF and MultiEdit regression proof.
+Both hook manifests now route `MultiEdit`, and a routing-level test proves that the real Claude and Codex
+MultiEdit paths reach `actor-binding-check.mjs` rather than only exercising the script directly.
+No actor-name, SQL-token, rebinding, delegation, or dataflow pattern was added. The capped best-effort
+status and the prohibition on another pattern-hardening round remain unchanged.
 
 **If this is ever revisited, rebuild rather than re-harden.** The only approach that removes the whole
 category is parsing with PostgreSQL's own grammar (`libpg_query`), which eliminates "spellings" entirely and

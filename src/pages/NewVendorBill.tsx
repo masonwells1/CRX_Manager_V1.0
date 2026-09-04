@@ -21,7 +21,7 @@ import {
 } from '../hooks/useUncertainMutationIntent';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
-import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import { centsToDollarInput, formatCents as fmt } from '../lib/money';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import type { Vendor, PurchaseOrder } from '../types';
@@ -154,11 +154,14 @@ export default function NewVendorBill() {
     if (!billNumber.trim()) { toast('error', 'Enter a bill number'); return; }
     if (!subtotalDollars || Number(subtotalDollars) <= 0) { toast('error', 'Enter a valid amount'); return; }
 
+    const subtotalCents = parseDollarsToCents(subtotalDollars);
+    if (subtotalCents === null) { toast('error', `Subtotal: ${MONEY_PRECISION_MESSAGE}`); return; }
+    // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
+    const adjustmentCents = parseDollarsToCentsSigned(adjustmentDollars || '0');
+    if (adjustmentCents === null) { toast('error', `Adjustment: ${MONEY_PRECISION_MESSAGE}`); return; }
+
     setSaving(true);
     try {
-      const subtotalCents = parseDollarsToCents(subtotalDollars);
-      // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
-      const adjustmentCents = parseDollarsToCentsSigned(adjustmentDollars || '0');
 
       // (codex audit F4, 2026-05-10): mirror the backend's `v_total > 0`
       // guard at the UI so users see a clear inline message instead of an
@@ -229,7 +232,9 @@ export default function NewVendorBill() {
     }
   };
 
-  const totalCents = parseDollarsToCents(subtotalDollars || '0') + parseDollarsToCentsSigned(adjustmentDollars || '0');
+  // Display-only preview. A refused (excess-precision) field shows as 0 in the
+  // preview; the save path above refuses it by name before anything is sent.
+  const totalCents = (parseDollarsToCents(subtotalDollars || '0') ?? 0) + (parseDollarsToCentsSigned(adjustmentDollars || '0') ?? 0);
 
   // Calculate due date preview
   const dueDate = (() => {
