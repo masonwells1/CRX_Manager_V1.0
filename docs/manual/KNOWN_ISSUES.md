@@ -821,7 +821,7 @@ assuming any screen is covered.
 
 **Fixed: 14 changes across 7 files** — 11 reset reorders, 1 assert repair, 2 click-level repairs, in
 `OrderDetail`, `DeliveryDetail`, `InvoiceDetail`, `FieldApplicationInvoice`, `Returns`,
-`PrepaymentManagerPanel`, `MonthEndClose`. Eight keys are also given a record scope via the hook's
+`PrepaymentManagerPanel`, `MonthEndClose`. Nine keys are also given a record scope via the hook's
 `intentScope` / `getKeyFor`, because detail pages do NOT remount on a route-id change (every
 `<x>/:id` route in `src/App.tsx` is rendered without a `key` prop) and a retained unscoped key
 would otherwise replay record A's receipt against record B.
@@ -849,6 +849,21 @@ three of the four `DeliveryDetail` actions (see round 3 / round 4 below). **Fix 
 key to the REQUEST PAYLOAD — the `fingerprintIntentPayload` approach from PR #535 — not to the
 route. Enumerated in `src/__tests__/idempotency-reset-order.test.ts` (`KNOWN_UNFIXED_SITES`), which
 fails if a site is added, removed, or substituted.
+
+**ALSO OPEN — `PrepaymentManagerPanel`'s split-check modal (`create_prepay_check_splits`), a MONEY
+path, recorded 2026-09-04 from the Codex GitHub App's P1 on PR #584.** Not in either list above and
+not pinned by the guard, because it fails on a different axis: its reset is correctly placed AFTER
+the assert, but its key is UNSCOPED while its request carries `p_customer_id`,
+`p_reference_number`, `p_splits` and `p_expected_total_cents` — all editable in the modal. **It is
+NOT a regression from PR #584**: the code is byte-identical to `main` (verified line by line;
+that PR's only edits to this file are `applyPrepayIdem` and `batchApplyIdem`). The partial
+mitigation from PR #59 (2026-05-16) resets the key on every modal OPEN, which covers close-then-
+reopen but NOT the live path: an ambiguous reply leaves the modal open, and editing the customer,
+reference or amounts and resubmitting in place reuses the key, so the server replays the FIRST
+check and reports the edited check as created while its credits were never added. **Fix shape:**
+payload binding (`fingerprintIntentPayload`), not a scope — a route scope binds nothing here, as
+there is no route. Deliberately left out of PR #584, which six adversarial rounds had already
+narrowed to exclude exactly this class.
 
 **ALSO OPEN — the original sweep missed an entire class, now enumerated.** It matched
 `resetKey()` / `resetKeyFor(` literally and never saw **aliased** resets from destructured hooks
