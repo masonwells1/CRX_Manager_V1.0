@@ -30,9 +30,15 @@ CLEAN with one LOW. Every finding was verified against the current code and fixe
    They now state the refuse-with-`null` contract and name coercing `null` to `0` as the thing
    to flag. `npm run test:agent-workflows` (adapter parity) passes.
 
-**Deliberately not changed.** Codex proof LOW: `PrepaymentManagerPanel` drops a zero-valued
-bucket split (`0.000` included) before the precision check. Zero splits are dropped by design
-whatever their decimals, and a non-zero excess-precision split is still refused by label.
+**DEFERRED, not decided (needs an owner call).** Codex proof LOW: `PrepaymentManagerPanel`
+drops a zero-valued bucket split (`0.000` included) before the precision check, so that one
+input silently ignores an excess-precision zero while every other money input refuses it. The
+money impact today is nil (the value is zero; a non-zero excess-precision split is still refused
+by label), but the inconsistency is not intentional design. Left as-is in this PR; Mason decides
+whether a zero split with extra decimals should be refused like everything else. A second LOW
+from the follow-up proof, `NewVendorBill`'s header total preview showing a refused field as
+`$0.00` before the save path refuses it by name, is display-only and already recorded in the
+2026-09-03 entry.
 
 **Proof observed.** `vitest` 85/85 across the four touched suites (two new cases), `tsc` clean,
 `eslint` clean on the five source files, adapter parity PASS. Browser (real pages in the
