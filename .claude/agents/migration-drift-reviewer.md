@@ -62,16 +62,30 @@ For each `CREATE OR REPLACE FUNCTION <name>(<args>)` in the migration:
    also cannot distinguish `f(integer)` from `f(text)`.
 
    **Require complete identity signatures.** Fresh live evidence must give, per function
-   name, the full schema-qualified identity signature of EVERY live overload — obtain it as
-   `oid::regprocedure::text` (the live-data guard REFUSES
-   `pg_get_function_identity_arguments()`, and a bare table alias like `AS a(argname)` trips
-   its function-call regex, so name aliases with a read prefix such as `AS list_arg(...)`).
-   Then compute the expected POST-migration signature set:
-   - the migration's `CREATE OR REPLACE FUNCTION f(<args>)` identity signature matches an
-     existing live signature exactly → it REPLACES that one, no new overload → clean;
-   - it does NOT match any live signature while other live signatures for that name exist,
-     and the migration does not `DROP` them → applying ADDS an overload → **BLOCKER**;
-   - the name does not exist live at all → a plain create → clean.
+   name, one row per live overload carrying the schema and the signature as SEPARATE
+   columns: `nspname` from a joined `pg_namespace`, plus `oid::regprocedure::text`. Do NOT
+   read the schema off the `regprocedure` text and do NOT call that text schema-qualified.
+   `regprocedure` renders **search_path-dependently** — it drops the schema when the
+   function is visible on the current path and prints it when it is not, so the same
+   function yields two different strings on two sessions, and a namespace confusion can fake
+   a replacement match. `scripts/db-invariant-sweeps/predicates/office-only-pricing-secdef-gates.sql`
+   documents this and resolves a KNOWN signature with `to_regprocedure('public.' || signature)`
+   instead. The live-data guard REFUSES `pg_get_function_identity_arguments()` (it also
+   embeds parameter NAMES, so a signature-only comparison never matches), and a bare table
+   alias like `AS a(argname)` trips its function-call regex, so name aliases with a read
+   prefix such as `AS list_arg(...)`.
+
+   Then compute the expected POST-migration signature set for that name **in that schema**,
+   and require it to hold **exactly one** signature:
+   - the authored signature matches a live signature in the same schema → it REPLACES that
+     one; if no other live signature for the name survives, the set holds 1 → clean;
+   - the set would hold MORE THAN ONE signature → **BLOCKER**, whether this migration adds
+     the extra overload or live already carried it and the migration merely leaves it in
+     place. `docs/workflows/SAFE_DEVELOPMENT_RULES.md` is explicit that the `pg_proc` query
+     "Must return exactly 1 row. If >1, consolidate before adding more." A pre-existing
+     second overload does not become acceptable because this migration did not create it —
+     that is the exact March 2026 shadow-overload shape this check exists to stop;
+   - the name does not exist live at all → a plain create, the set holds 1 → clean.
 
    Count-only evidence, `pronargs`, or candidate-authored prose asserting "exactly one
    overload" NEVER clears this finding. If identity-signature evidence is absent, emit

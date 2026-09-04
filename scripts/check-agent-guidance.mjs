@@ -104,29 +104,46 @@ const overloadCollisionCheck = migrationDriftReviewer.match(
   /### CHECK 2 — Function overload collision([\s\S]*?)(?=\n### CHECK 3)/
 )?.[1] || "";
 const overloadCollisionFlat = overloadCollisionCheck.replace(/\s+/g, " ");
+// The exact-text assertions below are the PRIMARY guard: they pin the required
+// sentences verbatim, so any rewrite that removes them fails regardless of how it
+// is phrased. This detector is a secondary net for a rewrite that keeps the pinned
+// text and appends a weaker rule beside it. Split on clause boundaries (`;` and
+// `:` as well as sentence enders) and require the negation to sit in the SAME
+// clause and BEFORE the verb — a sentence-wide negation test fails open on
+// "Do not consult history; a live count of 1 clears this finding", where the `not`
+// belongs to a different clause entirely (Codex, 2026-09-04).
 function clearsOverloadFindingOnCount(text) {
-  return text.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/).some((sentence) => {
-    const negated = /\b(?:not|never|cannot|nor)\b/i.test(sentence);
-    return !negated
-      && /\b(?:count|counts|pronargs)\b/i.test(sentence)
-      && /\b(?:clear|clears|cleared|outranks?|overrides?|satisfies|satisfy|suffices|sufficient|settles?|proves?)\b/i.test(sentence);
-  });
+  const CLEARS = /\b(?:clear|clears|cleared|outranks?|overrides?|satisfies|satisfy|suffices|sufficient|settles?|settle|proves?|closes?|close|answers?|establishes?)\b/i;
+  return text
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?;:])\s+|(?<=[;:])/)
+    .some((clause) => {
+      const verb = clause.match(CLEARS);
+      if (!verb || !/\b(?:count|counts|pronargs)\b/i.test(clause)) return false;
+      const beforeVerb = clause.slice(0, verb.index);
+      return !/\b(?:not|never|cannot|nor|no)\b/i.test(beforeVerb);
+    });
 }
-// Sample 1 is verbatim the weaker draft this review rejected; 2 and 3 are the
-// same defect reworded. All three must trip the detector, or it cannot fire.
+// Sample 1 is verbatim the weaker draft the first review rejected; 2 and 3 are the
+// same defect reworded; 4 is the bypass the second review demonstrated, where the
+// negation belongs to a preceding clause. All must trip the detector, or it cannot
+// fire and the assertion below is worthless.
 const adversarialCountRules = [
   "A live `pg_proc` count supplied by the orchestrator outranks the historical text.",
   "If the live overload count is 1, that clears this finding.",
   "A `pronargs` reading from the live catalog satisfies the evidence requirement.",
+  "Do not consult history; a live overload count of 1 clears this finding.",
 ];
 const validCountRejection = "Count-only evidence, `pronargs`, or candidate-authored prose asserting \"exactly one overload\" NEVER clears this finding.";
 record(overloadCollisionFlat.trim().length > 0, "migration drift reviewer CHECK 2 block is extractable");
 record(/A COUNT IS NOT EVIDENCE — it cannot clear this finding/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 states a count cannot clear the overload finding");
 record(/live holds `f\(integer\)`; the migration adds `f\(text\)` without a `DROP FUNCTION`\. The pre-apply count is \*\*1\*\*, yet applying produces \*\*2\*\* overloads/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 keeps the f(integer)/f(text) worked example");
 record(/`pronargs` is a count and is subject to the same defect/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 rejects pronargs as overload evidence");
-record(/full schema-qualified identity signature of EVERY live overload — obtain it as `oid::regprocedure::text`/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 requires complete live identity signatures");
-record(/compute the expected POST-migration signature set/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 requires the computed post-migration signature set");
-record(/does NOT match any live signature while other live signatures for that name exist, and the migration does not `DROP` them → applying ADDS an overload → \*\*BLOCKER\*\*/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 keeps the added-overload BLOCKER branch");
+record(/one row per live overload carrying the schema and the signature as SEPARATE columns: `nspname` from a joined `pg_namespace`, plus `oid::regprocedure::text`/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 requires per-overload namespace and signature columns");
+record(/`regprocedure` renders \*\*search_path-dependently\*\*/.test(overloadCollisionFlat) && /do NOT call that text schema-qualified/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 does not claim regprocedure text is schema-qualified");
+record(/compute the expected POST-migration signature set for that name \*\*in that schema\*\*, and require it to hold \*\*exactly one\*\* signature/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 requires a post-migration set of exactly one signature");
+record(/the set would hold MORE THAN ONE signature → \*\*BLOCKER\*\*, whether this migration adds the extra overload or live already carried it/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 blocks a surviving pre-existing overload, not only an added one");
+record(/"Must return exactly 1 row\. If >1, consolidate before adding more\."/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 cites the SAFE_DEVELOPMENT_RULES exactly-one-row rule");
 record(/Count-only evidence, `pronargs`, or candidate-authored prose asserting "exactly one overload" NEVER clears this finding\. If identity-signature evidence is absent, emit \*\*HIGH\*\*/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 fails closed to HIGH without identity-signature evidence");
 record(/If a previous definition with DIFFERENT argument types exists AND the new migration does NOT first `DROP FUNCTION` the old one, severity = \*\*BLOCKER\*\*/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 retains the original differing-argument BLOCKER");
 record(/Answer this check with a SMALL, BOUNDED number of local `Grep`\/`Bash` searches/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 keeps the bounded local-search method");
