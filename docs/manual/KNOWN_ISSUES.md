@@ -273,6 +273,59 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-09-04 — the migration drift reviewer's overload check can only see AUTHORED history, and its sanctioned runner can never show it the live catalog
+
+**Deferred deliberately by Mason on 2026-09-04**, split out of PR #594 so the uncontested
+search-method fix could land alone. This is a **pre-existing hole on `main`**, not one that PR
+introduced: `git diff origin/main` on that branch removed no rule and lowered no severity.
+
+**What CHECK 2 in `.claude/agents/migration-drift-reviewer.md` actually does.** It greps
+`supabase/migrations/` for an earlier `CREATE OR REPLACE FUNCTION` of the same name with different
+argument types, and calls it a BLOCKER when the new migration does not first `DROP FUNCTION` the
+old one. That is a search of the *authored files in this repository* — nothing else.
+
+**Hole 1 — live-only drift is invisible.** An overload that exists in the live database but was
+never authored into a migration file (applied by hand, applied from a branch whose file never
+landed, or created by a since-reverted migration) leaves no trace for the grep to find. CHECK 2
+reports clean, the new function is created beside the unseen one, and callers can resolve to the
+wrong overload. The 2026-03 incident class this check exists to catch is exactly that outcome.
+
+**Hole 2 — the sanctioned proof runner cannot close hole 1.**
+`scripts/write-apply-proofs.mjs` (`buildReviewerCharterPrompt`, ~line 75) executes this charter as a
+sandboxed read-only Codex run whose prompt carries **only the charter text and the migration path**.
+It injects no catalog query result, and the charter itself tells the reviewer it cannot call Supabase
+MCP. So a rule of the form "require live `pg_proc` evidence before clearing this check" would emit a
+finding on **every** migration containing a `CREATE OR REPLACE FUNCTION`, forever — the run would
+return BLOCKERS, no function migration could be applied through the sanctioned path, and the gate
+would be routed around. A gate that always fails is a gate that gets bypassed. This was found by an
+exact-SHA `gpt-5.6-sol` proof on PR #594 and is why the rule was withdrawn rather than shipped.
+
+**What a real fix has to solve, so the next attempt does not rediscover it:**
+
+1. **Get live evidence into the runner.** Either `write-apply-proofs.mjs` runs the catalog query
+   itself and injects the rows into the charter prompt, or the orchestrator records them as task
+   evidence the charter is told to look for. Without one of those, no evidence rule is satisfiable.
+2. **Compare argument types canonically, not as rendered text.** `oid::regprocedure::text` renders
+   BOTH the schema and the argument types **search_path-dependently**. Two identically named types
+   in different schemas can render as an exact string match while Postgres resolves different type
+   OIDs and creates a second overload. Evidence must carry `proargtypes` (the canonical input-type
+   OID vector), or types rendered under an explicitly stated search_path.
+3. **Never let a COUNT acquit.** A count cannot tell `f(integer)` from `f(text)`: live holds
+   `f(integer)`, the migration adds `f(text)` with no `DROP FUNCTION`, the pre-apply count reads
+   **1**, and applying leaves **2** overloads. `pronargs` is a count and has the same defect.
+   Candidate-authored prose asserting "exactly one overload" is not evidence either.
+4. **Keep detection and acquittal separate.** Local history must decide the default verdict with no
+   database access, so the check always reaches a verdict. Live evidence's only job is to *acquit* a
+   history-detected BLOCKER in the stale case where a later `DROP` removed an overload the files
+   still show. Absence of live evidence must leave the BLOCKER standing — never a HIGH demanding
+   evidence the run cannot fetch, and never clean.
+
+**Blast radius, so this is not read as urgent.** Nothing regressed: the reviewer behaves exactly as
+it did before PR #594, and the live-only-drift gap has been there as long as the check has. What
+changed on 2026-09-04 is that it is now written down instead of only being known.
+
+---
+
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
 The gate landed on `main` as `f2307fbf9` with these four items knowingly open. They were recorded
