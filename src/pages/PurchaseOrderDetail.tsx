@@ -470,8 +470,17 @@ export default function PurchaseOrderDetail() {
         }
         } catch (notifyErr) {
           // Never surface a post-commit notification failure as a receiving
-          // failure — see the comment above this block.
-          Sentry.captureException(notifyErr);
+          // failure — see the comment above this block. The reporter itself is
+          // wrapped for the same reason logNotificationFailure wraps its own
+          // Sentry calls: an exception escaping HERE would report a committed
+          // receipt as failed, and the operator's retry mints a fresh key
+          // against the already-retired intent, receiving the goods twice.
+          // A guard whose own error path can throw is not a guard.
+          try {
+            Sentry.captureException(notifyErr);
+          } catch {
+            // Nothing left to report through; the receipt still stands.
+          }
         }
 
         // Offer PDF download

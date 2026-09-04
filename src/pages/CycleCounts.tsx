@@ -584,7 +584,15 @@ export default function CycleCounts() {
         try {
           await logActivity({ event: 'cycle_count_completed', description: `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
         } catch (logErr) {
-          Sentry.captureException(logErr);
+          // Same reason as the receiving post-commit block: the count is already
+          // COMMITTED and its key retired by this point, so an exception escaping
+          // this catch — including from the reporter itself — would present a
+          // committed inventory adjustment to the operator as a failure.
+          try {
+            Sentry.captureException(logErr);
+          } catch {
+            // Nothing left to report through; the completion still stands.
+          }
         }
       },
       toast,

@@ -387,7 +387,18 @@ export default function IntegrityCleanupPanel() {
       assertRpcResult(data, 'reconcile_negative_inventory');
       reconcileIdem.resetKeyFor(scope);
       toast('success', `${row.product_name} reconciled to ${input.qty}`);
-      await fetchAll();
+      // The mutation-success boundary ENDS here: the RPC is proven and its retry
+      // receipt is already retired. The refresh below used to sit inside this
+      // try, so a refresh rejection was reported as a FAILED reconciliation —
+      // and a retry then minted a fresh key and re-applied an ABSOLUTE inventory
+      // quantity, overwriting any legitimate stock movement in between. Refresh
+      // failures now say only that the refresh failed.
+      try {
+        await fetchAll();
+      } catch (refreshErr) {
+        Sentry.captureException(refreshErr instanceof Error ? refreshErr : new Error(String(refreshErr)));
+        toast('error', 'Reconciled, but the list could not be refreshed. Reload to see current values.');
+      }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
       // Same non-throwing-Supabase shape as handleBackfillInvoice above.
