@@ -88,6 +88,11 @@ export default function CycleCounts() {
   const [loadingItems, setLoadingItems] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+  // The cycle count the open "complete anyway?" confirmation was asked ABOUT.
+  // The confirm path completes without re-running the uncounted-items check —
+  // correct for the count the operator answered for, dangerous for any other —
+  // so the answer has to carry the record identity, not just a boolean.
+  const [completeConfirmCountId, setCompleteConfirmCountId] = useState<string | null>(null);
   const [completeConfirmMsg, setCompleteConfirmMsg] = useState("");
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [reversing, setReversing] = useState(false);
@@ -494,6 +499,7 @@ export default function CycleCounts() {
       const uncounted = snapshot.items.filter((i) => !i.is_counted);
       if (uncounted.length > 0) {
         setCompleteConfirmMsg(`${uncounted.length} products have not been counted yet. Complete anyway?`);
+        setCompleteConfirmCountId(activeCount.id);
         setCompleteConfirmOpen(true);
         return;
       }
@@ -510,6 +516,18 @@ export default function CycleCounts() {
     if (!activeCount || !profile) return;
 
     if (!snapshot) {
+      // This branch runs from the confirmation dialog, and it deliberately does
+      // NOT re-check uncounted items — the operator already answered "complete
+      // anyway". That answer is only valid for the count it was asked about. The
+      // dialog's state is separate from the detail modal's, so a count switch
+      // between question and answer would otherwise complete a DIFFERENT count,
+      // skipping its uncounted check, on the strength of another count's yes.
+      const confirmedFor = completeConfirmCountId;
+      setCompleteConfirmCountId(null);
+      if (confirmedFor !== activeCount.id) {
+        toast('error', 'That confirmation was for a different cycle count. Open the count you want to complete and try again.');
+        return;
+      }
       if (completionInFlightRef.current) return;
       completionInFlightRef.current = true;
       setPreparingCompletion(true);

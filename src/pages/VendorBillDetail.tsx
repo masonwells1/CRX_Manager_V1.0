@@ -142,6 +142,11 @@ export default function VendorBillDetail() {
     setEditBillDate('');
     setEditDueDate('');
     setEditNotes('');
+    // ReasonModal opens solely on editOverageMessage !== null, and this component
+    // stays MOUNTED across /accounts-payable/bills/:id changes. Leaving it set
+    // carried the previous bill's overage prompt onto the next bill, while every
+    // other edit field above had been cleared out from under it.
+    setEditOverageMessage(null);
   }, [id]);
 
   useEffect(() => {
