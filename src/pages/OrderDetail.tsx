@@ -65,11 +65,26 @@ export default function OrderDetail() {
   const { runWithBelowCostApproval } = useBelowCostApproval();
   const updateOrderIdem = useIdempotencyKey('update_order_items', profile?.id || '');
   const voidOrderIdem = useIdempotencyKey('void_order', profile?.id || '');
-  const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '');
-  const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
+  // F1: scoped by order id. This component does NOT remount when the route id
+  // changes (App.tsx renders it without a key, the effects are keyed on [id], and
+  // activeOrderIdRef exists precisely to guard the stale in-flight fetch), so the
+  // hook's key map survives an order-to-order navigation. These three actions no
+  // longer retire their key on click, so without the scope an ambiguous result on
+  // order A could replay A's receipt after the user navigated to order B —
+  // reporting B cancelled without cancelling it, or opening A's invoice. Scoping
+  // keeps retry-under-the-same-key for the SAME order while minting a fresh key
+  // per order.
+  const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '', id ?? '');
+  const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '', id ?? '');
   const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
-  const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
-  const splitInvoiceIdem = useIdempotencyKey('create_split_invoices_from_order', profile?.id || '');
+  // F1 (CodeRabbit): consolidate_draft_invoices sends only (p_order_id, p_performed_by,
+  // p_idempotency_key), so the route id is the WHOLE of what a retry can vary. The key is
+  // retained across an ambiguous reply, and this page does not remount between orders, so
+  // without this scope order A's cached receipt could replay against order B.
+  const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '', id ?? '');
+  // F1: order-scoped for the same reason as cancelOrderIdem / createInvoiceIdem —
+  // this is the other half of the Create Invoice click path.
+  const splitInvoiceIdem = useIdempotencyKey('create_split_invoices_from_order', profile?.id || '', id ?? '');
   // Latest order id the route is showing — older in-flight fetches bail (M6 stale guard).
   const activeOrderIdRef = useRef<string | undefined>(undefined);
   // Per-target idempotency keys for "post all drafts" (M7) — keyed by standalone
@@ -593,7 +608,6 @@ export default function OrderDetail() {
             p_idempotency_key: cancelKey,
           });
           if (error) throw error;
-          cancelOrderIdem.resetKey();
           const result = assertRpcResult<{
             success: boolean;
             mode?: 'full_cancel' | 'remainder_closed';
@@ -606,6 +620,7 @@ export default function OrderDetail() {
             posted_invoices_flagged: number;
             paid_commissions_flagged: number;
           }>(cancelResult, 'cancel_order');
+          cancelOrderIdem.resetKey();
           // Show summary toast with cascade details
           if (result && result.success) {
             const remainderClosed = result.mode === 'remainder_closed';
@@ -695,6 +710,27 @@ export default function OrderDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      // F1 DELIBERATELY NOT FIXED HERE — left in main's (defective) order.
+      //
+      // Moving this reset after the assert would make the client RETAIN the key, and a
+      // retained key here is exposed to TWO distinct hazards. Keep them separate — the
+      // first has a cheap fix, the second does not (Codex round-4 LOW).
+      //
+      //   1. CROSS-RECORD. voidOrderIdem carries no record scope, this page survives
+      //      order-to-order navigation, and the void modal can stay open across that
+      //      change so the opening-click reset is bypassed — so order A's void receipt
+      //      could replay against order B (Codex round-3 HIGH). A route-id scope, the
+      //      one used for cancel/split/create-invoice above, WOULD close this.
+      //
+      //   2. SAME-ORDER, CHANGED REASON. void_order also sends the free-text
+      //      voidReason, and check_idempotency matches on key plus operation without
+      //      looking at the new payload. So even correctly scoped to one order, a retry
+      //      after editing the reason replays the first receipt and the UI reports a
+      //      reason that was never recorded. Only binding the REQUEST PAYLOAD
+      //      (fingerprintIntentPayload) closes this one.
+      //
+      // Because (2) needs payload binding anyway, this site waits for that work rather
+      // than taking the scope alone — tracked in docs/manual/KNOWN_ISSUES.md.
       voidOrderIdem.resetKey();
       const voided = assertRpcResult<{
         inventory_products_restored?: number;
@@ -888,8 +924,8 @@ export default function OrderDetail() {
             p_idempotency_key: splitKey,
           });
           if (error) throw error;
-          splitInvoiceIdem.resetKey();
           const ids = assertRpcResult<string[]>(data, 'create_split_invoices_from_order');
+          splitInvoiceIdem.resetKey();
           if (!ids || ids.length === 0) {
             throw new Error('No split invoices were generated — the order has no billable (positive) amount allocated to a customer.');
           }
@@ -903,8 +939,8 @@ export default function OrderDetail() {
           p_idempotency_key: invoiceKey,
         });
         if (error) throw error;
-        createInvoiceIdem.resetKey();
         const invoiceId = assertRpcResult<string>(data, 'create_invoice_from_order');
+        createInvoiceIdem.resetKey();
         navigate(`/invoices/${invoiceId}`);
       },
       toast,
@@ -934,8 +970,23 @@ export default function OrderDetail() {
   );
 
   const onCreateInvoiceClick = () => {
-    // Codex P2 fix: reset key per invoice-creation attempt (date/notes vary).
-    createInvoiceIdem.resetKey();
+    // F1 click-level repair: do NOT retire the key here.
+    //
+    // The previous comment claimed "date/notes vary" per attempt, but neither RPC on
+    // this path accepts a date or a note: create_invoice_from_order takes only
+    // (p_order_id, p_salesman_id, p_invoice_type, p_idempotency_key) and
+    // create_split_invoices_from_order the same shape. Every field is fixed for this
+    // screen, so two clicks are always the SAME intent — never a new one.
+    //
+    // Minting a fresh key per click therefore bought nothing and cost duplicate
+    // protection: after an ambiguous reply (server committed, response lost or the
+    // payload failed assertRpcResult) the user's natural retry travelled under a new
+    // key, so the server could not replay and issued a SECOND invoice. Holding the key
+    // lets create_invoice_from_order return the original invoice id instead.
+    //
+    // The key is retired after assertRpcResult confirms the reply (see
+    // handleCreateInvoice), which is what makes a later, genuinely new invoice a new
+    // intent.
     if (hasPendingDelivery) {
       setInvoiceWarnOpen(true);
       return;
@@ -1024,6 +1075,13 @@ export default function OrderDetail() {
   // #4 billing cockpit: merge this order's draft invoices into one (Agvance pattern).
   const handleConsolidateDrafts = async () => {
     if (!order || !profile) return;
+    // F1 (CodeRabbit round 2): on A -> B navigation the route id is already B while
+    // `order` still holds A — the id effect refetches but never clears `order`, and
+    // `loading` is never reset to true, so this button stays live in that window.
+    // Acting there would send A's id under a key scoped to B, and B's own retry would
+    // then replay A's receipt. Refusing until the loaded order IS the route order makes
+    // the key's scope and the request's p_order_id provably one value.
+    if (order.id !== id) return;
     setConsolidating(true);
     try {
       const idem = consolidateIdem.getKey();
@@ -1366,7 +1424,11 @@ export default function OrderDetail() {
                 dropdown of choices that always fail. */}
             {isAdmin && (order.status === 'confirmed' || order.status === 'partially_fulfilled') && (
               <button
-                onClick={() => { cancelOrderIdem.resetKey(); setPendingStatus('cancelled'); setStatusConfirmOpen(true); }}
+                // F1: no per-open reset. cancel_order takes only
+                // (p_order_id, p_performed_by, p_idempotency_key) — nothing varies
+                // between attempts, so reopening this dialog is the SAME intent and a
+                // fresh key would let an ambiguous first attempt cancel twice.
+                onClick={() => { setPendingStatus('cancelled'); setStatusConfirmOpen(true); }}
                 className="text-xs text-red-500 hover:text-red-700 underline"
               >
                 {order.status === 'partially_fulfilled' ? 'Cancel Remaining Quantity' : 'Cancel Order'}

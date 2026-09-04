@@ -173,9 +173,13 @@ export default function FieldApplicationInvoice() {
   // and the server dedup never double-applies.
   const billingKeysRef = useRef<Record<string, string>>({});
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
-  const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
+  // F1: scoped by the route id — these two keys' post-RPC resets moved after
+  // assertRpcResult, and this component does NOT remount when the route id changes
+  // (App.tsx renders both invoices/field-app/:id and .../new without a key) while line
+  // ~1710 navigates to a DIFFERENT field-app invoice.
+  const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '', id ?? '');
   // #27: reverse "Transfer to Scheduling" — push a job-built invoice back to its job.
-  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '');
+  const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '', id ?? '');
   // #28: Unpost — reverse a posting (posted/overdue -> unposted) right on this screen.
   // Per-invoice key cache (keyed by invoice id) for the SINGLE-invoice path.
   // FIX 4 (Wave 2a): a SPLIT GROUP routes through the atomic unpost_invoice_group under
@@ -1961,8 +1965,8 @@ export default function FieldApplicationInvoice() {
         p_idempotency_key: deleteKey,
       });
       if (error) throw error;
-      deleteIdem.resetKey();
       const deleted = assertRpcResult<number>(data, 'delete_invoices');
+      deleteIdem.resetKey();
       if (deleted < 1) {
         throw new Error('Invoice could not be deleted — it may be posted/paid or already removed.');
       }
@@ -2374,8 +2378,8 @@ export default function FieldApplicationInvoice() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      transferToSchedulingIdem.resetKey();
       const result = assertRpcResult<{ job_id: string; job_number: string }>(data, 'transfer_invoice_to_job');
+      transferToSchedulingIdem.resetKey();
       // The invoice is now cancelled and the form holds stale, deleted contents —
       // clear the unsaved-changes guard so leaving doesn't prompt, then go to the job.
       setDirty(false);
