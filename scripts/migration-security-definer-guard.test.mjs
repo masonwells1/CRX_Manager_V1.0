@@ -90,6 +90,16 @@ test('does not treat quoted SQL identifiers as executable ACL commands', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes(counterfeit), ['post_return_credit']);
 });
 
+test('keeps quoted control-character routine identities distinct during ACL tracking', () => {
+  const securityDefiner = 'CREATE FUNCTION public."GRANT"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;';
+  const invokerDecoy = 'CREATE FUNCTION public."\u0001RANT"() RETURNS void LANGUAGE sql AS $$ SELECT; $$;';
+  const decoyRevoke = 'REVOKE ALL ON FUNCTION public."\u0001RANT"() FROM PUBLIC, anon;';
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${securityDefiner}\n${invokerDecoy}\n${decoyRevoke}`),
+    ['GRANT'],
+  );
+});
+
 test('does not treat dollar signs inside identifiers as dollar quote delimiters', () => {
   const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
   const regranted = `${safe}\nSELECT 1 AS x$tag$;\nGRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon;\nSELECT 1 AS x$tag$;`;

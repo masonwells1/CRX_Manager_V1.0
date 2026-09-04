@@ -194,10 +194,11 @@ export function executableSql(sql) {
         end++;
       }
       if (end === src.length) return null;
-      // A quoted identifier is executable syntax, but its contents are not SQL
-      // keywords. Break action words without losing deterministic identity for a
-      // matching quoted routine declaration and ACL target.
-      out += src.slice(i, end + 1).replace(/\b(?:REVOKE|GRANT|CREATE|ALTER|DROP|SECURITY|DO|BEGIN)\b/gi, (word) => `\u0001${word.slice(1)}`);
+      // Keep quoted identifier bytes exact: PostgreSQL permits control
+      // characters, so replacing a keyword with a sentinel can collapse two
+      // distinct routine identities. Keyword-only scans mask quoted contents in
+      // a separate, offset-preserving view instead.
+      out += src.slice(i, end + 1);
       i = end + 1; continue;
     }
     out += ch; i++;
@@ -227,6 +228,22 @@ function statementEnd(text, start) {
     } else if (text[i] === ';') return i;
   }
   return text.length;
+}
+
+function maskQuotedIdentifierContents(text) {
+  let out = '';
+  for (let index = 0; index < text.length; index++) {
+    if (text[index] !== '"') { out += text[index]; continue; }
+    const start = index++;
+    while (index < text.length) {
+      if (text[index] === '"' && text[index + 1] === '"') { index += 2; continue; }
+      if (text[index] === '"') break;
+      index++;
+    }
+    if (index === text.length) return null;
+    out += `${text[start]}${' '.repeat(index - start - 1)}${text[index]}`;
+  }
+  return out;
 }
 
 function isExecutableRoutineBody(text) {
@@ -318,9 +335,14 @@ function canonicalType(value) {
 
 function aclEvents(sql) {
   const events = [];
-  const re = /\b(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
-  for (const match of sql.matchAll(re)) {
-    const open = match.index + match[0].length - 1;
+  const keywordSql = maskQuotedIdentifierContents(sql);
+  if (keywordSql === null) return null;
+  const actionRe = /\b(REVOKE|GRANT)\b/gi;
+  const eventRe = /^(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/i;
+  for (const action of keywordSql.matchAll(actionRe)) {
+    const match = eventRe.exec(sql.slice(action.index));
+    if (!match) return null;
+    const open = action.index + match[0].length - 1;
     const args = balanced(sql, open);
     if (!args) return null;
     const roles = /^\s+(?:FROM|TO)\s+([^;]+);/i.exec(sql.slice(args.end));
@@ -329,7 +351,7 @@ function aclEvents(sql) {
     if (!signature) return null;
     const roleNames = roles[1].split(',').map((role) => role.trim());
     if (roleNames.some((role) => role.includes('"'))) return null;
-    events.push({ index: match.index, action: match[1].toLowerCase(), signature, roles: roleNames.map((value) => {
+    events.push({ index: action.index, action: match[1].toLowerCase(), signature, roles: roleNames.map((value) => {
       if (/^public$/i.test(value)) return 'public';
       if (/^anon$/i.test(value)) return 'anon';
       return null;
@@ -338,7 +360,6 @@ function aclEvents(sql) {
   // Schema-wide grants, default privileges, and unfamiliar GRANT/REVOKE forms
   // can restore effective execution without appearing in a function-specific
   // event. The producer has no live ACL graph, so reject them rather than guess.
-  if ((sql.match(/\b(?:GRANT|REVOKE)\b/gi) || []).length !== events.length) return null;
   return events;
 }
 
