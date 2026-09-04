@@ -1,3 +1,5 @@
+-- NOT APPLIED — DO NOT APPLY without Mason's explicit in-chat approval.
+-- LOCAL CANDIDATE for the commission history replay guard.
 -- Harden the already-applied commission history snapshot RPC against shadow
 -- overloads and replay drift. This migration deliberately refuses unknown
 -- function, owner, security, search-path, body, comment, or ACL state rather
