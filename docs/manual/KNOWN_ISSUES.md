@@ -382,6 +382,48 @@ only the **two** invoice-creating bodies it re-emits. These are the same class a
 acting. Deliberately not folded into `20260904180000`: that file has a hard 2026-09-30 deadline and
 each additional md5-pinned body widens its blast radius.
 
+## OPEN 2026-09-04 — the field-app split PREVIEW prices from the UTC clock while SAVE prices from the invoice date
+
+Raised by the Codex GitHub App (P1) on PR #599 and **verified against the live catalog on
+2026-09-04**, after `20260904180000_invoice_season_follows_invoice_date` was applied:
+
+| body | season-helper refs | America/Chicago refs |
+|---|---|---|
+| `_save_field_app_invoice_impl_20260714` | 0 | 4 |
+| `_save_invoice_lineage_unaware_impl_20260827` | 0 | 4 |
+| `preview_field_app_invoice_split` | **1** | **0** |
+
+`20260904180000` moved the two SAVE bodies onto the invoice's own season. It did not touch
+`preview_field_app_invoice_split`, whose application-fee lookup still filters
+`car.season = <UTC clock season>` (latest source
+`supabase/migrations/20260630180000_field_app_pricing_unit_fix.sql:862`; live body md5
+`ca33fb973d86dbf3a2788dc11fbc49a5`). So the "Customers" breakdown Mason approves can display one
+application-fee rate while the save charges another.
+
+**This divergence is NEW — it is the cost of the save-side fix.** Before 2026-09-04 both sides read
+the same UTC clock, so they agreed (and were both wrong together). Now the save side is right and
+the preview is the one that can be wrong.
+
+**Severity is display-only, not a wrong charge.** `previewData` in
+`src/pages/FieldApplicationInvoice.tsx` is only passed to the breakdown component as a `preview`
+prop — it never feeds the save payload, and save recomputes the fee independently. The customer is
+billed the correct season's rate; the on-screen number Mason approves beforehand can differ.
+
+**Two windows, and the second is the big one:**
+- ~5 hours a year: 7 pm–midnight Chicago on 2026-09-30, when the clock season has rolled and the
+  invoice date has not.
+- **All year:** editing any invoice whose season differs from the current clock season — e.g.
+  re-opening a September 2026 invoice in November 2026 previews 2027 rates against a 2026 save.
+
+**Cannot be fixed in the frontend.** The live function takes 4 arguments
+(`p_locations`, `p_chemicals`, `p_application_service_id`, `p_invoice_id`) and has no date or season
+parameter, so the caller has nothing to pass. The fix needs a new migration that either accepts an
+invoice date or derives the season from `p_invoice_id`, plus a matching caller change.
+
+Deliberately NOT folded into PR #599: that PR's migration is already applied live, so holding it
+does not un-ship this divergence, and its frontend fix is what closes the 2026-09-30 window.
+**Recommended before 2026-09-30**, tracked as a follow-up.
+
 ## OPEN 2026-09-04, DEADLINE 2026-12-31 — `next_invoice_number` takes its YEAR from the UTC clock
 
 Split out of the invoice-date/season entry above on 2026-09-04 so it is not closed along with it —

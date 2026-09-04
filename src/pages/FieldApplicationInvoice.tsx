@@ -19,7 +19,7 @@ import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
 import { formatCents as fmt } from '../lib/money';
-import { localToday } from '../lib/dateUtils';
+import { todayInBusinessTz } from '../lib/dateUtils';
 import { billableAcres, acreDivergence, appliedMatchesSystem } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
@@ -211,14 +211,17 @@ export default function FieldApplicationInvoice() {
   const [transferringToScheduling, setTransferringToScheduling] = useState(false);
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  // localToday(), NOT new Date().toISOString() — toISOString() converts to UTC, so from ~7 pm
-  // Chicago this pre-filled TOMORROW. That is the same UTC/Chicago bug the server-side
-  // invoice_date fallbacks fixed on 2026-09-04, and because this page ALWAYS sends
-  // invoice_date, the server fallback never engages here — the wrong day could only be fixed
-  // on the client. On 2026-09-30 after 7 pm it pre-filled 2026-10-01, which then correctly
-  // (but wrongly for the business) files the invoice in season 2027. InvoiceDetail.tsx already
-  // used localToday(); this page did not.
-  const [transactionDate, setTransactionDate] = useState(localToday());
+  // todayInBusinessTz(), NOT new Date().toISOString() and NOT localToday().
+  // toISOString() converts to UTC, so from ~7 pm Chicago this pre-filled TOMORROW — the same
+  // UTC/Chicago bug the server-side invoice_date fallbacks fixed on 2026-09-04. Because this
+  // page ALWAYS sends invoice_date, the server fallback never engages here, so the wrong day
+  // could only be fixed on the client. On 2026-09-30 after 7 pm it pre-filled 2026-10-01,
+  // filing the invoice in season 2027.
+  // localToday() fixes that only for a browser whose own clock is Chicago. An invoice date is a
+  // company-wide accounting fact, so it must follow Crop RX's business timezone regardless of
+  // where the user is sitting — otherwise a salesman on Pacific time creates 2026-09-30
+  // invoices while Chicago is already on 2026-10-01, landing them in the wrong season.
+  const [transactionDate, setTransactionDate] = useState(todayInBusinessTz());
   const [notes, setNotes] = useState(''); // header_notes (printed)
   // #33: ChemMan billing details. Header/footer notes + PO + due date already
   // existed on invoices; payment_terms / internal_notes / discount are new (migration
@@ -2030,7 +2033,7 @@ export default function FieldApplicationInvoice() {
           // A cleared transaction-date input falls back to today — the server stamps
           // invoice_date with the America/Chicago business date on save (migration
           // 20260904160000, applied 2026-09-04), so the print still matches.
-          const base = transactionDate || localToday();
+          const base = transactionDate || todayInBusinessTz();
           const d = new Date(base + 'T00:00:00Z');
           d.setUTCDate(d.getUTCDate() + days);
           return d.toISOString().slice(0, 10);

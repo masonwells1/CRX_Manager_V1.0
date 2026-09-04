@@ -103,6 +103,11 @@ vi.mock('../lib/emailService', () => ({
 }));
 vi.mock('../lib/dateUtils', () => ({
   localToday: vi.fn(() => '2026-03-16'),
+  // The new-invoice date default is the Chicago BUSINESS date, not the browser's (2026-09-04).
+  // Pinned to the same day as localToday so the existing date assertions here are unaffected;
+  // the timezone behaviour itself is covered by dateUtils.test.ts and by the boundary proof in
+  // scripts/smoke/prove-invoice-season-follows-invoice-date.mjs, not by this mock.
+  todayInBusinessTz: vi.fn(() => '2026-03-16'),
   parseLocalDate: vi.fn((d: string) => new Date(d)),
 }));
 // parseCents is deliberately NOT mocked: the real parser refuses more than two

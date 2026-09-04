@@ -26,7 +26,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
-import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { todayInBusinessTz, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
 import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
@@ -129,7 +129,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const [invoice, setInvoice] = useState<Partial<Invoice>>({
     invoice_type: isMiscChargeLocked ? 'misc_charge' : 'chemical_sale',
     status: 'draft',
-    invoice_date: localToday(),
+    // An invoice date is a company-wide accounting fact, so it follows Crop RX's business
+    // timezone, not the browser's. localToday() would let a user outside Chicago open a new
+    // invoice dated 2026-09-30 while Chicago is already on 2026-10-01, filing it in season 2026
+    // when the business day says 2027 (the server derives season from invoice_date since
+    // migration 20260904180000).
+    invoice_date: todayInBusinessTz(),
     customer_id: '',
     salesman_id: profile?.id || '',
     header_notes: '',
@@ -1237,7 +1242,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
     return {
       invoice_number: invoice.invoice_number || 'DRAFT',
-      invoice_date: invoice.invoice_date || localToday(),
+      invoice_date: invoice.invoice_date || todayInBusinessTz(),
       due_date: invoice.due_date || undefined,
       invoice_type: invoice.invoice_type || 'chemical_sale',
       status: invoice.status || 'draft',
