@@ -162,6 +162,7 @@ export default function Reports() {
   const [commBalanceData, setCommBalanceData] = useState<CommissionBalanceRow[]>([]);
   const [commPaymentDetailData, setCommPaymentDetailData] = useState<CommissionPaymentDetailRow[]>([]);
   const [commissionAsOfDate, setCommissionAsOfDate] = useState('');
+  const [commissionReportError, setCommissionReportError] = useState(false);
   const commissionRequestId = useRef(0);
 
   // ─── OPERATIONAL data ───────────────────────────────────────
@@ -332,21 +333,29 @@ export default function Reports() {
     const businessToday = todayInBusinessTz();
     const asOf = endDate && endDate < businessToday ? endDate : businessToday;
     const requestId = ++commissionRequestId.current;
-    setCommBalanceData([]);
-    setCommPaymentDetailData([]);
-    setCommissionAsOfDate(asOf);
+    setCommissionReportError(false);
     const { data: balanceData, error: balanceError } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
     if (requestId !== commissionRequestId.current) return;
-    if (balanceError) { toast('error', `Commission balance failed: ${balanceError.message}`); return; }
+    if (balanceError) {
+      setCommissionReportError(true);
+      toast('error', `Commission balance failed: ${balanceError.message}`);
+      return;
+    }
     const balanceRows = assertRpcResult<CommissionBalanceRow[]>(balanceData, 'get_commission_balance_report');
 
     const { data: detailData, error: detailError } = await supabase.rpc('get_commission_payment_detail_report', { p_as_of_date: asOf });
     if (requestId !== commissionRequestId.current) return;
-    if (detailError) { toast('error', `Commission payment detail failed: ${detailError.message}`); return; }
+    if (detailError) {
+      setCommissionReportError(true);
+      toast('error', `Commission payment detail failed: ${detailError.message}`);
+      return;
+    }
     const detailRows = assertRpcResult<CommissionPaymentDetailRow[]>(detailData, 'get_commission_payment_detail_report');
 
     setCommBalanceData(balanceRows);
     setCommPaymentDetailData(detailRows);
+    setCommissionAsOfDate(asOf);
+    setCommissionReportError(false);
   }, [endDate, toast]);
 
   // ─── FINANCIAL parent fetcher ─────────────────────────────────
@@ -1211,6 +1220,12 @@ export default function Reports() {
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
               Balance and payout detail shown through {parseLocalDate(commissionAsOfDate).toLocaleDateString()}.
               {endDate > commissionAsOfDate && ' The selected range ends in the future, so this report is capped at today.'}
+            </div>
+          )}
+
+          {financialTab === 'commission_balance' && commissionReportError && (
+            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+              The selected commission report could not be loaded. Any results below are from the last successful run; empty tables are not a confirmed zero.
             </div>
           )}
 

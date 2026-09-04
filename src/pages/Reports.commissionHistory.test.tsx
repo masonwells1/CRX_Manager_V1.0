@@ -152,6 +152,30 @@ describe('Reports commission history', () => {
     });
   });
 
+  it('keeps the last successful report and labels a failed refresh as unconfirmed', async () => {
+    renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+    await screen.findByText('CP-2026-0042');
+    const successfulBanner = screen.getByText(/Balance and payout detail shown through/).textContent;
+
+    H.rpcHandler = (name) => Promise.resolve({
+      data: null,
+      error: name === 'get_commission_balance_report' ? { message: 'network unavailable' } : null,
+    });
+
+    const endDateInput = document.querySelectorAll<HTMLInputElement>('input[type="date"]')[1];
+    expect(endDateInput).toBeDefined();
+    fireEvent.change(endDateInput, { target: { value: '2026-08-20' } });
+
+    await screen.findByRole('alert');
+    expect(screen.getByRole('alert')).toHaveTextContent('empty tables are not a confirmed zero');
+    expect(screen.getByText(/Balance and payout detail shown through/)).toHaveTextContent(successfulBanner || '');
+    expect(screen.getByText('CP-2026-0042')).toBeInTheDocument();
+    expect(screen.getAllByText('Alex Farmer').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Balance and payout detail shown through 8\/20\/2026/)).not.toBeInTheDocument();
+  });
+
   it('ignores an older response that finishes after a newer cutoff', async () => {
     renderReports();
     fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
