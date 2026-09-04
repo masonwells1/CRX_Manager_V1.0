@@ -44,7 +44,7 @@ import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { centsTimesQuantity, isExactDecimalText, quantitySurvivesSave } from '../lib/money';
-import { applyChemEdit, chemLineBillingHazard, chemQuantityDisagreesWithRate, chemQuantityExpectedButZero, chemUnitUnspecifiedSides, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
+import { applyChemEdit, chemLineBillingHazard, chemQuantityDisagreesWithRate, chemQuantityExpectedButZero, chemUnitUnspecifiedSides, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, sumAcresExact, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, normalizeRateUnit, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
@@ -1453,6 +1453,7 @@ export default function JobDetail() {
     const byIndex = new Map<number, string>();
     // The acreage the server checks against: the sum over the fields being saved.
     const acres = sumAcres(fieldRows);
+    const exactAcres = sumAcresExact(fieldRows);
     chemRows.forEach((c, i) => {
       if (!c.product_id) return;
       if (rateDenominatorIsUnrecognized(c.rate_unit)) {
@@ -1516,9 +1517,11 @@ export default function JobDetail() {
       // acreage changes (never guessed — see recomputeChemRowForAcres), so its rate and total
       // stop agreeing and save_job would refuse the WHOLE save with no warning. Naming the
       // row here turns that into a per-line instruction: re-typing either field re-derives
-      // the other and records which one was typed. The different-units path is covered by
-      // chemLineBillingHazard below with the same tolerance through the converter.
-      const expectedQty = chemQuantityDisagreesWithRate(c, acres);
+      // the other and records which one was typed. chemLineBillingHazard owns the different-
+      // units path; its converted-unit Number arithmetic is tracked as a separate known issue.
+      const expectedQty = exactAcres == null
+        ? null
+        : chemQuantityDisagreesWithRate(c, exactAcres);
       if (expectedQty != null) {
         byIndex.set(i, `its rate (${c.rate_per_acre}/ac over ${fmt4(acres)} acres = ${fmt4(expectedQty)}) and its quantity (${c.quantity}) no longer agree — usually because the acres changed after the line was saved. Re-type the rate per acre to refill the quantity, or re-type the quantity to refill the rate`);
         return;
@@ -1916,7 +1919,7 @@ export default function JobDetail() {
     () => new Map(allFields.map((field) => [field.id, billableAcres(field.override_acres, field.measured_acres, field.total_acres)])),
     [allFields],
   );
-  const totalAcres = fieldRows.reduce((sum, f) => sum + (parseFloat(f.acres_to_treat) || 0), 0);
+  const totalAcres = sumAcres(fieldRows);
   // #53/#54: a customer-supplied product is applied but not billed and cost us
   // nothing — it contributes 0 to both job totals (mirrors the server's $0 line).
   // EXACT MONEY. These two totals are SAVED (jobs.total_cost_cents / total_price_cents at
@@ -2355,6 +2358,21 @@ export default function JobDetail() {
   };
 
   const performSave = async (licenseOverride: boolean, overrideReasonForAudit?: string) => {
+    // This belongs inside performSave, before any state change or payload/RPC work: the
+    // expired-license override calls this function directly and must not bypass the same
+    // finite, non-negative acreage boundary. Intentional blanks retain the established
+    // payload meaning 0.
+    const hasInvalidFieldAcres = fieldRows.some((field) => {
+      const rawAcres = field.acres_to_treat.trim();
+      if (rawAcres === '') return false;
+      const parsedAcres = parseFloat(rawAcres);
+      return !Number.isFinite(parsedAcres) || parsedAcres < 0;
+    });
+    if (hasInvalidFieldAcres) {
+      toast('error', 'Field acreage must be a finite, non-negative number. Correct the acreage and save again.');
+      return;
+    }
+
     setSaving(true);
     try {
       const payload = {
