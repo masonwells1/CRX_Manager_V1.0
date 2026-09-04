@@ -62,7 +62,10 @@ RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN; END; $$;`;
   );
   for (const bypass of [
     `-- REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;`,
-    `REVOKE ALL ON FUNCTION public.post_return_credit(text) FROM PUBLIC, anon;`,
     `REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO PUBLIC;`,
   ]) assert.deepEqual(securityDefinerMissingAnonRevokes(`${sql}\n${bypass}`), ['post_return_credit']);
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${sql}\nREVOKE ALL ON FUNCTION public.post_return_credit(text) FROM PUBLIC, anon;`),
+    ['unparseable-security-definer-sql'],
+  );
 });

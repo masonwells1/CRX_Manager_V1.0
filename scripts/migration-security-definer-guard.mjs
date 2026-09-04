@@ -31,7 +31,6 @@ function executableSql(sql) {
       out = blank(out, end - i); i = end; continue;
     }
     if (ch === "'" || escape) {
-      if (/\bDO\b[^;]*$/i.test(out)) return null;
       let end = i + (escape ? 2 : 1);
       while (end < src.length) {
         if (escape && src[end] === '\\') { end += 2; continue; }
@@ -40,6 +39,10 @@ function executableSql(sql) {
         end++;
       }
       if (end > src.length || src[end - 1] !== "'") return null;
+      if (isExecutableRoutineBody(out)) {
+        const body = executableSql(src.slice(i + (escape ? 2 : 1), end - 1));
+        if (body === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(body)) return null;
+      }
       out = blank(out, end - i); i = end; continue;
     }
     if (ch === '$') {
@@ -48,14 +51,14 @@ function executableSql(sql) {
         const close = src.indexOf(tag[0], i + tag[0].length);
         if (close === -1) return null;
         const end = close + tag[0].length;
-        // Dynamic SQL in a DO block can alter ACLs without leaving an
-        // analyzable GRANT/REVOKE statement. Lex its body recursively so an
-        // EXECUTE or direct ACL statements inside a quoted diagnostic string
-        // are inert, while real PL/pgSQL dynamic SQL or ACL changes fail this
-        // static proof closed.
-        if (/\bDO\b[^;]*$/i.test(out)) {
-          const doBody = executableSql(src.slice(i + tag[0].length, close));
-          if (doBody === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(doBody)) return null;
+        // A transient helper routine can make the same dynamic ACL change as a
+        // DO block, then disappear before the migration ends. Lex every
+        // executable DO/function/procedure body recursively so only real
+        // dynamic SQL or ACL commands fail this static proof closed; quoted
+        // diagnostic text inside the body remains inert.
+        if (isExecutableRoutineBody(out)) {
+          const body = executableSql(src.slice(i + tag[0].length, close));
+          if (body === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(body)) return null;
         }
         out = blank(out, end - i); i = end; continue;
       }
@@ -103,6 +106,19 @@ function statementEnd(text, start) {
   return text.length;
 }
 
+function isExecutableRoutineBody(text) {
+  let start = 0;
+  while (start < text.length) {
+    const end = statementEnd(text, start);
+    if (end === null) return false;
+    if (end === text.length) break;
+    start = end + 1;
+  }
+  const statement = text.slice(start);
+  return /\bDO\b/i.test(statement)
+    || /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(statement);
+}
+
 function splitArgs(args) {
   const parts = []; let start = 0, depth = 0;
   for (let i = 0; i <= args.length; i++) {
@@ -118,10 +134,36 @@ function canonicalSignature(name, args, declaration = false, quoted = false) {
   const types = splitArgs(args).map((arg) => {
     let value = arg.replace(/\bDEFAULT\b[\s\S]*$/i, '').replace(/\s*=\s*[\s\S]*$/, '').trim();
     if (declaration) value = value.replace(/^(?:IN|OUT|INOUT|VARIADIC)\s+/i, '').replace(/^(?:p_[A-Za-z0-9_]*|arg_[A-Za-z0-9_]*)\s+/i, '');
-    return value.replace(/\s+/g, ' ').replaceAll('"', '').toLowerCase();
+    return canonicalType(value);
   });
   const canonicalName = quoted ? `quoted:${name.replaceAll('""', '"')}` : `bare:${name.toLowerCase()}`;
   return `${canonicalName}(${types.join(',')})`;
+}
+
+function canonicalType(value) {
+  const normalized = value.replace(/\s+/g, ' ').replaceAll('"', '').trim().toLowerCase();
+  const array = /^(.*?)(?:\s*(\[\s*\]))+$/.exec(normalized);
+  const base = (array ? array[1] : normalized).trim();
+  // PostgreSQL treats these spellings as identical routine argument types.
+  // Retaining their source spelling would let an ACL target a SECURITY
+  // DEFINER overload without updating its tracked state.
+  const aliases = new Map([
+    ['smallint', 'int2'], ['int2', 'int2'],
+    ['integer', 'int4'], ['int', 'int4'], ['int4', 'int4'],
+    ['bigint', 'int8'], ['int8', 'int8'],
+    ['decimal', 'numeric'], ['numeric', 'numeric'],
+    ['real', 'float4'], ['float4', 'float4'],
+    ['double precision', 'float8'], ['float8', 'float8'], ['float', 'float8'],
+    ['boolean', 'bool'], ['bool', 'bool'],
+    ['character varying', 'varchar'], ['varchar', 'varchar'],
+    ['character', 'bpchar'], ['char', 'bpchar'], ['bpchar', 'bpchar'],
+    ['timestamp without time zone', 'timestamp'], ['timestamp', 'timestamp'],
+    ['timestamp with time zone', 'timestamptz'], ['timestamptz', 'timestamptz'],
+    ['time without time zone', 'time'], ['time', 'time'],
+    ['time with time zone', 'timetz'], ['timetz', 'timetz'],
+    ['bit varying', 'varbit'], ['varbit', 'varbit'],
+  ]);
+  return `${aliases.get(base) || base}${array ? '[]'.repeat((normalized.match(/\[\s*\]/g) || []).length) : ''}`;
 }
 
 function aclEvents(sql) {
@@ -255,7 +297,18 @@ export function securityDefinerMissingAnonRevokes(sql) {
     }
     else {
       const routine = state.get(event.signature);
-      if (!routine) continue;
+      // A grant/revoke to PUBLIC or anon that does not resolve to tracked
+      // state is not harmless: PostgreSQL type aliases and unsupported
+      // identity syntax can still select a declared SECURITY DEFINER routine
+      // of the same name. The proof producer has no catalog to disambiguate
+      // that overload, so never ignore the ACL event. A different routine name
+      // remains unrelated to this migration's declared SECURITY DEFINER state.
+      if (!routine) {
+        const eventName = event.signature.slice(0, event.signature.indexOf('('));
+        const hasSameNamedRoutine = [...state.keys()].some((signature) => signature.slice(0, signature.indexOf('(')) === eventName);
+        if (hasSameNamedRoutine && event.roles.some((role) => role === 'public' || role === 'anon')) return ['unparseable-security-definer-sql'];
+        continue;
+      }
       for (const role of event.roles) if (role === 'public' || role === 'anon') routine.roles.set(role, event.aclAction === 'revoke');
     }
   }

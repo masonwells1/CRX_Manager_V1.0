@@ -37,11 +37,13 @@ could judge different inputs.
   every reviewer.
 - After the last review the bundle is rebuilt and compared; a mismatch mints nothing and says
   which sources moved.
-- `evidenceHash` is a deterministic fingerprint of every review input: both reviewer
-  charters, the schema registry, migration history, applied-migration ledger, all migration
-  declarations/callers, production TypeScript RPC callers, and the proof-wrapper source.
-  It is recorded in both proof files and recomputed by the apply guard before it accepts either
-  proof, so an input change invalidates the verdict instead of silently reusing it.
+- `evidenceHash` is a deterministic fingerprint of the repository evidence and proof-producer
+  inputs: the schema registry, migration history, applied-migration ledger, all migration
+  declarations/callers, production TypeScript RPC callers, and the relevant proof-wrapper source.
+  The protected reviewer charters are pinned separately by `reviewerPolicyCommit`; wrapper source
+  is integrity-bound but is not itself reviewer-packet text. The hash is recorded in both proof
+  files and recomputed by the apply guard before it accepts either proof, so an input change
+  invalidates the verdict instead of silently reusing it.
 
 ### Note
 

@@ -20,7 +20,8 @@ test('does not accept a commented, quoted, wrong-overload, or later-regranted re
   const quoted = definition("SELECT 'REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;';");
   const wrongOverload = definition('REVOKE ALL ON FUNCTION public.post_return_credit(text) FROM PUBLIC, anon;');
   const regranted = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO PUBLIC;');
-  for (const sql of [commented, quoted, wrongOverload, regranted]) assert.deepEqual(securityDefinerMissingAnonRevokes(sql), ['post_return_credit']);
+  for (const sql of [commented, quoted, regranted]) assert.deepEqual(securityDefinerMissingAnonRevokes(sql), ['post_return_credit']);
+  assert.deepEqual(securityDefinerMissingAnonRevokes(wrongOverload), ['unparseable-security-definer-sql']);
 });
 
 test('fails closed for quoted names and unsupported ACL forms that can restore execution', () => {
@@ -82,6 +83,31 @@ test('fails closed for quoted grant recipients and dynamic DO-block ACL changes'
   assert.deepEqual(securityDefinerMissingAnonRevokes(directGrantAll), ['unparseable-security-definer-sql']);
   const directGrantAllPrivileges = `${safe}\nDO $$ BEGIN GRANT ALL PRIVILEGES ON FUNCTION public.post_return_credit(uuid) TO anon; END; $$;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(directGrantAllPrivileges), ['unparseable-security-definer-sql']);
+});
+
+test('normalizes PostgreSQL routine type aliases and rejects unmatched public ACL events', () => {
+  const integerDefinition = `CREATE FUNCTION public.alias_target(p_id int) RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;`;
+  const revoked = `${integerDefinition}\nREVOKE ALL ON FUNCTION public.alias_target(integer) FROM PUBLIC, anon;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(revoked), []);
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${revoked}\nGRANT EXECUTE ON FUNCTION public.alias_target(int4) TO anon;`),
+    ['alias_target'],
+  );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${integerDefinition}\nREVOKE ALL ON FUNCTION public.alias_target(text) FROM PUBLIC, anon;`),
+    ['unparseable-security-definer-sql'],
+  );
+});
+
+test('fails closed for dynamic ACLs inside transient helper routines', () => {
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  const helper = `${safe}
+CREATE FUNCTION public.restore_acl() RETURNS void LANGUAGE plpgsql AS $$
+BEGIN EXECUTE 'GRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon'; END;
+$$;
+SELECT public.restore_acl();
+DROP FUNCTION public.restore_acl();`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(helper), ['unparseable-security-definer-sql']);
 });
 
 test('fails closed for quoted schema and argument-type identities', () => {
