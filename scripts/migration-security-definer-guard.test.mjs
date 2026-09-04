@@ -182,6 +182,7 @@ test('fails closed for set_config string-mode changes', () => {
 
 test('rejects executable string-mode changes after comment normalization', () => {
   assert.equal(executableSql('SET/**/standard_conforming_strings=off; SELECT 1;'), null);
+  assert.equal(executableSql('SET "standard_conforming_strings" = off; SELECT 1;'), null);
   assert.equal(executableSql("SELECT set_config('standard_conforming_strings', 'off', false);"), null);
 });
 

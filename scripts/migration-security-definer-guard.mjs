@@ -55,6 +55,18 @@ function readSingleQuotedLiteral(text, start) {
   return null;
 }
 
+function isStandardConformingStringsParameter(text, start) {
+  if (startsKeyword(text, start, 'standard_conforming_strings')) return true;
+  if (text[start] !== '"') return false;
+  let value = '';
+  for (let index = start + 1; index < text.length; index++) {
+    if (text[index] === '"' && text[index + 1] === '"') { value += '"'; index++; continue; }
+    if (text[index] === '"') return value.toLowerCase() === 'standard_conforming_strings';
+    value += text[index];
+  }
+  return true;
+}
+
 function unsafeStandardConformingStringsChange(text, start) {
   if (startsKeyword(text, start, 'set')) {
     let index = skipWhitespaceAndComments(text, start + 3);
@@ -63,7 +75,7 @@ function unsafeStandardConformingStringsChange(text, start) {
       index = skipWhitespaceAndComments(text, index + (startsKeyword(text, index, 'local') ? 5 : 7));
       if (index === null) return true;
     }
-    return startsKeyword(text, index, 'standard_conforming_strings');
+    return isStandardConformingStringsParameter(text, index);
   }
   if (!startsKeyword(text, start, 'set_config')) return false;
   let index = skipWhitespaceAndComments(text, start + 'set_config'.length);
