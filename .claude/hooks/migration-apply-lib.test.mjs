@@ -1169,6 +1169,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       // and not about the content being rejected for some other reason.
       rmSync(linkPath);
       writeFileSync(linkPath, SQL, "utf8");
+      restoreFixtureLedgerAndEvidence(root);
       allows(evaluate(root), "the same bytes as a real file in the permitted directory are allowed");
     } else {
       console.log("  SKIP symlink-escape case — this platform/account cannot create symlinks");
