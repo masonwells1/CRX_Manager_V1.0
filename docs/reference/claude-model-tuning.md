@@ -24,7 +24,7 @@ Read this only when choosing a Claude model or reasoning effort, delegating work
 
 ## Model and Effort Routing
 
-This mapping is a starting point, not a reason to lower rigor on risky work.
+This mapping is a starting point, not a reason to lower rigor on risky work. Never lower effort on a money, RLS, or migration path to save tokens.
 
 | Work | Starting effort |
 |---|---|

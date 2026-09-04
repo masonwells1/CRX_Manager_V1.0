@@ -40,6 +40,7 @@ Direct reviews are read-only and PR comments default to dry-run. Production auth
 After changing Claude commands, skills, hooks, permissions, agents, or helpers:
 
 ```bash
+git status --short --branch
 node scripts/sync-agent-workflows.mjs --write
 npm run test:agent-workflows
 npm run agent-health

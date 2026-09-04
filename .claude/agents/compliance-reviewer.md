@@ -85,7 +85,7 @@ For each violation capture: file, line number, severity, and a one-line fix. **C
 ### CHECK 9 — Idempotency on critical writes  — MED
 - A new critical mutation path (money, status transition, create-entity) in the frontend that does not thread a `useIdempotencyKey()` key into the RPC.
 
-### CHECK 10 — Business-logic lifecycle red lines  — BLOCKER/HIGH
+### CHECK 10 — Business-logic lifecycle rules — BLOCKER/HIGH
 Flag code that would violate a documented lifecycle:
 - Delivery items edited when status is not `'scheduled'` (locked once `in_progress`+).
 - A delivery completed without going `scheduled → in_progress → completed`, or `complete_delivery` called without `p_signed_by`.

@@ -34,7 +34,7 @@ This matters especially for Mason: he cannot read code or reliably judge a diff.
 | Deterministic | Rules that must execute or block regardless of model judgment | `.claude/hooks/`, `.codex/hooks.json`, CI and guidance checks |
 | Historical | Why a decision was made and what changed | `docs/manual/DECISION_LOG.md`, `docs/changelog.d/` |
 
-The machine-wide Codex contract was reduced from 9,488 to 6,509 bytes and now contains only owner behavior, cross-project authority, baseline merge conditions, delegation limits, hard gates, and proof standards. CRX details route to this repository, and pre/post snapshots were preserved in the existing same-day Codex backup folder. Claude’s 66-line global file retained its behavior; one stale pointer was updated to the new on-demand model-tuning reference.
+The machine-wide Codex contract was reduced from 9,488 to 6,509 bytes and now contains only owner behavior, cross-project authority, baseline merge conditions, delegation limits, hard gates, and proof standards. CRX details route to this repository. The exact recoverable snapshots are `~/.codex/backups/20260904-codex-behavior/AGENTS.md` (before, SHA-256 `B8715E9934B4161838C6153448C8AD0730D5E31EBA104C762A7D37E721A6777C`) and `~/.codex/backups/20260904-codex-behavior/AGENTS.after-lean-20260904.md` (after, SHA-256 `870CAAD0F309757A6D5205A0F91C7C0B91D57604BF7427A5670428B8703EC94D`). Claude’s 66-line global file retained its behavior; one stale pointer was updated to the new on-demand model-tuning reference.
 
 ## Writing Rules
 
@@ -50,6 +50,8 @@ The machine-wide Codex contract was reduced from 9,488 to 6,509 bytes and now co
 Claude supports `.claude/rules/`, including rules scoped to file paths. Codex does not use that directory as its native shared instruction source. CRX therefore keeps cross-agent policy in `AGENTS.md` and shared workflow documents. Claude-only model behavior stays in `CLAUDE.md` or a Claude reference file; generated `.agents/` adapters expose canonical workflows to Codex.
 
 ## External Sources
+
+All four links below were reopened successfully on 2026-09-04 before this review closed.
 
 - OpenAI documents hierarchical `AGENTS.md` discovery, a default combined size ceiling, and concise repository-level instructions: `https://learn.chatgpt.com/docs/agent-configuration/agents-md`.
 - OpenAI recommends auditing instruction files for conflict, stating autonomy clearly, and calibrating verification to risk: `https://developers.openai.com/api/docs/guides/latest-model`.

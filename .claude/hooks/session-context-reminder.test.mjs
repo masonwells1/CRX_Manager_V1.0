@@ -24,9 +24,10 @@ const startup = run("startup");
 assert.match(startup, /read AGENTS\.md/);
 assert.match(startup, /load only the workflow and reference documents/);
 assert.match(startup, /Mason cannot read code or safely review a diff/);
-assert.match(startup, /routine multi-file.*get his approval after a short plan/);
-assert.match(startup, /continue without repeated pauses/);
-assert.match(startup, /current approval immediately before each live migration/);
+assert.match(startup, /Before multi-file work.*get his approval after a short plan/);
+assert.match(startup, /continue routine implementation without repeated pauses/);
+assert.match(startup, /Every hard-gated live action listed in AGENTS\.md/);
+assert.match(startup, /each live migration.*current approval immediately beforehand/);
 assert.match(startup, /armed hands-free migration path waives per-migration approval/);
 assert.match(startup, /never for a destructive migration/);
 // Keep the full rulebook task-routed instead of injecting it into every session.

@@ -17,13 +17,21 @@ function read(relative) {
   return readFileSync(path.join(ROOT, relative), "utf8");
 }
 
+function readChecked(relative) {
+  if (!existsSync(path.join(ROOT, relative))) {
+    record(false, `${relative} - present`);
+    return "";
+  }
+  return read(relative);
+}
+
 const agents = read("AGENTS.md");
 const claude = read("CLAUDE.md");
-const cursorRules = read(".cursorrules");
-const claudeModelTuning = read("docs/reference/claude-model-tuning.md");
-const codingGuidelines = read("docs/reference/coding-guidelines.md");
-const safeDevelopmentRules = read("docs/workflows/SAFE_DEVELOPMENT_RULES.md");
-const shipWorkflow = read(".claude/commands/ship.md");
+const cursorRules = readChecked(".cursorrules");
+const claudeModelTuning = readChecked("docs/reference/claude-model-tuning.md");
+const codingGuidelines = readChecked("docs/reference/coding-guidelines.md");
+const safeDevelopmentRules = readChecked("docs/workflows/SAFE_DEVELOPMENT_RULES.md");
+const shipWorkflow = readChecked(".claude/commands/ship.md");
 const routingTable = agents.match(/## Start and Route([\s\S]*?)## Engineering Principles/)?.[1] || "";
 const routedGuidance = [...new Set(
   [...routingTable.matchAll(/`([^`]+\.(?:md|json))`/g)].map((match) => match[1]),
@@ -83,6 +91,7 @@ record(/never have to nudge[\s\S]*Keep moving through authorized work/i.test(age
 record(/what failed, what it means, and what (?:the agent is|you are) trying next/i.test(agents), "owner communication makes failures explicit");
 record(/NEEDS MASON - ACTION REQUIRED[\s\S]*NEEDS MASON - DECISION REQUIRED/i.test(agents), "owner communication makes genuine stops unmistakable");
 record(/Codex proceeds after a short plan[\s\S]*Claude retains its global pre-code approval checkpoint/i.test(agents), "tool-specific plan authority stays explicit");
+record(/Deliver what was asked at the scope intended[\s\S]*rather than quietly narrowing, widening, or transforming it/i.test(agents), "shared contract prevents silent scope changes");
 record(/Before presenting findings as current, confirm the checkout is not behind `origin\/main`/i.test(agents), "reviews and audits require a current checkout");
 record(/simplest complete implementation/i.test(agents), "AGENTS.md requires simple, complete implementations");
 record(/clarity, not cleverness/i.test(agents), "AGENTS.md favors readable code over clever compression");
@@ -106,8 +115,9 @@ record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(claude), "CLA
 record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAUDE.md declares AGENTS.md canonical");
 record(/explicit approval in the current conversation/i.test(agents), "AGENTS.md defines current-conversation approval gates");
 const alwaysLoadedGuidance = `${agents}\n${claude}\n${cursorRules}`;
-record(!/^\s*(?:[-*+]\s+)?(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/im.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
+record(!/\b(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT)\s*:/i.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
 record(/Reviewer prompts must request every correctness, safety, and scope finding/i.test(claudeModelTuning), "Claude reviewer prompts retain the uncapped-finding default");
+record(/Never lower effort on a money, RLS, or migration path to save tokens/i.test(claudeModelTuning), "Claude tuning preserves the high-risk effort floor");
 record(/Fable 5 remains provisional but binding[\s\S]*must not treat this guidance as Opus-only or skip it/i.test(claudeModelTuning), "Claude model tuning remains binding for Fable 5 until superseded");
 record(/DECISION_LOG\.md[\s\S]*settled design choice[\s\S]*KNOWN_ISSUES\.md[\s\S]*problem is new/i.test(codingGuidelines), "every code change checks settled decisions and known issues");
 record(/^Read this before any multi-file, data, money, security, permission, production, migration, or customer-facing change\./m.test(safeDevelopmentRules), "safe-development trigger matches the lean routing table");

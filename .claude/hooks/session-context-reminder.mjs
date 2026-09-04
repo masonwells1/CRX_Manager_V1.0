@@ -68,11 +68,11 @@ const SESSION_ONBOARDING =
   "shared contract) and CLAUDE.md (Claude-only routing), then load only the workflow and reference " +
   "documents that AGENTS.md routes for the current task. Briefly confirm context is loaded. " +
   "CRITICAL CONTEXT: Mason cannot read code or safely review a diff. Own routine technical choices, " +
-  "and explain outcomes and risk in plain English. For routine multi-file or data, money, security, " +
-  "or live-system work, get his approval after a short plan, then continue without repeated pauses. " +
-  "Require Mason's current approval immediately before each live migration, Edge Function deployment, " +
-  "or data deletion. Only the armed hands-free migration path waives per-migration approval, and never " +
-  "for a destructive migration. " +
+  "and explain outcomes and risk in plain English. Before multi-file work or work touching data, money, " +
+  "security, or a live system, get his approval after a short plan; then continue routine implementation " +
+  "without repeated pauses. Every hard-gated live action listed in AGENTS.md—including each live migration, " +
+  "Edge Function deployment, and data deletion—requires Mason's current approval immediately beforehand. " +
+  "Only the armed hands-free migration path waives per-migration approval, never for a destructive migration. " +
   "Clearly identify the rare action or business decision only Mason can make.";
 
 emit(source === "compact" ? COMPACT_REANCHOR : SESSION_ONBOARDING);
