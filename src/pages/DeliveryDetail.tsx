@@ -795,22 +795,30 @@ export default function DeliveryDetail() {
     if (!profile) return;
     setCreatingFollowup(true);
 
-    const idemKey = followupIdem.getKey();
-    const { data, error } = await supabase.rpc('create_followup_delivery', {
-      p_original_delivery_id: id!,
-      p_performed_by: profile.id,
-      p_idempotency_key: idemKey,
-    });
-
-    if (error) {
-      toast('error', sanitizeError(error));
-    } else {
+    // F1 (Codex round 5): retaining the key past the assert is only worth anything if the
+    // user can still SPEND it. assertRpcResult throws on an ambiguous reply — the exact case
+    // the retained key exists for — and without finally, setCreatingFollowup(false) never ran,
+    // so the button stayed disabled and the only way out was to navigate away, which unmounts
+    // this page and drops the key. The retry then travelled under a FRESH key the server
+    // cannot replay, which is the duplicate F1 is meant to prevent. try/finally makes the
+    // retained key reachable, matching handleStartDelivery below.
+    try {
+      const idemKey = followupIdem.getKey();
+      const { data, error } = await supabase.rpc('create_followup_delivery', {
+        p_original_delivery_id: id!,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
       const result = assertRpcResult<{ delivery_id: string; delivery_number: string; item_count: number }>(data, 'create_followup_delivery');
       followupIdem.resetKey();
       toast('success', `Follow-up delivery ${result.delivery_number} created with ${result.item_count} items`);
       navigate(`/deliveries/${result.delivery_id}`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    } finally {
+      setCreatingFollowup(false);
     }
-    setCreatingFollowup(false);
   };
 
   // ── Start Delivery (Confirm) ──────────────────────────────────────────
