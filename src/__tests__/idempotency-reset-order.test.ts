@@ -615,6 +615,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     ['cancelOrderIdem', 'cancel_order'],
     ['createInvoiceIdem', 'create_invoice_from_order'],
     ['splitInvoiceIdem', 'create_split_invoices_from_order'],
+    ['consolidateIdem', 'consolidate_draft_invoices'],
   ];
 
   // CLAIM LIMITED to what this actually proves (Codex round-3 MEDIUM): it checks that

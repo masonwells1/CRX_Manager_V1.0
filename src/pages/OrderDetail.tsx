@@ -77,7 +77,11 @@ export default function OrderDetail() {
   const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '', id ?? '');
   const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '', id ?? '');
   const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
-  const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
+  // F1 (CodeRabbit): consolidate_draft_invoices sends only (p_order_id, p_performed_by,
+  // p_idempotency_key), so the route id is the WHOLE of what a retry can vary. The key is
+  // retained across an ambiguous reply, and this page does not remount between orders, so
+  // without this scope order A's cached receipt could replay against order B.
+  const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '', id ?? '');
   // F1: order-scoped for the same reason as cancelOrderIdem / createInvoiceIdem —
   // this is the other half of the Create Invoice click path.
   const splitInvoiceIdem = useIdempotencyKey('create_split_invoices_from_order', profile?.id || '', id ?? '');
