@@ -29,9 +29,64 @@ export interface ChemCalcRow {
 /** Round to 4 dp and stringify (the grid stores numbers as strings). */
 export const fmt4 = (x: number): string => (Math.round(x * 10000) / 10000).toString();
 
-/** Total acres across the job's field rows. */
+function payloadAcreValues(fieldRows: { acres_to_treat: string }[]): number[] {
+  return fieldRows.map((field) => parseFloat(field.acres_to_treat) || 0);
+}
+
+function exactDecimalSum(values: number[]): ExactDecimal | null {
+  if (values.some((value) => !Number.isFinite(value))) return null;
+  const decimals = values.map((value) => exactDecimal(value));
+  if (decimals.some((value) => value == null)) return null;
+  const exactValues = decimals as ExactDecimal[];
+  const scale = Math.max(0, ...exactValues.map((value) => value.scale));
+  return {
+    coefficient: exactValues.reduce(
+      (sum, value) => sum + value.coefficient * (10n ** BigInt(scale - value.scale)),
+      0n,
+    ),
+    scale,
+  };
+}
+
+function exactDecimalText(value: ExactDecimal): string {
+  const negative = value.coefficient < 0n;
+  const digits = (negative ? -value.coefficient : value.coefficient).toString();
+  const sign = negative ? '-' : '';
+  if (value.scale === 0) return `${sign}${digits}`;
+  if (digits.length <= value.scale) {
+    return `${sign}0.${'0'.repeat(value.scale - digits.length)}${digits}`;
+  }
+  const decimalAt = digits.length - value.scale;
+  return `${sign}${digits.slice(0, decimalAt)}.${digits.slice(decimalAt)}`;
+}
+
+/**
+ * Exact total of the canonical numeric field values prepared for `p_fields`, or null when a
+ * non-finite pre-serialization value cannot participate in this SQL-parity check. JSON turns
+ * that value into null and save_job currently reads the null acreage as zero; JobDetail has
+ * no dedicated client pre-warning for the mismatch. The residual is tracked in KNOWN_ISSUES.
+ */
+export function sumAcresExact(fieldRows: { acres_to_treat: string }[]): string | null {
+  const total = exactDecimalSum(payloadAcreValues(fieldRows));
+  return total == null ? null : exactDecimalText(total);
+}
+
+/**
+ * Total acres across the job's field rows. Each row is first parsed exactly as the save
+ * payload parses it, then the canonical numeric values are added as decimals. PostgreSQL
+ * sums those separate JSON values with exact `numeric` arithmetic, so ordinary binary
+ * addition here (`0.1 + 0.2`) would give the client a different acreage than the server.
+ */
 export function sumAcres(fieldRows: { acres_to_treat: string }[]): number {
-  return fieldRows.reduce((s, f) => s + (parseFloat(f.acres_to_treat) || 0), 0);
+  const payloadValues = payloadAcreValues(fieldRows);
+  // Preserve the pre-serialization Number result for existing display/calculator behavior.
+  // JSON later turns a non-finite value into null, which save_job currently reads as zero;
+  // the missing client/server acreage guard is tracked in KNOWN_ISSUES.
+  const total = exactDecimalSum(payloadValues);
+  if (total == null) {
+    return payloadValues.reduce((sum, value) => sum + value, 0);
+  }
+  return Number(exactDecimalText(total));
 }
 
 /**
@@ -108,21 +163,102 @@ export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: n
 // ── F06: on-screen mirror of save_job's CHEM_QUANTITY_NOT_DERIVED (units-EQUAL path) ──
 
 /**
- * The server's tolerance for |quantity − rate × acres|, copied from save_job
+ * Number-valued reference form of save_job's tolerance, retained to document and test
  * (20260820120000, rounds 23-24): GREATEST(0.0001, LEAST(0.00005 × acres, 0.1)).
  * 0.0001 is the quantity's own 4-dp storage precision; 0.00005 × acres is the error a
  * 4-decimal RATE introduces when the line was driven by total; 0.1 caps the acreage term so
- * it is never sized by the acreage figure itself. No term scales with the quantity.
+ * it is never sized by the acreage figure itself. The equal-unit SQL mirror below evaluates
+ * these terms as exact decimals; the converted-unit guard carries the corresponding terms
+ * through its unit converter inline rather than calling this helper.
  */
 export function chemQuantityTolerance(acres: number): number {
   return Math.max(0.0001, Math.min(0.00005 * acres, 0.1));
 }
 
+type ExactDecimal = { coefficient: bigint; scale: number };
+
+const DECIMAL_TEXT = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/;
+const MIN_QUANTITY_TOLERANCE: ExactDecimal = { coefficient: 1n, scale: 4 }; // 0.0001
+const RATE_ROUNDING_PER_ACRE: ExactDecimal = { coefficient: 5n, scale: 5 }; // 0.00005
+const MAX_QUANTITY_TOLERANCE: ExactDecimal = { coefficient: 1n, scale: 1 }; // 0.1
+
+/**
+ * Parse decimal/scientific text into a scaled integer, without passing through a float.
+ * Exponents are intentional here: unlike money's input grammar, canonical JSON numbers can
+ * stringify in scientific notation and must continue to match PostgreSQL `numeric`.
+ */
+function exactDecimal(value: string | number): ExactDecimal | null {
+  const match = DECIMAL_TEXT.exec(String(value).trim());
+  if (!match || (match[2] === '' && (match[3] ?? '') === '')) return null;
+
+  const fraction = match[3] ?? '';
+  const exponent = Number(match[4] ?? '0');
+  if (!Number.isSafeInteger(exponent)) return null;
+
+  let coefficient = BigInt((match[2] || '0') + fraction);
+  if (match[1] === '-') coefficient = -coefficient;
+
+  const scale = fraction.length - exponent;
+  if (scale >= 0) return { coefficient, scale };
+  return { coefficient: coefficient * (10n ** BigInt(-scale)), scale: 0 };
+}
+
+function compareExactDecimal(left: ExactDecimal, right: ExactDecimal): number {
+  const scale = Math.max(left.scale, right.scale);
+  const leftScaled = left.coefficient * (10n ** BigInt(scale - left.scale));
+  const rightScaled = right.coefficient * (10n ** BigInt(scale - right.scale));
+  return leftScaled < rightScaled ? -1 : leftScaled > rightScaled ? 1 : 0;
+}
+
+function multiplyExactDecimal(left: ExactDecimal, right: ExactDecimal): ExactDecimal {
+  return {
+    coefficient: left.coefficient * right.coefficient,
+    scale: left.scale + right.scale,
+  };
+}
+
+/**
+ * Exact mirror of SQL's inclusive comparison over the canonical numeric values serialized
+ * by the save payload:
+ * abs(qty - rate * acres) <= greatest(0.0001, least(0.00005 * acres, 0.1)).
+ */
+function quantityIsWithinSqlTolerance(quantityText: string, rateText: string, acresText: string): boolean {
+  const quantity = exactDecimal(quantityText);
+  const rate = exactDecimal(rateText);
+  const acreage = exactDecimal(acresText);
+  if (quantity == null || rate == null || acreage == null) return false;
+
+  const expected = multiplyExactDecimal(rate, acreage);
+  const comparisonScale = Math.max(quantity.scale, expected.scale);
+  const quantityScaled = quantity.coefficient * (10n ** BigInt(comparisonScale - quantity.scale));
+  const expectedScaled = expected.coefficient * (10n ** BigInt(comparisonScale - expected.scale));
+  const difference: ExactDecimal = {
+    coefficient: quantityScaled >= expectedScaled
+      ? quantityScaled - expectedScaled
+      : expectedScaled - quantityScaled,
+    scale: comparisonScale,
+  };
+
+  const acreageSlack: ExactDecimal = {
+    coefficient: RATE_ROUNDING_PER_ACRE.coefficient * acreage.coefficient,
+    scale: RATE_ROUNDING_PER_ACRE.scale + acreage.scale,
+  };
+  const cappedSlack = compareExactDecimal(acreageSlack, MAX_QUANTITY_TOLERANCE) <= 0
+    ? acreageSlack
+    : MAX_QUANTITY_TOLERANCE;
+  const tolerance = compareExactDecimal(cappedSlack, MIN_QUANTITY_TOLERANCE) >= 0
+    ? cappedSlack
+    : MIN_QUANTITY_TOLERANCE;
+
+  return compareExactDecimal(difference, tolerance) <= 0;
+}
+
 /**
  * Mirror of save_job's CHEM_QUANTITY_NOT_DERIVED refusal for one line, on the path where
  * the rate's base unit and the stock unit are the SAME unit. Returns the quantity the
- * server would expect (rate × acres) when the row's quantity disagrees with it by more than
- * chemQuantityTolerance, else null.
+ * server would expect (rate × acres) when the row's quantity falls outside the exact SQL
+ * tolerance, else null. `exactAcres` is the canonical decimal sum of the separate p_fields
+ * values; it is required so a caller cannot silently collapse that sum through Number.
  *
  * WHY THIS EXISTS. A line whose driver is unknown is deliberately left as saved when the
  * acreage changes (see recomputeChemRowForAcres), so its rate and quantity stop agreeing,
@@ -133,8 +269,8 @@ export function chemQuantityTolerance(acres: number): number {
  * SCOPE, stated exactly so the mirror is never MORE lenient than the SQL where it speaks:
  *  • Null when either unit is blank or unrecognised — CHEM_UNIT_UNSPECIFIED's mirror
  *    (chemUnitUnspecifiedSides) owns that shape.
- *  • Null when the two units DIFFER — chemLineBillingHazard already applies the same
- *    tolerance through the unit converter on that path and flags a stale row there.
+ *  • Null when the two units DIFFER — chemLineBillingHazard owns that path, but its converted-
+ *    unit arithmetic still uses Number and is tracked separately as a known issue.
  *  • Null when there is no usable rate or acreage — the server has nothing to derive from
  *    and takes a different exit (CHEM_QUANTITY_UNVERIFIABLE, priced lines only).
  *  • Null for a zero quantity — that is CHEM_QUANTITY_ZERO_BUT_EXPECTED's shape, which the
@@ -144,7 +280,7 @@ export function chemQuantityTolerance(acres: number): number {
  */
 export function chemQuantityDisagreesWithRate(
   row: { quantity: string; rate_per_acre: string; rate_unit?: string | null; unit?: string | null },
-  acres: number,
+  exactAcres: string,
 ): number | null {
   const quantityUnit = normalizeRateUnit(baseUnitOfRate(row.rate_unit));
   const priceUnit = normalizeRateUnit(row.unit);
@@ -152,10 +288,13 @@ export function chemQuantityDisagreesWithRate(
   const rate = parseFloat(row.rate_per_acre);
   const qty = parseFloat(row.quantity);
   if (!(rate > 0) || !Number.isFinite(rate)) return null;
-  if (!(acres > 0) || !Number.isFinite(acres)) return null;
   if (!Number.isFinite(qty) || qty === 0) return null;
-  const expected = rate * acres;
-  return Math.abs(qty - expected) <= chemQuantityTolerance(acres) ? null : expected;
+  const acreage = exactDecimal(exactAcres);
+  if (acreage == null || acreage.coefficient <= 0n) return null;
+  const exactRate = exactDecimal(String(rate));
+  if (exactRate == null) return null;
+  const expected = Number(exactDecimalText(multiplyExactDecimal(exactRate, acreage)));
+  return quantityIsWithinSqlTolerance(String(qty), String(rate), exactAcres) ? null : expected;
 }
 
 /**

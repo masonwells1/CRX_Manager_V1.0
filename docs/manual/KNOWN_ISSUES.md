@@ -1010,6 +1010,29 @@ A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-rec
 duplicates one of #449's fixes — delete it rather than continuing it.
 
 
+## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
+
+`chemLineBillingHazard` checks chemical rows whose rate and stock units differ by converting with
+JavaScript `Number` arithmetic before comparing the quantity and tolerance. PostgreSQL `save_job`
+uses exact `numeric` arithmetic, so a value extremely close to a converted-unit boundary can still be
+classified differently in the browser. The server remains the authoritative fail-closed check; the
+remaining risk is a misleading client refusal or a save that reaches the server and is then refused.
+Keep this separate from the equal-unit exact-decimal fix, and replace the converted-unit math with an
+exact rational/decimal conversion in a focused follow-up.
+
+
+## OPEN 2026-09-04 — Non-finite job acreage serializes as null and receives no client pre-warning
+
+An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
+`null`. JobDetail has no dedicated finite-acreage save guard, while `save_job` currently
+coalesces a null `acres_to_treat` value to zero in its acreage sum and finite check. The browser
+can therefore skip its equal-unit chemical warning while the server reasons over a smaller
+acreage, leading to a late whole-save refusal or a null/zero acreage path rather than the named
+`JOB_ACRES_NOT_FINITE` refusal. Fix this in a focused client-plus-new-migration change: refuse
+non-finite field input before the RPC and make the server reject missing/null acreage before
+coalescing legitimate blanks to zero.
+
+
 ## RESOLVED 2026-09-03 (code merged in PR #582, migration applied live 15:34 UTC as ledger version `20260903153402`) — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
 **Fix (2026-09-03).** The driver is now PERSISTED, exactly as the "clean fix" below asked
