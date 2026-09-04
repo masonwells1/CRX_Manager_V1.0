@@ -3,7 +3,8 @@
 Mason asked for a CodeRabbit review and a fresh Codex review of PR #588 (money inputs refuse
 amounts with more than two decimals). CodeRabbit (2 findings) and the Codex GitHub App (2
 findings) reviewed the frozen head `010f0c686`; the exact-SHA Codex push proof on that head was
-CLEAN with one LOW. Every finding was verified against the current code and fixed in one commit.
+CLEAN with one LOW. All four CodeRabbit and Codex App findings were verified against the current
+code and fixed in one commit; the proof's one LOW is DEFERRED, not fixed (see below).
 
 **What changed.**
 
