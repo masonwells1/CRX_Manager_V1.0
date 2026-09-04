@@ -580,16 +580,32 @@ function semanticSearchPathEntries(rawValue) {
 
 function hasSchemaBeforeExplicitPgCatalog(structuralSql, statementOnly = false) {
   if (structuralSql === null || structuralSql === undefined) return false;
+  const sql = String(structuralSql);
   const boundary = statementOnly ? "(?:^|;)\\s*" : "\\b";
   const searchPath = new RegExp(
     `${boundary}SET\\s+(?:LOCAL\\s+|SESSION\\s+)?(?:"search_path"|search_path)\\s*` +
-      `(?:(FROM\\s+CURRENT)\\b|(?:=|TO)\\s*([^;]+))`,
+      `(?:(FROM\\s+CURRENT)\\b|(?:=|TO)\\s*)`,
     "gi"
   );
+  const changes = [];
   let match;
-  while ((match = searchPath.exec(structuralSql)) !== null) {
-    if (match[1]) return true;
-    const entries = semanticSearchPathEntries(match[2]);
+  while ((match = searchPath.exec(sql)) !== null) {
+    changes.push({
+      index: match.index,
+      valueStart: searchPath.lastIndex,
+      inherited: Boolean(match[1]),
+    });
+  }
+  const selected = statementOnly ? changes : changes.slice(-1);
+  for (const change of selected) {
+    if (change.inherited) return true;
+    const position = changes.indexOf(change);
+    const nextChange = changes[position + 1]?.index ?? sql.length;
+    const statementEnd = sql.indexOf(";", change.valueStart);
+    const valueEnd = statementEnd === -1
+      ? nextChange
+      : Math.min(statementEnd, nextChange);
+    const entries = semanticSearchPathEntries(sql.slice(change.valueStart, valueEnd));
     if (entries === null) return true;
     const catalogIndex = entries.indexOf("pg_catalog");
     if (catalogIndex > 0) return true;

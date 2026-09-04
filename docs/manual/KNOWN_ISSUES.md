@@ -987,6 +987,11 @@ ALTER routine identities. A later `SECURITY INVOKER` ALTER therefore cannot demo
 in the guard's model. Explicit `pg_catalog.uuid` remains comparable; broader type resolution is not
 modeled and the capped posture is unchanged.
 
+**Repeated CREATE search-path narrowing (authorized 2026-09-04).** PostgreSQL applies the final of
+multiple legal routine `SET search_path` options. PR #449 now evaluates that effective final value,
+so an earlier explicit `pg_catalog` cannot hide a later unsafe path. This is ordered attribute
+handling, not a general CREATE parser, and the capped posture is unchanged.
+
 **What it does NOT catch, stated so nobody re-derives it:**
 
 | Gap | Why it is open |

@@ -2190,6 +2190,20 @@ ${searchPathActorRoutine("combined_create_path_actor", "'evil, pg_catalog'")}`);
 ok(isDeny(r), "a combined quoted CREATE search_path cannot hide a user schema before pg_catalog");
 
 r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine(
+  "repeated_unsafe_create_path_actor",
+  "pg_catalog, public SET search_path = evil, pg_catalog"
+)}`);
+ok(isDeny(r), "the final repeated CREATE search_path controls operator safety");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine(
+  "repeated_safe_create_path_actor",
+  "evil, pg_catalog SET search_path = pg_catalog, public"
+)}`);
+ok(!isDeny(r), "a final safe repeated CREATE search_path repairs the earlier option");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
 ${searchPathActorRoutine("quoted_create_path_actor").replace(
   "SET search_path = public, pg_temp",
   'SET "search_path" = evil, pg_catalog'

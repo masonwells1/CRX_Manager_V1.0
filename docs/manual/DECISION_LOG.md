@@ -1,11 +1,23 @@
 # Decision Log
 
-Last verified: 2026-09-03
+Last verified: 2026-09-04
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-04 — use final repeated CREATE search_path in PR #449; keep the broader cap
+
+**Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory
+replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** PostgreSQL permits repeated routine `SET search_path` options and the final option
+governs execution. The guard evaluates that final CREATE-level option in order; its file-wide
+top-level risk scan remains conservative across every search-path statement.
+
+**Boundary.** This orders one repeated routine attribute. It does not become a general CREATE
+option parser or widen actor-name/dataflow analysis; the broader best-effort cap remains.
 
 ## 2026-09-03 — fail closed on shadowed bare UUID overload identity in PR #449
 
