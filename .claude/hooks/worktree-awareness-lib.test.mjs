@@ -582,12 +582,20 @@ eq(currentCrossReference.state, "known", "repository correction guard proves eve
 // Hard-coding a number goes stale the moment a candidate is applied live (all
 // four 20260808* candidates were re-issued and applied on 2026-08-09, taking
 // this from 4 to 0), and a stale number turns a real guard into a red build.
-const independentCandidateCount = new Set(
-  historyText
+const countLocalCandidateMigrationFiles = (text) => new Set(
+  text
     .split(/\r?\n/)
-    .filter((line) => /LOCAL CANDIDATE/i.test(line))
+    // Match the structured status at the start of the detail cell. Applied rows
+    // may discuss a "LOCAL CANDIDATE row" later in explanatory prose.
+    .filter((line) => /^\|\s*\d+\s*\|\s*\d{14}\s*\|\s*\*{0,2}LOCAL\s+CANDIDATE\b[\s\S]*\bNOT\s+APPLIED\b/i.test(line))
     .flatMap((line) => [...line.matchAll(/`(\d{14}_[a-z0-9_]+\.sql)`/gi)].map((m) => m[1].toLowerCase())),
 ).size;
+eq(
+  countLocalCandidateMigrationFiles("| 910 | 20260903160000 | **MERGED TO MAIN — NOT APPLIED LIVE.** The LOCAL CANDIDATE row named `20260903160000_example.sql`. |"),
+  0,
+  "independent count ignores LOCAL CANDIDATE wording in applied-row prose",
+);
+const independentCandidateCount = countLocalCandidateMigrationFiles(historyText);
 eq(currentCrossReference.paths.size, independentCandidateCount, "repository correction guard keeps every hash-pinned local candidate visible");
 const periodCloseMatches = repoMigrationPaths.filter((p) => p.endsWith("_vendor_bill_period_close_lock.sql"));
 eq(periodCloseMatches.length, 1, "period-close migration has one stable-suffix match");
