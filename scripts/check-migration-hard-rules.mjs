@@ -25,15 +25,17 @@
 //   proves nothing either way.
 //
 // WHAT COUNTS AS A NEW TABLE
-//   Every CREATE TABLE in an ADDED migration file, except TEMP/TEMPORARY
-//   tables. Comments are stripped before matching. The table must appear in an
-//   `ALTER TABLE <name> ... ENABLE ROW LEVEL SECURITY` and in at least one
-//   `CREATE POLICY ... ON <name>` in the SAME file. Names are compared
-//   lowercase, unquoted, schema-qualified (unqualified names mean `public`).
-//   The one documented exemption is the same marker the local
-//   .claude/hooks/rls-on-new-tables.mjs hook honors: a `-- rls-check: exempt`
-//   comment in the file (used once in 900 migrations, for a SECURITY DEFINER
-//   only counter table). An exempt file is reported loudly, never silently.
+//   Every CREATE TABLE in an ADDED migration file or a revised pending
+//   migration that still exists at HEAD, except TEMP/TEMPORARY tables. Pending
+//   deletions have no HEAD source to inspect and remain a loud warning. Comments
+//   are stripped before matching. The table must appear in an `ALTER TABLE
+//   <name> ... ENABLE ROW LEVEL SECURITY` and in at least one `CREATE POLICY ...
+//   ON <name>` in the SAME file. Names are compared lowercase, unquoted,
+//   schema-qualified (unqualified names mean `public`). The one documented
+//   exemption is the same marker the local .claude/hooks/rls-on-new-tables.mjs
+//   hook honors: a `-- rls-check: exempt` comment in the file (used once in 900
+//   migrations, for a SECURITY DEFINER only counter table). An exempt file is
+//   reported loudly, never silently.
 //
 // USAGE
 //   node scripts/check-migration-hard-rules.mjs --base <sha> --head <sha> [--repo-root <dir>]
@@ -263,11 +265,15 @@ export function runDiffCheck({ repoRoot, base, head, log = console.log }) {
   for (const change of pendingChanges) {
     log(`  ⚠ revises a pending migration (version ${change.version} is newer than applied high-water ${change.highWater}): ${change.path}`);
   }
-  for (const relPath of added) {
+  const rlsAnalysisPaths = [
+    ...added,
+    ...pendingChanges.filter((change) => change.status !== 'D').map((change) => change.path),
+  ];
+  for (const relPath of rlsAnalysisPaths) {
     const sql = showFile(repoRoot, head, relPath);
     if (sql === null) {
       ok = false;
-      log(`  ✗ could not read added migration at head: ${relPath}`);
+      log(`  ✗ could not read migration at head: ${relPath}`);
       continue;
     }
     const { tables, violations, exemptViolations, exempt } = analyzeMigrationSql(sql);
