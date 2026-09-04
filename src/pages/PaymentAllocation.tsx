@@ -26,7 +26,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { formatCents as fmt } from '../lib/money';
 import type { PaymentAllocationEntry, PaymentAllocationResult, InvoiceType } from '../types';
 
@@ -202,7 +202,12 @@ export default function PaymentAllocation() {
 
   /* ── Allocation helpers ────────────────────────────────────────────── */
 
-  const checkCents = parseDollarsToCents(checkAmountInput);
+  // null = the typed check amount has more than two decimals (refused). It is
+  // kept separate from checkCents so the two submit paths can name the reason
+  // instead of reporting "Enter a check amount" for an amount that IS entered.
+  const checkCentsParsed = parseDollarsToCents(checkAmountInput);
+  const checkAmountRefused = checkCentsParsed === null;
+  const checkCents = checkCentsParsed ?? 0;
 
   const setAllocationForInvoice = useCallback((invoiceId: string, cents: number) => {
     setInvoices((prev) =>
@@ -213,6 +218,10 @@ export default function PaymentAllocation() {
   }, []);
 
   const handleAutoAllocate = useCallback(() => {
+    if (checkAmountRefused) {
+      toast('error', MONEY_PRECISION_MESSAGE);
+      return;
+    }
     if (checkCents <= 0) {
       toast('error', 'Enter a check amount first');
       return;
@@ -227,7 +236,7 @@ export default function PaymentAllocation() {
         allocated_cents: allocMap.get(inv.invoice_id) || 0,
       })),
     );
-  }, [checkCents, invoices, toast]);
+  }, [checkAmountRefused, checkCents, invoices, toast]);
 
   const handleClearAllocations = useCallback(() => {
     setInvoices((prev) => prev.map((inv) => ({ ...inv, allocated_cents: 0 })));
@@ -249,6 +258,10 @@ export default function PaymentAllocation() {
 
   const handleSubmit = async () => {
     if (!selectedCustomer || !profile) return;
+    if (checkAmountRefused) {
+      toast('error', MONEY_PRECISION_MESSAGE);
+      return;
+    }
     if (checkCents <= 0) {
       toast('error', 'Enter a check amount');
       return;
@@ -476,9 +489,16 @@ export default function PaymentAllocation() {
                       placeholder="0.00"
                       value={checkAmountInput}
                       onChange={(e) => setCheckAmountInput(e.target.value)}
-                      className="w-full pl-10 pr-3 py-3 text-lg font-semibold bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      aria-invalid={checkAmountRefused}
+                      className={`w-full pl-10 pr-3 py-3 text-lg font-semibold bg-white border rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green ${checkAmountRefused ? 'border-red-400' : 'border-gray-200'}`}
                     />
                   </div>
+                  {/* A refused amount (more than two decimals) parses to null, so checkCents is
+                      0 and both action buttons stay disabled — the handler toasts can never
+                      fire. Say why right under the field instead (CodeRabbit on PR #588). */}
+                  {checkAmountRefused && (
+                    <p role="alert" className="mt-1 text-sm text-red-600">{MONEY_PRECISION_MESSAGE}</p>
+                  )}
                 </div>
                 <div className="flex gap-2 pt-6">
                   <Button
@@ -566,6 +586,9 @@ export default function PaymentAllocation() {
                                     placeholder="0.00"
                                     onChange={(e) => {
                                       const cents = parseDollarsToCents(e.target.value);
+                                      // null = a third decimal digit. Refuse the keystroke rather than
+                                      // drop the allocation to 0 (which would bank the money as prepay).
+                                      if (cents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
                                       setAllocationForInvoice(inv.invoice_id, cents);
                                     }}
                                     className={`w-[120px] pl-5 pr-2 py-1.5 text-sm text-right border rounded-lg focus:outline-none focus:ring-2 ${

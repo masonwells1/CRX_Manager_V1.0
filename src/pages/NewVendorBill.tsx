@@ -23,6 +23,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import {
+  MONEY_PRECISION_MESSAGE,
   isWholeCentDollarInput,
   parseDollarsToCents,
   parseDollarsToCentsSigned,
@@ -176,15 +177,21 @@ export default function NewVendorBill() {
       return;
     }
 
+    const subtotalCents = parseDollarsToCents(subtotalDollars);
+    if (subtotalCents === null) { toast('error', `Subtotal: ${MONEY_PRECISION_MESSAGE}`); return; }
+    if (subtotalCents <= 0) { toast('error', 'Enter a valid amount'); return; }
+    // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
+    const adjustmentCents = parseDollarsToCentsSigned(adjustmentDollars || '0');
+    if (adjustmentCents === null) { toast('error', `Adjustment: ${MONEY_PRECISION_MESSAGE}`); return; }
+
     // Clear the blocking banner only once a real attempt is starting, so it survives
     // a validation bounce and disappears when the retry actually reaches the server.
+    // Deliberately AFTER the parse/precision refusals above: those are validation
+    // bounces too, and clearing the banner there would drop the explanation while
+    // the pending request that caused it is still unresolved.
     setOverageBlockedMessage(null);
     setSaving(true);
     try {
-      const subtotalCents = parseDollarsToCents(subtotalDollars);
-      if (subtotalCents <= 0) { toast('error', 'Enter a valid amount'); return; }
-      // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
-      const adjustmentCents = parseDollarsToCentsSigned(adjustmentDollars || '0');
 
       // (codex audit F4, 2026-05-10): mirror the backend's `v_total > 0`
       // guard at the UI so users see a clear inline message instead of an
@@ -299,7 +306,9 @@ export default function NewVendorBill() {
     }
   };
 
-  const totalCents = parseDollarsToCents(subtotalDollars || '0') + parseDollarsToCentsSigned(adjustmentDollars || '0');
+  // Display-only preview. A refused (excess-precision) field shows as 0 in the
+  // preview; the save path above refuses it by name before anything is sent.
+  const totalCents = (parseDollarsToCents(subtotalDollars || '0') ?? 0) + (parseDollarsToCentsSigned(adjustmentDollars || '0') ?? 0);
 
   // Calculate due date preview
   const dueDate = (() => {

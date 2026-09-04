@@ -34,6 +34,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import {
+  MONEY_PRECISION_MESSAGE,
   isWholeCentDollarInput,
   parseDollarsToCents,
   parseDollarsToCentsSigned,
@@ -252,6 +253,7 @@ export default function VendorBillDetail() {
       return;
     }
     const amountCents = parseDollarsToCents(payAmount);
+    if (amountCents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
     if (amountCents <= 0) { toast('error', 'Enter a valid payment amount'); return; }
 
     let request: NonNullable<typeof paymentIntent.unresolvedIntent>;
@@ -382,12 +384,17 @@ export default function VendorBillDetail() {
       return;
     }
     const subtotalCents = parseDollarsToCents(editSubtotal);
+    if (subtotalCents === null) { toast('error', `Subtotal: ${MONEY_PRECISION_MESSAGE}`); return; }
     if (subtotalCents <= 0) {
       toast('error', 'Subtotal must be positive');
       return;
     }
     // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
+    // `|| '0'` matches the isWholeCentDollarInput guard above, so the value that
+    // was validated is the value that gets parsed — an empty adjustment is a
+    // deliberate 0, not a refusal.
     const adjustmentCents = parseDollarsToCentsSigned(editAdjustment || '0');
+    if (adjustmentCents === null) { toast('error', `Adjustment: ${MONEY_PRECISION_MESSAGE}`); return; }
     if (!editBillDate || !editDueDate) {
       toast('error', 'Bill date and due date are required');
       return;

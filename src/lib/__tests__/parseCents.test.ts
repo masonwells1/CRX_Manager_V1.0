@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  MONEY_PRECISION_MESSAGE,
   isWholeCentDollarInput,
   parseDollarsToCents,
   parseDollarsToCentsSigned,
@@ -38,6 +39,17 @@ describe('isWholeCentDollarInput', () => {
     expect(isWholeCentDollarInput('90071992547409.91')).toBe(true);
     expect(isWholeCentDollarInput('90071992547409.92')).toBe(false);
   });
+
+  // The parsers now REFUSE more than two fractional digits (null) instead of
+  // truncating, so this guard's regex is no longer the only thing standing
+  // between "1.999" and a stored 199. Pin that the two rules are independent:
+  // the guard still refuses on shape, and the parser it calls still returns a
+  // real number for the in-shape magnitude cases above, so neither rule is
+  // quietly doing the other's job.
+  it('refuses excess precision on shape, before the parser null can reach it', () => {
+    expect(isWholeCentDollarInput('1.999')).toBe(false);
+    expect(parseDollarsToCents('1.999')).toBeNull();
+  });
 });
 
 describe('parseDollarsToCents (positive-only default)', () => {
@@ -48,8 +60,32 @@ describe('parseDollarsToCents (positive-only default)', () => {
   it('pads single cent digit', () => expect(parseDollarsToCents('1.5')).toBe(150));
   it('avoids float precision issue (1.01)', () => expect(parseDollarsToCents('1.01')).toBe(101));
   it('avoids float precision issue (0.1 + 0.2)', () => expect(parseDollarsToCents('0.30')).toBe(30));
-  it('truncates beyond 2 decimals', () => expect(parseDollarsToCents('1.999')).toBe(199));
   it('handles zero', () => expect(parseDollarsToCents('0')).toBe(0));
+
+  // Mason's 2026-09-03 decision: a typed fraction of a cent is REFUSED (null),
+  // never rounded and never truncated. Before this, '1.999' silently became
+  // 199 cents. null — not 0 — because a dozen callers save the number as-is
+  // and 0 means something real at most of them.
+  describe('refuses more than two fractional digits (never truncates)', () => {
+    it('refuses "1.999" (was truncated to 199)', () =>
+      expect(parseDollarsToCents('1.999')).toBeNull());
+    it('refuses "12.345" with currency formatting', () =>
+      expect(parseDollarsToCents('$12.345')).toBeNull());
+    it('refuses a thousandth of a cent "0.001"', () =>
+      expect(parseDollarsToCents('0.001')).toBeNull());
+    it('refuses trailing zeros beyond two places "1.500" (refusal is by digit count, not value)', () =>
+      expect(parseDollarsToCents('1.500')).toBeNull());
+    it('still accepts exactly two decimals "1.99"', () =>
+      expect(parseDollarsToCents('1.99')).toBe(199));
+    it('still accepts one decimal "1.5"', () =>
+      expect(parseDollarsToCents('1.5')).toBe(150));
+    it('refusal is distinct from the malformed-input 0', () => {
+      expect(parseDollarsToCents('1.2.3')).toBe(0);
+      expect(parseDollarsToCents('1.999')).not.toBe(0);
+    });
+    it('exports the one shared refusal message', () =>
+      expect(MONEY_PRECISION_MESSAGE).toBe('Enter an amount with no more than two decimal places.'));
+  });
   it('handles zero cents', () => expect(parseDollarsToCents('100.00')).toBe(10000));
 
   describe('loose-input rejection (audit #20)', () => {
@@ -103,6 +139,12 @@ describe('parseDollarsToCentsSigned (negative-capable variant)', () => {
     expect(parseDollarsToCentsSigned('1e5')).toBe(0));
   it('rejects multi-dot input', () =>
     expect(parseDollarsToCentsSigned('1.2.3')).toBe(0));
+  it('refuses more than two fractional digits on a negative "-1.999" (null, not -199)', () =>
+    expect(parseDollarsToCentsSigned('-1.999')).toBeNull());
+  it('refuses more than two fractional digits on a positive "1.999"', () =>
+    expect(parseDollarsToCentsSigned('1.999')).toBeNull());
+  it('still accepts a negative with exactly two decimals "-1.99"', () =>
+    expect(parseDollarsToCentsSigned('-1.99')).toBe(-199));
 
   // codex-driven hunt cycle 2: a minus is only the LEADING sign. A dash anywhere
   // else is malformed — previously "12-34" stripped the dash and parsed as a

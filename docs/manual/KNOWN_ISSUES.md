@@ -1,11 +1,15 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-03 for the F2 entry and migration-ledger facts.** The ordering boundary is
-the newest applied authored NAME:
-**`20260903150000_job_chemicals_persist_driver`**. Read ordering from the NAME — it is what
-the ordering guard compares and it moves far less often than the counters. For provenance, the same
-read observed 993 ledger rows (986 distinct names) and `max(version)` `20260903153402`; **treat both
-of those as a point-in-time observation, not a fact** — any lane applying a migration moves them, so
+**Last verified: 2026-09-04 for the migration-ledger facts; 2026-09-03 for the F2 entry.** The
+ordering boundary is the newest applied authored NAME:
+**`20260903230000_commission_report_snapshot_contract`** (ledger version `20260904040643`, read-only
+`list_migrations` on 2026-09-04). Read ordering from the NAME — it is what
+the ordering guard compares and it moves far less often than the counters. Two further reading
+traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
+reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
+because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …) sort above digits
+— use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` here as a point-in-time
+observation, not a fact** — any lane applying a migration moves them, so
 re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
 F2 item below was re-verified against live on this date (function bodies, grants, the
 `invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
@@ -415,6 +419,46 @@ undefined `getKeyFor` threw inside the click handler and the RPC never fired, so
 failed for a reason unrelated to its assertion. Both mocks now mirror the hook's full surface.
 
 ---
+## SETTLED 2026-09-03 (basis) / FIXED IN CODE, MIGRATION PENDING LIVE APPLY (UTC fallbacks) — "invoice due dates derive from the invoice date, not the Chicago posting date"
+
+**Report (`codex-transaction-review`, 2026-09-03):** due dates derive from `invoice_date` rather
+than the America/Chicago posting date, so a late-evening invoice lands on the wrong day. Verified
+at HEAD and against the LIVE posting body: `_post_invoice_impl_20260714` stamps
+`due_date = COALESCE(due_date, invoice_date + terms days)` (`20260702160000_a8_terms_to_due_date.sql:133`).
+**Two separate issues in one report.** (1) *Basis:* Mason decided 2026-09-03 the terms run from
+the **invoice date** the customer reads (`DECISION_LOG.md`, 2026-09-03), so the posting RPC is
+correct as shipped and deliberately unchanged; the 2026-07-16 spec's "posting date" wording is
+amended. Exactly one live invoice differs between the bases (backdated about four months; not named
+here — this repo is public) and it keeps its invoice-date-based due date / stays overdue by that
+decision. (2) *Timezone:* affects **zero** live
+invoices — 0 of 3 posted invoices crossed the UTC/Chicago day boundary (both sides tested) and both
+invoice screens send the browser-local date. The only real hole is four server-side
+`invoice_date = CURRENT_DATE` fallbacks; migration `20260904160000_invoice_date_fallbacks_chicago.sql`
+moves them to the Chicago business day (container proof
+`scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs`). **APPLIED LIVE 2026-09-04 13:00 UTC**
+(ledger version `20260904130047`) under Mason's in-chat OK, verified post-apply: all four bodies at
+their candidate pins, one overload each, SECDEF + `search_path` intact. That hole is CLOSED.
+
+**Two residuals remain open, both raised by the pre-apply gate and accepted rather than blocked.**
+(a) **OPEN, DEADLINE 2026-09-30 — `season` is still UTC in two of those four bodies.**
+`_save_invoice_lineage_unaware_impl_20260827` and `_save_field_app_invoice_impl_20260714` stamp
+`season` from `current_season()` = `compute_season(CURRENT_DATE)`, which the migration did not
+change. `compute_season` rolls at month >= 10, so on **2026-09-30 after 7 pm Chicago** a row would be
+dated 2026-09-30 (season 2026) while stamped `season = 2027`. Before the apply both were UTC and
+therefore agreed with each other; making the date correct exposed the coupling. `season` drives
+`customer_application_rates` lookups and year-end statements. The correct pattern already exists in
+`_save_field_app_split_invoice_impl`, which derives the season from the same COALESCEd Chicago date.
+Needs a follow-up migration before 2026-09-30. Same class, later window: `next_invoice_number`
+derives its year from `extract(year FROM now())` (UTC), so a 2026-12-31 evening invoice is dated
+2026 and numbered 2027.
+(b) **OPEN OWNER DECISION** — the split-invoice body's commission-record `CURRENT_DATE` is
+deliberately retained (pinned at exactly 1 by the postflight so it cannot drift silently). It now
+*disagrees* with the Chicago-dated invoice written in the same transaction on a Chicago evening,
+where before the apply the two always agreed. Whether commissions should follow the invoice date is
+Mason's call, not a defect to fix unilaterally.
+
+Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md` and
+`docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md`.
 
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
@@ -960,7 +1004,199 @@ re-confirming findings F1–F3 of `docs/audits/2026-09-01-no-pr-branch-dispositi
 the three was tracked here before; each lived only on a branch 150–690 commits behind `main`. The
 branches are references, not merge candidates — every fix must be re-derived on current `main`.
 
-**F1 — idempotency key discarded before the RPC result is checked (money paths).** On `main`,
+**F1 — PARTIALLY FIXED 2026-09-03; MOST of the defect class is still OPEN** (branch
+`claude/money-screens-idempotency-key-582a41`, PR #584). Read the "still open" list below before
+assuming any screen is covered.
+
+**Fixed: 14 changes across 7 files** — 11 reset reorders, 1 assert repair, 2 click-level repairs, in
+`OrderDetail`, `DeliveryDetail`, `InvoiceDetail`, `FieldApplicationInvoice`, `Returns`,
+`PrepaymentManagerPanel`, `MonthEndClose`. Nine keys are also given a record scope via the hook's
+`intentScope` / `getKeyFor`, because detail pages do NOT remount on a route-id change (every
+`<x>/:id` route in `src/App.tsx` is rendered without a `key` prop) and a retained unscoped key
+would otherwise replay record A's receipt against record B.
+
+**The bar a site had to clear, tightened twice by review.** It is not enough that the key names the
+right record: the scope must bind **everything a retry can vary**. `check_idempotency` matches on
+key plus operation only and returns the cached result *without looking at the new payload*, so a
+retained key on an RPC that also carries free text or quantities replays the FIRST payload while the
+screen reports the edited one. That is why `complete_delivery` (signature, per-item quantities,
+issue notes) and the free-text `cancel_delivery` / `void_delivery` / `void_order` are NOT fixed
+here, and why `apply_remaining_prepayments` is scoped by customer rather than left page-wide.
+
+**STILL OPEN — do not assume these are fixed.** Twelve pages were REVERTED to `main` after the
+round-2 `gpt-5.6-sol` review, because reordering the reset makes the client RETAIN the key and on
+these pages the key is bound to the URL rather than to what the RPC targets (an in-page selection,
+a staged payload, component state, or a `/new` route with no id). Retaining it there trades
+duplicate-on-retry for **cross-record replay** — demonstrated worst case on `PrepayWorkspacePanel`,
+where batch B receives batch A's receipt, reports success, and clears B's staged allocations
+without applying them. Open: `QuoteBuilder`, `BlendTicketDetail`, `PrepayWorkspacePanel`,
+`Deliveries` (batch cancel), `Invoices` (batch void/delete), `PaymentAllocation`,
+`FinanceChargePreviewModal`, `Quotes`, `DeliveryRemainders`, `NewOrder`, `QuickDeliveryModal`,
+`FieldSetup`, plus `JobDetail` (owned by a concurrent session; see the count caveat below), plus
+`FieldStop` and
+three of the four `DeliveryDetail` actions (see round 3 / round 4 below). **Fix shape:** bind the
+key to the REQUEST PAYLOAD — the `fingerprintIntentPayload` approach from PR #535 — not to the
+route. Enumerated in `src/__tests__/idempotency-reset-order.test.ts` (`KNOWN_UNFIXED_SITES`), which
+fails if a site is added, removed, or substituted.
+
+**ALSO OPEN — `PrepaymentManagerPanel`'s split-check modal (`create_prepay_check_splits`), a MONEY
+path, recorded 2026-09-04 from the Codex GitHub App's P1 on PR #584.** Not in either list above and
+not pinned by the guard, because it fails on a different axis: its reset is correctly placed AFTER
+the assert, but its key is UNSCOPED while its request carries `p_customer_id`,
+`p_reference_number`, `p_splits` and `p_expected_total_cents` — all editable in the modal. **It is
+NOT a regression from PR #584**: the code is byte-identical to `main` (verified line by line;
+that PR's only edits to this file are `applyPrepayIdem` and `batchApplyIdem`). The partial
+mitigation from PR #59 (2026-05-16) resets the key on every modal OPEN, which covers close-then-
+reopen but NOT the live path: an ambiguous reply leaves the modal open, and editing the customer,
+reference or amounts and resubmitting in place reuses the key, so the server replays the FIRST
+check and reports the edited check as created while its credits were never added. **Fix shape:**
+payload binding (`fingerprintIntentPayload`), not a scope — a route scope binds nothing here, as
+there is no route. Deliberately left out of PR #584, which six adversarial rounds had already
+narrowed to exclude exactly this class.
+
+**ALSO OPEN — the original sweep missed an entire class, now enumerated.** It matched
+`resetKey()` / `resetKeyFor(` literally and never saw **aliased** resets from destructured hooks
+(`const { resetKey: resetXKey } = useIdempotencyKey(...)`). The guard now resolves aliases per file
+and the class is counted, which surfaced sites no sweep or review had listed. **Real defects:**
+`QuoteBuilder` (`resetSaveQuoteIdempotencyKey` before the assert — live F1 on `save_quote`) and
+`CustomerDetail` ×2 (`save_customer` — one plain reset-before-assert, and one that releases the key
+on `!error` alone, which does not rule out the null reply this whole class is about). Neither is a
+money path. **Scanner FALSE POSITIVES, corrected by the round-4 review:**
+`BulkTicketUpload` (`resetUploadKey` lives in `finishCommittedUpload()`, reached only once the
+ticket is committed — the scanner pairs it with an unrelated non-blocking `functions.invoke()`
+above it) and `ManualTicketCreate` (`resetCreateKey` runs inside `if (!lookup.data)`, i.e. after a
+lookup PROVED the row does not exist — the same definitive-rejection shape already allowed for
+`Returns`). Both stay pinned so the scan stays honest, but they are **correct code, not defects**.
+Any re-sweep must match the destructured alias, not the method name — and must not assume a
+scanner hit is a bug.
+
+**Reverted after round 3, in addition to the twelve above.** `FieldStop` — it does NOT remount
+stop-to-stop (`App.tsx:285` has no `key`, and `fetchStop` carries an explicit stale-route guard for
+exactly that reason), so retaining an unscoped `complete_delivery` key could replay stop A's receipt
+against stop B. And ONE site inside the otherwise-fixed `OrderDetail`: `void_order` sends
+`order.id` plus a free-text `voidReason` rather than the route id, and the void modal can survive an
+order-to-order navigation so its opening-click reset is bypassed — it stays in main's order until it
+can be payload-bound.
+
+**Reverted after round 4 — three of the four `DeliveryDetail` actions.** The round-4 HIGH:
+`complete_delivery` sends `p_signed_by`, `p_quantities`, `p_issue_type` and `p_issue_notes`, all
+live UI state a driver can edit before retrying, so a route-scoped retained key would apply the
+first payload's quantities and signature while the screen reported the edited ones — wrong stock and
+a wrong signer on a delivery record. `cancel_delivery` and `void_delivery` carry the same problem
+through their free-text reasons, and the assert throws *before* the modal is closed and the reason
+cleared, so the field really is editable on retry. Only `create_followup_delivery` survives: its
+payload is exactly `(p_original_delivery_id, p_performed_by, p_idempotency_key)`, so the route id
+binds it completely. `apply_remaining_prepayments` was the mirror-image finding and was **fixed
+rather than reverted** — it is now scoped by customer id via `getKeyFor`, because the panel lists
+every customer and an unscoped retained key would hand customer A's receipt to customer B.
+
+**Guard strength (corrected twice — read this before trusting the guard).** `KNOWN_UNFIXED_SITES`
+is now **identity-pinned per file**: each listed file is pinned to the sorted list of reset
+identifiers the scanner finds in it, and `src/__tests__/idempotency-reset-order.test.ts` fails if a
+site is added, removed, **or substituted**. Round 3 replaced whole-file exemptions with a per-file
+count; round 4 showed the count alone still let a defect be swapped in as another was removed, with
+the total unmoved — so the earlier claim here that "a new defect cannot be absorbed" was false as
+written. Mutation-tested both ways: adding a site moves the list, and renaming one site's key to
+another's fails while the count stays at 2. Round 4 also found the pin was excusing any hit the
+classifier labelled at all, even a reason the file never declared; it now excuses only reasons
+declared in `ALLOWED_REASONS`, which is how the sixth `JobDetail` site appeared.
+
+**JobDetail's count is NOT the scanner's number — do not quote the pin as a defect count.**
+It read 5, then 6, then 3 across rounds 3–5, and every move was the guard being wrong rather than
+the file changing. Round 5 established: two of the six were never defects (`Save as Recipe` and
+`Complete Job` are modal-opening buttons that deliberately rotate intent), and a third existed only
+because a COMMENT containing `.update(` convinced the scanner a call had preceded it. Round 6
+sharpened that: only `Complete Job`'s classification actually changed — its handler opens eight
+lines above its reset and the window was four — while `Save as Recipe` already classified correctly
+(handler and reset share a line) and dropped out only when `JobDetail` was added to
+`ALLOWED_REASONS`.
+**Meanwhile the scanner UNDERCOUNTS the same file**: `runJobSave` and `assignWithOverride` each
+retire the key on their FIRST line, before the call that uses it, so an exact retry gets a brand-new
+key. That is a real defect of a DIFFERENT SHAPE — reset-before-**call**, not reset-before-assert —
+and this guard does not look for it. Three pinned, two invisible, both kinds real.
+
+**Residuals, stated rather than assumed away.** (a) The scanner matches LINE ORDER; `exitsBranch` is
+a textual heuristic that reads only lines starting with `throw`/`return`, so it can still launder
+across sibling branches and can wrongly flag a safe reset after an early-exit error branch. (b)
+Alias resolution handles only a DIRECT `{ resetKey: name }` destructure in the same file — a second
+rename, a wrapper function, a cross-file alias, an optional call or computed member access stays
+invisible. (c) The identity pin uses the key's own name, so two sites calling the SAME key's reset
+are not told apart. (d) The record-scoping check proves a declaration contains a route-id scope, not
+that the RPC sends that id or that the payload carries nothing else. (e) The scanner detects only
+reset-before-**assert**; a reset placed before the CALL that uses the key is a real defect of the
+same consequence and is not looked for at all — two live instances in `JobDetail`. (f) Line
+comments and string literals are stripped before matching (round 5: a comment mentioning
+`assertRpcResult` between a call and an early reset used to hide the reset entirely, and a comment
+mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is still not handled.
+(g) The same stripping removes whole TEMPLATE LITERALS including their `${…}` interpolations, so a
+reset executed inside an interpolation is invisible, and because stripping is line-based a multi-line
+template body still reads as code. (h) Only the hit scan is stripped: `classify()` and `aliasNames()`
+still read RAW lines, so a comment or string containing `onClick=`, `.throwOnError()` or a recovery
+marker can excuse a real hit, and one containing `resetKey:` can invent an alias. (i) The
+"no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/
+`functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
+intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes
+`foo.bar.resetKey()` to `bar.resetKey`, can double-count when an alias is itself named `resetKey`,
+and does not order multiple tokens sharing one line. Closing (a), (b), (f), (g) and (h) needs a real
+tokenizer, not a line scan.
+
+(k) **A route-id scope binds the record the ROUTE names, not the record the REQUEST sends** — added
+2026-09-04 from CodeRabbit's round-2 finding on PR #584, after the route-scope fix itself had landed.
+`OrderDetail`'s id effect sets `activeOrderIdRef` and refetches but never clears `order`, and
+`loading` is initialised `true` and thereafter only ever set `false` — never back to `true`. So on
+A → B navigation the page keeps rendering A's data with its buttons live while the route id is
+already B. `consolidate_draft_invoices` was the one order action whose request sent the LOADED
+`order.id` rather than the route `id`, so a click in that window sent A under a key scoped to B and
+let B's own retry replay A's receipt; it now refuses unless the loaded order IS the route order.
+**The staleness itself is NOT fixed** — every other action on that page is still live over the
+previous order's data in that window. Those actions all send the route `id`, so they are not a
+replay risk today, but the pairing is what matters: any detail page that scopes a key by the route
+id while sending a separately-loaded record id has this defect, and (d) above cannot see it, because
+it reads the declaration and never the request.
+
+**These residuals are the reason this guard is a tripwire, not a proof.** Six adversarial rounds
+drove the product findings to zero and then kept finding more in the scanner itself; that is the
+signal the review had stopped describing the change and started describing the instrument. The
+scanner is deliberately frozen here rather than chased further — a complete sweep is the OWED
+aliased-reset work, which needs an AST.
+
+**Historical note on the original attempt:** 39 call sites
+across 20 files were reordered, plus two click-level repairs in
+`OrderDetail.tsx` (`onCreateInvoiceClick` and the Cancel Order button — both RPCs take a payload
+that cannot vary between attempts, so a per-click reset only removed duplicate protection).
+**The Cancel Order defect was found by driving the real screen; the unit tests and the static guard
+both passed over it.** Proof: `src/__tests__/idempotency-reset-order.test.ts` (13 tests — 5
+behavioral plus 8 repo-wide guards, mutation-tested), and a real-browser run where the retry reused
+the key while the pre-fix behavior sent two different keys. Three sites are verified-correct and
+were NOT changed — a `resetKey()` inside an `if (error)` recovery branch in
+`QuickDeliveryModal.tsx`, `InvoiceDetail.tsx` and `Returns.tsx` is intended, and "fixing" them
+breaks duplicate recovery. (Line numbers are deliberately omitted: earlier revisions of this entry
+pinned line numbers that went stale within the same PR.) **Two follow-ups remain open:**
+(a) `JobDetail.tsx` carries several sites of the same class (see the count caveat above),
+excluded because a concurrent session owned the file; (b) the `voidOrderIdem` / `updateOrderIdem`
+click resets need a scoped key rather than deletion, because `void_order` takes a free-text
+`p_reason` and `update_order_items` takes `p_items` — real intent rotation, same shape as
+`VendorBillDetail`'s existing `getKeyFor(voidBillScope)`.
+
+**Codex `gpt-5.6-sol` (high) round 1 on that branch returned BLOCKED — 2 HIGH, 3 MEDIUM, 3 LOW —
+and both HIGHs were real.** (a) **Removing the per-click reset opened cross-order replay**:
+`OrderDetail` does not remount when the route id changes (`App.tsx` renders it without a `key`,
+effects are keyed on `[id]`, and `activeOrderIdRef` exists precisely to guard the stale in-flight
+fetch), so the hook's key map survives an order-to-order navigation. The per-click reset had been
+incidentally rotating it. Fixed by scoping `cancelOrderIdem`, `createInvoiceIdem` and
+`splitInvoiceIdem` to the route id via the hook's `intentScope`, which keeps retry-under-the-same-key
+for the same order while minting a fresh key per order. (b) **`save_invoice` returns the invoice id
+for EDITS as well as creates**, and the reply was validated only in the `isNew` arm, so every edit
+retired its key on an empty reply and reported "saved" — the original F1 mode, preserved. The assert
+is now unconditional. The MEDIUMs were: `assertRpcResult` rejects only null/undefined and does not
+validate shape (so `MonthEndClose`'s `Array.isArray` check now runs BEFORE the reset, and the
+ambiguous branch deliberately keeps the key); the repo-wide guard ignored a reset with no assert at
+all; and both click guards were fail-open. **Lesson worth keeping: the repo-wide guard matches line
+order and cannot bind a call, its reset and its assert to the same control-flow branch — a reset in
+an `else` arm whose sibling arm asserts still passes, which is exactly how HIGH (b) survived it.
+That limit is now written into the test file rather than assumed away.**
+
+**F1 (original report) — idempotency key discarded before the RPC result is checked (money paths).** On `main`,
 `src/pages/OrderDetail.tsx` calls `resetKey()` at lines 596, 698, 891 and 906 **before**
 `assertRpcResult(...)`; the 2026-08-02 branch `codex/idempotency-reset-order-hardening-20260802`
 found the same shape across ~22 files (cancel/void order, split invoicing, invoice creation,
@@ -2487,17 +2723,25 @@ raises, and only the smoke chain catches it.
 
 ---
 
-## OPEN — `parseCents.ts` truncates excess fractional precision
+## RESOLVED 2026-09-03 — `parseCents.ts` truncated excess fractional precision; it now REFUSES it
 
-`parseDollarsToCents` and `parseDollarsToCentsSigned` currently accept inputs with
-more than two fractional digits and truncate them (`1.999` becomes 199 cents); the
-focused test explicitly preserves that legacy behavior. This predates the
+**Owner decision (Mason, 2026-09-03): refuse, never round.** `parseDollarsToCents` and
+`parseDollarsToCentsSigned` return `null` for more than two fractional digits (`1.999`,
+`$12.345`) and the return type is `number | null`, so every caller must handle it. The caller
+audit the original entry asked for was done first and found that 13 of 26 sites would have
+saved a refused value as a real `$0` (credit limit → credit check disabled; prepay balance
+wiped; price override cleared), which is why the refusal is `null` and not the malformed-input
+`0`. Submit-time sites show the shared `MONEY_PRECISION_MESSAGE` and stop before any RPC;
+live-typing price boxes refuse the keystroke and keep their last accepted value. Full record:
+`docs/changelog.d/2026-09-03-money-inputs-refuse-excess-precision.md`. Original entry kept below.
+
+`parseDollarsToCents` and `parseDollarsToCentsSigned` previously accepted inputs with
+more than two fractional digits and truncated them (`1.999` became 199 cents); the
+focused test explicitly preserved that legacy behavior. This predated the
 2026-08-10 exact-whole-cent policy. New or changed authoritative money paths must
 parse decimal operands exactly and must not copy this truncation. Changing the
-shared form-input helper needs a separate caller audit and UI decision: reject
-excess precision or apply one explicit approved rounding rule. The documentation
-prerequisite records the debt but deliberately does not change production input
-semantics.
+shared form-input helper needed a separate caller audit and UI decision: reject
+excess precision or apply one explicit approved rounding rule.
 
 ---
 

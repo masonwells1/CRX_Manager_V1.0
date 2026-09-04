@@ -572,6 +572,13 @@ export default function CycleCounts() {
             p_idempotency_key: key,
             p_expected_item_revision: snapshot.itemRevision,
           }).throwOnError();
+          // Retire the key INSIDE the try, immediately after the awaited
+          // throwOnError() call. Behaviour is unchanged — the catch below rethrows on
+          // every path, so this line was already reachable only on success — but the
+          // reset now sits adjacent to the call it retires instead of after an
+          // intervening catch block, which is what makes its throw-on-error reason
+          // verifiable locally (by the F1 ordering guard and by a human reader alike).
+          completeCycleCountIdem.resetKeyFor(completionScope);
         } catch (completionErr) {
           // A change that lands DURING completion is refused by
           // p_expected_item_revision. Without this branch the operator saw only
@@ -587,7 +594,6 @@ export default function CycleCounts() {
           }
           throw completionErr;
         }
-        completeCycleCountIdem.resetKeyFor(completionScope);
 
         const varianceItems = snapshot.items.filter((i) => i.variance && i.variance !== 0);
 

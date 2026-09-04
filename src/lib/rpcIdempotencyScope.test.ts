@@ -346,6 +346,18 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // implementation saves. A private operation name would strand that receipt
   // and allow the reversal to run twice after a timeout.
   _section9_reverse_receiving_record_serialized: ['reverse_receiving_record'],
+  // Migration 20260904160000 (invoice_date fallbacks -> America/Chicago business
+  // day) is the FIRST on-disk CREATE of these three private implementations
+  // under their post-rename names: each was originally renamed with
+  // ALTER FUNCTION ... RENAME TO (20260812115237, 20260827041500, 20260714224000)
+  // and defined no body on disk, so this scan could not see them until now.
+  // The bodies are the LIVE ones re-emitted with one fallback delta each; the
+  // idempotency shape is pre-existing and unchanged. Direct EXECUTE is revoked
+  // on all three; each deliberately shares its public wrapper's cache namespace
+  // so a replay through the wrapper finds the result the implementation saved.
+  _price_order_below_cost_impl_20260810: ['price_order'],
+  _save_invoice_lineage_unaware_impl_20260827: ['save_invoice'],
+  _save_field_app_invoice_impl_20260714: ['save_field_app_invoice'],
   // Restore the Wave A alias exemption when its drafts are promoted from
   // scripts/.staging-migrations/.
 };

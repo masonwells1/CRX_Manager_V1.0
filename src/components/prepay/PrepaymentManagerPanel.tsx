@@ -19,7 +19,7 @@ import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { exportToCSV, fmtCSV } from '../../lib/csvExport';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { Sentry } from '../../lib/sentry';
-import { parseDollarsToCents } from '../../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../../lib/parseCents';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
 
@@ -201,6 +201,12 @@ export default function PrepaymentManagerPanel() {
   const handleSaveEdit = async () => {
     if (!editCredit) return;
     const newBalanceCents = parseDollarsToCents(editForm.balance);
+    // null = refused for excess precision. Never let it through as 0: the RPC
+    // would wipe this live prepay bucket's balance to $0.
+    if (newBalanceCents === null) {
+      toast('error', MONEY_PRECISION_MESSAGE);
+      return;
+    }
     if (isNaN(newBalanceCents) || newBalanceCents < 0) {
       toast('error', 'Balance must be a non-negative number');
       return;
@@ -316,13 +322,21 @@ export default function PrepaymentManagerPanel() {
       return;
     }
     const totalCents = parseDollarsToCents(checkForm.total);
+    if (totalCents === null) { toast('error', `Check total: ${MONEY_PRECISION_MESSAGE}`); return; }
     if (totalCents <= 0) { toast('error', 'Total must be positive'); return; }
 
     const validSplits = bucketSplits.filter((s) => s.label && parseFloat(s.amount) > 0);
     if (validSplits.length === 0) { toast('error', 'Add at least one bucket split'); return; }
 
-    // M3: use per-split rounded cents to avoid float rounding mismatch
-    const splitAmountsCents = validSplits.map((s) => parseDollarsToCents(s.amount));
+    // M3: use per-split exact cents to avoid float rounding mismatch. A split
+    // with more than two decimals is refused by name — before this, it would
+    // have been truncated and the user told only that the totals disagreed.
+    const splitAmountsCents: number[] = [];
+    for (const s of validSplits) {
+      const c = parseDollarsToCents(s.amount);
+      if (c === null) { toast('error', `Split "${s.label}": ${MONEY_PRECISION_MESSAGE}`); return; }
+      splitAmountsCents.push(c);
+    }
     const splitTotal = splitAmountsCents.reduce((sum, c) => sum + c, 0);
     // Money is already integer cents here, so the totals must match exactly.
     if (splitTotal !== totalCents) {
@@ -387,15 +401,24 @@ export default function PrepaymentManagerPanel() {
     setShowConfirm(false);
 
     try {
-      const applyKey = applyPrepayIdem.getKey();
+      // F1: scoped by customer. This key is now RETAINED across an ambiguous reply so
+      // the retry can replay, but the panel lists every customer and applying to B
+      // without leaving the page would otherwise reuse A's unresolved key —
+      // check_idempotency matches on key plus operation only and would hand back A's
+      // receipt while the screen reported it against B. getKeyFor/resetKeyFor take the
+      // scope explicitly, so an in-flight attempt cannot be re-scoped by a re-render.
+      // p_customer_id is the only part of this payload a retry can vary, so the
+      // customer id binds the request completely (Codex round-4 MEDIUM).
+      const applyScope = confirmCustomer.id;
+      const applyKey = applyPrepayIdem.getKeyFor(applyScope);
       const { data, error } = await supabase.rpc('apply_remaining_prepayments', {
         p_customer_id: confirmCustomer.id,
         p_performed_by: profile.id,
         p_idempotency_key: applyKey,
       });
       if (error) throw error;
-      applyPrepayIdem.resetKey();
       const result = assertRpcResult<{ applied_count: number; applied_cents: number; remaining_prepay_cents: number }>(data, 'apply_remaining_prepayments');
+      applyPrepayIdem.resetKeyFor(applyScope);
       // Audit #27: surface prepay application in activity feed.
       if (profile && result.applied_count > 0) {
         await logActivity({
@@ -429,8 +452,8 @@ export default function PrepaymentManagerPanel() {
         p_idempotency_key: batchKey,
       });
       if (error) throw error;
-      batchApplyIdem.resetKey();
       const result = assertRpcResult<{ total_customers: number; total_applied_cents: number; details: unknown[] }>(data, 'batch_apply_all_prepayments');
+      batchApplyIdem.resetKey();
       // Audit #27: surface batch prepay run in activity feed.
       if (profile && result.total_customers > 0) {
         await logActivity({
