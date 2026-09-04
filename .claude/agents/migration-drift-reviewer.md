@@ -46,12 +46,28 @@ For each `CREATE OR REPLACE FUNCTION <name>(<args>)` in the migration:
    2026-09-03, the local one-pass grep answered this check in 0.17 s, where the per-file remote
    walk died twice — after 598 and 751 fetches — with no verdict at all.
 
-2. If a previous definition with DIFFERENT argument types exists AND the new migration does NOT first `DROP FUNCTION` the old one, severity = **BLOCKER**.
-3. Postgres allows multiple overloads; the bug is when the caller expects to resolve to one but hits the other.
-4. Historical migration text shows what was AUTHORED, not what currently EXISTS — a later
-   `DROP` can have removed an overload the history still shows. So more than one authored
-   signature for a name is a **signal to confirm against the live catalog**, not a BLOCKER on
-   its own.
+2. **The local history search is the DETECTOR, and it alone decides the default verdict.**
+   If history holds a prior `CREATE OR REPLACE FUNCTION <name>` with DIFFERENT argument
+   types AND this migration does not first `DROP FUNCTION` the old one, severity =
+   **BLOCKER**. This is decidable from the one-pass grep in step 1 with no database access,
+   so it is always answerable. If history holds exactly one authored signature for the name
+   (or none), there is no multiplicity to resolve and this check is **clean** — do not ask
+   for live evidence you do not need.
+3. Postgres allows multiple overloads; the bug is when the caller expects to resolve to one
+   but hits the other. `docs/workflows/SAFE_DEVELOPMENT_RULES.md` states the standard: the
+   `pg_proc` query "Must return exactly 1 row. If >1, consolidate before adding more."
+4. **Fresh live identity evidence is the ONLY thing that can ACQUIT a step-2 BLOCKER, and it
+   is never required to reach a verdict.** Historical migration text shows what was
+   AUTHORED, not what currently EXISTS — a later `DROP` can have removed an overload the
+   history still shows, so a step-2 BLOCKER can be stale. That is the one and only reason to
+   consult the live catalog here.
+
+   **If no live evidence is supplied, the step-2 BLOCKER STANDS.** Do not emit a HIGH asking
+   the run to fetch evidence it cannot fetch, and never read its absence as clean. You cannot
+   query Supabase — your tools are Read/Grep/Glob/Bash — and `scripts/write-apply-proofs.mjs`
+   executes this charter with only the charter text and the migration path, so a sandboxed
+   run has no catalog access at all. Say plainly that the BLOCKER is unacquitted and name
+   what the orchestrator must supply.
 
    **A COUNT IS NOT EVIDENCE — it cannot clear this finding.** An overload count does not
    identify which signature exists, and the collision this check exists to prevent is
@@ -87,10 +103,17 @@ For each `CREATE OR REPLACE FUNCTION <name>(<args>)` in the migration:
      that is the exact March 2026 shadow-overload shape this check exists to stop;
    - the name does not exist live at all → a plain create, the set holds 1 → clean.
 
+   **Compare argument types by canonical OID, not by rendered text.** `regprocedure` renders
+   the ARGUMENT TYPES search_path-dependently too, so two schemas holding identically named
+   types can make an authored signature look like an exact match while Postgres resolves it
+   to different type OIDs and creates a second overload — the very failure this check
+   exists to stop. The acquitting evidence must therefore carry `proargtypes` (the canonical
+   input-type OID vector), or types rendered under a controlled, explicitly stated
+   search_path; the `regprocedure` text is for human reading, never for the match decision.
+
    Count-only evidence, `pronargs`, or candidate-authored prose asserting "exactly one
-   overload" NEVER clears this finding. If identity-signature evidence is absent, emit
-   **HIGH** naming exactly what to run. You cannot query Supabase yourself, so say so and
-   stop rather than inferring.
+   overload" NEVER acquits. Neither does evidence with no timestamp or no project binding:
+   a stale read describes a database that has since moved.
 
 ### CHECK 3 — `updated_at` on tables that lack it
 Read `tables_without_updated_at` from the schema registry. For each `UPDATE <table> SET ... updated_at` in the migration, if `<table>` is in that list, severity = **BLOCKER**.
