@@ -70,7 +70,7 @@ function readSingleQuotedLiteral(text, start) {
   let value = '';
   for (let index = quote + 1; index < text.length; index++) {
     if (text[index] === "'" && text[index + 1] === "'") { value += "'"; index++; continue; }
-    if (text[index] === "'") return { value, end: index + 1 };
+    if (text[index] === "'") return { value, end: index + 1, escapeString: quote !== start };
     value += text[index];
   }
   return null;
@@ -117,7 +117,7 @@ function unsafeStandardConformingStringsChange(text, start) {
   if (index === null) return true;
   const setting = readSingleQuotedLiteral(text, index);
   // A dynamic setting name cannot be statically proven not to alter this mode.
-  if (setting === null) return true;
+  if (setting === null || setting.escapeString) return true;
   const afterSetting = skipWhitespaceAndComments(text, setting.end);
   if (afterSetting === null || text[afterSetting] !== ',') return true;
   return setting.value.toLowerCase() === 'standard_conforming_strings';
@@ -416,6 +416,13 @@ export function securityDefinerMissingAnonRevokes(sql) {
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
     ...executable.matchAll(SECURITY_DEFINER_ALTER).map((match) => ({ match, kind: 'alter' })),
   ].sort((a, b) => a.match.index - b.match.index);
+  // A literal revoke cannot establish effective anonymous access after a role
+  // membership mutation. This source-only guard has no catalog graph for role
+  // inheritance, so fail closed whenever such a migration also changes a
+  // SECURITY DEFINER routine.
+  if (declarations.length > 0 && /\b(?:ALTER|CREATE|DROP)\s+(?:ROLE|GROUP|USER)\b/i.test(executable)) {
+    return ['unparseable-security-definer-sql'];
+  }
   // Keep all routines declared in this migration, not only SECURITY DEFINER
   // ones. An ACL event for an undeclared routine may be changing an existing
   // SECURITY DEFINER function, whose current body and ACL are not available to

@@ -24,6 +24,14 @@ test('does not accept a commented, quoted, wrong-overload, or later-regranted re
   assert.deepEqual(securityDefinerMissingAnonRevokes(wrongOverload), ['unparseable-security-definer-sql']);
 });
 
+test('fails closed when SECURITY DEFINER SQL changes role membership', () => {
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\nALTER GROUP authenticated ADD USER anon;`),
+    ['unparseable-security-definer-sql'],
+  );
+});
+
 test('fails closed for quoted names and unsupported ACL forms that can restore execution', () => {
   const quoted = `CREATE FUNCTION public."danger-fn"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['danger-fn']);
@@ -214,6 +222,7 @@ test('rejects executable string-mode changes after comment normalization', () =>
   assert.equal(executableSql('SET/**/standard_conforming_strings=off; SELECT 1;'), null);
   assert.equal(executableSql('SET "standard_conforming_strings" = off; SELECT 1;'), null);
   assert.equal(executableSql("SELECT set_config('standard_conforming_strings', 'off', false);"), null);
+  assert.equal(executableSql(String.raw`SELECT set_config(E'standard\x5fconforming\x5fstrings', 'off', false);`), null);
   assert.equal(executableSql('SELECT "set_config"(\'standard_conforming_strings\', \'off\', false);'), null);
   assert.equal(executableSql('SELECT pg_catalog."set_config"(\'standard_conforming_strings\', \'off\', false);'), null);
   assert.equal(executableSql("SELECT set_config('standard_' || 'conforming_strings', 'off', false);"), null);
