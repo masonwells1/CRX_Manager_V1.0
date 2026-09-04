@@ -291,11 +291,30 @@ invoices — 0 of 3 posted invoices crossed the UTC/Chicago day boundary (both s
 invoice screens send the browser-local date. The only real hole is four server-side
 `invoice_date = CURRENT_DATE` fallbacks; migration `20260904160000_invoice_date_fallbacks_chicago.sql`
 moves them to the Chicago business day (container proof
-`scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs`). **Until that migration is applied live**,
-a save whose payload omits `invoice_date` between 7 pm and midnight Chicago would still be dated
-tomorrow — the clients never omit it today. Follow-up, not fixed: the split-invoice body's
-commission-record `CURRENT_DATE` (same class, outside the decision). Full record:
-`docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md`.
+`scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs`). **APPLIED LIVE 2026-09-04 13:00 UTC**
+(ledger version `20260904130047`) under Mason's in-chat OK, verified post-apply: all four bodies at
+their candidate pins, one overload each, SECDEF + `search_path` intact. That hole is CLOSED.
+
+**Two residuals remain open, both raised by the pre-apply gate and accepted rather than blocked.**
+(a) **OPEN, DEADLINE 2026-09-30 — `season` is still UTC in two of those four bodies.**
+`_save_invoice_lineage_unaware_impl_20260827` and `_save_field_app_invoice_impl_20260714` stamp
+`season` from `current_season()` = `compute_season(CURRENT_DATE)`, which the migration did not
+change. `compute_season` rolls at month >= 10, so on **2026-09-30 after 7 pm Chicago** a row would be
+dated 2026-09-30 (season 2026) while stamped `season = 2027`. Before the apply both were UTC and
+therefore agreed with each other; making the date correct exposed the coupling. `season` drives
+`customer_application_rates` lookups and year-end statements. The correct pattern already exists in
+`_save_field_app_split_invoice_impl`, which derives the season from the same COALESCEd Chicago date.
+Needs a follow-up migration before 2026-09-30. Same class, later window: `next_invoice_number`
+derives its year from `extract(year FROM now())` (UTC), so a 2026-12-31 evening invoice is dated
+2026 and numbered 2027.
+(b) **OPEN OWNER DECISION** — the split-invoice body's commission-record `CURRENT_DATE` is
+deliberately retained (pinned at exactly 1 by the postflight so it cannot drift silently). It now
+*disagrees* with the Chicago-dated invoice written in the same transaction on a Chicago evening,
+where before the apply the two always agreed. Whether commissions should follow the invoice date is
+Mason's call, not a defect to fix unilaterally.
+
+Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md` and
+`docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md`.
 
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
