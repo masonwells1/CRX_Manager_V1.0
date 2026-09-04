@@ -1,4 +1,4 @@
-# Migration History (911 migration-history entries)
+# Migration History (912 migration-history entries)
 
 > **PRE-APPLY LIVE EVIDENCE (read this first).** The most recent read-only
 > `list_migrations` observation is at the top of this file, immediately below.
