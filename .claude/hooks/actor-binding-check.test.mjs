@@ -2099,10 +2099,11 @@ CREATE OPERATOR evil.= (
   FUNCTION = evil.always_true
 );`;
 
-function searchPathActorRoutine(name, searchPath = "public, pg_temp") {
+function searchPathActorRoutine(name, searchPath = "public, pg_temp", beforeRefusal = "") {
   return `CREATE FUNCTION public.${name}(p_actor pg_catalog.uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = ${searchPath} AS $body$
 BEGIN
+${beforeRefusal}
   IF p_actor IS DISTINCT FROM auth.uid() THEN
     RAISE EXCEPTION 'ACTOR_MISMATCH';
   END IF;
@@ -2110,6 +2111,55 @@ BEGIN
 END
 $body$;`;
 }
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine(
+    "body_path_actor",
+    "public, pg_temp",
+    "  SET search_path = evil, pg_catalog;"
+  )}`);
+ok(isDeny(r), "a body-level SET search_path before refusal invalidates operator safety");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine(
+    "quoted_body_path_actor",
+    "public, pg_temp",
+    '  SET "search_path" TO \'evil\', \'pg_catalog\';'
+  )}`);
+ok(isDeny(r), "quoted body-level SET search_path before refusal fails closed");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine(
+    "body_reset_path_actor",
+    "public, pg_temp",
+    "  RESET search_path;"
+  )}`);
+ok(isDeny(r), "body-level RESET search_path before refusal fails closed");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine(
+    "body_reset_all_actor",
+    "public, pg_temp",
+    "  RESET ALL;"
+  )}`);
+ok(isDeny(r), "body-level RESET ALL before refusal fails closed");
+
+r = runHook(fn(
+  "BEGIN\n  IF p_performed_by IS DISTINCT FROM auth.uid() THEN\n" +
+  "    RAISE EXCEPTION 'ACTOR_MISMATCH';\n  END IF;\n" +
+  "  SET search_path = evil, pg_catalog;\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;",
+  "p_performed_by pg_catalog.uuid"
+));
+ok(!isDeny(r), "a body-level search_path change after the refusal does not invalidate it");
+
+r = runHook(fn(
+  "BEGIN\n  SET CONSTRAINTS ALL DEFERRED;\n" +
+  "  IF p_performed_by IS DISTINCT FROM auth.uid() THEN\n" +
+  "    RAISE EXCEPTION 'ACTOR_MISMATCH';\n  END IF;\n" +
+  "  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);\nEND;"
+));
+ok(!isDeny(r), "an unrelated SET statement before refusal is not overblocked");
 
 r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
 ${searchPathActorRoutine("altered_path_actor")}

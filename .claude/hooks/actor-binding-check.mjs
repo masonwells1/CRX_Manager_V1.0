@@ -1643,6 +1643,17 @@ function hasRecognizedMutationBefore(structuralBody, beforeIndex, actorReference
   if (hasActorCallableForwarding(prefix, forwardingReferences) ||
       hasActorOperatorForwarding(prefix, forwardingReferences) ||
       hasActorSymbolicOperatorForwarding(prefix, forwardingReferences)) return true;
+  // A routine-level SET clause is not immutable: executable SET/RESET inside
+  // PL/pgSQL can replace or remove search_path before the equality operator in
+  // the actor refusal is resolved. Fail closed on that bounded pre-refusal
+  // shape instead of attempting to interpret procedural configuration state.
+  const searchPathName = '(?:"search_path"|search_path)';
+  const runtimeSearchPathChange = new RegExp(
+    `\\b(?:SET\\s+(?:LOCAL\\s+|SESSION\\s+)?${searchPathName}(?=\\s|=|;)|` +
+      `RESET\\s+(?:${searchPathName}|ALL)(?=\\s|;|$))`,
+    "i"
+  );
+  if (runtimeSearchPathChange.test(prefix)) return true;
   // A pre-guard control-flow exit can skip the identity check after evaluating
   // a side-effecting expression (for example RETURN helper(p_performed_by)).
   // Treat exits as disqualifying rather than trying to prove expressions pure.

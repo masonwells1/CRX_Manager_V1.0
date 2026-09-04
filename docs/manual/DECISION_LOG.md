@@ -7,6 +7,20 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — refuse pre-actor-check body search_path changes in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** A routine-local CREATE/ALTER `search_path` cannot prove UUID operator safety when the
+PL/pgSQL body executes `SET [LOCAL|SESSION] search_path`, quoted `SET "search_path"`, `RESET
+search_path`, or `RESET ALL` before the actor refusal. The guard fails closed on those bounded forms.
+A later body change does not retroactively invalidate an already enforced refusal.
+
+**Boundary.** This is a lexical pre-refusal safety check, not a general procedural configuration
+interpreter. It does not model arbitrary `set_config` expressions or branch feasibility; existing
+mutation/call forwarding rules and the broader actor-analysis cap remain operative.
+
 ## 2026-09-03 — include ALTER search_path in PR #449 final routine state; keep the broader cap
 
 **Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
