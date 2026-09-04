@@ -160,6 +160,117 @@ assert.equal(
 );
 assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary clean review/);
 
+// ── the redaction must fire on VALUES, not on variable NAMES ─────────────────
+// Narrowed 2026-09-02 (PR #563). A match replaces the WHOLE capture with a hash,
+// so a false positive does not censor a line — it destroys the review verdict
+// and the high-effort run that produced it, and presents as an unparseable
+// response rather than as a redaction. Reviewing a workflow-permissions change
+// made Codex spell the Actions token's name in its own findings, and every
+// review of that branch came back empty.
+//
+// A leaked credential arrives as a VALUE with a recognizable shape. These stay
+// redacted on sight, with no assignment needed:
+for (const leaked of [
+  "-----BEGIN RSA PRIVATE KEY-----",
+  "-----BEGIN OPENSSH PRIVATE KEY-----",
+  "token github_pat_11ABCDEFG0123456789_abcdefghijklmnop",
+  "ghp_abcdefghijklmnopqrstuvwxyz0123",
+  "sk-abcdefghijklmnopqrstuvwxyz012345",
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+  "AKIAIOSFODNN7EXAMPLE",
+  "AIzaSyD-abcdefghijklmnopqrstuvwxyz0123456",
+  "xoxb-1234567890-abcdefghijkl",
+  "sk_live_abcdefghijklmnop1234",
+]) {
+  assert.equal(
+    safeReviewCaptureText(`review said: ${leaked}`, "STDOUT").includes(leaked),
+    false,
+    `a credential VALUE must still be redacted on sight: ${leaked.slice(0, 24)}`,
+  );
+}
+
+// ...and an assignment still redacts, whichever separator is used:
+for (const assigned of [
+  "GITHUB_TOKEN=ghs_realvaluehere",
+  "GITHUB_TOKEN: abc123",
+  "SUPABASE_SERVICE_ROLE_KEY = zzz",
+  "OPENAI_API_KEY:zzz",
+  "password: hunter2",
+  "api_key=abcdef",
+  "access-token = zzz",
+]) {
+  assert.equal(
+    safeReviewCaptureText(`x ${assigned}`, "STDOUT").includes(assigned),
+    false,
+    `an assigned value must still be redacted: ${assigned}`,
+  );
+}
+
+// Codex round 4 (PR #563): the separator had to touch the name directly, so a
+// SERIALIZED credential kept its value verbatim — the closing quote after the
+// key interrupted the match. Machine-readable output is exactly where a real key
+// would show up, so a quote either side of the separator must not defeat this.
+// Supabase's own secret-key shape is also recognized on sight now; before round
+// 4 the pattern knew no Supabase key form at all, so a leaked one only redacted
+// when a variable name happened to sit beside it.
+for (const serialized of [
+  `{"SUPABASE_SERVICE_ROLE_KEY":"sb_secret_abcdefghijklmnopqrst"}`,
+  `{"GITHUB_TOKEN": "ghs_serializedvalue"}`,
+  `{'password':'hunter2'}`,
+  `"api_key": "abcdef123456"`,
+  `<secret>"access_token"='zzz'</secret>`,
+  // …and the bare Supabase key shape, with no name anywhere near it.
+  `the log line was sb_secret_abcdefghijklmnopqrst and nothing else`,
+]) {
+  assert.equal(
+    safeReviewCaptureText(`x ${serialized}`, "STDOUT").includes(serialized),
+    false,
+    `a serialized credential must be redacted: ${serialized.slice(0, 40)}`,
+  );
+}
+
+// NEAR-MISS CANARY for the quote relaxation. The value must still EXIST: a name
+// followed by a separator and nothing usable is documentation, not a leak. If
+// this starts failing, the pattern has drifted back toward matching bare names
+// and every review of a permissions change will come back as an empty capture.
+for (const valueless of [
+  `"GITHUB_TOKEN":`,
+  `SUPABASE_SERVICE_ROLE_KEY = `,
+  `"api_key": ""`,
+  `password: '`,
+]) {
+  assert.match(
+    safeReviewCaptureText(valueless, "STDOUT"),
+    new RegExp(valueless.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    `a separator with no value is not a leak: ${valueless}`,
+  );
+}
+
+// ...but a bare NAME in prose is documentation and must survive, or reviewing
+// any workflow-permissions change is impossible.
+for (const prose of [
+  "the job's GITHUB_TOKEN Permissions group shows Issues: write",
+  "grant administration: read so GITHUB_TOKEN can manage labels",
+  "SUPABASE_SERVICE_ROLE_KEY must never be committed",
+  "rotate the OPENAI_API_KEY quarterly",
+  "the access token is stored in the password manager",
+]) {
+  assert.match(
+    safeReviewCaptureText(prose, "STDOUT"),
+    new RegExp(prose.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    `a bare variable NAME is documentation and must survive: ${prose.slice(0, 40)}`,
+  );
+}
+
+// The whole-capture destruction is what makes a false positive expensive —
+// assert that property directly so nobody "improves" this into line-censoring
+// without noticing the verdict goes with it.
+assert.equal(
+  safeReviewCaptureText("VERDICT: CLEAN\nGITHUB_TOKEN=ghs_leak", "STDOUT").includes("VERDICT: CLEAN"),
+  false,
+  "one match redacts the ENTIRE capture, verdict included — that is why precision matters here",
+);
+
 {
   const source = mkdtempSync(path.join(tmpdir(), "crx-review-source-"));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: source, stdio: "ignore" });

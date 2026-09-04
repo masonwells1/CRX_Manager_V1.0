@@ -743,7 +743,44 @@ export function buildCodexExecArgs({ root, prompt, platform = process.platform }
   return args;
 }
 
-const REVIEW_CAPTURE_SECRET_RE = /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|GITHUB_TOKEN|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}|(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*\S+)/i;
+// Redaction for the review capture. Anything matching is replaced wholesale by a
+// SHA-256, so a false positive does not censor a line — it destroys the entire
+// review verdict and the run that paid for it.
+//
+// Narrowed 2026-09-02 (Mason approved, PR #563). Three environment-variable
+// NAMES — the Actions token, the Supabase service-role key, the OpenAI key —
+// previously matched as bare identifiers, with no requirement that a value
+// follow. Naming a variable is documentation, not a leak, and the cost was
+// severe and silent: this PR changes workflow token permissions, so Codex's own
+// findings necessarily spelled the Actions token's name, and every review of
+// this branch came back as `[STDOUT omitted…]` with no verdict. The failure
+// looks like an unparseable response rather than a redaction, so the natural
+// reaction is to re-run and pay for a full high-effort review again.
+//
+// They now redact only when an assignment follows — exactly how this pattern
+// already treats `password` and `api_key`. The forms that identify an actual
+// CREDENTIAL rather than a name are untouched and still match on sight:
+// private-key headers, `github_pat_…`, `ghp_/gho_/ghu_/ghs_/ghr_…`, `sk-…`,
+// JWTs, `AKIA…`, `AIza…`, Slack `xox…`, and live Stripe keys. A real leaked
+// value carries one of those shapes; it does not arrive as a bare variable name.
+// Codex round 4 (PR #563) found the narrowing left a gap: the separator had to
+// touch the name directly, so a serialized object — the name in quotes, the
+// quote, then a colon, then the credential — kept its value verbatim, because
+// the closing quote interrupted the match. Machine-readable output is exactly
+// where a real key would appear, so the name and the value may now each carry a
+// surrounding quote. The value still has to EXIST: one character that is not
+// whitespace, a quote, or a closing delimiter. A bare name remains documentation.
+const SECRET_NAME = String.raw`(?:SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|GITHUB_TOKEN|password|passwd|secret|api[_-]?key|access[_-]?token)`;
+const SECRET_NAME_WITH_VALUE = String.raw`${SECRET_NAME}["']?\s*[:=]\s*["']?[^\s"',;)\]}]`;
+// Supabase's current secret key shape. It is a credential on sight, like the
+// other entries here, and the round-4 finding surfaced it: the old pattern
+// recognised no Supabase key form at all, so a leaked one only ever redacted
+// via the variable name beside it.
+const SUPABASE_SECRET_KEY = String.raw`sb_secret_[A-Za-z0-9_-]{16,}`;
+const REVIEW_CAPTURE_SECRET_RE = new RegExp(
+  `(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}|${SUPABASE_SECRET_KEY}|${SECRET_NAME_WITH_VALUE})`,
+  "i",
+);
 
 export function safeReviewCaptureText(value, label) {
   const text = String(value || "");
