@@ -1163,7 +1163,13 @@ directly and would break. A TARGETED revoke of the other six is right, and is wh
 **Fix shape:** new migration, all eight, in-body active-profile + role gates, plus direct
 `authenticated` EXECUTE revoked from the six with no browser caller, through `migration-review`.
 
-**Status 2026-09-03 — FIX WRITTEN AND PROVEN, NOT YET APPLIED.**
+**HISTORICAL PRE-APPLY NOTE, 2026-09-03 — superseded by the applied-live status at the top of this
+entry. Kept for the derivation, NOT as a status.** Everything from here to the end of this entry
+describes the state before the 2026-09-04 apply; where it says "not applied", read "not applied
+*yet, as of 2026-09-03*". The current status is the heading above: APPLIED LIVE as ledger version
+`20260904023121`, verified against production.
+
+**Status as it stood 2026-09-03 — fix written and proven, apply still pending.**
 `supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql` on branch
 `claude/f2-number-generator-gates-e12d02` covers all **eight**, gates in-body before each advisory
 lock, **and narrows the grants**: direct `authenticated` EXECUTE is REVOKED from the six generators
@@ -1187,9 +1193,12 @@ showing a guard actually fires. `typecheck`/`lint` clean.
 above:** that the branch "re-emits no `GRANT`/`REVOKE`" (it now revokes from six), and that
 `_complete_delivery_authorized_impl` "checks authentication but not role" (it checks role; verified
 against live `prosrc`). Both were true when written.
-**Not applied live and not merged** — the live apply needs Mason's in-chat approval, a same-session
-apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict. This item stays OPEN until that lands;
-`codex/section1-security-hardening-20260725` stays until then per the branch-retention note below.
+**The 2026-09-03 precondition, now SATISFIED — kept for provenance.** As of that date this read
+"not applied live and not merged: the live apply needs Mason's in-chat approval, a same-session
+apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict, and this item stays OPEN until that
+lands." All three were obtained on 2026-09-04 and the migration applied; the item is RESOLVED per
+the heading above. **The branch-retention note still stands on its own terms:**
+`codex/section1-security-hardening-20260725` is retained per the note below and must not be deleted.
 
 **F3 — nine enforcement-file patterns missing from the `.claude/settings.json` `ask` list.**
 `scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, `scripts/normalize-eol.mjs`,
