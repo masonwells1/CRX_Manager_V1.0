@@ -38,15 +38,30 @@ test('fails closed for quoted names and unsupported ACL forms that can restore e
   );
 });
 
-test('tracks ALTER FUNCTION SECURITY DEFINER and fails closed for unmatched quoted identities', () => {
+test('fails closed for SECURITY DEFINER ALTERs and unmatched quoted identities', () => {
   const altered = 'ALTER FUNCTION public.escalate(uuid) SECURITY DEFINER;';
-  assert.deepEqual(securityDefinerMissingAnonRevokes(altered), ['escalate']);
+  assert.deepEqual(securityDefinerMissingAnonRevokes(altered), ['unparseable-security-definer-sql']);
   const routine = 'ALTER ROUTINE public.routine_escalate(uuid) SECURITY DEFINER;';
-  assert.deepEqual(securityDefinerMissingAnonRevokes(routine), ['routine_escalate']);
+  assert.deepEqual(securityDefinerMissingAnonRevokes(routine), ['unparseable-security-definer-sql']);
   const quoted = 'CREATE FUNCTION public."Case"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."case"() FROM PUBLIC, anon;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['unparseable-security-definer-sql']);
   const escaped = 'CREATE FUNCTION public."danger""name"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."danger""name"() FROM PUBLIC, anon;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(escaped), []);
+});
+
+test('allows only the fixed SECURITY DEFINER search path on routine ALTERs', () => {
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes('ALTER FUNCTION public.existing(uuid) RESET search_path;'),
+    ['unparseable-security-definer-sql'],
+  );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes('ALTER FUNCTION public.existing(uuid) SET search_path = public;'),
+    ['unparseable-security-definer-sql'],
+  );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes('ALTER FUNCTION public.existing(uuid) SET search_path = public, pg_temp;'),
+    [],
+  );
 });
 
 test('fails closed for search-path-sensitive targets and quoted role lookalikes', () => {

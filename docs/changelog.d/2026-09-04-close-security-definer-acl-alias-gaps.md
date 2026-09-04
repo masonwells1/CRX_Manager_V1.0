@@ -10,3 +10,7 @@ same migration, and migrations that disable `standard_conforming_strings` are re
 scanner can model their escape rules. Reviewer evidence now includes source-level CREATE, ALTER,
 GRANT, and REVOKE history for every routine changed by a migration; it states explicitly that
 source history is not a substitute for a verified live effective ACL.
+
+Routine `ALTER` statements now also fail closed when they add `SECURITY DEFINER`, reset
+`search_path`, or use any path other than the fixed `public, pg_temp` pair. This prevents an
+existing routine from acquiring owner privileges without a mechanically safe namespace.

@@ -124,6 +124,26 @@ function isExecutableRoutineBody(text) {
     || /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(statement);
 }
 
+function unsafeRoutineAlterSearchPath(sql) {
+  const headers = /\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b/gi;
+  for (const header of sql.matchAll(headers)) {
+    const end = statementEnd(sql, header.index);
+    if (end === null) return true;
+    const statement = sql.slice(header.index, end);
+    // This source-level ACL guard has no catalog proof of an ALTER target's
+    // current body or configuration. Changing an existing routine to SECURITY
+    // DEFINER, or resetting its search_path, therefore cannot mint a proof.
+    if (/\bSECURITY\s+DEFINER\b/i.test(statement) || /\bRESET\s+search_path\b/i.test(statement)) return true;
+    const setPath = /\bSET\s+search_path\s*(?:TO|=)\s+([\s\S]*)$/i.exec(statement);
+    if (!setPath) continue;
+    const entries = setPath[1].split(',').map((entry) => entry.trim().replace(/^'|'$/g, '').toLowerCase());
+    // The CRX SECURITY DEFINER contract permits only this fixed, nonempty
+    // path. Anything else may permit object shadowing under the owner role.
+    if (entries.length !== 2 || entries[0] !== 'public' || entries[1] !== 'pg_temp') return true;
+  }
+  return false;
+}
+
 function splitArgs(args) {
   const parts = []; let start = 0, depth = 0;
   for (let i = 0; i <= args.length; i++) {
@@ -244,6 +264,7 @@ function renameRoutineEvents(sql) {
 export function securityDefinerMissingAnonRevokes(sql) {
   const executable = executableSql(sql);
   if (executable === null) return ['unparseable-security-definer-sql'];
+  if (unsafeRoutineAlterSearchPath(executable)) return ['unparseable-security-definer-sql'];
   if (/\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b[\s\S]*?\bOWNER\s+TO\b/i.test(executable)) return ['unparseable-security-definer-sql'];
   const declarations = [
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
