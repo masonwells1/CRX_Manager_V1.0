@@ -1,14 +1,24 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-04 for the migration ledger and commission-history label issue.** The
-newest applied numeric authored name is **`20260903230000_commission_report_snapshot_contract`**.
-Read ordering from the NAME — it is what the ordering guard compares and it moves far less often than
-the counters. The same read observed 996 ledger rows (989 distinct names) and `max(version)`
-`20260904040643`; **treat both as a point-in-time observation, not a standing fact**. A local,
-not-yet-applied repair candidate now addresses 34 un-settled opening commission snapshots that hold
-an order UUID and unknown customer label despite available canonical labels; it is intentionally
-blocked if settlement history exists. All other issue entries retain their own verification dates.
-See `docs/manual/CURRENT_STATE.md` for the live/disk migration boundary.
+**Last verified: 2026-09-04 for the migration-ledger facts; 2026-09-03 for the F2 entry.** The
+ordering boundary is the newest applied authored NAME:
+**`20260903230000_commission_report_snapshot_contract`** (ledger version `20260904040643`, read-only
+`list_migrations` on 2026-09-04). Read ordering from the NAME — it is what
+the ordering guard compares and it moves far less often than the counters. Two further reading
+traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
+reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
+because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …) sort above digits
+— use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` here as a point-in-time
+observation, not a fact** — any lane applying a migration moves them, so
+re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
+F2 item below was re-verified against live on this date (function bodies, grants, the
+`invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
+item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
+six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
+
+The local, not-yet-applied `20260904110000_repair_commission_history_label_snapshots` candidate
+addresses 34 un-settled opening commission snapshots that hold an order UUID and unknown customer
+label despite available canonical labels. It is intentionally blocked if settlement history exists.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
 `20260903153402`.** Verified independently
@@ -268,6 +278,28 @@ The remaining fractional historical rows described below are still tracked data 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## SETTLED 2026-09-03 (basis) / FIXED IN CODE, MIGRATION PENDING LIVE APPLY (UTC fallbacks) — "invoice due dates derive from the invoice date, not the Chicago posting date"
+
+**Report (`codex-transaction-review`, 2026-09-03):** due dates derive from `invoice_date` rather
+than the America/Chicago posting date, so a late-evening invoice lands on the wrong day. Verified
+at HEAD and against the LIVE posting body: `_post_invoice_impl_20260714` stamps
+`due_date = COALESCE(due_date, invoice_date + terms days)` (`20260702160000_a8_terms_to_due_date.sql:133`).
+**Two separate issues in one report.** (1) *Basis:* Mason decided 2026-09-03 the terms run from
+the **invoice date** the customer reads (`DECISION_LOG.md`, 2026-09-03), so the posting RPC is
+correct as shipped and deliberately unchanged; the 2026-07-16 spec's "posting date" wording is
+amended. Exactly one live invoice differs between the bases (backdated about four months; not named
+here — this repo is public) and it keeps its invoice-date-based due date / stays overdue by that
+decision. (2) *Timezone:* affects **zero** live
+invoices — 0 of 3 posted invoices crossed the UTC/Chicago day boundary (both sides tested) and both
+invoice screens send the browser-local date. The only real hole is four server-side
+`invoice_date = CURRENT_DATE` fallbacks; migration `20260904160000_invoice_date_fallbacks_chicago.sql`
+moves them to the Chicago business day (container proof
+`scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs`). **Until that migration is applied live**,
+a save whose payload omits `invoice_date` between 7 pm and midnight Chicago would still be dated
+tomorrow — the clients never omit it today. Follow-up, not fixed: the split-invoice body's
+commission-record `CURRENT_DATE` (same class, outside the decision). Full record:
+`docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md`.
 
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 

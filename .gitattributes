@@ -186,3 +186,9 @@ supabase/migrations/20260903230000_commission_report_snapshot_contract.sql text 
 supabase/migrations/20260903231000_commission_history_report_replay_guard.sql text eol=lf
 scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf
 scripts/smoke/smoke-commission-report-snapshot-contract.sql text eol=lf
+# The invoice_date Chicago-fallback migration pins four live function bodies by md5 and
+# installs LF bodies; its prover reads it byte-for-byte. Pin both to LF on every platform.
+supabase/migrations/20260904160000_invoice_date_fallbacks_chicago.sql text eol=lf
+scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs text eol=lf
+# Byte-exact live bodies (one keeps CRLF, as production does); never EOL-converted.
+scripts/smoke/fixtures/invoice-date-fallbacks-live-bodies-20260903.sql -text diff whitespace=cr-at-eol

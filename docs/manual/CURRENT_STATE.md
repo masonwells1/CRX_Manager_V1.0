@@ -1,13 +1,18 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-04 by a read-only production ledger and commission-history label review.**
-The live ledger has 996 rows (989 distinct names), `max(version)`
-`20260904040643`, and its newest numeric authored name is
-**`20260903230000_commission_report_snapshot_contract`**. The local
-`20260904110000_repair_commission_history_label_snapshots` candidate is not applied. The
-review found 34 un-settled opening order snapshots with a UUID in place of the order number and an
-unknown customer label; the candidate appends corrected observations rather than changing those
-immutable rows. Refresh `.claude/schema-registry.json` only after a reviewed live apply.
+**Last verified: 2026-09-04 for the migration ledger (read-only `list_migrations` against project
+`rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-03 15:34 UTC by the live-introspection
+regeneration of `.claude/schema-registry.json` carried in PR #586 (F06 post-apply).** Three
+migrations have applied since that schema reading, so the registry's shape is now BEHIND live and a
+regeneration is outstanding — F2's `20260903160000_gate_number_generators_active_profile_role`
+(ledger version `20260904023121`), `20260903150100_ledger_backed_commission_history`
+(`20260903202611`), and `20260903230000_commission_report_snapshot_contract` (`20260904040643`).
+Recording the F2 apply and refreshing the registry is PR #594's lane, not this one.
+The current effective ordering high-water is the newest applied
+authored NAME: **`20260903230000_commission_report_snapshot_contract`** (verified 2026-09-04).
+The local `20260904110000_repair_commission_history_label_snapshots` candidate is not applied;
+it appends corrected labels for 34 un-settled opening commission snapshots rather than changing
+immutable ledger rows. Refresh `.claude/schema-registry.json` only after a reviewed live apply.
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than

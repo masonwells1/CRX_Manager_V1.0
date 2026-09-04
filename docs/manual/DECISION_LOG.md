@@ -7,6 +7,45 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — invoice payment terms run from the INVOICE DATE; the UTC hole is a separate, smaller issue
+
+**Source:** Mason's decision on 2026-09-03, put to him by the orchestrator session as one question
+with the concrete consequence stated (the one affected invoice keeps its invoice-date-based due date
+and stays flagged overdue; the row is named in the live ledger, not in this public repo),
+after this session's read-only investigation of a `codex-transaction-review` finding. The decision
+was relayed to the building session by the orchestrator; the live apply of the resulting migration
+still waits for Mason's typed OK in the applying session, as every apply does.
+
+**Decision.** When an invoice is entered later than its invoice date, the payment terms run from
+the **invoice date printed on the invoice**, not from the day it was posted in the system. The
+shipped posting RPC already does exactly this (`_post_invoice_impl_20260714`:
+`due_date = COALESCE(due_date, invoice_date + terms days)`, `20260702160000_a8_terms_to_due_date.sql:133`),
+so the posting RPC is **deliberately unchanged**, no invoice row is corrected, and the client is
+untouched. The 2026-07-16 spec's "posting date + 30 days" wording was written when the two dates
+coincided (same-day draft-and-post); the spec now carries an amendment saying so. **Do not
+"correct" the code back to the posting date** on the strength of that spec.
+
+**Two separate issues arrived in one report; keep them separate.** (1) The *basis* question above
+affected exactly one live invoice (invoice-dated roughly four months before it was posted; the
+invoice number and its dates are live business data and are deliberately not recorded here), and
+only because it was deliberately backdated by four months — not because of any timezone. (2) The
+*timezone* mechanism the report warned about — the live database clock is UTC, so a late-evening
+Chicago save is already "tomorrow" — affects **zero** live invoices: 0 of 3 posted invoices were
+posted across the UTC/Chicago day boundary (both sides tested read-only on 2026-09-03), and both
+invoice screens send the browser-local date rather than asking the server for one. The only real
+UTC hole is four server-side fallbacks that stamp `invoice_date = CURRENT_DATE` when a payload
+omits the date (`_price_order_below_cost_impl_20260810`, `_save_invoice_lineage_unaware_impl_20260827`,
+`_save_field_app_invoice_impl_20260714`, `_save_field_app_split_invoice_impl`); migration
+`20260904160000_invoice_date_fallbacks_chicago.sql` moves those to the America/Chicago business
+date per the ~2026-07-10 rule below. Anyone re-reading the original finding should not conclude
+the due-date code is still wrong.
+
+**What this forbids/implies:** the posting RPC's `invoice_date + terms` rule is settled; a future
+change to a posting-date basis is a new owner decision, not a bug fix. `invoice_date` must always
+be a Chicago business date on the server — a new `CURRENT_DATE` fallback for it is a bug. The
+split-invoice body's third `CURRENT_DATE` (a commission-record date) was outside this decision and
+is tracked as a follow-up in the changelog entry, not silently changed.
+
 ## 2026-09-03 — the risky-content gate stays loud; the parked prose exemption is retired
 
 **Source:** Mason's in-chat answer on 2026-09-03 ("yes to all three") to the question "leave the
