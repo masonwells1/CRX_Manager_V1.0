@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   fmt4,
   sumAcres,
+  sumAcresExact,
   applyChemEdit,
   recomputeChemRowForAcres,
   toGallonOrLbEquivalent,
@@ -31,6 +32,12 @@ describe('chemCalculator — fmt4 / sumAcres', () => {
   });
   it('sumAcres sums parseable acres and ignores blanks', () => {
     expect(sumAcres([{ acres_to_treat: '40' }, { acres_to_treat: '60' }, { acres_to_treat: '' }])).toBe(100);
+  });
+  it('sumAcres matches PostgreSQL numeric addition for the field values sent in the payload', () => {
+    expect(sumAcres([{ acres_to_treat: '0.1' }, { acres_to_treat: '0.2' }])).toBe(0.3);
+  });
+  it('sumAcresExact preserves the sign while summing canonical field values exactly', () => {
+    expect(sumAcresExact([{ acres_to_treat: '-0.3' }, { acres_to_treat: '0.2' }])).toBe('-0.1');
   });
 });
 
@@ -746,7 +753,10 @@ describe('chemCalculator — F06: a RELOADED row that carries its stored driver 
     const reloaded = row({ quantity: '10', rate_per_acre: '0.0561', driver: 'rate' });
     for (const acres of [1, 178.31, 999.5, 5000]) {
       const next = recomputeChemRowForAcres(reloaded, acres);
-      expect(chemQuantityDisagreesWithRate({ ...next, rate_unit: 'pt/ac', unit: 'pt' }, acres)).toBeNull();
+      expect(chemQuantityDisagreesWithRate(
+        { ...next, rate_unit: 'pt/ac', unit: 'pt' },
+        String(acres),
+      )).toBeNull();
     }
   });
 });
@@ -766,57 +776,160 @@ describe('chemCalculator — F06: chemQuantityDisagreesWithRate mirrors CHEM_QUA
   });
 
   it('the F06 shape: a stale reloaded line at doubled acreage is named, with the expected quantity', () => {
-    expect(chemQuantityDisagreesWithRate(line(), 200)).toBe(300);
+    expect(chemQuantityDisagreesWithRate(line(), '200')).toBe(300);
   });
 
   it('a line whose quantity agrees with rate x acres is silent', () => {
-    expect(chemQuantityDisagreesWithRate(line(), 100)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line(), '100')).toBeNull();
   });
 
   it("the gate's round-23 example — quantity typed, rate stored to 4 dp — is accepted", () => {
     // 178.31 acres, operator typed 10, the UI stores rate fmt4(10 / 178.31) = 0.0561, and
     // 0.0561 x 178.31 = 10.003191: off by 0.0032, inside 0.00005 x 178.31 = 0.0089.
-    expect(chemQuantityDisagreesWithRate(line({ quantity: '10', rate_per_acre: '0.0561' }), 178.31)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '10', rate_per_acre: '0.0561' }), '178.31')).toBeNull();
   });
 
   it('is exactly as strict as the SQL at the boundary', () => {
     // 100 acres -> tolerance 0.005. Expected 150.
-    expect(chemQuantityDisagreesWithRate(line({ quantity: '150.005' }), 100)).toBeNull();
-    expect(chemQuantityDisagreesWithRate(line({ quantity: '150.0051' }), 100)).toBe(150);
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '150.005' }), '100')).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '150.0051' }), '100')).toBe(150);
+  });
+
+  it('enforces the SQL absolute tolerance cap in the production predicate', () => {
+    // At 3,000 acres the acreage-scaled term is 0.15, but SQL caps it at 0.1.
+    expect(chemQuantityDisagreesWithRate(
+      line({ quantity: '3000.1', rate_per_acre: '1' }),
+      '3000',
+    )).toBeNull();
+    expect(chemQuantityDisagreesWithRate(
+      line({ quantity: '3000.1001', rate_per_acre: '1' }),
+      '3000',
+    )).toBe(3000);
+  });
+
+  it('uses exact decimal arithmetic at the 0.0001 SQL boundary', () => {
+    // PostgreSQL numeric sees 0.1001 - (0.0501 x 2) as exactly -0.0001, so the
+    // inclusive <= tolerance comparison accepts it. Binary float overshoots the
+    // boundary by ~2.86e-18 and must not make the browser refuse a valid save.
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '0.1001', rate_per_acre: '0.0501' }), '2')).toBeNull();
+
+    // One ten-thousandth farther away is outside the same tolerance and stays refused.
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '0.1000', rate_per_acre: '0.0501' }), '2')).toBe(0.1002);
+  });
+
+  it('compares the canonical numeric values the chemical payload sends', () => {
+    // buildJobChemicalsPayload sends parseFloat(rate_per_acre), not the raw input text.
+    // The client mirror must therefore compare 0.0501 here, exactly as PostgreSQL does.
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '0.1001', rate_per_acre: '0.0501 trailing' }), '2')).toBeNull();
+  });
+
+  it('matches SQL at the boundary when total acres come from multiple decimal fields', () => {
+    const fields = [{ acres_to_treat: '0.1' }, { acres_to_treat: '0.2' }];
+    const acres = sumAcres(fields);
+    const exactAcres = sumAcresExact(fields);
+    expect(acres).toBe(0.3);
+    expect(exactAcres).toBe('0.3');
+    if (exactAcres == null) throw new Error('Expected a finite exact acreage total');
+    expect(chemQuantityDisagreesWithRate(
+      line({ quantity: '0.01493', rate_per_acre: '0.0501' }),
+      exactAcres,
+    )).toBeNull();
+  });
+
+  it('uses exact acreage at the lower boundary, rejecting restoration of float comparison', () => {
+    // This deliberately synthetic acreage exercises distinct exact and floating-point
+    // outcomes around the cap; real field totals are much smaller, but the schema has no
+    // precision ceiling.
+    const fields = [
+      { acres_to_treat: '1000000000000000.1' },
+      { acres_to_treat: '0.2' },
+    ];
+    const acres = sumAcres(fields);
+    const exactAcres = sumAcresExact(fields);
+    expect(String(acres)).not.toBe('1000000000000000.3');
+    expect(exactAcres).toBe('1000000000000000.3');
+    if (exactAcres == null) throw new Error('Expected a finite exact acreage total');
+    expect(chemQuantityDisagreesWithRate(
+      line({ quantity: '999999999.9000003', rate_per_acre: '0.000001' }),
+      exactAcres,
+    )).toBeNull();
+    expect(chemQuantityDisagreesWithRate(
+      line({ quantity: '999999999.9000002', rate_per_acre: '0.000001' }),
+      exactAcres,
+    )).toBe(Number('1000000000.0000003'));
+  });
+
+  it('uses exact acreage at the upper boundary, rejecting dropped exactAcres wiring', () => {
+    // The complementary lower-bound test kills old Math.abs float comparison. This
+    // upper side detects a caller that drops exactAcres because the Number-collapsed
+    // field total moves its difference outside the 0.1 cap.
+    const fields = [
+      { acres_to_treat: '1000000000000000.1' },
+      { acres_to_treat: '0.2' },
+    ];
+    const acres = sumAcres(fields);
+    const exactAcres = sumAcresExact(fields);
+    expect(String(acres)).not.toBe(exactAcres);
+    expect(exactAcres).toBe('1000000000000000.3');
+    if (exactAcres == null) throw new Error('Expected a finite exact acreage total');
+    expect(chemQuantityDisagreesWithRate(
+      line({ quantity: '1000000000.1000003', rate_per_acre: '0.000001' }),
+      exactAcres,
+    )).toBeNull();
+  });
+
+  it('uses exact acreage when the display total overflows Number', () => {
+    const fields = [
+      { acres_to_treat: '1e308' },
+      { acres_to_treat: '1e308' },
+    ];
+    const acres = sumAcres(fields);
+    const exactAcres = sumAcresExact(fields);
+    expect(acres).toBe(Number.POSITIVE_INFINITY);
+    expect(exactAcres).toBe(`2${'0'.repeat(308)}`);
+    if (exactAcres == null) throw new Error('Expected a finite exact acreage total');
+    expect(chemQuantityDisagreesWithRate(
+      line({ quantity: '20', rate_per_acre: '1e-307' }),
+      exactAcres,
+    )).toBeNull();
+    expect(chemQuantityDisagreesWithRate(
+      line({ quantity: '1', rate_per_acre: '1e-307' }),
+      exactAcres,
+    )).toBe(20);
   });
 
   it('compares units after normalisation, so a per-acre suffix or a spelling does not hide the equal path', () => {
-    expect(chemQuantityDisagreesWithRate(line({ rate_unit: 'PT/acre', unit: 'Pt' }), 200)).toBe(300);
-    expect(chemQuantityDisagreesWithRate(line({ rate_unit: 'pt per acre', unit: 'pt' }), 200)).toBe(300);
+    expect(chemQuantityDisagreesWithRate(line({ rate_unit: 'PT/acre', unit: 'Pt' }), '200')).toBe(300);
+    expect(chemQuantityDisagreesWithRate(line({ rate_unit: 'pt per acre', unit: 'pt' }), '200')).toBe(300);
   });
 
   it('stays silent when the units DIFFER — that path belongs to chemLineBillingHazard', () => {
     // 32 oz/ac over 100 acres = 3200 fl oz = 25 gal: correct, and NOT this helper's call.
-    expect(chemQuantityDisagreesWithRate(line({ quantity: '25', rate_per_acre: '32', rate_unit: 'oz/ac', unit: 'gal' }), 100)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '25', rate_per_acre: '32', rate_unit: 'oz/ac', unit: 'gal' }), '100')).toBeNull();
   });
 
   it('stays silent when either unit is blank or unrecognised — chemUnitUnspecifiedSides owns that', () => {
-    expect(chemQuantityDisagreesWithRate(line({ unit: '' }), 200)).toBeNull();
-    expect(chemQuantityDisagreesWithRate(line({ rate_unit: '' }), 200)).toBeNull();
-    expect(chemQuantityDisagreesWithRate(line({ rate_unit: '/ac' }), 200)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ unit: '' }), '200')).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ rate_unit: '' }), '200')).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ rate_unit: '/ac' }), '200')).toBeNull();
   });
 
   it('stays silent with no usable rate or acreage (the server takes a different exit there)', () => {
-    expect(chemQuantityDisagreesWithRate(line({ rate_per_acre: '' }), 200)).toBeNull();
-    expect(chemQuantityDisagreesWithRate(line({ rate_per_acre: '0' }), 200)).toBeNull();
-    expect(chemQuantityDisagreesWithRate(line({ rate_per_acre: 'abc' }), 200)).toBeNull();
-    expect(chemQuantityDisagreesWithRate(line(), 0)).toBeNull();
-    expect(chemQuantityDisagreesWithRate(line(), Number.POSITIVE_INFINITY)).toBeNull();
-    expect(chemQuantityDisagreesWithRate(line(), Number.NaN)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ rate_per_acre: '' }), '200')).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ rate_per_acre: '0' }), '200')).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ rate_per_acre: 'abc' }), '200')).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line(), '0')).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line(), 'Infinity')).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line(), 'NaN')).toBeNull();
   });
 
   it('stays silent on a zero quantity — that is the ZERO_BUT_EXPECTED shape, mirrored separately', () => {
-    expect(chemQuantityDisagreesWithRate(line({ quantity: '0' }), 200)).toBeNull();
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '0' }), '200')).toBeNull();
   });
 
   it('does not gate on price or customer_supplied: the server checks every line on the equal path', () => {
     // The helper takes no price at all, so an unpriced stale line is still named.
-    expect(chemQuantityDisagreesWithRate(line({ quantity: '150' }), 200)).toBe(300);
+    expect(chemQuantityDisagreesWithRate(line({ quantity: '150' }), '200')).toBe(300);
   });
 });
 

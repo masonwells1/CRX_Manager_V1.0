@@ -283,6 +283,57 @@ scenarios.push(['revising a pending migration passes with a notice', (dir) => {
   const result = runCli(dir, base, head);
   eq(result.status, 0, 'exit 0');
   ok(result.stdout.includes('revises a pending migration'), 'notice printed');
+  ok(result.stdout.includes('1 new table(s) carry RLS + policy'), 'revised pending migration is analyzed for RLS');
+}]);
+
+scenarios.push(['revising a pending migration whose table lacks RLS fails', (dir) => {
+  const base = seedBase(dir);
+  write(dir, PENDING, NO_RLS);
+  const head = commitAll(dir, 'revise pending without RLS');
+  const result = runCli(dir, base, head);
+  eq(result.status, 1, 'DENY canary: revised pending migration is analyzed');
+  ok(result.stdout.includes('new table public.widgets is missing'), 'names the pending migration table');
+}]);
+
+scenarios.push(['revising an exempt pending migration passes with a loud notice', (dir) => {
+  const base = seedBase(dir);
+  write(dir, PENDING, EXEMPT);
+  const head = commitAll(dir, 'revise exempt pending');
+  const result = runCli(dir, base, head);
+  eq(result.status, 0, 'exit 0');
+  ok(result.stdout.includes('rls-check: exempt'), 'pending exemption remains visible');
+  ok(result.stdout.includes('⚠'), 'pending exemption is reported as a warning');
+}]);
+
+scenarios.push(['deleting a pending migration remains a warning', (dir) => {
+  const base = seedBase(dir);
+  rmSync(path.join(dir, PENDING));
+  const head = commitAll(dir, 'delete pending');
+  const result = runCli(dir, base, head);
+  eq(result.status, 0, 'pending deletion remains allowed before apply');
+  ok(result.stdout.includes('revises a pending migration'), 'pending deletion notice printed');
+}]);
+
+scenarios.push(['renaming a pending migration preserves the warning and analyzes the destination', (dir) => {
+  const base = seedBase(dir);
+  const renamed = 'supabase/migrations/20260903000000_pending_renamed.sql';
+  sh(dir, ['mv', PENDING, renamed]);
+  const head = commitAll(dir, 'rename pending');
+  const result = runCli(dir, base, head);
+  eq(result.status, 0, 'pending rename with RLS remains allowed');
+  ok(result.stdout.includes(`revises a pending migration`), 'deleted pending source remains a warning');
+  ok(result.stdout.includes(`${renamed}: 1 new table(s) carry RLS + policy`), 'renamed destination is analyzed');
+}]);
+
+scenarios.push(['renaming a pending migration to an unsafe destination fails', (dir) => {
+  const base = seedBase(dir);
+  const renamed = 'supabase/migrations/20260903000000_pending_renamed.sql';
+  sh(dir, ['mv', PENDING, renamed]);
+  write(dir, renamed, NO_RLS);
+  const head = commitAll(dir, 'rename pending without RLS');
+  const result = runCli(dir, base, head);
+  eq(result.status, 1, 'DENY canary: renamed pending destination is analyzed');
+  ok(result.stdout.includes(`${renamed}: new table public.widgets is missing`), 'unsafe renamed destination is named');
 }]);
 
 scenarios.push(['head cannot widen the pending band by editing the registry', (dir) => {
