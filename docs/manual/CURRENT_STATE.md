@@ -1,11 +1,13 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-03 for the migration ledger; schema shape re-read 2026-09-03 15:34 UTC by
-the live-introspection regeneration of `.claude/schema-registry.json` carried in PR #586 (F06
-post-apply) — the only delta against the 2026-09-01 reading is `job_chemicals.driver` and its CHECK,
-and F2's `20260903160000` will move it again the moment it applies, so re-run the regeneration then.**
-The current effective ordering high-water is the newest applied
-authored NAME: **`20260903150000_job_chemicals_persist_driver`**.
+**Last verified: 2026-09-04 by a read-only production ledger and commission-history label review.**
+The live ledger has 996 rows (989 distinct names), `max(version)`
+`20260904040643`, and its newest numeric authored name is
+**`20260903230000_commission_report_snapshot_contract`**. The local
+`20260904110000_repair_commission_history_label_snapshots` candidate is not applied. The
+review found 34 un-settled opening order snapshots with a UUID in place of the order number and an
+unknown customer label; the candidate appends corrected observations rather than changing those
+immutable rows. Refresh `.claude/schema-registry.json` only after a reviewed live apply.
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
@@ -14,9 +16,9 @@ high-water" rule compared against it silently skips files authored `20260831*` a
 durable way to state this boundary: it is what the ordering guard compares, and it changes far less
 often than the counters.
 
-For provenance, the same read observed **993 ledger rows** (986 distinct names — the difference is
+For provenance, the same 2026-09-04 read observed **996 ledger rows** (989 distinct names — the difference is
 duplicate names, from `count(distinct name)`, not truncation) and `max(version)`
-**`20260903153402`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
+**`20260904040643`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
 any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
 not evidence that something went wrong, and it should not be re-pinned on every apply.
 

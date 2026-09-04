@@ -1,19 +1,17 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-03 for the F2 entry and migration-ledger facts.** The ordering boundary is
-the newest applied authored NAME:
-**`20260903150000_job_chemicals_persist_driver`**. Read ordering from the NAME — it is what
-the ordering guard compares and it moves far less often than the counters. For provenance, the same
-read observed 993 ledger rows (986 distinct names) and `max(version)` `20260903153402`; **treat both
-of those as a point-in-time observation, not a fact** — any lane applying a migration moves them, so
-re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
-F2 item below was re-verified against live on this date (function bodies, grants, the
-`invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
-item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
+**Last verified: 2026-09-04 for the migration ledger and commission-history label issue.** The
+newest applied numeric authored name is **`20260903230000_commission_report_snapshot_contract`**.
+Read ordering from the NAME — it is what the ordering guard compares and it moves far less often than
+the counters. The same read observed 996 ledger rows (989 distinct names) and `max(version)`
+`20260904040643`; **treat both as a point-in-time observation, not a standing fact**. A local,
+not-yet-applied repair candidate now addresses 34 un-settled opening commission snapshots that hold
+an order UUID and unknown customer label despite available canonical labels; it is intentionally
+blocked if settlement history exists. All other issue entries retain their own verification dates.
+See `docs/manual/CURRENT_STATE.md` for the live/disk migration boundary.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
-`20260903153402`.** It is also the current ordering boundary named above. Verified independently
+`20260903153402`.** Verified independently
 against production on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job`
 is at md5 `18d08d5f40aea91fe13ac3e5a686c549` with exactly one overload, so no duplicate function was
 created. This **supersedes every earlier statement in this file that F06 was merged but not
