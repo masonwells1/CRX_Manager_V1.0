@@ -1,11 +1,21 @@
 # Decision Log
 
-Last verified: 2026-09-03
+Last verified: 2026-09-04
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-04 — Agent instructions use a lean shared contract and task-routed detail
+
+**Source:** Mason's request to analyze the CRX documentation setup against current Codex and Claude guidance, make `AGENTS.md` as lean as possible, prefer simple readable code, and explicitly design for an owner who cannot review code.
+
+**Decision.** `AGENTS.md` remains the short shared contract for durable owner, authority, safety, CRX hard-rule, verification, and routing behavior. Detailed procedures, examples, model tuning, and volatile facts load only when the task needs their workflow or reference file; deterministic requirements stay in hooks, tests, and CI. `CLAUDE.md` remains a small Claude-only router that imports the shared contract.
+
+**Claude tuning move.** The former `CLAUDE.md` Model Tuning section, including its concise response behavior, delegation budget, review-prompt rules, and effort mapping, moved to `docs/reference/claude-model-tuning.md`. The literal `<tone_preference>` wrapper is retired; its operative behavior remains in `AGENTS.md` Owner Communication and the on-demand tuning reference. Claude keeps Mason's existing one-time pre-code plan checkpoint for multi-file or risk-sensitive work. Codex keeps its standing authority to proceed after a short plan and must not require repeated nudges.
+
+**What this forbids/implies:** do not re-expand always-loaded files with task procedures already routed elsewhere; do not remove a hard rule without moving or superseding it; and do not make Mason name files, select technical implementations, or paste setup prompts. `scripts/check-agent-guidance.mjs` enforces size budgets, critical rule presence, and valid routing paths.
 
 ## 2026-09-03 — invoice payment terms run from the INVOICE DATE; the UTC hole is a separate, smaller issue
 
@@ -2862,7 +2872,7 @@ from zero in a throwaway container, all six post-baseline migrations replayed, 4
 **Why:** an Opus 5 review found the harness already close to Anthropic's guidance, with the gaps being things that were *missing* (no effort policy, no subagent budget, no length calibration) rather than things that were wrong.
 **What this forbids/implies:**
 - `CLAUDE.md` gains a **Model Tuning (Claude Opus 5)** section: concise-response `<tone_preference>`, written-deliverable length calibration, a subagent budget capped at the fan-outs already defined in `.claude/workflows/`, and an effort mapping (`low` mechanical → `xhigh` foundation/migration review). The effort mapping is an unmeasured starting point; **never lower effort on a money/RLS/migration path to save tokens.**
-- Redundant self-verification instructions are discouraged, but this **does not** relax the `AGENTS.md` Verification Standard, the Codex cross-model gate, or the adversarial skeptics on money/RLS/migration paths — those are production-safety and independent-check mechanisms, not model self-checks.
+- Redundant self-verification instructions are discouraged, but this **does not** relax `AGENTS.md`'s Verification and Closeout rules, the Codex cross-model gate, or the adversarial skeptics on money/RLS/migration paths — those are production-safety and independent-check mechanisms, not model self-checks.
 - Review prompts must request every finding and filter later; never instruct a reviewer to "only report high-severity issues" or "be conservative" (Opus 5 obeys literally and reports less). **SETTLED (Mason, 2026-07-25) — bounded overnight sweeps are exempt.** `overnight-bug-hunt.js:51`, `money-inventory-hunt.js:52`, and `whole-codebase-audit.js:29` keep their 8–10 "most significant" caps; the per-run cost of uncapped fan-out outweighs the tail findings. Accepted trade-off: a low-ranked correctness bug can be dropped before the skeptic pass on those runs. The rule binds everywhere else — do not add a cap to any other review prompt.
 - **SETTLED (Mason, 2026-07-25) — night hunt stays at `high`.** `money-inventory-hunt.js` pins `effort: 'high'` at `:293` and `:334`. It stays there until an effort sweep on real CRX tasks measures otherwise; nothing indicates `high` is currently failing, and `xhigh` costs more on the largest fan-out in the repo. The `xhigh` row of the mapping therefore does not reach those agents by design, not by oversight.
 - `AGENTS.md` gains a scope paragraph (deliver what was asked, at the scope intended) applying to Claude and Codex alike.

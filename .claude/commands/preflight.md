@@ -28,7 +28,7 @@ For each category that flipped to true, dispatch the matching subagent. CRITICAL
 | `MIGRATION_CHANGED` | `rls-security-reviewer` AND `migration-drift-reviewer` (both, parallel) |
 | `TYPES_CHANGED` OR `MIGRATION_CHANGED` | `typescript-types-drift-reviewer` |
 | `PDF_CHANGED` | `pdf-output-reviewer` |
-| Any `src/`, `supabase/functions/`, or migration file changed (always) | `compliance-reviewer` (audits the Hard Red Lines / code-drift conventions — money-as-cents, RLS, `assertRpcResult`, `checkMutationResult` after `.update()`/`.delete()`, no `confirm()`/`alert()`, Sentry-from-lib, no `@ts-ignore`/`any`, lifecycle invariants — which lint/build/test cannot catch). Matches `/ship` Step 3. |
+| Any `src/`, `supabase/functions/`, or migration file changed (always) | `compliance-reviewer` (audits the CRX Hard Rules / code-drift conventions — money-as-cents, RLS, `assertRpcResult`, `checkMutationResult` after `.update()`/`.delete()`, no `confirm()`/`alert()`, Sentry-from-lib, no `@ts-ignore`/`any`, lifecycle invariants — which lint/build/test cannot catch). Matches `/ship` Step 3. |
 
 For each subagent, pass the list of changed files in scope. Wait for all reports to come back.
 

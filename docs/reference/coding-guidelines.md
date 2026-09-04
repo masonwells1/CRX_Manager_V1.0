@@ -1,59 +1,44 @@
-# Coding guidelines (fuller version)
+# Coding Guidelines
 
-> Moved out of `CLAUDE.md` on 2026-06-15 so it doesn't load on every turn (Anthropic: a bloated CLAUDE.md makes Claude follow instructions *less*). `CLAUDE.md`'s "Working Principles" now carries a short distilled version of the four principles below; this file keeps the full text Mason asked to preserve. Where these differ from the CRX-specific rules in `CLAUDE.md`, **the CRX rules win.**
+Read this when changing application, database, test, or agent-tooling code. `AGENTS.md` carries the short always-loaded version; this file explains how to apply it.
 
-## Provenance
-- The four principles ("Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution") are the popular community "Karpathy CLAUDE.md" by **Forrest Chang** (`github.com/multica-ai/andrej-karpathy-skills`), distilled from Andrej Karpathy's LLM-coding observations. It is a third-party *derivative* — Karpathy did not author it.
-- The "NEVER STOP" passage is Andrej Karpathy's *actual* committed text (`github.com/karpathy/autoresearch`, `program.md`), written for an autonomous ML-experiment loop — **not** a coding-agent rule he publishes for general use.
+The earlier third-party principles and Karpathy experiment-loop passage Mason asked to preserve remain available as historical source material in `docs/research/2026-06-15-coding-principles-source.md`. They are not active policy where they conflict with `AGENTS.md`.
 
----
+## Build the Simplest Complete Solution
 
-## The four principles (verbatim)
+- Implement the requested outcome and the real edge cases shown by current source, data, tests, or business rules. Do not add features for hypothetical future needs.
+- Prefer an existing project pattern over a new abstraction. Prefer a direct function over a framework, factory, wrapper, compatibility layer, or configuration system used once.
+- Add a dependency only when the existing stack cannot reasonably solve the problem and the dependency materially reduces risk or maintenance.
+- Keep functions and components focused on one responsibility. Split code when it clarifies a meaningful boundary or makes testing easier, not to satisfy an arbitrary line count.
+- Shorter is useful only when it remains obvious. Do not trade readable control flow and names for dense expressions or clever one-liners.
 
-### 1. Think Before Coding
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+## Make Surgical Changes
 
-### 2. Simplicity First
-**Minimum code that solves the problem. Nothing speculative.**
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
+- Every changed line should trace to the requested outcome, a required test, or a directly exposed defect.
+- Match existing style and reuse shared helpers, types, components, and database patterns.
+- Do not reformat or refactor adjacent code merely because you would write it differently.
+- Remove imports, branches, helpers, and tests made obsolete by your change. Mention unrelated dead code; do not remove it unless asked.
+- Keep behavior changes separate from mechanical cleanup when separating them makes review and rollback clearer.
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+## Keep Business Rules Obvious
 
-### 3. Surgical Changes
-**Touch only what you must. Clean up only your own mess.**
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
+- Use names that describe the business meaning, units, and state. Money names include their units, such as `_cents`.
+- Keep authoritative financial, inventory, lifecycle, and permission rules in PostgreSQL where every caller receives the same protection.
+- Prefer explicit validation and state transitions over permissive fallback behavior that hides bad data.
+- Comments explain why a constraint exists, which business invariant it protects, or why an apparently simpler alternative is unsafe. Do not narrate what the code plainly says.
 
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
+## Verify Against the Goal
 
-The test: Every changed line should trace directly to the user's request.
+- Define observable completion before implementing. For a bug, reproduce the failing behavior when practical; for a feature, name the user-visible or data result that proves it works.
+- Run the smallest meaningful check first and expand verification according to risk. Do not run broad suites repeatedly without a new reason.
+- A new test can repeat the same mistaken assumption as the implementation. Observe the actual UI, RPC result, database invariant, or integration path required by `AGENTS.md`.
+- Stop adding abstractions, fallbacks, or tests once the requested behavior is complete, the required checks pass, and no evidence-backed risk remains.
 
-### 4. Goal-Driven Execution
-**Define success criteria. Loop until verified.**
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
+## Agent Momentum
 
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+Continue safe, authorized work until the stated outcome is complete. A failed approach is a signal to diagnose and try a safe alternative, not to hand the task back. This does not override the hard gates in `AGENTS.md` or an explicit restriction from Mason.
 
----
+## Sources
 
-## "NEVER STOP" (verbatim — Karpathy, `autoresearch/program.md`)
-
-> **CRX precedence:** this governs *task momentum* only (don't pause mid-task to ask "should I keep going?"). It does **NOT** override the CRX Hard Red Lines — pushing, deploying, applying a live migration, deleting data, or committing always require Mason's explicit OK in the current chat. For a live-production business app this boundary is absolute.
-
-**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers referenced in the code, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
+- OpenAI recommends starting with the smallest instruction set that preserves the product contract, making autonomy explicit, and calibrating verification to risk: `https://developers.openai.com/api/docs/guides/latest-model`.
+- Anthropic recommends short project instructions, removing self-evident guidance, loading detailed procedures through skills, and pruning rules that do not change behavior: `https://code.claude.com/docs/en/best-practices`.

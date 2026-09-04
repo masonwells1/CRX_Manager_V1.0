@@ -1,27 +1,31 @@
 # Safe Development Rules
 
-**READ THIS AT THE START OF EVERY SESSION.**
+Read this before any multi-file, application-code, data, money, security, permission, production, migration, or customer-facing change. A tiny documentation-only correction does not require loading this entire file.
 
-These are mandatory safety rules for anyone (human or AI) making changes to CRX Manager. Breaking these rules causes bugs, data loss, or security vulnerabilities.
+These are the detailed engineering rules behind the concise contract in `AGENTS.md`. Breaking them can cause bugs, data loss, security vulnerabilities, or incorrect business records.
 
 ---
 
-## Before Making ANY Change
+## Before Changing Code or Behavior
 
 ### 1. Read the context first
-- Read `AGENTS.md` — the canonical contract (hard rules, approval gates, project facts). The hard red lines live there, not in `CLAUDE.md` (which is Claude-only routing).
-- Read the relevant workflow doc in `docs/workflows/` for the area you're working on
-- Read the source files you plan to change
+- Read `AGENTS.md`, then only the workflow and reference documents its routing table names for this task.
+- Read the source files you plan to change.
+- Check `docs/manual/DECISION_LOG.md` before reopening a settled design question and `docs/manual/KNOWN_ISSUES.md` before claiming a problem is new.
 
 ### 2. Research before coding
-- Search the codebase for existing patterns before writing new code
-- Check if similar functionality already exists (there are many pages — see `docs/reference/pages-routes.md` for the current list — don't recreate one)
-- Look at how the existing code handles the same type of operation
+- Search for the closest existing pattern before writing new code.
+- Check whether the capability or helper already exists; use `docs/reference/pages-routes.md` when adding or changing a page.
+- For architecture or multi-file tracing, use Graphify to narrow the source surface, then verify the relevant edges in current source.
 
 ### 3. Plan before building
-- Write a clear plan listing every file you'll create or modify
-- For multi-file or risky work (data, money, security, production, migrations), show the plan to Mason. **Codex exception (Mason, 2026-07-22):** when Mason asks Codex to build, fix, finish, audit, or handle the task, that request approves ordinary reversible in-scope work, so Codex proceeds after the plan without a second approval. Claude and other agents retain their own plan-approval instructions. **Tiny, obvious, reversible fixes may proceed directly** (per `AGENTS.md`) — don't make a ceremony of a typo fix.
-- Break large changes into small, testable steps
+- For substantial work, state the goal, observable completion conditions, files or systems likely to change, and one current step.
+- Mason's request to build, fix, finish, handle, implement, or ship approves ordinary reversible in-scope work. Codex continues after the plan; Claude keeps its global pre-code approval checkpoint for multi-file work or work touching data, money, security, or a live system. After any required approval, continue without repeated permission pauses.
+- Break large changes into small, observable steps. Ask Mason only for a material business choice or an action listed as hard-gated in `AGENTS.md`.
+
+## Simplicity and Maintainability
+
+Apply `docs/reference/coding-guidelines.md` to every code change. In particular, choose the simplest complete implementation, keep the diff tied to the requested outcome, reuse existing patterns, and preserve readable control flow. CRX safety and business invariants take priority over reducing line count.
 
 ---
 
@@ -32,13 +36,15 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 | Use `checkMutationResult()` after every `.update()` or `.delete()` | Catches silent RLS failures that return empty data with no error |
 | Use `assertRpcResult()` after RPC calls | Catches RPCs that return null due to permission denial |
 | Use `logActivity()` for important user actions | Feeds the activity timeline and keeps audit history |
-| Use `generateIdempotencyKey()` for critical writes | Prevents double-submissions on order creation, delivery completion, payments |
+| Require and enforce `p_idempotency_key text DEFAULT NULL` on mutating RPCs; use `generateIdempotencyKey()` at callers | Prevents retries or double-clicks from applying the same business action twice |
 | Create migration files for ALL database changes | Keeps the schema version-controlled and reproducible |
+| Run `npm run lint` after changes | Catches static-analysis and project-convention violations |
 | Run `npm run typecheck` after changes | Catches type mismatches before they become runtime bugs |
 | Run `npm run build` after changes | Catches import errors and compile failures |
 | Update `src/types/index.ts` when database schema changes | Keeps TypeScript in sync with the database |
 | Use `(select auth.uid())` in RLS policies (not bare `auth.uid()`) | Performance: evaluates once per query instead of once per row |
 | Test as all roles (admin, sales_rep, driver) | Each role sees different data — bugs often hide in role-specific paths |
+| Match status values to `.claude/schema-registry.json` | Prevents frontend/RPC strings from violating live database constraints |
 
 ---
 
@@ -73,6 +79,8 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 | NEVER install additional CSS frameworks | Tailwind CSS only — other frameworks cause conflicts |
 | NEVER install additional icon libraries | Lucide React only — keeps bundle size consistent |
 | NEVER create a second Supabase client | Use `src/lib/db.ts` — multiple clients cause auth state issues |
+| NEVER import Sentry outside `src/lib/sentry` | Keeps monitoring configuration, context, and breadcrumbs consistent |
+| NEVER use `confirm()` / `window.confirm()` or `alert()` | Use `ConfirmModal` and toasts so behavior is accessible and consistent |
 
 ### Deployment
 | Rule | Consequence of breaking |
@@ -104,7 +112,7 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 | Rewrite CHECK with only YOUR values | Removes values other functions rely on | Query existing values first, add yours to the list |
 | CREATE OR REPLACE without checking overloads | Updates wrong overload; callers still hit old one | Check for overloads first, DROP all if >1, then CREATE |
 | DROP FUNCTION without replacement | Deletes the only working version | Verify replacement exists BEFORE dropping |
-| SECURITY DEFINER without SET search_path | Triggers fail when called from other SECURITY DEFINER functions | Always add SET search_path = public, pg_temp |
+| SECURITY DEFINER without a safe search path | Enables schema-hijacking and cross-function failures | Normally add `SET search_path = public, pg_temp`; the fully schema-qualified empty-path exception requires the proof recorded in `docs/manual/DECISION_LOG.md` |
 | Dynamic DO block modifying function source | Regex misses edge cases, creates untested code | Write functions explicitly |
 
 ### After Writing ANY Migration

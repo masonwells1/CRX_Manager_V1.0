@@ -1,7 +1,9 @@
 # Contributing to CRX Manager
 
-Quick reference for contributors and future-Mason. The full project conventions
-live in [`CLAUDE.md`](../CLAUDE.md) at the repo root.
+Quick reference for contributors and future-Mason. The short shared contract is
+[`AGENTS.md`](../AGENTS.md); detailed engineering rules live in
+[`SAFE_DEVELOPMENT_RULES.md`](workflows/SAFE_DEVELOPMENT_RULES.md). `CLAUDE.md`
+contains Claude-only routing.
 
 ---
 

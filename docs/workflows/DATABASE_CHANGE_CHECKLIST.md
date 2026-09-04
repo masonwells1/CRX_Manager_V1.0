@@ -125,6 +125,9 @@ The only sanctioned way to apply a migration to the live database:
    proof and policy before the call is allowed through).
 5. If the apply fails, do NOT retry variations against live — fix the migration file,
    re-run `/migration-review`, and apply again through the same gate.
+6. After a successful schema change, run the `regen-schema-registry` workflow against
+   that same database source. Do not use stamp-only mode as a substitute for live
+   introspection; the schema-aware hooks must see the new columns and constraints.
 
 ---
 

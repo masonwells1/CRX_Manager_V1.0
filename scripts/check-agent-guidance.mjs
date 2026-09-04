@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findWindowsShellVariableHooks } from "./windows-hook-command.mjs";
@@ -19,6 +19,11 @@ function read(relative) {
 
 const agents = read("AGENTS.md");
 const claude = read("CLAUDE.md");
+const cursorRules = read(".cursorrules");
+const routingTable = agents.match(/## Start and Route([\s\S]*?)## Engineering Principles/)?.[1] || "";
+const routedGuidance = [...new Set(
+  [...routingTable.matchAll(/`([^`]+\.(?:md|json))`/g)].map((match) => match[1]),
+)];
 const settings = JSON.parse(read(".claude/settings.json"));
 const codexHooksText = read(".codex/hooks.json");
 const codexHooks = JSON.parse(codexHooksText);
@@ -60,14 +65,36 @@ const adversarialEqualityRules = [
 ];
 const validNegativeEqualityRule = "Supabase MCP assigns a fresh live version at apply time, so the pre-apply filename is NOT expected to equal that future value.";
 
-record(agents.split(/\r?\n/).length <= 140, "AGENTS.md stays lean", `${agents.split(/\r?\n/).length} lines`);
-record(claude.split(/\r?\n/).length <= 90, "CLAUDE.md stays lean", `${claude.split(/\r?\n/).length} lines`);
+record(agents.split(/\r?\n/).length <= 90, "AGENTS.md stays lean", `${agents.split(/\r?\n/).length} lines`);
+record(Buffer.byteLength(agents, "utf8") <= 12000, "AGENTS.md stays within the startup-context budget", `${Buffer.byteLength(agents, "utf8")} bytes`);
+record(claude.split(/\r?\n/).length <= 60, "CLAUDE.md stays lean", `${claude.split(/\r?\n/).length} lines`);
+record(Buffer.byteLength(claude, "utf8") <= 6000, "CLAUDE.md stays within the startup-context budget", `${Buffer.byteLength(claude, "utf8")} bytes`);
+record(cursorRules.split(/\r?\n/).length <= 15, ".cursorrules stays a lean AGENTS.md router", `${cursorRules.split(/\r?\n/).length} lines`);
+record(/AGENTS\.md.*canonical shared contract/i.test(cursorRules), ".cursorrules delegates shared policy to AGENTS.md");
+record(!/\b\d{2,5}\s+(?:tables|migrations|pages|tests?|edge functions?)\b/i.test(cursorRules), ".cursorrules has no volatile project counts");
 record(claude.trimStart().startsWith("@AGENTS.md"), "CLAUDE.md imports AGENTS.md first");
 record(/## Owner Communication/.test(agents), "AGENTS.md defines the owner communication contract");
+record(/cannot safely review code or diffs/i.test(agents), "AGENTS.md acknowledges Mason cannot review code or diffs");
 record(/never have to nudge[\s\S]*Keep moving through authorized work/i.test(agents), "owner communication keeps authorized work moving without nudges");
-record(/what failed, what it means, and what the agent is trying next/i.test(agents), "owner communication makes failures explicit");
+record(/what failed, what it means, and what (?:the agent is|you are) trying next/i.test(agents), "owner communication makes failures explicit");
 record(/NEEDS MASON - ACTION REQUIRED[\s\S]*NEEDS MASON - DECISION REQUIRED/i.test(agents), "owner communication makes genuine stops unmistakable");
-record(/## Protected Delivery[\s\S]*\.claude\/commands\/ship\.md/.test(agents), "AGENTS.md routes volatile delivery mechanics to the ship workflow");
+record(/Codex proceeds after a short plan[\s\S]*Claude retains its global pre-code approval checkpoint/i.test(agents), "tool-specific plan authority stays explicit");
+record(/simplest complete implementation/i.test(agents), "AGENTS.md requires simple, complete implementations");
+record(/clarity, not cleverness/i.test(agents), "AGENTS.md favors readable code over clever compression");
+record(/## CRX Hard Rules/.test(agents), "AGENTS.md retains the CRX hard-rule section");
+record(/New tables require Row Level Security and policies in the same migration/i.test(agents), "AGENTS.md retains new-table RLS requirements");
+record(/Mutating RPCs must accept and enforce `p_idempotency_key text DEFAULT NULL`/i.test(agents), "AGENTS.md retains mutating-RPC idempotency requirements");
+record(/Money must resolve to exact whole cents/i.test(agents), "AGENTS.md retains exact-money requirements");
+record(/Use `src\/lib\/db\.ts` as the only Supabase client[\s\S]*assertRpcResult\(\)[\s\S]*checkMutationResult\(\)/i.test(agents), "AGENTS.md retains Supabase client and result-check requirements");
+record(/never use `--no-verify`[\s\S]*never push directly to `main`/i.test(agents), "AGENTS.md retains protected-delivery bans");
+record(/Mason explicitly pre-authorized[\s\S]*unexpired autopilot arm flag[\s\S]*migration-apply-guard proof[\s\S]*Codex verdict[\s\S]*never permits destructive migrations/i.test(agents), "AGENTS.md retains hands-free migration conditions");
+record(/## Safety and Protected Delivery[\s\S]*\.claude\/commands\/ship\.md/.test(agents), "AGENTS.md routes volatile delivery mechanics to the ship workflow");
+record(/docs\/workflows\/SAFE_DEVELOPMENT_RULES\.md/.test(agents), "AGENTS.md routes detailed engineering rules on demand");
+record(/docs\/workflows\/AGENT_COLLABORATION\.md/.test(agents), "AGENTS.md routes collaboration details on demand");
+record(/docs\/reference\/claude-model-tuning\.md/.test(claude), "CLAUDE.md routes model tuning on demand");
+const missingGuidance = routedGuidance.filter((relative) => !existsSync(path.join(ROOT, relative)));
+record(routedGuidance.length >= 15 && missingGuidance.length === 0, "every path in the AGENTS.md routing table resolves", missingGuidance.join(", "));
+record(existsSync(path.join(ROOT, ".agents/skills/graphify/SKILL.md")), "AGENTS.md graphify route resolves to the Codex adapter");
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(agents), "AGENTS.md has no volatile project counts");
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(claude), "CLAUDE.md has no volatile project counts");
 record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAUDE.md declares AGENTS.md canonical");

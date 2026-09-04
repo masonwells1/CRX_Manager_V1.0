@@ -1,9 +1,9 @@
 # Agent Onboarding — How Not to Fail Here
 
-**Last verified: 2026-07-19**
+**Last verified: 2026-09-04**
 **Update triggers: when a new recurring failure class is identified or the guard system changes.**
 
-You are a new coding agent — possibly a smaller or cheaper model than whoever wrote this doc — starting your first session in CRX Manager. This file is the front door. It assumes you've already read `AGENTS.md` (the contract: hard rules, approval gates, project facts) and exists to make you behave like a senior engineer on this codebase instead of a junior one, on your very first turn.
+You are a new coding agent — possibly a smaller or cheaper model than whoever wrote this doc — starting your first session in CRX Manager. This file is the front door. It assumes you've already read the short shared contract in `AGENTS.md` and exists to make you behave like a senior engineer on this codebase instead of a junior one, on your very first turn.
 
 CRX Manager is a **live production app** for a real agricultural chemical distributor. Real customers, real invoices, real money. Treat every mistake as one that could hit a real business tomorrow morning.
 
@@ -11,10 +11,10 @@ CRX Manager is a **live production app** for a real agricultural chemical distri
 
 ## Read order for your first session
 
-1. **`AGENTS.md`** — the canonical shared contract. Hard rules, approval gates, project facts. Non-negotiable.
+1. **`AGENTS.md`** — the concise shared contract: owner communication, authority, routing, true non-negotiables, and completion standards.
 2. **`docs/workflows/SAFE_DEVELOPMENT_RULES.md`** — the detailed "always do / never do" tables, migration safety, money handling.
 3. **This file** — the failure modes that got past agents before you, and how to not repeat them.
-4. **`docs/reference/gotchas.md`** — project-specific quirks that aren't obvious from reading code (wrong column names, non-obvious types, tables missing `updated_at`, etc.). Skim in full once; re-check the relevant section before touching an area it covers.
+4. **`docs/reference/gotchas.md`** — project-specific quirks that aren't obvious from reading code (wrong column names, non-obvious types, tables missing `updated_at`, etc.). Read the relevant section before touching an area it covers; do not load the entire file when the task is unrelated.
 5. **The `docs/workflows/` file for your task area** — e.g. `QUOTE_TO_DELIVERY.md` for the billing pipeline, `INVENTORY_RULES.md` for inventory, `DATABASE_CHANGE_CHECKLIST.md` before any migration, `RLS_SECURITY_GUIDE.md` before touching policies.
 6. **`docs/manual/ARCHITECTURE.md`** — orientation on how the app fits together, once it exists in your checkout. If it's missing, don't invent claims about structure — read the code directly instead.
 

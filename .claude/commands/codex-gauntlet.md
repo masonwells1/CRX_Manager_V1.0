@@ -149,7 +149,7 @@ For every Codex BLOCKER or HIGH:
 - cut any finding that cannot be grounded in evidence;
 - keep genuine disagreement visible for Mason.
 
-Scope: keep only correctness bugs and gaps against a stated requirement (the Hard Red Lines / lifecycle / money / RLS / idempotency rules). Drop defensive-coding-for-impossible-inputs, style, naming, and speculative-flexibility findings the same as an ungrounded finding.
+Scope: keep only correctness bugs and gaps against a stated requirement (the CRX Hard Rules / lifecycle / money / RLS / idempotency rules). Drop defensive-coding-for-impossible-inputs, style, naming, and speculative-flexibility findings the same as an ungrounded finding.
 
 Severity rubric: BLOCKER = data loss / money error / security hole / breaks a Hard Red Line; HIGH = wrong business result or lifecycle violation on a real path; MED = correctness gap on an unlikely path; LOW = minor. Verdict: SHIP = no open BLOCKER/HIGH; SHIP-WITH-FOLLOWUPS = open items are MED/LOW and explicitly accepted by Mason.
 
