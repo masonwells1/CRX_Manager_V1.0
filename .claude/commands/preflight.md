@@ -17,7 +17,7 @@ Categorize the changed files:
 - **PDF code** changed → set `PDF_CHANGED=true` (any file under `src/` that contains `from 'jspdf'` or `from 'jspdf-autotable'`)
 - **Edge Function** changed → set `EDGE_CHANGED=true` (any `supabase/functions/**/*.ts`)
 - **Schema registry** changed → set `REGISTRY_CHANGED=true` (`.claude/schema-registry.json`)
-- **Agent surface** changed → set `AGENT_SURFACE_CHANGED=true` (any `.claude/{commands,skills,hooks,workflows,agents}/` file, `.claude/settings.json`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, `scripts/check-*`, `scripts/validate-*`, `scripts/verify-*`, or `scripts/sync-agent-workflows.mjs`)
+- **Agent surface** changed → set `AGENT_SURFACE_CHANGED=true` (any `.claude/{commands,skills,hooks,workflows,agents}/` file, `.claude/settings.json`, `.cursorrules`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, `scripts/check-*`, `scripts/validate-*`, `scripts/verify-*`, or `scripts/sync-agent-workflows.mjs`)
 
 ## Step 2: Dispatch reviewer subagents (in PARALLEL)
 

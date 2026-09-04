@@ -18,7 +18,7 @@ Read this only when choosing a Claude model or reasoning effort, delegating work
 ## Verification and Review Prompts
 
 - Do not add generic “double-check your answer” loops. Run the real verification required by `AGENTS.md`: execute the changed behavior, inspect the result, and use independent review where the risk requires it.
-- Reviewer prompts normally request every correctness, safety, and scope finding, then classify or filter findings in a later pass. Do not hide real findings with a severity-only prompt.
+- Reviewer prompts must request every correctness, safety, and scope finding, then classify or filter findings in a later pass. Never hide real findings with a severity-only prompt.
 - Bounded overnight sweeps are the settled exception: `overnight-bug-hunt.js`, `money-inventory-hunt.js`, and `whole-codebase-audit.js` retain their existing significance caps because uncapped fan-out is too costly. Do not add that cap elsewhere without a new decision.
 - Avoid chasing speculative reviewer suggestions that do not affect correctness, safety, or the requested outcome; that creates unnecessary abstractions and tests.
 
@@ -35,7 +35,7 @@ This mapping is a starting point, not a reason to lower rigor on risky work.
 
 `money-inventory-hunt.js` deliberately pins its finder and verifier calls to `high` until a real effort comparison proves a better setting. Do not change that based only on the table above.
 
-The July 2026 tuning was measured on Opus 5. Applying it to Fable 5 remains provisional until a newer CRX harness review replaces it. Background and measurements: `docs/research/2026-07-25-opus5-harness-review.md`.
+The July 2026 tuning was measured on Opus 5. Applying it to Fable 5 remains provisional but binding until a newer CRX harness review replaces it; a Fable 5 session must not treat this guidance as Opus-only or skip it. Background and measurements: `docs/research/2026-07-25-opus5-harness-review.md`.
 
 ## External Guidance
 

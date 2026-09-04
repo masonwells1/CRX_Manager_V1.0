@@ -20,6 +20,10 @@ function read(relative) {
 const agents = read("AGENTS.md");
 const claude = read("CLAUDE.md");
 const cursorRules = read(".cursorrules");
+const claudeModelTuning = read("docs/reference/claude-model-tuning.md");
+const codingGuidelines = read("docs/reference/coding-guidelines.md");
+const safeDevelopmentRules = read("docs/workflows/SAFE_DEVELOPMENT_RULES.md");
+const shipWorkflow = read(".claude/commands/ship.md");
 const routingTable = agents.match(/## Start and Route([\s\S]*?)## Engineering Principles/)?.[1] || "";
 const routedGuidance = [...new Set(
   [...routingTable.matchAll(/`([^`]+\.(?:md|json))`/g)].map((match) => match[1]),
@@ -79,6 +83,7 @@ record(/never have to nudge[\s\S]*Keep moving through authorized work/i.test(age
 record(/what failed, what it means, and what (?:the agent is|you are) trying next/i.test(agents), "owner communication makes failures explicit");
 record(/NEEDS MASON - ACTION REQUIRED[\s\S]*NEEDS MASON - DECISION REQUIRED/i.test(agents), "owner communication makes genuine stops unmistakable");
 record(/Codex proceeds after a short plan[\s\S]*Claude retains its global pre-code approval checkpoint/i.test(agents), "tool-specific plan authority stays explicit");
+record(/Before presenting findings as current, confirm the checkout is not behind `origin\/main`/i.test(agents), "reviews and audits require a current checkout");
 record(/simplest complete implementation/i.test(agents), "AGENTS.md requires simple, complete implementations");
 record(/clarity, not cleverness/i.test(agents), "AGENTS.md favors readable code over clever compression");
 record(/## CRX Hard Rules/.test(agents), "AGENTS.md retains the CRX hard-rule section");
@@ -91,6 +96,7 @@ record(/Mason explicitly pre-authorized[\s\S]*unexpired autopilot arm flag[\s\S]
 record(/## Safety and Protected Delivery[\s\S]*\.claude\/commands\/ship\.md/.test(agents), "AGENTS.md routes volatile delivery mechanics to the ship workflow");
 record(/docs\/workflows\/SAFE_DEVELOPMENT_RULES\.md/.test(agents), "AGENTS.md routes detailed engineering rules on demand");
 record(/docs\/workflows\/AGENT_COLLABORATION\.md/.test(agents), "AGENTS.md routes collaboration details on demand");
+record(/Delegation, agent collaboration, or agent-surface changes/i.test(agents), "AGENTS.md routes delegation guidance on demand");
 record(/docs\/reference\/claude-model-tuning\.md/.test(claude), "CLAUDE.md routes model tuning on demand");
 const missingGuidance = routedGuidance.filter((relative) => !existsSync(path.join(ROOT, relative)));
 record(routedGuidance.length >= 15 && missingGuidance.length === 0, "every path in the AGENTS.md routing table resolves", missingGuidance.join(", "));
@@ -99,6 +105,13 @@ record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(agents), "AGE
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(claude), "CLAUDE.md has no volatile project counts");
 record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAUDE.md declares AGENTS.md canonical");
 record(/explicit approval in the current conversation/i.test(agents), "AGENTS.md defines current-conversation approval gates");
+const alwaysLoadedGuidance = `${agents}\n${claude}\n${cursorRules}`;
+record(!/^\s*(?:[-*+]\s+)?(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/im.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
+record(/Reviewer prompts must request every correctness, safety, and scope finding/i.test(claudeModelTuning), "Claude reviewer prompts retain the uncapped-finding default");
+record(/Fable 5 remains provisional but binding[\s\S]*must not treat this guidance as Opus-only or skip it/i.test(claudeModelTuning), "Claude model tuning remains binding for Fable 5 until superseded");
+record(/DECISION_LOG\.md[\s\S]*settled design choice[\s\S]*KNOWN_ISSUES\.md[\s\S]*problem is new/i.test(codingGuidelines), "every code change checks settled decisions and known issues");
+record(/^Read this before any multi-file, data, money, security, permission, production, migration, or customer-facing change\./m.test(safeDevelopmentRules), "safe-development trigger matches the lean routing table");
+record(/mergeStateStatus[\s\S]*known-stale protection sub-resource/i.test(shipWorkflow), "ship workflow uses behavioral PR mergeability evidence");
 record(migrationStampCheck.trim() === canonicalMigrationStampCheck.trim(), "migration drift reviewer B7 check matches the canonical fail-closed contract");
 record(/Before apply, the disk timestamp must be \*\*strictly greater than the current live effective ordering high-water\*\*/i.test(migrationStampCheck), "migration drift reviewer checks disk timestamp above live effective ordering high-water");
 record(/If no current live effective ordering high-water evidence derived from both `name` and fallback `version` is available, emit a \*\*HIGH\*\*/i.test(migrationStampCheck), "migration drift reviewer fails closed when row-by-row live evidence is missing");

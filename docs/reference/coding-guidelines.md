@@ -1,6 +1,8 @@
 # Coding Guidelines
 
-Read this when changing application, database, test, or agent-tooling code. `AGENTS.md` carries the short always-loaded version; this file explains how to apply it.
+Before changing code, check `docs/manual/DECISION_LOG.md` before reopening a settled design choice and `docs/manual/KNOWN_ISSUES.md` before claiming a problem is new.
+
+Read this for every code change. `AGENTS.md` carries the short always-loaded version; this file explains how to apply it.
 
 The earlier third-party principles and Karpathy experiment-loop passage Mason asked to preserve remain available as historical source material in `docs/research/2026-06-15-coding-principles-source.md`. They are not active policy where they conflict with `AGENTS.md`.
 

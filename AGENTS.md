@@ -24,19 +24,19 @@ This is the always-loaded, shared contract for Codex, Claude, and future coding 
 
 ## Start and Route
 
-1. Before writing, inspect `git status --short --branch`. Preserve unrelated work; use a clean current-main worktree when the checkout is dirty, stale, or occupied.
+1. Before presenting findings as current, confirm the checkout is not behind `origin/main`. Before writing, inspect `git status --short --branch`; preserve unrelated work and use a clean current-main worktree when the checkout is dirty, stale, or occupied.
 2. Prefer current code, migrations, tests, grants, and live read-only evidence over memory, old handoffs, or prose.
 3. Load only the guidance relevant to the task:
 
 | Task | Read or invoke |
 |---|---|
 | First session or unfamiliar area | `docs/manual/AGENT_ONBOARDING.md`, then `docs/manual/ARCHITECTURE.md` |
-| Any code change | `docs/reference/coding-guidelines.md` and the relevant section of `docs/reference/gotchas.md`; add `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for multi-file, data, money, security, permission, production, or customer-facing work |
+| Any code change | `docs/reference/coding-guidelines.md` and the relevant section of `docs/reference/gotchas.md`; add `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for multi-file, data, money, security, permission, production, migration, or customer-facing work |
 | Architecture, difficult debugging, workflow/migration tracing, structural audit, or PR impact | `graphify` skill first; use focused source inspection if docs are outside its code-only corpus |
 | Database, migration, or RLS | `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`, `docs/workflows/RLS_SECURITY_GUIDE.md`, and `.claude/schema-registry.json` |
 | Quote-to-cash or inventory | `docs/workflows/QUOTE_TO_DELIVERY.md` or `docs/workflows/INVENTORY_RULES.md` |
 | Frontend/UI | `docs/workflows/UI_PATTERNS.md` |
-| Agent collaboration or agent-surface changes | `docs/workflows/AGENT_COLLABORATION.md` and `docs/reference/agent-guardrails.md` |
+| Delegation, agent collaboration, or agent-surface changes | `docs/workflows/AGENT_COLLABORATION.md` and `docs/reference/agent-guardrails.md` |
 | Push, PR finalization, merge, or release | `.claude/commands/ship.md` |
 | Settled decisions, known problems, or current status | `docs/manual/DECISION_LOG.md`, `docs/manual/KNOWN_ISSUES.md`, or `docs/manual/CURRENT_STATE.md` |
 | Mason asks how the system or agent process works | `docs/manual/OWNER_PLAYBOOK.md` |
@@ -69,7 +69,7 @@ This is the always-loaded, shared contract for Codex, Claude, and future coding 
 
 - Done means the changed behavior ran and was observed. Match proof to risk: focused checks for small reversible work; broader tests and real-path proof for shared logic, money, data, auth, migrations, or production behavior.
 - If real verification cannot run, say exactly what remains unverified and the risk. Tests written alongside a change are supporting evidence, not sole proof.
-- Close substantial work with `VERDICT: COMPLETE`, `READY FOR APPROVAL`, `BLOCKED`, or `PARTIAL`; state what changed, the proof, who owns anything remaining, and one recommended next step.
+- Close substantial work with `COMPLETE`, `READY FOR APPROVAL`, `BLOCKED`, or `PARTIAL`; state what changed, the proof, who owns anything remaining, and one recommended next step.
 
 ## Guidance Ownership
 

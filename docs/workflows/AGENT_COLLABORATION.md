@@ -55,6 +55,7 @@ Direct reviews are read-only. PR comments default to dry-run. Production and del
 After changing agent commands, skills, hooks, permissions, agents, or helpers:
 
 ```powershell
+git status --short --branch
 node scripts/sync-agent-workflows.mjs --write
 npm run test:agent-workflows
 npm run agent-health

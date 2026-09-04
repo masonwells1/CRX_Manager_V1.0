@@ -1,6 +1,6 @@
 # Safe Development Rules
 
-Read this before any multi-file, application-code, data, money, security, permission, production, migration, or customer-facing change. A tiny documentation-only correction does not require loading this entire file.
+Read this before any multi-file, data, money, security, permission, production, migration, or customer-facing change. A tiny documentation-only correction does not require loading this entire file.
 
 These are the detailed engineering rules behind the concise contract in `AGENTS.md`. Breaking them can cause bugs, data loss, security vulnerabilities, or incorrect business records.
 
@@ -74,7 +74,8 @@ Apply `docs/reference/coding-guidelines.md` to every code change. In particular,
 |------|------------------------|
 | NEVER remove the pre-commit hook | Removes the safety net that catches errors before commits |
 | NEVER commit with `--no-verify` | Bypasses lint + build + test checks and the ledger guard |
-| NEVER commit agent-surface changes without a ledger update in the same commit | The pre-commit ledger guard (`scripts/check-ledger-update.mjs`, 2026-07-13) blocks commits that stage `.claude/{commands,skills,hooks,workflows,agents}/`, `.claude/settings.json`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, or guard scripts with no ledger update. PREFERRED: add `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` — a NEW dated file of your own, since two sessions never write the same path and it cannot conflict. The guard requires it be ADDED (not modified, deleted or renamed) and to carry a `## <YYYY-MM-DD> - <what changed>` heading with detail beneath it. Also accepted: `docs/CHANGELOG.md` / `docs/manual/*.md` / `docs/reference/agent-guardrails.md` / `docs/loops/` — policy changes must leave a written record Mason can find |
+| NEVER use destructive recovery such as `git reset --hard`, broad discard-all commands, or recursive force-delete without Mason's exact request after the risk is explained | Can permanently erase unrelated or another session's work |
+| NEVER commit agent-surface changes without a ledger update in the same commit | The pre-commit ledger guard (`scripts/check-ledger-update.mjs`, 2026-07-13) blocks commits that stage `.claude/{commands,skills,hooks,workflows,agents}/`, `.claude/settings.json`, `.cursorrules`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, or guard scripts with no ledger update. PREFERRED: add `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` — a NEW dated file of your own, since two sessions never write the same path and it cannot conflict. The guard requires it be ADDED (not modified, deleted or renamed) and to carry a `## <YYYY-MM-DD> - <what changed>` heading with detail beneath it. Also accepted: `docs/CHANGELOG.md` / `docs/manual/*.md` / `docs/reference/agent-guardrails.md` / `docs/loops/` — policy changes must leave a written record Mason can find |
 | NEVER add `@ts-ignore` or `any` types | Hides bugs that TypeScript would catch |
 | NEVER install additional CSS frameworks | Tailwind CSS only — other frameworks cause conflicts |
 | NEVER install additional icon libraries | Lucide React only — keeps bundle size consistent |

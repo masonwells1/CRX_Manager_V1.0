@@ -15,7 +15,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 **Claude tuning move.** The former `CLAUDE.md` Model Tuning section, including its concise response behavior, delegation budget, review-prompt rules, and effort mapping, moved to `docs/reference/claude-model-tuning.md`. The literal `<tone_preference>` wrapper is retired; its operative behavior remains in `AGENTS.md` Owner Communication and the on-demand tuning reference. Claude keeps Mason's existing one-time pre-code plan checkpoint for multi-file or risk-sensitive work. Codex keeps its standing authority to proceed after a short plan and must not require repeated nudges.
 
-**What this forbids/implies:** do not re-expand always-loaded files with task procedures already routed elsewhere; do not remove a hard rule without moving or superseding it; and do not make Mason name files, select technical implementations, or paste setup prompts. `scripts/check-agent-guidance.mjs` enforces size budgets, critical rule presence, and valid routing paths.
+**What this forbids/implies:** do not re-expand always-loaded files with task procedures already routed elsewhere; do not remove a hard rule without moving or superseding it; do not present findings from a checkout behind `origin/main` as current; and do not make Mason name files, select technical implementations, or paste setup prompts. Delegation routes to `docs/workflows/AGENT_COLLABORATION.md`, while every code change routes through the lightweight coding guide so settled decisions and known issues are checked without loading the full safety rulebook. `scripts/check-agent-guidance.mjs` enforces size budgets, critical rule presence, and valid routing paths.
 
 ## 2026-09-03 — invoice payment terms run from the INVOICE DATE; the UTC hole is a separate, smaller issue
 
@@ -738,14 +738,14 @@ for the closed-allowlist shape that entry needs. Still parked; nothing was chang
 **Source:** Mason's in-chat request on 2026-08-31 to tune both CLAUDE.md files for effectiveness;
 Codex PR #528 review finding that this log still scoped the tuning decision to Opus 5.
 
-**Decision.** The `CLAUDE.md` Model Tuning section added by the 2026-07-25 entry applies to the
+**Decision.** The Model Tuning guidance now kept in `docs/reference/claude-model-tuning.md` and originally added to `CLAUDE.md` by the 2026-07-25 entry applies to the
 whole Claude 5 family — Opus 5 and Fable 5 — not only Opus 5. The 2026-07-25 calibration
 (`<tone_preference>`, deliverable-length rule, subagent budget, self-verification carve-out,
 uncapped review prompts with the settled overnight-sweep exception, and the effort ladder) carries
 over to Fable 5 unchanged. The carry-over is provisional — the 2026-07-25 review measured Opus 5
 only — but binding until a newer harness review supersedes it.
 
-**Operative rule.** A Fable 5 session follows the Model Tuning rules exactly as an Opus 5 session
+**Operative rule.** A Fable 5 session follows the model-tuning rules exactly as an Opus 5 session
 would; do not treat the section as Opus-only or relitigate its scope. Every settled exception and
 the pending effort sweep from the 2026-07-25 entry remain in force. This supersedes only the
 model-scope wording of the 2026-07-25 entry; its substance is unchanged.
@@ -2871,7 +2871,7 @@ from zero in a throwaway container, all six post-baseline migrations replayed, 4
 **Decision (Mason, in-chat):** tune the harness for Claude Opus 5 and drop Hermes — "we don't use Hermes really." No third-agent contract, entry point, or hook adapter will be built.
 **Why:** an Opus 5 review found the harness already close to Anthropic's guidance, with the gaps being things that were *missing* (no effort policy, no subagent budget, no length calibration) rather than things that were wrong.
 **What this forbids/implies:**
-- `CLAUDE.md` gains a **Model Tuning (Claude Opus 5)** section: concise-response `<tone_preference>`, written-deliverable length calibration, a subagent budget capped at the fan-outs already defined in `.claude/workflows/`, and an effort mapping (`low` mechanical → `xhigh` foundation/migration review). The effort mapping is an unmeasured starting point; **never lower effort on a money/RLS/migration path to save tokens.**
+- At the time, `CLAUDE.md` gained a **Model Tuning (Claude Opus 5)** section; on 2026-09-04 that guidance moved without weakening to `docs/reference/claude-model-tuning.md`. It covers concise responses, written-deliverable length calibration, a subagent budget capped at the fan-outs already defined in `.claude/workflows/`, and an effort mapping (`low` mechanical → `xhigh` foundation/migration review). The effort mapping is an unmeasured starting point; **never lower effort on a money/RLS/migration path to save tokens.**
 - Redundant self-verification instructions are discouraged, but this **does not** relax `AGENTS.md`'s Verification and Closeout rules, the Codex cross-model gate, or the adversarial skeptics on money/RLS/migration paths — those are production-safety and independent-check mechanisms, not model self-checks.
 - Review prompts must request every finding and filter later; never instruct a reviewer to "only report high-severity issues" or "be conservative" (Opus 5 obeys literally and reports less). **SETTLED (Mason, 2026-07-25) — bounded overnight sweeps are exempt.** `overnight-bug-hunt.js:51`, `money-inventory-hunt.js:52`, and `whole-codebase-audit.js:29` keep their 8–10 "most significant" caps; the per-run cost of uncapped fan-out outweighs the tail findings. Accepted trade-off: a low-ranked correctness bug can be dropped before the skeptic pass on those runs. The rule binds everywhere else — do not add a cap to any other review prompt.
 - **SETTLED (Mason, 2026-07-25) — night hunt stays at `high`.** `money-inventory-hunt.js` pins `effort: 'high'` at `:293` and `:334`. It stays there until an effort sweep on real CRX tasks measures otherwise; nothing indicates `high` is currently failing, and `xhigh` costs more on the largest fan-out in the repo. The `xhigh` row of the mapping therefore does not reach those agents by design, not by oversight.

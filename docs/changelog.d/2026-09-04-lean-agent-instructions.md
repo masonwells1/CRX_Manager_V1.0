@@ -10,6 +10,6 @@
 - Added a plain-English instruction architecture review with current OpenAI and Anthropic documentation sources.
 - Replaced stale, approval-heavy prompt templates with short plain-English request examples so Mason never has to name files, choose an implementation, or repeatedly tell an agent to continue.
 - Rewrote the active coding guide around simple, surgical, goal-driven work while preserving Mason's earlier third-party source text in `docs/research/2026-06-15-coding-principles-source.md` as historical background.
-- On Mason's workstation, separately reduced the global Codex `AGENTS.md` from 9,488 to 6,509 bytes while retaining cross-project merge conditions and delegation limits; the repository contract is now the source for CRX-specific rules. Pre/post snapshots are preserved under `C:\Users\mason\.codex\backups\20260904-codex-behavior\`.
 - Replaced the stale `.cursorrules` project snapshot and volatile counts with an eight-line router to the canonical shared contract.
 - Removed a duplicated 122-line hook-reference block and refreshed its startup-reminder description.
+- Added regression checks for review-proof token safety, uncapped reviewer prompts, Fable 5 tuning scope, and behavioral PR mergeability; `.cursorrules` now receives the same ledger and preflight treatment as other agent guidance.
