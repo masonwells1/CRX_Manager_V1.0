@@ -8,18 +8,85 @@ const SECURITY_DEFINER_ROUTINE_HEADER = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:FU
 
 function blank(out, count) { return out + ' '.repeat(count); }
 
+function isIdentifierCharacter(ch) {
+  return Boolean(ch) && /[A-Za-z0-9_$]/.test(ch);
+}
+
+function startsKeyword(text, index, keyword) {
+  const candidate = text.slice(index, index + keyword.length);
+  return candidate.toLowerCase() === keyword
+    && !isIdentifierCharacter(text[index - 1])
+    && !isIdentifierCharacter(text[index + keyword.length]);
+}
+
+function skipWhitespaceAndComments(text, start) {
+  let index = start;
+  while (index < text.length) {
+    if (/\s/.test(text[index])) { index++; continue; }
+    if (text[index] === '-' && text[index + 1] === '-') {
+      index += 2;
+      while (index < text.length && text[index] !== '\n' && text[index] !== '\r') index++;
+      continue;
+    }
+    if (text[index] === '/' && text[index + 1] === '*') {
+      let depth = 1; index += 2;
+      while (index < text.length && depth) {
+        if (text[index] === '/' && text[index + 1] === '*') { depth++; index += 2; }
+        else if (text[index] === '*' && text[index + 1] === '/') { depth--; index += 2; }
+        else index++;
+      }
+      if (depth) return null;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function readSingleQuotedLiteral(text, start) {
+  const quote = text[start] === "'" ? start : ((text[start] === 'e' || text[start] === 'E') && text[start + 1] === "'" ? start + 1 : -1);
+  if (quote === -1) return null;
+  let value = '';
+  for (let index = quote + 1; index < text.length; index++) {
+    if (text[index] === "'" && text[index + 1] === "'") { value += "'"; index++; continue; }
+    if (text[index] === "'") return { value, end: index + 1 };
+    value += text[index];
+  }
+  return null;
+}
+
+function unsafeStandardConformingStringsChange(text, start) {
+  if (startsKeyword(text, start, 'set')) {
+    let index = skipWhitespaceAndComments(text, start + 3);
+    if (index === null) return true;
+    if (startsKeyword(text, index, 'local') || startsKeyword(text, index, 'session')) {
+      index = skipWhitespaceAndComments(text, index + (startsKeyword(text, index, 'local') ? 5 : 7));
+      if (index === null) return true;
+    }
+    return startsKeyword(text, index, 'standard_conforming_strings');
+  }
+  if (!startsKeyword(text, start, 'set_config')) return false;
+  let index = skipWhitespaceAndComments(text, start + 'set_config'.length);
+  if (index === null || text[index] !== '(') return true;
+  index = skipWhitespaceAndComments(text, index + 1);
+  if (index === null) return true;
+  const setting = readSingleQuotedLiteral(text, index);
+  // A dynamic setting name cannot be statically proven not to alter this mode.
+  return setting === null || setting.value.toLowerCase() === 'standard_conforming_strings';
+}
+
 // Preserve executable tokens and quoted identifiers, but blank comments and all
 // data literals. A revoke in prose, a string, or a function body cannot satisfy
 // an apply-time ACL check. Null means malformed SQL and fails closed.
-function executableSql(sql) {
+export function executableSql(sql) {
   const src = String(sql || ''); let out = '';
-  // The lightweight lexer below models PostgreSQL's default string rules. A
-  // migration can change those rules, making a backslash-escaped quote keep
-  // apparent GRANT/REVOKE text inside data. Until that mode is modelled, do not
-  // let any such migration supply ACL proof.
-  if (/\bSET\s+(?:(?:LOCAL|SESSION)\s+)?standard_conforming_strings\s*(?:TO|=)\s*'?(?:off|false|0)'?\b/i.test(src)) return null;
   for (let i = 0; i < src.length;) {
     const ch = src[i];
+    // The lexer models PostgreSQL's default string rules. Changing the mode
+    // through SET (including comment-separated tokens) or set_config() would
+    // make its treatment of backslash escapes unknowable, so reject it before
+    // handling any quoted content.
+    if ((ch === 's' || ch === 'S') && unsafeStandardConformingStringsChange(src, i)) return null;
     const escape = (ch === 'e' || ch === 'E') && src[i + 1] === "'" && !/[A-Za-z0-9_$]/.test(src[i - 1] || '');
     if (ch === '-' && src[i + 1] === '-') {
       let end = i + 2; while (end < src.length && src[end] !== '\n' && src[end] !== '\r') end++;

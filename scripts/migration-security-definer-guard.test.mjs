@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
+import { executableSql, securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 
 const definition = (suffix = '') => `
 CREATE OR REPLACE FUNCTION public.post_return_credit(p_id uuid)
@@ -164,6 +164,25 @@ test('fails closed for existing-routine grants and nonstandard string parsing', 
 CREATE FUNCTION public.string_decoy() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;
 SELECT 'counterfeit \' REVOKE ALL ON FUNCTION public.string_decoy() FROM PUBLIC, anon;';`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(nonstandardStrings), ['unparseable-security-definer-sql']);
+});
+
+test('fails closed for comment-separated string-mode changes', () => {
+  const commentSeparated = String.raw`SET/**/standard_conforming_strings=off;
+CREATE OR REPLACE FUNCTION public.post_return_credit(p_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$ BEGIN RETURN; END; $$;
+SELECT 'counterfeit \' REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;';`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(commentSeparated), ['unparseable-security-definer-sql']);
+});
+
+test('fails closed for set_config string-mode changes', () => {
+  const throughSetConfig = `${definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;')}\nSELECT set_config('standard_conforming_strings', 'off', false);`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(throughSetConfig), ['unparseable-security-definer-sql']);
+});
+
+test('rejects executable string-mode changes after comment normalization', () => {
+  assert.equal(executableSql('SET/**/standard_conforming_strings=off; SELECT 1;'), null);
+  assert.equal(executableSql("SELECT set_config('standard_conforming_strings', 'off', false);"), null);
 });
 
 test('fails closed for quoted schema and argument-type identities', () => {
