@@ -24,7 +24,7 @@ const PREAMBLE = [
   '- READ-ONLY. NEVER call apply_migration. NEVER run mutating SQL (no INSERT/UPDATE/DELETE/DDL). SELECT and introspection only.',
   '- Do NOT edit, write, or delete any file. This is a review, not a fix.',
   '- Cite hard evidence for every finding: a file:line, a table/function name, or the exact read-only SQL you ran and what it returned.',
-  '- Read CLAUDE.md and the relevant docs/reference/* files for the project\'s own documented rules and ACCEPTED exceptions before flagging anything.',
+  '- Read AGENTS.md and the workflow/reference files it routes for the project\'s documented rules and ACCEPTED exceptions before flagging anything.',
   '- Known accepted findings — do NOT re-report: profile_public_view uses SECURITY DEFINER semantics by design; customer RLS is intentionally lower-bound-only; reportPdf.ts columnStyles uses one allowed `any`. Numeric-dollar storage is never suppressed by type alone: audit every such column, including commissions.commission_amount, and report dirty values, inexact arithmetic, or a missing active finite whole-cent CHECK.',
   '- Prefer precision over volume. Report only what you can substantiate. Do NOT pad with speculative or style-only nits. Report at most your 10 most significant findings for this dimension.',
 ].join('\n')
@@ -116,12 +116,12 @@ const DIMENSIONS = [
   {
     key: 'business-lifecycle',
     prompt:
-      'Audit BUSINESS-LOGIC LIFECYCLE correctness. The documented lifecycles (quote, order, delivery, invoice, job, PO, return, commission, commission_payment) live in CLAUDE.md. Flag: (a) status-string values written by frontend or RPCs that are NOT in the live CHECK constraint for that table (the "void" vs "voided" class) — read live CHECK constraints from pg_constraint and compare; (b) lifecycle transitions that no trigger/RPC actually enforces; (c) the delivery scheduled→in_progress→completed two-step and item-lock rules being bypassable. Use live SQL for constraints.',
+      'Audit BUSINESS-LOGIC LIFECYCLE correctness. Follow the lifecycle documents routed by AGENTS.md, especially QUOTE_TO_DELIVERY.md and INVENTORY_RULES.md, for quote, order, delivery, invoice, job, PO, return, commission, and commission_payment rules. Flag: (a) status-string values written by frontend or RPCs that are NOT in the live CHECK constraint for that table (the "void" vs "voided" class) — read live CHECK constraints from pg_constraint and compare; (b) lifecycle transitions that no trigger/RPC actually enforces; (c) the delivery scheduled→in_progress→completed two-step and item-lock rules being bypassable. Use live SQL for constraints.',
   },
   {
     key: 'doc-drift',
     prompt:
-      'Audit DOCUMENTATION DRIFT. Compare counts claimed in CLAUDE.md and docs/reference/* against reality: pages (count src/pages + `lazy(` occurrences in src/App.tsx), migrations (count supabase/migrations/*.sql), RPCs (live pg_proc count in public), tables (live count), tests. Report every stale number as claimed-vs-actual. Also flag reference docs (migration-history.md, rpc-functions.md, pages-routes.md, database-schema.md) that are missing entries for recent additions.',
+      'Audit DOCUMENTATION DRIFT. Compare counts claimed in docs/reference/* against reality: pages (count src/pages + `lazy(` occurrences in src/App.tsx), migrations (count supabase/migrations/*.sql), RPCs (live pg_proc count in public), tables (live count), tests. Report every stale number as claimed-vs-actual, and flag any volatile count added to always-loaded AGENTS.md or CLAUDE.md. Also flag reference docs (migration-history.md, rpc-functions.md, pages-routes.md, database-schema.md) that are missing entries for recent additions.',
   },
   {
     key: 'deps-cve',
@@ -158,7 +158,7 @@ function verifyPrompt(d, f) {
     '',
     'Independently verify against the CURRENT code on disk and the LIVE database (read-only). Specifically check:',
     '1. Does the cited file:line / table / function actually exhibit this right now?',
-    '2. Is it already mitigated elsewhere — a trigger, an RLS policy, a PreToolUse hook, a deployed-vs-disk difference, or a documented ACCEPTED exception in CLAUDE.md?',
+    '2. Is it already mitigated elsewhere — a trigger, an RLS policy, a PreToolUse hook, a deployed-vs-disk difference, or a documented ACCEPTED exception in AGENTS.md or a workflow/reference file it routes?',
     '3. Is the severity calibrated correctly?',
     '',
     'Set isReal=true ONLY if you confirmed it with concrete evidence. Use revisedSeverity=FALSE_POSITIVE if refuted. In verifiedAgainst, state exactly what you ran or read.',

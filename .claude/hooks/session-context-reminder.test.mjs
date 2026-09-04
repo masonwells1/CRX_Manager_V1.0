@@ -32,7 +32,8 @@ assert.match(startup, /armed hands-free migration path waives per-migration appr
 assert.match(startup, /never for a destructive migration/);
 // Keep the full rulebook task-routed instead of injecting it into every session.
 assert.doesNotMatch(startup, /SAFE_DEVELOPMENT_RULES/);
-assert.ok(startup.length < 1_000, `startup reminder grew to ${startup.length} characters`);
+// Leave room for precise gate wording while keeping procedures out of startup context.
+assert.ok(startup.length < 1_200, `startup reminder grew to ${startup.length} characters`);
 assert.equal(run("resume"), startup);
 assert.equal(run("clear"), startup);
 assert.equal(run(), startup);

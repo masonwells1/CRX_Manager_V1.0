@@ -18,6 +18,7 @@ The earlier third-party principles and Karpathy experiment-loop passage Mason as
 
 - Every changed line should trace to the requested outcome, a required test, or a directly exposed defect.
 - Match existing style and reuse shared helpers, types, components, and database patterns.
+- Do not add `any` or `@ts-ignore`. The existing `src/lib/reportPdf.ts` `columnStyles` cast is the one narrow compatibility exception; do not copy it elsewhere.
 - Do not reformat or refactor adjacent code merely because you would write it differently.
 - Remove imports, branches, helpers, and tests made obsolete by your change. Mention unrelated dead code; do not remove it unless asked.
 - Keep behavior changes separate from mechanical cleanup when separating them makes review and rollback clearer.

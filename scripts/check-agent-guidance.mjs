@@ -19,7 +19,7 @@ function read(relative) {
 
 function readChecked(relative) {
   if (!existsSync(path.join(ROOT, relative))) {
-    record(false, `${relative} - present`);
+    record(false, `${relative} is missing`);
     return "";
   }
   return read(relative);
@@ -115,7 +115,7 @@ record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(claude), "CLA
 record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAUDE.md declares AGENTS.md canonical");
 record(/explicit approval in the current conversation/i.test(agents), "AGENTS.md defines current-conversation approval gates");
 const alwaysLoadedGuidance = `${agents}\n${claude}\n${cursorRules}`;
-record(!/\b(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT)\s*:/i.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
+record(!/(?:CODEX_PROOF_VERDICT|FINAL_VERDICT|OPUS5_VERDICT|VERDICT)\s*:/i.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
 record(/Reviewer prompts must request every correctness, safety, and scope finding/i.test(claudeModelTuning), "Claude reviewer prompts retain the uncapped-finding default");
 record(/Never lower effort on a money, RLS, or migration path to save tokens/i.test(claudeModelTuning), "Claude tuning preserves the high-risk effort floor");
 record(/Fable 5 remains provisional but binding[\s\S]*must not treat this guidance as Opus-only or skip it/i.test(claudeModelTuning), "Claude model tuning remains binding for Fable 5 until superseded");

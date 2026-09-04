@@ -47,7 +47,7 @@ const PREAMBLE = [
   '- READ-ONLY. NEVER call apply_migration. NEVER run mutating SQL (no INSERT/UPDATE/DELETE/DDL). SELECT + introspection only.',
   '- Do NOT edit, write, or delete any file. This workflow only FINDS; the command layer fixes.',
   '- Cite hard evidence for every finding: a file:line, a table/function name, or the exact read-only SQL you ran and what it returned. A finding with no concrete evidence is not a finding.',
-  '- Read CLAUDE.md + the relevant docs/reference/* for the project\'s own documented rules and ACCEPTED exceptions before flagging anything.',
+  '- Read AGENTS.md and the workflow/reference files it routes for the project\'s documented rules and ACCEPTED exceptions before flagging anything.',
   '- Prefer precision over volume. Report only what you can substantiate. NO style/naming nits, NO defensive-coding-for-impossible-inputs, NO speculative flexibility. Correctness bugs and Hard-Red-Line / lifecycle / money / RLS / idempotency violations ONLY. At most your 8 most significant findings.',
   '',
   'THE 8 BUG CLASSES YOU ARE HUNTING (find NEW instances of these — this is the whole point):',
@@ -218,7 +218,7 @@ const DIMENSIONS = [
   {
     key: 'lifecycle-invariants', phase: 2,
     prompt:
-      'Hunt BUSINESS-LIFECYCLE correctness across quote/order/delivery/invoice/job/PO/return/commission/commission_payment (lifecycles documented in CLAUDE.md). (a) status strings written that are NOT in the live CHECK; (b) transitions no trigger/RPC enforces; (c) the delivery two-step + item-lock being bypassable; (d) quote draw-down / Net-Free invariant holes. Use live pg_constraint.',
+      'Hunt BUSINESS-LIFECYCLE correctness across quote/order/delivery/invoice/job/PO/return/commission/commission_payment (follow the lifecycle documents routed by AGENTS.md, especially QUOTE_TO_DELIVERY.md and INVENTORY_RULES.md). (a) status strings written that are NOT in the live CHECK; (b) transitions no trigger/RPC enforces; (c) the delivery two-step + item-lock being bypassable; (d) quote draw-down / Net-Free invariant holes. Use live pg_constraint.',
   },
   {
     key: 'edge-and-pdf', phase: 2,
@@ -228,7 +228,7 @@ const DIMENSIONS = [
   {
     key: 'docs-deps-tests', phase: 2,
     prompt:
-      'Hunt DOC DRIFT + DEPS + TEST GAPS. Doc: compare counts in CLAUDE.md / docs/reference/* against reality (pages, migrations on disk, live RPC/table counts, tests) and report claimed-vs-actual. Deps: npm audit --json (prod vs dev) — unfixed vulns by severity. Tests: high-risk money/RPC/RLS/lifecycle areas with thin or skipped coverage; count it.skip/describe.skip and flag any guarding a financial/security path. Severity = risk of the untested area.',
+      'Hunt DOC DRIFT + DEPS + TEST GAPS. Doc: compare counts in docs/reference/* against reality (pages, migrations on disk, live RPC/table counts, tests) and report claimed-vs-actual; always-loaded AGENTS.md and CLAUDE.md must not contain volatile counts. Deps: npm audit --json (prod vs dev) — unfixed vulns by severity. Tests: high-risk money/RPC/RLS/lifecycle areas with thin or skipped coverage; count it.skip/describe.skip and flag any guarding a financial/security path. Severity = risk of the untested area.',
   },
 ]
 

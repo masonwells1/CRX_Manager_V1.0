@@ -57,3 +57,4 @@ All four links below were reopened successfully on 2026-09-04 before this review
 - OpenAI recommends auditing instruction files for conflict, stating autonomy clearly, and calibrating verification to risk: `https://developers.openai.com/api/docs/guides/latest-model`.
 - Anthropic recommends a short human-readable `CLAUDE.md`, skills for task-specific procedures, and hooks for actions that must always occur: `https://code.claude.com/docs/en/best-practices`.
 - Anthropic documents that `@` imports still load into startup context and recommends keeping each `CLAUDE.md` concise: `https://code.claude.com/docs/en/memory`.
+- Cursor documents that it automatically loads a root `AGENTS.md` and treats `.cursorrules` as a legacy format. That supports keeping `.cursorrules` as a tiny compatibility router instead of duplicating CRX rules: `https://prod.cursor.com/docs/rules`.
