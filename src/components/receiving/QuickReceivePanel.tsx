@@ -264,10 +264,15 @@ export default function QuickReceivePanel() {
      STEP 3: Confirm & receive
   ═══════════════════════════════════════════════════════════════════ */
   const submitQuickReceive = async (request: QuickReceiveIntent) => {
+    // Captured BEFORE the call: resolveIntent() below retires this intent, so
+    // asking for the key again afterwards can mint a different one. The damaged
+    // notification falls back to this exact key when the RPC returns no
+    // receiving record IDs.
+    const idemKey = receiveIntent.getIdempotencyKey();
     const { data, error } = await supabase.rpc('receive_po_items', {
       p_items: request.itemsPayload,
       p_performed_by: request.performedBy,
-      p_idempotency_key: receiveIntent.getIdempotencyKey(),
+      p_idempotency_key: idemKey,
       p_allow_over_receive: false,
     });
 
@@ -292,19 +297,29 @@ export default function QuickReceivePanel() {
 
     await receiveIntent.resolveIntent();
 
-    const damagedReceiptIntentIds = result.receiving_record_ids;
+    const receivingRecordIds = result.receiving_record_ids;
     const hasReceivingRecordIds = (
-      Array.isArray(damagedReceiptIntentIds)
-      && damagedReceiptIntentIds.length > 0
-      && damagedReceiptIntentIds.every((recordId) => typeof recordId === 'string')
+      Array.isArray(receivingRecordIds)
+      && receivingRecordIds.length > 0
+      && receivingRecordIds.every((recordId) => typeof recordId === 'string')
     );
+    // Bind the damaged-item alert to the committed receiving records when the
+    // RPC returned them, and otherwise to THIS receipt's idempotency key — the
+    // same fallback PurchaseOrderDetail uses. Gating the notification itself on
+    // the IDs meant a contract regression that dropped receiving_record_ids
+    // would silently swallow the damaged-goods alert: damaged stock recorded,
+    // no admin notified, and no failed-notification row explaining the gap.
+    // The PDF below still requires the real IDs and stays gated.
+    const damagedReceiptIntentIds: string[] = hasReceivingRecordIds
+      ? (receivingRecordIds as string[])
+      : [idemKey];
 
     // Notifications and the PDF are non-critical side effects after the
     // database result is proven. Their failure must never retain a mutation
     // lock or cause another stock receipt.
     try {
       const damagedItems = request.itemsPayload.filter((item) => item.condition !== 'good');
-      if (damagedItems.length > 0 && hasReceivingRecordIds) {
+      if (damagedItems.length > 0) {
         const damagedInfo = damagedItems.map((item) => {
           const match = request.matchResults.find((candidate) =>
             candidate.allocations.some((allocation) => allocation.po_item_id === item.po_item_id)

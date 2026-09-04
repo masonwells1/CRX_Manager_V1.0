@@ -422,6 +422,16 @@ export default function PurchaseOrderDetail() {
         const receivingRecordIds = (responseData as { receiving_record_ids?: string[] } | null)?.receiving_record_ids || [];
         const damagedReceiptIntentIds = receivingRecordIds.length > 0 ? receivingRecordIds : [idemKey];
 
+        // AUDIT 3.2: Notify admins about damaged/non-good items.
+        //
+        // Everything from here to setReceiveOpen(false) is POST-COMMIT: the
+        // inventory is already recorded and resolveIntent() above has retired the
+        // retry lock. If any of it rejects, runCriticalAction reports the whole
+        // action as failed for a receive that actually succeeded, the modal stays
+        // open, and the operator's retry mints a FRESH key against the retired
+        // intent — receiving the same goods a second time. So this block must not
+        // be able to throw, whatever the notification helpers do later.
+        try {
         // AUDIT 3.2: Notify admins about damaged/non-good items
         if (po && !completedElsewhere) {
           const damagedItems = request.itemsPayload
@@ -457,6 +467,11 @@ export default function PurchaseOrderDetail() {
           if (overItems.length > 0) {
             notifyOverReceive(po.po_number, overItems, po.id);
           }
+        }
+        } catch (notifyErr) {
+          // Never surface a post-commit notification failure as a receiving
+          // failure — see the comment above this block.
+          Sentry.captureException(notifyErr);
         }
 
         // Offer PDF download

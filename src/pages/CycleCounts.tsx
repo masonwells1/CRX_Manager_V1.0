@@ -9,7 +9,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -242,6 +242,29 @@ export default function CycleCounts() {
     setShowDetail(true);
     setLoadingItems(true);
 
+    // Seed the reviewed-revision baseline from the server before loading items.
+    // The list row this modal opened from can be minutes old, and completion now
+    // compares what the operator has actually reviewed against the authoritative
+    // revision; seeding from a stale list row would warn about a change the
+    // operator is already looking at. Reading the revision BEFORE the items is
+    // the fail-safe order: if an item changes while the item snapshot loads, the
+    // seeded revision is the older one, so completion warns (or the server
+    // refuses) rather than silently adopting the change.
+    const { data: revisionRow, error: revisionError } = await supabase
+      .from('cycle_counts')
+      .select('item_revision')
+      .eq('id', count.id)
+      .single();
+    if (revisionError) {
+      Sentry.captureException(revisionError);
+    } else if (typeof revisionRow?.item_revision === 'number') {
+      setActiveCount((previousCount) =>
+        previousCount && previousCount.id === count.id
+          ? { ...previousCount, item_revision: revisionRow.item_revision }
+          : previousCount
+      );
+    }
+
     const { data, error } = await supabase
       .from('cycle_count_items')
       .select('*, product:products(product_name)')
@@ -286,6 +309,18 @@ export default function CycleCounts() {
     const item = countItems.find((i) => i.id === itemId);
     if (!item || !profile || completionInFlightRef.current) return;
 
+    // Reject non-finite quantities before they reach the write intent. A
+    // type="number" box accepts "1e309", which parseFloat turns into Infinity,
+    // and JSON.stringify canonicalizes Infinity/NaN to null. That made a garbage
+    // entry produce byte-identical valueKey/scope to a deliberate "clear this
+    // count" (JSON.stringify([null, null])) — so it both collided with that
+    // intent and sent null to the server, silently CLEARING the counted quantity
+    // instead of reporting bad input.
+    if (countedQty !== null && !Number.isFinite(countedQty)) {
+      toast('error', 'Enter a valid count quantity.');
+      return;
+    }
+
     const variance = countedQty !== null ? countedQty - item.expected_qty : null;
     const variancePct = countedQty !== null && item.expected_qty !== 0
       ? Math.round(((variance || 0) / item.expected_qty) * 100 * 100) / 100
@@ -306,6 +341,7 @@ export default function CycleCounts() {
 
     const previous = itemWriteQueuesRef.current.get(itemId) ?? Promise.resolve();
     const write = previous.catch(() => undefined).then(async () => {
+      try {
       const { data, error } = await supabase.rpc('update_cycle_count_item', {
         p_item_id: itemId,
         p_counted_qty: countedQty ?? undefined,
@@ -346,6 +382,19 @@ export default function CycleCounts() {
             : i
         )
       );
+      } catch (writeErr) {
+        // A transport rejection or an assertRpcResult contract failure has to be
+        // recorded exactly like a returned { error }. It used to escape this
+        // queued task instead: no failed-write marker, no toast — and the
+        // rejected promise was then dropped from pendingItemWritesRef by the
+        // finally below. The first completion attempt died on Promise.all with
+        // no explanation, and the SECOND saw a clean pending set and committed
+        // the stale authoritative quantity, silently discarding the operator's
+        // edit as an inventory adjustment.
+        failedItemWritesRef.current.add(failedItemWriteKey(item.cycle_count_id, itemId));
+        Sentry.captureException(writeErr);
+        toast('error', 'Failed to save this count. Re-enter the quantity before completing.');
+      }
     });
     itemWriteQueuesRef.current.set(itemId, write);
     pendingItemWritesRef.current.add(write);
@@ -391,6 +440,12 @@ export default function CycleCounts() {
       return null;
     }
 
+    // Capture what the operator has actually reviewed BEFORE the refresh below
+    // overwrites it. Own edits keep this in sync (update_cycle_count_item stores
+    // the returned revision on activeCount), so a mismatch here means ANOTHER
+    // client changed an item.
+    const reviewedRevision = activeCount.item_revision;
+
     const items = await refreshCountItems(activeCount.id);
     if (!items) return null;
 
@@ -399,6 +454,19 @@ export default function CycleCounts() {
         ? { ...previousCount, item_revision: countState.item_revision }
         : previousCount
     );
+
+    // p_expected_item_revision fails closed only for a change that lands DURING
+    // completion. A change that landed BEFORE the click would otherwise be
+    // adopted silently: the screen showed 10, another tab set 100, and
+    // completion committed an inventory adjustment for 100 that the operator
+    // never saw. The refresh above has put the real numbers on screen; require a
+    // second, explicit click now that they are visible. The next click matches,
+    // because setActiveCount has advanced the reviewed baseline.
+    if (typeof reviewedRevision === 'number' && reviewedRevision !== countState.item_revision) {
+      toast('error', 'These counts were changed somewhere else while this count was open. The list has been refreshed — review the updated quantities, then complete again.');
+      return null;
+    }
+
     return { items, itemRevision: countState.item_revision };
   };
 
@@ -453,12 +521,28 @@ export default function CycleCounts() {
         const completionScope = `complete:${activeCount.id}:${snapshot.itemRevision}`;
         const key = completeCycleCountIdem.getKeyFor(completionScope);
         // complete_cycle_count RETURNS void — .throwOnError() for fire-and-forget.
-        await supabase.rpc('complete_cycle_count', {
-          p_cycle_count_id: activeCount.id,
-          p_completed_by: profile.id,
-          p_idempotency_key: key,
-          p_expected_item_revision: snapshot.itemRevision,
-        }).throwOnError();
+        try {
+          await supabase.rpc('complete_cycle_count', {
+            p_cycle_count_id: activeCount.id,
+            p_completed_by: profile.id,
+            p_idempotency_key: key,
+            p_expected_item_revision: snapshot.itemRevision,
+          }).throwOnError();
+        } catch (completionErr) {
+          // A change that lands DURING completion is refused by
+          // p_expected_item_revision. Without this branch the operator saw only
+          // the sanitized raw exception ("CYCLE_COUNT_STALE_REVISION") with no
+          // refreshed list and no instruction. Pull the authoritative rows back
+          // in and say plainly what happened; the reviewed-revision baseline
+          // advances with them, so the next click completes what is on screen.
+          if (hasRpcCode(completionErr, RpcErrorCodes.CYCLE_COUNT_STALE_REVISION)) {
+            await waitForAuthoritativeCountItems();
+            throw new Error(
+              'Someone changed a counted quantity while this count was being completed. The list has been refreshed — review the updated quantities, then complete again.'
+            );
+          }
+          throw completionErr;
+        }
         completeCycleCountIdem.resetKeyFor(completionScope);
 
         const varianceItems = snapshot.items.filter((i) => i.variance && i.variance !== 0);

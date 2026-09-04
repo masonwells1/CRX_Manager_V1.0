@@ -45,7 +45,15 @@ export function isWholeCentDollarInput(
   const pattern = options.allowNegative
     ? new RegExp(`^-?${unsignedDollars}$`)
     : new RegExp(`^${unsignedDollars}$`);
-  return pattern.test(value);
+  if (!pattern.test(value)) return false;
+
+  // The pattern bounds the DECIMAL places but not the digit count, so a large
+  // enough amount parses into a cents integer past Number.MAX_SAFE_INTEGER and
+  // silently loses precision — e.g. "90071992547409.93" becomes 9007199254740993,
+  // which JavaScript cannot represent exactly. That is precisely the
+  // exact-whole-cent rule this guard exists to enforce, so reject it here rather
+  // than let a rounded amount reach a money RPC.
+  return Number.isSafeInteger(parseDollarsToCentsSigned(value));
 }
 
 /**

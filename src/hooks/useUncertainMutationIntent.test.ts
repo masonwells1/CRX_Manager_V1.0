@@ -167,10 +167,26 @@ describe('useUncertainMutationIntent', () => {
     //   unresolvedIntent ? beginIntent(unresolvedIntent) : beginIntent({ ...fresh })
     // and on the retry render unresolvedIntent IS set — so the confirmed args are
     // computed and then discarded before the hook ever sees them.
-    const survivor = result.current.getUnresolvedIntent() as BillArgs;
+    // Build the CONFIRMED args the page computes on the retry, then apply the
+    // page's own selection expression to them. This test previously passed the
+    // already-unconfirmed survivor straight to beginIntent() and asserted it came
+    // back unconfirmed — tautological, and green even if the page stopped
+    // building confirmed args altogether. The defect is that the selection
+    // discards them, so the selection is what has to be exercised.
+    const confirmedArgs: BillArgs = {
+      p_bill_number: 'VB-1',
+      p_confirm_po_overage: true,
+      p_po_overage_reason: 'Freight surcharge approved by the owner',
+    };
+    const survivor = result.current.getUnresolvedIntent() as BillArgs | null;
+    // Verbatim shape of the call site: a surviving intent wins over fresh args.
+    const sentToHook = survivor ?? confirmedArgs;
+    // The confirmation the operator just supplied never reaches the hook at all.
+    expect(sentToHook).not.toBe(confirmedArgs);
+
     let retried!: BillArgs;
     await act(async () => {
-      retried = await result.current.beginIntent(survivor);
+      retried = await result.current.beginIntent(sentToHook);
     });
 
     // The confirmation is gone: this retry is byte-identical to the refused one.

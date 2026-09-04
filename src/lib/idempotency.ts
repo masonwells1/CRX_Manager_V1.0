@@ -31,10 +31,21 @@ export function generateIdempotencyKey(operation: string, userId: string): strin
  * receipt. Appending this fingerprint to the scope makes changed content mint a
  * fresh key, while a true retry of unchanged content keeps replaying.
  *
- * FNV-1a is a local lookup hash, not a security boundary — the server's own
- * intent binding remains the authoritative duplicate check. This mirrors
+ * FNV-1a is a local lookup hash, not a security boundary. This mirrors
  * pendingBulkPOIntentStorageKey in src/lib/bulkPOImportRetry.ts, which uses the
  * same hash for the same local-identity purpose.
+ *
+ * KNOWN LIMIT — do not read more protection into this than it gives. For RPCs
+ * that bind the actor and payload server-side, this is only a local convenience
+ * and the server remains the authoritative duplicate check. But several call
+ * sites deliberately target RPCs that replay on the KEY ALONE — `adjust_inventory`
+ * and `retire_inventory_item` say so in their own comments (live catalog:
+ * key-only check_idempotency, no actor/payload binding). For those, this 64-bit
+ * digest is the ONLY thing separating two different payloads, and some of the
+ * fingerprinted payloads include operator-entered free text (e.g. `adjustNote`).
+ * Accidental collision is negligible at these volumes; a deliberate one is not
+ * structurally prevented. Do not widen this function's use to a new key-only RPC
+ * without either a collision-resistant digest or server-side payload binding.
  */
 export function fingerprintIntentPayload(value: unknown): string {
   let hash = 0xcbf29ce484222325n;

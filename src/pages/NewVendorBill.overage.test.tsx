@@ -34,12 +34,20 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
   return chain;
 }
 
-vi.mock('../lib/db', () => ({
-  supabase: { from: mockFrom, rpc: mockRpc },
-  assertRpcResult: vi.fn((value) => value),
-  hasRpcCode: (error: { code?: string } | null, code: string) => error?.code === code,
-  RpcErrorCodes: { PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: '22023' },
-}));
+// Mock ONLY the Supabase client. `hasRpcCode` / `RpcErrorCodes` come from the
+// real module on purpose: the previous stub matched on `error.code === '22023'`,
+// but the real `hasRpcCode` matches on the error MESSAGE (`message === code`, or
+// a `CODE:` / `CODE ` prefix) and the real constant is the semantic string, not a
+// SQLSTATE. Stubbing them asserted a contract that does not exist in production —
+// the page could have failed to recognize a real refusal with this test green.
+vi.mock('../lib/db', async () => {
+  const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
+  return {
+    ...actual,
+    supabase: { from: mockFrom, rpc: mockRpc },
+    assertRpcResult: vi.fn((value) => value),
+  };
+});
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'actor-overage' }, role: 'admin' }),
 }));
@@ -74,7 +82,7 @@ describe('NewVendorBill PO-overage handling', () => {
   }
 
   it('prompts for a reason on an ordinary overage and sends the confirmation on retry', async () => {
-    mockRpc.mockResolvedValue({ data: null, error: { code: '22023', message: 'overage' } });
+    mockRpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' } });
     render(<NewVendorBill />);
     await fillAndSave();
 
@@ -102,7 +110,7 @@ describe('NewVendorBill PO-overage handling', () => {
     // in this state is futile, so no confirmation control may be offered.
     mockRpc.mockImplementation(async () => {
       Object.defineProperty(globalThis, 'indexedDB', { configurable: true, writable: true, value: undefined });
-      return { data: null, error: { code: '22023', message: 'overage' } };
+      return { data: null, error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' } };
     });
     render(<NewVendorBill />);
     await fillAndSave();

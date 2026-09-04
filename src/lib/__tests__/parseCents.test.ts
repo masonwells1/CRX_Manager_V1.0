@@ -18,6 +18,21 @@ describe('isWholeCentDollarInput', () => {
     expect(isWholeCentDollarInput('-10.25', { allowNegative: true })).toBe(true);
     expect(isWholeCentDollarInput('10-25', { allowNegative: true })).toBe(false);
   });
+
+  it('rejects an amount whose cents value exceeds exact integer range', () => {
+    // The decimal-places pattern alone bounds precision but not magnitude:
+    // "90071992547409.93" parses to 9007199254740993 cents, one past
+    // Number.MAX_SAFE_INTEGER (9007199254740991), so it cannot be represented
+    // exactly and would reach a money RPC silently rounded.
+    expect(Number.isSafeInteger(parseDollarsToCentsSigned('90071992547409.93'))).toBe(false);
+    expect(isWholeCentDollarInput('90071992547409.93')).toBe(false);
+    expect(isWholeCentDollarInput('-90071992547409.93', { allowNegative: true })).toBe(false);
+  });
+
+  it('still accepts the largest exactly representable amount', () => {
+    // Boundary immediately below the limit must remain usable.
+    expect(isWholeCentDollarInput('90071992547409.90')).toBe(true);
+  });
 });
 
 describe('parseDollarsToCents (positive-only default)', () => {

@@ -41,8 +41,19 @@ async function logNotificationFailure(
 ): Promise<void> {
   const errorMessage = error instanceof Error ? error.message : String(error);
 
-  // Report to Sentry for visibility
-  Sentry.captureException(error, { tags: { source: 'notification_failure', notification_type: notificationType } });
+  // Report to Sentry for visibility.
+  //
+  // This must not be able to reject. Every notify* helper awaits this from its
+  // own catch block, and several are awaited by callers AFTER a money/inventory
+  // RPC has committed and its idempotency intent has been retired (e.g. the
+  // damaged-receiving notification in PurchaseOrderDetail). An exception
+  // escaping here would report a committed receive as failed, and the operator's
+  // retry would mint a fresh key and receive the same goods twice.
+  try {
+    Sentry.captureException(error, { tags: { source: 'notification_failure', notification_type: notificationType } });
+  } catch {
+    // Reporting the reporter is not possible; drop it rather than break the caller.
+  }
 
   try {
     await supabase.rpc('log_failed_notification', {
@@ -54,8 +65,13 @@ async function logNotificationFailure(
       p_idempotency_key: crypto.randomUUID(),
     });
   } catch (logErr) {
-    // Last-resort: if even logging fails, report to Sentry
-    Sentry.captureException(logErr, { tags: { source: 'notification_failure_log', notification_type: notificationType } });
+    // Last-resort: if even logging fails, report to Sentry — and swallow a
+    // failure from the reporter itself, for the same reason as above.
+    try {
+      Sentry.captureException(logErr, { tags: { source: 'notification_failure_log', notification_type: notificationType } });
+    } catch {
+      // Nothing left to report through.
+    }
   }
 }
 

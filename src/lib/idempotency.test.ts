@@ -208,8 +208,23 @@ describe('fingerprintIntentPayload', () => {
       .not.toBe(fingerprintIntentPayload([{ ...row, field_name: 'South 40' }, boundaryA, null]));
   });
 
-  it('does not throw on an unserializable payload', () => {
+  it('does not throw on an undefined payload', () => {
+    // Was named "unserializable", which it never tested: JSON.stringify(undefined)
+    // returns the VALUE undefined rather than throwing, and the `?? 'undefined'`
+    // fallback covers exactly that. The genuinely unserializable cases are below.
     expect(() => fingerprintIntentPayload(undefined)).not.toThrow();
     expect(fingerprintIntentPayload(undefined)).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('throws on a genuinely unserializable payload — deliberately out of contract', () => {
+    // Pins real behavior instead of implying a safety this function does not
+    // provide. Every call site fingerprints JSON-safe data (ids, numbers,
+    // strings, GeoJSON). Throwing is the correct response: a lossy fallback
+    // would let two DIFFERENT payloads share one fingerprint, which is precisely
+    // the key-reuse bug this function exists to prevent.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() => fingerprintIntentPayload(circular)).toThrow();
+    expect(() => fingerprintIntentPayload({ value: 1n })).toThrow();
   });
 });

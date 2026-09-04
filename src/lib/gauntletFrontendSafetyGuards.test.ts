@@ -42,6 +42,22 @@ describe('gauntlet caller-side safety guards', () => {
     expect(component).toContain('saveFieldIdem.getKeyFor(intentScope)');
     expect(component).toContain('setBoundaryIdem.getKeyFor(intentScope)');
     expect(component).toContain('setOverrideAcresIdem.getKeyFor(intentScope)');
+    // Both halves of the re-entry pairing, pinned SEPARATELY and anchored.
+    //
+    // This was previously a single whole-file toContain of
+    // 'if (uploadInFlightRef.current) return;'. That string is the DISMISSAL
+    // guard in handleClose; the upload guard reads
+    // 'if (!profile || uploadInFlightRef.current) return;' and never matched it.
+    // So the assertion named "refuses re-entry" was satisfied entirely by the
+    // close guard: deleting the upload guard left this test green while a rapid
+    // double-submit ran two import pipelines.
+    //
+    // 1. handleUpload refuses re-entry — anchored to the handler's first line so
+    //    deleting or relocating the guard fails here.
+    expect(component).toMatch(
+      /const handleUpload = async \(\) => \{\n\s*if \(!profile \|\| uploadInFlightRef\.current\) return;/,
+    );
+    // 2. every dismissal path stays disabled until the import reaches a terminal screen.
     expect(component).toContain('if (uploadInFlightRef.current) return;');
     expect(component).toContain('closeDisabled={uploading}');
   });
