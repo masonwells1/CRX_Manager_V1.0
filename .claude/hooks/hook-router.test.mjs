@@ -120,6 +120,12 @@ function configuredHooksFor(manifest, toolName) {
 for (const hook of ["migration-apply-guard.mjs", "live-testdata-guard.mjs", "mcp-tool-guard.mjs"]) {
   eq(matcherFor(codex, hook), "mcp__.*", `${hook} is MCP-only on Codex`);
 }
+for (const [surface, manifest] of [["Claude", claude], ["Codex", codex]]) {
+  ok(
+    configuredHooksFor(manifest, "MultiEdit").some((hook) => `${hook.command} ${hook.commandWindows || ""}`.includes("actor-binding-check.mjs")),
+    `${surface} MultiEdit path invokes the actor-binding guard`,
+  );
+}
 eq(matcherFor(codex, "production-action-guard.mjs"), "*", "production guard remains reachable for native Write, Edit, and apply_patch calls");
 for (const toolName of ["Write", "Edit", "apply_patch"]) {
   ok(

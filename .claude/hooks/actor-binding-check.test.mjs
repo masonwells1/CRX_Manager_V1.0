@@ -25,12 +25,15 @@ let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 
-function runHook(content, filePath = ordinaryMigrationPath) {
-  const payload = { tool_input: { file_path: filePath, content } };
+function runToolInput(toolInput) {
+  const payload = { tool_input: toolInput };
   return spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")], {
     input: JSON.stringify(payload),
     encoding: "utf8",
   });
+}
+function runHook(content, filePath = ordinaryMigrationPath) {
+  return runToolInput({ file_path: filePath, content });
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
 
@@ -3462,23 +3465,49 @@ r = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")
 });
 ok(isDeny(r), "Edit-tool new_string payload is checked the same as Write content");
 
-const editRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-edit-"));
-const editMigration = path.join(editRoot, "supabase", "migrations", "20260807000001_edit.sql");
-mkdirSync(path.dirname(editMigration), { recursive: true });
-const safeEditFile = fn(BOUND);
-writeFileSync(editMigration, safeEditFile);
-r = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")], {
-  input: JSON.stringify({
-    tool_input: {
-      file_path: editMigration,
-      old_string: "$function$;",
-      new_string: "$function$;\n",
-    },
-  }),
-  encoding: "utf8",
-});
-ok(!isDeny(r), "Edit fragments are reconstructed into the complete resulting migration");
-rmSync(editRoot, { recursive: true, force: true });
+// A real Edit carries only the changed body fragment. Reconstruct the full
+// on-disk migration so the existing function header, parameters, and SECURITY
+// DEFINER attribute remain visible to the actor-binding analysis.
+const editFixtureRoot = mkdtempSync(path.join(os.tmpdir(), "crx-actor-binding-edit-"));
+try {
+  const editFixtureDir = path.join(editFixtureRoot, "supabase", "migrations");
+  mkdirSync(editFixtureDir, { recursive: true });
+  const editFixturePath = path.join(editFixtureDir, "20260904000000_partial_edit.sql");
+  const harmlessBody = "PERFORM 1;";
+  writeFileSync(editFixturePath, fn(harmlessBody).replace(/\n/g, "\r\n"));
+
+  r = runToolInput({
+    file_path: editFixturePath,
+    old_string: harmlessBody,
+    new_string: MUTATION,
+  });
+  ok(isDeny(r), "partial Edit is reconstructed and blocks an unsafe actor write");
+
+  r = runToolInput({
+    file_path: editFixturePath,
+    edits: [{ old_string: harmlessBody, new_string: MUTATION }],
+  });
+  ok(isDeny(r), "MultiEdit is reconstructed and blocks an unsafe actor write");
+
+  r = runToolInput({
+    file_path: editFixturePath,
+    old_string: harmlessBody,
+    new_string: "PERFORM 2;",
+  });
+  eq(r.status, 0, "benign partial Edit hook exits 0");
+  ok(!isDeny(r), "benign partial Edit remains allowed");
+
+  writeFileSync(editFixturePath, `-- actor-binding-check: exempt\r\n${fn(harmlessBody).replace(/\n/g, "\r\n")}`);
+  r = runToolInput({
+    file_path: editFixturePath,
+    old_string: harmlessBody,
+    new_string: MUTATION,
+  });
+  eq(r.status, 0, "exempt partial Edit hook exits 0");
+  ok(!isDeny(r), "existing file-level exemption remains visible during a partial Edit");
+} finally {
+  rmSync(editFixtureRoot, { recursive: true, force: true });
+}
 
 // malformed JSON on stdin must fail OPEN, not crash the session
 r = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")], { input: "not json", encoding: "utf8" });

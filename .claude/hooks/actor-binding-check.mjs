@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// Forgeable-actor binding guard for CRX Manager (write-time half of the
-// actor-forgery / actor-forgery-fin-audit db-invariant sweeps).
+// Best-effort forgeable-actor binding guard for CRX Manager. This is a cheap
+// write-time speed bump for ordinary Write/Edit paths, not a security boundary;
+// exact-SHA review and CodeRabbit remain the load-bearing pre-merge controls.
+// See the 2026-09-01 capped-guard decision in docs/manual/DECISION_LOG.md.
 //
 // THE GAP THIS CLOSES
 //   Two sweep predicates (predicates/actor-forgery.sql and
 //   predicates/actor-forgery-fin-audit.sql) find SECURITY DEFINER routines that
 //   trust a caller-supplied actor parameter — but they only run against the LIVE
-//   catalog, i.e. AFTER the migration has been applied. Between writing the
-//   migration and applying it there was no gate at all, so the forgery shipped
-//   first and was detected second. This hook moves the same check to write time.
+//   catalog, i.e. AFTER the migration has been applied. This hook performs a
+//   narrower form of that check while supported Write/Edit tools author SQL.
 //
 // WHAT IT BLOCKS
 //   A migration file that CREATEs or REPLACEs a SECURITY DEFINER routine which
@@ -71,6 +72,7 @@
 //     mismatch against auth.uid() (directly or through one stable local binding).
 
 import { readFileSync, readdirSync } from "node:fs";
+import { toLF } from "./edit-splice-lib.mjs";
 import path from "node:path";
 
 function out(decision, reason) {
@@ -182,35 +184,44 @@ if (!filePath || !scopePath.endsWith(".sql") || !scopePath.includes("supabase/mi
 }
 
 function proposedFileContent(toolInput, targetPath) {
-  if (typeof toolInput?.content === "string") return { content: toolInput.content };
+  if (typeof toolInput?.content === "string") return { content: toLF(toolInput.content) };
   // Anything else reaching this point is a write to a migration whose resulting
-  // bytes this reader cannot reconstruct — the settings matcher `Write|Edit` is
-  // an unanchored regex, so a batched or future edit shape (an `edits` array,
-  // say) arrives here with neither `content` nor `new_string`. Reconstructing
-  // it as "" would silently allow the whole file. Fail closed instead.
-  if (typeof toolInput?.new_string !== "string") {
-    return { error: "this tool payload carries no readable file content or single old/new string pair" };
+  // bytes this reader cannot reconstruct must fail closed. Supported Edit and
+  // MultiEdit payloads are applied in order against LF-normalized disk bytes so
+  // Windows CRLF cannot make a real edit disappear from the analysis.
+  const edits = Array.isArray(toolInput?.edits) ? toolInput.edits : [toolInput];
+  if (edits.length === 0 || edits.some((edit) => typeof edit?.new_string !== "string")) {
+    return { error: "this tool payload carries no readable file content or supported edit list" };
   }
-  if (typeof toolInput?.old_string !== "string") return { content: toolInput.new_string };
+  if (!Array.isArray(toolInput?.edits) && typeof toolInput?.old_string !== "string") {
+    return { content: toLF(toolInput.new_string) };
+  }
 
   let current;
   try {
-    current = readFileSync(targetPath, "utf8");
+    current = toLF(readFileSync(targetPath, "utf8"));
   } catch {
     return { error: "the current migration file could not be read" };
   }
-  const oldString = toolInput.old_string;
-  const first = current.indexOf(oldString);
-  if (first === -1) return { error: "old_string was not found in the current migration file" };
-  if (toolInput.replace_all === true) {
-    return { content: current.split(oldString).join(toolInput.new_string) };
+
+  for (const edit of edits) {
+    if (typeof edit?.old_string !== "string" || edit.old_string.length === 0) {
+      return { error: "an edit carries no readable non-empty old_string" };
+    }
+    const oldString = toLF(edit.old_string);
+    const newString = toLF(edit.new_string);
+    const first = current.indexOf(oldString);
+    if (first === -1) return { error: "old_string was not found in the current migration file" };
+    if (edit.replace_all === true || toolInput?.replace_all === true) {
+      current = current.split(oldString).join(newString);
+      continue;
+    }
+    if (current.indexOf(oldString, first + oldString.length) !== -1) {
+      return { error: "old_string matched more than once in the current migration file" };
+    }
+    current = current.slice(0, first) + newString + current.slice(first + oldString.length);
   }
-  if (current.indexOf(oldString, first + oldString.length) !== -1) {
-    return { error: "old_string matched more than once in the current migration file" };
-  }
-  return {
-    content: current.slice(0, first) + toolInput.new_string + current.slice(first + oldString.length),
-  };
+  return { content: current };
 }
 
 const proposed = proposedFileContent(payload?.tool_input, filePath);

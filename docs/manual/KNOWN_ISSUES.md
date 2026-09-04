@@ -935,19 +935,21 @@ straight into `financial_audit_log` with no binding check (Gauntlet Section 1 HI
 `20260617171500`).
 
 `.claude/hooks/actor-binding-check.mjs` is the **write-time** half of that defence — it inspects a migration
-before it is written, so a forgery is refused rather than detected after it ships. **Scope that claim
-precisely: it inspects `Write` and `Edit` tool calls only.** Both manifests register it under the matcher
-`"Write|Edit"` (`.claude/settings.json`, `.codex/hooks.json`), so a migration authored any other way is
-never presented to it (row 6). The sweep predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are
-the **post-apply** half, run against the live catalog, and are indifferent to how the file was written.
+before a supported file-editing tool call is allowed, so a forgery can be refused rather than detected only
+after it ships. **Scope that claim precisely: it is routed for `Write`, `Edit`, and `MultiEdit` tool calls
+only.** Both manifests register it under the matcher `"Write|Edit|MultiEdit"` (`.claude/settings.json`,
+`.codex/hooks.json`), so a migration authored any other way is never presented to it (row 6). The sweep
+predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are the **post-apply** half, run against the
+live catalog, and are indifferent to how the file was written.
 
 **Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. PR #449
 replaces the old 213-line whole-write-only check with the hardened guard described here when it lands:
-ordinary incremental edits are reconstructed, visible actor forwarding to callables is refused, and the 19
+supported Edit/MultiEdit changes are reconstructed against the full file with CRLF-safe handling, visible
+actor forwarding to callables is refused, and the 19
 reproduced laundering channels plus the authorized non-first-`INTO`, `VALUES … INTO`, and final-security-mode repairs are covered. Until #449 is
 merged, `main` still runs the old guard; after it is merged, this paragraph describes the active hook. The
 rewrite is still **not a boundary**, and no document should describe it as preventing actor forgery. The
-remaining gaps below and the non-`Write`/`Edit` tool-path limit are why the cap remains operative.
+remaining gaps below and the non-`Write`/`Edit`/`MultiEdit` tool-path limit are why the cap remains operative.
 
 **Final-security-mode narrowing (authorized 2026-09-03).** A later
 `ALTER ... SECURITY INVOKER` no longer clears earlier definer evidence when executable SQL in the
@@ -992,15 +994,16 @@ multiple legal routine `SET search_path` options. PR #449 now evaluates that eff
 so an earlier explicit `pg_catalog` cannot hide a later unsafe path. This is ordered attribute
 handling, not a general CREATE parser, and the capped posture is unchanged.
 
-**What it does NOT catch, stated so nobody re-derives it:**
+**What it does NOT catch, plus the one closed plumbing gap, stated so nobody re-derives it:**
 
 | Gap | Why it is open |
 |---|---|
 | Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
 | Re-binding after a passing check, dynamic SQL, `RETURNING … INTO`, and temp-table round trips | **NARROWED by PR #449.** Direct `:=`/`=` actor re-binding is covered by both post-apply predicates and by the write-time hook. The hook also treats dynamic `EXECUTE` and visible actor forwarding as mutations, inspects every target in recognized `SELECT`/`VALUES`/`RETURNING`/`FETCH`/`EXECUTE INTO` lists, treats `ALIAS FOR` spellings as the same writable parameter, and conservatively rejects actor-bearing procedure `CALL`s as possible output writeback. Positional aliases and fail-closed opaque Unicode targets are included. Final security-mode matching preserves exact quoted schema/routine identities, so an unrelated equal-length quoted name cannot supply an `INVOKER` demotion. The same final-state model applies later `ALTER` search-path changes before trusting UUID operator resolution; explicit/quoted `SET`, `FROM CURRENT`, `RESET`, and `RESET ALL` are covered, including PostgreSQL's combined quoted-list form such as `'evil, pg_catalog'`. Executable body-level `SET`/`RESET search_path` before the actor refusal also fails closed so runtime operator lookup cannot replace that final routine attribute. This is target-only coverage: it does not propagate actor taint from `VALUES` expressions into unrelated locals. The predicates remain narrower: they do not model `INTO` lists, `EXECUTE … USING`, procedure output, or temp-table dataflow. A temp-table round trip can still separate the actor source from both predicates' sinks, and novel laundering that hides the actor before a later use remains outside this text analysis. The broader best-effort cap remains in force. |
+| ~~An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function~~ **Closed 2026-09-03 for supported Edit/MultiEdit paths.** | The hook reconstructs the full post-edit migration with CRLF-safe handling before running actor analysis. Regression tests cover single Edit, MultiEdit, a benign edit, and an existing file-level exemption. This closes only the fragment-plumbing gap; every lexical, rebinding, naming, delegation, and unsupported-tool limit in this table remains. |
 | Cross-migration helper implementations and actor-hidden helper calls | PR #449 adds a fail-closed callable-forwarding rule, so an ordinary wrapper that visibly passes its actor parameter to a helper is refused even without literal DML. The hook still cannot inspect a helper body defined in another migration or follow an actor first hidden behind an unmodelled alias/CTE before the call. Neither sweep predicate follows helper calls across routines. Those residuals remain for exact-SHA review and CodeRabbit rather than another regex round. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
-| **A migration written by any tool other than `Write`/`Edit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
+| **A migration written by any tool other than hooked `Write`/`Edit`/`MultiEdit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit\|MultiEdit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
 
 **The finding that settled the cap.** PostgreSQL needs no whitespace before a quoted identifier, so
 `CREATE OR REPLACE FUNCTION"public"."f"(` is valid SQL that the guard **never matched** — the security check
@@ -1009,7 +1012,7 @@ three careful passes.
 
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
-- **For the novel-lexical and non-`Write`/`Edit` tool-path gaps** (the final two rows
+- **For the novel-lexical and non-`Write`/`Edit`/`MultiEdit` tool-path gaps** (the final two rows
   above): the exact-SHA `gpt-5.6-sol` proof on migration diffs and the CodeRabbit final review are the
   controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
   not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
@@ -1019,7 +1022,7 @@ three careful passes.
   clears both predicates without trying.** Do not describe any row here as requiring an attacker to clear
   all three controls.
 
-  The non-`Write`/`Edit` row needs no cleverness: an ordinary shell-written migration bypasses the hook with
+  The non-`Write`/`Edit`/`MultiEdit` row needs no cleverness: an ordinary shell-written migration bypasses the hook with
   unremarkable SQL. "Deliberately obfuscated SQL" describes the novel-lexical row only, and even there it
   describes what defeats the hook, not what defeats the sweeps.
 - **For actor-hidden cross-routine/cross-migration helper calls:** **only the Codex proof and CodeRabbit
@@ -3716,7 +3719,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 - **Proof-file self-attestation** — the migration-apply and Codex-push proof JSONs can be written by the same agent that should be gated by them; nothing binds the proof to an actual reviewer run. Partial raise-the-bar option: have the reviewer subagents write the proof themselves. Full closure impractical (accepted residual for a malicious agent; the fix targets honest confusion). The 2026-07-13 hands-free additions (content-bound `codex-review-mig-<name>.json` Codex proof, exact `queryHash` binding on both proofs, required `reviewers` array naming both reviewer subagents, and timestamp freshness bounded to [0, 30 min] so future-dated stamps fail) raise the honest-mistake bar further but remain self-attestable by a deliberately dishonest agent — same accepted residual. Likewise the destructive-SQL classifier is a lexical scanner, not a SQL parser: it is quote-aware and default-keep (five adversarial Codex rounds closed the comment/literal/dollar-quote hiding tricks), but a genuinely novel obfuscation could still slip it — the classifier's job is stopping honest mistakes, and its false positives merely park a migration for the morning.
 - **Migration source provenance closes the quiet path, not the loud one** (added 2026-08-31, from CodeRabbit's Major on PR #525). The apply gate now refuses SQL that is not the exact content of `<checkout>/supabase/migrations/<name>.sql` — an allowlist naming the one permitted directory, so parked drafts, `.REJECTED` files in any spelling, scratch copies and text that was never a file all fail by construction rather than by enumeration. What it does **not** stop: an agent that copies a parked file **into** `supabase/migrations/` and applies it from there. Provenance then passes, and the reviewer + Codex proofs are still required. That is the deliberate boundary — the rule forces a tracked, diffable, reviewable file move instead of a pasted body that leaves no trace on disk, which is the same honest-mistake threat model as the proof self-attestation residual above. Scope is session-local (this checkout and the primary one, never a sibling worktree), matching the reviewer-proof lookup. Do **not** "fix" the residual by adding a blocklist of rejected suffixes or parked directories: the allowlist already covers every location, and a suffix list reopens each round — see the 2026-08-31 `bash-safety-lib` entry above (eight holes across five rounds) and the 2026-08-25/26 `DECISION_LOG` entries on closed allowlists.
 - **New live-sweep predicates worth writing** (scripts/db-invariant-sweeps/): a `concurrency-hotspot` predicate asserting the named race-prone functions (inventory reservations, prebook, number sequences, balances) contain `FOR UPDATE`/advisory locks; ~~an `audit-log-completeness` predicate asserting each allowlisted money-mutator RPC writes `financial_audit_log`~~ (**BUILT 2026-08-07** — `predicates/audit-log-completeness.sql`, 0 rows live, non-vacuous over 39 money-mutating SECDEF functions); more `fin-*` arithmetic identities per derived-value family — **PARTIALLY BUILT 2026-08-07**: `fin-vendor-bill-balance-identity.sql` (0 rows live) and `fin-po-receipt-identity.sql` (22 March-2026 import-era violations **accepted-and-baselined by Mason 2026-08-07** — each allowlisted per-key with live figures recorded; sweep nets to 0 and any NEW violation still fails); order/quote `total_profit`, `net_margin_pct`, per-line commissions still unwritten.
-- ~~**Write-time forgeable-actor hook**~~ — **BUILT 2026-08-07** as `.claude/hooks/actor-binding-check.mjs` (+ test, wired in `.claude/settings.json` and `.codex/hooks.json`): PreToolUse Write|Edit hook flagging SECDEF migration functions with `p_performed_by`/`p_actor%`/`p_user%` params lacking `ACTOR_MISMATCH` binding, at write time instead of post-write sweeps.
+- ~~**Write-time forgeable-actor hook**~~ — **BUILT 2026-08-07** as `.claude/hooks/actor-binding-check.mjs` (+ test, wired in `.claude/settings.json` and `.codex/hooks.json`): PreToolUse Write|Edit hook flagging SECDEF migration functions with `p_performed_by`/`p_actor%`/`p_user%` params lacking `ACTOR_MISMATCH` binding, at write time instead of post-write sweeps. **2026-09-03 maintenance:** routing now also includes MultiEdit and reconstructs full post-edit content before running the same capped analysis.
 - **Edge Functions are exempt from the assert/check ESLint rules** (Deno) and the coverage ratchet's scope leaves ~130 legacy Supabase reads unchecked — known accepted gaps.
 - **Invoice-type leaks and direct-URL edit-lock bypasses** (lifecycle class) have no static guard — stays reviewer-checklist territory (`compliance-reviewer`).
 - **Shell string-reconstruction bypasses** of the Bash regex guards (quote-splitting, variable substitution) — accepted residual under the honest-mistake threat model; keep widening regexes as concrete shapes appear.
