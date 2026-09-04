@@ -12,7 +12,7 @@ import { hasPageAccess } from '../lib/pagePermissions';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
-import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
+import { exportToCSV, fmtCSV, fmtDateCSV, fmtDateOnlyCSV } from '../lib/csvExport';
 import { formatUSD } from '../lib/money';
 import LogbookReport from '../components/reports/LogbookReport';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
@@ -27,7 +27,7 @@ import {
 } from '../lib/recognizedInvoiceCustomers';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
-  ChemicalHistoryRow, CommissionBalanceRow, CommissionPaymentDetailRow, InventoryCostRow,
+  ChemicalHistoryRow, CommissionBalanceRow, CommissionHistoryReportPayload, CommissionPaymentDetailRow, InventoryCostRow,
   YearEndSummaryData,
 } from '../types';
 
@@ -335,26 +335,24 @@ export default function Reports() {
     const requestId = ++commissionRequestId.current;
     setCommissionReportError(false);
     try {
-      const { data: balanceData, error: balanceError } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
+      const { data: reportData, error: reportError } = await supabase.rpc('get_commission_history_report', { p_as_of_date: asOf });
       if (requestId !== commissionRequestId.current) return;
-      if (balanceError) {
+      if (reportError) {
         setCommissionReportError(true);
-        toast('error', `Commission balance failed: ${balanceError.message}`);
+        toast('error', `Commission report failed: ${reportError.message}`);
         return;
       }
-      const balanceRows = assertRpcResult<CommissionBalanceRow[]>(balanceData, 'get_commission_balance_report');
-
-      const { data: detailData, error: detailError } = await supabase.rpc('get_commission_payment_detail_report', { p_as_of_date: asOf });
-      if (requestId !== commissionRequestId.current) return;
-      if (detailError) {
-        setCommissionReportError(true);
-        toast('error', `Commission payment detail failed: ${detailError.message}`);
-        return;
+      const report = assertRpcResult<CommissionHistoryReportPayload>(reportData, 'get_commission_history_report');
+      if (
+        report.as_of_date !== asOf
+        || !Array.isArray(report.balance_rows)
+        || !Array.isArray(report.payment_detail_rows)
+      ) {
+        throw new Error('get_commission_history_report returned an invalid payload');
       }
-      const detailRows = assertRpcResult<CommissionPaymentDetailRow[]>(detailData, 'get_commission_payment_detail_report');
 
-      setCommBalanceData(balanceRows);
-      setCommPaymentDetailData(detailRows);
+      setCommBalanceData(report.balance_rows);
+      setCommPaymentDetailData(report.payment_detail_rows);
       setCommissionAsOfDate(asOf);
       setCommissionReportError(false);
     } catch (err) {
@@ -784,13 +782,13 @@ export default function Reports() {
       ], 'product_profitability');
     } else if (profitTab === 'commission') {
       exportToCSV(commissionData, [
-        { key: 'order_date', header: 'Date', format: fmtDateCSV },
+        { key: 'order_date', header: 'Date', format: fmtDateOnlyCSV },
         { key: 'recipient', header: 'Recipient' },
         { key: 'commission_amount', header: 'Commission', format: fmtCSV },
         { key: 'split_percentage', header: 'Split %', format: (v) => `${v}%` },
         { key: 'order_profit', header: 'Order Profit', format: fmtCSV },
         { key: 'status', header: 'Status' },
-        { key: 'paid_date', header: 'Paid Date', format: fmtDateCSV },
+        { key: 'paid_date', header: 'Paid Date', format: fmtDateOnlyCSV },
       ], 'commissions');
     } else if (profitTab === 'revenue') {
       exportToCSV(revenueData, [
@@ -883,12 +881,12 @@ export default function Reports() {
   const handleCommissionPaymentDetailCSV = () => {
     exportToCSV(commPaymentDetailData as unknown as Record<string, unknown>[], [
       { key: 'payment_number', header: 'Payment Number' },
-      { key: 'payment_date', header: 'Payment Date', format: fmtDateCSV },
+      { key: 'payment_date', header: 'Payment Date', format: fmtDateOnlyCSV },
       { key: 'recipient_name', header: 'Recipient' },
       { key: 'source_type', header: 'Source Type' },
       { key: 'source_number', header: 'Source Number' },
       { key: 'customer_name', header: 'Customer' },
-      { key: 'commission_order_date', header: 'Commission Date', format: fmtDateCSV },
+      { key: 'commission_order_date', header: 'Commission Date', format: fmtDateOnlyCSV },
       { key: 'settled_amount', header: 'Settled Amount', format: fmtCSV },
     ], 'commission_payment_detail');
     toast('success', 'Payment detail exported');

@@ -12924,11 +12924,15 @@ export type Database = {
           outstanding_balance: number
           paid_count: number
           pending_count: number
-          recipient_id: string
+          recipient_id: string | null
           recipient_name: string
           total_earned: number
           total_paid: number
         }[]
+      }
+      get_commission_history_report: {
+        Args: { p_as_of_date: string }
+        Returns: Json
       }
       get_commission_payment_detail_report: {
         Args: { p_as_of_date: string }
@@ -12939,7 +12943,7 @@ export type Database = {
           payment_date: string
           payment_id: string
           payment_number: string
-          recipient_id: string
+          recipient_id: string | null
           recipient_name: string
           settled_amount: number
           source_number: string

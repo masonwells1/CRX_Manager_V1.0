@@ -45,9 +45,19 @@ vi.mock('../lib/db', () => ({
     rpc: (name: string, args: Record<string, unknown>) => {
       H.rpc.push({ name, args });
       if (H.rpcHandler) return H.rpcHandler(name, args);
-      if (name === 'get_commission_payment_detail_report') {
-        return Promise.resolve({
-          data: [{
+      return Promise.resolve({
+        data: {
+          as_of_date: String(args.p_as_of_date),
+          balance_rows: [{
+            recipient_id: 'recipient-1',
+            recipient_name: 'Alex Farmer',
+            total_earned: 1500,
+            total_paid: 1234.56,
+            outstanding_balance: 265.44,
+            pending_count: 1,
+            paid_count: 1,
+          }],
+          payment_detail_rows: [{
             commission_id: 'commission-1',
             commission_order_date: '2026-08-14',
             customer_name: 'Prairie View Farms',
@@ -60,19 +70,7 @@ vi.mock('../lib/db', () => ({
             source_number: 'INV-1042',
             source_type: 'Invoice',
           }],
-          error: null,
-        });
-      }
-      return Promise.resolve({
-        data: [{
-          recipient_id: 'recipient-1',
-          recipient_name: 'Alex Farmer',
-          total_earned: 1500,
-          total_paid: 1234.56,
-          outstanding_balance: 265.44,
-          pending_count: 1,
-          paid_count: 1,
-        }],
+        },
         error: null,
       });
     },
@@ -94,7 +92,12 @@ vi.mock('../components/ui/Toast', () => ({
 
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
-vi.mock('../lib/csvExport', () => ({ exportToCSV: vi.fn(), fmtCSV: vi.fn(), fmtDateCSV: vi.fn() }));
+vi.mock('../lib/csvExport', () => ({
+  exportToCSV: vi.fn(),
+  fmtCSV: vi.fn(),
+  fmtDateCSV: vi.fn(),
+  fmtDateOnlyCSV: vi.fn(),
+}));
 vi.mock('../lib/yearEndSummaryPdf', () => ({ downloadYearEndSummaryPdf: vi.fn(), downloadBatchYearEndSummaries: vi.fn() }));
 vi.mock('../components/reports/LogbookReport', () => ({ default: () => <div>Logbook</div> }));
 vi.mock('../components/reports/YearEndSummaryDialog', () => ({ default: () => null }));
@@ -116,15 +119,16 @@ afterEach(() => {
 });
 
 describe('Reports commission history', () => {
-  it('calls both commission report RPCs and renders payment detail fields', async () => {
+  it('calls one snapshot RPC and renders both balance and payment-detail fields', async () => {
     renderReports();
 
     fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
     fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
 
     await waitFor(() => {
-      expect(H.rpc.filter(({ name }) => name === 'get_commission_balance_report')).not.toHaveLength(0);
-      expect(H.rpc.filter(({ name }) => name === 'get_commission_payment_detail_report')).not.toHaveLength(0);
+      expect(H.rpc.filter(({ name }) => name === 'get_commission_history_report')).toHaveLength(1);
+      expect(H.rpc.some(({ name }) => name === 'get_commission_balance_report')).toBe(false);
+      expect(H.rpc.some(({ name }) => name === 'get_commission_payment_detail_report')).toBe(false);
       expect(screen.getByText('CP-2026-0042')).toBeInTheDocument();
     });
 
@@ -136,22 +140,20 @@ describe('Reports commission history', () => {
     expect(screen.getAllByText('$1,234.56').length).toBeGreaterThan(0);
   });
 
-  it('clamps a future This Season end to Chicago today for both RPCs', async () => {
+  it('clamps a future This Season end to Chicago today for the snapshot RPC', async () => {
     const businessToday = todayInBusinessTz();
     renderReports();
     fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
     fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
 
-    await waitFor(() => expect(H.rpc.some(({ name }) => name === 'get_commission_payment_detail_report')).toBe(true));
+    await waitFor(() => expect(H.rpc.some(({ name }) => name === 'get_commission_history_report')).toBe(true));
     H.rpc = [];
 
     fireEvent.click(screen.getByRole('button', { name: 'This Season' }));
 
     await waitFor(() => {
-      const balance = H.rpc.find(({ name }) => name === 'get_commission_balance_report');
-      const detail = H.rpc.find(({ name }) => name === 'get_commission_payment_detail_report');
-      expect(balance?.args.p_as_of_date).toBe(businessToday);
-      expect(detail?.args.p_as_of_date).toBe(businessToday);
+      const snapshot = H.rpc.find(({ name }) => name === 'get_commission_history_report');
+      expect(snapshot?.args.p_as_of_date).toBe(businessToday);
     });
   });
 
@@ -162,9 +164,9 @@ describe('Reports commission history', () => {
     await screen.findByText('CP-2026-0042');
     const successfulBanner = screen.getByText(/Balance and payout detail shown through/).textContent;
 
-    H.rpcHandler = (name) => Promise.resolve({
+    H.rpcHandler = () => Promise.resolve({
       data: null,
-      error: name === 'get_commission_balance_report' ? { message: 'network unavailable' } : null,
+      error: { message: 'network unavailable' },
     });
 
     const endDateInput = document.querySelectorAll<HTMLInputElement>('input[type="date"]')[1];
@@ -193,6 +195,25 @@ describe('Reports commission history', () => {
     expect(H.toast).toHaveBeenCalledWith('error', expect.stringContaining('RPC returned no data'));
   });
 
+  it('rejects a partial snapshot payload instead of publishing mismatched sections', async () => {
+    H.rpcHandler = (_name, args) => Promise.resolve({
+      data: {
+        as_of_date: args.p_as_of_date,
+        balance_rows: [],
+      },
+      error: null,
+    });
+
+    renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+
+    await screen.findByRole('alert');
+    expect(screen.getByRole('alert')).toHaveTextContent('empty tables are not a confirmed zero');
+    expect(screen.queryByText(/Balance and payout detail shown through/)).not.toBeInTheDocument();
+    expect(H.toast).toHaveBeenCalledWith('error', expect.stringContaining('invalid payload'));
+  });
+
   it('ignores an older response that finishes after a newer cutoff', async () => {
     renderReports();
     fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
@@ -207,45 +228,46 @@ describe('Reports commission history', () => {
     H.rpc = [];
     H.rpcHandler = (name, args) => {
       const asOf = args.p_as_of_date;
-      if (name === 'get_commission_balance_report' && asOf === '2026-08-20') return older;
-      if (name === 'get_commission_balance_report' && asOf === '2026-08-21') return newer;
-      return Promise.resolve({
-        data: name === 'get_commission_payment_detail_report' ? [{
-          commission_id: 'commission-new',
-          commission_order_date: '2026-08-18',
-          customer_name: 'Newer Customer',
-          payment_date: '2026-08-21',
-          payment_id: 'payment-new',
-          payment_number: 'CP-NEWER',
-          recipient_id: 'recipient-new',
-          recipient_name: 'Newer Recipient',
-          settled_amount: 21.25,
-          source_number: 'ORDER-NEW',
-          source_type: 'Order',
-        }] : [],
-        error: null,
-      });
+      if (name === 'get_commission_history_report' && asOf === '2026-08-20') return older;
+      if (name === 'get_commission_history_report' && asOf === '2026-08-21') return newer;
+      return Promise.resolve({ data: null, error: { message: `Unexpected RPC ${name}` } });
     };
 
     const endDateInput = document.querySelectorAll<HTMLInputElement>('input[type="date"]')[1];
     expect(endDateInput).toBeDefined();
     fireEvent.change(endDateInput, { target: { value: '2026-08-20' } });
-    await waitFor(() => expect(H.rpc.some(({ name, args }) => name === 'get_commission_balance_report' && args.p_as_of_date === '2026-08-20')).toBe(true));
+    await waitFor(() => expect(H.rpc.some(({ name, args }) => name === 'get_commission_history_report' && args.p_as_of_date === '2026-08-20')).toBe(true));
 
     fireEvent.change(endDateInput, { target: { value: '2026-08-21' } });
-    await waitFor(() => expect(H.rpc.some(({ name, args }) => name === 'get_commission_balance_report' && args.p_as_of_date === '2026-08-21')).toBe(true));
+    await waitFor(() => expect(H.rpc.some(({ name, args }) => name === 'get_commission_history_report' && args.p_as_of_date === '2026-08-21')).toBe(true));
 
     await act(async () => {
       resolveNewer({
-        data: [{
-          recipient_id: 'recipient-new',
-          recipient_name: 'Newer Recipient',
-          total_earned: 21.25,
-          total_paid: 21.25,
-          outstanding_balance: 0,
-          pending_count: 0,
-          paid_count: 1,
-        }],
+        data: {
+          as_of_date: '2026-08-21',
+          balance_rows: [{
+            recipient_id: 'recipient-new',
+            recipient_name: 'Newer Recipient',
+            total_earned: 21.25,
+            total_paid: 21.25,
+            outstanding_balance: 0,
+            pending_count: 0,
+            paid_count: 1,
+          }],
+          payment_detail_rows: [{
+            commission_id: 'commission-new',
+            commission_order_date: '2026-08-18',
+            customer_name: 'Newer Customer',
+            payment_date: '2026-08-21',
+            payment_id: 'payment-new',
+            payment_number: 'CP-NEWER',
+            recipient_id: 'recipient-new',
+            recipient_name: 'Newer Recipient',
+            settled_amount: 21.25,
+            source_number: 'ORDER-NEW',
+            source_type: 'Order',
+          }],
+        },
         error: null,
       });
     });
@@ -253,15 +275,19 @@ describe('Reports commission history', () => {
 
     await act(async () => {
       resolveOlder({
-        data: [{
-          recipient_id: 'recipient-old',
-          recipient_name: 'Older Recipient',
-          total_earned: 20,
-          total_paid: 0,
-          outstanding_balance: 20,
-          pending_count: 1,
-          paid_count: 0,
-        }],
+        data: {
+          as_of_date: '2026-08-20',
+          balance_rows: [{
+            recipient_id: 'recipient-old',
+            recipient_name: 'Older Recipient',
+            total_earned: 20,
+            total_paid: 0,
+            outstanding_balance: 20,
+            pending_count: 1,
+            paid_count: 0,
+          }],
+          payment_detail_rows: [],
+        },
         error: null,
       });
     });

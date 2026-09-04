@@ -3421,6 +3421,12 @@ export interface CommissionPaymentDetailRow {
   settled_amount: number;
 }
 
+export interface CommissionHistoryReportPayload {
+  as_of_date: string;
+  balance_rows: CommissionBalanceRow[];
+  payment_detail_rows: CommissionPaymentDetailRow[];
+}
+
 export interface InventoryCostRow {
   [k: string]: unknown;
   product_id: string;

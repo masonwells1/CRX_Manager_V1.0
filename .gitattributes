@@ -177,3 +177,12 @@ scripts/apply-live-testdata-maintenance-20260812.test.mjs text eol=lf
 # has nothing to do with the SQL. Pin both to LF.
 supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql text eol=lf
 scripts/smoke/prove-number-generator-gates.mjs text eol=lf
+
+# Commission-history snapshot and replay guard. The guard compares an md5 of
+# the SQL-language body installed by the preceding snapshot migration, while
+# the disposable prover streams both source files verbatim into PostgreSQL.
+# Keep the SQL and proof inputs byte-identical across Windows and Linux.
+supabase/migrations/20260903230000_commission_report_snapshot_contract.sql text eol=lf
+supabase/migrations/20260903231000_commission_history_report_replay_guard.sql text eol=lf
+scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf
+scripts/smoke/smoke-commission-report-snapshot-contract.sql text eol=lf
