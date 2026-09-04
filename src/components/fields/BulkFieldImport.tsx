@@ -536,6 +536,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             // floor), so a tiny stated value would otherwise bill below the safety floor. An
             // out-of-band or RPC-rejected stated value is a non-fatal warning: the field still
             // imports, billing on the measured acres.
+            // Tracks whether every stage this row NEEDED actually landed. An
+            // out-of-band stated acreage is a deliberate skip, not a failure — the
+            // row is complete and bills on measured. A REJECTED override RPC is a
+            // failure: the row is unfinished, so its keys must survive (see the
+            // retirement block below).
+            let overrideOk = true;
             if (pf.stated_acres != null) {
               if (!isAcreInBand(pf.stated_acres)) {
                 warnings.push(`"${pf.field_name}": the file's ${pf.stated_acres} ac is outside the allowed ${ACRE_BAND_MIN}–${ACRE_BAND_MAX} acre range — billing on the measured ${pf.full_acres} ac instead.`);
@@ -551,26 +557,32 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                   assertRpcResult(ovData, 'set_field_override_acres');
                 } catch (ovError: unknown) {
                   const msg = ovError instanceof Error ? ovError.message : String(ovError);
+                  overrideOk = false;
                   warnings.push(`"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
                 }
               }
             }
             success++;
-            // Retire at ROW completion, never per stage.
+            // Retire only when the WHOLE row landed — never per stage, and never
+            // while any stage this row needed is still outstanding.
             //
             // save_field's key must NOT be retired at its own success: it is the
             // only thing stopping a retry-after-boundary-failure from creating a
             // second field, and that failure happens AFTER save_field has already
-            // committed. Retiring it here — once the boundary and any override have
-            // landed — means a later re-import of a finished row is new intent,
-            // while a retry of a half-finished row still replays onto the same field.
+            // committed. The same argument applies to a REJECTED override: the row
+            // is counted a success (it bills on measured acres) but it is not
+            // finished, so retiring here would let a retry of the acreage mint a
+            // fresh save key and INSERT A SECOND FIELD. Gating on overrideOk keeps
+            // the replay available until the row is genuinely done.
             //
             // Stages 2 and 3 are keyed on that same field id, so they retire with it.
             // overrideScope may never have been minted (no stated acreage, or an
             // out-of-band one); retiring an unminted scope is a no-op.
-            saveFieldIdem.resetKeyFor(saveScope);
-            setBoundaryIdem.resetKeyFor(boundaryScope);
-            setOverrideAcresIdem.resetKeyFor(overrideScope);
+            if (overrideOk) {
+              saveFieldIdem.resetKeyFor(saveScope);
+              setBoundaryIdem.resetKeyFor(boundaryScope);
+              setOverrideAcresIdem.resetKeyFor(overrideScope);
+            }
           }
         }
       } catch (err: unknown) {

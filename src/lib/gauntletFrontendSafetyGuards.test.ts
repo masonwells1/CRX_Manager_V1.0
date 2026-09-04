@@ -47,6 +47,15 @@ describe('gauntlet caller-side safety guards', () => {
     // staying stable when only the failed row is re-imported.
     expect(component).toContain('const saveIdentityDigest = fingerprintIntentPayload(fieldIdentity);');
     expect(component).toContain('const saveScope = `import:save:${saveIdentityDigest}:#${saveOccurrence}`;');
+    // Pin the counter's MECHANISM, not merely its appearance in the scope string.
+    // Codex (gpt-5.6-sol, 2026-09-04, finding 24) showed that asserting only the
+    // scope string is vacuous: replacing the whole counter with `const
+    // saveOccurrence = 0;` left this guard AND the behavioral suite green while
+    // every identical row collapsed onto one key. Verified by running that exact
+    // mutation. Pin the read and the increment so a neutered counter fails here.
+    expect(component).toContain('const saveIdentityOccurrences = new Map<string, number>();');
+    expect(component).toContain('const saveOccurrence = saveIdentityOccurrences.get(saveIdentityDigest) ?? 0;');
+    expect(component).toContain('saveIdentityOccurrences.set(saveIdentityDigest, saveOccurrence + 1);');
     // total_acres is deliberately OUTSIDE the identity — set_field_boundary
     // overwrites it with the server-measured billable acreage moments later, so
     // the seeded value must never be able to mint a second field. Pinned as the
@@ -78,8 +87,16 @@ describe('gauntlet caller-side safety guards', () => {
     // own success instead would RE-CREATE the duplicate-field bug: save_field has
     // already committed by the time the boundary call fails, so a retry would find
     // the key gone, mint a fresh one, and insert a second field.
+    // Retirement is additionally gated on overrideOk. Codex (finding 2, confirmed
+    // from source at 100% rather than its stated 75%) showed the ungated form let a
+    // boundary-success/override-FAILURE row retire its save key while the row was
+    // unfinished — so retrying the acreage minted a fresh key and inserted a SECOND
+    // field. The gate is pinned inside the same anchored match as the three resets,
+    // so removing it fails here rather than silently reopening the duplicate path.
+    expect(component).toContain('let overrideOk = true;');
+    expect(component).toContain('overrideOk = false;');
     expect(component).toMatch(
-      /\n\s*success\+\+;\n(?:\s*\/\/[^\n]*\n)*\s*saveFieldIdem\.resetKeyFor\(saveScope\);\n\s*setBoundaryIdem\.resetKeyFor\(boundaryScope\);\n\s*setOverrideAcresIdem\.resetKeyFor\(overrideScope\);/,
+      /\n\s*success\+\+;\n(?:\s*\/\/[^\n]*\n)*\s*if \(overrideOk\) \{\n\s*saveFieldIdem\.resetKeyFor\(saveScope\);\n\s*setBoundaryIdem\.resetKeyFor\(boundaryScope\);\n\s*setOverrideAcresIdem\.resetKeyFor\(overrideScope\);\n\s*\}/,
     );
     // Exactly one retirement per stage, so none can ALSO be retired earlier.
     expect(component.match(/saveFieldIdem\.resetKeyFor\(/g)).toHaveLength(1);

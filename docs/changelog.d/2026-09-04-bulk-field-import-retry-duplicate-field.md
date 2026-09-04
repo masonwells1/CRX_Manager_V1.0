@@ -5,9 +5,15 @@ Closes the HIGH finding parked from PR #535's round-2 `gpt-5.6-sol` review
 2026-09-04 with an explicit decision to merge #535 without it and fix it separately.
 
 **This change is stacked on PR #535** (`codex/gauntlet-s9-safety-20260831`, base `37b488b16`).
-The defect does not exist on `main`, where `BulkFieldImport.tsx` still passes a throwaway
-`crypto.randomUUID()` per call. If #535 is abandoned, this change is moot and should be dropped
-rather than rebased.
+
+> **CORRECTION (2026-09-04, Codex `gpt-5.6-sol` finding 11).** The paragraph that stood here said
+> the defect "does not exist on `main`" and that this change "is moot and should be dropped" if
+> #535 is abandoned. **Both statements are wrong and the advice was unsafe.** On `main` every
+> `save_field` call gets a fresh `crypto.randomUUID()`, so a retry can never replay the committed
+> save — it calls `save_field(p_field_id: null)` with a new key and duplicates **unconditionally**.
+> `main` is worse than #535, not clean. If #535 is abandoned this work must be re-based onto
+> whatever carries `useIdempotencyKey`/`fingerprintIntentPayload`, or reimplemented — not dropped.
+> See `2026-09-04-bulk-import-retry-codex-round1-fixes.md`.
 
 ### The defect
 
@@ -45,13 +51,22 @@ Per-stage intent scopes, each bound to its own stage's exact payload:
 
 - **`save_field`** is scoped to `fieldIdentity` — the columns `save_field` itself writes — with the
   row's file position replaced by a per-identity occurrence counter. The counter keeps two genuinely
-  identical rows on separate keys (so they still become two fields) while staying stable when only
-  the failed row is re-imported, because it counts copies of the content rather than offsets in the
-  file. `fieldPayload` is now derived from `fieldIdentity`, so a column added later joins the scope
-  automatically.
-- **`total_acres` is deliberately excluded** from that identity. `set_field_boundary` overwrites it
-  with the server-measured billable acreage moments later (`total_acres = v_billable`), so the value
-  `save_field` seeds never survives and must not be able to mint a second field.
+  identical rows on separate keys (so they still become two fields). `fieldPayload` is now derived
+  from `fieldIdentity`, so a column added later joins the scope automatically.
+
+  > **CORRECTION (finding 1, BLOCKER).** This bullet claimed the counter "stays stable when only
+  > the failed row is re-imported." **That is false.** `saveIdentityOccurrences` is rebuilt on every
+  > `handleUpload`, so re-importing only the second of two identical rows makes it `#0` — replaying
+  > the first row's key, or minting a new one and duplicating. Not fixed; a stable cross-invocation
+  > ordinal cannot be derived from file content alone.
+- **`total_acres` is deliberately excluded** from that identity, which is what lets a corrected-
+  geometry retry replay instead of inserting.
+
+  > **CORRECTION (finding 3, HIGH).** The justification that stood here — that `set_field_boundary`
+  > overwrites it so the seeded value "never survives" — is **false on the failure path**. It is
+  > overwritten only when the boundary call SUCCEEDS. When it fails, the seeded value persists on
+  > the orphaned field indefinitely, and a corrected retry replays the save receipt so the corrected
+  > acreage never lands. The exclusion is still correct; the stated reason was not.
 - **`set_field_boundary`** and **`set_field_override_acres`** each bind to the field id `save_field`
   actually returned plus their own payload. A corrected boundary is genuinely new work and correctly
   mints a fresh key; an unchanged retry still replays.
