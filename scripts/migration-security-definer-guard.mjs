@@ -58,16 +58,27 @@ function readSingleQuotedLiteral(text, start) {
   return null;
 }
 
-function isStandardConformingStringsParameter(text, start) {
-  if (startsKeyword(text, start, 'standard_conforming_strings')) return true;
-  if (text[start] !== '"') return false;
+function readDoubleQuotedIdentifier(text, start) {
+  if (text[start] !== '"') return null;
   let value = '';
   for (let index = start + 1; index < text.length; index++) {
     if (text[index] === '"' && text[index + 1] === '"') { value += '"'; index++; continue; }
-    if (text[index] === '"') return value.toLowerCase() === 'standard_conforming_strings';
+    if (text[index] === '"') return { value, end: index + 1 };
     value += text[index];
   }
-  return true;
+  return null;
+}
+
+function isStandardConformingStringsParameter(text, start) {
+  if (startsKeyword(text, start, 'standard_conforming_strings')) return true;
+  const identifier = readDoubleQuotedIdentifier(text, start);
+  return identifier === null ? false : identifier.value.toLowerCase() === 'standard_conforming_strings';
+}
+
+function setConfigNameEnd(text, start) {
+  if (startsKeyword(text, start, 'set_config')) return start + 'set_config'.length;
+  const identifier = readDoubleQuotedIdentifier(text, start);
+  return identifier !== null && identifier.value.toLowerCase() === 'set_config' ? identifier.end : null;
 }
 
 function unsafeStandardConformingStringsChange(text, start) {
@@ -80,8 +91,9 @@ function unsafeStandardConformingStringsChange(text, start) {
     }
     return isStandardConformingStringsParameter(text, index);
   }
-  if (!startsKeyword(text, start, 'set_config')) return false;
-  let index = skipWhitespaceAndComments(text, start + 'set_config'.length);
+  const setConfigEnd = setConfigNameEnd(text, start);
+  if (setConfigEnd === null) return false;
+  let index = skipWhitespaceAndComments(text, setConfigEnd);
   if (index === null || text[index] !== '(') return true;
   index = skipWhitespaceAndComments(text, index + 1);
   if (index === null) return true;
@@ -104,7 +116,7 @@ export function executableSql(sql) {
     // through SET (including comment-separated tokens) or set_config() would
     // make its treatment of backslash escapes unknowable, so reject it before
     // handling any quoted content.
-    if ((ch === 's' || ch === 'S') && unsafeStandardConformingStringsChange(src, i)) return null;
+    if ((ch === 's' || ch === 'S' || ch === '"') && unsafeStandardConformingStringsChange(src, i)) return null;
     const escape = (ch === 'e' || ch === 'E') && src[i + 1] === "'" && !/[A-Za-z0-9_$]/.test(src[i - 1] || '');
     if (ch === '-' && src[i + 1] === '-') {
       let end = i + 2; while (end < src.length && src[end] !== '\n' && src[end] !== '\r') end++;

@@ -190,6 +190,8 @@ test('rejects executable string-mode changes after comment normalization', () =>
   assert.equal(executableSql('SET/**/standard_conforming_strings=off; SELECT 1;'), null);
   assert.equal(executableSql('SET "standard_conforming_strings" = off; SELECT 1;'), null);
   assert.equal(executableSql("SELECT set_config('standard_conforming_strings', 'off', false);"), null);
+  assert.equal(executableSql('SELECT "set_config"(\'standard_conforming_strings\', \'off\', false);'), null);
+  assert.equal(executableSql('SELECT pg_catalog."set_config"(\'standard_conforming_strings\', \'off\', false);'), null);
   assert.equal(executableSql("SELECT set_config('standard_' || 'conforming_strings', 'off', false);"), null);
 });
 

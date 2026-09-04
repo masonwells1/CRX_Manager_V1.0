@@ -32,6 +32,7 @@ import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
 import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
 import { fixedGitExecutable } from "../../scripts/write-codex-push-proof.mjs";
+import { checkWrappable } from "./migration-wrappability-lib.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 export const REQUIRED_CODEX_EFFORT = "high";
@@ -357,6 +358,17 @@ export function evaluateMigrationApply({
   const migQuery = (query || "").toString();
   if (!migQuery.trim()) {
     return block("MIGRATION APPLY GUARD: transmitted SQL is missing or empty. Refusing an unbound migration apply.");
+  }
+  // The file-based apply path rejects top-level transaction control before it
+  // calls this shared rule book. The MCP path calls evaluateMigrationApply()
+  // directly, so enforce the same precondition here: SAVEPOINT/ROLLBACK can
+  // otherwise undo an ACL revoke that the source-only SECURITY DEFINER guard
+  // records as effective.
+  const wrappability = checkWrappable(migQuery);
+  if (!wrappability.wrappable) {
+    return block(
+      `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" is not safely wrappable ` +
+      `(${wrappability.reason}). Refusing transaction control that could invalidate a reviewed migration state.`);
   }
   const currentHash = createHash("sha256").update(migQuery).digest("hex");
   const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unknown";

@@ -217,6 +217,21 @@ const evaluate = (root, over = {}) => evaluateMigrationApply({
 // ── BASELINE: the fixture must ALLOW, or every deny below proves nothing ─────
 allows(evaluate(fixture()), "known-good interactive fixture is allowed");
 
+// The MCP apply hook calls evaluateMigrationApply() directly. A revoke inside a
+// savepoint may be rolled back while this source-only gate still sees it, so the
+// shared path must reject transaction control before it can trust ACL lifecycle.
+{
+  const rollbackAclSql = `CREATE FUNCTION public.rollback_acl_target() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;
+SAVEPOINT acl_probe;
+REVOKE EXECUTE ON FUNCTION public.rollback_acl_target() FROM PUBLIC, anon;
+ROLLBACK TO SAVEPOINT acl_probe;\n`;
+  denies(
+    evaluate(fixture({ migrationFile: rollbackAclSql }), { query: rollbackAclSql }),
+    "ROLLBACK",
+    "shared MCP apply path refuses a savepoint that could roll back an anonymous-execution revoke",
+  );
+}
+
 // ── CHECK 1: ordering preflight ─────────────────────────────────────────────
 // Each case asserts the SPECIFIC message for its condition, not just the guard
 // banner. Mutation testing earned this: disabling the missing-snapshot check
