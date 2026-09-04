@@ -64,9 +64,10 @@ F2 is last because it may need an owner decision.
 - New money storage is bigint cents; legacy PostgreSQL numeric-dollar storage is approved only after
   exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified;
   dirty or unconstrained columns remain findings. Existing approved columns retain
-  exact `numeric` arithmetic. Before using the shared helpers from `src/lib/parseCents`, reject
-  inputs with more than two fractional digits or apply one approved exact decimal rounding rule;
-  those legacy helpers currently truncate excess precision and are not sufficient alone. Never use
+  exact `numeric` arithmetic. The shared helpers in `src/lib/parseCents` REFUSE inputs with more
+  than two fractional digits by returning `null` (since 2026-09-03); check for `null` and show
+  `MONEY_PRECISION_MESSAGE`, never coerce `null` to `0`. Any other money parsing path must reject
+  excess precision or apply one approved exact decimal rounding rule first. Never use
   binary floating-point rounding for money.
 - In NEW code avoid raw em-dashes (the file-write pipeline can mangle them) - use ASCII "-" or the
   `—` escape / `&mdash;` in JSX text.
