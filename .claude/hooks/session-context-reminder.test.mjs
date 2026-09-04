@@ -41,6 +41,8 @@ assert.equal(run(), startup);
 const compact = run("compact");
 assert.match(compact, /POST-COMPACT RULE RE-ANCHOR/);
 assert.match(compact, /money = exact whole cents/);
+assert.match(compact, /parseDollarsToCents\(\) REFUSES more than two decimals/);
+assert.match(compact, /never coerce null to 0 on a saved or authoritative path/);
 assert.match(compact, /Mason cannot read code or safely review a diff/);
 
 assert.equal(runRaw("{"), "");

@@ -7,8 +7,9 @@ Step-by-step guide for ANY database schema change. Follow every step — skippin
 ## Before You Start
 
 1. **Read the existing schema** — check `docs/reference/database-schema.md` to understand what already exists
-2. **Check for related tables** — if you're adding a column to `orders`, think about whether `order_items`, `deliveries`, or `invoices` also need changes
-3. **Plan the migration** — write out what SQL you need before creating the file
+2. **Read the canonical SQL patterns** — use `docs/reference/sql-canonical-patterns.md` for SECURITY DEFINER, actor binding, idempotency, and mutation-result shapes
+3. **Check for related tables** — if you're adding a column to `orders`, think about whether `order_items`, `deliveries`, or `invoices` also need changes
+4. **Plan the migration** — write out what SQL you need before creating the file
 
 ---
 

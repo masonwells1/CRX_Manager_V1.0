@@ -12,13 +12,14 @@
 // from git, inserts a dated section at the TOP of docs/CHANGELOG.md in the
 // file's existing entry format ("## YYYY-MM-DD — Title" + prose paragraph +
 // bullets), and prints the live pages/migrations counts so the driving
-// session can spot CLAUDE.md Snapshot drift.
+// session can spot drift in the routed reference documentation.
 //
 // The PROSE stays Claude's/Mason's job: without --summary the entry carries a
 // literal {SUMMARY} placeholder to fill in; with --summary "text" the text is
 // used as the title + lead paragraph.
 //
-// This script NEVER edits CLAUDE.md — it only prints the counts to compare.
+// This script NEVER edits always-loaded guidance — it only prints counts to compare
+// with docs/reference/pages-routes.md and docs/reference/migration-history.md.
 //
 // Usage:
 //   node scripts/log-session.mjs --summary "Plain-English what shipped + why"
@@ -166,7 +167,7 @@ const migrationsTouched = [...new Set(
   migsRaw.split("\n").map(l => l.trim()).filter(l => /supabase\/migrations\/.+\.sql$/.test(l))
 )];
 
-// ─── Mechanical counts (print-only — compare to the CLAUDE.md Snapshot) ───
+// ─── Mechanical counts (print-only — compare to routed reference docs) ───
 function countFiles(rel, ext) {
   try {
     return readdirSync(path.join(root, rel)).filter(f => f.endsWith(ext)).length;
@@ -227,8 +228,8 @@ try {
 
 console.log("── log-session — derived changelog entry ─────────────────────────");
 console.log(entry);
-console.log("── mechanical counts (compare to the CLAUDE.md Snapshot — update it");
-console.log("   in the driving session if drifted; this script NEVER edits CLAUDE.md) ──");
+console.log("── mechanical counts (compare to docs/reference; update those docs");
+console.log("   through the documentation workflow if drifted) ─────────────────────");
 console.log(`   pages (src/pages/*.tsx):            ${pageCount === null ? "(src/pages unreadable)" : pageCount}`);
 console.log(`   migrations (supabase/migrations):   ${migCount === null ? "(dir unreadable)" : migCount}`);
 console.log("───────────────────────────────────────────────────────────────────");

@@ -69,7 +69,7 @@
 //     -- If the MCP response is too large, split with `AND c.table_name <= 'mmm'` /
 //     -- `AND c.table_name > 'mmm'` and concatenate the row arrays.
 //
-// (Q6) applied_names (OPTIONAL — powers name-based staleness comparison in
+// (Q6) applied_names (REQUIRED — powers name-based staleness comparison in
 //      session-staleness.mjs; server-assigned `version` can be LOWER than the
 //      migration filename's timestamp for migrations applied via the Supabase
 //      MCP, which makes the numeric high-water compare false-positive forever

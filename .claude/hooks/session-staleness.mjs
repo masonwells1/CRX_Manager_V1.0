@@ -245,7 +245,7 @@ try {
     cwd: projectDir,
   });
   const lines = porcelain.split("\n").filter(l => l.trim());
-  // Filter out the well-known untracked dirs from CLAUDE.md SessionStart context.
+  // Filter out the well-known untracked dirs from the SessionStart context.
   const meaningfulLines = lines.filter(l => {
     const p = l.slice(3);
     return !p.startsWith(".claude/worktrees/")

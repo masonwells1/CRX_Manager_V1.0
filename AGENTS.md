@@ -54,7 +54,7 @@ This is the always-loaded, shared contract for Codex, Claude, and future coding 
 - Add database changes as new files under `supabase/migrations/`; never edit an applied migration. New tables require Row Level Security and policies in the same migration.
 - Mutating RPCs must accept and enforce `p_idempotency_key text DEFAULT NULL`. `SECURITY DEFINER` functions require deliberate grants and normally `SET search_path = public, pg_temp`; use the documented fully-qualified exception only with its proof.
 - Money must resolve to exact whole cents. New storage uses bigint cents; authoritative TypeScript parses decimals into integer cents before arithmetic. Follow the documented legacy exceptions in `docs/workflows/SAFE_DEVELOPMENT_RULES.md`.
-- Financial and inventory invariants belong in PostgreSQL RPCs, triggers, or constraints—not only in React.
+- Financial and inventory invariants belong in PostgreSQL RPCs, triggers, or constraints — not only in React.
 - Use `src/lib/db.ts` as the only Supabase client. Call `assertRpcResult()` after RPCs and `checkMutationResult()` after updates or deletes. Never write generated columns.
 - Match status values to `.claude/schema-registry.json`. Use shared types from `src/types/index.ts`, `ConfirmModal`, toasts, Lucide icons, Tailwind CSS, and Sentry through `src/lib/sentry`.
 
