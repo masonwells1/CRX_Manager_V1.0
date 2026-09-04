@@ -449,11 +449,22 @@ export default function PurchaseOrderDetail() {
           } catch {
             // Nothing left to report through; the receipt still stands.
           }
+          // Do not promise the retry will WORK. Resubmitting runs the same local
+          // cleanup that just failed, so a transient rejection clears and a
+          // persistently broken store does not — and once the retry window expires,
+          // handleReceive refuses before it even attempts reconciliation. Telling the
+          // operator "submit it again to clear it" as if it always succeeds hands them
+          // an instruction that can loop forever. State the outcome that is certain
+          // (the goods are recorded), the action that may work, and the escalation
+          // when it does not. (gpt-5.6-sol on 862cd144d.)
           toast(
             'warning',
-            'These goods WERE received and recorded. A local record could not be cleared, so the '
-            + 'receiving form will reopen showing this same receipt — submit it again to clear it. '
-            + 'It will not receive the goods twice. Other shipments cannot be received until it clears.',
+            'These goods WERE received and recorded — that part is safe and will not be undone. '
+            + 'A local record could not be cleared, so the receiving form reopens showing this same '
+            + 'receipt. Submitting it again is safe and will not receive twice; it may clear the '
+            + 'record. If it keeps reappearing, reload the page, and if it still persists this '
+            + 'browser cannot clear it — report it, and do not attempt other receipts on this '
+            + 'device until it is resolved.',
           );
         }
         const receivingRecordIds = (responseData as { receiving_record_ids?: string[] } | null)?.receiving_record_ids || [];

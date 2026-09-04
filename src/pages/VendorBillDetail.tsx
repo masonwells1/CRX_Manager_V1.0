@@ -401,6 +401,20 @@ export default function VendorBillDetail() {
     setEditModalOpen(true);
   };
 
+  // Closing the editor ENDS the session. Without this the token advanced only on
+  // open and on route change, so a late refusal for an edit the operator had
+  // explicitly cancelled still matched and reopened the overage prompt over a
+  // closed editor — and confirming it then failed the entry guard on the now-null
+  // editModalBillId, surfacing an error instead of the action the prompt offered.
+  // (gpt-5.6-sol on 862cd144d.) Both close paths — the Modal's onClose and the
+  // Cancel button — route through here so they cannot drift apart.
+  const closeEditModal = () => {
+    editSessionRef.current += 1;
+    setEditOverageMessage(null);
+    setEditModalOpen(false);
+    setEditModalBillId(null);
+  };
+
   const handleEditBill = async (confirmPoOverage = false, poOverageReason = '') => {
     if (!bill || bill.id !== id || editModalBillId !== id) {
       setEditModalOpen(false);
@@ -477,7 +491,26 @@ export default function VendorBillDetail() {
       // still looking at this bill — that is a fact about the request, not about
       // the screen. Only the reporting below is route-dependent.
       editIdem.resetKey();
-      if (!isStillCurrentBill()) return;
+      if (!isStillCurrentBill()) {
+        // The edit COMMITTED. Returning silently here suppressed reconciliation as
+        // well as reporting: the replacement editing session kept showing bill data
+        // fetched BEFORE this edit landed, and submitting it re-sent those stale
+        // fields over the committed ones. `fetchBill()` is state reconciliation, not
+        // reporting — only the success toast and closing the editor are
+        // session-scoped. (gpt-5.6-sol on 862cd144d.)
+        //
+        // Do NOT claim the edit on screen saved — it did not; an EARLIER one did.
+        // Say that, leave the operator's current figures untouched, and refresh the
+        // record underneath them. fetchBill() re-reads the CURRENT route and guards
+        // on activeBillIdRef, so it is safe to call from a stale session.
+        toast(
+          'warning',
+          'An earlier edit to this bill finished after you left it. The bill has been refreshed — '
+          + 'check the figures on screen before saving again.',
+        );
+        fetchBill();
+        return;
+      }
       toast('success', 'Bill updated');
       setEditModalOpen(false);
       setEditModalBillId(null);
@@ -950,10 +983,7 @@ export default function VendorBillDetail() {
       {/* Edit Bill Modal (PR-14, 2026-05-10) */}
       <Modal
         open={editModalOpen}
-        onClose={() => {
-          setEditModalOpen(false);
-          setEditModalBillId(null);
-        }}
+        onClose={closeEditModal}
         title="Edit Vendor Bill"
       >
         <div className="space-y-4">
@@ -995,10 +1025,7 @@ export default function VendorBillDetail() {
           <div className="flex justify-end gap-3 pt-2">
             <Button
               variant="ghost"
-              onClick={() => {
-                setEditModalOpen(false);
-                setEditModalBillId(null);
-              }}
+              onClick={closeEditModal}
             >
               Cancel
             </Button>

@@ -280,4 +280,49 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
     expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
     expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy();
   });
+
+  // gpt-5.6-sol on 862cd144d: the session token advanced on open and on route
+  // change but NOT on close, so a late refusal for an edit the operator had
+  // explicitly cancelled still matched and reopened the overage prompt over a
+  // closed editor. Confirming it then failed the entry guard on the now-null
+  // editModalBillId, producing an error instead of the action the prompt offered.
+  it('discards a stale refusal for an edit the operator cancelled', async () => {
+    let releaseEdit: (value: unknown) => void = () => {};
+    H.rpc.mockImplementation((name: string) => {
+      if (name === 'update_vendor_bill') {
+        return new Promise((resolve) => { releaseEdit = resolve; });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_A}`]}>
+        <Routes>
+          <Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Edit Bill/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    await waitFor(() => expect(H.rpc).toHaveBeenCalledWith('update_vendor_bill', expect.anything()));
+
+    // Operator gives up on the edit and closes the editor while it is in flight.
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Save Changes/i })).toBeNull());
+
+    // The refusal for the cancelled edit lands. Same bill, same route.
+    await act(async () => {
+      releaseEdit({
+        data: null,
+        error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' },
+      });
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+    });
+
+    // A cancelled edit must not be resurrected by its own late answer.
+    expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
+  });
 });
