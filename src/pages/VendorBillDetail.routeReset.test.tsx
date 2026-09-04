@@ -106,6 +106,12 @@ function GoToOtherBill() {
   return <button onClick={() => navigate(`/accounts-payable/bills/${BILL_B}`)}>go-to-bill-b</button>;
 }
 
+// Returning to the ORIGINAL bill is the case a route-id check cannot see.
+function GoToBillA() {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(`/accounts-payable/bills/${BILL_A}`)}>go-to-bill-a</button>;
+}
+
 const OVERAGE_PROMPT = /Why should cumulative billing exceed/i;
 
 describe('VendorBillDetail route change with the overage prompt open', () => {
@@ -213,6 +219,64 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
 
     // It must be discarded outright: no overage prompt over bill B, and B's own
     // editor left exactly as the operator opened it.
+    expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
+    expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy();
+  });
+
+  // gpt-5.6-sol on c127bd535: the route-id check passes when the operator LEAVES
+  // bill A and COMES BACK. `currentBillIdRef.current === targetBillId` is true
+  // again, so bill A's stale refusal was adopted by the new editing session and
+  // opened the overage prompt over figures it was never checked against —
+  // confirming it would submit the CURRENT form carrying the old justification.
+  // The A -> B -> A shape is what the previous test cannot reach.
+  it('discards a stale refusal after the operator leaves bill A and returns to it', async () => {
+    let releaseEdit: (value: unknown) => void = () => {};
+    H.rpc.mockImplementation((name: string) => {
+      if (name === 'update_vendor_bill') {
+        return new Promise((resolve) => { releaseEdit = resolve; });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_A}`]}>
+        <GoToOtherBill />
+        <GoToBillA />
+        <Routes>
+          <Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    // Submit edit P1 on bill A; hold the RPC open.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Edit Bill/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    await waitFor(() => expect(H.rpc).toHaveBeenCalledWith('update_vendor_bill', expect.anything()));
+
+    // Leave to bill B, then come BACK to A and reopen its editor with fresh
+    // figures. Every identity a route check inspects now reads "bill A" again.
+    activeBillRow = billB;
+    fireEvent.click(screen.getByRole('button', { name: 'go-to-bill-b' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+
+    activeBillRow = bill;
+    fireEvent.click(screen.getByRole('button', { name: 'go-to-bill-a' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Edit Bill/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy());
+
+    // P1's refusal finally lands, against a bill whose id matches again.
+    await act(async () => {
+      releaseEdit({
+        data: null,
+        error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' },
+      });
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+    });
+
+    // The session token, not the bill id, is what refuses it.
     expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
     expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy();
   });

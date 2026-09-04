@@ -126,6 +126,30 @@ export default function VendorBillDetail() {
     currentBillIdRef.current = id;
   }, [id]);
 
+  // The route id alone CANNOT tell a late response whether it is still answering
+  // the edit that produced it. Leaving bill A and returning to A — or simply
+  // closing and reopening A's editor with different figures — leaves
+  // `currentBillIdRef.current === targetBillId` true, so a stale response was
+  // adopted by a NEW editing session: on success it closed the editor and
+  // discarded the operator's unsaved figures, and on an overage refusal it opened
+  // the reason prompt over them, where confirming submitted the CURRENT form with
+  // a justification collected for the previous one. (gpt-5.6-sol on c127bd535.)
+  //
+  // This counter identifies the editing session, not the record. It advances on
+  // every route change and every editor open, so A -> B -> A and
+  // open -> close -> open are both distinguishable from never having left.
+  const editSessionRef = useRef(0);
+  // Bumped DURING RENDER, not in an effect. `currentBillIdRef` above is written by
+  // an effect, which runs after render — a response landing in that gap still read
+  // the OLD id and passed a check that should already have failed. Deriving the
+  // change during render closes that window, and the same-value rewrite under
+  // StrictMode's double render is harmless.
+  const lastRouteIdForSessionRef = useRef(id);
+  if (lastRouteIdForSessionRef.current !== id) {
+    lastRouteIdForSessionRef.current = id;
+    editSessionRef.current += 1;
+  }
+
   // Route changes must retire every visible bill-specific form while preserving
   // any unresolved durable payment record under the old bill's storage scope.
   useEffect(() => {
@@ -365,6 +389,15 @@ export default function VendorBillDetail() {
     setEditDueDate(bill.due_date);
     setEditNotes(bill.notes || '');
     setEditModalBillId(bill.id);
+    // A reopened editor is a NEW session even on the same bill: the figures in it
+    // are not the ones any in-flight request was built from.
+    editSessionRef.current += 1;
+    // An overage prompt raised for the PREVIOUS session must not survive into this
+    // one. Confirming it calls handleEditBill(true, reason), which reads the CURRENT
+    // form — so a justification collected for the old figures would authorize an
+    // overage on the new ones. The route-change effect already clears this; a
+    // same-bill reopen needs it too.
+    setEditOverageMessage(null);
     setEditModalOpen(true);
   };
 
@@ -418,7 +451,13 @@ export default function VendorBillDetail() {
     // against B, authorizing an overage B was never checked for and recording
     // A's justification against it.
     const targetBillId = bill.id;
-    const isStillCurrentBill = () => currentBillIdRef.current === targetBillId;
+    // Captured BEFORE the await, compared after. Both halves are required: the
+    // route id catches a move to another bill, the session catches a return to
+    // this one and a reopened editor, which the route id alone reports as "still
+    // here". Anything that reaches the UI below must satisfy both.
+    const submissionSession = editSessionRef.current;
+    const isStillCurrentBill = () =>
+      currentBillIdRef.current === targetBillId && editSessionRef.current === submissionSession;
     try {
       const key = editIdem.getKey();
       const { data, error } = await supabase.rpc('update_vendor_bill', {

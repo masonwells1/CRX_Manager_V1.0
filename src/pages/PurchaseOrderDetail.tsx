@@ -432,11 +432,29 @@ export default function PurchaseOrderDetail() {
         try {
           await receiveIntent.resolveIntent();
         } catch (resolveErr) {
+          // Telemetry alone is NOT enough here, and treating it as enough was the
+          // defect (gpt-5.6-sol on c127bd535). Retaining the key prevents a
+          // double-receive, but it does not preserve LIVENESS: an unresolved intent
+          // makes the recovery effect force the receive modal back open with THIS
+          // receipt's payload, and handleReceive then replays the frozen request. So
+          // the operator cannot receive a different shipment until this clears, and a
+          // silent success message would leave them to discover that as a mystery.
+          //
+          // Say what happened and what to do. Submitting the reopened form again is
+          // safe: it replays under the same key, reconciles against the receipt that
+          // already committed, and takes the completedElsewhere path rather than
+          // receiving the goods twice.
           try {
             Sentry.captureException(resolveErr);
           } catch {
             // Nothing left to report through; the receipt still stands.
           }
+          toast(
+            'warning',
+            'These goods WERE received and recorded. A local record could not be cleared, so the '
+            + 'receiving form will reopen showing this same receipt — submit it again to clear it. '
+            + 'It will not receive the goods twice. Other shipments cannot be received until it clears.',
+          );
         }
         const receivingRecordIds = (responseData as { receiving_record_ids?: string[] } | null)?.receiving_record_ids || [];
         const damagedReceiptIntentIds = receivingRecordIds.length > 0 ? receivingRecordIds : [idemKey];
