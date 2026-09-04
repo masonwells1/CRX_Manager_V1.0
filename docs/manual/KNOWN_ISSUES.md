@@ -459,6 +459,21 @@ Deliberately NOT folded into PR #599: that PR's migration is already applied liv
 does not un-ship this divergence, and its frontend fix is what closes the 2026-09-30 window.
 **Recommended before 2026-09-30**, tracked as a follow-up.
 
+**PARTIALLY CLOSED 2026-09-04 — the stale-preview half is fixed; the server half is not.** The
+`gpt-5.6-sol` push-proof review raised a second, sharper vector that the earlier reviews missed:
+the transaction-date input did **not** invalidate a rendered preview, even though locations
+(`:1314`), chemicals (`:1367`) and the application-service selector (`:2672`) all did. So an
+operator could preview on 2026-09-30, move the date to 2026-10-01, and save with the season-2026
+per-acre rate still on screen while the save charged the season-2027 rate — approving a number that
+was not billed, with no boundary or timezone involved. `FieldApplicationInvoice.tsx:2645` now clears
+`previewData` on date change, with a regression test that fails if the clear is removed.
+
+**What is still open:** `preview_field_app_invoice_split` itself continues to price from the UTC
+clock, so a *freshly generated* preview can still disagree with the save on a backdated or
+cross-boundary invoice. That still needs a migration — the live function has no date or season
+parameter. The fix above only removes the STALE-preview vector, which was the part reachable
+without any clock edge case at all.
+
 ## OPEN 2026-09-04, DEADLINE 2026-12-31 — `next_invoice_number` takes its YEAR from the UTC clock
 
 Split out of the invoice-date/season entry above on 2026-09-04 so it is not closed along with it —

@@ -399,6 +399,35 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
       expect(discounts['new-inv-1'].amount_cents).toBe(2500);
     });
   });
+
+  // The transaction date decides the SEASON, and the season selects the
+  // customer_application_rates row — so it changes the PRICE exactly as much as locations,
+  // chemicals and the service selector do, all of which already invalidate the preview.
+  // Before this guard, previewing on one side of October 1 and then moving the date across it
+  // left the OLD per-acre rate on screen while save charged the new one, so the breakdown the
+  // operator approves was not the one billed (Codex push-proof review, 2026-09-04).
+  it('discards a rendered preview when the transaction date changes', async () => {
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    // The discount input only exists while previewData is set, so it is a faithful proxy for
+    // "a server-computed preview is on screen".
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    expect(await screen.findByTitle(/Early-pay discount earned/i)).toBeInTheDocument();
+
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+
+    await waitFor(() => {
+      expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+    });
+  });
 });
 
 describe('FieldApplicationInvoice — existing single invoice (no group)', () => {

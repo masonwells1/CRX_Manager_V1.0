@@ -2635,7 +2635,14 @@ export default function FieldApplicationInvoice() {
             <input
               type="date"
               value={transactionDate}
-              onChange={(e) => { setTransactionDate(e.target.value); setDirty(true); }}
+              // setPreviewData(null): the transaction date decides the SEASON, and the season
+              // selects the customer_application_rates row, so this input changes the PRICE just
+              // as much as locations (:1314), chemicals (:1367) and the service selector (:2665)
+              // do -- all three already invalidate the preview. Without this, previewing on
+              // 2026-09-30 and then moving the date to 2026-10-01 leaves the season-2026 per-acre
+              // rate on screen while save charges the season-2027 rate, so the customer breakdown
+              // Mason approves is not the one billed (Codex push-proof review, 2026-09-04).
+              onChange={(e) => { setTransactionDate(e.target.value); setDirty(true); setPreviewData(null); }}
               disabled={!canEdit}
               className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
             />
