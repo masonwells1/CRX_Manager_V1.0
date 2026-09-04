@@ -9,7 +9,10 @@ const SECURITY_DEFINER_ROUTINE_HEADER = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:FU
 function blank(out, count) { return out + ' '.repeat(count); }
 
 function isIdentifierCharacter(ch) {
-  return Boolean(ch) && /[A-Za-z0-9_$]/.test(ch);
+  // PostgreSQL allows non-ASCII letters in unquoted identifiers. Treat every
+  // non-ASCII code point as identifier content here: the lexer must never let
+  // a dollar quote start in the middle of an identifier it cannot classify.
+  return Boolean(ch) && (/[A-Za-z0-9_$]/.test(ch) || ch.codePointAt(0) > 0x7f);
 }
 
 function startsKeyword(text, index, keyword) {
@@ -132,7 +135,7 @@ export function executableSql(sql) {
     // PostgreSQL allows `$` inside unquoted identifiers. A dollar quote may
     // begin only at a token boundary; otherwise `x$tag$` is an identifier, not
     // a literal that can hide executable ACL statements.
-    if (ch === '$' && !/[A-Za-z0-9_$]/.test(src[i - 1] || '')) {
+    if (ch === '$' && !isIdentifierCharacter(src[i - 1])) {
       const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i));
       if (tag) {
         const close = src.indexOf(tag[0], i + tag[0].length);
