@@ -115,18 +115,28 @@ const HAZARD_CHEM = {
   sort_order: 0,
 };
 
-function makeJob(chem: Record<string, unknown>) {
+function makeJob(
+  chem: Record<string, unknown>,
+  acres: number | string | Array<number | string> = 100,
+  applicatorId: string | null = null,
+) {
+  const fieldAcres = Array.isArray(acres) ? acres : [acres];
   return {
     id: 'job-1',
     job_number: 'J-1001',
     job_date: '2026-08-19',
     customer_id: 'cust-1',
+    applicator_id: applicatorId,
     status: 'scheduled',
     customer: { farm_name: 'Farm Alpha' },
     vehicle: null,
     quote: null,
     quote_section: null,
-    job_fields: [{ id: 'jf-1', acres_to_treat: 100, field: { field_name: 'North 100' } }],
+    job_fields: fieldAcres.map((fieldAcresValue, index) => ({
+      id: `jf-${index + 1}`,
+      acres_to_treat: fieldAcresValue,
+      field: { field_name: `Field ${index + 1}` },
+    })),
     job_chemicals: [chem],
     job_field_shares: [],
     applied_info: null,
@@ -191,7 +201,15 @@ function buildGatedByIdProductsChain(rows: unknown[], gate: Promise<void>): Reco
   return self;
 }
 
-function mountWith(chem: Record<string, unknown>) {
+function mountWith(
+  chem: Record<string, unknown>,
+  acres: number | string | Array<number | string> = 100,
+  licenseFixture?: {
+    applicator: { id: string; full_name: string; role: string; is_active: boolean };
+    license: { profile_id: string; expiry_date: string; is_active: boolean };
+    savedApplicatorId?: string | null;
+  },
+) {
   // One gate per mount, created BEFORE render so the by-id effect can only ever
   // observe the pending promise. `from('products')` is called more than once, so the
   // gate must be shared across those chains rather than created inside each.
@@ -201,9 +219,20 @@ function mountWith(chem: Record<string, unknown>) {
   labelLookupGated = true;
 
   mockFrom.mockImplementation((table: string) => {
-    if (table === 'jobs') return buildChain({ data: makeJob(chem), error: null });
+    if (table === 'jobs') {
+      return buildChain({
+        data: makeJob(chem, acres, licenseFixture?.savedApplicatorId ?? null),
+        error: null,
+      });
+    }
     if (table === 'products') return buildGatedByIdProductsChain([DRY_PRODUCT], gate);
     if (table === 'unit_conversions') return buildChain({ data: UNIT_CONVERSIONS, error: null });
+    if (table === 'profile_public_view') {
+      return buildChain({ data: licenseFixture ? [licenseFixture.applicator] : [], error: null });
+    }
+    if (table === 'applicator_licenses') {
+      return buildChain({ data: licenseFixture ? [licenseFixture.license] : [], error: null });
+    }
     return buildChain({ data: [], error: null });
   });
   return render(
@@ -446,6 +475,205 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     const args = saveCall?.[1] as { p_job_payload: Record<string, unknown> };
     expect(args.p_job_payload.total_price_cents).toBe(15);   // exact — NOT the float path's 14
     expect(args.p_job_payload.total_cost_cents).toBe(15);
+  }, 30000);
+
+  it('SAVES a quantity exactly on PostgreSQL numeric tolerance instead of falsely blocking it', async () => {
+    // Exact SQL arithmetic: abs(0.1001 - (0.0501 x 2)) = 0.0001, and the
+    // server comparison is inclusive. Binary float reads the difference as
+    // 0.00010000000000000286 and used to show "no longer agree" / block Save.
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0.1001, unit: 'Lb', rate_per_acre: 0.0501, rate_unit: 'Lb/ac',
+    }, 2);
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
+    await clickSave(save);
+
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true),
+      { timeout: 15000 },
+    );
+    expect(screen.queryByText(/no longer agree/i)).toBeNull();
+    const saveCall = mockRpc.mock.calls.find((c) => c[0] === 'save_job');
+    const args = saveCall?.[1] as { p_fields: Array<Record<string, unknown>>; p_chemicals: Array<Record<string, unknown>> };
+    expect(args.p_fields[0].acres_to_treat).toBe(2);
+    expect(args.p_chemicals[0]).toMatchObject({ quantity: 0.1001, rate_per_acre: 0.0501 });
+  }, 30000);
+
+  it('SAVES an exact-boundary quantity when acreage is split across decimal fields', async () => {
+    // The payload sends 0.1 and 0.2 as separate field values, so PostgreSQL numeric sums
+    // exact 0.3. A binary client sum of 0.30000000000000004 used to falsely block this row.
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0.01493, unit: 'Lb', rate_per_acre: 0.0501, rate_unit: 'Lb/ac',
+    }, [0.1, 0.2]);
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
+    await clickSave(save);
+
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true),
+      { timeout: 15000 },
+    );
+    expect(screen.queryByText(/no longer agree/i)).toBeNull();
+    const saveCall = mockRpc.mock.calls.find((c) => c[0] === 'save_job');
+    const args = saveCall?.[1] as {
+      p_job_payload: Record<string, unknown>;
+      p_fields: Array<Record<string, unknown>>;
+      p_chemicals: Array<Record<string, unknown>>;
+    };
+    expect(args.p_job_payload.total_acres).toBe(0.3);
+    expect(args.p_fields.map((field) => field.acres_to_treat)).toEqual([0.1, 0.2]);
+    expect(args.p_chemicals[0]).toMatchObject({ quantity: 0.01493, rate_per_acre: 0.0501 });
+  }, 30000);
+
+  it('SAVES the lower boundary that restoration of floating-point comparison rejects', async () => {
+    // The field payload values sum to exact 1000000000000000.3 in PostgreSQL numeric,
+    // while the browser's Number values cannot represent the product and subtraction
+    // exactly. At this deliberately synthetic scale, the submitted quantity is on SQL's
+    // accepted lower 0.1 boundary but Math.abs reports it outside. This pins exact decimal
+    // comparison through the real save gate; the schema has no precision ceiling.
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 999999999.9000003, unit: 'Lb', rate_per_acre: 0.000001, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, [1000000000000000.1, 0.2]);
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
+    await clickSave(save);
+
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true),
+      { timeout: 15000 },
+    );
+    expect(screen.queryByText(/no longer agree/i)).toBeNull();
+    const saveCall = mockRpc.mock.calls.find((c) => c[0] === 'save_job');
+    const args = saveCall?.[1] as { p_fields: Array<Record<string, unknown>> };
+    expect(args.p_fields.map((field) => field.acres_to_treat)).toEqual([1000000000000000.1, 0.2]);
+  }, 30000);
+
+  it('SAVES the complementary upper boundary only when JobDetail passes exact acreage', async () => {
+    // The lower case above kills restoration of the old Math.abs float predicate. This
+    // complementary side kills a dropped exactAcres argument: the Number-collapsed field
+    // total makes its exact-decimal difference 0.1000001 instead of SQL's accepted 0.1.
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 1000000000.1000003, unit: 'Lb', rate_per_acre: 0.000001, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, [1000000000000000.1, 0.2]);
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
+    await clickSave(save);
+
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true),
+      { timeout: 15000 },
+    );
+    expect(screen.queryByText(/no longer agree/i)).toBeNull();
+    const saveCall = mockRpc.mock.calls.find((c) => c[0] === 'save_job');
+    const args = saveCall?.[1] as { p_fields: Array<Record<string, unknown>> };
+    expect(args.p_fields.map((field) => field.acres_to_treat)).toEqual([1000000000000000.1, 0.2]);
+  }, 30000);
+
+  it('REFUSES a nonblank non-finite field acreage before save_job can run', async () => {
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0, unit: 'Lb', rate_per_acre: 0, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, '1e999');
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+
+    await waitFor(() => {
+      const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
+      expect(errors.some((m) => /field acreage.*finite, non-negative number/i.test(m))).toBe(true);
+    }, { timeout: 15000 });
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }, 30000);
+
+  it('REFUSES negative field acreage before save_job can run', async () => {
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0, unit: 'Lb', rate_per_acre: 0, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, '-1');
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(
+        'error',
+        expect.stringMatching(/field acreage.*finite, non-negative number/i),
+      );
+    }, { timeout: 15000 });
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }, 30000);
+
+  it.each([
+    ['non-finite', '1e999'],
+    ['negative', '-1'],
+  ])('keeps %s acreage blocked after an admin confirms the expired-license override', async (_case, acres) => {
+    // Reaching Assign Anyway proves the fail-closed guard remains inside performSave,
+    // where the override calls directly, rather than only in the initial save handler.
+    const expiredApplicator = {
+      id: 'app-expired', full_name: 'Expired Applicator', role: 'applicator', is_active: true,
+    };
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0, unit: 'Lb', rate_per_acre: 0, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, acres, {
+      applicator: expiredApplicator,
+      license: { profile_id: expiredApplicator.id, expiry_date: '2025-01-01', is_active: true },
+    });
+
+    const applicatorSelect = await waitFor(() => {
+      const found = screen.getAllByRole('combobox').find((element) => (
+        Array.from((element as HTMLSelectElement).options)
+          .some((option) => option.value === expiredApplicator.id)
+      ));
+      if (!found) throw new Error('applicator select not found');
+      return found as HTMLSelectElement;
+    }, { timeout: 15000 });
+    fireEvent.change(applicatorSelect, { target: { value: expiredApplicator.id } });
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    const assignAnyway = await screen.findByRole('button', { name: /assign anyway/i }, { timeout: 15000 });
+    fireEvent.click(assignAnyway);
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith(
+        'error',
+        expect.stringMatching(/field acreage.*finite, non-negative number/i),
+      );
+    }, { timeout: 15000 });
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }, 30000);
+
+  it('normalizes an intentionally blank field acreage to 0 in the save_job payload', async () => {
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0, unit: 'Lb', rate_per_acre: 0, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 0, price_per_unit_cents: 0,
+    }, '');
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    await clickSave(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true),
+      { timeout: 15000 },
+    );
+    const saveCall = mockRpc.mock.calls.find((c) => c[0] === 'save_job');
+    const args = saveCall?.[1] as { p_fields: Array<Record<string, unknown>> };
+    expect(args.p_fields[0].acres_to_treat).toBe(0);
   }, 30000);
 
   /** Mount on the Locations tab with one reloaded 1.5 pt/ac / 150 pt line over 100 acres,
