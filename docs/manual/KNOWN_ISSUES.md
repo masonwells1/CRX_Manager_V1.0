@@ -2560,17 +2560,25 @@ raises, and only the smoke chain catches it.
 
 ---
 
-## OPEN — `parseCents.ts` truncates excess fractional precision
+## RESOLVED 2026-09-03 — `parseCents.ts` truncated excess fractional precision; it now REFUSES it
 
-`parseDollarsToCents` and `parseDollarsToCentsSigned` currently accept inputs with
-more than two fractional digits and truncate them (`1.999` becomes 199 cents); the
-focused test explicitly preserves that legacy behavior. This predates the
+**Owner decision (Mason, 2026-09-03): refuse, never round.** `parseDollarsToCents` and
+`parseDollarsToCentsSigned` return `null` for more than two fractional digits (`1.999`,
+`$12.345`) and the return type is `number | null`, so every caller must handle it. The caller
+audit the original entry asked for was done first and found that 13 of 26 sites would have
+saved a refused value as a real `$0` (credit limit → credit check disabled; prepay balance
+wiped; price override cleared), which is why the refusal is `null` and not the malformed-input
+`0`. Submit-time sites show the shared `MONEY_PRECISION_MESSAGE` and stop before any RPC;
+live-typing price boxes refuse the keystroke and keep their last accepted value. Full record:
+`docs/changelog.d/2026-09-03-money-inputs-refuse-excess-precision.md`. Original entry kept below.
+
+`parseDollarsToCents` and `parseDollarsToCentsSigned` previously accepted inputs with
+more than two fractional digits and truncated them (`1.999` became 199 cents); the
+focused test explicitly preserved that legacy behavior. This predated the
 2026-08-10 exact-whole-cent policy. New or changed authoritative money paths must
 parse decimal operands exactly and must not copy this truncation. Changing the
-shared form-input helper needs a separate caller audit and UI decision: reject
-excess precision or apply one explicit approved rounding rule. The documentation
-prerequisite records the debt but deliberately does not change production input
-semantics.
+shared form-input helper needed a separate caller audit and UI decision: reject
+excess precision or apply one explicit approved rounding rule.
 
 ---
 

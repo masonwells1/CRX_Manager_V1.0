@@ -15,7 +15,7 @@ import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } fr
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
@@ -1046,6 +1046,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // payment becomes a prepay credit instead of erroring.
   const handlePayment = async () => {
     const amountCents = parseDollarsToCents(payAmount);
+    if (amountCents === null) {
+      toast('error', MONEY_PRECISION_MESSAGE);
+      return;
+    }
     if (amountCents <= 0) {
       toast('error', 'Enter a valid payment amount');
       return;
@@ -1141,6 +1145,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   const handleApplyCredit = async () => {
     const amountCents = parseDollarsToCents(applyCreditAmount);
+    if (amountCents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
     if (amountCents <= 0) { toast('error', 'Enter a valid amount to apply'); return; }
     if (!selectedCreditId) { toast('error', 'Select a credit memo to apply'); return; }
     if (!profile) { toast('error', 'Cannot apply credit — profile not loaded. Please refresh.'); return; }
@@ -1884,9 +1889,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                         <input
                           type="number"
                           value={(item.unit_price_cents / 100).toFixed(2)}
-                          onChange={(e) =>
-                            updateItem(idx, 'unit_price_cents', parseDollarsToCents(e.target.value))
-                          }
+                          onChange={(e) => {
+                            const cents = parseDollarsToCents(e.target.value);
+                            // null = a third decimal digit. Refuse the keystroke; never store
+                            // a $0 unit price that only the below-cost prompt would question.
+                            if (cents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
+                            updateItem(idx, 'unit_price_cents', cents);
+                          }}
                           min={0}
                           step={0.01}
                           className="w-28 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"

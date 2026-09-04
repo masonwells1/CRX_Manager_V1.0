@@ -24,7 +24,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCents, formatUSD as fmt } from '../lib/money';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import type { RebateProgram, RebateClaim, RebateClaimStatus } from '../types';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 
@@ -298,6 +298,8 @@ export default function Rebates() {
       toast('error', 'Fill in required fields');
       return;
     }
+    const claimAmountCents = parseDollarsToCents(String(cForm.claim_amount_cents));
+    if (claimAmountCents === null) { toast('error', `Claim amount: ${MONEY_PRECISION_MESSAGE}`); return; }
 
     await runCriticalAction<{ claim_id: string; claim_number: string }>({
       action: async () => {
@@ -307,7 +309,7 @@ export default function Rebates() {
         const { data, error } = await supabase.rpc('create_rebate_claim', {
           p_program_id: cForm.program_id,
           p_quantity: Number(cForm.quantity),
-          p_claim_amount_cents: parseDollarsToCents(String(cForm.claim_amount_cents)),
+          p_claim_amount_cents: claimAmountCents,
           p_order_id: cForm.order_id || undefined,
           p_customer_id: cForm.customer_id || undefined,
           p_product_id: cForm.product_id || undefined,

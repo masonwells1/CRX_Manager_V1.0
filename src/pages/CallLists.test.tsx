@@ -428,6 +428,24 @@ describe('Call Lists adoption workspace', () => {
     expect(await screen.findByText('Refreshed Farm')).toBeInTheDocument();
   });
 
+  it('keeps the applied prepay list on screen when a refused threshold is applied', async () => {
+    rpcRows.get_call_list_prepay_prospects = [baseRow({ farm_name: 'Old Farm', prior_season_spend_cents: 100000, current_season_prepay_cents: 0 })];
+    renderCallLists();
+    expect(await screen.findByText('Old Farm')).toBeInTheDocument();
+    const rpcCallsBefore = mockRpc.mock.calls.length;
+
+    fireEvent.change(screen.getByLabelText('Minimum prior spend ($)'), { target: { value: '12.345' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply and refresh' }));
+
+    expect(mockToast).toHaveBeenCalledWith('error', 'Minimum prior spend: Enter an amount with no more than two decimal places.');
+    // A refused threshold must leave the still-applied list alone: before the fix the rows
+    // were cleared first, so the page said "This call list is clear" for a list that was
+    // never re-queried (Codex P2 on PR #588).
+    expect(screen.getByText('Old Farm')).toBeInTheDocument();
+    expect(screen.queryByText(/call list is clear/i)).not.toBeInTheDocument();
+    expect(mockRpc.mock.calls.length).toBe(rpcCallsBefore);
+  });
+
   it('ignores an obsolete in-flight response after the selected list changes', async () => {
     const oldResponse = deferred<RpcResult>();
     const currentResponse = deferred<RpcResult>();
