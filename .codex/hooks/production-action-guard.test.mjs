@@ -6,7 +6,22 @@ import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
+import {
+  PROTECTED_HARNESS_FILES,
+  canonicalizeGuardPath,
+  computedSegmentWithUnrecognizedCommand,
+  evaluateProductionAction,
+  expandBraces,
+  gitInvocationIsReadOnly,
+  globCouldMatchProtectedHarnessPath,
+  isClearlyReadOnlySql,
+  mutatingSegmentWithComputedText,
+  protectedBasenameMentioned,
+  pullRequestChecksGreen,
+  shellSegmentHead,
+  unrecognizedCommandWord,
+  unrecognizedProtectedHarnessAccess,
+} from "./production-action-guard.mjs";
 
 const projectRoot = process.cwd();
 // Git exports repository selectors while running hooks. This test creates
@@ -318,6 +333,804 @@ try {
 
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");
   assert.equal(evaluatePush(ordinary.repo).blocked, false, "non-risky main push allowed without proof");
+
+  // ── codex-bot-review-lib is guard-critical: it is IMPORTED at startup ──────
+  // Codex HIGH on PR #563's own exact-head review: the module was reachable by
+  // apply_patch (blocked:false) while the identical patch against
+  // production-action-guard.mjs was blocked:true. Because it executes at import
+  // time, an allowed edit could keep its exports intact and still terminate or
+  // subvert the hook before it reads any input — and silent completion means
+  // ALLOW, so that bypasses every production-action restriction, not just the
+  // review check. Every write channel must refuse it.
+  for (const tool of ["Write", "Edit", "NotebookEdit", "apply_patch"]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: tool, toolInput: { file_path: ".claude/hooks/codex-bot-review-lib.mjs" } }).blocked,
+      true,
+      `${tool} against codex-bot-review-lib.mjs must be blocked — the guard imports it at startup`,
+    );
+  }
+  // Path spelling must not be an escape: separators, ./ prefix, and case.
+  for (const spelling of [
+    ".claude\\hooks\\codex-bot-review-lib.mjs",
+    "./.claude/hooks/codex-bot-review-lib.mjs",
+    ".CLAUDE/HOOKS/CODEX-BOT-REVIEW-LIB.MJS",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: spelling } }).blocked,
+      true,
+      `alternate spelling must still be blocked: ${spelling}`,
+    );
+  }
+  // ...and the shell path, not only the file tools.
+  for (const command of [
+    'echo x > .claude/hooks/codex-bot-review-lib.mjs',
+    'cp /tmp/evil.mjs .claude/hooks/codex-bot-review-lib.mjs',
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `shell write must be blocked: ${command}`,
+    );
+  }
+  // The test file itself is NOT guard-critical — nothing imports it at runtime —
+  // so protection must not have been widened into a blanket directory ban.
+  assert.equal(
+    evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".claude/hooks/codex-bot-review-lib.test.mjs" } }).blocked,
+    false,
+    "the test file stays editable; protection is scoped to the imported module, not the whole directory",
+  );
+
+  // ── dot-segment detours must not buy a different verdict ──────────────────
+  // Codex HIGH, PR #563 round 2: the matcher compared raw strings, so
+  // `.claude/hooks/../hooks/<file>` — the same file, confirmed with
+  // Resolve-Path — was ALLOWED through Write, apply_patch and PowerShell while
+  // the direct spelling was blocked. This was never specific to one module:
+  // every protected entry had the hole.
+  for (const alias of [
+    ".claude/hooks/../hooks/codex-bot-review-lib.mjs",
+    ".claude/hooks/./codex-bot-review-lib.mjs",
+    ".claude/./hooks/../hooks/codex-bot-review-lib.mjs",
+    ".claude\\hooks\\..\\hooks\\codex-bot-review-lib.mjs",
+    "./.claude/hooks/../../.claude/hooks/codex-bot-review-lib.mjs",
+    ".codex/hooks/../../.claude/hooks/codex-push-lib.mjs",
+    "scripts/../scripts/write-codex-push-proof.mjs",
+  ]) {
+    for (const tool of ["Write", "Edit", "apply_patch"]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: tool, toolInput: { file_path: alias } }).blocked,
+        true,
+        `${tool} must resolve the detour and block: ${alias}`,
+      );
+    }
+  }
+  // Canonicalization must not over-block: a genuinely different file that merely
+  // sits near a protected one stays editable.
+  for (const innocent of [
+    ".claude/hooks/../hooks/some-other-lib.mjs",
+    ".claude/hooks/../../src/components/Label.tsx",
+    "docs/../docs/manual/DECISION_LOG.md",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: innocent } }).blocked,
+      false,
+      `canonicalization must not over-block an unrelated path: ${innocent}`,
+    );
+  }
+  assert.equal(canonicalizeGuardPath(".claude/hooks/../hooks/x.mjs"), ".claude/hooks/x.mjs", "dot-segments resolve");
+  assert.equal(canonicalizeGuardPath(".claude\\hooks\\x.mjs"), ".claude/hooks/x.mjs", "separators unify");
+  assert.equal(canonicalizeGuardPath("./a/./b/../c"), "a/c", "leading ./ and interior .. resolve");
+  assert.equal(canonicalizeGuardPath("../outside/x.mjs"), "../outside/x.mjs", "a leading .. stays meaningful in a relative path");
+  assert.equal(canonicalizeGuardPath("/a/../../b"), "/b", "cannot escape above a rooted path");
+  assert.equal(canonicalizeGuardPath(""), "", "empty stays empty");
+  // Codex round 3 escapes: an interior `./` and a Windows DRIVE-RELATIVE alias
+  // (`C:.claude/...`, no slash after the colon) both wrote to protected files.
+  // The drive prefix left `.claude` preceded by `:`, which the protected anchor
+  // never matched. These are the exact payloads it demonstrated.
+  for (const alias of [
+    "C:.claude/hooks/codex-bot-review-lib.mjs",
+    "c:.claude/hooks/codex-push-lib.mjs",
+    "C:.codex/hooks.json",
+    "D:scripts/write-codex-push-proof.mjs",
+    "C:/repo/.claude/hooks/codex-push-lib.mjs",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: alias } }).blocked,
+      true,
+      `drive-qualified alias must be blocked: ${alias}`,
+    );
+  }
+  assert.equal(canonicalizeGuardPath("C:.claude/hooks/x.mjs"), ".claude/hooks/x.mjs", "a drive-RELATIVE prefix is dropped");
+  assert.equal(canonicalizeGuardPath("C:/repo/x.mjs"), "/repo/x.mjs", "a drive-ROOTED prefix keeps its root");
+
+  // ...and the shell channel, which cannot be canonicalized as a single path.
+  for (const command of [
+    'echo x > .claude/hooks/../hooks/codex-bot-review-lib.mjs',
+    'cp /tmp/evil.mjs .claude/hooks/../hooks/codex-push-lib.mjs',
+    'Set-Content -Path .codex/hooks/../hooks/production-action-guard.mjs -Value ""',
+    // Interior `./` — walked past the first cut's `../`-only sniffing.
+    'Set-Content .claude/hooks/./codex-push-lib.mjs -Value ""',
+    'Set-Content scripts/./write-codex-push-proof.mjs -Value ""',
+    'Set-Content .codex/./hooks.json -Value ""',
+    'Set-Content -Path "C:.claude/hooks/codex-bot-review-lib.mjs" -Value ""',
+    'rm ./.claude/./hooks/codex-push-lib.mjs',
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `shell dot-segment detour must be refused: ${command}`,
+    );
+  }
+  // A read through a dot-segment is still fine — only MUTATING commands are refused.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "cat .claude/hooks/../hooks/codex-bot-review-lib.mjs" } }).blocked,
+    false,
+    "reading through a detour stays allowed; only mutation is refused",
+  );
+
+  // ── round 4: characters the shell DELETES, not ones it splits on ───────────
+  // Codex HIGH, PR #563 round 4. Round 3 treated quotes and the backtick as
+  // argument SEPARATORS. PowerShell treats them as no-ops inside a word: it
+  // removes them and joins what remains. So splicing one into the middle of a
+  // protected path split one blocked token into two harmless ones, and the
+  // write went through. Codex confirmed with PowerShell's own parser that both
+  // of these resolve to `.claude/hooks/codex-push-lib.mjs`, and measured
+  // `blocked:false` on each.
+  //
+  // The backtick is built from a char code so this fixture cannot be broken by
+  // an editor or a template-literal escape silently eating it.
+  const BACKTICK = String.fromCharCode(96);
+  for (const command of [
+    `Set-Content .claude/hooks/codex-push-${BACKTICK}lib.mjs -Value ""`,
+    'Set-Content .claude/hooks/codex-push-""lib.mjs -Value ""',
+    `Set-Content .claude/hooks/codex-bot-review-${BACKTICK}lib.mjs -Value ""`,
+    "Set-Content .claude/hooks/codex-bot-review-''lib.mjs -Value \"\"",
+    // The splice can land anywhere in the path, including the directory part.
+    `Set-Content .claude/${BACKTICK}hooks/codex-push-lib.mjs -Value ""`,
+    'rm .codex/""hooks.json',
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `an intra-word quote/escape splice must be refused: ${command}`,
+    );
+  }
+  // Still a read, still allowed — the splice must not turn reads into denials.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: `cat .claude/hooks/codex-push-${BACKTICK}lib.mjs` } }).blocked,
+    false,
+    "a spliced READ stays allowed; only mutation is refused",
+  );
+  // NEAR-MISS CANARY for the de-quoted view. Quoted fragments separated by real
+  // whitespace are two arguments, not concatenation — removing the quotes must
+  // not fuse them into a protected path. Without this, "strip all quotes and
+  // look for the path anywhere" would pass the tests above while blocking
+  // ordinary commands that merely mention the directory and the file apart.
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: 'Set-Content out.txt -Value ".claude/hooks/" "codex-push-lib.mjs"' },
+    }).blocked,
+    false,
+    "whitespace-separated quoted fragments are NOT concatenation and must stay allowed",
+  );
+
+  // ── round 7: Windows ignores trailing periods and spaces in a segment ──────
+  // Codex HIGH, PR #563 round 7 (exact-SHA proof of the merged-up head). The
+  // Win32 path normalizer strips trailing periods and spaces from a segment
+  // before the file system sees it, so `.claude./hooks/x.mjs`,
+  // `.claude/hooks./x.mjs` and `.claude/hooks/x.mjs.` all open
+  // `.claude/hooks/x.mjs` — probe-confirmed with Get-Item on each spelling.
+  // The canonicalizer knew `.`/`..` and drive prefixes and nothing else, so
+  // every one of these resolved to a protected file and returned blocked:false.
+  // These are the exact payloads Codex demonstrated, plus the trailing-space
+  // and multi-period forms Windows treats the same way.
+  for (const alias of [
+    ".claude./hooks/codex-bot-review-lib.mjs",
+    ".claude/hooks./codex-bot-review-lib.mjs",
+    ".claude/hooks/codex-bot-review-lib.mjs.",
+    ".claude/hooks/codex-bot-review-lib.mjs...",
+    ".claude/hooks/codex-bot-review-lib.mjs. .",
+    ".codex./hooks/production-action-guard.mjs",
+    ".codex/hooks.json.",
+    "scripts./write-codex-push-proof.mjs",
+    "package.json.",
+    ".claude./hooks/../hooks./codex-push-lib.mjs.",
+    "C:.claude./hooks/codex-push-lib.mjs.",
+  ]) {
+    for (const tool of ["Write", "Edit", "apply_patch"]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: tool, toolInput: { file_path: alias } }).blocked,
+        true,
+        `${tool} must strip Windows trailing periods/spaces and block: ${alias}`,
+      );
+    }
+  }
+  assert.equal(canonicalizeGuardPath(".claude./hooks./x.mjs."), ".claude/hooks/x.mjs", "trailing periods vanish from every segment");
+  assert.equal(canonicalizeGuardPath(".claude/hooks/x.mjs. ."), ".claude/hooks/x.mjs", "trailing period/space mixes vanish too");
+  assert.equal(canonicalizeGuardPath("a/.../b"), "a/b", "an all-period segment is dropped (over-inclusive by design)");
+  // `.. ` is NOT a parent hop: Windows refuses to resolve a segment made only
+  // of periods and spaces (probe-confirmed), and POSIX reads it as a literal
+  // name. Dropping it shortens the path toward a protected suffix, which is
+  // the deny direction, and — the part that matters — the exact `..` above
+  // still hops, so the strip never eats a real parent reference.
+  assert.equal(canonicalizeGuardPath("a/b/.. /c"), "a/b/c", "a period/space-only segment is dropped, not mistaken for `..`");
+  assert.equal(canonicalizeGuardPath("a/b/../c"), "a/c", "the exact `..` still hops to the parent");
+  assert.equal(canonicalizeGuardPath("../x.mjs."), "../x.mjs", "a leading `..` survives the strip in a relative path");
+  // The shell channel, with the two mutation forms Codex used.
+  for (const command of [
+    'Set-Content .claude./hooks/codex-bot-review-lib.mjs -Value ""',
+    'Set-Content .claude/hooks./codex-bot-review-lib.mjs -Value ""',
+    'Set-Content .claude/hooks/codex-bot-review-lib.mjs. -Value ""',
+    "echo x > .claude/hooks/codex-bot-review-lib.mjs.",
+    'Set-Content -Path ".claude/hooks/codex-push-lib.mjs..." -Value ""',
+    "rm .codex./hooks.json",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a Windows trailing-period alias must be refused: ${command}`,
+    );
+  }
+  // A read through a trailing-period alias is still just a read.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "cat .claude/hooks/codex-bot-review-lib.mjs." } }).blocked,
+    false,
+    "reading through a trailing-period alias stays allowed; only mutation is refused",
+  );
+  // NEAR-MISS CANARIES. Only TRAILING periods are Windows no-ops: an interior
+  // period is part of the name, and a real suffix after the protected name is a
+  // different file. A strip that reached into the middle of a segment, or a
+  // matcher loosened to "protected name appears somewhere", would pass every
+  // positive case above while blocking these.
+  for (const innocent of [
+    ".claude/hooks/codex-push-lib..mjs",
+    ".claude/hooks/codex-push-lib.mjs.bak",
+    ".claude/hooks/codex-bot-review-lib.test.mjs.",
+    "scripts/write-codex-push-proof.test.mjs.",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: innocent } }).blocked,
+      false,
+      `an interior period or a real suffix is a different file and must stay editable: ${innocent}`,
+    );
+  }
+
+  // ── round 8 (SEC-002): cmd.exe's caret and the POSIX backslash escape ──────
+  // Codex HIGH on the exact-SHA proof of fd72af13e. Round 4 stripped the
+  // characters a shell DELETES while building a word — but only PowerShell's:
+  // quotes and the backtick. cmd.exe deletes `^` the same way, so
+  // `cmd /c "echo x > .claude/hooks/codex-push-^lib.mjs"` writes the protected
+  // file while the token the guard examined still carried the caret. A POSIX
+  // shell (Git Bash here) does the same with an unquoted backslash. The set is
+  // now the UNION of every shell's no-ops; the backslash, being also Windows'
+  // separator, gets its own deleted view.
+  const CARET = String.fromCharCode(94);
+  for (const command of [
+    `cmd /c "echo x > .claude/hooks/codex-push-${CARET}lib.mjs"`,
+    `echo x > .claude/hooks/codex-push-${CARET}lib.mjs`,
+    `cmd /c "echo x > .claude/hooks/codex-bot-review-${CARET}lib.mjs"`,
+    `Set-Content .codex/${CARET}hooks.json -Value ""`,
+    // The caret can land in the directory part too.
+    `cmd /c "echo x > .cla${CARET}ude/hooks/codex-push-lib.mjs"`,
+    // POSIX: an unquoted backslash before an ordinary character is deleted.
+    "echo x > .claude/hooks/codex-push-\\lib.mjs",
+    "cp /tmp/evil.mjs .claude/hooks/codex-bot-review-\\lib.mjs",
+    // ...and the two escapes combined with a quote splice, all in one word.
+    `echo x > .claude/hooks/codex-push-${CARET}l""ib.mjs`,
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a caret or backslash escape spliced into a protected path must be refused: ${command}`,
+    );
+  }
+  // Still a read, still allowed.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: `cmd /c "type .claude/hooks/codex-push-${CARET}lib.mjs"` } }).blocked,
+    false,
+    "a caret-spliced READ stays allowed; only mutation is refused",
+  );
+  // NEAR-MISS CANARIES. A backslash-SEPARATED Windows path to an unrelated file
+  // must not fuse into a protected one when backslashes are deleted, and
+  // whitespace-separated fragments are still two arguments.
+  for (const innocent of [
+    'Set-Content .claude\\hooks\\some-other-lib.mjs -Value ""',
+    'Set-Content out.txt -Value ".claude\\hooks\\" "codex-push-lib.mjs"',
+    `Set-Content out.txt -Value ".claude/hooks/" ${CARET} "codex-push-lib.mjs"`,
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: innocent } }).blocked,
+      false,
+      `deleting escape characters must not fabricate a protected path: ${innocent}`,
+    );
+  }
+
+  // ── round 9: a COMPUTED destination is refused, not parsed ─────────────────
+  // Codex HIGH on the exact-SHA proof of dc965401f. Every token check above
+  // reads literals; a path assembled at run time has none to read, and both of
+  // Codex's probes returned blocked:false. Rounds 2, 3, 4, 7 and 8 were each one
+  // more spelling, so this refuses the SHAPE: a mutating segment carrying a
+  // parenthesised expression, a `$` variable, Join-Path or -f/-join is denied
+  // outright, like a shell-expanded interpreter argument already is.
+  for (const command of [
+    'Set-Content (".claude/hooks/codex-bot-review-" + "lib.mjs") -Value ""',
+    'Copy-Item evil.mjs (Join-Path ".claude/hooks" "codex-bot-review-lib.mjs")',
+    'Set-Content ("{0}/{1}" -f ".claude/hooks", "codex-push-lib.mjs") -Value ""',
+    '$d = ".claude/hooks"; Set-Content "$d/codex-push-lib.mjs" -Value ""',
+    'Set-Content $dest -Value ""',
+    "echo x > $(Get-Content dest.txt)",
+    'Set-Content -Path (Get-Content dest.txt) -Value ""',
+    'Set-Content ((".claude", "hooks", "codex-push-lib.mjs") -join "/") -Value ""',
+    // Codex round 10: cmd.exe builds text with %VAR% and delayed !VAR! expansion,
+    // which the first cut of this rule did not count as computed. The fragments
+    // never spell the protected file; cmd assembles it.
+    'cmd /c "set a=.claude/hooks/codex-bot-review-&& echo x > %a%lib.mjs"',
+    'cmd /v:on /c "set a=.claude/hooks/codex-bot-review-&& echo x > !a!lib.mjs"',
+    "echo x > %a%lib.mjs",
+    "echo x > !a!lib.mjs",
+    // Substring expansion has the same shape.
+    'cmd /c "set a=.claude/hooks/codex-bot-review-lib.mjs.bak&& echo x > %a:~0,-4%"',
+  ]) {
+    const verdict = evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } });
+    assert.equal(verdict.blocked, true, `a computed destination in a mutating command must be refused: ${command}`);
+    assert.match(String(verdict.reason), /computed destination|builds a path/i, `…as a computed destination, not by accident of some other gate: ${command}`);
+  }
+  assert.equal(
+    mutatingSegmentWithComputedText('cmd /c "set a=.claude/hooks/codex-bot-review-&& echo x > %a%lib.mjs"'),
+    'echo x > %a%lib.mjs"',
+    "the classifier names the MUTATING segment carrying the cmd expansion, not the harmless `set`",
+  );
+  // cmd.exe's own write verbs were missing from the mutation list entirely, so
+  // `copy evil.mjs <protected>` was not even a mutation to the literal gate.
+  for (const command of [
+    "copy evil.mjs .claude\\hooks\\codex-push-lib.mjs",
+    "move evil.mjs .claude/hooks/codex-bot-review-lib.mjs",
+    "xcopy evil.mjs .codex\\hooks\\production-action-guard.mjs /Y",
+    "mklink .claude\\hooks\\codex-push-lib.mjs evil.mjs",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a cmd.exe write verb against a protected file must be refused: ${command}`,
+    );
+  }
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "copy docs\\a.md docs\\b.md" } }).blocked,
+    false,
+    "a cmd.exe copy between ordinary files stays allowed",
+  );
+  // ── round 11: the working directory is part of the path ───────────────────
+  // Codex HIGH on the exact-SHA proof of 008f300fc — a hole that predates this
+  // PR but lives in this file. Every matcher compared the raw candidate, so a
+  // tool told to run IN the protected directory could name the module by its
+  // bare basename: `workdir: ".claude/hooks"` + `Set-Content codex-bot-review-lib.mjs`
+  // and the equivalent Write/Edit inputs all returned blocked:false.
+  for (const [workdir, candidate] of [
+    [".claude/hooks", "codex-bot-review-lib.mjs"],
+    [".claude\\hooks", "codex-push-lib.mjs"],
+    [".codex/hooks", "production-action-guard.mjs"],
+    ["scripts", "write-codex-push-proof.mjs"],
+    [".claude", "hooks/codex-push-lib.mjs"],
+    [".claude/hooks/", "./codex-bot-review-lib.mjs"],
+  ]) {
+    for (const tool of ["Write", "Edit", "apply_patch"]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: tool, toolInput: { file_path: candidate, workdir } }).blocked,
+        true,
+        `${tool} must join the working directory before matching: workdir=${workdir} path=${candidate}`,
+      );
+    }
+    for (const command of [`Set-Content ${candidate} -Value ""`, `echo x > ${candidate}`]) {
+      assert.equal(
+        evaluateProductionAction({ toolName: "PowerShell", toolInput: { command, workdir } }).blocked,
+        true,
+        `a shell write must join the working directory before matching: workdir=${workdir} ${command}`,
+      );
+    }
+  }
+  // `cwd` is the other spelling the guard already reads for the working directory.
+  assert.equal(
+    evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "codex-bot-review-lib.mjs", cwd: ".claude/hooks" } }).blocked,
+    true,
+    "the `cwd` spelling of the working directory is joined too",
+  );
+  // NEAR-MISS CANARIES: an unrelated file in an unrelated working directory,
+  // and a protected-looking basename in a directory that is not the protected
+  // one, both stay editable — the join must not turn every basename into a hit.
+  for (const [workdir, candidate] of [
+    ["docs", "notes.md"],
+    ["docs", "codex-push-lib.mjs"],
+    [".claude/hooks", "codex-bot-review-lib.test.mjs"],
+    [".claude/hooks", "some-other-lib.mjs"],
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: candidate, workdir } }).blocked,
+      false,
+      `an unprotected file stays editable whatever the working directory: workdir=${workdir} path=${candidate}`,
+    );
+  }
+  // A directory change INSIDE the command moves the working directory out from
+  // under the join; a mutating command that also changes directory is refused.
+  for (const command of [
+    "Set-Location .claude/hooks; Set-Content codex-bot-review-lib.mjs -Value \"\"",
+    "cd .claude/hooks && echo x > codex-push-lib.mjs",
+    "pushd .codex\\hooks; Set-Content production-action-guard.mjs -Value \"\"",
+    "cd docs; echo x > notes.md",
+  ]) {
+    const verdict = evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } });
+    assert.equal(verdict.blocked, true, `a directory change followed by a write is unbindable and must be refused: ${command}`);
+  }
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "cd .claude/hooks; Get-Content codex-bot-review-lib.mjs" } }).blocked,
+    false,
+    "a directory change followed by a READ stays allowed",
+  );
+  // Positional and special shell parameters are computed text too (Codex
+  // round 11): `$1$2` assembles a protected name from two harmless arguments.
+  for (const command of [
+    "sh -c 'cp source \"$1$2\"' _ .claude/hooks/codex-bot-review- lib.mjs",
+    "bash -c 'echo x > $1' _ .claude/hooks/codex-push-lib.mjs",
+    "cp evil.mjs $@",
+    "cp evil.mjs \"$*\"",
+  ]) {
+    // Some of these also spell a protected literal, or invoke `sh -c`, and an
+    // earlier gate may deny first; any denial is the right answer, and the
+    // classifier pin below proves the computed-text rule sees them on its own.
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a positional/special parameter in a mutating segment is computed text: ${command}`,
+    );
+    assert.notEqual(mutatingSegmentWithComputedText(command), "", `the classifier itself flags the mutating segment: ${command}`);
+  }
+  assert.equal(mutatingSegmentWithComputedText("echo 100% done > docs/out.txt"), "", "a lone percent sign is not an expansion");
+  assert.equal(mutatingSegmentWithComputedText("Write-Output %date% | Out-Null"), "", "an expansion in a NON-mutating segment is not condemned");
+  // A computed form that ALSO spells the protected path literally is caught by
+  // the earlier literal gate first; either denial is the right answer.
+  for (const command of [
+    'Set-Content -Path (Join-Path $PWD ".claude/hooks/codex-push-lib.mjs") -Value ""',
+    "copy evil.mjs %APPDATA%\\..\\..\\repo\\.claude\\hooks\\codex-push-lib.mjs",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a computed form that still spells the protected path is denied (by whichever gate sees it first): ${command}`,
+    );
+  }
+  // NEAR-MISS CANARIES: the refusal is scoped to the MUTATING segment. A
+  // variable or subexpression in a non-mutating stage, a literal destination
+  // with an ordinary value, and a plain redirect all stay allowed — otherwise
+  // "deny anything with a `$`" would pass every case above while making the
+  // shell unusable.
+  for (const innocent of [
+    'npm test 2>&1 | Where-Object { $_ -match "fail" }',
+    "git log --oneline > docs/out.txt",
+    'Set-Content docs/notes.txt -Value "plain"',
+    "Get-ChildItem (Join-Path $PWD docs) | Select-Object Name",
+    'Write-Output ("a" + "b")',
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: innocent } }).blocked,
+      false,
+      `a computed expression outside a mutating segment, or a literal destination, stays allowed: ${innocent}`,
+    );
+  }
+  // ── round 12: fail closed on protected files ──────────────────────────────
+  // Codex HIGH on the exact-SHA proof of 312f4a9f0. Every shell rule decided
+  // "is this a write?" by recognising the verb, so a writer the list did not
+  // know was not a write: `Write-Output forged | Tee-Object -FilePath <lib>`,
+  // `tee`, `install`, `dd of=`, a brace expansion and a wildcard all overwrote
+  // the startup-imported module and returned blocked:false (reproduced by
+  // execution before the fix; the same six pass on origin/main). A segment that
+  // NAMES a protected file must now start with a recognised read-only head.
+  const lib = ".claude/hooks/codex-bot-review-lib.mjs";
+  for (const command of [
+    `Write-Output forged | Tee-Object -FilePath ${lib}`,
+    `echo forged | tee ${lib}`,
+    "printf x | tee -a .codex/hooks/production-action-guard.mjs",
+    `install -m 644 forged.mjs ${lib}`,
+    `dd if=forged.mjs of=${lib}`,
+    "cp forged.mjs .claude/hooks/{codex-bot-review-lib,x}.mjs",
+    "cat forged.mjs | tee .claude/hooks/{codex-bot-review-lib,x}.mjs",
+    "cp forged.mjs .claude/hooks/codex-bot-review-l*.mjs",
+    "cat forged.mjs | tee .claude/hooks/codex-bot-review-l*.mjs",
+    "cat forged.mjs | tee .claude/hooks/codex-bot-review-li?.mjs",
+    "cat forged.mjs | tee .claude/hooks/codex-bot-review-li[b].mjs",
+    `python -c "open('${lib}','w').write('x')"`,
+    `sed --in-place 's/a/b/' ${lib}`,
+    `git checkout -- ${lib}`,
+    `git restore ${lib}`,
+    `node scripts/fix.mjs ${lib}`,
+    "npx prettier --write package.json",
+    `& C:\\tools\\evil.exe ${lib}`,
+    "rm -f {package.json,x}",
+    `cmd /c "type forged.mjs | tee ${lib}"`,
+    `bash -c "install forged.mjs ${lib}"`,
+    "powershell -NoProfile -File .codex/hooks/production-action-guard.mjs",
+  ]) {
+    // Some of these are also caught by an earlier verb-based gate (cp, rm);
+    // any denial is the right answer, and the classifier pins below prove the
+    // fail-closed rule and the glob matcher see their cases on their own.
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `an unrecognised head naming a protected file is treated as a writer: ${command}`,
+    );
+  }
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "echo x | tee codex-bot-review-lib.mjs", workdir: ".claude/hooks" } }).blocked,
+    true,
+    "the fail-closed rule joins the working directory like every other matcher",
+  );
+  // The classifier itself, on the forms the verb gates cannot see.
+  for (const command of [
+    `Write-Output forged | Tee-Object -FilePath ${lib}`,
+    `echo forged | tee ${lib}`,
+    `install -m 644 forged.mjs ${lib}`,
+    `dd if=forged.mjs of=${lib}`,
+    "cat forged.mjs | tee .claude/hooks/codex-bot-review-l*.mjs",
+    "cat forged.mjs | tee .claude/hooks/{codex-bot-review-lib,x}.mjs",
+  ]) {
+    assert.notEqual(unrecognizedProtectedHarnessAccess(command), null, `the fail-closed classifier flags: ${command}`);
+  }
+  assert.equal(unrecognizedProtectedHarnessAccess(`echo forged | tee ${lib}`).head, "tee", "the classifier reports the offending head");
+  assert.equal(shellSegmentHead("MSYS_NO_PATHCONV=1 sudo /usr/bin/CAT.exe x").head, "cat", "the head skips assignments and sudo and drops directory/extension");
+  assert.equal(shellSegmentHead("FOO=bar").head, "", "an assignment alone has no head");
+  assert.equal(shellSegmentHead('cmd /c "type x"').head, "type", "a cmd wrapper is unwrapped to the command it runs");
+  assert.equal(shellSegmentHead("powershell -NoProfile -Command Get-Content x").head, "get-content", "a PowerShell wrapper is unwrapped past its flags");
+  assert.equal(shellSegmentHead("bash -c 'tee x'").head, "tee", "an unwrapped writer is still the writer");
+  // The glob matcher: segment-by-segment from the right, suffix semantics.
+  for (const glob of [
+    ".claude/hooks/codex-bot-review-l*.mjs",
+    ".claude/hooks/*.mjs",
+    "C:/repo/.claude/hooks/codex-bot-review-li?.mjs",
+    ".claude/**/codex-push-lib.mjs",
+    "scripts/*.mjs",
+    "*",
+    "dist/*",
+    "*.json",
+  ]) {
+    assert.equal(globCouldMatchProtectedHarnessPath(glob), true, `a glob that could expand to a protected file matches: ${glob}`);
+  }
+  for (const glob of [
+    "dist/*.js",
+    "docs/*.md",
+    "*.mjs",
+    ".claude/hooks/*.test.mjs",
+    "src/**/*.ts",
+    ".claude/hooks/codex-bot-review-lib.mjs",
+  ]) {
+    assert.equal(globCouldMatchProtectedHarnessPath(glob), false, `a glob that cannot reach a protected file (or is not a glob) does not match: ${glob}`);
+  }
+  assert.deepEqual(expandBraces("a/{b,c}.mjs"), ["a/b.mjs", "a/c.mjs"], "a comma group expands to its alternatives");
+  assert.deepEqual(expandBraces('{"a":1}'), ['{"a":1}'], "a brace pair without a comma is not an expansion");
+  assert.deepEqual(expandBraces("x{1..3}"), ["x*"], "a range becomes a wildcard");
+  // PROTECTED_HARNESS_FILES must be exactly the set PROTECTED_HARNESS_SOURCE
+  // matches, or the glob matcher silently protects fewer files than the regex.
+  for (const file of PROTECTED_HARNESS_FILES) {
+    assert.equal(canonicalizeGuardPath(file), file, `protected file list entries are canonical: ${file}`);
+    assert.equal(
+      evaluateProductionAction({ toolName: "Write", toolInput: { file_path: file } }).blocked,
+      true,
+      `every listed protected file is protected by the regex too: ${file}`,
+    );
+  }
+  assert.equal(PROTECTED_HARNESS_FILES.length, 15, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
+  // NEAR-MISS CANARIES: reads, the sanctioned script runs, staging and
+  // committing, and every command that names NO protected file stay allowed.
+  // "Deny anything that names a hook file" would pass the block above while
+  // making the harness unusable — the proof wrapper is itself a protected file.
+  for (const [command, workdir] of [
+    [`cat ${lib}`],
+    [`cat ${lib} | sed -n '1,40p'`],
+    [`Get-Content ${lib} | Select-String advisory`],
+    ["type .codex\\hooks\\production-action-guard.mjs | findstr gate"],
+    [`grep -n advisory ${lib}`],
+    ["rg -n advisory .claude/hooks/codex-push-lib.mjs"],
+    [`git diff -- ${lib}`],
+    [`git -C C:/repo show origin/main:${lib} | head -n 20`],
+    [`git add ${lib}`],
+    [`git --no-pager log -3 -- ${lib}`],
+    ["node scripts/write-codex-push-proof.mjs"],
+    ["node scripts/write-apply-proofs.mjs --migration supabase/migrations/x.sql"],
+    ["node .codex/hooks/production-action-guard.test.mjs"],
+    ["npm run test:agent-workflows"],
+    [`Test-Path ${lib}`],
+    [`sha256sum ${lib}`],
+    ["cd .claude/hooks && cat codex-bot-review-lib.mjs"],
+    ["echo '{\"a\":1,\"b\":2}' > cfg.json"],
+    ["rm -rf dist"],
+    ["rm -rf dist/*.js"],
+    ["echo x | tee notes.txt"],
+    ["install -m 644 a.txt docs/b.txt"],
+    ["dd if=a.img of=b.img"],
+    ["cat codex-bot-review-lib.mjs", ".claude/hooks"],
+    [`MSYS_NO_PATHCONV=1 cat ${lib}`],
+    [`cmd /c "type ${lib}"`],
+    [`bash -c "cat ${lib} | head -n 5"`],
+    [`powershell -NoProfile -Command "Get-Content ${lib}"`],
+    [`env FOO=1 cat ${lib}`],
+  ]) {
+    const toolInput = workdir ? { command, workdir } : { command };
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput }).blocked,
+      false,
+      `a read, a sanctioned run, or a command naming no protected file stays allowed: ${command}`,
+    );
+  }
+  // Cost, pinned so nobody "fixes" it back open: a wildcard that could expand
+  // to a protected ROOT file (`build\*` → build/package.json under the suffix
+  // rule the literal matcher already uses) is refused; spell the directory.
+  assert.equal(
+    evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "Remove-Item -Recurse build\\*" } }).blocked,
+    true,
+    "a bare wildcard delete is refused because it could expand to package.json",
+  );
+  // ── round 13: read-only git grammar, computed text fails closed, basenames ──
+  // Codex two HIGHs on the exact-SHA proof of 5a9052934, both reproduced by
+  // execution before the fix. (1) `git diff --output=<protected> HEAD HEAD`
+  // truncated the guard: read-only git was accepted whatever its options.
+  // (2) `$d=".codex/hooks/production-action-"; $f="guard.mjs"; Write-Output ""
+  // | Tee-Object -FilePath $d$f` blanked it: the computed-text rule knew only
+  // the mutation verbs and the fail-closed rule only protected NAMES, and a
+  // split destination under an unknown writer satisfied neither. Own finding
+  // (3): `cd .codex/hooks; echo x | tee production-action-guard.mjs` — the
+  // directory-change rule knew only the verb list.
+  const guardFile = ".codex/hooks/production-action-guard.mjs";
+  for (const command of [
+    `git diff --output=${guardFile} HEAD HEAD`,
+    `git diff --output ${guardFile} HEAD HEAD`,
+    `git log --output=${lib} -1`,
+    `git show --output=${lib} HEAD`,
+    `git -c diff.external=evil.sh diff -- ${lib}`,
+    `git -c core.pager=evil.sh log -- ${lib}`,
+    `GIT_EXTERNAL_DIFF=evil.sh git diff -- ${lib}`,
+    `$env:GIT_EXTERNAL_DIFF="evil.sh"; git diff -- ${lib}`,
+    `git diff --ext-diff -- ${lib}`,
+    `git diff --textconv -- ${lib}`,
+    `git grep -O evil.sh pattern -- ${lib}`,
+    `git --exec-path=C:/evil diff -- ${lib}`,
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `a read-only git subcommand with a write/exec option, config override or GIT_* env is not a read: ${command}`,
+    );
+  }
+  assert.equal(gitInvocationIsReadOnly(["diff", "--output=x", "HEAD"]), false, "the git grammar refuses --output");
+  assert.equal(gitInvocationIsReadOnly(["-c", "core.pager=x", "log"]), false, "the git grammar refuses -c");
+  assert.equal(gitInvocationIsReadOnly(["diff", "--", lib], "GIT_PAGER=x git diff"), false, "the git grammar refuses a GIT_* env anywhere in the command");
+  assert.equal(gitInvocationIsReadOnly(["diff", `--relative=${lib}`]), false, "an option VALUE naming a protected file is never a pathspec");
+  assert.equal(gitInvocationIsReadOnly(["-C", "C:/repo", "--no-pager", "diff", "--output-indicator-new=+", "--", lib]), true, "harmless options and -C stay a read");
+  assert.equal(gitInvocationIsReadOnly(["checkout", "--", lib]), false, "a non-read subcommand is not a read");
+  const split = [
+    '$d=".codex/hooks/production-action-"; $f="guard.mjs"; Write-Output "" | Tee-Object -FilePath $d$f',
+    'd=.claude/hooks/codex-bot-review-; f=lib.mjs; echo x | tee "$d$f"',
+    'd=.claude/hooks/codex-bot-review-; f=lib.mjs; install -m 644 forged.mjs "$d$f"',
+    'd=.claude/hooks/codex-bot-review-; f=lib.mjs; dd if=forged.mjs of="$d$f"',
+    '$w="Tee-Object"; & $w -FilePath $d$f',
+    "w=tee; $w $d$f",
+    "w=tee; 'tee' $d$f",
+    "$x = tee $d$f",
+    'Write-Output "" | ForEach-Object { Tee-Object -FilePath $d$f }',
+    'Write-Output "" | % { Tee-Object -FilePath $d$f }',
+    "echo $(tee $d$f)",
+    "cat x `tee $d$f`",
+    'Invoke-Expression "tee $d$f"',
+    '[IO.File]::WriteAllText($d+$f, "")',
+    'c="tee $d$f"; bash -c "$c"',
+    "cmd /c \"tee %d%%f%\"",
+    "set a=.claude/hooks/codex-bot-review-&& type nul | tee %a%lib.mjs",
+    "$p=@{FilePath=$d$f}; Tee-Object @p",
+    'printf "%s" $d$f | xargs tee',
+    'find . -name "$pat" -exec tee {} \\;',
+    "foreach ($f in $files) { tee $f }",
+    "if ($x) { tee $d$f }",
+    "exec tee $d$f",
+    'eval "tee $d$f"',
+    "read -r x < <(tee $d$f)",
+    "echo hi > >(tee $d$f)",
+    // the round-12 rule looked only at the head, so a substitution inside a
+    // READER's segment was never examined
+    `cat ${lib} $(tee ${lib})`,
+    `echo ${lib} | xargs tee`,
+    `echo ${lib} | xargs -n1 install forged.mjs`,
+  ];
+  for (const command of split) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `computed text under an unrecognised command word, or a substitution/executor fed a protected name, is refused: ${command}`,
+    );
+  }
+  for (const command of split.slice(0, 8)) {
+    assert.notEqual(computedSegmentWithUnrecognizedCommand(command), null, `the computed-text classifier flags it on its own: ${command}`);
+  }
+  assert.equal(computedSegmentWithUnrecognizedCommand('d=x; echo x | tee "$d$f"').head, "tee", "the classifier reports the offending command word");
+  assert.equal(unrecognizedCommandWord("cat x $(tee y)"), "tee", "the walker sees the word after `$(`");
+  assert.equal(unrecognizedCommandWord("Where-Object { $_ -match 'x' }"), "", "a `$var` followed by an operator is an expression");
+  assert.equal(unrecognizedCommandWord("w=tee; $w $d$f".split(";")[1]), "$w", "a `$var` followed by an argument is an invocation");
+  assert.equal(unrecognizedCommandWord("& $w -FilePath x"), "$w", "a `$var` after the call operator is an invocation");
+  assert.equal(unrecognizedCommandWord('"a" + "b"'), "", "a quoted word followed by an operator is an expression");
+  assert.equal(unrecognizedCommandWord("'tee' $d$f"), "'tee'", "a quoted word followed by an argument is that command");
+  assert.equal(unrecognizedCommandWord("if ($LASTEXITCODE -ne 0) { exit 1 }"), "", "keywords and casts are not writers");
+  assert.equal(unrecognizedCommandWord('bash -c "cat x | head"'.split("|")[0]), "", "a wrapper is unwrapped to the read it runs");
+  assert.equal(unrecognizedCommandWord("xargs -I{} tee {}"), "tee", "an executor is unwrapped to the command it runs");
+  for (const command of [
+    "cd .codex/hooks; echo x | tee production-action-guard.mjs",
+    "Set-Location .claude/hooks; Write-Output x | Tee-Object -FilePath codex-bot-review-lib.mjs",
+    "pushd scripts && install forged.mjs write-codex-push-proof.mjs",
+    "cd .codex/hooks && echo x | tee production-action-*.mjs",
+    "find .codex/hooks -name '*.mjs' -delete",
+    "find . -name production-action-guard.mjs -exec tee {} \\;",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked,
+      true,
+      `after a directory change, or under find, a protected basename is the protected file: ${command}`,
+    );
+  }
+  assert.equal(protectedBasenameMentioned("echo x | tee production-action-guard.mjs"), true, "the basename matcher sees a bare protected name");
+  assert.equal(protectedBasenameMentioned("echo x | tee production-action-*.mjs"), true, "…and a glob that could be one");
+  assert.equal(protectedBasenameMentioned("echo x | tee notes.txt"), false, "…but not an unrelated name");
+  // NEAR-MISS CANARIES: reads with computed arguments, pipeline stages,
+  // keywords, harmless git options, and directory changes followed by reads
+  // all stay allowed — "deny anything with a `$`" would pass the block above
+  // while making the shell unusable.
+  for (const innocent of [
+    `git diff --output-indicator-new=+ -- ${lib}`,
+    `git log -p --stat -- ${lib}`,
+    `git diff --no-ext-diff -- ${lib}`,
+    `git blame -L 1,10 ${lib}`,
+    "cat $f",
+    "Get-Content (Join-Path $a $b)",
+    "git -C $repo status",
+    "gh pr list --json title | ForEach-Object { $_.title }",
+    "gh pr view 563 --json mergeStateStatus | ConvertFrom-Json | % { $_.mergeStateStatus }",
+    "if ($LASTEXITCODE -ne 0) { exit 1 }",
+    "foreach ($f in Get-ChildItem docs) { Get-Content $f }",
+    "for f in $(git ls-files '*.ts'); do cat $f; done",
+    'echo "$HOME"',
+    "echo ${HOME}",
+    "$x = 5",
+    '$d=".codex/hooks/production-action-"',
+    "$x = (Get-Date).Year",
+    "[int]$x -gt 0",
+    'ls | grep "$pat" | sort',
+    "npm test 2>&1 | Select-String -Pattern 'fail'",
+    "git log --oneline -5 | ForEach-Object { $_.Split(' ')[0] }",
+    "while read -r line; do echo $line; done < file.txt",
+    "[ -f $f ] && cat $f",
+    "cd $dir && cat notes.md",
+    "find . -name package.json",
+    "find src -name '*.ts' | xargs grep -l foo",
+    "grep -f patterns.txt src/a.ts",
+    "gh api -X PUT repos/crop/crx/pulls/123/merge -f merge_method=squash | Out-Null",
+  ]) {
+    const verdict = evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: innocent } });
+    assert.doesNotMatch(
+      String(verdict.reason || ""),
+      /builds text at run time|not a recognised read-only operation/,
+      `a read, a pipeline stage, a keyword or a harmless git option is not refused by the round-13 rules: ${innocent}`,
+    );
+  }
+  // Cost, pinned so nobody "fixes" it back open: computed text under an
+  // unknown head is refused even when the head is a familiar tool, because the
+  // guard cannot know what it does with the value. Spell the argument.
+  for (const cost of ["npm run build -- --mode $MODE", "node scripts/other.mjs $x", "curl -o $out https://x", 'gh pr view $PR --json title']) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: cost } }).blocked,
+      true,
+      `computed text under an unrecognised head is refused, even a familiar one: ${cost}`,
+    );
+  }
+
+  const botLibPush = makeRepo(".claude/hooks/codex-bot-review-lib.mjs", "export const ordinary = true;\n");
+  assert.equal(
+    evaluatePush(botLibPush.repo).blocked,
+    true,
+    "pushing a change to codex-bot-review-lib.mjs requires the Sol proof like any other guard source",
+  );
 
   const guardrailChange = makeRepo(".claude/hooks/codex-push-lib.mjs", "export const ordinary = true;\n");
   assert.equal(
@@ -643,6 +1456,185 @@ try {
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
   }).blocked, true, "CHANGES_REQUESTED still denies - never merge over an unresolved objection");
+
+  // ── a slow advisory lookup must not be able to starve a HARD denial ────────
+  // Codex round 6 (PR #563). The Codex GitHub App lookup is advisory and
+  // fail-open, and it costs up to four `gh` calls each capped at 10s against a
+  // 15-SECOND hook budget. A PreToolUse hook killed mid-call emits nothing, and a
+  // hook that emits nothing does NOT deny (the class PR #502 established). While
+  // that lookup ran FIRST, a slow GitHub could kill this hook before the
+  // objection, green-pipeline, risky-diff and exact-SHA-proof denials ever ran —
+  // and the merge would proceed.
+  //
+  // This is the behavioural pin, not a source-order one: the graphql call THROWS
+  // if it is reached, so any regression that moves the advisory back in front of
+  // a hard denial fails here rather than in production.
+  // The advisory resolves the PR's owner/name/number from a `--json number,url`
+  // call before it can issue the GraphQL read. A stub that omits those fields
+  // makes the advisory short-circuit, and then "graphql was never reached" proves
+  // nothing about ordering — it would hold even with the advisory running first.
+  // So both stubs below answer that lookup properly; only the ORDER decides
+  // whether the throw is hit.
+  const advisoryMetaJson = JSON.stringify({
+    number: 123,
+    url: "https://github.com/masonwells1/CRX_Manager_V1.0/pull/123",
+  });
+  const isAdvisoryMetaCall = (args) => Array.isArray(args) && args.includes("number,url");
+  let advisoryAttempts = 0;
+  const hangingAdvisoryGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      advisoryAttempts += 1;
+      throw new Error("advisory lookup reached before a hard denial");
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" });
+  };
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: hangingAdvisoryGh,
+  }).blocked, true, "the objection still denies even though the advisory lookup would fail");
+  assert.equal(
+    advisoryAttempts,
+    0,
+    "the advisory lookup is NOT reached before the objection deny — if it were, a slow GitHub could kill the hook and deny nothing",
+  );
+
+  // CONTROL — without this the assertion above passes just as happily against a
+  // guard that never calls the advisory at all, which is the dead-code failure
+  // the ordering pin was originally written to prevent. On a clean, green,
+  // proof-backed merge the advisory IS reached.
+  writeProof(risky.repo, valid);
+  let controlAttempts = 0;
+  const controlGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      controlAttempts += 1;
+      throw new Error("advisory unavailable"); // fail-open: a notice, never a deny
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  const controlVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: controlGh,
+  });
+  assert.equal(controlAttempts > 0, true, "CONTROL: the advisory IS reached once every hard gate has passed");
+  assert.equal(controlVerdict.blocked, false, "a failed advisory lookup fails OPEN — it prints a notice and allows");
+
+  // ── round 8 (SEC-001): a CHAINED merge must not run #1's advisory before ──
+  // ── #2's hard checks ─────────────────────────────────────────────────────
+  // Codex HIGH on the exact-SHA proof of fd72af13e. Running the advisory at
+  // the allow point of ONE merge was not enough: `gh pr merge 123 && gh pr merge
+  // 456` gates each segment in turn, so #123's (clean, green, proof-backed)
+  // advisory ran before #456's objection check. A slow GitHub there could kill
+  // the hook before #456 was ever examined, and a killed hook denies nothing —
+  // so #456 would merge over CHANGES_REQUESTED. The advisory for #123 must not
+  // be reached at all when a later segment is going to be denied.
+  let chainedAttempts = 0;
+  const chainedGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      chainedAttempts += 1;
+      throw new Error("advisory lookup for the first merge reached before the second merge's hard denial");
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    // The stub tells the PRs apart by the selector `gh pr view <n>` carries.
+    if (Array.isArray(args) && args.includes("456")) {
+      return JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" });
+    }
+    return mainPrJson;
+  };
+  const chainedVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash && gh pr merge 456 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: chainedGh,
+  });
+  assert.equal(chainedVerdict.blocked, true, "the second merge's objection denies the whole command");
+  assert.match(String(chainedVerdict.reason), /CHANGES_REQUESTED/, "the denial is the objection, not an advisory or a fail-open notice");
+  assert.equal(
+    chainedAttempts,
+    0,
+    "the FIRST merge's advisory lookup is never reached when a LATER merge fails a hard gate — an in-loop advisory could starve that gate",
+  );
+  // CONTROL for the chained case: when every merge in the chain is clean, the
+  // advisory IS reached for each of them — deferral is not deletion.
+  let chainedControlAttempts = 0;
+  const chainedControlGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      chainedControlAttempts += 1;
+      throw new Error("advisory unavailable"); // fail-open
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  const chainedControlVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash && gh pr merge 456 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: chainedControlGh,
+  });
+  assert.equal(chainedControlVerdict.blocked, false, "CONTROL: two clean merges are allowed");
+  assert.equal(chainedControlAttempts, 2, "CONTROL: the advisory runs once per merge AFTER both cleared their hard gates — deferred, not dropped");
+
+  // ── round 9: the GitHub-connector merge tool must get the advisory too ─────
+  // Codex HIGH on the exact-SHA proof of dc965401f — a regression round 8
+  // introduced. Moving the lookup out of gatePullRequestMerge() left the
+  // connector route (mcp__github__merge_pull_request, one PR per call) returning
+  // the deferred request untouched: a mocked unresolved Codex thread on the
+  // exact head produced blocked:false through the connector while the same PR
+  // through `gh pr merge` produced blocked:true. Behavioural, on both routes.
+  const standingThreadGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      return JSON.stringify({ data: { repository: { pullRequest: {
+        headRefOid: risky.sha,
+        reviewThreads: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [{
+            isResolved: false,
+            isOutdated: false,
+            comments: { nodes: [{ author: { login: "chatgpt-codex-connector" }, originalCommit: { oid: risky.sha } }] },
+          }],
+        },
+      } } } });
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  const connectorStanding = evaluateProductionAction({
+    toolName: "mcp__github__merge_pull_request",
+    toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: standingThreadGh,
+  });
+  assert.equal(connectorStanding.blocked, true, "an unresolved Codex App thread on the exact head denies a CONNECTOR merge, not only a shell one");
+  assert.match(String(connectorStanding.reason), /unresolved comment/, "…with the App-review denial, not some other gate");
+  const shellStanding = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: standingThreadGh,
+  });
+  assert.equal(shellStanding.blocked, true, "PARITY: the same standing thread denies the shell route");
+  assert.match(String(shellStanding.reason), /unresolved comment/, "…with the same denial");
+  // And the connector route still ALLOWS when the App has nothing standing —
+  // the fix must add the check, not turn the route into a deny.
+  const connectorClean = evaluateProductionAction({
+    toolName: "mcp__github__merge_pull_request",
+    toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: controlGh,
+  });
+  assert.equal(connectorClean.blocked, false, "CONTROL: a clean, green, proof-backed connector merge with a failed (fail-open) advisory is still allowed");
   // --auto MUST NOT exempt an active objection (Codex High finding, PR #559).
   // Every other gate exempts auto because GitHub holds the merge until its own
   // requirements are met; the requirement that covered this one was the required
@@ -1088,15 +2080,23 @@ try {
     assert.equal(noBaseOid.blocked, true, "PR payload without baseRefOid fails closed");
 
     // The gh query must actually ask for baseRefOid.
-    let askedFor = "";
+    //
+    // Collect EVERY invocation rather than keeping only the last one: since
+    // 2026-09-02 the merge route makes further gh calls after resolving the PR
+    // (the Codex GitHub App review lookup), and a last-write-wins capture then
+    // asserts against the wrong call and fails for the wrong reason.
+    const ghCalls = [];
     evaluateProductionAction({
       toolName: "PowerShell",
       toolInput: { command: "gh pr merge 123 --squash" },
       repoDir: stale.repo,
       nowMs: now,
-      runGh: (args) => { askedFor = args.join(" "); return prAt(githubBase); },
+      runGh: (args) => { ghCalls.push(args.join(" ")); return prAt(githubBase); },
     });
-    assert.match(askedFor, /baseRefOid/, "gh pr view requests baseRefOid");
+    assert.ok(
+      ghCalls.some((call) => /baseRefOid/.test(call)),
+      "gh pr view requests baseRefOid",
+    );
 
     // A base that is not a full commit id must fail closed: `rev-parse --verify`
     // resolves ref names too, so an abbreviated/symbolic value would otherwise
