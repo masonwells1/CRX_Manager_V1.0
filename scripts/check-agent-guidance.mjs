@@ -30,6 +30,7 @@ const claude = read("CLAUDE.md");
 const cursorRules = readChecked(".cursorrules");
 const claudeModelTuning = readChecked("docs/reference/claude-model-tuning.md");
 const codingGuidelines = readChecked("docs/reference/coding-guidelines.md");
+const sqlCanonicalPatterns = readChecked("docs/reference/sql-canonical-patterns.md");
 const safeDevelopmentRules = readChecked("docs/workflows/SAFE_DEVELOPMENT_RULES.md");
 const shipWorkflow = readChecked(".claude/commands/ship.md");
 const routingTable = agents.match(/## Start and Route([\s\S]*?)## Engineering Principles/)?.[1] || "";
@@ -124,6 +125,11 @@ record(!/\b(?:CODEX_PROOF_VERDICT|FINAL_VERDICT|OPUS5_VERDICT|VERDICT)\s*:/i.tes
 record(/Reviewer prompts must request every correctness, safety, and scope finding/i.test(claudeModelTuning), "Claude reviewer prompts retain the uncapped-finding default");
 record(/Never lower effort on a money, RLS, or migration path to save tokens/i.test(claudeModelTuning), "Claude tuning preserves the high-risk effort floor");
 record(/Fable 5 remains provisional but binding[\s\S]*must not treat this guidance as Opus-only or skip it/i.test(claudeModelTuning), "Claude model tuning remains binding for Fable 5 until superseded");
+record(
+  /normal helper use requires no exemption marker/i.test(sqlCanonicalPatterns) &&
+    !/When using helpers,\s+add[^\n]*idempotency-body-check:\s*exempt/i.test(sqlCanonicalPatterns),
+  "canonical SQL guidance does not disable idempotency checks for normal helper use",
+);
 record(/DECISION_LOG\.md[\s\S]*settled design choice[\s\S]*KNOWN_ISSUES\.md[\s\S]*problem is new/i.test(codingGuidelines), "every code change checks settled decisions and known issues");
 record(/^Read this before any multi-file, data, money, security, permission, production, migration, or customer-facing change\./m.test(safeDevelopmentRules), "safe-development trigger matches the lean routing table");
 record(/mergeStateStatus[\s\S]*known-stale protection sub-resource/i.test(shipWorkflow), "ship workflow uses behavioral PR mergeability evidence");

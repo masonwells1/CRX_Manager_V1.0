@@ -430,7 +430,7 @@ const KNOWN_OVERLOADED_FUNCTIONS = ['next_invoice_number', 'check_rate_limit'];
 // MUTATING_RPCS_WITH_IDEMPOTENCY and asserts the body either references
 // `check_idempotency` (the canonical helper-function pattern) OR carries
 // the explicit `-- idempotency-body-check: exempt` marker for the small set
-// of functions that use raw inline lookups (documented in CLAUDE.md).
+// of functions that use raw inline lookups (documented in docs/reference/sql-canonical-patterns.md).
 
 import {
   FUNCTIONS_REQUIRING_SECURITY_INVOKER,
@@ -533,7 +533,7 @@ describe.skipIf(!isLiveDB)('Live DB: Mutating RPC Idempotency Bodies', () => {
         `    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;\n` +
         `  END IF;\n\n` +
         `Or carry "-- idempotency-body-check: exempt" if using a raw inline lookup ` +
-        `(documented exception, see CLAUDE.md "Canonical Patterns for New RPCs").`,
+        `(documented exception, see docs/reference/sql-canonical-patterns.md).`,
     ).toHaveLength(0);
   });
 });

@@ -3,7 +3,7 @@
 --   EXACTLY ONE overload per RPC name — a second overload is how CREATE OR REPLACE silently forks
 --   into two live bodies (the March-2026 40-bug drift class) and how a hardened body coexists with a
 --   stale, still-callable one.
--- Mirrors the CLAUDE.md post-migration verification query
+-- Mirrors the post-migration verification query in the routed database workflow
 --   (SELECT proname, count(*) ... GROUP BY proname HAVING count(*) > 1 — should return ZERO),
 --   promoted from a manual post-write check to a standing live gate. Every "overload=1" smoke-test
 --   line in the history is this invariant, checked by hand; this makes it automatic.
