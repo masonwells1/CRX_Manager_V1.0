@@ -237,6 +237,20 @@ describe('FieldApplicationInvoice — new invoice (no id)', () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
+  it('refuses a blank transaction date before calling the save RPC', async () => {
+    await renderPage();
+
+    const dateLabel = screen.getByText('Transaction Date');
+    const dateInput = dateLabel.parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeInstanceOf(HTMLInputElement);
+
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    expect(mockToast).toHaveBeenCalledWith('error', 'Choose a transaction date before saving.');
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('clicking Save calls save_field_app_invoice with the 7-arg Phase 1 shape', async () => {
     mockRpc.mockResolvedValueOnce({
       data: { invoice_ids: ['new-inv-1'], invoice_group_id: null },

@@ -1421,6 +1421,10 @@ export default function FieldApplicationInvoice() {
   // silent data corruption). 'cannot_compare' / 'no_label_max' never gate a save.
   const handleSave = async () => {
     if (!profile) return;
+    if (!transactionDate) {
+      toast('error', 'Choose a transaction date before saving.');
+      return;
+    }
     if ((isNew || ['draft', 'unposted'].includes(status)) && paymentTerms === 'Custom date…' && !dueDate) {
       toast('error', 'Choose a custom due date before saving.');
       return;
@@ -1495,6 +1499,14 @@ export default function FieldApplicationInvoice() {
 
   const performSave = async (overrideReasonForAudit?: string) => {
     if (!profile) return;
+    // The date input can be cleared even though new invoices start on today's Chicago
+    // business date. Sending an empty string reaches the date cast in PostgreSQL and
+    // produces a raw RPC error instead of using the server fallback, so refuse it here
+    // with an actionable message before allocating an idempotency key or starting save.
+    if (!transactionDate) {
+      toast('error', 'Choose a transaction date before saving.');
+      return;
+    }
     if (fetchingWeather !== null) {
       toast('error', 'Wait for Get Weather to finish before saving.');
       return;
@@ -2035,11 +2047,9 @@ export default function FieldApplicationInvoice() {
             days = Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
           }
           // A cleared transaction-date input falls back to today for THIS print calculation only.
-          // Note the server fallback does NOT rescue a cleared field on this page: the input has no
-          // `required` and no blank guard, so an empty box sends invoice_date: '' — and '' is not
-          // SQL NULL, so the COALESCE in the re-emitted body never fires and the ::date cast raises
-          // instead. That is fail-closed (nothing bad is stored), but it is a raised error, not a
-          // Chicago default. Do not read this line as "the server fills it in".
+          // Saving is different: handleSave gives the user an actionable refusal before the
+          // override flow, and performSave repeats the guard directly before the RPC as a
+          // defense-in-depth check. Do not read this line as "the server fills it in".
           const base = transactionDate || todayInBusinessTz();
           const d = new Date(base + 'T00:00:00Z');
           d.setUTCDate(d.getUTCDate() + days);
