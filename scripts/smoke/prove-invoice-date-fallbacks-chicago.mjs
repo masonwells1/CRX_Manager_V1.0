@@ -389,7 +389,17 @@ try {
   const rB = psql('\\i /tmp/mutant-b.sql', { allowFailure: true, wrap: true });
   const outB = `${rB.stdout}\n${rB.stderr}`;
   assert.doesNotMatch(outB, /PREFLIGHT_BODY_DRIFT/, 'with the pin removed the drift must NOT be refused by the drift pin (proves the pin is load-bearing)');
-  log('PHASE 7b: with the first function\'s drift pin removed, its drifted body is no longer refused -- the pin is load-bearing (mutant discarded)');
+  // gpt-5.6-sol exact-SHA review 2026-09-04 (LOW): asserting only that one error token is
+  // ABSENT lets ANY unrelated failure -- a syntax error, a dead connection, a different
+  // exception -- false-green this phase, because the token is absent then too. Require the
+  // mutant to have actually SUCCEEDED and to have actually overwritten the drifted body.
+  // That is the positive form of the claim: with the pin gone, the drift is not merely
+  // "unrefused", it is silently replaced -- which is the outcome the pin exists to prevent.
+  assert.equal(rB.status, 0, `with the pin removed the mutant must APPLY successfully, not fail for an unrelated reason (exit ${rB.status}): ${outB}`);
+  assert.match(outB, /POSTFLIGHT_OK/, 'the mutant apply must reach POSTFLIGHT_OK -- otherwise the absent drift token proves nothing');
+  assert.equal(bodyMd5(FUNCS[0]), pins[FUNCS[0]].candidate,
+    `with the pin removed the DRIFTED body must be overwritten to the candidate pin (that is the damage the pin prevents); got ${bodyMd5(FUNCS[0])}`);
+  log('PHASE 7b: with the first function\'s drift pin removed, its drifted body applies cleanly and is OVERWRITTEN to the candidate pin -- the pin is load-bearing (mutant discarded)');
 
   log('ALL PHASES PASSED');
 } catch (error) {

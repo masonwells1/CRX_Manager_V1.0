@@ -10,7 +10,8 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 ## 2026-09-03 — invoice payment terms run from the INVOICE DATE; the UTC hole is a separate, smaller issue
 
 **Source:** Mason's decision on 2026-09-03, put to him by the orchestrator session as one question
-with the concrete consequence stated (CS-2026-0119 stays due 2026-05-08 and stays flagged overdue),
+with the concrete consequence stated (the one affected invoice keeps its invoice-date-based due date
+and stays flagged overdue; the row is named in the live ledger, not in this public repo),
 after this session's read-only investigation of a `codex-transaction-review` finding. The decision
 was relayed to the building session by the orchestrator; the live apply of the resulting migration
 still waits for Mason's typed OK in the applying session, as every apply does.
@@ -25,7 +26,8 @@ coincided (same-day draft-and-post); the spec now carries an amendment saying so
 "correct" the code back to the posting date** on the strength of that spec.
 
 **Two separate issues arrived in one report; keep them separate.** (1) The *basis* question above
-affected exactly one live invoice (CS-2026-0119, invoice-dated 2026-04-08, posted 2026-08-18), and
+affected exactly one live invoice (invoice-dated roughly four months before it was posted; the
+invoice number and its dates are live business data and are deliberately not recorded here), and
 only because it was deliberately backdated by four months — not because of any timezone. (2) The
 *timezone* mechanism the report warned about — the live database clock is UTC, so a late-evening
 Chicago save is already "tomorrow" — affects **zero** live invoices: 0 of 3 posted invoices were

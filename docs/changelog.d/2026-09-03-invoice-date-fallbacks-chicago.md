@@ -11,8 +11,10 @@ report:
    spec literally says "posting date". Mason chose the **invoice date** (what the customer reads;
    standard AR practice). The posting RPC is therefore **deliberately unchanged**, no invoice row
    is touched, and the client is untouched. Exactly one live invoice differs between the two
-   bases — CS-2026-0119, invoice-dated 2026-04-08 and posted 2026-08-18 — and it stays due
-   2026-05-08 and flagged overdue with that consequence in front of him. The spec now carries an
+   bases (identified during the 2026-09-03 review; not named here — this repository is public and
+   customer invoice numbers and dates are live business data). It keeps its invoice-date-based due
+   date and stays flagged overdue, with that consequence put in front of him before he chose. The
+   specific row is recoverable from the live ledger by anyone who needs it. The spec now carries an
    amendment so nobody "corrects" the code back.
 2. **The timezone hole.** The live DB clock is UTC. That mechanism affects **zero** live invoices:
    0 of 3 posted invoices crossed the UTC/Chicago day boundary (both sides tested), and both
