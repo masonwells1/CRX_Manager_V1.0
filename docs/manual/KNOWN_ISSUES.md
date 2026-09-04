@@ -295,8 +295,16 @@ moves them to the Chicago business day (container proof
 (ledger version `20260904130047`) under Mason's in-chat OK, verified post-apply: all four bodies at
 their candidate pins, one overload each, SECDEF + `search_path` intact. That hole is CLOSED.
 
-**Two residuals remain open, both raised by the pre-apply gate and accepted rather than blocked.**
-(a) **OPEN, DEADLINE 2026-09-30 — `season` is still UTC in two of those four bodies.**
+**Of the two residuals raised by the pre-apply gate, (a) is now CLOSED and (b) remains an owner decision.**
+(a) **CLOSED 2026-09-04 — applied live as ledger version `20260904152221`
+(`20260904180000_invoice_season_follows_invoice_date`). The 2026-09-30 window is shut on the
+database side.** Post-apply read-only verification: both bodies at their candidate pins
+(`e3fc9bd9…`, `29d699a8…`), ZERO current-season-helper calls, ZERO UTC current-date tokens, one
+overload each, SECDEF + `search_path` and grants unchanged. The companion frontend fix
+(`src/pages/FieldApplicationInvoice.tsx`, which defaulted its transaction date in UTC) ships with
+PR #599 and reaches production only on merge — until then that page can still pre-fill tomorrow's
+date after ~7 pm Chicago, though the season it produces will now agree with whatever date it sends.
+Historical description of the defect follows. **WAS OPEN, DEADLINE 2026-09-30 — `season` was still UTC in two of those four bodies.**
 `_save_invoice_lineage_unaware_impl_20260827` and `_save_field_app_invoice_impl_20260714` stamp
 `season` from `current_season()` = `compute_season(CURRENT_DATE)`, which the migration did not
 change. `compute_season` rolls at month >= 10, so on **2026-09-30 after 7 pm Chicago** a row would be
