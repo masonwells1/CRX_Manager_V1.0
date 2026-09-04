@@ -16,6 +16,16 @@ cutover is `2026-09-03T20:26:11.402245Z`; exact reports begin on the first compl
 settlement events, all 10 required triggers enabled, admin-only RLS, zero non-owner ledger grants,
 and every reviewed function fingerprint. No live `[E2E]` fixture rows were created.
 
+**Superseded 2026-09-03 15:34 UTC header, kept for F06 live-apply provenance.** The guarded F06
+apply returned HTTP 201 with query hash
+`2dabfda1c1f74900fe7be500e0a2598ef4063e903768c90f5905f58e977b5ef7` and moved the ledger to
+993 rows at version `20260903153402`, authored-name high-water
+`20260903150000_job_chemicals_persist_driver`. Post-apply verification found a nullable,
+default-free, non-generated `job_chemicals.driver`, the exact `rate`/`qty` CHECK, and one `save_job`
+overload with body md5 `18d08d5f40aea91fe13ac3e5a686c549`; the later commission-history apply
+supersedes only that boundary, not the recorded F06 proof. Full evidence is retained in
+`docs/changelog.d/2026-09-03-f06-migration-applied-live.md` and row 903 below.
+
 **Superseded 2026-09-01 header, kept for provenance** — its **986-row** / `20260827041500` figures
 predate the 2026-09-03 applies and must not be used as the current ordering boundary:
 
