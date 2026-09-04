@@ -50,7 +50,10 @@ function executableSql(sql) {
       }
       out = blank(out, end - i); i = end; continue;
     }
-    if (ch === '$') {
+    // PostgreSQL allows `$` inside unquoted identifiers. A dollar quote may
+    // begin only at a token boundary; otherwise `x$tag$` is an identifier, not
+    // a literal that can hide executable ACL statements.
+    if (ch === '$' && !/[A-Za-z0-9_$]/.test(src[i - 1] || '')) {
       const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i));
       if (tag) {
         const close = src.indexOf(tag[0], i + tag[0].length);

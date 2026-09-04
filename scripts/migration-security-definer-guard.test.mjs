@@ -90,6 +90,12 @@ test('does not treat quoted SQL identifiers as executable ACL commands', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes(counterfeit), ['post_return_credit']);
 });
 
+test('does not treat dollar signs inside identifiers as dollar quote delimiters', () => {
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  const regranted = `${safe}\nSELECT 1 AS x$tag$;\nGRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon;\nSELECT 1 AS x$tag$;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(regranted), ['post_return_credit']);
+});
+
 test('resets ACL state after DROP and tracks SECURITY DEFINER procedures', () => {
   const recreated = `${definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;')}\nDROP FUNCTION public.post_return_credit(uuid);\n${definition()}`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(recreated), ['post_return_credit']);
