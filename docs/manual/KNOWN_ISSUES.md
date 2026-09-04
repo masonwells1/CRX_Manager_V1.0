@@ -304,17 +304,90 @@ dated 2026-09-30 (season 2026) while stamped `season = 2027`. Before the apply b
 therefore agreed with each other; making the date correct exposed the coupling. `season` drives
 `customer_application_rates` lookups and year-end statements. The correct pattern already exists in
 `_save_field_app_split_invoice_impl`, which derives the season from the same COALESCEd Chicago date.
-Needs a follow-up migration before 2026-09-30. Same class, later window: `next_invoice_number`
-derives its year from `extract(year FROM now())` (UTC), so a 2026-12-31 evening invoice is dated
-2026 and numbered 2027.
+**FIXED IN CODE 2026-09-04, MIGRATION PENDING LIVE APPLY:**
+`supabase/migrations/20260904180000_invoice_season_follows_invoice_date.sql` re-emits both bodies
+with `compute_season(COALESCE(<payload invoice_date>, (now() AT TIME ZONE 'America/Chicago')::date))`,
+mirroring the split-invoice pattern. The pre-apply gate found a THIRD site the original residual did
+not name: `_save_field_app_invoice_impl_20260714` also matched `customer_application_rates` on
+`car.season = current_season()`, so fixing only the stamp would have filed the invoice under one
+season and priced it at another. **Do not "simplify" this to one pre-loop variable feeding both
+sites** — that is exactly the design the prover reproduces as a defect in PHASE 8d (it files an
+edited invoice under one season and charges the other's rate, and NO static guard catches it). The
+shipped code stamps a NEW invoice from `v_season` (the invoice date's season) and binds the
+`customer_application_rates` lookup to `v_invoice_season` — the season the ROW carries, returned by
+the INSERT and read back from the UPDATE. Container proof:
+`scripts/smoke/prove-invoice-season-follows-invoice-date.mjs` — it reproduces the defect through the
+REAL installed functions (an invoice dated 2026-10-01 filed under season 2026 and charged the
+season-2026 rate), then shows both fixed on either side of the boundary, and instruments the clock
+wiring itself. **Deliberate behaviour change recorded with it:** a caller-supplied `invoice_date` in
+another season now files AND prices under that date's season, which is the rule the split-invoice
+body already follows.
+
+**Three OPEN OWNER DECISIONS for Mason, all confined to an EDIT that moves an invoice date across
+October 1 — none is in the 2026-09-30 evening window, and all three are OBSERVED by prover phases
+6c/6d/6e rather than inferred:**
+1. On such an edit the two stamps stay divergent: `invoice_date` moves, `season` does not. The file
+   never re-seasons an existing record (that would move it onto a different year-end statement, and
+   the split-provenance triggers refuse it outright), so the "date and season agree" claim holds on
+   CREATE, not on EDIT.
+2. In a MULTI-GROWER group, an edit that also ADDS a grower prices the pre-existing invoices at
+   their stored season and the new one at the invoice date's season — **two growers on the same
+   application billed at different seasons' rates**. Before this change all of them priced from the
+   clock, so the stamps could already diverge but the prices could not.
+3. If no `customer_application_rates` row exists for the season the invoice is filed under, the fee
+   silently falls back to the service default rate. Pre-existing behaviour on a newly reachable
+   path — e.g. an override entered for the new season after the roll, since
+   `src/pages/ApplicationServiceDetail.tsx` defaults its Season box to the current season.
 (b) **OPEN OWNER DECISION** — the split-invoice body's commission-record `CURRENT_DATE` is
 deliberately retained (pinned at exactly 1 by the postflight so it cannot drift silently). It now
 *disagrees* with the Chicago-dated invoice written in the same transaction on a Chicago evening,
 where before the apply the two always agreed. Whether commissions should follow the invoice date is
 Mason's call, not a defect to fix unilaterally.
 
-Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md` and
-`docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md`.
+Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md`,
+`docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md` and
+`docs/changelog.d/2026-09-04-invoice-season-follows-invoice-date.md`.
+
+## OPEN 2026-09-04 — other paths still stamp `invoices.season` from the UTC clock
+
+Surfaced by `migration-drift-reviewer` (M8) and `rls-security-reviewer` (M5) while reviewing
+`20260904180000_invoice_season_follows_invoice_date.sql`, which closes the 2026-09-30 window for
+only the **two** invoice-creating bodies it re-emits. These are the same class and are NOT closed:
+
+- **The `invoices.season` column DEFAULT is itself the UTC clock read** —
+  `season integer NOT NULL DEFAULT current_season()`
+  (`supabase/migrations/20260213100000_phase2_billing_architecture.sql:50`). Any path that inserts
+  into `invoices` without naming `season` gets the UTC calendar day. The two fixed bodies always
+  pass `season` explicitly, so they are unaffected.
+- `issue_return_credit` — credit-memo invoice stamped `current_season()`
+  (`20260701202000_returns_rpc_gating.sql:361`).
+- The blend-ticket → invoice path — `COALESCE(v_ticket.season, current_season())` for both the stamp
+  and the rate lookup (`20260714230200_blend_ticket_order_lifecycle.sql:723,881`).
+- The delivery-split paths — `COALESCE(v_order.season, current_season())`
+  (`20260707070000_u7_delivery_split_billing.sql:654`, `20260707090000_u7_split_gate_allow_predelivery.sql:213`).
+
+**Not yet verified against the live catalog** — those are the latest occurrences in migration
+*sources*, and superseded bodies are noise. Confirm which are the currently installed bodies before
+acting. Deliberately not folded into `20260904180000`: that file has a hard 2026-09-30 deadline and
+each additional md5-pinned body widens its blast radius.
+
+## OPEN 2026-09-04, DEADLINE 2026-12-31 — `next_invoice_number` takes its YEAR from the UTC clock
+
+Split out of the invoice-date/season entry above on 2026-09-04 so it is not closed along with it —
+it is the same class of defect but a different function, a different migration lineage, a narrower
+window and a later deadline.
+
+`next_invoice_number()` derives the year in the invoice number from `extract(year FROM now())`,
+which on live is UTC (`supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql:391`).
+Between 6 pm America/Chicago on 2026-12-31 and midnight UTC, an invoice is dated 2026-12-31 but
+numbered with 2027. Unlike `season`, this does not change what the customer is charged or which
+year-end statement the invoice lands on — it makes the human-readable number disagree with the date
+printed beside it, and it consumes a number out of the next year's sequence.
+
+Deliberately NOT folded into `20260904180000_invoice_season_follows_invoice_date.sql`: that file has
+a hard 2026-09-30 deadline, and adding a third md5-pinned body widens its blast radius for a window
+that does not open for another three months. Changing the year source also has sequence-uniqueness
+consequences of its own that deserve their own review.
 
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 

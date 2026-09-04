@@ -176,3 +176,8 @@ supabase/migrations/20260904160000_invoice_date_fallbacks_chicago.sql text eol=l
 scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs text eol=lf
 # Byte-exact live bodies (one keeps CRLF, as production does); never EOL-converted.
 scripts/smoke/fixtures/invoice-date-fallbacks-live-bodies-20260903.sql -text diff whitespace=cr-at-eol
+# The season follow-up to 20260904160000: same shape, same reason. It pins two live function
+# bodies by md5 and its own postflight REFUSES an installed body carrying CR bytes, so a CRLF
+# checkout would install bytes the pins were never computed against and abort mid-apply.
+supabase/migrations/20260904180000_invoice_season_follows_invoice_date.sql text eol=lf
+scripts/smoke/prove-invoice-season-follows-invoice-date.mjs text eol=lf

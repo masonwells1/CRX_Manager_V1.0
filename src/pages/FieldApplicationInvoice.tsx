@@ -19,6 +19,7 @@ import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
 import { formatCents as fmt } from '../lib/money';
+import { localToday } from '../lib/dateUtils';
 import { billableAcres, acreDivergence, appliedMatchesSystem } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
@@ -210,7 +211,14 @@ export default function FieldApplicationInvoice() {
   const [transferringToScheduling, setTransferringToScheduling] = useState(false);
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [transactionDate, setTransactionDate] = useState(new Date().toISOString().slice(0, 10));
+  // localToday(), NOT new Date().toISOString() — toISOString() converts to UTC, so from ~7 pm
+  // Chicago this pre-filled TOMORROW. That is the same UTC/Chicago bug the server-side
+  // invoice_date fallbacks fixed on 2026-09-04, and because this page ALWAYS sends
+  // invoice_date, the server fallback never engages here — the wrong day could only be fixed
+  // on the client. On 2026-09-30 after 7 pm it pre-filled 2026-10-01, which then correctly
+  // (but wrongly for the business) files the invoice in season 2027. InvoiceDetail.tsx already
+  // used localToday(); this page did not.
+  const [transactionDate, setTransactionDate] = useState(localToday());
   const [notes, setNotes] = useState(''); // header_notes (printed)
   // #33: ChemMan billing details. Header/footer notes + PO + due date already
   // existed on invoices; payment_terms / internal_notes / discount are new (migration
@@ -2019,9 +2027,10 @@ export default function FieldApplicationInvoice() {
             const n = m ? Number(m[1]) : NaN;
             days = Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
           }
-          // A cleared transaction-date input falls back to today — the DB defaults
-          // invoice_date to CURRENT_DATE on save, so the print still matches.
-          const base = transactionDate || new Date().toLocaleDateString('en-CA');
+          // A cleared transaction-date input falls back to today — the server stamps
+          // invoice_date with the America/Chicago business date on save (migration
+          // 20260904160000, applied 2026-09-04), so the print still matches.
+          const base = transactionDate || localToday();
           const d = new Date(base + 'T00:00:00Z');
           d.setUTCDate(d.getUTCDate() + days);
           return d.toISOString().slice(0, 10);
