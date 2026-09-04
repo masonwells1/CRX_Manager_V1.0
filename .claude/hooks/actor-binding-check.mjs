@@ -523,6 +523,61 @@ function normalizedQualifiedIdentifier(identifier) {
   return parts.join(".");
 }
 
+function splitSearchPathItems(value, stringLiteralMode = false) {
+  const text = String(value || "");
+  const items = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"' || (!stringLiteralMode && ch === "'")) {
+      const end = scanQuoted(text, i);
+      if (end === -1) return null;
+      i = end - 1;
+      continue;
+    }
+    if (ch === ",") {
+      items.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  items.push(text.slice(start));
+  return items;
+}
+
+/** Expand SQL string constants because PostgreSQL interprets one quoted GUC
+ * value such as 'evil, pg_catalog' as the same search-path list as two SQL
+ * items. Nonstandard escape strings fail closed: their decoded identifier list
+ * is not safe to infer without PostgreSQL's complete string decoder. */
+function semanticSearchPathEntries(rawValue) {
+  const sqlItems = splitSearchPathItems(rawValue);
+  if (!sqlItems) return null;
+  const entries = [];
+  const leadingIdentifier = new RegExp(`^(${SQL_IDENTIFIER_PATTERN})`, "i");
+  for (const sqlItem of sqlItems) {
+    const item = sqlItem.trim();
+    if (!item) continue;
+    if (/^(?:E|U&)\s*'/i.test(item)) return null;
+    if (item.startsWith("'")) {
+      const end = scanQuoted(item, 0);
+      if (end === -1) return null;
+      const decoded = item.slice(1, end - 1).replace(/''/g, "'");
+      const gucItems = splitSearchPathItems(decoded, true);
+      if (!gucItems) return null;
+      for (const gucItem of gucItems) {
+        const normalized = normalizedIdentifier(gucItem.trim());
+        if (normalized === null) return null;
+        entries.push(normalized);
+      }
+      continue;
+    }
+    const identifier = leadingIdentifier.exec(item)?.[1];
+    const normalized = normalizedIdentifier(identifier);
+    if (normalized === null) return null;
+    entries.push(normalized);
+  }
+  return entries;
+}
+
 function hasSchemaBeforeExplicitPgCatalog(structuralSql, statementOnly = false) {
   if (structuralSql === null || structuralSql === undefined) return false;
   const boundary = statementOnly ? "(?:^|;)\\s*" : "\\b";
@@ -532,16 +587,10 @@ function hasSchemaBeforeExplicitPgCatalog(structuralSql, statementOnly = false) 
   );
   let match;
   while ((match = searchPath.exec(structuralSql)) !== null) {
-    // Routine attributes can follow the path without a semicolon (`...,
-    // pg_catalog AS $body$`). Locate pg_catalog inside the captured value
-    // instead of requiring the final list item to consume the whole suffix.
-    // `'pg_catalog'` (a single-quoted list item) is the spelling PostgreSQL's
-    // own \df output and nearly every CRX migration uses. Accept it alongside
-    // the bare and double-quoted forms; the caller must supply text in which
-    // string literals are still readable for this branch to fire.
-    const catalog = /(?:^|,)\s*(?:'pg_catalog'|"pg_catalog"|pg_catalog)(?=\s*(?:,|$|\b(?:AS|LANGUAGE|SECURITY|SET|RESET|CALLED|RETURNS|STRICT|IMMUTABLE|STABLE|VOLATILE|PARALLEL|COST|ROWS|SUPPORT)\b))/i
-      .exec(match[1]);
-    if (catalog && match[1].slice(0, catalog.index).trim() !== "") return true;
+    const entries = semanticSearchPathEntries(match[1]);
+    if (entries === null) return true;
+    const catalogIndex = entries.indexOf("pg_catalog");
+    if (catalogIndex > 0) return true;
   }
   return false;
 }

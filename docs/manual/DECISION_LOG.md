@@ -7,6 +7,18 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — parse combined quoted search_path lists in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** Search-path operator safety uses PostgreSQL's list meaning for an ordinary quoted GUC
+value: `'evil, pg_catalog'` is two entries, not one opaque string. The same bounded parser governs
+CREATE attributes, later ALTER attributes, and top-level state inherited by `FROM CURRENT`.
+
+**Boundary.** This is not a general PostgreSQL configuration interpreter. Nonstandard escape-string
+forms fail closed, and the existing actor-name, dataflow, tool-path, and broader-analysis caps remain.
+
 ## 2026-09-03 — refuse pre-actor-check body search_path changes in PR #449; keep the broader cap
 
 **Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied

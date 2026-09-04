@@ -2174,6 +2174,16 @@ ALTER FUNCTION public.quoted_altered_path_actor(pg_catalog.uuid)
 ok(isDeny(r), "quoted ALTER SET search_path is included in final routine state");
 
 r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("combined_create_path_actor", "'evil, pg_catalog'")}`);
+ok(isDeny(r), "a combined quoted CREATE search_path cannot hide a user schema before pg_catalog");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("combined_altered_path_actor")}
+ALTER FUNCTION public.combined_altered_path_actor(pg_catalog.uuid)
+  SET search_path TO 'evil, pg_catalog';`);
+ok(isDeny(r), "a combined quoted ALTER search_path cannot hide a user schema before pg_catalog");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
 ${searchPathActorRoutine("reset_path_actor")}
 ALTER FUNCTION public.reset_path_actor(pg_catalog.uuid) RESET search_path;`);
 ok(isDeny(r), "ALTER RESET search_path removes the routine-local operator safety proof");
@@ -2193,6 +2203,12 @@ SET search_path = public, pg_temp;
 ${searchPathActorRoutine("current_path_actor", "evil, pg_catalog")}
 ALTER FUNCTION public.current_path_actor(pg_catalog.uuid) SET search_path FROM CURRENT;`);
 ok(!isDeny(r), "ALTER SET search_path FROM CURRENT uses the current top-level safe path");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+SET search_path TO 'evil, pg_catalog';
+${searchPathActorRoutine("combined_current_path_actor")}
+ALTER FUNCTION public.combined_current_path_actor(pg_catalog.uuid) SET search_path FROM CURRENT;`);
+ok(isDeny(r), "ALTER SET search_path FROM CURRENT cannot inherit a hidden user schema before pg_catalog");
 
 r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
 ${searchPathActorRoutine("repaired_path_actor", "evil, pg_catalog")}
