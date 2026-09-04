@@ -323,9 +323,12 @@ wiring itself. **Deliberate behaviour change recorded with it:** a caller-suppli
 another season now files AND prices under that date's season, which is the rule the split-invoice
 body already follows.
 
-**Three OPEN OWNER DECISIONS for Mason, all confined to an EDIT that moves an invoice date across
-October 1 — none is in the 2026-09-30 evening window, and all three are OBSERVED by prover phases
-6c/6d/6e rather than inferred:**
+**Three consequences of never re-seasoning on edit — all SETTLED by Mason on 2026-09-04
+(`docs/manual/DECISION_LOG.md`, 2026-09-04 entry): an invoice is priced at the season IT is filed
+under, and an edit never rewrites an existing invoice's season.** All are confined to an EDIT that
+moves an invoice date across October 1, none is in the 2026-09-30 evening window, and all three are
+OBSERVED by prover phases 6c/6d/6e rather than inferred. Recorded here so they are not re-opened as
+bugs:
 1. On such an edit the two stamps stay divergent: `invoice_date` moves, `season` does not. The file
    never re-seasons an existing record (that would move it onto a different year-end statement, and
    the split-provenance triggers refuse it outright), so the "date and season agree" claim holds on

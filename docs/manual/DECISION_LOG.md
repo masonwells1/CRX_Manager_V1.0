@@ -7,6 +7,36 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-04 — an invoice is priced at the season IT is filed under, even when that splits a field application
+
+**Source:** Mason's decision in the building session on 2026-09-04, put to him as one question with
+the concrete money consequence stated, after both `rls-security-reviewer` and
+`migration-drift-reviewer` raised it against `20260904180000_invoice_season_follows_invoice_date.sql`
+and the container prover reproduced it as an OBSERVED outcome (PHASE 6d), not an inference.
+
+**Decision.** The application fee on a field-application invoice is priced at the season **that
+invoice** is filed under — never at an independent clock read, and never at the season of some other
+invoice in the same group. An edit never re-seasons an existing invoice.
+
+**The accepted consequence Mason was shown and chose.** A field application billed in one season and
+then edited across October 1 *while adding a grower* produces one invoice group whose members are
+filed under two different seasons and therefore billed at two different per-acre rates — observed in
+the prover as the pre-existing grower at 1111c/acre (season 2026) and the added grower at 2222c/acre
+(season 2027) on one application, one group, one date. This is rare, is not part of the 2026-09-30
+window that migration closes, and was chosen over the two alternatives because it **never rewrites an
+existing invoice**: forcing one season across the group would make the added invoice disagree with
+its own date, and re-seasoning the whole application would move already-issued invoices onto a
+different year-end statement.
+
+**Operative rules.** (1) Do NOT "simplify" the field-application save to derive one pre-loop season
+and feed both the invoice stamp and the `customer_application_rates` lookup from it — that is the
+exact design the prover reproduces as a defect in PHASE 8d, and no static guard catches it. The
+stamp comes from `v_season` (the invoice date's season); the rate lookup binds to `v_invoice_season`
+(the season the row carries, returned by the INSERT and read back from the UPDATE). (2) Do NOT add
+`season = …` to that function's UPDATE branch. (3) A related accepted residual stands: if no
+`customer_application_rates` row exists for the filed season, the fee falls back to the service
+default silently — pre-existing behaviour, newly reachable, observed in PHASE 6e.
+
 ## 2026-09-03 — invoice payment terms run from the INVOICE DATE; the UTC hole is a separate, smaller issue
 
 **Source:** Mason's decision on 2026-09-03, put to him by the orchestrator session as one question
