@@ -241,12 +241,33 @@ function assertCheckedInMarkers() {
   const triggerStart = migration.indexOf(
     'CREATE OR REPLACE FUNCTION public.bump_cycle_count_item_revision',
   );
+  assert.ok(triggerStart >= 0, 'cycle-count revision trigger function is missing');
   const triggerEnd = migration.indexOf(
     'REVOKE ALL ON FUNCTION public.bump_cycle_count_item_revision',
     triggerStart,
   );
+  assert.ok(
+    triggerEnd > triggerStart,
+    'cycle-count revision trigger function is not terminated by its REVOKE',
+  );
   const triggerBody = migration.slice(triggerStart, triggerEnd);
-  assert.ok(triggerBody.indexOf('FOR UPDATE;') < triggerBody.indexOf('SET item_revision = item_revision + 1'));
+  // Both offsets must exist before their ORDER means anything. A missing
+  // `FOR UPDATE;` yields -1, which is below every real offset, so comparing the
+  // raw indexOf results would pass precisely when the lock this asserts is gone.
+  const triggerLock = triggerBody.indexOf('FOR UPDATE;');
+  const triggerBump = triggerBody.indexOf('SET item_revision = item_revision + 1');
+  assert.ok(
+    triggerLock >= 0,
+    'cycle-count revision trigger does not lock the parent count row',
+  );
+  assert.ok(
+    triggerBump >= 0,
+    'cycle-count revision trigger does not bump item_revision',
+  );
+  assert.ok(
+    triggerLock < triggerBump,
+    'cycle-count revision trigger bumps item_revision before locking the parent count row',
+  );
   assert.match(triggerBody, /CYCLE_COUNT_NOT_IN_PROGRESS/);
   assert.match(triggerBody, /CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN/);
 

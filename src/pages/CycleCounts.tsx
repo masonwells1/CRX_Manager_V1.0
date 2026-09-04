@@ -463,7 +463,16 @@ export default function CycleCounts() {
 
         const varianceItems = snapshot.items.filter((i) => i.variance && i.variance !== 0);
 
-        await logActivity({ event: 'cycle_count_completed', description: `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
+        // The count is COMMITTED and its key is retired by this point, so the
+        // inventory adjustment has already happened. Activity logging is a
+        // post-commit side effect: letting it reject here would surface a
+        // failure toast for a completion that succeeded, and the retry then
+        // runs under a fresh key against an already-completed count.
+        try {
+          await logActivity({ event: 'cycle_count_completed', description: `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
+        } catch (logErr) {
+          Sentry.captureException(logErr);
+        }
       },
       toast,
       setLoading: setCompleting,

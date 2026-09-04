@@ -995,16 +995,20 @@ export default function Reports() {
   ];
 
   // ─── Date filter bar (shared across profitability/financial/operational)
-  const dateFilterBar = (onCSV: () => void) => (
+  // datesDisabled: some reports ignore the selected range entirely (commission
+  // balance is current-state only). Leaving the controls live made the screen
+  // claim a historical cutoff it never applied, so they are actually disabled
+  // rather than merely footnoted. CSV stays available.
+  const dateFilterBar = (onCSV: () => void, datesDisabled = false) => (
     <Card>
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <label className="block text-xs font-medium text-secondary mb-1">Start Date</label>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
+          <input type="date" value={startDate} disabled={datesDisabled} onChange={(e) => setStartDate(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-100 disabled:text-secondary disabled:cursor-not-allowed" />
         </div>
         <div>
           <label className="block text-xs font-medium text-secondary mb-1">End Date</label>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
+          <input type="date" value={endDate} disabled={datesDisabled} onChange={(e) => setEndDate(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-100 disabled:text-secondary disabled:cursor-not-allowed" />
         </div>
         <div className="flex gap-1.5">
           {[
@@ -1015,7 +1019,7 @@ export default function Reports() {
             { key: 'last30', label: 'Last 30d' },
             { key: 'last90', label: 'Last 90d' },
           ].map((p) => (
-            <button key={p.key} onClick={() => applyPreset(p.key)} className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 hover:bg-crx-green-tint hover:border-crx-green hover:text-crx-green transition-colors">
+            <button key={p.key} onClick={() => applyPreset(p.key)} disabled={datesDisabled} className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 hover:bg-crx-green-tint hover:border-crx-green hover:text-crx-green transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-gray-200 disabled:hover:text-inherit">
               {p.label}
             </button>
           ))}
@@ -1144,10 +1148,10 @@ export default function Reports() {
             ))}
           </div>
 
-          {dateFilterBar(handleFinancialCSV)}
+          {dateFilterBar(handleFinancialCSV, financialTab === 'commission_balance')}
           {financialTab === 'commission_balance' && (
             <p className="text-xs text-secondary">
-              Commission Balance is current-state only. Historical cutoffs are disabled until immutable payout history exists.
+              Commission Balance is current-state only. Shown as of today. Historical cutoffs are disabled until immutable payout history exists.
             </p>
           )}
 

@@ -418,11 +418,20 @@ export default function VendorBillDetail() {
         // IDEMPOTENCY_INTENT_MISMATCH with the committed update receipt.
         // Discarding it and rotating the key would run the edit a second time
         // and write duplicate financial-audit and activity rows.
+        //
+        // A matching bill_id does NOT establish that the edit on screen is the
+        // edit that committed. An intent MISMATCH means the payload differed, so
+        // the receipt necessarily belongs to an EARLIER submission against this
+        // same bill — and the difference can be the notes or either date, not
+        // just the amount, so no field comparison here can prove equivalence.
+        // Report only what the receipt actually proves: an earlier edit landed,
+        // and the fields currently on screen are unconfirmed. Then show the
+        // stored bill so the operator can see the real state and decide.
         const committed = getIdempotencyMismatchResult(err, 'update_vendor_bill');
         const committedBillId = committed?.bill_id;
         if (committed && typeof committedBillId === 'string' && committedBillId === bill.id) {
           editIdem.resetKey();
-          toast('warning', 'This edit was already saved. Showing the saved bill instead of applying it twice.');
+          toast('warning', 'An earlier edit to this bill was already saved. Your latest changes were NOT confirmed — showing the saved bill so you can check it and re-apply them if needed.');
           setEditModalOpen(false);
           setEditModalBillId(null);
           fetchBill();

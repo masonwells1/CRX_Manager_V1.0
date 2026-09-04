@@ -191,5 +191,12 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
       "get_commission_balance_report', { p_as_of_date: todayInBusinessTz() }",
     );
     expect(reports).toContain('Commission Balance is current-state only.');
+    // The banner alone let the date controls stay live while the report ignored
+    // them, so the screen showed a historical cutoff it never applied. Pin the
+    // disabling itself, not just the wording that describes it.
+    expect(reports).toContain(
+      "dateFilterBar(handleFinancialCSV, financialTab === 'commission_balance')",
+    );
+    expect(reports).toContain('const dateFilterBar = (onCSV: () => void, datesDisabled = false) =>');
   });
 });

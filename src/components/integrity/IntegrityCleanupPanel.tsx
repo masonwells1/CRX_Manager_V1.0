@@ -351,7 +351,10 @@ export default function IntegrityCleanupPanel() {
     if (!profile) return;
     const input = reconcileInputs[row.id];
     const newQuantity = parseFloat(input?.qty ?? '');
-    if (!input?.qty || isNaN(newQuantity) || newQuantity < 0) {
+    // Number.isFinite, not isNaN: exponent notation such as 1e309 parses to
+    // Infinity, which is neither NaN nor < 0, so an isNaN/negative pair alone
+    // lets a non-finite quantity through to an inventory-reconciling RPC.
+    if (!input?.qty || !Number.isFinite(newQuantity) || newQuantity < 0) {
       toast('error', 'Enter a non-negative quantity');
       return;
     }
