@@ -19,7 +19,7 @@ report:
    invoice screens send the browser-local date. The only real hole is four server-side fallbacks
    that stamp `invoice_date = CURRENT_DATE` when a payload omits the date.
 
-**What changed — `supabase/migrations/20260903170000_invoice_date_fallbacks_chicago.sql`.** Each
+**What changed — `supabase/migrations/20260904160000_invoice_date_fallbacks_chicago.sql`.** Each
 of the four bodies is re-emitted from its LIVE installed text (read read-only on 2026-09-03; three
 were created by RENAME, so no single migration file carries their applied text) with exactly one
 delta: the `invoice_date` fallback becomes `(now() AT TIME ZONE 'America/Chicago')::date`, the

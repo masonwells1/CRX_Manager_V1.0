@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Disposable PostgreSQL 17 proof for
- *   supabase/migrations/20260903170000_invoice_date_fallbacks_chicago.sql
+ *   supabase/migrations/20260904160000_invoice_date_fallbacks_chicago.sql
  * (the four server-side invoice_date fallbacks move from the UTC CURRENT_DATE to the
  * America/Chicago business date; Mason's 2026-09-03 decision, DECISION_LOG).
  *
@@ -53,7 +53,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-invoice-date-chicago-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
-const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260903170000_invoice_date_fallbacks_chicago.sql');
+const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260904160000_invoice_date_fallbacks_chicago.sql');
 // Byte-exact LIVE definitions of the four functions (pg_get_functiondef, read 2026-09-03;
 // the split body keeps its CRLF as production does). The ledger replay cannot reproduce
 // production's exact starting bodies: the baseline dump and this checkout disagree with

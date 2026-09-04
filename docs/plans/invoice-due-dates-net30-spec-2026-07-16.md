@@ -9,7 +9,7 @@
 > `20260702160000_a8_terms_to_due_date.sql`). Do NOT "correct" the code back to the posting date
 > on the strength of the sentences below. The genuine timezone rule still stands: `invoice_date`
 > itself must be the America/Chicago business date, which is what
-> `20260903170000_invoice_date_fallbacks_chicago.sql` enforces on the server-side fallbacks.
+> `20260904160000_invoice_date_fallbacks_chicago.sql` enforces on the server-side fallbacks.
 
 **Status:** APPROVED by Mason 2026-07-16 (in-chat decision) — ready for a dedicated build session.
 **Decision:** "Net 30 normal, but I want an option to set it to Net 15, or even immediately,

@@ -2819,7 +2819,7 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // 20260827041500 respectively; CREATE OR REPLACE keeps those ACLs). Both
   // declare p_idempotency_key text and deliberately share their public
   // wrapper's cache namespace ('price_order' / 'save_invoice'). Pre-apply-window
-  // entries, exactly like the draw-down impl above: migration 20260903170000
+  // entries, exactly like the draw-down impl above: migration 20260904160000
   // (invoice_date fallbacks -> America/Chicago business day) is the FIRST
   // on-disk CREATE of each under its post-rename name, because both were
   // originally renamed with ALTER FUNCTION ... RENAME TO and had no on-disk

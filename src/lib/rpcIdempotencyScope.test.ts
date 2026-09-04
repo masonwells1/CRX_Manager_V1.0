@@ -339,7 +339,7 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // The intent-bound public wrapper owns the actor+return fingerprint while
   // this service-role-only helper preserves the committed receive namespace.
   _receive_return_impl_20260714: ['receive_return'],
-  // Migration 20260903170000 (invoice_date fallbacks -> America/Chicago business
+  // Migration 20260904160000 (invoice_date fallbacks -> America/Chicago business
   // day) is the FIRST on-disk CREATE of these three private implementations
   // under their post-rename names: each was originally renamed with
   // ALTER FUNCTION ... RENAME TO (20260812115237, 20260827041500, 20260714224000)

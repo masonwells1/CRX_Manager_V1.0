@@ -34,7 +34,7 @@ invoice screens send the browser-local date rather than asking the server for on
 UTC hole is four server-side fallbacks that stamp `invoice_date = CURRENT_DATE` when a payload
 omits the date (`_price_order_below_cost_impl_20260810`, `_save_invoice_lineage_unaware_impl_20260827`,
 `_save_field_app_invoice_impl_20260714`, `_save_field_app_split_invoice_impl`); migration
-`20260903170000_invoice_date_fallbacks_chicago.sql` moves those to the America/Chicago business
+`20260904160000_invoice_date_fallbacks_chicago.sql` moves those to the America/Chicago business
 date per the ~2026-07-10 rule below. Anyone re-reading the original finding should not conclude
 the due-date code is still wrong.
 

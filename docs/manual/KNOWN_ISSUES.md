@@ -284,7 +284,7 @@ amended. Exactly one live invoice differs between the bases (CS-2026-0119, backd
 and it stays due 2026-05-08 / overdue by that decision. (2) *Timezone:* affects **zero** live
 invoices — 0 of 3 posted invoices crossed the UTC/Chicago day boundary (both sides tested) and both
 invoice screens send the browser-local date. The only real hole is four server-side
-`invoice_date = CURRENT_DATE` fallbacks; migration `20260903170000_invoice_date_fallbacks_chicago.sql`
+`invoice_date = CURRENT_DATE` fallbacks; migration `20260904160000_invoice_date_fallbacks_chicago.sql`
 moves them to the Chicago business day (container proof
 `scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs`). **Until that migration is applied live**,
 a save whose payload omits `invoice_date` between 7 pm and midnight Chicago would still be dated
