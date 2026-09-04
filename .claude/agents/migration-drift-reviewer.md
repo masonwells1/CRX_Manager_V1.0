@@ -51,9 +51,32 @@ For each `CREATE OR REPLACE FUNCTION <name>(<args>)` in the migration:
 4. Historical migration text shows what was AUTHORED, not what currently EXISTS — a later
    `DROP` can have removed an overload the history still shows. So more than one authored
    signature for a name is a **signal to confirm against the live catalog**, not a BLOCKER on
-   its own. You cannot query Supabase yourself: if the orchestrator has recorded a current
-   live `pg_proc` overload count for the affected functions in the task evidence, treat that
-   as authoritative over the historical text; if it has not, emit **HIGH** asking for it.
+   its own.
+
+   **A COUNT IS NOT EVIDENCE — it cannot clear this finding.** An overload count does not
+   identify which signature exists, and the collision this check exists to prevent is
+   invisible to a count. Worked example: live holds `f(integer)`; the migration adds
+   `f(text)` without a `DROP FUNCTION`. The pre-apply count is **1**, yet applying produces
+   **2** overloads — the exact failure mode. That is precisely what a count-based rule
+   would wave through. `pronargs` is a count and is subject to the same defect: it
+   also cannot distinguish `f(integer)` from `f(text)`.
+
+   **Require complete identity signatures.** Fresh live evidence must give, per function
+   name, the full schema-qualified identity signature of EVERY live overload — obtain it as
+   `oid::regprocedure::text` (the live-data guard REFUSES
+   `pg_get_function_identity_arguments()`, and a bare table alias like `AS a(argname)` trips
+   its function-call regex, so name aliases with a read prefix such as `AS list_arg(...)`).
+   Then compute the expected POST-migration signature set:
+   - the migration's `CREATE OR REPLACE FUNCTION f(<args>)` identity signature matches an
+     existing live signature exactly → it REPLACES that one, no new overload → clean;
+   - it does NOT match any live signature while other live signatures for that name exist,
+     and the migration does not `DROP` them → applying ADDS an overload → **BLOCKER**;
+   - the name does not exist live at all → a plain create → clean.
+
+   Count-only evidence, `pronargs`, or candidate-authored prose asserting "exactly one
+   overload" NEVER clears this finding. If identity-signature evidence is absent, emit
+   **HIGH** naming exactly what to run. You cannot query Supabase yourself, so say so and
+   stop rather than inferring.
 
 ### CHECK 3 — `updated_at` on tables that lack it
 Read `tables_without_updated_at` from the schema registry. For each `UPDATE <table> SET ... updated_at` in the migration, if `<table>` is in that list, severity = **BLOCKER**.

@@ -56,10 +56,17 @@ step 4. That reviewer had never once returned a verdict — it walked ~900 migra
 time over the network and died after 598 and then 751 `fetch_blob` calls, producing an
 UNADJUDICATED capture that resembled a verdict. The whole corpus is already checked out locally, so
 the charter now requires a small bounded number of local `Grep`/`Bash` searches and forbids remote
-per-file enumeration. Step 4 records that historical migration text shows what was AUTHORED, not
-what currently EXISTS, so multiple authored signatures are a signal to confirm against the live
-catalog rather than a BLOCKER on their own. **No check was removed and no severity was lowered.**
-On its first run under the fixed charter it completed and returned CLEAN in 93,656 tokens.
+per-file enumeration. On its first run under the fixed charter it completed and returned CLEAN in
+93,656 tokens.
+
+Step 4 records that historical migration text shows what was AUTHORED, not what currently EXISTS,
+so multiple authored signatures are a signal to confirm against the live catalog rather than a
+BLOCKER on their own. **Correction:** this entry originally claimed "no severity was lowered". That
+was wrong — the first draft of step 4 let a live overload *count* settle the question, and an
+exact-SHA `gpt-5.6-sol` review caught it. See
+`2026-09-04-drift-reviewer-check2-identity-signatures.md` for the defect and the fix. No check was
+removed, and step 2 — the BLOCKER on a differing-argument overload with no `DROP FUNCTION` — is
+untouched.
 
 ## Not done here (owned elsewhere)
 
