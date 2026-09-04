@@ -946,17 +946,17 @@ the **post-apply** half, run against the live catalog, and are indifferent to ho
 and nothing more. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels closed over
 two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of that is in the
 running hook**, and this PR does not change it. Do not credit the active guard with #449's fixes. It is
-**not** a boundary, and no document should describe it as preventing actor forgery. Note in particular that
-the ordinary *incremental* edit path is not covered at all (row 3 below), so "catches every ordinary
-spelling" would overstate even the active guard.
+**not** a boundary, and no document should describe it as preventing actor forgery. The ordinary
+*incremental* edit path was not covered when this issue was recorded; the narrow 2026-09-03 maintenance
+change now reconstructs full post-edit files without changing the capped actor-analysis patterns.
 
-**What it does NOT catch, stated so nobody re-derives it:**
+**What it does NOT catch, plus the one closed plumbing gap, stated so nobody re-derives it:**
 
 | Gap | Why it is open |
 |---|---|
 | Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
 | Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** (213 lines, no such logic) — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
-| An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function | The hook analyses `tool_input.content \|\| tool_input.new_string` — the fragment alone. It does **not** reconstruct the full post-edit file the way `sql-safety.mjs`, `idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. With no function header, parameter list or `SECURITY DEFINER` attribute in the analysed text, the guard finds no candidate and allows. This is the *normal* editing path; the hook's own Edit-coverage test passes a whole function as `new_string`, so it does not exercise it. The sweeps do still see the applied routine. |
+| ~~An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function~~ **Closed 2026-09-03 for supported Edit/MultiEdit paths.** | The hook now reconstructs the full post-edit migration with the shared CRLF-safe `edit-splice-lib.mjs` before running its unchanged analysis. Regression tests cover single Edit, MultiEdit, a benign edit, and an existing file-level exemption. This closes only the fragment-plumbing gap; every lexical, rebinding, naming, delegation, and unsupported-tool limit in this table remains. |
 | Cross-routine / cross-migration helpers | **Not covered — and there is no "fail-closed callable rule" in the running hook.** The analysis is intra-routine and single-file, and the active guard only considers a routine whose own body contains a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM`. A `SECURITY DEFINER` wrapper that accepts `p_performed_by` and delegates the write to a helper therefore has no literal DML in its body and is allowed — confirmed by running the real hook, which returned `allow`. Neither sweep predicate follows the helper call either. Any fail-closed callable handling belongs to **parked PR #449**; do not rely on it. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
 | **A migration written by any tool other than `Write`/`Edit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
@@ -968,7 +968,7 @@ three careful passes.
 
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
-- **For the incremental-Edit, novel-lexical and non-`Write`/`Edit` tool-path gaps** (rows 3, 5 and 6
+- **For the novel-lexical and non-`Write`/`Edit` tool-path gaps** (rows 5 and 6
   above): the exact-SHA `gpt-5.6-sol` proof on migration diffs and the CodeRabbit final review are the
   controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
   not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
@@ -978,10 +978,10 @@ three careful passes.
   clears both predicates without trying.** Do not describe any row here as requiring an attacker to clear
   all three controls.
 
-  Two of these three rows need no cleverness at all, which is the point of the cap: an ordinary incremental
-  `Edit` (row 3) and an ordinary shell-written migration (row 6) each bypass the *hook* with completely
-  unremarkable SQL. "Deliberately obfuscated SQL" describes the novel-lexical row only, and even there it
-  describes what defeats the hook, not what defeats the sweeps.
+  An ordinary shell-written migration (row 6) needs no cleverness at all. The ordinary incremental Edit
+  path (row 3) was comparably unremarkable before its narrow 2026-09-03 reconstruction fix. "Deliberately
+  obfuscated SQL" describes the novel-lexical row only, and even there it describes what defeats the hook,
+  not what defeats the sweeps.
 - **For cross-routine / cross-migration helpers** (row 4): **only the Codex proof and the CodeRabbit
   review.** Neither predicate can see this path. `actor-forgery.sql` needs actor/`auth.uid`/role proximity
   inside the *wrapper's own* `prosrc`, and `-fin-audit.sql` needs both the parameter and the

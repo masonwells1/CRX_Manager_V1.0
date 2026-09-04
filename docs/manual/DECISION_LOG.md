@@ -585,6 +585,12 @@ header, no parameter list and no `SECURITY DEFINER` attribute in the analysed te
 candidate and allows it. This is the normal editing path, not an exotic one; the hook's own Edit-coverage
 test passes a whole function as `new_string` and so does not exercise it.
 
+**2026-09-03 narrow maintenance update.** Mason prioritized the combined #575/#336 close-out after the
+PR-comment audit. The ordinary Edit plumbing gap above is now closed by reconstructing the full post-edit
+file with the repository's existing `edit-splice-lib.mjs`, including CRLF and MultiEdit regression proof.
+No actor-name, SQL-token, rebinding, delegation, or dataflow pattern was added. The capped best-effort
+status and the prohibition on another pattern-hardening round remain unchanged.
+
 **If this is ever revisited, rebuild rather than re-harden.** The only approach that removes the whole
 category is parsing with PostgreSQL's own grammar (`libpg_query`), which eliminates "spellings" entirely and
 turns the re-binding hole into a real assignment-target check. That is a scoped project with a dependency
