@@ -67,10 +67,17 @@ migrations." Recorded as follow-up, not a #535 blocker.
 
 Sol's read-only detection queries were run against live. Clean (0 rows): null-PO-total bypassing
 overage confirmation, negative/nonfinite cycle-count quantities, invalid commission money.
-**Not clean, and pre-dating this PR:** 19 `inventory` rows with negative `quantity_available`
-(all last touched 2026-07-02..2026-07-17, zero touched since the migrations went live), and PO
-item `e6559c38-4ae4-4899-b33c-a23e8900cec8` storing 227.5 received with no backing
-`receiving_records`. Both unowned.
+
+Two predicates did return rows — 19 `inventory` rows with negative `quantity_available` (all last
+touched 2026-07-02..2026-07-17, zero touched since the migrations went live), and PO item
+`e6559c38-4ae4-4899-b33c-a23e8900cec8` storing 227.5 received with no backing `receiving_records`.
+Neither was caused by this PR; both pre-date it. **Mason has since identified both as test data,
+not production defects** (relayed from another session; recorded as such rather than confirmed
+here). No action, and they are not a backlog item.
+
+Worth keeping from that exchange: row age and financial shape are not evidence that data is real.
+These rows read as genuine — aged, unexplained, financially shaped, provenance-checked — and none
+of that was decisive. Ask whether live rows are real data before describing them as a defect.
 
 Sol also confirmed the earlier absent-role rewrite is correct and complete across every visible
 arm, with no remaining `EXISTS(role) AND has_table_privilege('name', …)` shape.
