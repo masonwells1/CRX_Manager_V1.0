@@ -41,11 +41,23 @@ For each violation capture: file, line number, severity, and a one-line fix. **C
   already-dollar display value. Money INPUT uses `parseDollarsToCents` (positive) /
   `parseDollarsToCentsSigned` (the 3 vendor-bill callsites only) from `src/lib/parseCents.ts`.
   Since 2026-09-03 (PR #588) both helpers REFUSE more than two fractional digits by returning
-  `null`; a caller that saves or does arithmetic on the result without a `null` check, or that
-  coerces `null` to `0` (`?? 0`, `|| 0`), is a BLOCKER — `0` is a real saved value at most
-  callsites (no credit limit, cleared override, $0 prepay). Callers show `MONEY_PRECISION_MESSAGE`
-  and stop. Any OTHER money parsing path must still reject more than two fractional digits or
-  apply one explicit approved exact rounding rule before converting to integer cents.
+  `null`. On any **saved or authoritative** path — a value that is persisted, passed to an RPC, or
+  used to gate or compute a saved amount — a caller that saves or does arithmetic on the result
+  without a `null` check, or that coerces `null` to `0` (`?? 0`, `|| 0`), is a BLOCKER; `0` is a
+  real saved value at most callsites (no credit limit, cleared override, $0 prepay). Callers show
+  `MONEY_PRECISION_MESSAGE` and stop. Any OTHER money parsing path must still reject more than two
+  fractional digits or apply one explicit approved exact rounding rule before converting to
+  integer cents.
+- **NOT a violation — the display-only preview pair.** A preview value may coerce with `?? 0`, but
+  ONLY when you have checked BOTH halves in the file and can cite a line for each: (a) the coerced
+  value never reaches a save — not persisted, not passed to an RPC, not used to gate or compute a
+  saved amount; AND (b) the SAME field's save path refuses `null` **by name** with
+  `MONEY_PRECISION_MESSAGE` and returns before anything is sent. Known instance:
+  `src/pages/NewVendorBill.tsx:237` (its save path refuses at `:157-161`). If you cannot point at
+  the refusing lines, report it as a BLOCKER. The exception is that verified pair — never the
+  `?? 0` shape on its own, never a nearby comment claiming "display only", and never a preview
+  whose save path checks a *different* field. A preview that renders a wrong `0` while its save
+  path silently accepts the same input is the exact bug this CHECK exists to catch.
 
 ### CHECK 2 — Mutation result not checked  — HIGH
 - Any `supabase.from(...).update(...)` or `.delete(...)` whose result is not passed to `checkMutationResult(result, '<context>')` (imported from `../lib/db`).
