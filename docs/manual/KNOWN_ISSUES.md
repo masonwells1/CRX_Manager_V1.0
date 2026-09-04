@@ -1010,6 +1010,30 @@ A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-rec
 duplicates one of #449's fixes — delete it rather than continuing it.
 
 
+## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
+
+`chemLineBillingHazard` checks chemical rows whose rate and stock units differ by converting with
+JavaScript `Number` arithmetic before comparing the quantity and tolerance. PostgreSQL `save_job`
+uses exact `numeric` arithmetic, so a value extremely close to a converted-unit boundary can still be
+classified differently in the browser. The server remains the authoritative fail-closed check; the
+remaining risk is a misleading client refusal or a save that reaches the server and is then refused.
+Keep this separate from the equal-unit exact-decimal fix, and replace the converted-unit math with an
+exact rational/decimal conversion in a focused follow-up.
+
+
+## OPEN 2026-09-04 — Invalid job acreage still needs a server-side refusal
+
+An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
+`null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every
+nonblank non-finite or negative acreage at the top of `performSave`, including the
+expired-license override path, before saving state, payload work, or `save_job`. Intentional
+blank acreage retains its established payload meaning of zero. The live `save_job` function
+already refuses non-finite and negative field acreage before any write. The issue stays open
+because a missing acreage key or JSON-null acreage is still coalesced to zero; a separate forward
+migration must refuse those two cases authoritatively. The unrelated different-unit chemical
+conversion issue above also remains open.
+
+
 ## RESOLVED 2026-09-03 (code merged in PR #582, migration applied live 15:34 UTC as ledger version `20260903153402`) — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
 **Fix (2026-09-03).** The driver is now PERSISTED, exactly as the "clean fix" below asked
