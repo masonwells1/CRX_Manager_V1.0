@@ -594,18 +594,18 @@ compensating controls, and conflating them would overstate the defence:
 
 Note on (2): the incidental write-time coverage of `EXECUTE … USING` / `INSERT … RETURNING … INTO` — an
 unconditional `hasMutation` trigger rather than modelled taint — lives in **parked PR #449, not in the hook
-that is running**. The active `.claude/hooks/actor-binding-check.mjs` is 213 lines and contains no such
-trigger (PR #449's hardened rewrite is the ~3,000-line version referenced above), so today these forms are
-not caught at write time at all. Do not credit the running guard with them until #449 lands.
+that is running**. The active `.claude/hooks/actor-binding-check.mjs` contains no such trigger (PR #449's
+hardened rewrite is the much larger version referenced above), so today these forms are not caught at write
+time at all. Do not credit the running guard with them until #449 lands.
 
 Note on the tool path, which is wider than any residual listed above: the guard is registered under the
-matcher `"Write|Edit"` in **both** `.claude/settings.json` and `.codex/hooks.json`, so a migration created
-through Bash or PowerShell — `cat`, `tee`, a redirect, a generator script — is never presented to it, and
-`bash-safety.mjs` blocks only *modification* of an existing file under `supabase/migrations/`, not
+matcher `"Write|Edit|MultiEdit"` in **both** `.claude/settings.json` and `.codex/hooks.json`, so a migration
+created through Bash or PowerShell — `cat`, `tee`, a redirect, a generator script — is never presented to
+it, and `bash-safety.mjs` blocks only *modification* of an existing file under `supabase/migrations/`, not
 *creation* of a new one. Ordinary SQL bypasses the guard on tool choice alone. This is not a residual of the
 analysis; it is the analysis never running. The post-apply sweeps are unaffected — they read the live
 catalog and do not care which tool wrote the file. Any claim that this guard covers "every ordinary
-spelling" must be scoped to hooked `Write`/`Edit` calls.
+spelling" must be scoped to hooked `Write`/`Edit`/`MultiEdit` calls.
 
 Note on cross-routine delegation: a `SECURITY DEFINER` wrapper that accepts an actor parameter and
 delegates the write to a helper is allowed at write time — the guard only proceeds when the routine's own
@@ -614,13 +614,20 @@ either, because the wrapper carries neither predicate's cue in its own `prosrc` 
 the `has_function_privilege('authenticated', ...)` candidacy test. There is no fail-closed callable rule in
 the running hook; that belongs to parked PR #449.
 
-Note on the write path itself: the hook reads `tool_input.content || tool_input.new_string` and analyses that
-fragment alone — it does **not** reconstruct the full post-edit file the way `sql-safety.mjs`,
-`idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. An ordinary
-incremental `Edit` that inserts an unsafe write *inside* an existing function therefore carries no function
-header, no parameter list and no `SECURITY DEFINER` attribute in the analysed text, so the guard finds no
-candidate and allows it. This is the normal editing path, not an exotic one; the hook's own Edit-coverage
-test passes a whole function as `new_string` and so does not exercise it.
+Note on the write path itself, updated 2026-09-03: `Write` carries the full file; `Edit` and `MultiEdit`
+carry fragments. The hook now reconstructs the full post-edit file with `edit-splice-lib.mjs` before running
+its unchanged actor-pattern analysis. Before this maintenance, an ordinary incremental Edit that inserted
+an unsafe write inside an existing function carried no function header, parameter list, or `SECURITY
+DEFINER` attribute in the analyzed fragment and was allowed. That fragment-plumbing gap is closed for the
+supported Edit/MultiEdit paths; the lexical, rebinding, naming, delegation, and non-hooked-tool gaps remain.
+
+**2026-09-03 narrow maintenance update.** Mason prioritized the combined #575/#336 close-out after the
+PR-comment audit. The ordinary Edit plumbing gap above is now closed by reconstructing the full post-edit
+file with the repository's existing `edit-splice-lib.mjs`, including CRLF and MultiEdit regression proof.
+Both hook manifests now route `MultiEdit`, and a routing-level test proves that the real Claude and Codex
+MultiEdit paths reach `actor-binding-check.mjs` rather than only exercising the script directly.
+No actor-name, SQL-token, rebinding, delegation, or dataflow pattern was added. The capped best-effort
+status and the prohibition on another pattern-hardening round remain unchanged.
 
 **If this is ever revisited, rebuild rather than re-harden.** The only approach that removes the whole
 category is parsing with PostgreSQL's own grammar (`libpg_query`), which eliminates "spellings" entirely and

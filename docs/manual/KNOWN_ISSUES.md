@@ -956,31 +956,34 @@ straight into `financial_audit_log` with no binding check (Gauntlet Section 1 HI
 `20260617171500`).
 
 `.claude/hooks/actor-binding-check.mjs` is the **write-time** half of that defence — it inspects a migration
-before it is written, so a forgery is refused rather than detected after it ships. **Scope that claim
-precisely: it inspects `Write` and `Edit` tool calls only.** Both manifests register it under the matcher
-`"Write|Edit"` (`.claude/settings.json`, `.codex/hooks.json`), so a migration authored any other way is
-never presented to it (row 6). The sweep predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are
-the **post-apply** half, run against the live catalog, and are indifferent to how the file was written.
+before a supported file-editing tool call is allowed, so a forgery can be refused rather than detected only
+after it ships. **Scope that claim precisely: it is routed for `Write`, `Edit`, and `MultiEdit` tool calls
+only.** Both manifests register it under the matcher `"Write|Edit|MultiEdit"` (`.claude/settings.json`,
+`.codex/hooks.json`), so a migration authored any other way is never presented to it (row 6). The sweep
+predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are the **post-apply** half, run against the
+live catalog, and are indifferent to how the file was written.
 
 **Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. The
-**active** hook is the unchanged 213-line guard: it catches ordinary spellings *of a whole-function write*
-and nothing more. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels closed over
-two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of that is in the
-running hook**, and this PR does not change it. Do not credit the active guard with #449's fixes. It is
-**not** a boundary, and no document should describe it as preventing actor forgery. Note in particular that
-the ordinary *incremental* edit path is not covered at all (row 3 below), so "catches every ordinary
-spelling" would overstate even the active guard.
+**active** hook remains the capped guard: its actor-pattern analysis catches ordinary spellings in full-file
+content, while the narrow 2026-09-03 maintenance reconstructs supported Edit/MultiEdit calls before running
+that unchanged analysis. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels
+closed over two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of
+that is in the running hook**, and this maintenance does not import it. Do not credit the active guard with
+the fixes in PR #449. It is
+**not** a boundary, and no document should describe it as preventing actor forgery. The ordinary
+*incremental* edit path was not covered when this issue was recorded; the narrow 2026-09-03 maintenance
+change now reconstructs full post-edit files without changing the capped actor-analysis patterns.
 
-**What it does NOT catch, stated so nobody re-derives it:**
+**What it does NOT catch, plus the one closed plumbing gap, stated so nobody re-derives it:**
 
 | Gap | Why it is open |
 |---|---|
 | Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
-| Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** (213 lines, no such logic) — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
-| An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function | The hook analyses `tool_input.content \|\| tool_input.new_string` — the fragment alone. It does **not** reconstruct the full post-edit file the way `sql-safety.mjs`, `idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. With no function header, parameter list or `SECURITY DEFINER` attribute in the analysed text, the guard finds no candidate and allows. This is the *normal* editing path; the hook's own Edit-coverage test passes a whole function as `new_string`, so it does not exercise it. The sweeps do still see the applied routine. |
+| Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
+| ~~An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function~~ **Closed 2026-09-03 for supported Edit/MultiEdit paths.** | The hook now reconstructs the full post-edit migration with the shared CRLF-safe `edit-splice-lib.mjs` before running its unchanged analysis. Regression tests cover single Edit, MultiEdit, a benign edit, and an existing file-level exemption. This closes only the fragment-plumbing gap; every lexical, rebinding, naming, delegation, and unsupported-tool limit in this table remains. |
 | Cross-routine / cross-migration helpers | **Not covered — and there is no "fail-closed callable rule" in the running hook.** The analysis is intra-routine and single-file, and the active guard only considers a routine whose own body contains a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM`. A `SECURITY DEFINER` wrapper that accepts `p_performed_by` and delegates the write to a helper therefore has no literal DML in its body and is allowed — confirmed by running the real hook, which returned `allow`. Neither sweep predicate follows the helper call either. Any fail-closed callable handling belongs to **parked PR #449**; do not rely on it. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
-| **A migration written by any tool other than `Write`/`Edit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
+| **A migration written by any tool other than hooked `Write`/`Edit`/`MultiEdit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit\|MultiEdit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
 
 **The finding that settled the cap.** PostgreSQL needs no whitespace before a quoted identifier, so
 `CREATE OR REPLACE FUNCTION"public"."f"(` is valid SQL that the guard **never matched** — the security check
@@ -989,7 +992,7 @@ three careful passes.
 
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
-- **For the incremental-Edit, novel-lexical and non-`Write`/`Edit` tool-path gaps** (rows 3, 5 and 6
+- **For the novel-lexical and non-hooked tool-path gaps** (rows 5 and 6
   above): the exact-SHA `gpt-5.6-sol` proof on migration diffs and the CodeRabbit final review are the
   controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
   not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
@@ -999,10 +1002,10 @@ three careful passes.
   clears both predicates without trying.** Do not describe any row here as requiring an attacker to clear
   all three controls.
 
-  Two of these three rows need no cleverness at all, which is the point of the cap: an ordinary incremental
-  `Edit` (row 3) and an ordinary shell-written migration (row 6) each bypass the *hook* with completely
-  unremarkable SQL. "Deliberately obfuscated SQL" describes the novel-lexical row only, and even there it
-  describes what defeats the hook, not what defeats the sweeps.
+  An ordinary shell-written migration (row 6) needs no cleverness at all. The ordinary incremental Edit
+  path (row 3) was comparably unremarkable before its narrow 2026-09-03 reconstruction fix. "Deliberately
+  obfuscated SQL" describes the novel-lexical row only, and even there it describes what defeats the hook,
+  not what defeats the sweeps.
 - **For cross-routine / cross-migration helpers** (row 4): **only the Codex proof and the CodeRabbit
   review.** Neither predicate can see this path. `actor-forgery.sql` needs actor/`auth.uid`/role proximity
   inside the *wrapper's own* `prosrc`, and `-fin-audit.sql` needs both the parameter and the
@@ -1028,7 +1031,31 @@ A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-rec
 duplicates one of #449's fixes — delete it rather than continuing it.
 
 
-## FIXED IN CODE 2026-09-03, MIGRATION PENDING LIVE APPLY — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
+## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
+
+`chemLineBillingHazard` checks chemical rows whose rate and stock units differ by converting with
+JavaScript `Number` arithmetic before comparing the quantity and tolerance. PostgreSQL `save_job`
+uses exact `numeric` arithmetic, so a value extremely close to a converted-unit boundary can still be
+classified differently in the browser. The server remains the authoritative fail-closed check; the
+remaining risk is a misleading client refusal or a save that reaches the server and is then refused.
+Keep this separate from the equal-unit exact-decimal fix, and replace the converted-unit math with an
+exact rational/decimal conversion in a focused follow-up.
+
+
+## OPEN 2026-09-04 — Invalid job acreage still needs a server-side refusal
+
+An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
+`null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every
+nonblank non-finite or negative acreage at the top of `performSave`, including the
+expired-license override path, before saving state, payload work, or `save_job`. Intentional
+blank acreage retains its established payload meaning of zero. The live `save_job` function
+already refuses non-finite and negative field acreage before any write. The issue stays open
+because a missing acreage key or JSON-null acreage is still coalesced to zero; a separate forward
+migration must refuse those two cases authoritatively. The unrelated different-unit chemical
+conversion issue above also remains open.
+
+
+## RESOLVED 2026-09-03 (code merged in PR #582, migration applied live 15:34 UTC as ledger version `20260903153402`) — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
 **Fix (2026-09-03).** The driver is now PERSISTED, exactly as the "clean fix" below asked
 for. Migration `20260903150000_job_chemicals_persist_driver.sql` adds nullable
@@ -1044,10 +1071,14 @@ paths write — are still left exactly as saved; instead, `chemRowDefects` now m
 `CHEM_QUANTITY_ZERO_BUT_EXPECTED` per line, so the disagreement is shown on the row and the
 save is refused in the browser rather than rolling back at the server. Container proof
 (`scripts/smoke/prove-save-job-persist-driver.mjs`: T1–T66 + D1–D8, 13 mutants) and browser
-proof are recorded in `docs/changelog.d/2026-09-03-f06-job-chemicals-driver.md`. **Until the
-migration is applied live, the on-screen mirror is the whole fix in production** and every
-line still reloads as driver-unknown. The heuristic recovery below stays reverted. The
-original entry is kept as the diagnosis.
+proof are recorded in `docs/changelog.d/2026-09-03-f06-job-chemicals-driver.md`. **The
+migration was applied live on 2026-09-03 at 15:34 UTC** (ledger version `20260903153402`,
+verified by SELECT afterwards: `driver` nullable text with no default, the exact CHECK, `save_job`
+md5 `18d08d5f40aea91fe13ac3e5a686c549` with the v3 marker; apply evidence in
+`docs/changelog.d/2026-09-03-f06-migration-applied-live.md`). From that moment every save records
+the typed side; the 4 rows saved before the apply keep a NULL driver until they are re-typed, and
+the on-screen mirror covers them. The heuristic recovery below stays reverted. The original entry
+is kept as the diagnosis.
 
 **Plain English.** Open a saved job, change the acres, and a chemical line keeps both numbers it was
 saved with. A line saved as **1.5 pt/ac, quantity 150, over 100 acres** still reads 1.5 and 150 at
@@ -3697,7 +3728,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 - **Proof-file self-attestation** — the migration-apply and Codex-push proof JSONs can be written by the same agent that should be gated by them; nothing binds the proof to an actual reviewer run. Partial raise-the-bar option: have the reviewer subagents write the proof themselves. Full closure impractical (accepted residual for a malicious agent; the fix targets honest confusion). The 2026-07-13 hands-free additions (content-bound `codex-review-mig-<name>.json` Codex proof, exact `queryHash` binding on both proofs, required `reviewers` array naming both reviewer subagents, and timestamp freshness bounded to [0, 30 min] so future-dated stamps fail) raise the honest-mistake bar further but remain self-attestable by a deliberately dishonest agent — same accepted residual. Likewise the destructive-SQL classifier is a lexical scanner, not a SQL parser: it is quote-aware and default-keep (five adversarial Codex rounds closed the comment/literal/dollar-quote hiding tricks), but a genuinely novel obfuscation could still slip it — the classifier's job is stopping honest mistakes, and its false positives merely park a migration for the morning.
 - **Migration source provenance closes the quiet path, not the loud one** (added 2026-08-31, from CodeRabbit's Major on PR #525). The apply gate now refuses SQL that is not the exact content of `<checkout>/supabase/migrations/<name>.sql` — an allowlist naming the one permitted directory, so parked drafts, `.REJECTED` files in any spelling, scratch copies and text that was never a file all fail by construction rather than by enumeration. What it does **not** stop: an agent that copies a parked file **into** `supabase/migrations/` and applies it from there. Provenance then passes, and the reviewer + Codex proofs are still required. That is the deliberate boundary — the rule forces a tracked, diffable, reviewable file move instead of a pasted body that leaves no trace on disk, which is the same honest-mistake threat model as the proof self-attestation residual above. Scope is session-local (this checkout and the primary one, never a sibling worktree), matching the reviewer-proof lookup. Do **not** "fix" the residual by adding a blocklist of rejected suffixes or parked directories: the allowlist already covers every location, and a suffix list reopens each round — see the 2026-08-31 `bash-safety-lib` entry above (eight holes across five rounds) and the 2026-08-25/26 `DECISION_LOG` entries on closed allowlists.
 - **New live-sweep predicates worth writing** (scripts/db-invariant-sweeps/): a `concurrency-hotspot` predicate asserting the named race-prone functions (inventory reservations, prebook, number sequences, balances) contain `FOR UPDATE`/advisory locks; ~~an `audit-log-completeness` predicate asserting each allowlisted money-mutator RPC writes `financial_audit_log`~~ (**BUILT 2026-08-07** — `predicates/audit-log-completeness.sql`, 0 rows live, non-vacuous over 39 money-mutating SECDEF functions); more `fin-*` arithmetic identities per derived-value family — **PARTIALLY BUILT 2026-08-07**: `fin-vendor-bill-balance-identity.sql` (0 rows live) and `fin-po-receipt-identity.sql` (22 March-2026 import-era violations **accepted-and-baselined by Mason 2026-08-07** — each allowlisted per-key with live figures recorded; sweep nets to 0 and any NEW violation still fails); order/quote `total_profit`, `net_margin_pct`, per-line commissions still unwritten.
-- ~~**Write-time forgeable-actor hook**~~ — **BUILT 2026-08-07** as `.claude/hooks/actor-binding-check.mjs` (+ test, wired in `.claude/settings.json` and `.codex/hooks.json`): PreToolUse Write|Edit hook flagging SECDEF migration functions with `p_performed_by`/`p_actor%`/`p_user%` params lacking `ACTOR_MISMATCH` binding, at write time instead of post-write sweeps.
+- ~~**Write-time forgeable-actor hook**~~ — **BUILT 2026-08-07** as `.claude/hooks/actor-binding-check.mjs` (+ test, wired in `.claude/settings.json` and `.codex/hooks.json`): PreToolUse Write|Edit hook flagging SECDEF migration functions with `p_performed_by`/`p_actor%`/`p_user%` params lacking `ACTOR_MISMATCH` binding, at write time instead of post-write sweeps. **2026-09-03 maintenance:** routing now also includes MultiEdit and reconstructs full post-edit content before running the same capped analysis.
 - **Edge Functions are exempt from the assert/check ESLint rules** (Deno) and the coverage ratchet's scope leaves ~130 legacy Supabase reads unchecked — known accepted gaps.
 - **Invoice-type leaks and direct-URL edit-lock bypasses** (lifecycle class) have no static guard — stays reviewer-checklist territory (`compliance-reviewer`).
 - **Shell string-reconstruction bypasses** of the Bash regex guards (quote-splitting, variable substitution) — accepted residual under the honest-mistake threat model; keep widening regexes as concrete shapes appear.
