@@ -948,7 +948,7 @@ content, while the narrow 2026-09-03 maintenance reconstructs supported Edit/Mul
 that unchanged analysis. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels
 closed over two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of
 that is in the running hook**, and this maintenance does not import it. Do not credit the active guard with
-#449's fixes. It is
+the fixes in PR #449. It is
 **not** a boundary, and no document should describe it as preventing actor forgery. The ordinary
 *incremental* edit path was not covered when this issue was recorded; the narrow 2026-09-03 maintenance
 change now reconstructs full post-edit files without changing the capped actor-analysis patterns.

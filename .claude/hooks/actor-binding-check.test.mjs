@@ -143,6 +143,7 @@ try {
     old_string: harmlessBody,
     new_string: "PERFORM 2;",
   });
+  eq(r.status, 0, "benign partial Edit hook exits 0");
   ok(!isDeny(r), "benign partial Edit remains allowed");
 
   writeFileSync(editFixturePath, `-- actor-binding-check: exempt\r\n${fn(harmlessBody).replace(/\n/g, "\r\n")}`);
@@ -151,6 +152,7 @@ try {
     old_string: harmlessBody,
     new_string: MUTATION,
   });
+  eq(r.status, 0, "exempt partial Edit hook exits 0");
   ok(!isDeny(r), "existing file-level exemption remains visible during a partial Edit");
 } finally {
   rmSync(editFixtureRoot, { recursive: true, force: true });
