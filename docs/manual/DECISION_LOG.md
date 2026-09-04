@@ -7,6 +7,17 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-04 — stop final-mode tracking across routine identity changes in PR #449
+
+**Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory
+replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** A later `SECURITY INVOKER` or search-path ALTER cannot clear or rewrite earlier
+definer evidence when intervening routine/schema rename, move, or drop DDL breaks textual identity.
+
+**Boundary.** The guard records bounded identity-break statement positions and fails closed across
+them; it does not model the full catalog lifecycle. The broader actor-analysis cap remains unchanged.
+
 ## 2026-09-04 — preserve quoted actor-parameter identity in PR #449; keep the broader cap
 
 **Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory

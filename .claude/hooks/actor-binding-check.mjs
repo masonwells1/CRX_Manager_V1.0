@@ -3067,6 +3067,32 @@ function hasRollbackCapableTransactionControl(structuralSql) {
   return /(?:^|;)\s*(?:ROLLBACK|ABORT)\b/i.test(String(structuralSql || ""));
 }
 
+/** A later ALTER ... SECURITY INVOKER can demote an earlier definer body only
+ * while the routine's textual identity remains stable. Renaming or moving a
+ * routine/schema, or dropping a routine/schema, can make the same old name
+ * resolve to a replacement while the original definer survives elsewhere.
+ * Track the bounded DDL statement indexes and refuse to carry a demotion or
+ * search-path update across any such identity break. This is deliberately
+ * conservative across unrelated identity DDL; the capped guard does not try
+ * to reconstruct PostgreSQL's full catalog-name lifecycle. */
+function routineIdentityChangeIndexes(structuralSql) {
+  const indexes = [];
+  const identityChange = new RegExp(
+    `\\b(?:` +
+      `ALTER\\s+(?:FUNCTION|PROCEDURE|ROUTINE)\\b[^;]*?\\b(?:RENAME\\s+TO|SET\\s+SCHEMA)\\b|` +
+      `DROP\\s+(?:FUNCTION|PROCEDURE|ROUTINE)\\b|` +
+      `ALTER\\s+SCHEMA\\b[^;]*?\\bRENAME\\s+TO\\b|` +
+      `DROP\\s+SCHEMA\\b` +
+    `)`,
+    "gi"
+  );
+  let match;
+  while ((match = identityChange.exec(String(structuralSql || ""))) !== null) {
+    indexes.push(match.index);
+  }
+  return indexes;
+}
+
 function routineNamesMayMatch(left, right) {
   // A SECURITY mode change may reduce risk only when both sides identify the
   // same schema-qualified routine. PostgreSQL search_path makes unqualified
@@ -3205,6 +3231,9 @@ try {
       topLevelRoutineAlterationIndexes.has(altered.index));
   const hasRollbackControl = masked !== null &&
     hasRollbackCapableTransactionControl(masked);
+  const identityChangeIndexes = masked === null
+    ? []
+    : routineIdentityChangeIndexes(masked);
   const createdRoutines = [];
   if (masked !== null && hasExecuteSqlReadonlyOperatorAlias(masked)) {
     violations.push(
@@ -3439,10 +3468,14 @@ try {
     // The mode may be attached later through ALTER FUNCTION/PROCEDURE/ROUTINE, so evaluate
     // the final same-file mode rather than trusting CREATE attributes alone.
     const laterSecurityModes = alteredSecurityModes.filter((altered) =>
-      altered.index > head.index && routineAlterMatchesCreate(createdRoutine, altered)
+      altered.index > head.index &&
+      routineAlterMatchesCreate(createdRoutine, altered) &&
+      !identityChangeIndexes.some((index) => index > head.index && index < altered.index)
     );
     const laterSearchPathChanges = alteredSearchPaths.filter((altered) =>
-      altered.index > head.index && routineAlterMatchesCreate(createdRoutine, altered)
+      altered.index > head.index &&
+      routineAlterMatchesCreate(createdRoutine, altered) &&
+      !identityChangeIndexes.some((index) => index > head.index && index < altered.index)
     );
     const finalAlteredMode = laterSecurityModes.findLast((altered) =>
       !hasRollbackControl || altered.mode !== "INVOKER"

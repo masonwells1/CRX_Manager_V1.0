@@ -3401,6 +3401,40 @@ r = runHook(
 ok(!isDeny(r), "ALTER FUNCTION SECURITY INVOKER overrides an earlier CREATE SECURITY DEFINER mode");
 
 r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")
+    .replace("public.test_fn", "public.actor_f") +
+  "\nALTER FUNCTION public.actor_f(uuid) RENAME TO actor_f_old;\n" +
+  fn("BEGIN RETURN NULL; END;", "p_actor uuid", "SECURITY INVOKER")
+    .replace("public.test_fn", "public.actor_f") +
+  "\nALTER FUNCTION public.actor_f(uuid) SECURITY INVOKER;"
+);
+ok(isDeny(r), "a renamed definer cannot be cleared by demoting a replacement at its old identity");
+
+for (const [label, identityChange] of [
+  ["routine SET SCHEMA", "ALTER FUNCTION public.actor_f(uuid) SET SCHEMA archive;"],
+  ["routine DROP", "DROP FUNCTION public.actor_f(uuid);"],
+  ["schema rename", "ALTER SCHEMA public RENAME TO public_archive;"],
+]) {
+  r = runHook(
+    fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")
+      .replace("public.test_fn", "public.actor_f") +
+    `\n${identityChange}\n` +
+    fn("BEGIN RETURN NULL; END;", "p_actor uuid", "SECURITY INVOKER")
+      .replace("public.test_fn", "public.actor_f") +
+    "\nALTER FUNCTION public.actor_f(uuid) SECURITY INVOKER;"
+  );
+  ok(isDeny(r), `${label} prevents a replacement demotion from clearing earlier definer evidence`);
+}
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")
+    .replace("public.test_fn", "public.documented_demotion") +
+  "\nSELECT 'ALTER FUNCTION public.documented_demotion(uuid) RENAME TO archived';\n" +
+  "ALTER FUNCTION public.documented_demotion(uuid) SECURITY INVOKER;"
+);
+ok(!isDeny(r), "identity-changing DDL mentioned only as string data does not block a real demotion");
+
+r = runHook(
   fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "conditionally_demoted") +
   `\nCREATE OR REPLACE PROCEDURE public.defer_invoker_demotion()
 LANGUAGE SQL

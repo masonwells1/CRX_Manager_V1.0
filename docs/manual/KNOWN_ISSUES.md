@@ -1000,6 +1000,13 @@ a refusal for `p_actor` or a same-named trusted local cannot validate a separate
 Unicode-escaped and non-ASCII quoted actor inputs remain positional-only; this does not widen the
 actor-name grammar or the broader capped posture.
 
+**Routine identity-lifecycle narrowing (authorized 2026-09-04).** A later invoker or search-path
+ALTER is not applied backward across intervening routine/schema rename, move, or drop DDL. Those
+statements can leave the original definer at a new identity while a replacement occupies its old
+name, so the hook keeps evaluating the earlier body instead of treating the replacement's ALTER as
+a demotion. This is bounded fail-closed tracking, not a PostgreSQL catalog-lifecycle model, and the
+broader capped posture remains unchanged.
+
 **What it does NOT catch, plus the one closed plumbing gap, stated so nobody re-derives it:**
 
 | Gap | Why it is open |
