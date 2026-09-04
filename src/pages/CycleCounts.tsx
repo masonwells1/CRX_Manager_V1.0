@@ -277,9 +277,24 @@ export default function CycleCounts() {
       .select('item_revision')
       .eq('id', count.id)
       .single();
+    // The ref is seeded HERE too, not just activeCount. It outranks state when
+    // completion reads the reviewed baseline, so an entry left over from an earlier
+    // visit to this same count would survive a reopen and outrank the revision just
+    // loaded from the server — reporting a change the operator is already looking at.
+    // Every place that establishes a reviewed baseline has to move BOTH, or the one
+    // that is read silently wins with the older value.
     if (revisionError) {
       Sentry.captureException(revisionError);
+      // Could not confirm a revision: drop any stale entry rather than let an
+      // unconfirmed leftover outrank the row actually loaded. The read then falls
+      // back to activeCount, which the fail-closed check downstream already handles.
+      latestItemRevisionRef.current.delete(count.id);
     } else if (typeof revisionRow?.item_revision === 'number') {
+      // Deliberately overwrites a newer value an in-flight write may have just
+      // recorded. That is the same fail-safe ordering the comment above describes for
+      // activeCount: seeding the OLDER revision makes completion warn rather than
+      // silently adopt a change the operator has not seen.
+      latestItemRevisionRef.current.set(count.id, revisionRow.item_revision);
       setActiveCount((previousCount) =>
         previousCount && previousCount.id === count.id
           ? { ...previousCount, item_revision: revisionRow.item_revision }
@@ -500,16 +515,18 @@ export default function CycleCounts() {
         ? { ...previousCount, item_revision: countState.item_revision }
         : previousCount
     );
-    // Advance the ref WITH the state it takes precedence over. Because the read above
-    // prefers the ref, leaving it behind here pinned this client to a superseded
-    // revision permanently: after another client's edit the refresh adopts the new
-    // revision into state, but every later click kept reading the old one from the
-    // ref and repeated the same mismatch — completion wedged until a reload or
-    // another local write, which is strictly worse than the one extra click this ref
-    // was added to remove. The invariant the comment below relies on ("the next click
-    // matches, because the reviewed baseline has advanced") only holds if BOTH
-    // baselines advance together. Found by Codex on 1973add81.
+    // Advance the ref WITH the state it takes precedence over. Kept adjacent to the
+    // setActiveCount above on purpose: the two are one operation, and separating them
+    // is exactly how this went wrong.
     latestItemRevisionRef.current.set(activeCount.id, countState.item_revision);
+    // Why it matters: because the completion read prefers the ref, leaving it behind
+    // here pinned this client to a superseded revision permanently. After another
+    // client's edit the refresh adopts the new revision into state, but every later
+    // click kept reading the old one from the ref and repeated the same mismatch —
+    // completion wedged until a reload or another local write, strictly worse than the
+    // one extra click this ref was added to remove. The invariant the comment below
+    // relies on ("the next click matches, because the reviewed baseline has advanced")
+    // only holds if BOTH baselines advance together. Found by Codex on 1973add81.
 
     // p_expected_item_revision fails closed only for a change that lands DURING
     // completion. A change that landed BEFORE the click would otherwise be

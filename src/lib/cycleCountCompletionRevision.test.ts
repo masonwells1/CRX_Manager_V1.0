@@ -166,6 +166,45 @@ describe('cycle count completion revision contract', () => {
   // The pairing therefore has THREE members, not two: write on local save, ADVANCE on
   // remote adoption, read at completion. Pinning only the first and last is satisfied
   // by the wedge.
+  // THE INVARIANT, not a list of the three sites that have bitten so far.
+  //
+  // `latestItemRevisionRef` OUTRANKS `activeCount` when completion reads the reviewed
+  // baseline, so any place that establishes a baseline in state and not in the ref
+  // lets a superseded value silently win. Three separate rounds of review each found
+  // one more such place — local save, remote refresh, reopen — because the earlier
+  // tests pinned the sites found so far instead of the rule. Pin the rule: every
+  // assignment of an authoritative `item_revision` into `activeCount` must carry a
+  // `latestItemRevisionRef` mutation with it.
+  it('moves the ref at EVERY site that establishes a reviewed baseline', () => {
+    const lines = page.split('\n');
+    const baselineSites = lines
+      .map((line, i) => ({ line, i }))
+      .filter(({ line }) => /item_revision:\s*\w+\.item_revision/.test(line));
+
+    // The guard must have work to do; a regex that matches nothing always passes.
+    expect(baselineSites.length).toBeGreaterThanOrEqual(3);
+
+    // The paired ref write must carry the SAME revision expression as the baseline it
+    // shadows. An earlier version accepted any nearby ref mutation, and a
+    // `latestItemRevisionRef.current.delete(...)` in the sibling error branch of
+    // openDetail sat inside the window and satisfied the check — deleting the real
+    // seed then went undetected under mutation. Matching the expression is what makes
+    // this a pairing check rather than a proximity check.
+    const unpaired = baselineSites
+      // Adjacency window, deliberately narrow: wide enough to span the rest of a
+      // setActiveCount updater plus a short comment, far too narrow to be satisfied by
+      // an unrelated ref mutation elsewhere in the function.
+      .filter(({ line, i }) => {
+        const source = /item_revision:\s*(\w+\.item_revision)/.exec(line)?.[1];
+        if (!source) return true;
+        return !lines.slice(Math.max(0, i - 12), i + 10)
+          .some((l) => l.includes('latestItemRevisionRef.current.set') && l.includes(source));
+      })
+      .map(({ line, i }) => `${i + 1}: ${line.trim()}`);
+
+    expect(unpaired).toEqual([]);
+  });
+
   it('advances the revision ref wherever it adopts an authoritative revision', () => {
     expect(page).toContain('latestItemRevisionRef.current.set(activeCount.id, countState.item_revision)');
     // Must sit with the state adoption it shadows: adopting into state while leaving
