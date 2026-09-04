@@ -2718,6 +2718,19 @@ function readBalancedParens(text, openIdx) {
   return null;
 }
 
+/** Recover the exact identifier immediately before a matched parameter-list
+ * opener. The structural mask is length-preserving but deliberately blanks
+ * quoted identifier contents, so it is safe for syntax discovery and unsafe
+ * for routine identity. Slice the same span from the original source before
+ * normalizing CREATE/ALTER identities. */
+function exactIdentifierBeforeOpenParen(structuralSql, sourceSql, capturedIdentifier, openIdx) {
+  let end = openIdx;
+  while (end > 0 && /\s/.test(structuralSql[end - 1])) end--;
+  const start = end - String(capturedIdentifier || "").length;
+  if (start < 0 || structuralSql.slice(start, end) !== capturedIdentifier) return null;
+  return sourceSql.slice(start, end);
+}
+
 /** From just past the parameter list, return every function attribute and the
  * exact indexes for the AS $tag$...$tag$ body. PostgreSQL permits attributes
  * such as SECURITY DEFINER both before and after the body, so the post-body
@@ -2782,7 +2795,7 @@ function readAttrsAndBody(text, fromIdx) {
  * and therefore cannot prove that a top-level CREATE finished as INVOKER.
  * PostgreSQL applies the last executed mode after CREATE, so looking only at
  * the CREATE attributes would still misclassify a real top-level demotion. */
-function alteredRoutineSecurityModes(structuralSql) {
+function alteredRoutineSecurityModes(structuralSql, sourceSql = structuralSql) {
   const altered = [];
   const head = new RegExp(
     `\\bALTER\\s+(?:FUNCTION|PROCEDURE|ROUTINE)${SQL_KEYWORD_IDENTIFIER_GAP}` +
@@ -2798,6 +2811,9 @@ function alteredRoutineSecurityModes(structuralSql) {
       altered.push({ name: null, signature: null, mode: "DEFINER", index: match.index });
       break;
     }
+    const exactName = exactIdentifierBeforeOpenParen(
+      structuralSql, sourceSql, match[1], paramsOpen
+    );
     const terminator = structuralSql.indexOf(";", parsed.end);
     const statementEnd = terminator === -1 ? structuralSql.length : terminator;
     const actionList = structuralSql.slice(parsed.end, statementEnd);
@@ -2807,8 +2823,10 @@ function alteredRoutineSecurityModes(structuralSql) {
     while ((securityMode = securityModeRe.exec(actionList)) !== null) mode = securityMode;
     if (mode !== null) {
       altered.push({
-        name: normalizedQualifiedIdentifier(match[1]),
-        signature: normalizedRoutineIdentityArgs(parsed.params, false),
+        name: exactName === null ? null : normalizedQualifiedIdentifier(exactName),
+        signature: normalizedRoutineIdentityArgs(
+          blankComments(sourceSql.slice(paramsOpen + 1, parsed.end - 1)), false
+        ),
         mode: mode[1].toUpperCase(),
         index: match.index,
       });
@@ -2936,10 +2954,10 @@ try {
   );
   const executableSecurityModes = masked === null
     ? []
-    : alteredRoutineSecurityModes(masked);
+    : alteredRoutineSecurityModes(masked, content);
   const topLevelSecurityModeIndexes = new Set((callNameMasked === null
     ? []
-    : alteredRoutineSecurityModes(callNameMasked)
+    : alteredRoutineSecurityModes(callNameMasked, content)
   ).map(({ index }) => index));
   // Any readable DEFINER elevation is dangerous, including dynamic SQL. An
   // INVOKER demotion is trusted only when it is top-level and executes as part
@@ -3132,9 +3150,14 @@ try {
   let head;
   while (masked !== null && (head = routineHeadRe.exec(masked)) !== null) {
     const routineKind = head[1].toUpperCase();
-    const routineName = head[2];
-    const normalizedRoutineName = normalizedQualifiedIdentifier(routineName);
     const paramsOpen = routineHeadRe.lastIndex - 1;
+    const exactRoutineName = exactIdentifierBeforeOpenParen(
+      masked, content, head[2], paramsOpen
+    );
+    const routineName = exactRoutineName ?? head[2];
+    const normalizedRoutineName = exactRoutineName === null
+      ? null
+      : normalizedQualifiedIdentifier(exactRoutineName);
     const parsed = readBalancedParens(masked, paramsOpen);
     if (!parsed) {
       violations.push(

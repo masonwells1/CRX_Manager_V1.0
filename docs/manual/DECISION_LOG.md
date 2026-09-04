@@ -7,6 +7,19 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — preserve exact quoted routine identities in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** PR #449 must compare `CREATE` and `ALTER FUNCTION`/`PROCEDURE` identities using the
+exact quoted schema and routine names from source, not the syntax mask that blanks quoted contents.
+Distinct equal-length quoted names must never share a later `SECURITY INVOKER` demotion.
+
+**Boundary.** This repairs identity matching only. It does not add catalog resolution, infer
+`search_path` for unqualified names, decode Unicode-escaped identifiers, or widen the actor-name and
+cross-routine dataflow cap. Those ambiguous forms continue to fail closed or require manual review.
+
 ## 2026-09-03 — authorize exact-review `VALUES … INTO` target repair in PR #449; keep the broader cap
 
 **Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied

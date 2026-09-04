@@ -3110,6 +3110,26 @@ r = runHook(
 ok(isDeny(r), "an unrelated cross-schema invoker ALTER cannot demote an unbound SECURITY DEFINER mutator");
 
 r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")
+    .replace("public.test_fn", 'public."evilone"') +
+  "\n" +
+  fn("NULL;", "p_actor_id uuid", "SECURITY INVOKER")
+    .replace("public.test_fn", 'public."safeone"') +
+  '\nALTER FUNCTION public."safeone"(uuid) SECURITY INVOKER;'
+);
+ok(isDeny(r), "equal-length quoted routine names cannot collapse into one ALTER identity");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")
+    .replace("public.test_fn", '"evilone".shared_name') +
+  "\n" +
+  fn("NULL;", "p_actor_id uuid", "SECURITY INVOKER")
+    .replace("public.test_fn", '"safeone".shared_name') +
+  '\nALTER FUNCTION "safeone".shared_name(uuid) SECURITY INVOKER;'
+);
+ok(isDeny(r), "equal-length quoted schema names cannot collapse into one ALTER identity");
+
+r = runHook(
   fn("NULL;", "p_actor_id uuid", "SECURITY INVOKER")
     .replace("public.test_fn", "public.shared_name") +
   "\nALTER FUNCTION private.shared_name(uuid) SECURITY DEFINER;"
