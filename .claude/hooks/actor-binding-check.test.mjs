@@ -2090,6 +2090,66 @@ CREATE OPERATOR public.= (
   FUNCTION = public.shadowed_catalog_uuid_eq
 );`;
 
+const SEARCH_PATH_OPERATOR_SETUP = `CREATE SCHEMA evil;
+CREATE FUNCTION evil.always_true(pg_catalog.uuid, pg_catalog.uuid)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $eq$SELECT true$eq$;
+CREATE OPERATOR evil.= (
+  LEFTARG = pg_catalog.uuid,
+  RIGHTARG = pg_catalog.uuid,
+  FUNCTION = evil.always_true
+);`;
+
+function searchPathActorRoutine(name, searchPath = "public, pg_temp") {
+  return `CREATE FUNCTION public.${name}(p_actor pg_catalog.uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ${searchPath} AS $body$
+BEGIN
+  IF p_actor IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO public.financial_audit_log(actor_user_id) VALUES (p_actor);
+END
+$body$;`;
+}
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("altered_path_actor")}
+ALTER FUNCTION public.altered_path_actor(pg_catalog.uuid)
+  SET search_path = evil, pg_catalog;`);
+ok(isDeny(r), "a later ALTER SET search_path can invalidate an otherwise safe refusal");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("quoted_altered_path_actor")}
+ALTER FUNCTION public.quoted_altered_path_actor(pg_catalog.uuid)
+  SET "search_path" TO 'evil', 'pg_catalog';`);
+ok(isDeny(r), "quoted ALTER SET search_path is included in final routine state");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("reset_path_actor")}
+ALTER FUNCTION public.reset_path_actor(pg_catalog.uuid) RESET search_path;`);
+ok(isDeny(r), "ALTER RESET search_path removes the routine-local operator safety proof");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("quoted_reset_path_actor")}
+ALTER FUNCTION public.quoted_reset_path_actor(pg_catalog.uuid) RESET "search_path";`);
+ok(isDeny(r), "quoted ALTER RESET search_path removes the routine-local safety proof");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("reset_all_path_actor")}
+ALTER FUNCTION public.reset_all_path_actor(pg_catalog.uuid) RESET ALL;`);
+ok(isDeny(r), "ALTER RESET ALL removes the routine-local operator safety proof");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+SET search_path = public, pg_temp;
+${searchPathActorRoutine("current_path_actor", "evil, pg_catalog")}
+ALTER FUNCTION public.current_path_actor(pg_catalog.uuid) SET search_path FROM CURRENT;`);
+ok(!isDeny(r), "ALTER SET search_path FROM CURRENT uses the current top-level safe path");
+
+r = runHook(`${SEARCH_PATH_OPERATOR_SETUP}
+${searchPathActorRoutine("repaired_path_actor", "evil, pg_catalog")}
+ALTER FUNCTION public.repaired_path_actor(pg_catalog.uuid)
+  SET search_path = public, pg_temp;`);
+ok(!isDeny(r), "a final safe ALTER search_path can repair unsafe CREATE attributes");
+
 r = runHook(`${SHADOWED_UUID_SETUP}
 CREATE FUNCTION public.shadowed_actor_parameter(p_actor uuid) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $body$

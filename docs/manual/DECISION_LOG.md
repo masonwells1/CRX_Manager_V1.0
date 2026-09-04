@@ -7,6 +7,20 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — include ALTER search_path in PR #449 final routine state; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** A legacy UUID actor-refusal comparison is accepted only when the routine's final
+same-file `search_path` still proves safe operator resolution. Matching top-level `ALTER FUNCTION`/
+`PROCEDURE` forms participate in last-write state for explicit or quoted `SET search_path`, `SET ...
+FROM CURRENT`, `RESET search_path`, and `RESET ALL`. Reset or unreadable inherited state fails closed.
+
+**Boundary.** This tracks one security-relevant routine attribute across already matched CREATE/ALTER
+identities. It does not execute PostgreSQL configuration semantics generally, resolve catalog state,
+or widen actor-name discovery and cross-routine dataflow. Rollback-capable files remain conservative.
+
 ## 2026-09-03 — preserve exact quoted routine identities in PR #449; keep the broader cap
 
 **Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied

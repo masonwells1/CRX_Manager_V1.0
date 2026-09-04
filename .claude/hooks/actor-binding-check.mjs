@@ -2731,6 +2731,59 @@ function exactIdentifierBeforeOpenParen(structuralSql, sourceSql, capturedIdenti
   return sourceSql.slice(start, end);
 }
 
+/** Return the final search_path change in one ALTER routine action list.
+ * `trusted` means PostgreSQL still searches pg_catalog before every user
+ * schema for operator resolution. RESET forms deliberately return false:
+ * they remove the routine-local guarantee and fall back to caller/session
+ * state that this migration cannot prove. FROM CURRENT is resolved later
+ * against the last readable top-level setting before this ALTER. */
+function alteredRoutineSearchPath(actionList) {
+  const action = blankComments(String(actionList || ""));
+  const changeRe = /\b(?:(SET)\s+(?:"search_path"|search_path)\s*(?:(FROM\s+CURRENT)\b|(?:=|TO)\s*)|(RESET)\s+(?:"search_path"|search_path|ALL)(?=\s|;|$))/gi;
+  const changes = [];
+  let match;
+  while ((match = changeRe.exec(action)) !== null) {
+    changes.push({
+      index: match.index,
+      valueStart: changeRe.lastIndex,
+      kind: match[3] ? "reset" : match[2] ? "current" : "explicit",
+    });
+  }
+  const last = changes.at(-1);
+  if (!last) return null;
+  if (last.kind === "reset") return { kind: "reset", trusted: false };
+  if (last.kind === "current") return { kind: "current", trusted: null };
+  const value = action.slice(last.valueStart).trim();
+  if (!value || /^DEFAULT\b/i.test(value)) return { kind: "explicit", trusted: false };
+  return {
+    kind: "explicit",
+    trusted: !hasSchemaBeforeExplicitPgCatalog(`SET search_path = ${value}`),
+  };
+}
+
+/** Resolve ALTER ... SET search_path FROM CURRENT from the migration's last
+ * readable top-level session setting. With no preceding SET, or after RESET,
+ * the inherited session value is unknown and therefore cannot prove safe
+ * owner-rights operator resolution. */
+function currentTopLevelSearchPathTrust(topLevelSql, sourceSql, beforeIndex) {
+  const structural = String(topLevelSql || "").slice(0, beforeIndex);
+  const settingRe = /(?:^|;)\s*(?:(SET)\s+(?:LOCAL\s+|SESSION\s+)?(?:"search_path"|search_path)\s*(?:=|TO)\s*|(RESET)\s+(?:"search_path"|search_path|ALL)(?=\s|;|$))/gi;
+  let trust = null;
+  let match;
+  while ((match = settingRe.exec(structural)) !== null) {
+    if (match[2]) {
+      trust = false;
+      continue;
+    }
+    const statementEnd = structural.indexOf(";", settingRe.lastIndex);
+    const end = statementEnd === -1 ? structural.length : statementEnd;
+    const value = sourceSql.slice(settingRe.lastIndex, end).trim();
+    trust = value !== "" && !/^DEFAULT\b/i.test(value) &&
+      !hasSchemaBeforeExplicitPgCatalog(`SET search_path = ${value}`);
+  }
+  return trust === true;
+}
+
 /** From just past the parameter list, return every function attribute and the
  * exact indexes for the AS $tag$...$tag$ body. PostgreSQL permits attributes
  * such as SECURITY DEFINER both before and after the body, so the post-body
@@ -2817,17 +2870,20 @@ function alteredRoutineSecurityModes(structuralSql, sourceSql = structuralSql) {
     const terminator = structuralSql.indexOf(";", parsed.end);
     const statementEnd = terminator === -1 ? structuralSql.length : terminator;
     const actionList = structuralSql.slice(parsed.end, statementEnd);
+    const sourceActionList = sourceSql.slice(parsed.end, statementEnd);
+    const searchPath = alteredRoutineSearchPath(sourceActionList);
     const securityModeRe = /\b(?:EXTERNAL\s+)?SECURITY\s+(DEFINER|INVOKER)\b/gi;
     let mode = null;
     let securityMode;
     while ((securityMode = securityModeRe.exec(actionList)) !== null) mode = securityMode;
-    if (mode !== null) {
+    if (mode !== null || searchPath !== null) {
       altered.push({
         name: exactName === null ? null : normalizedQualifiedIdentifier(exactName),
         signature: normalizedRoutineIdentityArgs(
           blankComments(sourceSql.slice(paramsOpen + 1, parsed.end - 1)), false
         ),
-        mode: mode[1].toUpperCase(),
+        mode: mode === null ? null : mode[1].toUpperCase(),
+        searchPath,
         index: match.index,
       });
     }
@@ -2952,19 +3008,33 @@ try {
     masked,
     blankComments(content)
   );
-  const executableSecurityModes = masked === null
+  const executableRoutineAlterations = masked === null
     ? []
     : alteredRoutineSecurityModes(masked, content);
-  const topLevelSecurityModeIndexes = new Set((callNameMasked === null
+  const topLevelRoutineAlterationIndexes = new Set((callNameMasked === null
     ? []
     : alteredRoutineSecurityModes(callNameMasked, content)
   ).map(({ index }) => index));
   // Any readable DEFINER elevation is dangerous, including dynamic SQL. An
   // INVOKER demotion is trusted only when it is top-level and executes as part
   // of the migration itself rather than being stored for a later code path.
-  const alteredSecurityModes = executableSecurityModes.filter((altered) =>
-    altered.mode === "DEFINER" || topLevelSecurityModeIndexes.has(altered.index)
+  const alteredSecurityModes = executableRoutineAlterations.filter((altered) =>
+    altered.mode !== null &&
+    (altered.mode === "DEFINER" || topLevelRoutineAlterationIndexes.has(altered.index))
   );
+  const alteredSearchPaths = executableRoutineAlterations
+    .filter((altered) => altered.searchPath !== null)
+    .map((altered) => ({
+      ...altered,
+      trustedSearchPath: altered.searchPath.kind === "current"
+        ? currentTopLevelSearchPathTrust(callNameMasked, content, altered.index)
+        : altered.searchPath.trusted,
+    }))
+    // A deferred or dynamically discovered unsafe change must fail closed. A
+    // safe change can override CREATE attributes only when it is top-level and
+    // therefore executes as part of this migration.
+    .filter((altered) => altered.trustedSearchPath === false ||
+      topLevelRoutineAlterationIndexes.has(altered.index));
   const hasRollbackControl = masked !== null &&
     hasRollbackCapableTransactionControl(masked);
   const createdRoutines = [];
@@ -3203,6 +3273,9 @@ try {
     const laterSecurityModes = alteredSecurityModes.filter((altered) =>
       altered.index > head.index && routineAlterMatchesCreate(createdRoutine, altered)
     );
+    const laterSearchPathChanges = alteredSearchPaths.filter((altered) =>
+      altered.index > head.index && routineAlterMatchesCreate(createdRoutine, altered)
+    );
     const finalAlteredMode = laterSecurityModes.findLast((altered) =>
       !hasRollbackControl || altered.mode !== "INVOKER"
     )?.mode;
@@ -3281,8 +3354,12 @@ try {
     const rawAttrs = (rest.attrsRanges || [])
       .map(([from, to]) => blankComments(content.slice(from, to)))
       .join(" ");
-    const trustedUuidOperatorResolution = !hasSchemaBeforeExplicitPgCatalog(attrs) &&
+    const createSearchPathIsTrusted = !hasSchemaBeforeExplicitPgCatalog(attrs) &&
       !hasSchemaBeforeExplicitPgCatalog(rawAttrs);
+    const trustedUuidOperatorResolution = hasRollbackControl
+      ? createSearchPathIsTrusted &&
+        !laterSearchPathChanges.some(({ trustedSearchPath }) => trustedSearchPath === false)
+      : laterSearchPathChanges.at(-1)?.trustedSearchPath ?? createSearchPathIsTrusted;
     const hasRecognizedActorRefusal = actorDescriptors.every(({ name, references, trustedUuid }) =>
       hasEnforcedActorRefusal(
         body,
