@@ -2842,10 +2842,14 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
-  // record_commission_earned_state and record_commission_settlement_event were
-  // pre-apply trigger-only exemptions. The 2026-09-03 live registry refresh
-  // moved its high-water through their migration, so they are no longer part of
-  // the generated mutator inventory and retaining either entry would be stale.
+  // The applied ledger migration moved both recorder helpers below the live
+  // registry high-water. The forward-only label-repair candidate re-emits only
+  // earned-state, so it is once again discovered until that candidate applies.
+  // It remains trigger-only (RETURNS trigger) and every non-owner EXECUTE grant
+  // is revoked; retaining this narrow entry is required for the candidate but
+  // must be removed after the next live registry refresh.
+  record_commission_earned_state:
+    'local commission-label repair candidate re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission write owns the transaction',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',
