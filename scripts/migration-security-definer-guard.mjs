@@ -15,6 +15,24 @@ function isIdentifierCharacter(ch) {
   return Boolean(ch) && (/[A-Za-z0-9_$]/.test(ch) || ch.codePointAt(0) > 0x7f);
 }
 
+function isDollarTagStart(ch) {
+  return Boolean(ch) && (/[A-Za-z_]/.test(ch) || ch.codePointAt(0) > 0x7f);
+}
+
+function isDollarTagCharacter(ch) {
+  return Boolean(ch) && (/[A-Za-z0-9_]/.test(ch) || ch.codePointAt(0) > 0x7f);
+}
+
+function dollarQuoteDelimiter(text, start) {
+  if (text[start] !== '$') return null;
+  let end = start + 1;
+  if (text[end] === '$') return '$$';
+  if (!isDollarTagStart(text[end])) return null;
+  end++;
+  while (end < text.length && isDollarTagCharacter(text[end])) end++;
+  return text[end] === '$' ? text.slice(start, end + 1) : null;
+}
+
 function startsKeyword(text, index, keyword) {
   const candidate = text.slice(index, index + keyword.length);
   return candidate.toLowerCase() === keyword
@@ -151,18 +169,18 @@ export function executableSql(sql) {
     // begin only at a token boundary; otherwise `x$tag$` is an identifier, not
     // a literal that can hide executable ACL statements.
     if (ch === '$' && !isIdentifierCharacter(src[i - 1])) {
-      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i));
+      const tag = dollarQuoteDelimiter(src, i);
       if (tag) {
-        const close = src.indexOf(tag[0], i + tag[0].length);
+        const close = src.indexOf(tag, i + tag.length);
         if (close === -1) return null;
-        const end = close + tag[0].length;
+        const end = close + tag.length;
         // A transient helper routine can make the same dynamic ACL change as a
         // DO block, then disappear before the migration ends. Lex every
         // executable DO/function/procedure body recursively so only real
         // dynamic SQL or ACL commands fail this static proof closed; quoted
         // diagnostic text inside the body remains inert.
         if (isExecutableRoutineBody(out)) {
-          const body = executableSql(src.slice(i + tag[0].length, close));
+          const body = executableSql(src.slice(i + tag.length, close));
           if (body === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(body)) return null;
         }
         out = blank(out, end - i); i = end; continue;

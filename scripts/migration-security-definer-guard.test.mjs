@@ -102,6 +102,20 @@ test('does not treat dollar signs after Unicode identifiers as dollar quote deli
   assert.deepEqual(securityDefinerMissingAnonRevokes(regranted), ['post_return_credit']);
 });
 
+test('recognizes Unicode dollar-quote tags before evaluating SECURITY DEFINER ACLs', () => {
+  const definition = `CREATE FUNCTION public.unicode_tag_probe()
+RETURNS void AS $é$ DELETE FROM public.customers; $é$
+LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp;`;
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${definition}\nREVOKE ALL ON FUNCTION public.unicode_tag_probe() FROM PUBLIC;`),
+    ['unicode_tag_probe'],
+  );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${definition}\nREVOKE ALL ON FUNCTION public.unicode_tag_probe() FROM PUBLIC, anon;`),
+    [],
+  );
+});
+
 test('resets ACL state after DROP and tracks SECURITY DEFINER procedures', () => {
   const recreated = `${definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;')}\nDROP FUNCTION public.post_return_credit(uuid);\n${definition()}`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(recreated), ['post_return_credit']);
