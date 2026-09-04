@@ -457,10 +457,17 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           notes: pf.notes,
           is_active: true,
         };
-        // total_acres is a transient seed, NOT part of the identity: set_field_boundary
-        // overwrites it with the server-measured billable acreage a moment later
-        // (`total_acres = v_billable`), so the value save_field stores never survives
-        // and must never be able to mint a second field.
+        // total_acres is NOT part of the identity. A SUCCESSFUL set_field_boundary
+        // overwrites it with the server-measured billable acreage (`total_acres =
+        // v_billable`), so on the happy path the seeded value is not the one that
+        // survives — and excluding it is what lets a corrected-geometry retry replay
+        // onto the field already created instead of inserting a second one.
+        //
+        // Do NOT read this as "the seed never survives" (an earlier version of this
+        // comment claimed that, and it was false — Codex round 1, finding 3). When
+        // set_field_boundary FAILS, the seeded value persists on the boundary-less
+        // field for as long as no boundary call succeeds, and a replayed save_field
+        // does not update it. The exclusion is still correct; that rationale was not.
         const fieldPayload = { ...fieldIdentity, total_acres: pf.total_acres };
 
         // ── Per-STAGE intent scopes ──────────────────────────────────────────
@@ -536,14 +543,21 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             // floor), so a tiny stated value would otherwise bill below the safety floor. An
             // out-of-band or RPC-rejected stated value is a non-fatal warning: the field still
             // imports, billing on the measured acres.
-            // Tracks whether every stage this row NEEDED actually landed. An
-            // out-of-band stated acreage is a deliberate skip, not a failure — the
-            // row is complete and bills on measured. A REJECTED override RPC is a
-            // failure: the row is unfinished, so its keys must survive (see the
-            // retirement block below).
+            // Tracks whether every override this row REQUESTED actually landed.
+            //
+            // The test is "was an override requested and did it fail to apply", NOT
+            // "did an RPC error". A stated acreage the client rejects as out-of-band
+            // never reaches the server, but the operator's requested billing acreage
+            // still did not land — and correcting that number and re-importing the
+            // row is the same retry shape as any other correction. Treating the local
+            // rejection as "complete" retired the save key and let that correction
+            // insert a SECOND field (Codex round 2, finding 1).
+            //
+            // A row with NO stated acreage requested no override, so it is complete.
             let overrideOk = true;
             if (pf.stated_acres != null) {
               if (!isAcreInBand(pf.stated_acres)) {
+                overrideOk = false;
                 warnings.push(`"${pf.field_name}": the file's ${pf.stated_acres} ac is outside the allowed ${ACRE_BAND_MIN}–${ACRE_BAND_MAX} acre range — billing on the measured ${pf.full_acres} ac instead.`);
               } else {
                 try {

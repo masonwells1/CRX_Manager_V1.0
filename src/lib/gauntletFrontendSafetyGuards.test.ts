@@ -56,10 +56,12 @@ describe('gauntlet caller-side safety guards', () => {
     expect(component).toContain('const saveIdentityOccurrences = new Map<string, number>();');
     expect(component).toContain('const saveOccurrence = saveIdentityOccurrences.get(saveIdentityDigest) ?? 0;');
     expect(component).toContain('saveIdentityOccurrences.set(saveIdentityDigest, saveOccurrence + 1);');
-    // total_acres is deliberately OUTSIDE the identity — set_field_boundary
-    // overwrites it with the server-measured billable acreage moments later, so
-    // the seeded value must never be able to mint a second field. Pinned as the
-    // spread that adds it back, so moving it into fieldIdentity fails here.
+    // total_acres is deliberately OUTSIDE the identity: excluding it is what lets a
+    // corrected-geometry retry replay onto the field already created. NOT because
+    // "the seed never survives" — that rationale was false (Codex round 1, finding
+    // 3): a SUCCESSFUL set_field_boundary overwrites it, but on the failure path the
+    // seed persists on the boundary-less field. Pinned as the spread that adds it
+    // back, so moving it into fieldIdentity fails here.
     expect(component).toContain('const fieldPayload = { ...fieldIdentity, total_acres: pf.total_acres };');
     expect(component).not.toMatch(/const fieldIdentity = \{[^}]*total_acres/);
     // Stages 2 and 3 bind to the field id save_field ACTUALLY returned plus
@@ -94,7 +96,15 @@ describe('gauntlet caller-side safety guards', () => {
     // field. The gate is pinned inside the same anchored match as the three resets,
     // so removing it fails here rather than silently reopening the duplicate path.
     expect(component).toContain('let overrideOk = true;');
-    expect(component).toContain('overrideOk = false;');
+    // BOTH failure paths must clear it, not just the RPC rejection. A stated acreage
+    // the CLIENT rejects as out-of-band never reaches the server, but the requested
+    // billing acreage still did not land — and correcting it and re-importing is the
+    // same retry shape (Codex round 2, finding 1). Pinned as two occurrences so
+    // deleting the out-of-band one fails here.
+    expect(component.match(/overrideOk = false;/g)).toHaveLength(2);
+    expect(component).toMatch(
+      /if \(!isAcreInBand\(pf\.stated_acres\)\) \{\n\s*overrideOk = false;/,
+    );
     expect(component).toMatch(
       /\n\s*success\+\+;\n(?:\s*\/\/[^\n]*\n)*\s*if \(overrideOk\) \{\n\s*saveFieldIdem\.resetKeyFor\(saveScope\);\n\s*setBoundaryIdem\.resetKeyFor\(boundaryScope\);\n\s*setOverrideAcresIdem\.resetKeyFor\(overrideScope\);\n\s*\}/,
     );

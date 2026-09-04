@@ -32,7 +32,18 @@ function chainable() {
 
 vi.mock('../../lib/db', () => ({
   supabase: { from: vi.fn(() => chainable()), rpc: (...args: unknown[]) => rpc(...args) },
-  assertRpcResult: (data: unknown) => data != null,
+  // Must match the REAL contract in src/lib/db.ts, which THROWS on null/undefined
+  // and returns the data otherwise. Codex round 1 (finding 22) and round 2
+  // (findings 2-3) both raised the possibility that the component ignores a falsy
+  // return — a hole that exists only if the helper is a predicate. It is not; but
+  // mocking it as `data != null` made the tests describe a contract the app does
+  // not have, so the mock now mirrors the real one.
+  assertRpcResult: (data: unknown, rpcName: string) => {
+    if (data === null || data === undefined) {
+      throw new Error(`${rpcName} returned no data — operation may have been denied`);
+    }
+    return data;
+  },
   rpcAuthErrorMessage: () => null,
 }));
 
@@ -80,7 +91,7 @@ let geometryOffset = 0;
 let rowCount = 1;
 // The file's stated acreage. In-band (0.1-5000) so set_field_override_acres is
 // actually called rather than skipped with a warning.
-const statedAcresValue = '40';
+let statedAcresValue = '40';
 
 vi.mock('../../lib/fieldImportParser', () => ({
   parseShapefileBundle: vi.fn(),
@@ -145,6 +156,7 @@ describe('BulkFieldImport — retry after a committed save_field', () => {
     rpc.mockReset();
     geometryOffset = 0;
     rowCount = 1;
+    statedAcresValue = '40';
   });
 
   it('replays the ORIGINAL save_field key when the boundary failed and the geometry was corrected', async () => {
@@ -259,11 +271,59 @@ describe('BulkFieldImport — retry after a committed save_field', () => {
     expect(saves[1][1].p_idempotency_key).toBe(originalKey);
     const boundaries = callsTo('set_field_boundary');
     expect(boundaries[boundaries.length - 1][1].p_field_id).toBe('field-A');
+    // Codex round 2, finding 4: key retention alone is not the scenario. The retry
+    // must actually RE-ATTEMPT the override, against the original field, and land it
+    // — otherwise this stays green while the retry silently stops trying.
+    const overrides = callsTo('set_field_override_acres');
+    expect(overrides).toHaveLength(2);
+    expect(overrides[1][1].p_field_id).toBe('field-A');
+    expect(overrides[1][1].p_override_acres).toBe(40);
+    // Second attempt succeeded, so the row is finally complete and warns no more.
+    expect(screen.queryByText(/couldn't be set as the billable acres/i)).toBeNull();
   });
 
   // Codex finding 19: every test imported exactly one row, so the occurrence counter —
   // the highest-risk new logic — had no behavioral coverage at all. Two rows that are
   // IDENTICAL in every save_field column must still become two separate fields.
+  // Codex round 2, finding 1 (HIGH): an out-of-band stated acreage is rejected by the
+  // CLIENT and never reaches the server, but the operator's requested billing acreage
+  // still did not land. Treating that as "complete" retired the save key, so correcting
+  // the number and re-importing inserted a SECOND field.
+  it('keeps the save_field key when the stated acreage was rejected as OUT OF BAND', async () => {
+    statedAcresValue = '99999';          // above ACRE_BAND_MAX -> rejected client-side
+    rpc.mockImplementation((fn: string, args: Record<string, unknown>) =>
+      Promise.resolve(fn === 'save_field'
+        ? { data: 'field-A', error: null }
+        : { data: { field_id: args.p_field_id }, error: null }));
+
+    const { rerender } = render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+    const originalKey = callsTo('save_field')[0][1].p_idempotency_key;
+    expect(screen.getByText(/outside the allowed/i)).toBeInTheDocument();
+    // The override RPC was never called — the client refused it.
+    expect(callsTo('set_field_override_acres')).toHaveLength(0);
+
+    // The operator corrects the acreage to something in-band and re-imports the row.
+    statedAcresValue = '40';
+    rpc.mockImplementation((fn: string, args: Record<string, unknown>) =>
+      Promise.resolve(fn === 'save_field'
+        ? { data: args.p_idempotency_key === originalKey ? 'field-A' : 'field-B-DUPLICATE', error: null }
+        : { data: { field_id: args.p_field_id }, error: null }));
+
+    await closeModal();
+    rerender(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    const saves = callsTo('save_field');
+    expect(saves).toHaveLength(2);
+    // Must replay onto the field already created, not insert a second one.
+    expect(saves[1][1].p_idempotency_key).toBe(originalKey);
+    const overrides = callsTo('set_field_override_acres');
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0][1].p_field_id).toBe('field-A');
+    expect(overrides[0][1].p_override_acres).toBe(40);
+  });
+
   // The FIRST row must fail, or this test is vacuous. Verified by mutation: with both
   // rows succeeding, row 1 RETIRES its scope at row completion before row 2 starts, so
   // row 2 mints a fresh key regardless and two fields appear even with the counter
@@ -306,6 +366,13 @@ describe('BulkFieldImport — retry after a committed save_field', () => {
     expect(keys[0]).not.toBe(keys[1]);
     expect(issued).toHaveLength(2);
     expect(saves[1][1].p_field_id).toBeNull();
+    // Codex round 2, finding 5: two different keys are only attributable to the
+    // COUNTER if row 1 genuinely failed and RETAINED its scope. If a regression
+    // swallowed the boundary failure, row 1 would retire its scope normally and row 2
+    // would mint a fresh key anyway — passing for an unrelated reason. Pin that row 1
+    // actually failed, so the retention precondition is part of the test.
+    expect(screen.getByText(/boundary measurement failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 failed/i)).toBeInTheDocument();
   });
 
   it('replays the same save_field key when the identical row is retried unchanged', async () => {
