@@ -49,7 +49,7 @@ const PREAMBLE = [
   '- Do NOT edit, write, or delete any file. This workflow only FINDS; the command layer fixes.',
   '- Cite hard evidence for every finding: a file:line, a table/function name, or the exact read-only SQL you ran and what it returned. A finding with no concrete evidence is not a finding.',
   '- Read AGENTS.md and the workflow/reference files it routes for the project\'s documented rules and ACCEPTED exceptions before flagging anything.',
-  '- Prefer precision over volume. Report only what you can substantiate. NO style/naming nits, NO defensive-coding-for-impossible-inputs, NO speculative flexibility. Correctness bugs and Hard-Red-Line / lifecycle / money / RLS / idempotency violations ONLY. At most your 8 most significant findings.',
+  '- Prefer precision over volume. Report only what you can substantiate. NO style/naming nits, NO defensive-coding-for-impossible-inputs, NO speculative flexibility. Correctness bugs and CRX Hard Rule / lifecycle / money / RLS / idempotency violations ONLY. At most your 8 most significant findings.',
   '',
   'THE 8 BUG CLASSES YOU ARE HUNTING (find NEW instances of these — this is the whole point):',
   BUG_CLASSES,

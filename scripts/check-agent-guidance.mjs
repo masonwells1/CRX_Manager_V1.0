@@ -19,7 +19,7 @@ function read(relative) {
 
 function readChecked(relative) {
   if (!existsSync(path.join(ROOT, relative))) {
-    record(false, `${relative} is missing`);
+    record(false, `${relative} exists`);
     return "";
   }
   return read(relative);
@@ -109,13 +109,17 @@ record(/Delegation, agent collaboration, or agent-surface changes/i.test(agents)
 record(/docs\/reference\/claude-model-tuning\.md/.test(claude), "CLAUDE.md routes model tuning on demand");
 const missingGuidance = routedGuidance.filter((relative) => !existsSync(path.join(ROOT, relative)));
 record(routedGuidance.length >= 15 && missingGuidance.length === 0, "every path in the AGENTS.md routing table resolves", missingGuidance.join(", "));
-record(existsSync(path.join(ROOT, ".agents/skills/graphify/SKILL.md")), "AGENTS.md graphify route resolves to the Codex adapter");
+record(
+  existsSync(path.join(ROOT, ".claude/skills/graphify/SKILL.md")) &&
+    existsSync(path.join(ROOT, ".agents/skills/graphify/SKILL.md")),
+  "AGENTS.md graphify route resolves for Claude and Codex",
+);
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(agents), "AGENTS.md has no volatile project counts");
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(claude), "CLAUDE.md has no volatile project counts");
 record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAUDE.md declares AGENTS.md canonical");
 record(/explicit approval in the current conversation/i.test(agents), "AGENTS.md defines current-conversation approval gates");
 const alwaysLoadedGuidance = `${agents}\n${claude}\n${cursorRules}`;
-record(!/(?:CODEX_PROOF_VERDICT|FINAL_VERDICT|OPUS5_VERDICT|VERDICT)\s*:/i.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
+record(!/\b(?:CODEX_PROOF_VERDICT|FINAL_VERDICT|OPUS5_VERDICT|VERDICT)\s*:/i.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
 record(/Reviewer prompts must request every correctness, safety, and scope finding/i.test(claudeModelTuning), "Claude reviewer prompts retain the uncapped-finding default");
 record(/Never lower effort on a money, RLS, or migration path to save tokens/i.test(claudeModelTuning), "Claude tuning preserves the high-risk effort floor");
 record(/Fable 5 remains provisional but binding[\s\S]*must not treat this guidance as Opus-only or skip it/i.test(claudeModelTuning), "Claude model tuning remains binding for Fable 5 until superseded");

@@ -1,6 +1,6 @@
 ## 2026-09-04 - Make shared agent instructions lean and task-routed
 
-- Reduced the always-loaded `AGENTS.md` from 140 to 80 lines while preserving owner communication, Codex autonomy, Claude's existing plan checkpoint, hard gates, CRX non-negotiables, and completion standards.
+- Reduced the always-loaded `AGENTS.md` from roughly 140 to roughly 80 lines while preserving owner communication, Codex autonomy, Claude's existing plan checkpoint, hard gates, CRX non-negotiables, and completion standards.
 - Reduced `CLAUDE.md` from 68 to 49 lines and moved model/effort/reviewer tuning to the on-demand `docs/reference/claude-model-tuning.md` reference.
 - Added explicit simplicity guidance: prefer the simplest complete implementation, readable focused code, existing patterns, and no speculative abstractions or unrelated cleanup.
 - Changed Claude startup routing to load only task-relevant workflow and reference documents instead of the full safe-development rulebook on every session.

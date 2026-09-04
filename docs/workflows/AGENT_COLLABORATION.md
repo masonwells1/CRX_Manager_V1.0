@@ -56,6 +56,7 @@ After changing agent commands, skills, hooks, permissions, agents, or helpers:
 
 ```powershell
 git status --short --branch
+# The next command updates tracked adapters; inspect the status above first.
 node scripts/sync-agent-workflows.mjs --write
 npm run test:agent-workflows
 npm run agent-health

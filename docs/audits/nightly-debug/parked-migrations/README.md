@@ -2,7 +2,7 @@
 
 These `.sql` files are **🟡 Yellow-tier** fixes the nightly mission drafted and
 **validated** but has **NOT applied** — they touch migrations/RPCs/money/RLS, which never
-get auto-applied while Mason sleeps (Hard Red Line). They live HERE, not in
+get auto-applied while Mason sleeps (CRX Hard Rule). They live HERE, not in
 `supabase/migrations/`, on purpose: nothing in this folder is picked up by the apply
 pipeline or the pre-commit SQL validator.
 

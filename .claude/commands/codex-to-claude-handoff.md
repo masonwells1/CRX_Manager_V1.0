@@ -25,8 +25,7 @@ Mason does not need to remember this command name. Treat plain-English requests 
 1. `AGENTS.md` — shared contract and task-routing table
 2. `CLAUDE.md` — Claude-only routing
 3. Only the workflow and reference files `AGENTS.md` routes for this handoff's scope
-4. The workflow doc relevant to the handoff topic.
-5. Any prior audit, prompt, or disposition doc being handed off.
+4. Any prior audit, prompt, or disposition doc being handed off.
 
 ## Step 0 - State Check
 
