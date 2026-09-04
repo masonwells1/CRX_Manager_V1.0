@@ -87,7 +87,10 @@ function unsafeStandardConformingStringsChange(text, start) {
   if (index === null) return true;
   const setting = readSingleQuotedLiteral(text, index);
   // A dynamic setting name cannot be statically proven not to alter this mode.
-  return setting === null || setting.value.toLowerCase() === 'standard_conforming_strings';
+  if (setting === null) return true;
+  const afterSetting = skipWhitespaceAndComments(text, setting.end);
+  if (afterSetting === null || text[afterSetting] !== ',') return true;
+  return setting.value.toLowerCase() === 'standard_conforming_strings';
 }
 
 // Preserve executable tokens and quoted identifiers, but blank comments and all
