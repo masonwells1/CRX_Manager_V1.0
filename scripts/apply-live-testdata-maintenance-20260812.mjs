@@ -153,11 +153,88 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // codexGuard re-pinned again 2026-09-02 (PR #560, CodeRabbit): the guard now
   // IMPORTS pullRequestReviewBlocked from .claude/hooks/codex-push-lib.mjs
   // instead of mirroring it locally. Mirroring is what let the two sides drift.
-  codexGuard: "0fd170d5b972a2b5fc660136949df1bb48917f43",
+  // codexGuard re-pinned again 2026-09-02 (PR #563, merge of origin/main): BOTH
+  // sides moved this file and neither pin survives. This branch added the Codex
+  // GitHub App review check to the merge route; main (#560) migrated the
+  // objection predicate underneath it. The reconciliation keeps both — the App
+  // check runs FIRST (it was unreachable behind the old approval deny, which is
+  // what this branch's third commit fixed) and main's pullRequestReviewBlocked
+  // follows it. Ordering is pinned by tests in codex-bot-review-lib.test.mjs so
+  // the reachability bug cannot return. Anchors unchanged; transform identity.
+  // Values below come from the producer test's printed candidate, never
+  // hand-computed — that is the sanctioned re-pin procedure.
+  // codexGuard re-pinned again 2026-09-02 (PR #563, Codex HIGH on its own
+  // exact-head review): codex-bot-review-lib.mjs joined PROTECTED_HARNESS_SOURCE.
+  // Both merge guards import it at startup, so it is in codex-push-lib's trust
+  // class; leaving it off the list made it directly patchable while the guard
+  // that imports it was not.
+  // codexGuard re-pinned again 2026-09-02 (PR #563, Codex HIGH round 2):
+  // protected-path matching now canonicalizes `.`/`..` segments, and a mutating
+  // shell command that reaches a protected file through a `../` detour is
+  // refused. The raw-string matcher let `.claude/hooks/../hooks/<file>` through
+  // on every protected entry, not just the module that review was about.
+  // codexGuard re-pinned again 2026-09-02 (PR #563, Codex HIGH round 3): the
+  // canonicalizer now drops a Windows drive-relative prefix, and the shell check
+  // canonicalizes every argument token instead of sniffing for `../` — Codex
+  // escaped the previous fix with an interior `./` and with `C:.claude/...`.
+  // Re-pinned again 2026-09-03 (Codex round 4): the shell check now examines a
+  // second, DE-QUOTED view of the command. Quotes and backticks are characters
+  // the shell deletes while building a word, not ones it splits on, so treating
+  // them as separators let an intra-word splice break a protected path into two
+  // harmless tokens.
+  // Re-pinned 2026-09-03 (Codex round 6): the Codex GitHub App advisory lookup
+  // moved from BEFORE the hard denials to the allow point after them, extracted
+  // into codexAppAdvisory() with a 5s deadline. An advisory, fail-open lookup
+  // running first could exhaust the 15s hook budget, and a PreToolUse hook killed
+  // mid-call emits nothing — which does not deny.
+  // Re-pinned 2026-09-03 (Codex round 7, exact-SHA proof of the merged-up head):
+  // canonicalizeGuardPath now strips trailing periods and spaces from every
+  // path segment, the way the Win32 path normalizer does before the file system
+  // sees a name. `.claude./hooks/x.mjs`, `.claude/hooks./x.mjs` and
+  // `.claude/hooks/x.mjs.` all open the protected file and were allowed. Anchors
+  // unchanged; the pushLib transform is still identity. Output taken from the
+  // producer test's printed candidate, never hand-computed.
+  // Re-pinned again 2026-09-03 (Codex round 8, two HIGHs on the exact-SHA proof
+  // of fd72af13e): SEC-001 — the Codex App advisory lookup is now DEFERRED past
+  // every merge segment in a command and run under one shared deadline, so a
+  // chained `gh pr merge 1 && gh pr merge 2` cannot let #1's advisory starve #2's
+  // hard gates; SEC-002 — the shell no-op set gained cmd.exe's caret and a
+  // backslash-deleted view for the POSIX escape. Anchors unchanged; the pushLib
+  // transform is still identity. Output from the producer test's candidate.
+  // Re-pinned again 2026-09-03 (Codex round 9, two HIGHs on the exact-SHA proof
+  // of dc965401f): the GitHub-connector merge route now runs the deferred
+  // advisory itself (round 8 had left it returning the request untouched), and a
+  // mutating shell segment whose text is computed — parenthesised expression,
+  // `$` variable, Join-Path, -f/-join — is refused outright instead of parsed.
+  // Anchors unchanged; pushLib transform still identity. Output from the
+  // producer test's candidate.
+  // Re-pinned again 2026-09-03 (Codex round 10, HIGH on the exact-SHA proof of
+  // b95a519a7): the computed-text rule now counts cmd.exe's `%VAR%` / `!VAR!`
+  // expansion, and cmd's own write verbs (copy/move/xcopy/robocopy/mklink)
+  // joined the mutation list. Anchors unchanged; pushLib transform identity.
+  // Re-pinned again 2026-09-03 (Codex round 11, two HIGHs + one Medium on the
+  // exact-SHA proof of 008f300fc): protected-path candidates are now joined
+  // onto the tool's working directory before matching (file tools and shell), a
+  // directory-changing mutation is refused as unbindable, ANY `$` in a mutating
+  // segment is computed text, and the advisory prints an "incomplete" notice
+  // when the thread walk did not finish. Anchors unchanged; pushLib identity.
+  // Re-pinned again 2026-09-03 (Codex round 12, HIGH on the exact-SHA proof of
+  // 312f4a9f0): the shell gate now fails CLOSED on protected files — a segment
+  // that names one must start with a recognised read-only head (tee/Tee-Object/
+  // install/dd and every unknown writer were allowed before), and the path
+  // matcher is brace- and glob-aware. Anchors unchanged; pushLib identity.
+  // Re-pinned again 2026-09-03 (Codex round 13, two HIGHs on the exact-SHA proof
+  // of 5a9052934): every command word of an examined segment is walked (not
+  // only its head), read-only git is held to a safe argument grammar
+  // (`--output`/`--ext-diff`/`--textconv`/`-c`/`GIT_*=` disqualify it), a
+  // computed segment fails closed on unrecognised command words, executors fed
+  // by a pipe are examined, and a protected basename counts after a directory
+  // change. Anchors unchanged; pushLib identity.
+  codexGuard: "a1ba52df7b4e84989276632aea37fa8a1d567bcc",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "4ce9ecd68f006392df3291f1b0c3df40c8e5add3",
+  codexGuard: "d96b63533e81e00887c4361795c043f2c062f794",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
 

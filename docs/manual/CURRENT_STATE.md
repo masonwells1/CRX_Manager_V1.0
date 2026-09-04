@@ -1,14 +1,64 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-03 for the migration ledger (F06 authoring read); 2026-09-01 (post
-return-credit chain) for schema shape.** A read-only read on 2026-09-03 records **990 ledger rows**,
-live `max(version)` **`20260903025854`**, latest applied authored name
-`20260831212415_guard_cycle_count_completion_revision`. The F06 migration
-`20260903150000_job_chemicals_persist_driver` (nullable `job_chemicals.driver` + `save_job`
-re-emission, marker `chem_unit_invariant_v3`) is authored on its branch and **NOT applied**: live
-`job_chemicals` still has no `driver` column and `save_job` is the 20260820120000 body (md5
-`227ab7b6bc2023724adf6952a221d2a8`, single overload). The schema-shape statement that follows is
-unchanged by that read. Schema shape comes from the live introspection that regenerated
+**Last verified: 2026-09-03 for the migration ledger; schema shape re-read 2026-09-03 15:34 UTC by
+the live-introspection regeneration of `.claude/schema-registry.json` carried in PR #586 (F06
+post-apply) — the only delta against the 2026-09-01 reading is `job_chemicals.driver` and its CHECK,
+and F2's `20260903160000` will move it again the moment it applies, so re-run the regeneration then.**
+The current effective ordering high-water is the newest applied
+authored NAME: **`20260903150000_job_chemicals_persist_driver`**.
+
+Read ordering from the authored NAME, not from `version` — the two diverge, and
+`.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
+high-water" rule compared against it silently skips files authored `20260831*` and `20260903*` alike
+— the `version` stamps run ahead of the authored names in both ranges. The NAME is also the
+durable way to state this boundary: it is what the ordering guard compares, and it changes far less
+often than the counters.
+
+For provenance, the same read observed **993 ledger rows** (986 distinct names — the difference is
+duplicate names, from `count(distinct name)`, not truncation) and `max(version)`
+**`20260903153402`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
+any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
+not evidence that something went wrong, and it should not be re-pinned on every apply.
+
+**Disk-vs-live drift, confirmed 2026-09-03 — OWNED BY PR #535, NOT AN ORPHAN.** Six `20260831*`
+migrations are applied live with **no file on `main`**:
+`20260831160000_harden_receiving_reversal_and_ap_reporting`,
+`20260831161000_require_cumulative_po_bill_confirmation`,
+`20260831162000_fail_closed_historical_commission_balance`,
+`20260831212415_guard_cycle_count_completion_revision`,
+`20260831233000_bind_section9_replays_to_intent`, and
+`20260831235900_serialize_gauntlet_write_boundaries`. `main`'s newest tracked migration is
+`20260827041500`. **All six DO have files on PR #535's branch
+`codex/gauntlet-s9-safety-20260831`** — verified 2026-09-03 with `git ls-tree` against that branch,
+6/6 present — so merging #535 closes the drift completely and there is nothing to adopt or
+reconstruct. Do not go hunting for missing files; check that branch first.
+
+The consequence still bites until #535 merges: `main` does not describe production, so any migration
+whose safety argument rests on "the live body equals the last committed body" must verify against
+**live**, not against disk. `20260903160000` does exactly that — it pins md5 hashes read from live
+`pg_proc.prosrc` rather than diffing against tracked files.
+
+**F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
+`20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
+file, the `save_job` re-emission (marker `chem_unit_invariant_v3`) and its client changes on `main`;
+the live apply followed separately and is now confirmed. Verified independently against production
+on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job` is at md5
+`18d08d5f40aea91fe13ac3e5a686c549` — the candidate body, which replaced the 20260820120000 body
+(`227ab7b6bc2023724adf6952a221d2a8`) — with exactly one overload, so no duplicate function was
+created. F06's earlier 990-row / `20260903025854` / `20260831212415` ledger figures are superseded by
+the 993-row capture above.
+
+**The sequencing lesson outlives the fact.** For the window between that merge and that apply, this
+file correctly recorded F06 as merged but NOT applied: `main` carried the migration while production
+had no `driver` column. That window exists for every migration, so **a merge is not an apply** —
+confirm each against live separately rather than inferring one from the other. Earlier revisions of
+this section stated the not-applied half; they were right when written and are now superseded.
+
+This header supersedes the 2026-09-01 ledger figures below; its non-ledger observations still stand.
+
+**Superseded 2026-09-01 (post return-credit chain) header, kept for provenance — its 986-row /
+`20260827041500` / `20260901184530` figures must not be used as the current ordering boundary.**
+Schema shape comes from the live introspection that regenerated
 `.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
 columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
 read of individual routine bodies or their grants beyond the functions this chain touched, which
