@@ -254,11 +254,22 @@ function assertCheckedInMarkers() {
   // Both offsets must exist before their ORDER means anything. A missing
   // `FOR UPDATE;` yields -1, which is below every real offset, so comparing the
   // raw indexOf results would pass precisely when the lock this asserts is gone.
-  const triggerLock = triggerBody.indexOf('FOR UPDATE;');
+  //
+  // Pin the WHOLE parent lock in ONE pattern, not a bare `FOR UPDATE;`. The
+  // message claims the trigger locks THE PARENT COUNT ROW, but a naked
+  // `indexOf('FOR UPDATE;')` is satisfied by a lock on any row of any table —
+  // so the assertion passed while asserting strictly less than its own name. The
+  // table, the predicate that identifies the parent, and the lock must all be
+  // present together for that claim to hold.
+  const parentLockMatch = triggerBody.match(
+    /FROM\s+public\.cycle_counts\s+cc\s+WHERE\s+cc\.id\s*=\s*v_cycle_count_id\s+FOR UPDATE;/,
+  );
+  const triggerLock = parentLockMatch ? parentLockMatch.index : -1;
   const triggerBump = triggerBody.indexOf('SET item_revision = item_revision + 1');
   assert.ok(
     triggerLock >= 0,
-    'cycle-count revision trigger does not lock the parent count row',
+    'cycle-count revision trigger does not lock the parent count row '
+      + '(expected FROM public.cycle_counts cc WHERE cc.id = v_cycle_count_id FOR UPDATE;)',
   );
   assert.ok(
     triggerBump >= 0,

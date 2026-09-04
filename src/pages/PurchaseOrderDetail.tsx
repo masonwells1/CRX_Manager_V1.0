@@ -432,8 +432,18 @@ export default function PurchaseOrderDetail() {
         // intent — receiving the same goods a second time. So this block must not
         // be able to throw, whatever the notification helpers do later.
         try {
-        // AUDIT 3.2: Notify admins about damaged/non-good items
-        if (po && !completedElsewhere) {
+        // AUDIT 3.2: Notify admins about damaged/non-good items.
+        //
+        // This runs on a REPLAY too — deliberately NOT gated on
+        // `completedElsewhere`. The receipt has committed, possibly on an earlier
+        // attempt whose response never reached this tab, so the damaged goods are
+        // recorded while nobody has necessarily been told about them. Gating this
+        // on a first commit meant a retried receive silently dropped the damage
+        // alert: inventory correct, damage report never sent. Re-alerting is
+        // prevented by the receipt-derived idempotency key
+        // (`damagedReceiptIntentIds`), which falls back to this request's own key
+        // when the replay carried no receiving_record_ids.
+        if (po) {
           const damagedItems = request.itemsPayload
             .filter((ip) => ip.condition && ip.condition !== 'good')
             .map((ip) => {
@@ -447,8 +457,16 @@ export default function PurchaseOrderDetail() {
           if (damagedItems.length > 0) {
             await notifyDamagedReceiving(po.po_number, damagedItems, po.id, damagedReceiptIntentIds);
           }
+        }
 
-          // AUDIT: Notify admins about over-received items
+        // AUDIT: Notify admins about over-received items.
+        //
+        // This one STAYS scoped to a first, non-replay commit. Unlike the damaged
+        // notification it carries no idempotency key, so a replay would re-alert;
+        // and the "remaining" quantity it reports is derived from `items` held in
+        // memory, which the earlier commit has already moved past. On a replay it
+        // would send a duplicate alert quoting the wrong numbers.
+        if (po && !completedElsewhere) {
           const overItems = request.itemsPayload
             .filter((ip) => {
               const poItem = items.find((i) => i.id === ip.po_item_id);

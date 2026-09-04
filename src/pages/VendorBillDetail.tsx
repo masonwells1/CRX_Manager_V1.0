@@ -117,6 +117,14 @@ export default function VendorBillDetail() {
   const [editing, setEditing] = useState(false);
   const [editOverageMessage, setEditOverageMessage] = useState<string | null>(null);
 
+  // The route id as of NOW, readable after an await. `id` itself is captured by
+  // each render's closure, so a handler that awaited across a route change still
+  // sees the bill it started on and cannot tell that it is answering late.
+  const currentBillIdRef = useRef(id);
+  useEffect(() => {
+    currentBillIdRef.current = id;
+  }, [id]);
+
   // Route changes must retire every visible bill-specific form while preserving
   // any unresolved durable payment record under the old bill's storage scope.
   useEffect(() => {
@@ -389,6 +397,21 @@ export default function VendorBillDetail() {
       return;
     }
     setEditing(true);
+    // The bill this submission is FOR. Every UI update below happens after an
+    // await, by which time the operator may have navigated to another bill —
+    // this component stays mounted across /accounts-payable/bills/:id changes,
+    // so nothing unmounts the late handler. Compare against the live route id
+    // before touching any shared UI state.
+    //
+    // The entry guard above does NOT cover this: after navigating it passes,
+    // because `bill`, `id` and `editModalBillId` have all legitimately advanced
+    // to the NEW bill. The only stale thing is which bill the answer is about.
+    // Left unguarded, a PO-overage refusal for bill A reopened the reason prompt
+    // while bill B was on screen; confirming it called handleEditBill(true, …)
+    // against B, authorizing an overage B was never checked for and recording
+    // A's justification against it.
+    const targetBillId = bill.id;
+    const isStillCurrentBill = () => currentBillIdRef.current === targetBillId;
     try {
       const key = editIdem.getKey();
       const { data, error } = await supabase.rpc('update_vendor_bill', {
@@ -404,12 +427,27 @@ export default function VendorBillDetail() {
       });
       if (error) throw error;
       assertRpcResult<{ success: boolean; bill_id: string; old_total_cents: number; new_total_cents: number }>(data, 'update_vendor_bill');
+      // The edit COMMITTED, so retire its key whether or not the operator is
+      // still looking at this bill — that is a fact about the request, not about
+      // the screen. Only the reporting below is route-dependent.
       editIdem.resetKey();
+      if (!isStillCurrentBill()) return;
       toast('success', 'Bill updated');
       setEditModalOpen(false);
       setEditModalBillId(null);
       fetchBill();
     } catch (err) {
+      // A late answer for a bill the operator has left may not touch the UI. It
+      // must not reopen the reason prompt, close the editor they have since
+      // opened, or toast about a bill that is no longer on screen. The key is
+      // deliberately left retained here: the request's outcome is unknown, and
+      // retaining is the direction that replays rather than double-applies.
+      if (!isStillCurrentBill()) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+          tags: { source: 'vendor-bill-edit', reason: 'stale-route-response' },
+        });
+        return;
+      }
       if (hasRpcCode(err, RpcErrorCodes.PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED)) {
         setEditOverageMessage(
           'The exact server total shows this edit would raise active billing above 105% of the purchase order. Enter a reason to confirm the overage.',
@@ -447,8 +485,12 @@ export default function VendorBillDetail() {
       } else {
         toast('error', sanitizeError(err));
       }
+    } finally {
+      // Must be a finally: the stale-route guards above return early, and this
+      // used to sit after the try/catch. Skipping it would strand the page with
+      // the Save button spinning and disabled until a reload.
+      setEditing(false);
     }
-    setEditing(false);
   };
 
   const handleVoidPayment = async () => {

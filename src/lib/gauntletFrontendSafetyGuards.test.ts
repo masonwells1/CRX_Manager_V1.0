@@ -21,7 +21,17 @@ describe('gauntlet caller-side safety guards', () => {
   it('serializes cycle-count edits and completes only after a fresh authoritative read', () => {
     const page = source('src/pages/CycleCounts.tsx');
     expect(page).toContain('itemWriteQueuesRef');
-    expect(page).toContain('await Promise.all([...pendingItemWritesRef.current])');
+    // Completion waits on the pending writes OF THE COUNT BEING COMPLETED, never
+    // the component-wide set. `pendingItemWritesRef` outlives the detail modal, so
+    // an unscoped await made completing count B hang on a stalled save from count
+    // A, with nothing to time it out. Pin the scoping and not merely the await:
+    // the unscoped `Promise.all([...pendingItemWritesRef.current])` IS the bug, and
+    // it satisfies any assertion that only looks for an await on that ref. Both
+    // halves of the pairing are named, and the old unscoped form is denied
+    // outright so this cannot silently regress back to it.
+    expect(page).toContain('const completingCountId = activeCount.id;');
+    expect(page).toContain('.filter((entry) => entry.cycleCountId === completingCountId)');
+    expect(page).not.toContain('await Promise.all([...pendingItemWritesRef.current])');
     expect(page).toMatch(/waitForAuthoritativeCountItems[\s\S]*refreshCountItems/);
     expect(page).toContain('disabled={preparingCompletion || completing}');
     expect(page).toContain('onConfirm={() => { void executeComplete(); }}');

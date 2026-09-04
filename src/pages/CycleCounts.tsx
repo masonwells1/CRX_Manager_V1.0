@@ -99,7 +99,10 @@ export default function CycleCounts() {
   const [reverseConfirmOpen, setReverseConfirmOpen] = useState(false);
   const [preparingCompletion, setPreparingCompletion] = useState(false);
   const itemWriteQueuesRef = useRef(new Map<string, Promise<void>>());
-  const pendingItemWritesRef = useRef(new Set<Promise<void>>());
+  // Each pending write carries its own cycle_count_id. Completion may only wait
+  // on writes belonging to the count being completed — see
+  // waitForAuthoritativeCountItems.
+  const pendingItemWritesRef = useRef(new Set<{ cycleCountId: string; promise: Promise<void> }>());
   const failedItemWritesRef = useRef(new Set<string>());
   const itemWriteIntentsRef = useRef(new Map<string, CycleCountWriteIntent>());
   const itemWriteSequenceRef = useRef(0);
@@ -402,19 +405,31 @@ export default function CycleCounts() {
       }
     });
     itemWriteQueuesRef.current.set(itemId, write);
-    pendingItemWritesRef.current.add(write);
+    const pendingEntry = { cycleCountId: item.cycle_count_id, promise: write };
+    pendingItemWritesRef.current.add(pendingEntry);
     try {
       await write;
     } finally {
-      pendingItemWritesRef.current.delete(write);
+      pendingItemWritesRef.current.delete(pendingEntry);
       if (itemWriteQueuesRef.current.get(itemId) === write) itemWriteQueuesRef.current.delete(itemId);
     }
   };
 
   // Complete the cycle count
   const waitForAuthoritativeCountItems = async (): Promise<CompletionSnapshot | null> => {
-    await Promise.all([...pendingItemWritesRef.current]);
     if (!activeCount) return null;
+    // Wait ONLY on writes belonging to the count being completed. This set is
+    // component-wide and outlives the detail modal, so awaiting all of it made
+    // completing count B block on a stalled save from count A — indefinitely, since
+    // nothing here times out. Scoping matches how failed writes are already tracked
+    // below; both sets have to be scoped or the wedge just moves from one to the
+    // other. Captured before the await so a mid-flight count switch cannot widen it.
+    const completingCountId = activeCount.id;
+    await Promise.all(
+      [...pendingItemWritesRef.current]
+        .filter((entry) => entry.cycleCountId === completingCountId)
+        .map((entry) => entry.promise)
+    );
     // Failed writes are tracked per cycle count, not component-wide. A failure
     // left behind in count A must not block completing count B: this set
     // outlives the detail modal, so an unscoped check wedged every other count

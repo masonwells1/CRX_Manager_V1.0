@@ -40,12 +40,18 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
 // a `CODE:` / `CODE ` prefix) and the real constant is the semantic string, not a
 // SQLSTATE. Stubbing them asserted a contract that does not exist in production —
 // the page could have failed to recognize a real refusal with this test green.
+//
+// `assertRpcResult` is real for the same reason. It used to be stubbed as an
+// identity function, which deleted the very guard the success path relies on:
+// the page calls assertRpcResult(data, 'create_vendor_bill'), and under the stub
+// a null `data` — a silent RLS denial — would have flowed on into the success
+// path here while production threw. A test must not replace the guard standing
+// next to the behavior it is asserting.
 vi.mock('../lib/db', async () => {
   const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
   return {
     ...actual,
     supabase: { from: mockFrom, rpc: mockRpc },
-    assertRpcResult: vi.fn((value) => value),
   };
 });
 vi.mock('../contexts/AuthContext', () => ({
@@ -66,6 +72,7 @@ describe('NewVendorBill PO-overage handling', () => {
     window.sessionStorage.clear();
     globalThis.indexedDB = new IDBFactory();
     mockToast.mockClear();
+    mockNavigate.mockClear();
     mockRpc.mockReset();
     mockFrom.mockImplementation((table: string) =>
       buildChain({ data: table === 'vendors' ? VENDORS : [], error: null }));
@@ -121,5 +128,26 @@ describe('NewVendorBill PO-overage handling', () => {
     expect(screen.queryByText(/Enter a reason to confirm the overage/i)).toBeNull();
     expect(screen.queryByPlaceholderText(/Why should cumulative billing exceed/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /Retry Exact Bill/i })).toBeTruthy();
+  });
+
+  // Un-stubbing `assertRpcResult` in the mock above is only worth anything if
+  // something asserts on it. Without this case the suite passes identically with
+  // the identity stub reinstated, because the other two tests read
+  // `mockRpc.mock.calls` — arguments captured BEFORE the guard ever runs.
+  //
+  // `{ data: null, error: null }` is what a silent RLS denial looks like from
+  // PostgREST: no error, no row. The page must treat that as a failure. Creating
+  // a vendor bill that was never written, then navigating to its detail page, is
+  // a money-path defect.
+  it('treats a null RPC result as a failure and does not report a bill created', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: null });
+    render(<NewVendorBill />);
+    await fillAndSave();
+
+    await waitFor(() => {
+      expect(mockToast.mock.calls.some(([level]) => level === 'error')).toBe(true);
+    });
+    expect(mockToast.mock.calls.some(([, message]) => message === 'Vendor bill created')).toBe(false);
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });

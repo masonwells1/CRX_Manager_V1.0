@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ReactNode } from 'react';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import { IDBFactory } from 'fake-indexeddb';
 
@@ -45,10 +45,19 @@ const bill = {
   purchase_order: null,
 };
 
+const billB = { ...bill, id: BILL_B, bill_number: 'VB-2002' };
+
+// Which bill row the mocked `vendor_bills` fetch answers with. Flipped by the
+// late-response test before it navigates, so that after the route change the
+// page's `bill` really is bill B — otherwise `handleEditBill`'s entry guard
+// (`bill.id !== id`) would reject on identity grounds and the test would pass
+// without ever exercising the stale-response path it exists to cover.
+let activeBillRow: Record<string, unknown> = bill;
+
 vi.mock('../lib/db', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const builder = (table: string) => {
-    const result = table === 'vendor_bills' ? { data: bill, error: null } : { data: [], error: null };
+    const result = table === 'vendor_bills' ? { data: activeBillRow, error: null } : { data: [], error: null };
     const proxy: unknown = new Proxy(function () {}, {
       get(_t, prop: string | symbol) {
         if (prop === 'then') return (resolve: (v: unknown) => unknown) => resolve({ data: [], error: null });
@@ -106,6 +115,7 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
     globalThis.indexedDB = new IDBFactory();
     H.rpc.mockReset();
     H.toast.mockReset();
+    activeBillRow = bill;
   });
   afterEach(() => cleanup());
 
@@ -145,5 +155,65 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
     // full page renders again, so this is the point where the two cases differ.
     await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
     expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
+  });
+
+  // The case the test above deliberately does NOT cover: it navigates only after
+  // the refusal has already arrived. Here the refusal is still IN FLIGHT across
+  // the route change, which is the dangerous ordering.
+  //
+  // `handleEditBill`'s entry guard cannot catch this. By the time the late answer
+  // lands, `bill`, `id` and `editModalBillId` have all legitimately advanced to
+  // bill B, so every identity check passes — the only stale thing is which bill
+  // the answer concerns. Reopening the prompt there is a MONEY defect, not a
+  // cosmetic one: ReasonModal's onConfirm calls handleEditBill(true, reason),
+  // which would submit BILL B with p_confirm_po_overage=true, authorizing an
+  // overage B was never checked for and filing A's justification against it.
+  it('discards a PO-overage refusal that arrives after the operator moved to another bill', async () => {
+    let releaseEdit: (value: unknown) => void = () => {};
+    H.rpc.mockImplementation((name: string) => {
+      if (name === 'update_vendor_bill') {
+        return new Promise((resolve) => { releaseEdit = resolve; });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_A}`]}>
+        <GoToOtherBill />
+        <Routes>
+          <Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    // Save bill A. The RPC is held open, so nothing has answered yet.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Edit Bill/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    await waitFor(() => expect(H.rpc).toHaveBeenCalledWith('update_vendor_bill', expect.anything()));
+    expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
+
+    // Move to bill B and open ITS editor, so every identity the entry guard
+    // checks is now legitimately bill B.
+    activeBillRow = billB;
+    fireEvent.click(screen.getByRole('button', { name: 'go-to-bill-b' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Edit Bill/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy());
+
+    // Now bill A's refusal finally lands.
+    await act(async () => {
+      releaseEdit({
+        data: null,
+        error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' },
+      });
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+    });
+
+    // It must be discarded outright: no overage prompt over bill B, and B's own
+    // editor left exactly as the operator opened it.
+    expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
+    expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy();
   });
 });
