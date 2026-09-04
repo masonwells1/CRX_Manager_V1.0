@@ -936,6 +936,20 @@ intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()`
 and does not order multiple tokens sharing one line. Closing (a), (b), (f), (g) and (h) needs a real
 tokenizer, not a line scan.
 
+(k) **A route-id scope binds the record the ROUTE names, not the record the REQUEST sends** — added
+2026-09-04 from CodeRabbit's round-2 finding on PR #584, after the route-scope fix itself had landed.
+`OrderDetail`'s id effect sets `activeOrderIdRef` and refetches but never clears `order`, and
+`loading` is initialised `true` and thereafter only ever set `false` — never back to `true`. So on
+A → B navigation the page keeps rendering A's data with its buttons live while the route id is
+already B. `consolidate_draft_invoices` was the one order action whose request sent the LOADED
+`order.id` rather than the route `id`, so a click in that window sent A under a key scoped to B and
+let B's own retry replay A's receipt; it now refuses unless the loaded order IS the route order.
+**The staleness itself is NOT fixed** — every other action on that page is still live over the
+previous order's data in that window. Those actions all send the route `id`, so they are not a
+replay risk today, but the pairing is what matters: any detail page that scopes a key by the route
+id while sending a separately-loaded record id has this defect, and (d) above cannot see it, because
+it reads the declaration and never the request.
+
 **These residuals are the reason this guard is a tripwire, not a proof.** Six adversarial rounds
 drove the product findings to zero and then kept finding more in the scanner itself; that is the
 signal the review had stopped describing the change and started describing the instrument. The
