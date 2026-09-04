@@ -77,7 +77,10 @@ vi.mock('../lib/db', () => ({
       });
     },
   },
-  assertRpcResult: <T,>(data: T) => data,
+  assertRpcResult: <T,>(data: T) => {
+    if (data == null) throw new Error('RPC returned no data');
+    return data;
+  },
   sanitizeError: (error: unknown) => String(error),
 }));
 
@@ -174,6 +177,20 @@ describe('Reports commission history', () => {
     expect(screen.getByText('CP-2026-0042')).toBeInTheDocument();
     expect(screen.getAllByText('Alex Farmer').length).toBeGreaterThan(0);
     expect(screen.queryByText(/Balance and payout detail shown through 8\/20\/2026/)).not.toBeInTheDocument();
+  });
+
+  it('treats a silent-null RPC response as a visible failure instead of a zero report', async () => {
+    H.rpcHandler = () => Promise.resolve({ data: null, error: null });
+
+    renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+
+    await screen.findByRole('alert');
+    expect(screen.getByRole('alert')).toHaveTextContent('empty tables are not a confirmed zero');
+    expect(screen.queryByText(/Balance and payout detail shown through/)).not.toBeInTheDocument();
+    expect(await screen.findByText('No commission data')).toBeInTheDocument();
+    expect(H.toast).toHaveBeenCalledWith('error', expect.stringContaining('RPC returned no data'));
   });
 
   it('ignores an older response that finishes after a newer cutoff', async () => {

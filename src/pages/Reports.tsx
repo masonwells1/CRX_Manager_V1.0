@@ -334,28 +334,34 @@ export default function Reports() {
     const asOf = endDate && endDate < businessToday ? endDate : businessToday;
     const requestId = ++commissionRequestId.current;
     setCommissionReportError(false);
-    const { data: balanceData, error: balanceError } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
-    if (requestId !== commissionRequestId.current) return;
-    if (balanceError) {
-      setCommissionReportError(true);
-      toast('error', `Commission balance failed: ${balanceError.message}`);
-      return;
-    }
-    const balanceRows = assertRpcResult<CommissionBalanceRow[]>(balanceData, 'get_commission_balance_report');
+    try {
+      const { data: balanceData, error: balanceError } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
+      if (requestId !== commissionRequestId.current) return;
+      if (balanceError) {
+        setCommissionReportError(true);
+        toast('error', `Commission balance failed: ${balanceError.message}`);
+        return;
+      }
+      const balanceRows = assertRpcResult<CommissionBalanceRow[]>(balanceData, 'get_commission_balance_report');
 
-    const { data: detailData, error: detailError } = await supabase.rpc('get_commission_payment_detail_report', { p_as_of_date: asOf });
-    if (requestId !== commissionRequestId.current) return;
-    if (detailError) {
-      setCommissionReportError(true);
-      toast('error', `Commission payment detail failed: ${detailError.message}`);
-      return;
-    }
-    const detailRows = assertRpcResult<CommissionPaymentDetailRow[]>(detailData, 'get_commission_payment_detail_report');
+      const { data: detailData, error: detailError } = await supabase.rpc('get_commission_payment_detail_report', { p_as_of_date: asOf });
+      if (requestId !== commissionRequestId.current) return;
+      if (detailError) {
+        setCommissionReportError(true);
+        toast('error', `Commission payment detail failed: ${detailError.message}`);
+        return;
+      }
+      const detailRows = assertRpcResult<CommissionPaymentDetailRow[]>(detailData, 'get_commission_payment_detail_report');
 
-    setCommBalanceData(balanceRows);
-    setCommPaymentDetailData(detailRows);
-    setCommissionAsOfDate(asOf);
-    setCommissionReportError(false);
+      setCommBalanceData(balanceRows);
+      setCommPaymentDetailData(detailRows);
+      setCommissionAsOfDate(asOf);
+      setCommissionReportError(false);
+    } catch (err) {
+      if (requestId !== commissionRequestId.current) return;
+      setCommissionReportError(true);
+      toast('error', `Commission report failed: ${sanitizeError(err)}`);
+    }
   }, [endDate, toast]);
 
   // ─── FINANCIAL parent fetcher ─────────────────────────────────
