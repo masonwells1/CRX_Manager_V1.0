@@ -368,6 +368,7 @@ DO $probe$
 DECLARE
   v_a uuid; v_b uuid; v_c uuid; v_field uuid; v_svc uuid; v_res jsonb;
   v_grp uuid; v_a_season int; v_a_rate bigint; v_c_season int; v_c_rate bigint; v_c_grp uuid;
+  v_a_id uuid; v_c_id uuid;
 BEGIN
 ${AUTHENTICATE}
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] grpA ${label} ' || substr(gen_random_uuid()::text, 1, 8)) RETURNING id INTO v_a;
@@ -402,15 +403,31 @@ ${AUTHENTICATE}
     jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
     '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
 
-  SELECT i.season, i.invoice_group_id INTO v_a_season, v_grp FROM invoices i WHERE i.customer_id = v_a AND i.invoice_type = 'field_application' LIMIT 1;
-  SELECT i.season, i.invoice_group_id INTO v_c_season, v_c_grp FROM invoices i WHERE i.customer_id = v_c AND i.invoice_type = 'field_application' LIMIT 1;
+  -- Bind every read-back to the ACTIVE invoice in the EDITED group, and read the fee line
+  -- through that invoice's id (CodeRabbit, 2026-09-04). The previous form matched on
+  -- customer_id alone with a bare LIMIT 1 and no deleted_at filter, so it could have read a
+  -- soft-deleted or unrelated field-application invoice for the same customer. That would not
+  -- have failed loudly -- it would have silently compared the WRONG invoice's season and rate,
+  -- which is how a mutation test quietly stops discriminating (PHASE 8d/8e depend on this).
+  SELECT i.id, i.season, i.invoice_group_id INTO v_a_id, v_a_season, v_grp
+    FROM invoices i
+   WHERE i.customer_id = v_a AND i.invoice_type = 'field_application'
+     AND i.deleted_at IS NULL AND i.invoice_group_id = v_grp
+   ORDER BY i.created_at DESC, i.id DESC LIMIT 1;
+  -- Deliberately NOT filtered by v_grp: line ~698 asserts groupId = addedGroupId ("or this phase
+  -- proves nothing"), and constraining this read to the group would make that assertion
+  -- tautological -- the same can-never-fail flaw being fixed above.
+  SELECT i.id, i.season, i.invoice_group_id INTO v_c_id, v_c_season, v_c_grp
+    FROM invoices i
+   WHERE i.customer_id = v_c AND i.invoice_type = 'field_application'
+     AND i.deleted_at IS NULL
+   ORDER BY i.created_at DESC, i.id DESC LIMIT 1;
+  IF v_a_id IS NULL THEN RAISE EXCEPTION 'PROBE_SETUP ${label}: no ACTIVE invoice for the edited grower in group % (result %)', v_grp, v_res; END IF;
   IF v_c_season IS NULL THEN RAISE EXCEPTION 'PROBE_SETUP ${label}: the added grower got no invoice (result %)', v_res; END IF;
   SELECT ii.unit_price_cents INTO v_a_rate FROM invoice_items ii
-    JOIN invoices i ON i.id = ii.invoice_id
-   WHERE i.customer_id = v_a AND ii.is_application_fee LIMIT 1;
+   WHERE ii.invoice_id = v_a_id AND ii.is_application_fee LIMIT 1;
   SELECT ii.unit_price_cents INTO v_c_rate FROM invoice_items ii
-    JOIN invoices i ON i.id = ii.invoice_id
-   WHERE i.customer_id = v_c AND ii.is_application_fee LIMIT 1;
+   WHERE ii.invoice_id = v_c_id AND ii.is_application_fee LIMIT 1;
   IF v_a_rate IS NULL OR v_c_rate IS NULL THEN RAISE EXCEPTION 'PROBE_SETUP ${label}: missing application-fee line (a %, c %)', v_a_rate, v_c_rate; END IF;
   RAISE EXCEPTION 'PROBE_ROLLBACK ${label} grp=% a_season=% a_rate=% c_grp=% c_season=% c_rate=%', v_grp, v_a_season, v_a_rate, v_c_grp, v_c_season, v_c_rate;
 END
@@ -699,6 +716,12 @@ try {
   // season column report the DATE it was handed. This is the exact swap the
   // 2026-09-30 19:00-Chicago window turns on, observable at today's instant.
   const realComputeSeason = functionDef('compute_season');
+  // Captured BEFORE the shim is installed. The restoration check below used to compare
+  // bodyMd5('compute_season') against a literal copy of bodyMd5's own query -- both operands read
+  // the CURRENT body, so it was a tautology that passed even if the shim were still installed
+  // (CodeRabbit, 2026-09-04). Pinning the real hash here is what makes the later assertion able
+  // to fail: if the shim survived, or realComputeSeason restored something else, it goes red.
+  const realComputeSeasonMd5 = bodyMd5('compute_season');
   for (const fn of FUNCS) psql(preApplyDefs[fn]);          // back to the pre-candidate bodies
   assert.deepEqual(bodyState(), before, 'reset to the live pins before the wiring probe');
   psql(SHIM);
@@ -714,7 +737,8 @@ try {
     `AFTER the candidate the season must follow the CHICAGO business day: ${JSON.stringify(wiringAfter)}`);
   assert.notEqual(wiringAfter.chicagoEnc, wiringAfter.sessionEnc, 'wiring probe precondition: the two days must differ');
   psql(realComputeSeason);
-  assert.equal(bodyMd5('compute_season'), scalar("SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'compute_season'"), 'compute_season restored');
+  assert.equal(bodyMd5('compute_season'), realComputeSeasonMd5,
+    'compute_season must be byte-identical to its PRE-shim body: every later phase reads season through it, so a surviving shim would silently invalidate PHASE 8');
   log(`PHASE 7: clock wiring proven -- with session day ${wiringBefore.session} vs Chicago day ${wiringBefore.chicago}, season followed the SESSION day before (${wiringBefore.encodes}) and the CHICAGO day after (${wiringAfter.encodes})`);
 
   // ---- PHASE 8a: mutation -- either site left on the current-season helper -----------
