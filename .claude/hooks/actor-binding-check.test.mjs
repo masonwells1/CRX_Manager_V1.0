@@ -3343,6 +3343,19 @@ r = runHook(
 ok(isDeny(r), "schema-distinct unqualified custom types cannot collapse into one ALTER identity");
 
 r = runHook(
+  "CREATE SCHEMA evil;\n" +
+  "CREATE DOMAIN evil.uuid AS pg_catalog.uuid;\n" +
+  "SET search_path = evil, pg_catalog;\n" +
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")
+    .replace("test_fn", "shadowed_uuid_overload") +
+  "\nSET search_path = pg_catalog;\n" +
+  fn("BEGIN RETURN NULL; END;", "p_actor_id pg_catalog.uuid", "SECURITY INVOKER")
+    .replace("test_fn", "shadowed_uuid_overload") +
+  "\nALTER FUNCTION public.shadowed_uuid_overload(uuid) SECURITY INVOKER;"
+);
+ok(isDeny(r), "a shadowed bare uuid ALTER cannot demote a different SECURITY DEFINER overload");
+
+r = runHook(
   fn(MUTATION, "p_performed_by s1.actor_id", "SECURITY DEFINER")
     .replace("test_fn", "qualified_custom_type") +
   "\nALTER FUNCTION public.qualified_custom_type(s1.actor_id) SECURITY INVOKER;"

@@ -981,6 +981,12 @@ pg_cron or another execution boundary is treated as security-relevant dynamic DD
 a textually later safe top-level ALTER cannot claim to repair code that executes afterward. This does
 not model general branch or scheduler timing and does not change the broader capped posture.
 
+**Shadowed UUID overload narrowing (authorized 2026-09-03).** When a migration can place a
+user-schema `uuid` before explicit `pg_catalog`, bare UUID signatures are not used to match CREATE and
+ALTER routine identities. A later `SECURITY INVOKER` ALTER therefore cannot demote the wrong overload
+in the guard's model. Explicit `pg_catalog.uuid` remains comparable; broader type resolution is not
+modeled and the capped posture is unchanged.
+
 **What it does NOT catch, stated so nobody re-derives it:**
 
 | Gap | Why it is open |

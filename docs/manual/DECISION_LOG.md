@@ -7,6 +7,18 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-03 — fail closed on shadowed bare UUID overload identity in PR #449
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** If a migration can shadow bare `uuid` resolution, unqualified UUID in CREATE/ALTER
+routine signatures is not stable final-mode identity. Only explicit unambiguous identities may let a
+later `SECURITY INVOKER` ALTER remove an earlier SECURITY DEFINER body from actor review.
+
+**Boundary.** This reuses the existing file-level UUID-shadow risk signal. It does not resolve each
+statement's catalog state or widen the actor-name/dataflow analysis; the broader cap remains.
+
 ## 2026-09-03 — refuse runtime-ordered search_path poisoning in PR #449; keep the broader cap
 
 **Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
