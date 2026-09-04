@@ -1,7 +1,10 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-03 for the migration ledger ONLY. Schema shape is still the 2026-09-01
-reading below and was NOT re-read.** The current effective ordering high-water is the newest applied
+**Last verified: 2026-09-03 for the migration ledger; schema shape re-read 2026-09-03 15:34 UTC by
+the live-introspection regeneration of `.claude/schema-registry.json` carried in PR #586 (F06
+post-apply) — the only delta against the 2026-09-01 reading is `job_chemicals.driver` and its CHECK,
+and F2's `20260903160000` will move it again the moment it applies, so re-run the regeneration then.**
+The current effective ordering high-water is the newest applied
 authored NAME: **`20260903150000_job_chemicals_persist_driver`**.
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and

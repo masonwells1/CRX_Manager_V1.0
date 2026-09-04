@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260903025854",
+    "migrations_high_water": "20260903153402",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -372,6 +372,9 @@
       "20260831161000_require_cumulative_po_bill_confirmation",
       "20260831162000_fail_closed_historical_commission_balance",
       "20260831212415_guard_cycle_count_completion_revision",
+      "20260831233000_bind_section9_replays_to_intent",
+      "20260831235900_serialize_gauntlet_write_boundaries",
+      "20260903150000_job_chemicals_persist_driver",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -2016,6 +2019,16 @@
       ],
       "constraints": [
         "job_applied_records_start_weather_source_check"
+      ],
+      "nullable": true
+    },
+    "job_chemicals.driver": {
+      "values": [
+        "rate",
+        "qty"
+      ],
+      "constraints": [
+        "job_chemicals_driver_chk"
       ],
       "nullable": true
     },
@@ -7172,7 +7185,8 @@
       "phi_days",
       "warehouse",
       "vendor",
-      "customer_supplied"
+      "customer_supplied",
+      "driver"
     ],
     "job_dispatch_preservation": [
       "job_id",
