@@ -12,13 +12,12 @@ CRX Manager is a **live production app** for a real agricultural chemical distri
 ## Read order for your first session
 
 1. **`AGENTS.md`** — the concise shared contract: owner communication, authority, routing, true non-negotiables, and completion standards.
-2. **`docs/workflows/SAFE_DEVELOPMENT_RULES.md`** — the detailed "always do / never do" tables, migration safety, money handling.
-3. **This file** — the failure modes that got past agents before you, and how to not repeat them.
-4. **`docs/reference/gotchas.md`** — project-specific quirks that aren't obvious from reading code (wrong column names, non-obvious types, tables missing `updated_at`, etc.). Read the relevant section before touching an area it covers; do not load the entire file when the task is unrelated.
-5. **The `docs/workflows/` file for your task area** — e.g. `QUOTE_TO_DELIVERY.md` for the billing pipeline, `INVENTORY_RULES.md` for inventory, `DATABASE_CHANGE_CHECKLIST.md` before any migration, `RLS_SECURITY_GUIDE.md` before touching policies.
-6. **`docs/manual/ARCHITECTURE.md`** — orientation on how the app fits together, once it exists in your checkout. If it's missing, don't invent claims about structure — read the code directly instead.
+2. **This file** — the failure modes that got past agents before you, and how to not repeat them.
+3. **Follow the task table in `AGENTS.md`** — for any code change, read `docs/reference/coding-guidelines.md` and the relevant section of `docs/reference/gotchas.md`. Add only the relevant sections of `docs/workflows/SAFE_DEVELOPMENT_RULES.md` when the task is multi-file or touches data, money, security, permissions, production, migrations, or customers; do not load the full rulebook for unrelated work.
+4. **The `docs/workflows/` file routed for your task area** — e.g. `QUOTE_TO_DELIVERY.md` for the billing pipeline, `INVENTORY_RULES.md` for inventory, `DATABASE_CHANGE_CHECKLIST.md` before any migration, `RLS_SECURITY_GUIDE.md` before touching policies.
+5. **`docs/manual/ARCHITECTURE.md`** — orientation on how the app fits together. If it's missing, don't invent claims about structure — read the code directly instead.
 
-Do not skip straight to step 5 because the task "looks simple." Steps 1–4 are what stop a simple-looking task from becoming the 91st fix commit for the same bug class.
+Do not skip the routing decision because the task "looks simple." Start with the contract and this file, then load only the guidance the task actually needs.
 
 ---
 
