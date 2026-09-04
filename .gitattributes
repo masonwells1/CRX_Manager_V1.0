@@ -169,3 +169,10 @@ scripts/apply-live-testdata-maintenance-20260812.test.mjs text eol=lf
 # has nothing to do with the SQL. Pin both to LF.
 supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql text eol=lf
 scripts/smoke/prove-number-generator-gates.mjs text eol=lf
+
+# The invoice_date Chicago-fallback migration pins four live function bodies by md5 and
+# installs LF bodies; its prover reads it byte-for-byte. Pin both to LF on every platform.
+supabase/migrations/20260904160000_invoice_date_fallbacks_chicago.sql text eol=lf
+scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs text eol=lf
+# Byte-exact live bodies (one keeps CRLF, as production does); never EOL-converted.
+scripts/smoke/fixtures/invoice-date-fallbacks-live-bodies-20260903.sql -text diff whitespace=cr-at-eol
