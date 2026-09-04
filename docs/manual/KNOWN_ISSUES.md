@@ -1152,7 +1152,7 @@ A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-rec
 duplicates one of #449's fixes — delete it rather than continuing it.
 
 
-## FIXED IN CODE 2026-09-03, MIGRATION PENDING LIVE APPLY — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
+## RESOLVED 2026-09-03 (code merged in PR #582, migration applied live 15:34 UTC as ledger version `20260903153402`) — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
 
 **Fix (2026-09-03).** The driver is now PERSISTED, exactly as the "clean fix" below asked
 for. Migration `20260903150000_job_chemicals_persist_driver.sql` adds nullable
@@ -1168,10 +1168,14 @@ paths write — are still left exactly as saved; instead, `chemRowDefects` now m
 `CHEM_QUANTITY_ZERO_BUT_EXPECTED` per line, so the disagreement is shown on the row and the
 save is refused in the browser rather than rolling back at the server. Container proof
 (`scripts/smoke/prove-save-job-persist-driver.mjs`: T1–T66 + D1–D8, 13 mutants) and browser
-proof are recorded in `docs/changelog.d/2026-09-03-f06-job-chemicals-driver.md`. **Until the
-migration is applied live, the on-screen mirror is the whole fix in production** and every
-line still reloads as driver-unknown. The heuristic recovery below stays reverted. The
-original entry is kept as the diagnosis.
+proof are recorded in `docs/changelog.d/2026-09-03-f06-job-chemicals-driver.md`. **The
+migration was applied live on 2026-09-03 at 15:34 UTC** (ledger version `20260903153402`,
+verified by SELECT afterwards: `driver` nullable text with no default, the exact CHECK, `save_job`
+md5 `18d08d5f40aea91fe13ac3e5a686c549` with the v3 marker; apply evidence in
+`docs/changelog.d/2026-09-03-f06-migration-applied-live.md`). From that moment every save records
+the typed side; the 4 rows saved before the apply keep a NULL driver until they are re-typed, and
+the on-screen mirror covers them. The heuristic recovery below stays reverted. The original entry
+is kept as the diagnosis.
 
 **Plain English.** Open a saved job, change the acres, and a chemical line keeps both numbers it was
 saved with. A line saved as **1.5 pt/ac, quantity 150, over 100 acres** still reads 1.5 and 150 at
