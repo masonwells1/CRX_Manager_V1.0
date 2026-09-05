@@ -962,10 +962,13 @@ export function fleetSummaryLine(ledgerCount, parkedCount) {
 // CLI writes `.agents/skills/source-command-<name>/SKILL.md` into a checkout by
 // itself; the repo's generator never emits that shape (FOREIGN_SKILL_DIR_RE in
 // scripts/sync-agent-workflows.mjs; KNOWN_ISSUES 2026-09-02). They are harness
-// output, not work — reported and LABELLED here, never dropped.
+// output, not work — reported and LABELLED here, never dropped. Only an UNTRACKED
+// (`??`) entry is the CLI's litter: a staged, modified, or deleted file under that
+// folder is something a person did on purpose and stays real dirt (Codex App
+// review of PR #613, 2026-09-05).
 export const CODEX_IMPORT_DIRT_RE = /^\.agents\/skills\/source-command-[^/]+\//;
 export function isCodexImportDirtLine(line) {
-  const m = /^.{2} "?(.+?)"?$/.exec(String(line || "").replace(/\r$/, ""));
+  const m = /^\?\? "?(.+?)"?$/.exec(String(line || "").replace(/\r$/, ""));
   if (!m) return false;
   return CODEX_IMPORT_DIRT_RE.test(m[1].replace(/\\/g, "/"));
 }

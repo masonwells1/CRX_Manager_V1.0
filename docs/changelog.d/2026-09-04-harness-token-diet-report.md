@@ -18,10 +18,12 @@ eligibility. This change does presentation only.
 
 - `.claude/hooks/worktree-awareness-lib.mjs` + `worktree-awareness.mjs`: every worktree that is
   not provably finished — unmerged, merge-state unknown, unreadable, or carrying real uncommitted
-  changes — keeps its full two-line entry, unchanged wording. Worktrees that are merged or detached
-  with no real changes fold into ONE counted line that still names each of them. Dirt from the
-  Codex CLI `/import` folders (`.agents/skills/source-command-*/`) is recognised by region and
-  LABELLED ("24 dirty files (all Codex-import skill dirs)"), never dropped. The "PARKED STATE
+  changes — keeps its full two-line entry, unchanged wording. Worktrees that `origin/main` provably
+  contains, with no real changes, fold into ONE counted line that still names each of them; a
+  detached worktree whose merge state is unknown keeps its detailed lines. UNTRACKED files in the
+  Codex CLI `/import` folders (`.agents/skills/source-command-*/`) are recognised by region and
+  LABELLED ("24 dirty files (all Codex-import skill dirs)"), never dropped; a staged, modified, or
+  deleted file under that folder is real dirt (Codex App review of PR #613). The "PARKED STATE
   UNKNOWN" tail lists each distinct reason once with the worktrees that share it. The cleanup hook
   and its classifier are untouched: nothing becomes deletable that was not deletable before.
 - `.claude/hooks/hook-router-runtime.mjs` + `prompt-router.mjs`: `runHookRouter` accepts

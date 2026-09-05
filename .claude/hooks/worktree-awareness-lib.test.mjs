@@ -81,6 +81,13 @@ ok(!isCodexImportDirtLine("?? .agents/skills/ship/SKILL.md"), "a real adapter is
 ok(!isCodexImportDirtLine(" M .agents/skills/source-command-ship.md"), "near-miss shape (no dir) stays real dirt");
 ok(!isCodexImportDirtLine("?? docs/source-command-ship/SKILL.md"), "importer prefix outside .agents/skills stays real dirt");
 ok(!isCodexImportDirtLine(" M .claude/settings.local.json"), "settings.local is not importer dirt (cleanup has its own rule)");
+// Only UNTRACKED entries are the importer's litter; anything a person staged, edited, or
+// deleted under that folder is deliberate work (Codex App P2 on PR #613).
+ok(!isCodexImportDirtLine("A  .agents/skills/source-command-ship/SKILL.md"), "a STAGED file under an importer dir is real dirt");
+ok(!isCodexImportDirtLine(" M .agents/skills/source-command-ship/SKILL.md"), "a MODIFIED tracked file under an importer dir is real dirt");
+ok(!isCodexImportDirtLine(" D .agents/skills/source-command-ship/SKILL.md"), "a DELETED tracked file under an importer dir is real dirt");
+ok(!isCodexImportDirtLine("AM .agents/skills/source-command-ship/SKILL.md"), "staged-then-edited file under an importer dir is real dirt");
+eq(classifyDirt("?? .agents/skills/source-command-ship/\nA  .agents/skills/source-command-fleet/SKILL.md\n"), { total: 2, importer: 1, real: 1 }, "classifyDirt counts a staged importer-dir file as real");
 const mixedDirt = classifyDirt("?? .agents/skills/source-command-ship/\n?? .agents/skills/source-command-fleet/\n M src/App.tsx\n");
 eq(mixedDirt, { total: 3, importer: 2, real: 1 }, "classifyDirt splits importer dirt from real dirt");
 eq(classifyDirt(""), { total: 0, importer: 0, real: 0 }, "clean status → all zero");
