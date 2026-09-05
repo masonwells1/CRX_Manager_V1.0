@@ -200,9 +200,29 @@ ok(isDeny(r), "apply_migration on an unregistered connector UUID is denied");
 r = runHook({ tool_name: ALT_UUID + "Execute_SQL", tool_input: { query: "select 1" } });
 ok(isDeny(r), "execute_sql on an unregistered connector UUID is denied (case-insensitive)");
 r = runHook({ tool_name: ALT_UUID + "list_projects", tool_input: {} });
-eq(r.stdout.trim(), "", "read-only leaf on an unregistered UUID passes through (could be any connector)");
+eq(r.stdout.trim(), "", "Supabase read-only leaf on an unregistered UUID passes through (harmless on any connector)");
 r = runHook({ tool_name: ALT_UUID + "get_event", tool_input: { id: "1" } });
-eq(r.stdout.trim(), "", "unrelated leaf on an unregistered UUID passes through (stated residual)");
+eq(r.stdout.trim(), "", "read-shaped leaf (get_) on an unregistered UUID passes through");
+r = runHook({ tool_name: ALT_UUID + "search_files", tool_input: { q: "x" } });
+eq(r.stdout.trim(), "", "read-shaped leaf (search_) on an unregistered UUID passes through");
+// Codex probe 2026-09-05 (PR #605 head c3e2b3fd7): unknown or renamed mutations on a
+// reinstalled connector must NOT fall through to the classifier.
+r = runHook({ tool_name: ALT_UUID + "delete_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "unknown mutation (delete_project) on an unregistered UUID is denied");
+ok(r.stdout.includes("UNREGISTERED connector UUID"), "denial names the unregistered-UUID cause");
+r = runHook({ tool_name: ALT_UUID + "future_write_tool", tool_input: {} });
+ok(isDeny(r), "never-seen leaf (future_write_tool) on an unregistered UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "Create_Event", tool_input: {} });
+ok(isDeny(r), "non-read leaf in mixed case on an unregistered UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "import-claude-design-from-url", tool_input: {} });
+ok(isDeny(r), "hyphenated non-read leaf on an unregistered UUID is denied (regex accepts hyphens)");
+// A REGISTERED non-Supabase connector (the Vercel UUID named in .claude/settings.json)
+// is left to settings.json: its unknown leaves are not this guard's business.
+const VERCEL_UUID = "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__";
+r = runHook({ tool_name: VERCEL_UUID + "unpause_project", tool_input: { project_id: "x" } });
+eq(r.stdout.trim(), "", "non-read leaf on a REGISTERED connector UUID (Vercel) passes through to settings.json");
+r = runHook({ tool_name: VERCEL_UUID + "deploy_to_vercel", tool_input: {} });
+eq(r.stdout.trim(), "", "deploy_to_vercel on the registered Vercel UUID is left to its ask entry");
 r = runHook({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function", tool_input: {} });
 eq(r.stdout.trim(), "", "deploy_edge_function on the REGISTERED UUID is still left to the ask tier");
 

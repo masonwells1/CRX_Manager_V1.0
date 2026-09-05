@@ -31,12 +31,18 @@
 //     being refused, so a new or renamed Supabase mutation absent from the finite
 //     settings.json deny list could be accepted. Mirrors the fail-closed rule in
 //     .codex/hooks/production-action-guard.mjs (SUPABASE_READ_ONLY_TOOLS).
+//   - UNREGISTERED connector UUIDs (a UUID-shaped server named in no Claude
+//     settings file): every leaf that is neither on the Supabase read-only
+//     allowlist nor read-shaped by verb is denied until the UUID is
+//     registered - the reinstalled-Supabase case (Codex P1 x2, PR #605).
 //
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
 // broken guard must never brick a session.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { checkCommandDeep, checkMigrationModify } from "./bash-safety-lib.mjs";
 
 function out(decision, reason) {
@@ -82,32 +88,95 @@ const SUPABASE_READ_ONLY_TOOLS = new Set([
 ]);
 // Owned by another gate; this guard stays silent so THAT gate decides.
 const SUPABASE_GATED_ELSEWHERE = new Set(["execute_sql", "apply_migration", "deploy_edge_function"]);
-// Sensitive Supabase leaves by SUFFIX, independent of server prefix. The
-// connector UUID is per-install and changes on reinstall
+// ── Connector UUID registry: fail closed on UNREGISTERED UUID servers ────────
+// The Supabase connector UUID is per-install and changes on reinstall
 // (.claude/skills/deploy-edge-function/SKILL.md), so a reinstalled connector
 // arrives under a UUID that neither settings.json nor SUPABASE_TOOL_RE knows,
-// and under Auto mode its lifecycle mutations and deploy/migration/SQL leaves
-// would reach the classifier (GitHub Codex P1 2026-09-05, PR #605). Any
-// UUID-shaped server offering one of these leaves is denied until its UUID is
-// registered here and in settings.json. Read-only and unknown leaves on an
-// unregistered UUID pass through: the guard cannot tell one connector's UUID
-// from another's, and denying every unknown leaf on every UUID server would
-// break unrelated connectors. Stated residual, mirrored from the Codex guard's
-// LIVE_TOOL_ACTIONS suffix rule.
-const UUID_SERVER_TOOL_RE = /^mcp__[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}__([a-z0-9_]+)$/i;
+// and under Auto mode its mutations would reach the classifier (GitHub Codex
+// P1 x2 on PR #605, 2026-09-05). The hook payload carries only the tool name,
+// so the connector's identity cannot be derived at call time. The next best
+// source of truth is the Claude settings files themselves: a UUID server that
+// Mason (or a reviewed PR) has named in ANY allow/ask/deny entry of the repo
+// settings.json, settings.local.json, or ~/.claude/settings.json is a
+// REGISTERED connector whose classification is settled there. A UUID server
+// that appears in none of them is UNREGISTERED and is treated as possibly the
+// reinstalled Supabase connector:
+//   - a leaf on the exact Supabase read-only allowlist passes (harmless on any
+//     connector);
+//   - a leaf that is read-shaped by verb (get_/list_/search_/read_/find_/
+//     query_/... ) passes, so a brand-new read-only connector still works;
+//   - EVERYTHING ELSE is denied, including the twelve known Supabase live
+//     leaves, `delete_project`, `future_write_tool`, or any renamed mutation,
+//     until the UUID is registered. The denial says how.
+// Registering is one settings.json edit (agents may make it natively since
+// PR #605), and a reinstalled Supabase connector must ALSO be added to
+// SUPABASE_TOOL_RE so the full allowlist applies again. Residual: a mutation
+// deliberately named with a read verb on an unregistered connector passes;
+// no known connector does that, and the registered path is the intended one.
+const UUID_SERVER_TOOL_RE = /^mcp__([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})__([\w-]+)$/i;
 const SUPABASE_SENSITIVE_LEAVES = new Set([
   "apply_migration", "deploy_edge_function", "execute_sql",
   "delete_branch", "merge_branch", "reset_branch", "rebase_branch", "create_branch",
   "create_project", "pause_project", "restore_project", "confirm_cost",
 ]);
+const READ_SHAPED_LEAF_RE = /^(?:get|list|search|read|find|query|describe|fetch|show|view|check|inspect|compare|validate|render|extract|convert|download|suggest|analy[sz]e|display|lookup|count|preview)(?:_|$)/i;
+const SETTINGS_UUID_RE = /^mcp__([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})__/i;
+
+function registeredConnectorUuids() {
+  const found = new Set();
+  const hookDir = path.dirname(fileURLToPath(import.meta.url));
+  const repoRoot = path.resolve(hookDir, "..", "..");
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const candidates = [
+    path.join(repoRoot, ".claude", "settings.json"),
+    path.join(repoRoot, ".claude", "settings.local.json"),
+    path.join(projectDir, ".claude", "settings.json"),
+    path.join(projectDir, ".claude", "settings.local.json"),
+    path.join(os.homedir(), ".claude", "settings.json"),
+  ];
+  for (const file of candidates) {
+    try {
+      if (!existsSync(file)) continue;
+      const parsed = JSON.parse(readFileSync(file, "utf8"));
+      const perms = parsed?.permissions && typeof parsed.permissions === "object" ? parsed.permissions : {};
+      for (const tier of ["allow", "ask", "deny"]) {
+        for (const entry of Array.isArray(perms[tier]) ? perms[tier] : []) {
+          const m = SETTINGS_UUID_RE.exec(String(entry));
+          if (m) found.add(m[1].toLowerCase());
+        }
+      }
+    } catch (err) {
+      // A malformed settings file yields fewer registered UUIDs, i.e. MORE
+      // denials — the safe direction. Say so on stderr; never throw.
+      process.stderr.write(`[mcp-tool-guard] could not read ${file}: ${err?.message || err}\n`);
+    }
+  }
+  return found;
+}
+
 const supabaseLeaf = SUPABASE_TOOL_RE.exec(toolName);
 if (!supabaseLeaf) {
-  const uuidLeaf = UUID_SERVER_TOOL_RE.exec(toolName);
-  if (uuidLeaf && SUPABASE_SENSITIVE_LEAVES.has(uuidLeaf[1].toLowerCase())) {
-    out("block",
-      `MCP TOOL GUARD (${toolName}): "${uuidLeaf[1]}" is a Supabase live-action leaf on a connector UUID this repo does not recognise. ` +
-      "The connector UUID changes on reinstall; register the new UUID in .claude/settings.json (ask/deny entries) and in " +
-      ".claude/hooks/mcp-tool-guard.mjs SUPABASE_TOOL_RE before any live Supabase action can run through it (fail closed).");
+  const uuidMatch = UUID_SERVER_TOOL_RE.exec(toolName);
+  if (uuidMatch) {
+    const uuid = uuidMatch[1].toLowerCase();
+    const leaf = uuidMatch[2];
+    const leafLower = leaf.toLowerCase();
+    if (!registeredConnectorUuids().has(uuid)) {
+      const howToFix =
+        "The connector UUID changes on reinstall and this UUID appears in no Claude settings file (repo .claude/settings.json, " +
+        ".claude/settings.local.json, ~/.claude/settings.json). Register it there (an allow/ask/deny entry for at least one of its " +
+        "tools) so its classification is settled; if it is the reinstalled Supabase connector, also add the UUID to " +
+        ".claude/hooks/mcp-tool-guard.mjs SUPABASE_TOOL_RE so the exact read-only allowlist applies again (fail closed).";
+      if (SUPABASE_SENSITIVE_LEAVES.has(leafLower)) {
+        out("block",
+          `MCP TOOL GUARD (${toolName}): "${leaf}" is a Supabase live-action leaf on an UNREGISTERED connector UUID. ` + howToFix);
+      }
+      if (!SUPABASE_READ_ONLY_TOOLS.has(leafLower) && !READ_SHAPED_LEAF_RE.test(leaf)) {
+        out("block",
+          `MCP TOOL GUARD (${toolName}): "${leaf}" is not a read-shaped tool and runs on an UNREGISTERED connector UUID, ` +
+          "so it is denied rather than left to the permission classifier. " + howToFix);
+      }
+    }
   }
 }
 if (supabaseLeaf) {
