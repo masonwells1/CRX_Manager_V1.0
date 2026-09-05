@@ -45,6 +45,20 @@ test('fails closed for role definitions and canonical role membership changes', 
   }
 });
 
+test('fails closed for ownership mutations and direct system-catalog writes', () => {
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  for (const mutation of [
+    'REASSIGN OWNED BY CURRENT_USER TO anon;',
+    'ALTER TABLE public.customers OWNER TO anon;',
+    "UPDATE pg_catalog.pg_proc SET proconfig = ARRAY['search_path=attacker'] WHERE proname = 'post_return_credit';",
+    'UPDATE pg_proc SET proacl = NULL;',
+    'DELETE FROM pg_catalog.pg_default_acl;',
+  ]) assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\n${mutation}`),
+    ['unparseable-security-definer-sql'],
+  );
+});
+
 test('fails closed for quoted names and unsupported ACL forms that can restore execution', () => {
   const quoted = `CREATE FUNCTION public."danger-fn"() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT; $$;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['danger-fn']);

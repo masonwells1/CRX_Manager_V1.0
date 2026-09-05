@@ -76,3 +76,16 @@ RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
     ['unparseable-security-definer-sql'],
   );
 });
+
+test('proof production fails closed on SECURITY DEFINER ownership and catalog mutations', () => {
+  const sql = `CREATE FUNCTION public.post_return_credit(p_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN RETURN; END; $$;
+REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;`;
+  for (const mutation of [
+    'REASSIGN OWNED BY CURRENT_USER TO anon;',
+    'UPDATE pg_catalog.pg_proc SET proacl = NULL;',
+  ]) assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${sql}\n${mutation}`),
+    ['unparseable-security-definer-sql'],
+  );
+});

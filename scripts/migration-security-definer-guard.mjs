@@ -456,7 +456,14 @@ export function securityDefinerMissingAnonRevokes(sql) {
   const executable = executableSql(sql);
   if (executable === null) return ['unparseable-security-definer-sql'];
   if (unsafeRoutineAlterConfiguration(executable)) return ['unparseable-security-definer-sql'];
-  if (/\bALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b[\s\S]*?\bOWNER\s+TO\b/i.test(executable)) return ['unparseable-security-definer-sql'];
+  // Source-only evidence cannot prove ownership or catalog state. Those can
+  // silently change a routine's effective ACL or configuration after a valid
+  // declaration, so any ownership transfer or direct system-catalog DML
+  // blocks proof generation rather than attempting an incomplete model.
+  if (
+    /\b(?:REASSIGN\s+OWNED|OWNER\s+TO)\b/i.test(executable)
+    || /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:(?:pg_catalog\s*\.\s*)?pg_[A-Za-z0-9_]+)\b/i.test(executable)
+  ) return ['unparseable-security-definer-sql'];
   const declarations = [
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
     ...executable.matchAll(SECURITY_DEFINER_ALTER).map((match) => ({ match, kind: 'alter' })),
