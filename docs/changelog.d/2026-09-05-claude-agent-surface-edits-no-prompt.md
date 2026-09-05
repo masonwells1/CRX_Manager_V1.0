@@ -14,10 +14,11 @@ were — he said so explicitly.
   `scripts/write-codex-push-proof.mjs`, `scripts/run-claude-review.mjs`; and the Desktop Commander /
   filesystem MCP write tools (`start_process`, `interact_with_process`, `write_file`, `edit_block`,
   `edit_file`, `move_file`, `set_config_value`).
-- Added to `permissions.allow`: `Task`, and server-level grants for `mcp__github`, `mcp__supabase`,
-  `mcp__Supabase`, `mcp__claude_ai_Supabase`, the UUID-named Supabase connector, `mcp__Vercel`,
-  `mcp__Desktop_Commander`, `mcp__filesystem`, `mcp__Claude_Browser`, so an unlisted read tool is
-  no longer silently refused.
+- Added to `permissions.allow`: `Task`, `mcp__Claude_Browser`, and explicit read-only Supabase and
+  Vercel MCP tools, so a read tool is no longer silently refused. (The first cut used server-wide
+  grants; the exact-SHA Codex review blocked that — see
+  `2026-09-05-claude-settings-explicit-mcp-grants.md` for the correction and the new `deny`
+  entries for the Supabase lifecycle and filesystem/Desktop Commander mutators.)
 
 Why the `ask` entries mattered more than they looked: this repo runs `defaultMode: dontAsk`, and in
 that mode an `ask` rule is a silent deny. So these were never prompts — Claude simply could not edit
