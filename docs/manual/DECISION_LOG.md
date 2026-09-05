@@ -7,7 +7,19 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
-## 2026-09-05 — Agents may natively edit the enforcement surfaces without a prompt; Mason overrode the Codex objection and merges PR #605 himself
+## 2026-09-05 — Retain guard approvals and broaden ordinary work
+
+**Source:** Mason answered "yes proceed" to the recommendation to retain approval for
+files controlling review and merging while giving agents broad access to ordinary work.
+
+**Decision:** Restore all 32 native Edit/Write approval entries for the 16 protected
+configuration/hook/workflow/script path patterns in PR #605. Keep the user's inherited
+permission mode, explicit MCP read grants, connector safeguards, and expanded risky-path
+review coverage. Ordinary source edits remain permitted. Explicit merge/deploy approvals
+and the existing protected delivery process are unchanged. This supersedes the earlier
+same-day unrestricted native-edit decision below. No review rejection may be waived.
+
+## 2026-09-05 — Superseded: agents may natively edit enforcement surfaces without a prompt
 
 **Implementation follow-up:** a fresh Claude session proved that removing ask rules alone still
 leaves built-in `.claude/` writes denied under `dontAsk`. PR #605 now removes that repository mode

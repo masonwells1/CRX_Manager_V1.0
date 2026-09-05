@@ -118,8 +118,8 @@ const SUPABASE_GATED_ELSEWHERE = new Set(["execute_sql", "apply_migration", "dep
 //      reinstalled Supabase connector with only `list_projects` listed still
 //      has `delete_project`, `future_write_tool`, `deploy_edge_function`
 //      denied (Codex probe on 68c1c32f0). The denial says how to register.
-// Registering is a settings.json edit (agents may make it natively since
-// PR #605); a reinstalled Supabase connector must ALSO be added to
+// Registering is a settings.json edit requiring approval under PR #605's final
+// policy; a reinstalled Supabase connector must ALSO be added to
 // SUPABASE_TOOL_RE. Residual: a mutation deliberately named with a read verb
 // on an unidentified connector passes; no known connector does that. A
 // malformed settings file yields fewer registered entries, i.e. MORE denials.

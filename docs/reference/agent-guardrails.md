@@ -1,9 +1,15 @@
 # Agent guardrails — hooks & review subagents (CRX Manager)
 
-PR #605 permission-mode verification: removing path-specific ask rules does not override Claude's
-built-in protected-path check. The repo now inherits the user's mode (Mason uses Auto), so those
-writes go to Claude's classifier rather than being silently denied by a repo `dontAsk` override.
-Explicit ask/deny rules and independent exact-commit review requirements remain in force.
+Current PR #605 decision: Mason approved retaining native Edit/Write approval for the
+16 protected hook/configuration/workflow/script path patterns. These explicit ask rules
+apply even in Auto mode. Ordinary source edits remain allowed; the earlier same-day
+notes describing unrestricted native enforcement-file edits are superseded. The repo
+still inherits the user's mode instead of forcing silent refusals with `dontAsk`.
+
+PR #605 permission-mode verification: removing path-specific ask rules alone did not override
+Claude's built-in protected-path check under `dontAsk`. The inherited user mode supports ordinary
+work, while the restored explicit ask rules take priority for protected configuration writes.
+Independent exact-commit review requirements also remain in force.
 
 > Extracted from `CLAUDE.md` on 2026-06-15 to keep the always-loaded file lean. This is the full reference for the
 > automated safety net; `CLAUDE.md` keeps only a short summary + a pointer here. Regenerate the schema registry the
