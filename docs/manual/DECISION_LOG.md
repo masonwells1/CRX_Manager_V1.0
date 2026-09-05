@@ -1,11 +1,21 @@
 # Decision Log
 
-Last verified: 2026-09-04
+Last verified: 2026-09-05
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-05 — Agents may natively edit the enforcement surfaces without a prompt; Mason overrode the Codex objection and merges PR #605 himself
+
+**Source:** Mason's 2026-09-05 direction ("give full permission to Claude and Codex ... everything else is free game"), reaffirmed twice after the concern was raised, and his reply "open it all I'll merge" after the exact-SHA Codex review of PR #605 returned a HIGH objection to exactly this point.
+
+**Decision:** `.claude/settings.json` no longer lists native `Edit`/`Write` of `.claude/settings.json`, `.claude/hooks/**`, `.codex/hooks/**`, `.codex/hooks.json`, `.codex/config.toml`, `.husky/**`, `.github/workflows/**`, `package.json`, `.coderabbit.yaml`, the `scripts/check-*`/`validate-*`/`verify-*` families, or the proof/ledger/review scripts in `ask`. Under this repo's `dontAsk` mode those entries were silent refusals, not prompts. Merge, deploy, and live-database entries stay in `ask`; the `deny` list grew (Supabase lifecycle, filesystem and Desktop Commander mutators); MCP grants are explicit and read-only; the browser grant is read-only tools.
+
+**Why:** Mason cannot review code, so a permission prompt buys him nothing and a silent refusal only stalls work he cannot diagnose. The hooks, CI, branch protection, and the risky-path exact-SHA Codex proof at merge are the boundary he relies on. Codex's objection — a mistaken or hijacked session can now rewrite those hooks locally — was put to him plainly with the recommendation to keep the gate files prompted; he chose the full opening and to click Merge himself, since the Codex proof gate binds agents, not the owner.
+
+**What this forbids/implies:** no agent may self-certify past a `BLOCKERS` verdict; when Codex objects to a settings change, the objection goes to Mason and only Mason's own GitHub merge lands it. A hook or settings edit remains a risky path: agents still need the exact-SHA Codex proof to merge one. Do not re-add the removed `ask` entries without a fresh decision here. Recorded as a known residual in `docs/reference/agent-guardrails.md`.
 
 ## 2026-09-04 — Agent instructions use a lean shared contract and task-routed detail
 
