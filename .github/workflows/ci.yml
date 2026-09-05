@@ -574,6 +574,40 @@ jobs:
           TEMP: ${{ runner.temp }}
         run: node scripts/supplier-pricing-phase3-private-artifacts.test.mjs
 
+      - name: Report 8.3 short-name generation on the runner volumes
+        # 2026-09-05 (Codex GitHub App P2 on #612): review-proof-guard.test.mjs
+        # carries Windows 8.3 short-name alias cases. They run only when the
+        # volume holding the test fixture (TEMP, redirected below) hands out
+        # aliases; otherwise the test prints a skip note. This step makes that
+        # answer visible on its own: the per-volume setting, and whether a fresh
+        # long file name under the redirected TEMP actually receives an alias.
+        shell: pwsh
+        env:
+          PROBE_ROOT: ${{ runner.temp }}
+        run: |
+          $volumes = @("C:", (Split-Path -Qualifier $env:GITHUB_WORKSPACE), (Split-Path -Qualifier $env:PROBE_ROOT)) | Select-Object -Unique
+          foreach ($volume in $volumes) {
+            Write-Host "--- fsutil 8dot3name query $volume"
+            fsutil 8dot3name query $volume
+          }
+          $probe = Join-Path $env:PROBE_ROOT "eight-dot-three-probe"
+          New-Item -ItemType Directory -Force -Path $probe | Out-Null
+          Set-Content -Path (Join-Path $probe "codex-review-0123abcd.json") -Value "{}"
+          Write-Host "--- dir /x $probe (a ~1 entry in the short-name column means aliases are generated)"
+          cmd /c dir /x $probe
+
+      - name: Guard-hook regression tests (win32 alias and path semantics)
+        # 2026-09-05: the same suite lint-typecheck-test runs on Ubuntu. Here it
+        # executes the win32-only branches — the 8.3 alias cases above, the
+        # `dir /x` parser, and realpathSync.native handling — that skip on every
+        # other platform, so before this step they ran nowhere in CI. Every file
+        # in the suite imports only Node builtins and sibling scripts, so no
+        # `npm ci` is needed. TEMP is redirected for the reason given above.
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: npm run test:correction-guards
+
   e2e-smoke:
     name: E2E Smoke Tests
     runs-on: ubuntu-latest
