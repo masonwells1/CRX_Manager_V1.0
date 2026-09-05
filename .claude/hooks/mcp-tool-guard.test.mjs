@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -336,5 +336,26 @@ for (const tier of ["ask", "deny"]) {
     r = runHook({ tool_name: SB_UUID + "execute_sql", tool_input: { query: "select 1" } }, dir);
     eq(r.stdout.trim(), "", `replacement UUID SQL defers to its explicit ${tier} rule`);
   });
+}
+for (const prefix of [SB_UUID, "mcp__other_supabase__", "mcp__supabase_prod__"]) {
+  withProjectSettings({ allow: [prefix + "list_tables", prefix + "apply_migration"] }, (dir) => {
+    r = runHook({ tool_name: prefix + "apply_migration", tool_input: { name: "probe", query: "select 1" } }, dir);
+    ok(isDeny(r), "replacement/alias migration does not inherit authority from read or allow entries");
+  });
+  for (const tier of ["ask", "deny"]) {
+    withProjectSettings({ allow: [prefix + "list_tables"], [tier]: [prefix + "apply_migration"] }, (dir) => {
+      r = runHook({ tool_name: prefix + "apply_migration", tool_input: {} }, dir);
+      eq(r.stdout.trim(), "", `replacement/alias migration defers to its exact ${tier} rule`);
+    });
+  }
+}
+// Pin permission coverage to the guard's recognized filesystem mutator set.
+// Adding a new recognized mutator without a matching deny must fail this check.
+const hookSource = readFileSync(path.join(__dirname, "mcp-tool-guard.mjs"), "utf8");
+const mutatorAlternatives = hookSource.match(/^const DC_WRITE_RE = .*__\(([^)]+)\)/m);
+ok(mutatorAlternatives, "recognized filesystem mutator alternatives are discoverable");
+const permissionConfig = JSON.parse(readFileSync(path.join(__dirname, "../settings.json"), "utf8"));
+for (const leaf of mutatorAlternatives[1].split("|")) {
+  ok(permissionConfig.permissions.deny.includes(`mcp__Desktop_Commander__${leaf}`), `Desktop Commander ${leaf} is denied by settings`);
 }
 console.log(`mcp-tool-guard: ${pass} assertions passed`);
