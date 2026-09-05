@@ -97,9 +97,37 @@ measured refusal tell (`Action not completed`) is treated as a **fourth outcome*
 the command and declined it, which still costs the attempt. That state keeps the command and marker
 rather than clearing them, because presenting a spent attempt as untried invites another one.
 
+### Round two — five more, and the same lesson each time
+
+The second review was also BLOCKED, and again every finding was real. Four of the five are the
+*same* mistake in places the first pass did not reach:
+
+- **Two more paths read "a command exists" as "a review was requested".** The ready-label route (the
+  one an operator lands on when relabelling after a failure) and the crash-recovery handler both
+  reported success on marker + command alone. Both now consult the acknowledgement. The crash path is
+  precisely when the gate knows least, so it was the last place that should have been optimistic.
+- **The classifier failed OPEN.** It recognised the summary and the refusal and treated *everything
+  else* as an acknowledgement — so any unrelated or delayed bot comment could green the gate.
+  Polarity inverted: acceptance is matched positively (`Action performed`, `Review triggered`, both
+  measured here), and anything unrecognised is not an acknowledgement. If CodeRabbit changes its
+  wording this gate goes quiet rather than certifying a review that never happened; fix it by
+  updating the markers against observed replies, never by widening the default back.
+- **`CHANGES_REQUESTED` was missing from the last snapshot before posting.** Checked at the first two
+  and not the third, so an objection arriving during the mergeability poll or the marker write still
+  cost a slot.
+- **The window was 25 seconds, not the 30 the comment claimed.** Six attempts gave five gaps, and the
+  first read happened instantly, before any reply could exist. The wait now precedes every lookup.
+
+**One residual, stated rather than buried:** deleting the comment cannot revoke an event CodeRabbit
+may already be processing. If it answers after the window and someone then relabels, two paid reviews
+are possible. The window is sized so the gap is narrow — every acknowledgement measured here arrived
+within 11 s against a 30 s wait — and it cannot be closed by waiting, only narrowed. The failure
+message tells the operator to confirm no review exists for the head before relabelling, and the
+ready-label path now refuses to post over an existing command rather than quietly adding a second.
+
 ### Proven by mutation, not by coverage
 
-110/110 tests pass, and every new refusal was verified to actually fire by removing it and watching
+113/113 tests pass, and every new refusal was verified to actually fire by removing it and watching
 the suite go red — a guard nobody has watched refuse anything is not a proven guard:
 
 | mutation | tests that went red |
@@ -110,6 +138,12 @@ the suite go red — a guard nobody has watched refuse anything is not a proven 
 | terminal-lookup rule latched back to "any lookup succeeded" | 2 |
 | duplicate path hard-coded back to "confirmed" | 3 |
 | comment classification removed | 3 |
+| classifier default widened back to "anything counts" | 1 |
+
+Seven existing tests had to change, and that is itself a finding: each had asserted a green
+`duplicate` for a marker plus command with **no acknowledgement anywhere**. They were faithfully
+encoding the defect. Their real intent — no second paid command — is preserved and now asserted
+explicitly; only the reported status changed.
 
 The harness gained a `coderabbitai[bot]` acknowledgement, a GraphQL `reviewDecision`, and an
 `actionsComments` view. That last one matters: CodeRabbit's reply is a real comment that stays on the
