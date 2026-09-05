@@ -118,7 +118,7 @@ SELECT set_config('request.jwt.claim.sub', '\${cutoverPreimage.admin}', false);
     const result = applySql(sql, { allowFailure: true });
     const output = (result.stdout || '') + (result.stderr || '');
     assert.notEqual(result.status, 0, label + ' unexpectedly succeeded');
-    assert.match(output, /COMMISSION_HISTORY_REPORT_CONTRACT_DRIFT:/,
+    assert.match(output, /COMMISSION_HISTORY_REPORT_(?:CONTRACT|DEPENDENCY)_DRIFT:/,
       label + ' failed for wrong reason:\\n' + output);
     console.log('COMMISSION_REPORT_SNAPSHOT_MUTATION_REJECTED ' + label);
   }
@@ -171,7 +171,43 @@ COMMIT;\`, 'unexpected_anon_grantee');
 GRANT EXECUTE ON FUNCTION public.get_commission_history_report(date) TO authenticated WITH GRANT OPTION;
 \${replayGuardSource}
 COMMIT;\`, 'authenticated_grant_option');
-  console.log('COMMISSION_REPORT_SNAPSHOT_PROOF_PASS postgres=17 replay=ledger_then_snapshot mutation_guards=8');
+  expectReplayGuardFailure(\`BEGIN;
+ALTER FUNCTION public.get_commission_history_report(date) COST 321;
+\${replayGuardSource}
+COMMIT;\`, 'wrapper_cost_drift');
+  expectReplayGuardFailure(\`BEGIN;
+CREATE FUNCTION public.get_commission_balance_report(p_as_of_date text)
+RETURNS text
+LANGUAGE sql
+AS 'SELECT p_as_of_date';
+\${replayGuardSource}
+COMMIT;\`, 'child_shadow_overload');
+  const balanceDefinition = scalar(
+    "SELECT pg_get_functiondef('public.get_commission_balance_report(date)'::regprocedure);",
+  );
+  const balanceBodyDrift = balanceDefinition.replace(
+    'PERFORM public.require_admin();',
+    'PERFORM 1;',
+  );
+  assert.notEqual(balanceBodyDrift, balanceDefinition,
+    'child body mutation could not remove the reviewed admin gate');
+  expectReplayGuardFailure(\`BEGIN;
+\${balanceBodyDrift};
+\${replayGuardSource}
+COMMIT;\`, 'child_balance_body_drift');
+  expectReplayGuardFailure(\`BEGIN;
+GRANT EXECUTE ON FUNCTION public.get_commission_payment_detail_report(date) TO anon;
+\${replayGuardSource}
+COMMIT;\`, 'child_unexpected_anon_grantee');
+  expectReplayGuardFailure(\`BEGIN;
+ALTER FUNCTION public.get_commission_balance_report(date) SECURITY INVOKER;
+\${replayGuardSource}
+COMMIT;\`, 'child_security_invoker');
+  expectReplayGuardFailure(\`BEGIN;
+ALTER FUNCTION public.get_commission_payment_detail_report(date) SET search_path TO public;
+\${replayGuardSource}
+COMMIT;\`, 'child_search_path_drift');
+  console.log('COMMISSION_REPORT_SNAPSHOT_PROOF_PASS postgres=17 replay=ledger_then_snapshot mutation_guards=14');
   psql(\`
 SET session_replication_role = replica;
 UPDATE public.commission_history_cutover
