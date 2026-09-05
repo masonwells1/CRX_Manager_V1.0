@@ -13,11 +13,17 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 files controlling review and merging while giving agents broad access to ordinary work.
 
 **Decision:** Restore all 32 native Edit/Write approval entries for the 16 protected
-configuration/hook/workflow/script path patterns in PR #605. Keep the user's inherited
-permission mode, explicit MCP read grants, connector safeguards, and expanded risky-path
+configuration/hook/workflow/script path patterns in PR #605. Use `acceptEdits` mode,
+explicit MCP read grants, connector safeguards, and expanded risky-path
 review coverage. Ordinary source edits remain permitted. Explicit merge/deploy approvals
 and the existing protected delivery process are unchanged. This supersedes the earlier
 same-day unrestricted native-edit decision below. No review rejection may be waived.
+
+**Mode correction after review:** inheriting Auto left new named connector mutations
+eligible for classifier approval. `acceptEdits` keeps ordinary local edits automatic
+but requires permission for unlisted connector tools. This is a tool-permission mode,
+not a change to merge authorization or GitHub auto-merge. It supersedes the earlier
+implementation choice to inherit Auto mode and avoids chasing every future tool name.
 
 ## 2026-09-05 — Superseded: agents may natively edit enforcement surfaces without a prompt
 

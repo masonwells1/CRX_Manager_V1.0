@@ -2,12 +2,13 @@
 
 Current PR #605 decision: Mason approved retaining native Edit/Write approval for the
 16 protected hook/configuration/workflow/script path patterns. These explicit ask rules
-apply even in Auto mode. Ordinary source edits remain allowed; the earlier same-day
-notes describing unrestricted native enforcement-file edits are superseded. The repo
-still inherits the user's mode instead of forcing silent refusals with `dontAsk`.
+apply in the final `acceptEdits` mode. Ordinary source edits remain allowed; the earlier
+same-day notes describing unrestricted native enforcement-file edits or inherited Auto
+mode are superseded. Unlisted connector tools require permission rather than classifier
+approval. GitHub merge authorization is unchanged.
 
 PR #605 permission-mode verification: removing path-specific ask rules alone did not override
-Claude's built-in protected-path check under `dontAsk`. The inherited user mode supports ordinary
+Claude's built-in protected-path check under `dontAsk`. The final local-edit mode supports ordinary
 work, while the restored explicit ask rules take priority for protected configuration writes.
 Independent exact-commit review requirements also remain in force.
 

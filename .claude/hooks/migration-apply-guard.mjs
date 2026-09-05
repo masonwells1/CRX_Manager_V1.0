@@ -41,12 +41,13 @@ let payload;
 try {
   payload = JSON.parse(readFileSync(0, "utf8"));
 } catch {
-  out("allow");
+  process.exit(0);
 }
 
 const toolName = (payload?.tool_name || "").toLowerCase();
-// Only act on apply_migration tool calls; allow everything else instantly.
-if (!toolName.includes("apply_migration")) out("allow");
+// Only decide migration calls. An explicit allow on an unrelated MCP call
+// overrides its normal permission check; silence delegates to that check.
+if (!toolName.includes("apply_migration")) process.exit(0);
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 

@@ -426,9 +426,11 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isDeny(r), "flag deleted by explicit disarm → interactive rules apply again");
     writeMigrationFile(tmp, MIG, BENIGN_SQL);
 
-    // 8. Non-apply_migration tool → instant allow, no interference.
+    // 8. Unrelated tools must receive NO decision, not an overriding allow.
     r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "DROP TABLE customers;" } }, tmp);
-    ok(!isDeny(r), "other tools pass through untouched");
+    eq(r.stdout, "", "other tools defer to their own permission checks");
+    r = runHook({ tool_name: "mcp__permission_probe__write_marker", tool_input: {} }, tmp);
+    eq(r.stdout, "", "an unlisted named connector mutation is not approved by the migration guard");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
