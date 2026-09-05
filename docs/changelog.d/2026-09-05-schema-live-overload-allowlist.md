@@ -72,3 +72,19 @@ STILL IN SCOPE after the filter  : 610
 
 610 app functions remain checked. The offline suite passes: 74 passed, 78 skipped, and the `<=2` cap
 is satisfied at 0. Typecheck clean.
+
+### Codex review finding (fixed here)
+
+The exact-SHA `gpt-5.6-sol` review flagged the exclusion as incompletely qualified: it joined
+`pg_depend` on `objid` alone. `pg_depend.objid` is only meaningful together with the catalog it
+belongs to, so a dependency row in another catalog whose `objid` happened to equal a `pg_proc` oid
+would have excluded a real function — precisely the "filter that silently covers less" failure this
+change was trying to avoid.
+
+Fixed by adding `d.classid = 'pg_proc'::regclass`. That is not a new invention: the standing live
+predicate `scripts/db-invariant-sweeps/predicates/overloads.sql` has carried the identical exclusion
+— same `classid`/`objid`/`deptype` triple, and the same `plpgsql_check` rationale — since
+**2026-06-11**. This test was simply out of sync with a decision the repo had already made and
+verified in the live sweeps. Re-verified against live after the fix: 634 public functions, 24
+excluded, **610 still in scope**, 0 unexpected overloads — unchanged, so the correction is
+behaviourally identical on today's schema and correct in principle for any future one.

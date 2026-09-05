@@ -818,9 +818,16 @@ describe.skipIf(!isLiveDB)('Live DB: No Unintended Function Overloads', () => {
         -- Measured 2026-09-05 against live: 634 public functions, 24 excluded as
         -- extension-owned, 610 still in scope — so this narrows the population,
         -- it does not disable the check.
+        -- classid is required, not decorative: pg_depend.objid is only meaningful
+        -- alongside the catalog it belongs to, so an unrelated dependency row whose
+        -- objid happens to equal a pg_proc oid would otherwise exclude a real
+        -- function. This mirrors the standing live predicate in
+        -- scripts/db-invariant-sweeps/predicates/overloads.sql, which has carried
+        -- the same exclusion (and the same plpgsql_check rationale) since
+        -- 2026-06-11 — this test was simply out of sync with it.
         AND NOT EXISTS (
           SELECT 1 FROM pg_depend d
-          WHERE d.objid = p.oid AND d.deptype = 'e'
+          WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
         )
       GROUP BY p.proname
       HAVING count(*) > 1
