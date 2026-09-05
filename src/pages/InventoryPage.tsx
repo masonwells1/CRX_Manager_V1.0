@@ -92,9 +92,57 @@ export default function InventoryPage() {
       p_allow_over_receive: false,
     }),
   });
-  const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
+  // adjust_inventory and create_inventory_hold replay on the idempotency KEY
+  // ALONE: the server matches key + operation and never compares the actor or
+  // the payload (adjust: migration 20260317200000; holds: 20260507200000 and
+  // the parked 20260630173022). So the browser has to guarantee that a request
+  // whose reply was lost is retried with its exact payload under its original
+  // key, and is never edited into a "new" request. The old per-open resetKey()
+  // did the opposite: closing and reopening the dialog after a lost reply
+  // minted a fresh key, and PostgreSQL applied the adjustment (or inserted the
+  // hold) a second time. Freeze the payload instead, as receive_po_items does.
+  const adjustIntent = useUncertainMutationIntent<{
+    inventoryId: string;
+    delta: number;
+    note: string | null;
+    performedBy: string;
+  }>({
+    operation: 'adjust_inventory',
+    userId: profile?.id || '',
+    surface: 'inventory-page',
+    getIntentIdentity: (intent) => ({
+      p_inventory_id: intent.inventoryId,
+      p_delta: intent.delta,
+      p_reason: intent.note,
+      p_performed_by: intent.performedBy,
+    }),
+  });
+  const createHoldIntent = useUncertainMutationIntent<{
+    productId: string;
+    customerId: string | null;
+    quantity: number;
+    expiresAt: string | null;
+    notes: string | null;
+    performedBy: string;
+    force: boolean;
+    forceReason: string | null;
+  }>({
+    operation: 'create_inventory_hold',
+    userId: profile?.id || '',
+    surface: 'inventory-page',
+    getIntentIdentity: (intent) => ({
+      p_product_id: intent.productId,
+      p_customer_id: intent.customerId,
+      p_quantity: intent.quantity,
+      p_hold_type: 'manual',
+      p_expires_at: intent.expiresAt,
+      p_notes: intent.notes,
+      p_performed_by: intent.performedBy,
+      p_force: intent.force,
+      p_force_reason: intent.forceReason,
+    }),
+  });
   const retireIdem = useIdempotencyKey('retire_inventory_item', profile?.id || '');
-  const createHoldIdem = useIdempotencyKey('create_inventory_hold', profile?.id || '');
   const releaseHoldIdem = useIdempotencyKey('release_inventory_hold', profile?.id || '');
   const manualAddIdem = useIdempotencyKey('manual_inventory_add', profile?.id || '');
   const { toast } = useToast();
@@ -306,6 +354,29 @@ export default function InventoryPage() {
     setReceiveOpen(true);
   }, [receivePoIntent.unresolvedIntent]);
 
+  // An adjustment whose reply was lost reopens locked to its frozen payload so
+  // the operator can only retry it unchanged (or wait for reconciliation).
+  useEffect(() => {
+    const recovered = adjustIntent.unresolvedIntent;
+    if (!recovered) return;
+    setSelectedId(recovered.inventoryId);
+    setAdjustQty(String(recovered.delta));
+    setAdjustNote(recovered.note ?? '');
+    setAdjustOpen(true);
+  }, [adjustIntent.unresolvedIntent]);
+
+  useEffect(() => {
+    const recovered = createHoldIntent.unresolvedIntent;
+    if (!recovered) return;
+    setHoldProductId(recovered.productId);
+    setHoldQty(String(recovered.quantity));
+    setHoldCustomerId(recovered.customerId ?? '');
+    setHoldNotes(recovered.notes ?? '');
+    setHoldExpires(recovered.expiresAt ?? '');
+    setHoldWarning('');
+    setHoldOpen(true);
+  }, [createHoldIntent.unresolvedIntent]);
+
   useEffect(() => {
     fetchInventory();
     fetchHolds();
@@ -368,19 +439,26 @@ export default function InventoryPage() {
   };
 
   const openHoldModal = () => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset page-scoped key on each open
-    // so different products/customers can't share an idempotency intent.
-    createHoldIdem.resetKey();
     fetchProducts();
     fetchCustomers();
-    setHoldProductId('');
-    setHoldQty('');
-    setHoldCustomerId('');
-    setHoldNotes('');
-    setHoldExpires('');
-    setHoldWarning('');
     setProductSearch('');
+    // While a hold is unresolved the dialog shows and retries THAT frozen
+    // request; clearing the form here would hide what is about to be retried.
+    if (!createHoldIntent.isIntentLocked) {
+      setHoldProductId('');
+      setHoldQty('');
+      setHoldCustomerId('');
+      setHoldNotes('');
+      setHoldExpires('');
+      setHoldWarning('');
+    }
     setHoldOpen(true);
+  };
+
+  const openAdjustModal = (inventoryId: string) => {
+    // Same rule: an unresolved adjustment cannot be re-aimed at another row.
+    if (!adjustIntent.isIntentLocked) setSelectedId(inventoryId);
+    setAdjustOpen(true);
   };
 
   const [creatingHold, setCreatingHold] = useState(false);
@@ -391,58 +469,106 @@ export default function InventoryPage() {
   const [forceHoldOpen, setForceHoldOpen] = useState(false);
   const [forceHoldServerMessage, setForceHoldServerMessage] = useState('');
 
-  const callCreateHoldRpc = async (force: boolean, forceReason: string | null) => {
-    if (!profile) return;
-    const qty = parseFloat(holdQty);
-    const idemKey = createHoldIdem.getKey();
+  type HoldRpcOutcome = 'created' | 'replayed' | 'uncertain';
+  const HOLD_UNCERTAIN_MESSAGE =
+    'The hold may already be created. Retry the locked request unchanged to reconcile it.';
+  const HOLD_REPLAYED_MESSAGE =
+    'This hold was already created in another tab. Refreshing instead of creating it twice.';
+
+  const callCreateHoldRpc = async (force: boolean, forceReason: string | null): Promise<HoldRpcOutcome> => {
+    if (!profile) throw new Error('Sign in again to create a hold');
+    // beginIntent returns the FROZEN intent while one is unresolved, so a retry
+    // re-sends the original product, customer, quantity, expiry, notes and
+    // force flag under the original key no matter what the form now shows.
+    const request = await createHoldIntent.beginIntent({
+      productId: holdProductId,
+      customerId: holdCustomerId || null,
+      quantity: parseFloat(holdQty),
+      expiresAt: holdExpires || null,
+      notes: holdNotes || null,
+      performedBy: profile.id,
+      force,
+      forceReason,
+    });
+    const idemKey = createHoldIntent.getIdempotencyKey();
     const { data, error } = await supabase.rpc('create_inventory_hold', {
-      p_product_id: holdProductId,
-      p_customer_id: (holdCustomerId || null) as string,
-      p_quantity: qty,
+      p_product_id: request.productId,
+      p_customer_id: request.customerId as string,
+      p_quantity: request.quantity,
       p_hold_type: 'manual',
-      p_expires_at: (holdExpires || null) as string,
-      p_notes: (holdNotes || null) as string,
-      p_performed_by: profile.id,
-      p_force: force,
-      p_force_reason: forceReason ?? undefined,
+      p_expires_at: request.expiresAt as string,
+      p_notes: request.notes as string,
+      p_performed_by: request.performedBy,
+      p_force: request.force,
+      p_force_reason: request.forceReason ?? undefined,
       p_idempotency_key: idemKey,
     });
-    if (error) throw error;
-    assertRpcResult(data, 'create_inventory_hold');
-    createHoldIdem.resetKey();
+    let outcome: HoldRpcOutcome = 'created';
+    if (error) {
+      const disposition = await createHoldIntent.classifyFailure(error);
+      // A positively identified server refusal means nothing was inserted, so
+      // the intent is released and the caller decides (force flow or toast).
+      if (disposition === 'definitive') throw error;
+      // Transport failures keep the request locked: PostgreSQL may have
+      // committed the hold before the reply was lost.
+      if (disposition === 'uncertain') return 'uncertain';
+      outcome = 'replayed';
+    } else {
+      assertRpcResult(data, 'create_inventory_hold');
+    }
+    await createHoldIntent.resolveIntent();
+    return outcome;
   };
 
   const handleCreateHold = async () => {
     if (creatingHold) return;
-    if (!holdProductId) {
-      toast('error', 'Please select a product');
+    if (createHoldIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
       return;
     }
-    const qty = parseFloat(holdQty);
-    if (!qty || qty <= 0) {
-      toast('error', 'Please enter a valid quantity');
+    if (createHoldIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
       return;
     }
     if (!profile) return;
 
-    // UX preview only — the actual block is server-side. Even if the user
-    // bypasses this warning by clicking Create Hold a second time, the RPC's
-    // FOR UPDATE recompute will catch a true negative.
-    const invItem = inventory.find(i => i.product_id === holdProductId);
-    if (invItem) {
-      const todaysFree = invItem.quantity_available - invItem.quantity_prebooked - invItem.holds_qty;
-      if (todaysFree - qty < 0) {
-        if (!holdWarning) {
-          setHoldWarning(`Warning: this hold would exceed today's free stock. Only ${todaysFree.toFixed(1)} units are uncommitted right now (Available ${invItem.quantity_available} − Prebooked ${invItem.quantity_prebooked} − Existing Holds ${invItem.holds_qty.toFixed(1)}). On-order quantities don't count toward holds. Click Create Hold again to proceed anyway.`);
-          return;
+    // A locked retry re-sends the frozen payload, so form validation and the
+    // free-stock preview only apply to a NEW hold.
+    if (!createHoldIntent.isIntentLocked) {
+      if (!holdProductId) {
+        toast('error', 'Please select a product');
+        return;
+      }
+      const qty = parseFloat(holdQty);
+      if (!qty || qty <= 0) {
+        toast('error', 'Please enter a valid quantity');
+        return;
+      }
+
+      // UX preview only — the actual block is server-side. Even if the user
+      // bypasses this warning by clicking Create Hold a second time, the RPC's
+      // FOR UPDATE recompute will catch a true negative.
+      const invItem = inventory.find(i => i.product_id === holdProductId);
+      if (invItem) {
+        const todaysFree = invItem.quantity_available - invItem.quantity_prebooked - invItem.holds_qty;
+        if (todaysFree - qty < 0) {
+          if (!holdWarning) {
+            setHoldWarning(`Warning: this hold would exceed today's free stock. Only ${todaysFree.toFixed(1)} units are uncommitted right now (Available ${invItem.quantity_available} − Prebooked ${invItem.quantity_prebooked} − Existing Holds ${invItem.holds_qty.toFixed(1)}). On-order quantities don't count toward holds. Click Create Hold again to proceed anyway.`);
+            return;
+          }
         }
       }
     }
 
     setCreatingHold(true);
     try {
-      await callCreateHoldRpc(false, null);
-      toast('success', 'Hold created successfully');
+      const outcome = await callCreateHoldRpc(false, null);
+      if (outcome === 'uncertain') {
+        toast('warning', HOLD_UNCERTAIN_MESSAGE);
+        return;
+      }
+      if (outcome === 'replayed') toast('warning', HOLD_REPLAYED_MESSAGE);
+      else toast('success', 'Hold created successfully');
       setHoldOpen(false);
       fetchInventory();
       fetchHolds();
@@ -471,9 +597,16 @@ export default function InventoryPage() {
   const handleForceCreateHold = async (reason: string) => {
     setCreatingHold(true);
     try {
-      await callCreateHoldRpc(true, reason);
-      toast('success', 'Hold created with admin override');
+      const outcome = await callCreateHoldRpc(true, reason);
       setForceHoldOpen(false);
+      if (outcome === 'uncertain') {
+        // The hold dialog stays open, locked to the forced payload, so the
+        // retry re-sends the same override under the same key.
+        toast('warning', HOLD_UNCERTAIN_MESSAGE);
+        return;
+      }
+      if (outcome === 'replayed') toast('warning', HOLD_REPLAYED_MESSAGE);
+      else toast('success', 'Hold created with admin override');
       setHoldOpen(false);
       fetchInventory();
       fetchHolds();
@@ -674,6 +807,14 @@ export default function InventoryPage() {
   };
 
   const handleAdjust = async () => {
+    if (adjustIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
+    if (adjustIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
     const qty = parseFloat(adjustQty);
     if (isNaN(qty) || qty === 0) {
       toast('error', 'Please enter a non-zero adjustment quantity');
@@ -683,22 +824,49 @@ export default function InventoryPage() {
 
     await runCriticalAction({
       action: async () => {
-        const idemKey = adjustIdem.getKey();
+        // beginIntent returns the FROZEN intent while one is unresolved, so a
+        // retry re-sends the original row, delta and note under the original
+        // key no matter what the form now shows.
+        const request = await adjustIntent.beginIntent({
+          inventoryId: selectedId,
+          delta: qty,
+          note: adjustNote || null,
+          performedBy: profile.id,
+        });
+        const idemKey = adjustIntent.getIdempotencyKey();
         const { data, error } = await supabase.rpc('adjust_inventory', {
-          p_inventory_id: selectedId,
-          p_delta: qty,
-          p_reason: (adjustNote || null) as string,
-          p_performed_by: profile.id,
+          p_inventory_id: request.inventoryId,
+          p_delta: request.delta,
+          p_reason: request.note as string,
+          p_performed_by: request.performedBy,
           p_idempotency_key: idemKey,
         });
-        if (error) throw error;
-        assertRpcResult(data, 'adjust_inventory');
-        adjustIdem.resetKey();
+        let completedElsewhere = false;
+        if (error) {
+          const disposition = await adjustIntent.classifyFailure(error);
+          if (disposition === 'resolved') {
+            completedElsewhere = true;
+          } else if (disposition === 'definitive') {
+            throw error;
+          } else {
+            // Transport failure: PostgreSQL may have applied the delta before
+            // the reply was lost. The dialog stays locked to this exact request.
+            throw new Error('The adjustment may already be applied. Retry the locked request unchanged to reconcile it.');
+          }
+        } else {
+          assertRpcResult(data, 'adjust_inventory');
+        }
+        await adjustIntent.resolveIntent();
+        return { delta: request.delta, completedElsewhere };
       },
       toast,
-      successMessage: `Adjusted by ${qty} units`,
       sentryTag: 'adjust_inventory',
-      onSuccess: () => {
+      onSuccess: ({ delta, completedElsewhere }) => {
+        if (completedElsewhere) {
+          toast('warning', 'This adjustment was already applied in another tab. Refreshing instead of applying it twice.');
+        } else {
+          toast('success', `Adjusted by ${delta} units`);
+        }
         setAdjustOpen(false);
         setAdjustQty('');
         setAdjustNote('');
@@ -713,8 +881,6 @@ export default function InventoryPage() {
   // order/delivery between validation and delete. retire_inventory_item RPC
   // does it all in one transaction with FOR UPDATE on the inventory row.
   const handleDelete = (inventoryId: string) => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset retire key per inventory target.
-    retireIdem.resetKey();
     setDeleteConfirmId(inventoryId);
   };
 
@@ -723,7 +889,14 @@ export default function InventoryPage() {
 
     await runCriticalAction({
       action: async () => {
-        const idemKey = retireIdem.getKey();
+        // retire_inventory_item replays on the key alone, and this confirmation
+        // carries no editable payload — only the row. Keep one key per row so a
+        // lost reply is retried under the same key (the server returns the
+        // original receipt instead of retiring twice), while confirming a
+        // DIFFERENT row mints its own key rather than replaying this receipt.
+        // The key is retired only on confirmed success.
+        const scope = `retire:${deleteConfirmId}`;
+        const idemKey = retireIdem.getKeyFor(scope);
         const { data, error } = await supabase.rpc('retire_inventory_item', {
           p_inventory_id: deleteConfirmId,
           p_performed_by: profile.id,
@@ -731,7 +904,7 @@ export default function InventoryPage() {
         });
         if (error) throw error;
         assertRpcResult(data, 'retire_inventory_item');
-        retireIdem.resetKey();
+        retireIdem.resetKeyFor(scope);
       },
       toast,
       successMessage: 'Inventory item deleted',
@@ -975,7 +1148,7 @@ export default function InventoryPage() {
                   <ArrowDownToLine className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); adjustIdem.resetKey(); setSelectedId(row.id); setAdjustOpen(true); }}
+                  onClick={(e) => { e.stopPropagation(); openAdjustModal(row.id); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Manual Adjustment"
                   aria-label="Manual Adjustment"
@@ -1215,11 +1388,7 @@ export default function InventoryPage() {
             setLedgerOpen(true);
           }}
           onReceive={openReceiveModal}
-          onAdjust={(id) => {
-            adjustIdem.resetKey();
-            setSelectedId(id);
-            setAdjustOpen(true);
-          }}
+          onAdjust={openAdjustModal}
           onDelete={handleDelete}
         />
 
@@ -1453,8 +1622,17 @@ export default function InventoryPage() {
       />
 
       {/* Create Hold Modal */}
-      <Modal open={holdOpen} onClose={() => setHoldOpen(false)} title="Create" accent="Hold">
+      <Modal open={holdOpen} onClose={() => { if (!createHoldIntent.isIntentLocked) setHoldOpen(false); }} title="Create" accent="Hold">
         <div className="space-y-4">
+          {createHoldIntent.isIntentLocked && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              {createHoldIntent.isForeignIntentLocked
+                ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                : createHoldIntent.isRetryExpired
+                ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                : 'The last response was uncertain. This hold request is locked so stock cannot be reserved twice. Retry it unchanged to reconcile the result.'}
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-secondary mb-1">Product</label>
             <input
@@ -1462,6 +1640,7 @@ export default function InventoryPage() {
               value={productSearch}
               onChange={(e) => setProductSearch(e.target.value)}
               placeholder="Search products..."
+              disabled={createHoldIntent.isIntentLocked}
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-2"
             />
             <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
@@ -1472,6 +1651,7 @@ export default function InventoryPage() {
                   <div key={p.id} className={holdProductId === p.id ? 'bg-crx-green/10' : ''}>
                     <ProductSearchResultRow
                       onClick={() => {
+                        if (createHoldIntent.isIntentLocked) return;
                         setHoldProductId(p.id);
                         setHoldWarning('');
                       }}
@@ -1494,6 +1674,7 @@ export default function InventoryPage() {
               setHoldQty(e.target.value);
               setHoldWarning('');
             }}
+            disabled={createHoldIntent.isIntentLocked}
           />
 
           {holdWarning && (
@@ -1508,6 +1689,7 @@ export default function InventoryPage() {
             <select
               value={holdCustomerId}
               onChange={(e) => setHoldCustomerId(e.target.value)}
+              disabled={createHoldIntent.isIntentLocked}
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">No customer</option>
@@ -1522,6 +1704,7 @@ export default function InventoryPage() {
             value={holdNotes}
             onChange={(e) => setHoldNotes(e.target.value)}
             placeholder="e.g., Holding for spring burndown"
+            disabled={createHoldIntent.isIntentLocked}
           />
 
           <Input
@@ -1529,11 +1712,18 @@ export default function InventoryPage() {
             type="date"
             value={holdExpires}
             onChange={(e) => setHoldExpires(e.target.value)}
+            disabled={createHoldIntent.isIntentLocked}
           />
 
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setHoldOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreateHold} loading={creatingHold}>Create Hold</Button>
+            <Button variant="secondary" disabled={createHoldIntent.isIntentLocked} onClick={() => setHoldOpen(false)}>Cancel</Button>
+            <Button
+              onClick={handleCreateHold}
+              loading={creatingHold}
+              disabled={createHoldIntent.isForeignIntentLocked || createHoldIntent.isRetryExpired}
+            >
+              {createHoldIntent.isIntentLocked ? 'Retry Exact Hold' : 'Create Hold'}
+            </Button>
           </div>
         </div>
       </Modal>
@@ -1690,7 +1880,7 @@ export default function InventoryPage() {
       </Modal>
 
       {/* Adjust Modal */}
-      <Modal open={adjustOpen} onClose={() => setAdjustOpen(false)} title="Manual" accent="Adjustment">
+      <Modal open={adjustOpen} onClose={() => { if (!adjustIntent.isIntentLocked) setAdjustOpen(false); }} title="Manual" accent="Adjustment">
         {(() => {
           const selectedRow = inventory.find((r) => r.id === selectedId);
           const parsedDelta = parseFloat(adjustQty);
@@ -1699,6 +1889,15 @@ export default function InventoryPage() {
           const wouldGoNegative = projectedQty !== null && projectedQty < 0;
           return (
             <div className="space-y-4">
+              {adjustIntent.isIntentLocked && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  {adjustIntent.isForeignIntentLocked
+                    ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
+                    : adjustIntent.isRetryExpired
+                    ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                    : 'The last response was uncertain. This adjustment is locked so stock cannot be adjusted twice. Retry it unchanged to reconcile the result.'}
+                </div>
+              )}
               {selectedRow && (
                 <p className="text-sm text-secondary">
                   Current on hand: <strong className="text-nav-dark">{selectedRow.quantity_available}</strong> units
@@ -1710,6 +1909,7 @@ export default function InventoryPage() {
                 step="any"
                 value={adjustQty}
                 onChange={(e) => setAdjustQty(e.target.value)}
+                disabled={adjustIntent.isIntentLocked}
               />
               {selectedRow && hasDelta && projectedQty !== null && (
                 <p className={`text-sm ${wouldGoNegative ? 'text-red-600' : 'text-secondary'}`}>
@@ -1726,10 +1926,13 @@ export default function InventoryPage() {
                 value={adjustNote}
                 onChange={(e) => setAdjustNote(e.target.value)}
                 placeholder="Reason for adjustment"
+                disabled={adjustIntent.isIntentLocked}
               />
               <div className="flex justify-end gap-2">
-                <Button variant="secondary" onClick={() => setAdjustOpen(false)}>Cancel</Button>
-                <Button onClick={handleAdjust}>Apply Adjustment</Button>
+                <Button variant="secondary" disabled={adjustIntent.isIntentLocked} onClick={() => setAdjustOpen(false)}>Cancel</Button>
+                <Button onClick={handleAdjust} disabled={adjustIntent.isForeignIntentLocked || adjustIntent.isRetryExpired}>
+                  {adjustIntent.isIntentLocked ? 'Retry Exact Adjustment' : 'Apply Adjustment'}
+                </Button>
               </div>
             </div>
           );
