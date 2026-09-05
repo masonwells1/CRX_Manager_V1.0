@@ -73,6 +73,16 @@ vi.mock('react-router-dom', async () => {
 vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
 }));
+// Isolate JobDetail from an UNRELATED child that calls its own RPC. RelatedNotes
+// fetches get_notes_for_entity on mount; this file's fixture answers every RPC with
+// `{ data: null, error: null }`, which the REAL assertRpcResult correctly rejects. The
+// rejection escapes as an unhandled promise rejection — the suite still reports "tests
+// passed" while vitest exits 1 with 26 errors, so it is invisible to a grep for FAIL.
+// Mocking the child is the same isolation CustomerDetail.test.tsx already applies; the
+// alternative (teaching every per-test mockRpc override about an unrelated RPC) breaks
+// again the next time someone calls mockRpc.mockResolvedValue.
+// Found by the Codex GitHub App review of 26edc763 (P1), 2026-09-05.
+vi.mock('../components/team/RelatedNotes', () => ({ default: () => null }));
 vi.mock('../hooks/usePageMeta', () => ({ usePageMeta: () => {} }));
 vi.mock('../hooks/useUnsavedChanges', () => ({
   useUnsavedChanges: () => ({ state: 'unblocked', reset: vi.fn(), proceed: vi.fn() }),

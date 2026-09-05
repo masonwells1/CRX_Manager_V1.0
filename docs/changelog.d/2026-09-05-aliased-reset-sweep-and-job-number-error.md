@@ -92,6 +92,36 @@ next one. Binding that needs PR #535's `fingerprintIntentPayload`.
 against a completely unscoped hook, asserting a property of the mock rather than of the page. The
 mock now honours `intentScope`, and the new test was confirmed to fail without the scope.
 
+## Review round 2 — the Codex GitHub App P1, and a lesson about reading test output
+
+Swapping the passthrough for the real `assertRpcResult` had a consequence in
+`JobDetail.billingHazard.test.tsx` that the summary line hides. `RelatedNotes` is rendered by
+JobDetail and fetches `get_notes_for_entity` on mount; this file's fixture answers EVERY RPC with
+`{ data: null, error: null }`, which the real helper correctly rejects. The rejection escapes as an
+unhandled promise rejection.
+
+**Vitest then reports `Test Files 349 passed / Tests 4985 passed` — and exits 1 with `Errors 26`.**
+A grep for `FAIL` or for the `Tests` line sees a totally green run. This was claimed green on that
+basis and was not; CI's `Lint, Type Check, Test, Build` failed on `26edc763` accordingly. The
+durable rule: **read the exit code, not the summary** — a vitest run can pass every assertion and
+still fail.
+
+Fixed by mocking the unrelated child, the same isolation `CustomerDetail.test.tsx` already applies.
+The alternative — teaching every per-test `mockRpc` override about an unrelated RPC — breaks again
+the next time someone calls `mockRpc.mockResolvedValue`.
+
+### The two P2s are the same cross-lane dependency, deliberately not fixed
+
+Both `QuoteBuilder` and `CustomerDetail` are flagged for binding the retained key to the submitted
+PAYLOAD, not just the record. The concrete case: an ambiguous reply retains the key, the operator
+EDITS a field and retries, the server fingerprints the changed payload and raises
+`IDEMPOTENCY_PAYLOAD_CONFLICT`, so the stale-reload flow discards the new edits.
+
+That is a real consequence of F1 retention and is stated here rather than papered over. It is also
+exactly what PR #535's `fingerprintIntentPayload` exists to solve, and it is another lane's work —
+flagged to that lane rather than routed around. The trade this PR makes is deliberate: a silent
+DUPLICATE WRITE (the old behaviour) is worse than a conflict dialog on an edited retry.
+
 ## Found, NOT fixed — reported rather than silently widened
 
 An independent scan of ALL 274 reset call sites (literal, aliased and `idem.resetKey()` member
