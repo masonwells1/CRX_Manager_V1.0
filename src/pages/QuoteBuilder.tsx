@@ -1606,11 +1606,18 @@ export default function QuoteBuilder() {
       // the return-to-A path: it would strand a freshly loaded quote behind a
       // "reload before saving" gate it has already satisfied.
       //
-      // Deliberately does NOT touch the idempotency key. This request failed, so
-      // the key must survive for the retry (F1) exactly as it does on the
-      // in-route error paths below.
+      // Deliberately does NOT touch the idempotency key. The outcome here is
+      // genuinely unknown, so the key must survive for the retry (F1) exactly as it
+      // does on the in-route error paths below.
+      //
+      // And because it is unknown, the message must not claim a rollback. A reply
+      // lost in transit AFTER PostgreSQL committed arrives through this same
+      // `error` branch, so "your changes were not stored" would be a guess stated
+      // as fact — and the operator is not even looking at this quote to check. Say
+      // what is true (unconfirmed) and what to do about it. The retained key is
+      // what makes the retry safe if it did commit.
       if (error && editingSessionChanged()) {
-        toast('error', `Quote ${quoteNumberAtSend || 'you were editing'} could not be saved. Reopen it and try again — your changes were not stored.`);
+        toast('error', `Quote ${quoteNumberAtSend || 'you were editing'} could not be confirmed as saved. Reopen it to check, and save again if your changes are missing.`);
         return null;
       }
 

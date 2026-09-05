@@ -144,6 +144,22 @@ on quote B and asserts the doomed load issues **no database read at all** — no
 consumed. Removing the door refusal fails exactly that test, and the failure shows the extra read
 (3 → 4).
 
+### Third review round — P2 on the wording, accepted
+
+> When the operator navigates away and the RPC response is lost after PostgreSQL commits,
+> Supabase surfaces the network failure through this same `error` branch, so the toast
+> incorrectly guarantees that the changes "were not stored."
+
+Correct, and it contradicted the reasoning three lines above it in the same function. The key is
+retained on this path **because the outcome is unknown**; the message then told the operator the
+save definitely did not happen. A reply lost in transit after the database committed arrives
+through exactly this branch, and the operator is not even looking at this quote to check.
+
+The message now says the save could not be **confirmed**, and what to do: reopen it, and save
+again if the changes are missing. The retained key is what makes that retry safe if it did in
+fact commit. The regression test now pins both halves — the quote is still named, and the message
+must not assert a rollback.
+
 ### Not verified / flagged, not fixed
 
 - The `catch` block's toast is still unguarded: a malformed reply for quote A, which makes

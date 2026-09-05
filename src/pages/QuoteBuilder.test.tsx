@@ -1873,6 +1873,14 @@ describe('QuoteBuilder', () => {
     // A saved, and it did not. The toast names it, because the page they are
     // looking at is a different quote.
     expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Q-AAA-1'));
+    // ...and it must not claim a rollback it cannot know about. A reply lost in
+    // transit after PostgreSQL committed arrives through this same error branch,
+    // which is exactly why the retry key is retained. Raised as a P2 on this branch.
+    const [, failureMessage] = mockToast.mock.calls.find(
+      (call) => call[0] === 'error' && String(call[1]).includes('Q-AAA-1'),
+    )!;
+    expect(failureMessage).not.toMatch(/were not stored|was not saved|no changes were/i);
+    expect(failureMessage).toMatch(/could not be confirmed/i);
   });
 
   // Raised by the exact-SHA gpt-5.6-sol review of this branch, as CRX-1/High.
