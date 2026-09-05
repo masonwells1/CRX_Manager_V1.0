@@ -14,11 +14,11 @@ command file's text and had no notion of a frontmatter block.
   (`# ...`) inside the block matched the H1 pattern and became the adapter's title. A `---` rule
   further down the file is untouched. `stripFrontmatter()` and `commandTitle()` are exported for
   the test.
-- `.claude/commands/status.md`, `fleet.md`, `parked.md`: new frontmatter `model: sonnet`,
-  `effort: low`, with a YAML comment naming the tuning doc. `parked` keeps the human gate: an
-  apply request leaves it for `/explain-migration` and `/migration-review`, which are not
-  lowered. Nothing else in the three files changed, so their first paragraph (what Claude Code
-  shows as the description when `description:` is omitted) is the same text as before.
+- `.claude/commands/status.md`, `fleet.md`: new frontmatter `model: sonnet`, `effort: low`, with
+  a YAML comment naming the tuning doc. Nothing else in the files changed, so their first
+  paragraph (what Claude Code shows as the description when `description:` is omitted) is the
+  same text as before. `parked.md` was routed in the first commit and reverted in the same PR;
+  see `2026-09-05-parked-command-keeps-default-effort.md`.
 - `scripts/sync-agent-workflows.test.mjs`: pins that a frontmatter YAML comment does not become
   the title (this case FAILS on the old code), that a body `---` rule is left alone, and that the
   three real command files still resolve to the titles their `.agents/` adapters carry.

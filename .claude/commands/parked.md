@@ -1,11 +1,3 @@
----
-# Read-only inventory: faster model at low effort (docs/reference/claude-model-tuning.md).
-# An apply request leaves this command for /explain-migration and /migration-review,
-# which carry their own (higher) effort.
-model: sonnet
-effort: low
----
-
 Show Mason every PARKED migration across all worktrees — database changes that are written and waiting, but have NOT been applied to the live database — and, if he wants one applied, walk it through the existing safety gates.
 
 Use this when Mason asks anything like: "what's parked", "anything waiting on me", "what migrations are pending", "apply the parked ones".

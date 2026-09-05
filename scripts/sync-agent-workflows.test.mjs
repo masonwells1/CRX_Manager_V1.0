@@ -543,15 +543,24 @@ try {
     assert.equal(stripFrontmatter(plain), plain);
     assert.equal(commandTitle(plain, "x"), "Plain Heading");
 
-    // The three routed command files must keep resolving to the titles their
+    // The two routed command files must keep resolving to the titles their
     // generated .agents/ adapters already carry; otherwise --check goes red the
     // moment frontmatter lands. Read from the real repo, not a fixture.
     const commandsRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".claude", "commands");
-    for (const [name, expectedTitle] of [["status", "Status"], ["fleet", "Fleet"], ["parked", "Parked"]]) {
+    for (const [name, expectedTitle] of [["status", "Status"], ["fleet", "Fleet"]]) {
       const source = readFileSync(path.join(commandsRoot, `${name}.md`), "utf8");
       assert.match(source, /^---\r?\n/, `${name}.md is expected to open with frontmatter`);
       assert.equal(commandTitle(source, name), expectedTitle, `${name}.md adapter title must be unchanged by its frontmatter`);
     }
+
+    // /parked is NOT routed. On an apply request it continues into the
+    // migration flow (risk assessment, /explain-migration, /migration-review,
+    // the apply itself), and docs/reference/claude-model-tuning.md forbids
+    // lowering effort on a migration path (Codex App P1 on PR #621). Pin that
+    // it carries no frontmatter so a later "tidy-up" cannot quietly re-route it.
+    const parked = readFileSync(path.join(commandsRoot, "parked.md"), "utf8");
+    assert.doesNotMatch(parked, /^---\r?\n/, "parked.md must not carry model/effort frontmatter");
+    assert.equal(commandTitle(parked, "parked"), "Parked");
   }
 } finally {
   rmSync(targetRoot, { recursive: true, force: true });

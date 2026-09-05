@@ -33,7 +33,7 @@ This mapping is a starting point, not a reason to lower rigor on risky work. Nev
 | Money, inventory, RLS, migrations, shipping, and adversarial review | `high` |
 | Foundation-wide review, migration review, and overnight hunts | `xhigh` |
 
-The read-only report commands `status`, `fleet`, and `parked` carry this routing in their frontmatter (`model: sonnet`, `effort: low`, since 2026-09-05). A command wrapped by a same-named skill (`agent-health`) takes its settings from the skill file, not the command file. No other command pins a model or effort; the session default applies.
+The read-only report commands `status` and `fleet` carry this routing in their frontmatter (`model: sonnet`, `effort: low`, since 2026-09-05). `parked` does not: its inventory is mechanical, but on an apply request the same command continues into the migration flow, and a command-level pin would lower that path. A command wrapped by a same-named skill (`agent-health`) takes its settings from the skill file, not the command file. No other command pins a model or effort; the session default applies.
 
 `money-inventory-hunt.js` deliberately pins its finder and verifier calls to `high` until a real effort comparison proves a better setting. Do not change that based only on the table above.
 
