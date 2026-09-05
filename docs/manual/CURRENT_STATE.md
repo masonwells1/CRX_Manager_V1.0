@@ -1,15 +1,15 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-04 for the migration ledger (read-only `list_migrations` against project
-`rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-03 15:34 UTC by the live-introspection
-regeneration of `.claude/schema-registry.json` carried in PR #586 (F06 post-apply).** Three
-migrations have applied since that schema reading, so the registry's shape is now BEHIND live and a
-regeneration is outstanding — F2's `20260903160000_gate_number_generators_active_profile_role`
-(ledger version `20260904023121`), `20260903150100_ledger_backed_commission_history`
-(`20260903202611`), and `20260903230000_commission_report_snapshot_contract` (`20260904040643`).
-Recording the F2 apply and refreshing the registry is PR #594's lane, not this one.
-The current effective ordering high-water is the newest applied
-authored NAME: **`20260903230000_commission_report_snapshot_contract`** (verified 2026-09-04).
+**Last verified: 2026-09-05 for the migration ledger (read-only `list_migrations` against project
+`rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-04 by the live-introspection regeneration
+of `.claude/schema-registry.json`, through ledger version `20260904040643`.** Two routine-only
+migrations have applied since that schema reading:
+`20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). Neither adds or changes a
+table, column, enum, generated column, or CHECK constraint, so the registry's schema shape remains
+current; its applied-migration list and ledger high-water are two entries behind live. The current
+effective ordering high-water is the newest applied authored NAME:
+**`20260904180000_invoice_season_follows_invoice_date`** (verified 2026-09-05).
 The local `20260905020100_repair_commission_history_label_snapshots` candidate is not applied;
 it appends corrected labels for 34 un-settled opening commission snapshots rather than changing
 immutable ledger rows. Refresh `.claude/schema-registry.json` only after a reviewed live apply.
@@ -21,9 +21,9 @@ high-water" rule compared against it silently skips files authored `20260831*` a
 durable way to state this boundary: it is what the ordering guard compares, and it changes far less
 often than the counters.
 
-For provenance, the same 2026-09-04 read observed **996 ledger rows** (989 distinct names — the difference is
+For provenance, the same 2026-09-05 read observed **998 ledger rows** (991 distinct names — the difference is
 duplicate names, from `count(distinct name)`, not truncation) and `max(version)`
-**`20260904040643`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
+**`20260904152221`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
 any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
 not evidence that something went wrong, and it should not be re-pinned on every apply.
 
@@ -44,6 +44,11 @@ The consequence still bites until #535 merges: `main` does not describe producti
 whose safety argument rests on "the live body equals the last committed body" must verify against
 **live**, not against disk. `20260903160000` does exactly that — it pins md5 hashes read from live
 `pg_proc.prosrc` rather than diffing against tracked files.
+
+**A seventh repository/production gap is currently owned by PR #599.** Live includes
+`20260904180000_invoice_season_follows_invoice_date`, but its file is not yet on `main`; it is carried
+by open PR #599 (`claude/vibrant-sinoussi-81a492`). This is why the two local commission candidates
+were renumbered above that live name even though the source file is absent from this branch's base.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
 `20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration

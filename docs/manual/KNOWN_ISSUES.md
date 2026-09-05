@@ -1,23 +1,24 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-04 for both the migration-ledger facts and the F2 entry.** The
-ordering boundary is the newest applied authored NAME:
-**`20260903230000_commission_report_snapshot_contract`** (ledger version `20260904040643`, read-only
-`list_migrations` on 2026-09-04). F2
-(`20260903160000_gate_number_generators_active_profile_role`) applied earlier the same day as ledger
-version `20260904023121` and was the boundary until the commission snapshot landed after it. Read
-ordering from the NAME — it is what
+**Last verified: 2026-09-05 for the migration-ledger header; the F2 entry retains its separate
+2026-09-04 verification.** The ordering boundary is the newest applied authored NAME:
+**`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`, read-only
+`list_migrations` on 2026-09-05). Live held **998 ledger rows / 991 distinct names** at that
+point-in-time. The commission snapshot (`20260903230000`, ledger version `20260904040643`) was
+followed by the invoice-date fallback (`20260904160000`, version `20260904130047`) and then the
+invoice-season correction (`20260904180000`). The last file is not yet on `main`; open PR #599 owns
+that repository/production gap. Read ordering from the NAME — it is what
 the ordering guard compares and it moves far less often than the counters. Two further reading
 traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
 reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
 because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …) sort above digits
 — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` here as a point-in-time
 observation, not a fact** — any lane applying a migration moves them, so
-re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
-F2 item below was re-verified against live on this date (post-apply function bodies, grants, and a
-three-principal behavioral simulation); every other
+re-read live rather than trusting them, and do not re-pin them here on every apply. Only the ledger
+header was re-read on 2026-09-05. The F2 item below was last re-verified against live on 2026-09-04
+(post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
+six-file disk-vs-live migration drift confirmed 2026-09-03 and the PR that owns it.
 
 The local, not-yet-applied `20260905020100_repair_commission_history_label_snapshots` candidate
 addresses 34 un-settled opening commission snapshots that hold an order UUID and unknown customer

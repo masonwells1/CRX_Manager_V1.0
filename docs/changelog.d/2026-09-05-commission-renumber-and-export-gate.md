@@ -23,6 +23,12 @@ the renumber rationale) and the replay-guard status changelog entry.
 Neither migration is applied. Both still require Mason's explicit in-chat approval before any live
 apply.
 
+The final CI freshness gate required the two manual status headers to be re-read after those
+September 5 filenames were introduced. A fresh read-only production ledger check observed 998 rows,
+991 distinct names, `max(version) = 20260904152221`, and the same effective authored-name high-water
+`20260904180000_invoice_season_follows_invoice_date`. `CURRENT_STATE.md` and `KNOWN_ISSUES.md` now
+record that evidence and identify open PR #599 as the owner of the still-unmerged high-water file.
+
 ## Commission CSV exports no longer emit stale figures as current
 
 `Export CSV` and `Export Payment Detail` on the Commission Balance tab stayed enabled while a
