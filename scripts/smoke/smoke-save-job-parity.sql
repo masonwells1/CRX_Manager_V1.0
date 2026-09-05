@@ -25,8 +25,8 @@
 --      second job.
 --   6. STRICT-ACTOR preserved: a forged p_performed_by raises ACTOR_MISMATCH.
 --
--- Auth: save_job binds auth.uid() and role-gates admin|sales_rep. We set a
--- transaction-local request.jwt.claims sub = a real active admin.
+-- Auth: save_job binds auth.uid() and role-gates admin|sales_rep. We set both
+-- transaction-local request.jwt.claims and request.jwt.claim.sub to a real active admin.
 --
 -- The DO block ALWAYS ends in RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK' — nothing
 -- here ever commits. Requires migration 20260624120000 applied.
@@ -63,6 +63,7 @@ BEGIN
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP_FAILED: no active admin'; END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- --------------------------------------------------------------- fixtures
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] Parity Farm A ' || v_sfx) RETURNING id INTO v_cust_a;
