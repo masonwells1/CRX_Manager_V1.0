@@ -1166,6 +1166,54 @@ test('an unrelated CodeRabbit comment cannot forge an acknowledgement', async ()
   assert.match(harness.failures[0], /did not acknowledge the review command/);
 });
 
+// Only the FIRST CodeRabbit comment after the command is treated as a reply to it.
+// Scanning the whole tail for a matching phrase would let an unrelated later
+// action answer a command CodeRabbit ignored.
+test('an unrelated "Action performed" behind another reply does not acknowledge the command', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  const listComments = harness.github.rest.issues.listComments;
+  harness.github.rest.issues.listComments = async (params) => {
+    const response = await listComments(params);
+    // CodeRabbit says something unrelated first...
+    response.data.push({
+      id: 9001,
+      body: 'Note: automatic reviews are disabled for this repository.',
+      created_at: new Date().toISOString(),
+      user: { login: 'coderabbitai[bot]' },
+    });
+    // ...then performs an action for something else entirely.
+    response.data.push({
+      id: 9002,
+      body: '> [!TIP]\n> Action performed. Comments resolved.',
+      created_at: new Date().toISOString(),
+      user: { login: 'coderabbitai[bot]' },
+    });
+    return response;
+  };
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked', 'a later unrelated action must not answer an ignored command');
+  assert.match(harness.failures[0], /did not acknowledge the review command/);
+});
+
+// The acknowledgement wait is up to 30s of real time after the last snapshot.
+test('a head change during the acknowledgement wait is not reported as a clean success', async () => {
+  const harness = makeHarness({
+    // The final re-read, after the acknowledgement, sees a moved head.
+    pulls: [
+      pullRequest(), pullRequest(), pullRequest(), pullRequest(),
+      pullRequest({ head: NEXT_HEAD }),
+    ],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  // The review is spent — CodeRabbit accepted it — so the command must NOT be
+  // deleted here, or the next relabel looks untried and buys a second one.
+  assert.equal(harness.actionsComments.length, 1);
+  assert.match(harness.failures[0], /changed while waiting for that acknowledgement/);
+});
+
 test('the gate crashing after a post does not recover as a successful request', async () => {
   const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
   // Crash after the command is posted: the ready-label removal throws.

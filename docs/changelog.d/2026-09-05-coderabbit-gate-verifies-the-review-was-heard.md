@@ -125,9 +125,35 @@ within 11 s against a 30 s wait — and it cannot be closed by waiting, only nar
 message tells the operator to confirm no review exists for the head before relabelling, and the
 ready-label path now refuses to post over an existing command rather than quietly adding a second.
 
+### Round three — and the honest limit of what this gate can prove
+
+Two more findings, both real. One is fixed outright; the other is a boundary, and saying so is more
+useful than pretending otherwise.
+
+**Fixed: the candidate was not revalidated after the acknowledgement wait.** That wait is up to 30
+seconds of real time *after* the last snapshot, so a head change, a newly failing check, a removed
+label, auto-merge being switched on, or a `CHANGES_REQUESTED` verdict inside it would have been
+reported as a clean success on a candidate that had already stopped being one. The gate now re-reads
+the pull request, the checks and the review decision before crediting. It deliberately does **not**
+delete the command on that path: CodeRabbit has already accepted it, so the review is spent whether
+or not the comment survives, and removing it would make the next relabel look untried.
+
+**Narrowed, not solved: the acknowledgement is not causally bound to the command.** Only the *first*
+CodeRabbit comment after the command now counts, so an unrelated later action ("Action performed" for
+something else) can no longer answer a command that was ignored. But CodeRabbit's reply does not name
+the head or the command it answers, and its documentation defines no acknowledgement contract, so the
+binding is by author, order and time — not causation.
+
+**That is the right scope for this gate, though.** What was broken, and silently false for months,
+is whether the command was *heard at all*. Proving that a review of the exact head **exists** is a
+different, head-bound question, and it already has an owner: the merge gate must match a CodeRabbit
+review's `commit_id` to the final head. Widening this 30-second poll into a review-existence check
+would take minutes and duplicate a gate that already exists. The success message now says this
+explicitly, so nobody reads a green gate as proof of a review.
+
 ### Proven by mutation, not by coverage
 
-113/113 tests pass, and every new refusal was verified to actually fire by removing it and watching
+115/115 tests pass, and every new refusal was verified to actually fire by removing it and watching
 the suite go red — a guard nobody has watched refuse anything is not a proven guard:
 
 | mutation | tests that went red |
@@ -139,6 +165,7 @@ the suite go red — a guard nobody has watched refuse anything is not a proven 
 | duplicate path hard-coded back to "confirmed" | 3 |
 | comment classification removed | 3 |
 | classifier default widened back to "anything counts" | 1 |
+| first-reply binding relaxed to "any matching reply" | 1 |
 
 Seven existing tests had to change, and that is itself a finding: each had asserted a green
 `duplicate` for a marker plus command with **no acknowledgement anywhere**. They were faithfully

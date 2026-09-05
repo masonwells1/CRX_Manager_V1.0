@@ -445,19 +445,23 @@ async function awaitCodeRabbitAcknowledgement({
       lastLookupSucceeded = true;
       // Strictly AFTER our command. Compare by comment id, which is monotonic per
       // repository and, unlike created_at, cannot tie at one-second resolution.
-      const replies = comments.filter((comment) => (
-        normalize(comment?.user?.login) === CODERABBIT_BOT_LOGIN
-        && Number(comment?.id || 0) > Number(sinceCommentId || 0)
-      ));
-      const refusal = replies.find((comment) => classifyCodeRabbitComment(comment.body) === 'refusal');
-      if (refusal) {
-        return { acknowledged: false, verified: true, refused: true, commentId: refusal.id };
+      // Only the FIRST CodeRabbit comment after our command is treated as a reply
+      // to it. Scanning the whole tail for any matching phrase would let an
+      // unrelated later action ("Action performed" for something else entirely)
+      // answer a command CodeRabbit ignored. This is a proximity binding, not a
+      // causal one — see the residual note at the call site.
+      const reply = comments
+        .filter((comment) => (
+          normalize(comment?.user?.login) === CODERABBIT_BOT_LOGIN
+          && Number(comment?.id || 0) > Number(sinceCommentId || 0)
+        ))
+        .sort((left, right) => Number(left.id || 0) - Number(right.id || 0))[0];
+      const kind = reply ? classifyCodeRabbitComment(reply.body) : null;
+      if (kind === 'refusal') {
+        return { acknowledged: false, verified: true, refused: true, commentId: reply.id };
       }
-      const acknowledgement = replies.find(
-        (comment) => classifyCodeRabbitComment(comment.body) === 'acknowledgement',
-      );
-      if (acknowledgement) {
-        return { acknowledged: true, verified: true, commentId: acknowledgement.id };
+      if (kind === 'acknowledgement') {
+        return { acknowledged: true, verified: true, commentId: reply.id };
       }
     } catch (error) {
       lastLookupSucceeded = false;
@@ -701,18 +705,21 @@ async function inspectExistingRequest({ github, owner, repo, pullNumber, headSha
     .sort((left, right) => Number(right.id || 0) - Number(left.id || 0))[0];
   if (!command) return { verified: true, acknowledged: false, commandMissing: true };
 
-  const replies = comments.filter((comment) => (
-    normalize(comment?.user?.login) === CODERABBIT_BOT_LOGIN
-    && Number(comment?.id || 0) > Number(command.id || 0)
-  ));
-  if (replies.some((comment) => classifyCodeRabbitComment(comment.body) === 'refusal')) {
+  // Same first-reply rule as the live poll, so the two cannot disagree about what
+  // counts as an answer to a command.
+  const reply = comments
+    .filter((comment) => (
+      normalize(comment?.user?.login) === CODERABBIT_BOT_LOGIN
+      && Number(comment?.id || 0) > Number(command.id || 0)
+    ))
+    .sort((left, right) => Number(left.id || 0) - Number(right.id || 0))[0];
+  const kind = reply ? classifyCodeRabbitComment(reply.body) : null;
+  if (kind === 'refusal') {
     return { verified: true, acknowledged: false, refused: true, commandId: command.id };
   }
   return {
     verified: true,
-    acknowledged: replies.some(
-      (comment) => classifyCodeRabbitComment(comment.body) === 'acknowledgement',
-    ),
+    acknowledged: kind === 'acknowledgement',
     commandId: command.id,
   };
 }
@@ -1427,6 +1434,21 @@ async function runGate({ github, context, core, config, attemptState }) {
   }
   // The command is posted and the candidate is still valid. That is NOT yet a
   // requested review — see awaitCodeRabbitAcknowledgement above for why.
+  //
+  // RESIDUAL, and the honest limit of this check: the acknowledgement is bound to
+  // the command by AUTHOR, by ORDER (it must be the first CodeRabbit comment after
+  // it) and by TIME (inside the window), but not CAUSALLY. CodeRabbit's reply does
+  // not name the head or the command it answers, and its documentation defines no
+  // acknowledgement contract, so a reply to some other action arriving first in
+  // that window would be misread. What this check does prove is the thing that was
+  // actually broken and silently false for months: that the command was HEARD
+  // rather than dropped for being bot-authored.
+  //
+  // It deliberately does NOT try to prove a review of this exact head exists. That
+  // proof is head-bound and belongs where it already lives — the merge gate, which
+  // must match a CodeRabbit review's commit_id to the final head. Widening this
+  // 30-second poll into a review-existence check would take minutes and would
+  // duplicate a gate that already exists.
   const acknowledgement = await awaitCodeRabbitAcknowledgement({
     github,
     owner,
@@ -1510,8 +1532,76 @@ async function runGate({ github, context, core, config, attemptState }) {
     });
   }
 
+  // The acknowledgement wait is up to 30 seconds of real time AFTER the last state
+  // snapshot. A head change, a newly failing check, a removed label, auto-merge
+  // being switched on, or a CHANGES_REQUESTED verdict inside that window would
+  // otherwise be reported as a clean success on a candidate that had already
+  // stopped being one. Re-read before crediting.
+  let settledPullRequest;
+  let settledCheckBlockers;
+  let settledReviewDecisionBlockers;
+  try {
+    [settledPullRequest, settledCheckBlockers, settledReviewDecisionBlockers] = await Promise.all([
+      getPullRequestWithResolvedMergeability({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        attempts: mergeabilityPollAttempts,
+        pollMs: mergeabilityPollMs,
+        settle,
+      }),
+      collectCheckBlockers({
+        github,
+        owner,
+        repo,
+        headSha: expectedHeadSha,
+        config,
+        core,
+        selfRunId: context.runId,
+      }),
+      collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
+    ]);
+  } catch (settledSnapshotError) {
+    // The review IS requested and acknowledged at this point — that cannot be
+    // undone, and the command must stay so a relabel cannot buy a second one. Only
+    // the verdict is withheld.
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    return blockCandidate({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      reason: `CodeRabbit acknowledged the review for ${expectedHeadSha}, but the candidate could not be re-verified afterwards (${settledSnapshotError.message}); the command and marker were preserved — re-check the candidate by hand`,
+    });
+  }
+
+  const settledReasons = validatePullRequest(
+    settledPullRequest,
+    context.payload.repository.default_branch,
+    expectedHeadSha,
+  );
+  settledReasons.push(...requestedMarkerStillAttached(settledPullRequest));
+  settledReasons.push(...settledCheckBlockers);
+  settledReasons.push(...settledReviewDecisionBlockers);
+  if (settledReasons.length > 0) {
+    // Deliberately NOT deleting the command here: CodeRabbit has already accepted
+    // it, so the review is spent whether or not the comment survives. Removing it
+    // would make the next relabel look untried and buy a second one.
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    return blockCandidate({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      reason: `CodeRabbit acknowledged the review for ${expectedHeadSha}, but the candidate changed while waiting for that acknowledgement, so the review no longer covers a valid frozen candidate; ${settledReasons.join('; ')}`,
+    });
+  }
+
   await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-  core.notice(`Requested one CodeRabbit review for frozen head ${expectedHeadSha}; CodeRabbit acknowledged it.`);
+  core.notice(`Requested one CodeRabbit review for frozen head ${expectedHeadSha}; CodeRabbit acknowledged it. This proves the command was HEARD, not that a review of this exact head exists — the merge gate still has to match a review's commit_id to the final head.`);
   return recoveredCommand
     ? { status: 'requested', headSha: expectedHeadSha, recovered: true, acknowledged: true }
     : { status: 'requested', headSha: expectedHeadSha, acknowledged: true };
