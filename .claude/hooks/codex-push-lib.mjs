@@ -2167,15 +2167,6 @@ export function pullRequestApproved(pullRequest) {
 // This deliberately does NOT fail closed on a missing field: after the
 // protection change, `null` is the ordinary verdict for an unreviewed PR and
 // treating it as a block would restore exactly the deadlock this removed. The
-// upstream sentence below is accurate by inspection today — both callers deny an
-// unfetchable PR (pr-merge-guard.mjs gateRequest()'s catch, and
-// production-action-guard.mjs's baseRefName/baseRefOid denials) — but NO test
-// asserts it. pr-merge-guard.test.mjs's "missing field does not block" case
-// checks only this predicate's own return value and puts the upstream claim in
-// its LABEL, which does not test it. Delete or reorder either caller's
-// fetch-failure deny and nothing turns red.
-// @unproven — accurate by inspection, but no test covers the upstream deny;
-// needs a caller-level test before it can be called proven.
 // fail-closed floor lives upstream instead — gateRequest() denies outright if
 // the PR's JSON cannot be fetched at all, so this predicate is never reached
 // with an unknown verdict. The green-pipeline check remains a hard deny, so

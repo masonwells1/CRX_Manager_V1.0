@@ -809,28 +809,34 @@ describe.skipIf(!isLiveDB)('Live DB: No Unintended Function Overloads', () => {
       SELECT p.proname, count(*) as overload_count
       FROM pg_proc p
       WHERE p.pronamespace = 'public'::regnamespace
-        -- Exclude functions owned by an installed extension. This guard exists to
-        -- catch accidental overloads introduced by OUR migrations (the bug class
-        -- behind 40+ March 2026 issues); an extension's own functions are never
-        -- created by a migration and cannot be that drift. plpgsql_check 2.7 is
-        -- installed into public and legitimately ships 8 overloaded functions,
-        -- which made this test fail for every listed and unlisted name alike.
-        -- Measured 2026-09-05 against live: 634 public functions, 24 excluded as
-        -- extension-owned, 610 still in scope — so this narrows the population,
-        -- it does not disable the check.
-        -- classid is required, not decorative: pg_depend.objid is only meaningful
-        -- alongside the catalog it belongs to, so an unrelated dependency row whose
-        -- objid happens to equal a pg_proc oid would otherwise exclude a real
-        -- function. This mirrors the standing live predicate in
-        -- scripts/db-invariant-sweeps/predicates/overloads.sql, which has carried
-        -- the same exclusion (and the same plpgsql_check rationale) since
-        -- 2026-06-11 — this test was simply out of sync with it.
-        AND NOT EXISTS (
-          SELECT 1 FROM pg_depend d
-          WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
-        )
       GROUP BY p.proname
+      -- Report a name only when it is overloaded AND at least one of its
+      -- overloads is ours. This guard catches accidental overloads introduced by
+      -- OUR migrations (the bug class behind 40+ March 2026 issues); an
+      -- extension's functions are managed by CREATE/ALTER EXTENSION and cannot
+      -- fork that way. plpgsql_check 2.7 is installed into public and
+      -- legitimately ships 8 overloaded functions, which is why this test was
+      -- failing for every listed and unlisted name alike.
+      --
+      -- The suppression is deliberately applied AFTER grouping, not as a WHERE
+      -- filter before it. Filtering extension rows out first would mean an
+      -- application migration that created a function sharing an extension
+      -- function's name left only its own single row, count 1, and the collision
+      -- would pass undetected. Grouping everything and suppressing only names
+      -- whose overloads are ENTIRELY extension-owned keeps that case visible.
+      --
+      -- classid is required, not decorative: pg_depend.objid is only meaningful
+      -- alongside the catalog it belongs to, so an unrelated dependency row whose
+      -- objid happened to equal a pg_proc oid would otherwise exclude a real
+      -- function. This mirrors the standing live predicate in
+      -- scripts/db-invariant-sweeps/predicates/overloads.sql, which has carried
+      -- the same exclusion, and the same plpgsql_check rationale, since
+      -- 2026-06-11 — this test was simply out of sync with it.
       HAVING count(*) > 1
+         AND bool_or(NOT EXISTS (
+               SELECT 1 FROM pg_depend d
+               WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+             ))
     `);
 
     const unexpected = (result as Array<{ proname: string; overload_count: number }>).filter(
