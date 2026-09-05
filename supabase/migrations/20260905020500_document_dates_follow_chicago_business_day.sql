@@ -58,11 +58,11 @@
 -- separate re-emit with its own md5 pin, which would widen a money migration already mid-landing
 -- (Mason's standing ruling, 2026-09-05). It is tracked as its own change.
 --
--- Live exposure today is NIL, not merely low: the only caller is
--- src/components/deliveries/QuickDeliveryModal.tsx:381, which always passes p_scheduled_date
--- (seeded from localToday(), which reads the BROWSER clock — a separate frontend defect of the
--- same family, also not fixed here). The wrapper default becomes reachable the moment a second
--- caller, a script, or a SQL console omits the argument.
+-- No current frontend callsite omits the date: src/components/deliveries/
+-- QuickDeliveryModal.tsx:381 always passes p_scheduled_date (seeded from localToday(), which
+-- reads the BROWSER clock — a separate frontend defect of the same family, also not fixed here).
+-- The authenticated/service-role wrapper nevertheless remains callable by a direct RPC consumer
+-- that omits the date, so its UTC default is a live residual even though the known UI path avoids it.
 --
 -- HOW THIS FILE WAS PRODUCED
 -- --------------------------
@@ -106,11 +106,26 @@ DECLARE
     'transfer_job_to_invoice',
       jsonb_build_array('78b827f8509a2740ea9879364747c372', '65cec26a71dde8c465a64337e25d8098')
   );
+  v_expected_defaults constant jsonb := jsonb_build_object(
+    '_convert_quote_to_order_owner_impl',
+      jsonb_build_array('NULL::uuid, NULL::text'),
+    '_draw_down_quote_below_cost_impl_20260810',
+      jsonb_build_array('NULL::uuid, NULL::text'),
+    '_create_quick_delivery_intent_impl_20260802',
+      jsonb_build_array(
+        'NULL::uuid, CURRENT_DATE, NULL::text, NULL::uuid, NULL::text, false',
+        'NULL::uuid, ((now() AT TIME ZONE ''America/Chicago''::text))::date, NULL::text, NULL::uuid, NULL::text, false'
+      ),
+    'transfer_job_to_invoice',
+      jsonb_build_array('NULL::text')
+  );
   v_seen int := 0;
 BEGIN
   FOR r IN
     SELECT p.oid, p.proname, md5(p.prosrc) AS src_md5, p.prosecdef, p.proconfig,
            p.proowner::regrole::text AS owner,
+           p.pronargdefaults,
+           pg_get_expr(p.proargdefaults, 0) AS arg_defaults,
            count(*) OVER (PARTITION BY p.proname) AS overloads,
            acl.execute_grantees, acl.has_grant_option, acl.owner_is_grantor
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -133,6 +148,16 @@ BEGIN
       RAISE EXCEPTION
         'PREFLIGHT_DRIFT: public.% body md5 is %, which is neither body this migration accepts (%). Re-read the current body, confirm the date expressions are still the only thing needing conversion, then re-pin.',
         r.proname, r.src_md5, (v_expected -> r.proname)::text;
+    END IF;
+    IF r.pronargdefaults > 0 AND r.arg_defaults IS NULL THEN
+      RAISE EXCEPTION
+        'PREFLIGHT_DEFAULTS_UNREADABLE: public.% declares % argument default(s) but pg_get_expr(proargdefaults, 0) returned NULL. Refusing to overwrite defaults that cannot be verified.',
+        r.proname, r.pronargdefaults;
+    END IF;
+    IF r.arg_defaults IS NULL OR NOT ((v_expected_defaults -> r.proname) ? r.arg_defaults) THEN
+      RAISE EXCEPTION
+        'PREFLIGHT_DEFAULT_DRIFT: public.% argument defaults are %, expected one of %. Refusing to overwrite a default-only live change.',
+        r.proname, COALESCE(r.arg_defaults, '(none)'), (v_expected_defaults -> r.proname)::text;
     END IF;
     IF r.owner <> 'postgres' THEN
       RAISE EXCEPTION 'PREFLIGHT_OWNER: public.% is owned by %, expected postgres.', r.proname, r.owner;
@@ -2770,6 +2795,16 @@ DECLARE
   r record;
   v_seen int := 0;
   v_code text;
+  v_expected_defaults constant jsonb := jsonb_build_object(
+    '_convert_quote_to_order_owner_impl',
+      jsonb_build_array('NULL::uuid, NULL::text'),
+    '_draw_down_quote_below_cost_impl_20260810',
+      jsonb_build_array('NULL::uuid, NULL::text'),
+    '_create_quick_delivery_intent_impl_20260802',
+      jsonb_build_array('NULL::uuid, ((now() AT TIME ZONE ''America/Chicago''::text))::date, NULL::text, NULL::uuid, NULL::text, false'),
+    'transfer_job_to_invoice',
+      jsonb_build_array('NULL::text')
+  );
 BEGIN
   FOR r IN
     SELECT p.oid, p.proname, p.prosrc, p.prosecdef, p.proconfig,
@@ -2831,6 +2866,12 @@ BEGIN
         RAISE EXCEPTION
           'POSTFLIGHT_UTC_RESIDUAL_DEFAULT: public.% still carries CURRENT_DATE in an ARGUMENT DEFAULT after conversion; a caller that omits that argument would still get the UTC clock.', r.proname;
       END IF;
+    END IF;
+
+    IF r.arg_defaults IS NULL OR NOT ((v_expected_defaults -> r.proname) ? r.arg_defaults) THEN
+      RAISE EXCEPTION
+        'POSTFLIGHT_DEFAULT_DRIFT: public.% argument defaults are %, expected exactly %. Refusing to certify an unpinned replacement signature.',
+        r.proname, COALESCE(r.arg_defaults, '(none)'), (v_expected_defaults -> r.proname)::text;
     END IF;
 
     IF (SELECT count(*) FROM regexp_matches(r.prosrc, 'America/Chicago', 'g')) < 1 THEN

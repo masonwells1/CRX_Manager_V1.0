@@ -21,7 +21,8 @@
  *       and the discriminator for phase 4;
  *   3.  against an unexpected anon EXECUTE grant the candidate ABORTS with
  *       PREFLIGHT_ACL and changes nothing; against a DRIFTED body it separately
- *       ABORTS with PREFLIGHT_DRIFT;
+ *       ABORTS with PREFLIGHT_DRIFT; against a default-only live drift it ABORTS
+ *       with PREFLIGHT_DEFAULT_DRIFT before overwriting that catalog state;
  *   4.  it applies over the pinned bodies, and AFTER it NO writer evaluates CURRENT_DATE
  *       in code any more, while each carries exactly the number of America/Chicago
  *       conversions the file claims;
@@ -239,7 +240,7 @@ try {
   assert.equal(codeCurrentDateCount(QUICK_IMPL) > 0, true, 'sanity: the body defect must also be present');
   log(`PHASE 2b: the argument-default defect reproduces — ${QUICK_IMPL} defaults are "${defaultsBefore}", invisible to every prosrc check`);
 
-  // PHASE 3: ACL and body-drift refusal.
+  // PHASE 3: ACL, body-drift, and default-only-drift refusal.
   const originalDefs = Object.fromEntries(WRITERS.map((fn) => [fn, functionDef(fn)]));
   const restoreWriters = () => {
     psql(Object.values(originalDefs).join('\n;\n'));
@@ -269,6 +270,30 @@ try {
   assert.equal(bodyMd5('_convert_quote_to_order_owner_impl'), rebuild._convert_quote_to_order_owner_impl, 'other writers must be untouched after the refused apply');
   log('PHASE 3b: the candidate ABORTS with PREFLIGHT_DRIFT on a drifted body and changes nothing');
   restoreWriters();
+
+  const defaultOnlyDrift = originalDefs[QUICK_IMPL].replace(
+    'p_scheduled_date date DEFAULT CURRENT_DATE',
+    "p_scheduled_date date DEFAULT DATE '2000-01-01'",
+  );
+  assert.notEqual(defaultOnlyDrift, originalDefs[QUICK_IMPL],
+    'default-only live-drift mutation did not alter the function definition — the anchor moved');
+  psql(defaultOnlyDrift);
+  assert.deepEqual(bodyState(), rebuild,
+    'changing only an argument default must leave every prosrc body hash unchanged');
+  const driftedDefaults = argDefaults(QUICK_IMPL);
+  assert.match(driftedDefaults, /2000-01-01/,
+    `default-only drift was not installed before the preflight test: ${driftedDefaults}`);
+  const defaultDrifted = psql('\\i /tmp/candidate.sql', { allowFailure: true, wrap: wrapByName.get('candidate.sql') ?? false });
+  assert.match(`${defaultDrifted.stdout}\n${defaultDrifted.stderr}`, /PREFLIGHT_DEFAULT_DRIFT/,
+    'the candidate must ABORT on a default-only live drift that leaves prosrc unchanged');
+  assert.deepEqual(bodyState(), rebuild,
+    'the default-only drift refusal must leave every writer body untouched');
+  assert.equal(argDefaults(QUICK_IMPL), driftedDefaults,
+    'the refused candidate must not overwrite the drifted live argument default');
+  log('PHASE 3c: the candidate ABORTS with PREFLIGHT_DEFAULT_DRIFT on a default-only live change and overwrites nothing');
+  restoreWriters();
+  assert.equal(argDefaults(QUICK_IMPL), defaultsBefore,
+    'restoring the writer must restore its original argument defaults before the real apply');
 
   // PHASE 4: the real apply.
   const applied = psql('\\i /tmp/candidate.sql', { allowFailure: true, wrap: wrapByName.get('candidate.sql') ?? false });
@@ -372,24 +397,35 @@ $eval$;`, { allowFailure: true });
   assert.deepEqual(bodyState(), rebuild, 'the default mutant must install nothing (its transaction rolled back)');
   log('PHASE 8: MUTATION — reverting ONLY the argument default aborts in POSTFLIGHT_UTC_RESIDUAL_DEFAULT (body check silent) and installs nothing');
 
-  // PHASE 9: prove the fail-closed reader assertion. Swapping pg_get_expr's second argument from 0
-  // to p.oid is the wrong-but-obvious form: it returns NULL for every function, silently, and would
-  // turn PHASE 8's check into a tautology that passes on NULL. The candidate must refuse to certify
-  // rather than report clean. First, demonstrate the reader really does go dark.
+  // PHASES 9-10: prove both fail-closed reader assertions. Swapping pg_get_expr's second argument
+  // from 0 to p.oid is the wrong-but-obvious form: it returns NULL for every function, silently,
+  // and would turn the default checks into tautologies that pass on NULL. The candidate must refuse
+  // both before replacement and during certification. First, demonstrate the reader really does go dark.
   const darkReader = argDefaultsViaProOid(QUICK_IMPL);
   assert.equal(darkReader, '<NULL>',
     `pg_get_expr(proargdefaults, p.oid) was expected to return NULL, got: ${darkReader}`);
-  const readerMutated = candidateSql.replace(
-    'pg_get_expr(p.proargdefaults, 0) AS arg_defaults',
-    'pg_get_expr(p.proargdefaults, p.oid) AS arg_defaults',
-  );
-  assert.notEqual(readerMutated, candidateSql, 'reader mutation did not alter the candidate — the anchor text moved');
-  copyText(readerMutated, 'reader-mutant.sql', workDir);
-  const readerMutantRun = psql('\\i /tmp/reader-mutant.sql', { allowFailure: true, wrap: wrapByName.get('reader-mutant.sql') ?? false });
-  assert.match(`${readerMutantRun.stdout}\n${readerMutantRun.stderr}`, /POSTFLIGHT_DEFAULTS_UNREADABLE/,
-    'a blinded argument-default reader must abort in POSTFLIGHT_DEFAULTS_UNREADABLE, not pass on NULL');
-  assert.deepEqual(bodyState(), rebuild, 'the reader mutant must install nothing (its transaction rolled back)');
-  log(`PHASE 9: MUTATION — blinding the reader (pg_get_expr second arg 0 -> p.oid, which returns ${darkReader}) aborts in POSTFLIGHT_DEFAULTS_UNREADABLE instead of passing on NULL`);
+  const readerAnchor = 'pg_get_expr(p.proargdefaults, 0) AS arg_defaults';
+  const blindedReader = 'pg_get_expr(p.proargdefaults, p.oid) AS arg_defaults';
+  const preflightReaderIndex = candidateSql.indexOf(readerAnchor);
+  const postflightReaderIndex = candidateSql.indexOf(readerAnchor, preflightReaderIndex + readerAnchor.length);
+  assert.ok(preflightReaderIndex >= 0, 'preflight argument-default reader anchor moved');
+  assert.ok(postflightReaderIndex > preflightReaderIndex, 'postflight argument-default reader anchor moved');
+
+  const preflightReaderMutated = `${candidateSql.slice(0, preflightReaderIndex)}${blindedReader}${candidateSql.slice(preflightReaderIndex + readerAnchor.length)}`;
+  copyText(preflightReaderMutated, 'preflight-reader-mutant.sql', workDir);
+  const preflightReaderRun = psql('\\i /tmp/preflight-reader-mutant.sql', { allowFailure: true, wrap: wrapByName.get('preflight-reader-mutant.sql') ?? false });
+  assert.match(`${preflightReaderRun.stdout}\n${preflightReaderRun.stderr}`, /PREFLIGHT_DEFAULTS_UNREADABLE/,
+    'a blinded preflight argument-default reader must abort before replacement, not pass on NULL');
+  assert.deepEqual(bodyState(), rebuild, 'the preflight reader mutant must install nothing');
+  log(`PHASE 9: MUTATION — blinding only the preflight reader aborts in PREFLIGHT_DEFAULTS_UNREADABLE (the wrong reader returns ${darkReader})`);
+
+  const postflightReaderMutated = `${candidateSql.slice(0, postflightReaderIndex)}${blindedReader}${candidateSql.slice(postflightReaderIndex + readerAnchor.length)}`;
+  copyText(postflightReaderMutated, 'postflight-reader-mutant.sql', workDir);
+  const postflightReaderRun = psql('\\i /tmp/postflight-reader-mutant.sql', { allowFailure: true, wrap: wrapByName.get('postflight-reader-mutant.sql') ?? false });
+  assert.match(`${postflightReaderRun.stdout}\n${postflightReaderRun.stderr}`, /POSTFLIGHT_DEFAULTS_UNREADABLE/,
+    'a blinded postflight argument-default reader must abort certification, not pass on NULL');
+  assert.deepEqual(bodyState(), rebuild, 'the postflight reader mutant must install nothing (its transaction rolled back)');
+  log('PHASE 10: MUTATION — blinding only the postflight reader aborts in POSTFLIGHT_DEFAULTS_UNREADABLE instead of certifying NULL');
 
   log('\nALL PHASES PASSED');
 } finally {
