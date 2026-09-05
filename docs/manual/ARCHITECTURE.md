@@ -106,8 +106,8 @@ arithmetic, and rounding are not allowed. The pre-write `money-safety.mjs` hook
 (see `docs/reference/agent-guardrails.md`) blocks `parseFloat()` on variables
 whose names end in `_cents`.
 
-Concrete rules that follow from this principle (full list in `AGENTS.md`
-"CRX Hard Rules"):
+Concrete rules that follow from this principle (full detail in
+`docs/workflows/SAFE_DEVELOPMENT_RULES.md`):
 - Inventory and financial invariants belong in RPCs/triggers, not React.
 - Mutating RPCs require and enforce an idempotency key (`p_idempotency_key`)
   so a duplicate button-click or network retry can't double-charge or
@@ -310,8 +310,8 @@ duplicated here:
 - **`docs/manual/AGENT_ONBOARDING.md`** — (companion document, written
   alongside this one) onboarding guide for a new agent session: how to get
   oriented, what to read first, how the approval gates work day-to-day.
-- **`AGENTS.md`** (repo root) — the canonical shared contract: hard rules,
-  approval gates, and workspace hygiene rules every agent must follow.
+- **`AGENTS.md`** (repo root) — the concise shared contract: owner communication,
+  authority, routing, true non-negotiables, and completion standards.
 - **The rest of `docs/manual/`** — `DECISION_LOG.md` (settled decisions —
   check before re-opening one), `KNOWN_ISSUES.md` (everything known-open),
   `CURRENT_STATE.md` (dated live snapshot), `OWNER_PLAYBOOK.md` (Mason's
@@ -343,6 +343,6 @@ duplicated here:
 | Agent/Codex collaboration mechanics | `docs/workflows/AGENT_COLLABORATION.md` |
 | Hook + reviewer-agent reference | `docs/reference/agent-guardrails.md` |
 | Project-specific known gotchas | `docs/reference/gotchas.md` |
-| Shared agent contract (hard rules, approval gates) | `AGENTS.md` |
+| Shared agent contract and routing | `AGENTS.md` |
 | Change history | `docs/CHANGELOG.md` |
 | Past architecture audits | `docs/audits/` |

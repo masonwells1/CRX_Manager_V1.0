@@ -87,7 +87,7 @@ IF p_idempotency_key IS NOT NULL THEN
   PERFORM save_idempotency(p_idempotency_key, 'my_rpc_name', v_result);
 END IF;
 ```
-The `check_idempotency` / `save_idempotency` helpers (defined in `20260210000000_tier3_idempotency_and_triggers.sql`, both have `search_path = public, pg_temp`) are the canonical pattern. Inline raw-SQL idempotency lookups still exist in some 2026-05-07 migrations (`create_inventory_hold`, `mark_inventory_row_verified`) — those are NOT precedent for new code. When using helpers, add the file-level marker comment `-- idempotency-body-check: exempt` at the top so the schema-aware hook doesn't trip on the indirection.
+The `check_idempotency` / `save_idempotency` helpers (defined in `20260210000000_tier3_idempotency_and_triggers.sql`, both have `search_path = public, pg_temp`) are the canonical pattern. Inline raw-SQL idempotency lookups still exist in some 2026-05-07 migrations (`create_inventory_hold`, `mark_inventory_row_verified`) — those are NOT precedent for new code. The guard recognizes correctly paired helper calls, so normal helper use requires no exemption marker. Reserve the file-level `-- idempotency-body-check: exempt` marker for valid SQL the guard cannot parse or a wrapper that genuinely delegates idempotency; because it disables this check for the whole migration file, a manual review must inspect every function in that file.
 
 **Strict-actor pattern (until shared helper exists):**
 ```sql

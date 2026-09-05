@@ -12,12 +12,13 @@ Mason does not need to remember this command name. Treat plain-English requests 
 
 Read first:
 
-1. `CLAUDE.md`
-2. `docs/workflows/SAFE_DEVELOPMENT_RULES.md`
-3. `docs/reference/gotchas.md`
-4. `docs/workflows/CODEX_REVIEW_GAUNTLET.md`
-5. `.claude/skills/codex-review/SKILL.md`
-6. `.claude/commands/review-workflow.md` if running foundation mode
+1. `AGENTS.md`
+2. `CLAUDE.md`
+3. `docs/workflows/SAFE_DEVELOPMENT_RULES.md`
+4. `docs/reference/gotchas.md`
+5. `docs/workflows/CODEX_REVIEW_GAUNTLET.md`
+6. `.claude/skills/codex-review/SKILL.md`
+7. `.claude/commands/review-workflow.md` if running foundation mode
 
 ## Mode Selection
 
@@ -149,9 +150,9 @@ For every Codex BLOCKER or HIGH:
 - cut any finding that cannot be grounded in evidence;
 - keep genuine disagreement visible for Mason.
 
-Scope: keep only correctness bugs and gaps against a stated requirement (the Hard Red Lines / lifecycle / money / RLS / idempotency rules). Drop defensive-coding-for-impossible-inputs, style, naming, and speculative-flexibility findings the same as an ungrounded finding.
+Scope: keep only correctness bugs and gaps against a stated requirement (the CRX Hard Rules / lifecycle / money / RLS / idempotency rules). Drop defensive-coding-for-impossible-inputs, style, naming, and speculative-flexibility findings the same as an ungrounded finding.
 
-Severity rubric: BLOCKER = data loss / money error / security hole / breaks a Hard Red Line; HIGH = wrong business result or lifecycle violation on a real path; MED = correctness gap on an unlikely path; LOW = minor. Verdict: SHIP = no open BLOCKER/HIGH; SHIP-WITH-FOLLOWUPS = open items are MED/LOW and explicitly accepted by Mason.
+Severity rubric: BLOCKER = data loss / money error / security hole / breaks a CRX Hard Rule; HIGH = wrong business result or lifecycle violation on a real path; MED = correctness gap on an unlikely path; LOW = minor. Verdict: SHIP = no open BLOCKER/HIGH; SHIP-WITH-FOLLOWUPS = open items are MED/LOW and explicitly accepted by Mason.
 
 ### Step 5: Fix Loop
 

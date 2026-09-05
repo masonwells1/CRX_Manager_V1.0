@@ -45,7 +45,7 @@ Exempt: read-only functions, trigger functions, internal helpers called only fro
 ### CHECK 5 — Actor-forgery anti-pattern
 Pattern: function accepts `p_performed_by uuid` (or similar actor parameter) but does NOT validate `p_performed_by IS DISTINCT FROM auth.uid()` and `RAISE EXCEPTION 'ACTOR_MISMATCH'`.
 Severity: **HIGH** — exact pattern from `unapply_credit_memo` (B5).
-Canonical block (from CLAUDE.md):
+Canonical actor-binding pattern:
 ```sql
 v_actor := auth.uid();
 IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
