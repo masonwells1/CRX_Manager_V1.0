@@ -398,6 +398,12 @@ const RISKY_PATH_RES = [
   // etc.) touches ONLY these files and would otherwise merge un-gated, disabling
   // the very gate meant to review it (Codex round-8, PR #142).
   /(^|\/)\.claude\/settings\.json$/i,
+  // Editable configuration and verification scripts still require independent
+  // review, even when their diff contains no security-related keywords.
+  /(^|\/)\.claude\/settings\.local\.json$/i,
+  /(^|\/)\.codex\/config\.toml$/i,
+  /(^|\/)\.coderabbit\.yaml$/i,
+  /(^|\/)scripts\/(?:check|validate|verify)-[^/]+$/i,
   /(^|\/)\.codex\/hooks\.json$/i,
 ];
 export function riskyFiles(files) {

@@ -309,6 +309,18 @@ assert.deepEqual(
 // de-registers a guard by editing only these must still require the verdict.
 assert.deepEqual(riskyFiles([".claude/settings.json"]), [".claude/settings.json"]);
 assert.deepEqual(riskyFiles([".codex/hooks.json"]), [".codex/hooks.json"]);
+// PR #605: these editable surfaces must require review regardless of content.
+for (const configPath of [
+  ".coderabbit.yaml",
+  ".codex/config.toml",
+  ".claude/settings.local.json",
+  "scripts/check-agent-guidance.mjs",
+  "scripts/validate-example.ps1",
+  "scripts/verify-example.sh",
+]) {
+  assert.deepEqual(riskyFiles([configPath]), [configPath]);
+}
+assert.deepEqual(riskyFiles(["docs/verify-example.md", "scripts/example.mjs"]), []);
 assert.deepEqual(
   riskyFiles([
     "src/pages/Home.tsx",

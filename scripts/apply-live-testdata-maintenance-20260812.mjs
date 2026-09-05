@@ -231,11 +231,12 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // by a pipe are examined, and a protected basename counts after a directory
   // change. Anchors unchanged; pushLib identity.
   codexGuard: "a1ba52df7b4e84989276632aea37fa8a1d567bcc",
-  pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
+  // PR #605: expanded review coverage; producer transform remains identity.
+  pushLib: "706e3b9234bc598d07379f46c1c5917ebe99cba0",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "d96b63533e81e00887c4361795c043f2c062f794",
-  pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
+  pushLib: "706e3b9234bc598d07379f46c1c5917ebe99cba0",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

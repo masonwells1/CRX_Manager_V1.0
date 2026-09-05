@@ -625,6 +625,9 @@ for (const payload of [
   const result = run(payload);
   assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
   assert.match(result.stdout, /"permissionDecision":"deny"/, `path-field writer must deny: ${payload.tool_name}`);
+  assert.match(result.stdout, /Use native Edit\/Write/);
+  assert.match(result.stdout, /exact-SHA independent review before merge/);
+  assert.doesNotMatch(result.stdout, /ask.*tier/);
 }
 
 // Read-only built-ins must be allowed on protected paths — this guard's own
@@ -641,15 +644,15 @@ for (const payload of [
 }
 
 // Native Write/Edit are deliberately NOT denied here — there is no unlock any
-// more, so denying them would permanently strand hook maintenance. The `ask` tier
-// gates them instead. Pinned so the exemption stays a recorded choice.
+// more, so denying them would permanently strand hook maintenance. Independent
+// review gates delivery instead. Pinned so the exemption stays a recorded choice.
 for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/hooks/sql-safety.mjs", content: "x" } },
   { tool_name: "Edit", tool_input: { file_path: ".husky/pre-push" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "", `native editor stays with the ask tier: ${payload.tool_name}`);
+  assert.equal(result.stdout, "", `native editor remains allowed: ${payload.tool_name}`);
 }
 
 // KNOWN OVER-BLOCK, pinned deliberately rather than papered over. A dotted
