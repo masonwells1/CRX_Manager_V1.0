@@ -1,8 +1,9 @@
-## 2026-09-05 - Three exact-SHA Codex rounds on the review-proof guard narrowing, and what they settled
+## 2026-09-05 - Seven exact-SHA Codex rounds on the review-proof guard narrowing, and what they settled
 
-Each `scripts/write-codex-push-proof.mjs` run on a candidate of
+The first six `scripts/write-codex-push-proof.mjs` runs on candidates of
 `2026-09-05-review-proof-guard-read-only-narrowing.md` returned `CODEX_PROOF_VERDICT: BLOCKERS`
-with findings that were all confirmed by reproducing them against the candidate:
+with findings that were all confirmed by reproducing them against the candidate; the seventh
+returned `CLEAN`:
 
 | round | finding | disposition |
 |---|---|---|
@@ -19,6 +20,7 @@ with findings that were all confirmed by reproducing them against the candidate:
 | 5 | the 8.3 test failed outright on a volume with short names turned off, which is the mitigation the docs recommend | fixed: skipped with a note when the volume generates no aliases at all; still fails when the directory has one and the proof does not |
 | 6 | the draft folded "more than one hard link" into "unresolvable" BEFORE checking the resolved name, so an outside symlink to a hard-linked proof was allowed — and the Linux CI run of the test, which creates exactly that, would have failed | fixed: the read target is classified into four explicit verdicts (proof, aliased, unresolvable, clear) with the name check first; the exact shape is pinned |
 | 6 | the KNOWN_ISSUES edit dropped the "OPEN 2026-09-04" heading of the entry below it | fixed |
+| 7 | none | `CODEX_PROOF_VERDICT: CLEAN` on the shape that ships |
 
 The two command-text narrowings were withdrawn after round 3: each round produced a real bypass in
 the previous round's fix, which is the recorded "a command-text guard never converges" failure
@@ -26,4 +28,7 @@ mode. Their behaviour is the base guard's, every reproduced bypass is a pinned d
 over-block is pinned as a recorded choice with a workaround. Round 4, on the withdrawn shape, found
 the alias hole in the one exemption that survived; the fix is a canonicalization the base guard
 never had, so a proof read through an 8.3 alias or a symlink now denies for every native reader,
-whether or not the path spells `session-state`. A fifth round runs on that shape.
+whether or not the path spells `session-state`. Rounds 5 and 6 corrected the KNOWN_ISSUES claim
+and the classification order; round 7 returned `CLEAN`. Any later run only re-binds the proof to
+a new head after `main` moved or this record was corrected — it does not change the reviewed
+shape.
