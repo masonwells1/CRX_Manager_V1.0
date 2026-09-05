@@ -498,6 +498,22 @@ CREATE POLICY commission_earned_state_ledger_unexpected_select
 COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'earned_ledger_extra_policy');
 
   expectRecipientGuardFailure(\`BEGIN;
+\${extractFunctionStatement(driftedRepairPostimage, 'record_commission_earned_state')}
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'earned_recorder_body_drift');
+
+  expectRecipientGuardFailure(\`BEGIN;
+GRANT SELECT ON TABLE public.commission_settlement_events TO authenticated;
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'settlement_ledger_acl_drift');
+
+  expectRecipientGuardFailure(\`BEGIN;
+ALTER TABLE public.commission_settlement_events
+  DISABLE TRIGGER trg_commission_settlement_events_immutable;
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'settlement_ledger_mutation_trigger_disabled');
+
+  expectRecipientGuardFailure(\`BEGIN;
 DROP TRIGGER trg_commission_payments_record_settlement_event ON public.commission_payments;
 CREATE TRIGGER trg_commission_payments_record_settlement_event
   BEFORE UPDATE OF status ON public.commission_payments
@@ -530,7 +546,7 @@ COMMIT;\`);
     'valid reassigned-recipient post/void did not preserve exact-cent ledger history');
 
   console.log('COMMISSION_HISTORY_LABEL_REPAIR_PROOF_PASS postgres=17 append_only=true opening_labels=3 future_job_label=true mutation_guards=15');
-  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_PROOF_PASS stale_rejected=true current_posted=true exact_cents=true void_preserved=true mutation_guards=8');
+  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_PROOF_PASS stale_rejected=true current_posted=true exact_cents=true void_preserved=true mutation_guards=11');
 `;
 
 try {

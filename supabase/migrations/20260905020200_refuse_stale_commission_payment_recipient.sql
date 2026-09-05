@@ -27,6 +27,19 @@ BEGIN
         JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public'
          AND p.proname = 'record_commission_settlement_event') <> 1
+     OR (SELECT count(*)
+           FROM pg_proc p
+           JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public'
+            AND p.proname = 'record_commission_earned_state') <> 1
+     OR (SELECT count(*)
+           FROM pg_proc p
+           JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public'
+            AND p.proname IN (
+                  'prevent_commission_history_ledger_mutation',
+                  'prevent_commission_history_ledger_truncate'
+                )) <> 2
      OR NOT EXISTS (
        SELECT 1
          FROM pg_proc p
@@ -52,6 +65,42 @@ BEGIN
          CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) privilege
         WHERE p.oid = 'public.record_commission_settlement_event()'::regprocedure
           AND privilege.grantee <> p.proowner
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_proc p
+        WHERE p.oid = 'public.record_commission_earned_state()'::regprocedure
+          AND p.proowner = 'postgres'::regrole
+          AND p.prosecdef
+          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+          AND p.prorettype = 'trigger'::regtype
+          AND p.provolatile = 'v'
+          AND p.proparallel = 'u'
+          AND NOT p.proisstrict
+          AND NOT p.proleakproof
+          AND NOT p.proretset
+          AND p.procost = 100
+          AND md5(p.prosrc) = '5623b0d31181d357b303a36e563a77aa'
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_proc p
+         CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) privilege
+        WHERE p.oid = 'public.record_commission_earned_state()'::regprocedure
+          AND privilege.grantee <> p.proowner
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_trigger t
+        WHERE t.tgrelid = 'public.commissions'::regclass
+          AND t.tgname = 'trg_commissions_record_earned_state'
+          AND t.tgfoid = 'public.record_commission_earned_state()'::regprocedure
+          AND NOT t.tgisinternal
+          AND t.tgenabled = 'O'
+          AND t.tgtype = 21
+          AND t.tgnargs = 0
+          AND octet_length(t.tgargs) = 0
+          AND t.tgqual IS NULL
      )
      OR NOT EXISTS (
        SELECT 1
@@ -113,59 +162,70 @@ BEGIN
                AND NOT a.attisdropped
           )
      )
-     OR NOT EXISTS (
+     OR EXISTS (
        SELECT 1
-         FROM pg_class c
-        WHERE c.oid = 'public.commission_earned_state_ledger'::regclass
-          AND c.relowner = 'postgres'::regrole
-          AND c.relrowsecurity
-          AND NOT c.relforcerowsecurity
+         FROM (VALUES
+           ('public.commission_earned_state_ledger'::regclass, 'commission_earned_state_ledger_admin_select'),
+           ('public.commission_settlement_events'::regclass, 'commission_settlement_events_admin_select')
+         ) expected(table_oid, policy_name)
+         LEFT JOIN pg_class c ON c.oid = expected.table_oid
+         LEFT JOIN pg_policy p
+           ON p.polrelid = expected.table_oid
+          AND p.polname = expected.policy_name
+        WHERE c.relowner <> 'postgres'::regrole
+           OR NOT c.relrowsecurity
+           OR c.relforcerowsecurity
+           OR p.oid IS NULL
+           OR p.polcmd <> 'r'
+           OR p.polroles <> ARRAY['authenticated'::regrole::oid]
+           OR pg_get_expr(p.polqual, p.polrelid) NOT IN ('is_admin()', 'public.is_admin()')
+           OR p.polwithcheck IS NOT NULL
      )
      OR (SELECT count(*)
            FROM pg_policy p
-          WHERE p.polrelid = 'public.commission_earned_state_ledger'::regclass) <> 1
-     OR NOT EXISTS (
-       SELECT 1
-         FROM pg_policy p
-        WHERE p.polrelid = 'public.commission_earned_state_ledger'::regclass
-          AND p.polname = 'commission_earned_state_ledger_admin_select'
-          AND p.polcmd = 'r'
-          AND p.polroles = ARRAY['authenticated'::regrole::oid]
-          AND pg_get_expr(p.polqual, p.polrelid) IN ('is_admin()', 'public.is_admin()')
-          AND p.polwithcheck IS NULL
-     )
+          WHERE p.polrelid IN (
+                  'public.commission_earned_state_ledger'::regclass,
+                  'public.commission_settlement_events'::regclass
+                )) <> 2
      OR EXISTS (
        SELECT 1
          FROM pg_class c
          CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege
-        WHERE c.oid = 'public.commission_earned_state_ledger'::regclass
+        WHERE c.oid IN (
+                'public.commission_earned_state_ledger'::regclass,
+                'public.commission_settlement_events'::regclass
+              )
           AND privilege.grantee <> c.relowner
      )
-     OR NOT EXISTS (
+     OR EXISTS (
        SELECT 1
-         FROM pg_trigger t
-        WHERE t.tgrelid = 'public.commission_earned_state_ledger'::regclass
-          AND t.tgname = 'trg_commission_earned_state_ledger_immutable'
-          AND t.tgfoid = 'public.prevent_commission_history_ledger_mutation()'::regprocedure
-          AND NOT t.tgisinternal
-          AND t.tgenabled = 'O'
-          AND t.tgtype = 27
-          AND t.tgnargs = 0
-          AND octet_length(t.tgargs) = 0
-          AND t.tgqual IS NULL
+         FROM pg_class c
+         CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('S', c.relowner))) privilege
+        WHERE c.oid IN (
+                'public.commission_earned_state_ledger_id_seq'::regclass,
+                'public.commission_settlement_events_id_seq'::regclass
+              )
+          AND (c.relowner <> 'postgres'::regrole OR privilege.grantee <> c.relowner)
      )
-     OR NOT EXISTS (
+     OR EXISTS (
        SELECT 1
-         FROM pg_trigger t
-        WHERE t.tgrelid = 'public.commission_earned_state_ledger'::regclass
-          AND t.tgname = 'trg_commission_earned_state_ledger_no_truncate'
-          AND t.tgfoid = 'public.prevent_commission_history_ledger_truncate()'::regprocedure
+         FROM (VALUES
+           ('public.commission_earned_state_ledger'::regclass, 'trg_commission_earned_state_ledger_immutable', 27::smallint, 'public.prevent_commission_history_ledger_mutation()'::regprocedure),
+           ('public.commission_earned_state_ledger'::regclass, 'trg_commission_earned_state_ledger_no_truncate', 34::smallint, 'public.prevent_commission_history_ledger_truncate()'::regprocedure),
+           ('public.commission_settlement_events'::regclass, 'trg_commission_settlement_events_immutable', 27::smallint, 'public.prevent_commission_history_ledger_mutation()'::regprocedure),
+           ('public.commission_settlement_events'::regclass, 'trg_commission_settlement_events_no_truncate', 34::smallint, 'public.prevent_commission_history_ledger_truncate()'::regprocedure)
+         ) expected(table_oid, trigger_name, trigger_type, function_oid)
+         LEFT JOIN pg_trigger t
+           ON t.tgrelid = expected.table_oid
+          AND t.tgname = expected.trigger_name
+          AND t.tgtype = expected.trigger_type
+          AND t.tgfoid = expected.function_oid
           AND NOT t.tgisinternal
           AND t.tgenabled = 'O'
-          AND t.tgtype = 34
           AND t.tgnargs = 0
           AND octet_length(t.tgargs) = 0
           AND t.tgqual IS NULL
+        WHERE t.oid IS NULL
      ) THEN
     RAISE EXCEPTION 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT: reviewed settlement recorder or earned ledger foundation differs';
   END IF;

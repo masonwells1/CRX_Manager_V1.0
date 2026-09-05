@@ -20,9 +20,9 @@ written before reassignment proceeds, and the existing post-settlement recipient
 the reassignment. The original exact-cent posting math and void reversal branch are preserved.
 
 The network-isolated PostgreSQL 17 proof observes stale-A refusal, a valid B post at +1,234 cents,
-and its void at -1,234 cents. Eight mutation guards cover the apply-time writer lock, recipient and
-row-lock checks, body/overload drift, immutable-ledger helper, exact RLS policy, and unconditional
-trigger shape, so a green proof cannot come from an unused guard.
+and its void at -1,234 cents. Eleven mutation guards cover the apply-time writer lock, recipient and
+row-lock checks, both recorder bodies/overloads, immutable-ledger helpers and triggers, exact RLS
+policies/ACLs, and unconditional trigger shape, so a green proof cannot come from an unused guard.
 
 This migration is source-only and not applied live. It requires a fresh migration apply gate and
 Mason's explicit in-chat approval before production changes.
