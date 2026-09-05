@@ -103,6 +103,11 @@ RETURNS integer LANGUAGE sql AS 'SELECT p_unused';
 COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_recorder_shadow_overload');
 
   expectRepairFailure(\`BEGIN;
+ALTER FUNCTION public.record_commission_earned_state() STABLE;
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_recorder_volatility_drift');
+
+  expectRepairFailure(\`BEGIN;
 ALTER TABLE public.commission_earned_state_ledger DISABLE ROW LEVEL SECURITY;
 \${repairSource}
 COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_ledger_rls_disabled');
@@ -314,6 +319,37 @@ ROLLBACK;\`, { allowFailure: true });
   );
   console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_MUTATION_CAUGHT weakened_apply_writer_lock');
 
+  expectRecipientGuardFailure(\`BEGIN;
+ALTER TABLE public.commission_payments DISABLE ROW LEVEL SECURITY;
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_rls_disabled');
+
+  expectRecipientGuardFailure(\`BEGIN;
+CREATE POLICY commission_payments_unexpected_update
+  ON public.commission_payments
+  FOR UPDATE TO authenticated
+  USING (public.is_admin())
+  WITH CHECK (public.is_admin());
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_update_policy_added');
+
+  const missingPaymentAclRevoke = recipientGuardSource.replace(
+    'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER\\n' +
+      '  ON TABLE public.commission_payments, public.commission_payment_items\\n' +
+      '  FROM PUBLIC, anon, authenticated;',
+    '-- MUTATION: legacy direct-write table grants were not revoked'
+  );
+  assert.notEqual(missingPaymentAclRevoke, recipientGuardSource,
+    'payment ACL revoke mutation did not change the migration');
+  expectRecipientGuardFailure(missingPaymentAclRevoke,
+    'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_direct_write_acl');
+
+  expectRecipientGuardFailure(\`BEGIN;
+ALTER TABLE public.commission_payment_items
+  DROP CONSTRAINT commission_payment_items_amount_whole_cents_chk;
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_item_whole_cents_constraint_missing');
+
   applySql(recipientGuardSource);
 
   const reassignedRecipient = 'c011ec70-0000-4000-8000-000000000140';
@@ -464,6 +500,33 @@ ROLLBACK;\`, { allowFailure: true });
   console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_MUTATION_CAUGHT missing_commission_row_lock');
   applySql(extractFunctionStatement(recipientGuardSource, 'record_commission_settlement_event'));
 
+  const subcentPost = psql(\`BEGIN;
+ALTER TABLE public.commission_payment_items
+  DROP CONSTRAINT commission_payment_items_amount_whole_cents_chk;
+SET LOCAL session_replication_role = replica;
+UPDATE public.commission_payment_items i
+   SET amount = 12.345
+  FROM public.commission_payments p
+ WHERE p.id = i.commission_payment_id
+   AND p.payment_number = 'RECIPIENT-GUARD-CURRENT-B';
+SET LOCAL session_replication_role = origin;
+SELECT set_config('request.jwt.claim.sub', '\${reassignedRecipient}', true);
+UPDATE public.commission_payments
+   SET status = 'posted', posted_by = '\${reassignedRecipient}'
+ WHERE payment_number = 'RECIPIENT-GUARD-CURRENT-B';
+COMMIT;\`, { allowFailure: true });
+  const subcentPostOutput = (subcentPost.stdout || '') + (subcentPost.stderr || '');
+  assert.notEqual(subcentPost.status, 0, 'positive sub-cent payment item unexpectedly posted');
+  assert.match(subcentPostOutput, /COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT/,
+    'positive sub-cent payment item failed for the wrong reason:\\n' + subcentPostOutput);
+  assert.equal(scalar(\`
+    SELECT p.status || '|' || i.amount::text
+      FROM public.commission_payments p
+      JOIN public.commission_payment_items i ON i.commission_payment_id = p.id
+     WHERE p.payment_number = 'RECIPIENT-GUARD-CURRENT-B'
+  \`), 'unposted|12.34', 'rejected sub-cent post did not roll back cleanly');
+  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_MUTATION_CAUGHT positive_subcent_item');
+
   const driftedRecorder = recipientGuardSource.replace(
     '  RETURN NEW;\\nEND;\\n$function$;',
     '  PERFORM 1; -- MUTATION: reviewed body drift\\n  RETURN NEW;\\nEND;\\n$function$;'
@@ -545,8 +608,8 @@ COMMIT;\`);
     'posted:' + reassignedRecipient + ':1234,voided:' + reassignedRecipient + ':-1234',
     'valid reassigned-recipient post/void did not preserve exact-cent ledger history');
 
-  console.log('COMMISSION_HISTORY_LABEL_REPAIR_PROOF_PASS postgres=17 append_only=true opening_labels=3 future_job_label=true mutation_guards=15');
-  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_PROOF_PASS stale_rejected=true current_posted=true exact_cents=true void_preserved=true mutation_guards=11');
+  console.log('COMMISSION_HISTORY_LABEL_REPAIR_PROOF_PASS postgres=17 append_only=true opening_labels=3 future_job_label=true mutation_guards=16');
+  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_PROOF_PASS stale_rejected=true current_posted=true exact_cents=true void_preserved=true mutation_guards=16');
 `;
 
 try {

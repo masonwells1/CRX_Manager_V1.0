@@ -20,6 +20,13 @@ LOCK TABLE public.commission_payments,
            public.commission_settlement_events
   IN SHARE ROW EXCLUSIVE MODE;
 
+-- July moved authenticated writes behind SECURITY DEFINER RPCs by removing
+-- permissive write policies. Remove the older table-level write grants too so
+-- the catalog itself expresses that boundary instead of relying on RLS alone.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON TABLE public.commission_payments, public.commission_payment_items
+  FROM PUBLIC, anon, authenticated;
+
 DO $preflight$
 BEGIN
   IF (SELECT count(*)
@@ -56,7 +63,7 @@ BEGIN
           AND p.procost = 100
           AND md5(p.prosrc) IN (
             'feb0f260fd2ad9e2945f761e93e9a3dc',
-            '34a8609db7167765d29b13b88f661085'
+            '9054ce6c57f3e985e2b044385e07a6cd'
           )
      )
      OR EXISTS (
@@ -164,6 +171,81 @@ BEGIN
      )
      OR EXISTS (
        SELECT 1
+         FROM pg_class c
+        WHERE c.oid IN (
+                'public.commission_payments'::regclass,
+                'public.commission_payment_items'::regclass
+              )
+          AND (
+            c.relowner <> 'postgres'::regrole
+            OR NOT c.relrowsecurity
+            OR c.relforcerowsecurity
+          )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM (VALUES
+           ('public.commission_payments'::regclass, 'commission_payments_select_admin'),
+           ('public.commission_payment_items'::regclass, 'commission_payment_items_select_admin')
+         ) expected(table_oid, policy_name)
+         LEFT JOIN pg_policy p
+           ON p.polrelid = expected.table_oid
+          AND p.polname = expected.policy_name
+        WHERE p.oid IS NULL
+           OR NOT p.polpermissive
+           OR p.polcmd <> 'r'
+           OR p.polroles <> ARRAY['authenticated'::regrole::oid]
+           OR coalesce(pg_get_expr(p.polqual, p.polrelid), '') !~*
+              '^\s*\(*\s*(SELECT\s+)?(public\.)?is_admin\s*\(\s*\)(\s+AS\s+is_admin)?\s*\)*\s*$'
+           OR p.polwithcheck IS NOT NULL
+     )
+     OR (SELECT count(*)
+           FROM pg_policy p
+          WHERE p.polrelid IN (
+                  'public.commission_payments'::regclass,
+                  'public.commission_payment_items'::regclass
+                )) <> 2
+     OR EXISTS (
+       SELECT 1
+         FROM pg_class c
+         CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) privilege
+        WHERE c.oid IN (
+                'public.commission_payments'::regclass,
+                'public.commission_payment_items'::regclass
+              )
+          AND privilege.grantee IN (
+                0,
+                'anon'::regrole::oid,
+                'authenticated'::regrole::oid
+              )
+          AND privilege.privilege_type IN (
+                'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'
+              )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM (VALUES
+           (
+             'public.commission_payments'::regclass,
+             'commission_payments_total_amount_whole_cents_chk',
+             'CHECK (((total_amount IS NULL) OR ((total_amount = round(total_amount, 2)) AND (total_amount > ''-Infinity''::numeric) AND (total_amount < ''Infinity''::numeric))))'
+           ),
+           (
+             'public.commission_payment_items'::regclass,
+             'commission_payment_items_amount_whole_cents_chk',
+             'CHECK (((amount IS NULL) OR ((amount = round(amount, 2)) AND (amount > ''-Infinity''::numeric) AND (amount < ''Infinity''::numeric))))'
+           )
+         ) expected(table_oid, constraint_name, constraint_definition)
+         LEFT JOIN pg_constraint c
+           ON c.conrelid = expected.table_oid
+          AND c.conname = expected.constraint_name
+          AND c.contype = 'c'
+        WHERE c.oid IS NULL
+           OR NOT c.convalidated
+           OR pg_get_constraintdef(c.oid) <> expected.constraint_definition
+     )
+     OR EXISTS (
+       SELECT 1
          FROM (VALUES
            ('public.commission_earned_state_ledger'::regclass, 'commission_earned_state_ledger_admin_select'),
            ('public.commission_settlement_events'::regclass, 'commission_settlement_events_admin_select')
@@ -250,7 +332,13 @@ BEGIN
     IF EXISTS (
       SELECT 1 FROM public.commission_payment_items i
       WHERE i.commission_payment_id = NEW.id
-        AND (i.amount IS NULL OR round(i.amount, 2) < 0)
+        AND (
+          i.amount IS NULL
+          OR i.amount <> round(i.amount, 2)
+          OR i.amount <= '-Infinity'::numeric
+          OR i.amount >= 'Infinity'::numeric
+          OR i.amount < 0
+        )
     ) THEN
       RAISE EXCEPTION 'COMMISSION_SETTLEMENT_INVALID_ITEM_AMOUNT';
     END IF;
@@ -401,7 +489,7 @@ BEGIN
           AND NOT p.proleakproof
           AND NOT p.proretset
           AND p.procost = 100
-          AND md5(p.prosrc) = '34a8609db7167765d29b13b88f661085'
+          AND md5(p.prosrc) = '9054ce6c57f3e985e2b044385e07a6cd'
           AND p.prosrc LIKE '%FOR UPDATE OF c%'
           AND p.prosrc LIKE '%COMMISSION_SETTLEMENT_RECIPIENT_CHANGED%'
           AND p.prosrc NOT LIKE '%s.recipient_id IS NOT DISTINCT FROM NEW.recipient_id%'

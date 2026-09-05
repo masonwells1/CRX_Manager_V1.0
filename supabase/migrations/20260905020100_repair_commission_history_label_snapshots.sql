@@ -46,7 +46,14 @@ BEGIN
         WHERE p.oid = 'public.record_commission_earned_state()'::regprocedure
           AND p.proowner = 'postgres'::regrole
           AND p.prosecdef
-          AND p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+          AND p.prorettype = 'trigger'::regtype
+          AND p.provolatile = 'v'
+          AND p.proparallel = 'u'
+          AND NOT p.proisstrict
+          AND NOT p.proleakproof
+          AND NOT p.proretset
+          AND p.procost = 100
           AND md5(p.prosrc) = 'dc0577e8e694773e75a1c8099819ba6c'
      )
      OR NOT EXISTS (
@@ -68,7 +75,14 @@ BEGIN
         WHERE p.oid = 'public.record_commission_settlement_event()'::regprocedure
           AND p.proowner = 'postgres'::regrole
           AND p.prosecdef
-          AND p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+          AND p.prorettype = 'trigger'::regtype
+          AND p.provolatile = 'v'
+          AND p.proparallel = 'u'
+          AND NOT p.proisstrict
+          AND NOT p.proleakproof
+          AND NOT p.proretset
+          AND p.procost = 100
           AND md5(p.prosrc) = 'feb0f260fd2ad9e2945f761e93e9a3dc'
      )
      OR NOT EXISTS (
@@ -97,7 +111,9 @@ BEGIN
          CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) privilege
         WHERE p.oid IN (
                 'public.record_commission_earned_state()'::regprocedure,
-                'public.record_commission_settlement_event()'::regprocedure
+                'public.record_commission_settlement_event()'::regprocedure,
+                'public.prevent_commission_history_ledger_mutation()'::regprocedure,
+                'public.prevent_commission_history_ledger_truncate()'::regprocedure
               )
           AND privilege.grantee <> p.proowner
      )
@@ -107,7 +123,14 @@ BEGIN
         WHERE p.oid = 'public.prevent_commission_history_ledger_mutation()'::regprocedure
           AND p.proowner = 'postgres'::regrole
           AND NOT p.prosecdef
-          AND p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+          AND p.prorettype = 'trigger'::regtype
+          AND p.provolatile = 'v'
+          AND p.proparallel = 'u'
+          AND NOT p.proisstrict
+          AND NOT p.proleakproof
+          AND NOT p.proretset
+          AND p.procost = 100
           AND md5(p.prosrc) = 'f31a41a2b139f101074f95d2e361308f'
      )
      OR NOT EXISTS (
@@ -116,7 +139,14 @@ BEGIN
         WHERE p.oid = 'public.prevent_commission_history_ledger_truncate()'::regprocedure
           AND p.proowner = 'postgres'::regrole
           AND NOT p.prosecdef
-          AND p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+          AND p.prorettype = 'trigger'::regtype
+          AND p.provolatile = 'v'
+          AND p.proparallel = 'u'
+          AND NOT p.proisstrict
+          AND NOT p.proleakproof
+          AND NOT p.proretset
+          AND p.procost = 100
           AND md5(p.prosrc) = 'add7928abcb610caedb7cfbea52b8602'
      )
      OR EXISTS (
@@ -376,7 +406,14 @@ BEGIN
      WHERE p.oid = 'public.record_commission_earned_state()'::regprocedure
        AND p.proowner = 'postgres'::regrole
        AND p.prosecdef
-       AND p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]
+       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+       AND p.prorettype = 'trigger'::regtype
+       AND p.provolatile = 'v'
+       AND p.proparallel = 'u'
+       AND NOT p.proisstrict
+       AND NOT p.proleakproof
+       AND NOT p.proretset
+       AND p.procost = 100
        AND md5(p.prosrc) = '5623b0d31181d357b303a36e563a77aa'
        AND p.prosrc LIKE '%LEFT JOIN public.jobs j ON j.id = NEW.job_id%'
        AND p.prosrc LIKE '%LEFT JOIN public.customers c ON c.id = NEW.customer_id%'

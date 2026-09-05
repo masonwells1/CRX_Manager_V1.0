@@ -17,12 +17,17 @@ new one for the current recipient.
 The lock closes the concurrent version of the same race. If reassignment commits first, posting sees
 the new recipient and refuses the old batch. If posting locks first, its signed settlement event is
 written before reassignment proceeds, and the existing post-settlement recipient guard then refuses
-the reassignment. The original exact-cent posting math and void reversal branch are preserved.
+the reassignment. The original exact-cent posting math and void reversal branch are preserved. The
+migration also removes the legacy external table-write grants and pins the payment tables' owner,
+RLS mode, two admin-read-only policies, resulting ACL lockdown, and both payment whole-cent
+constraints. The trigger independently refuses null,
+non-finite, negative, or sub-cent item amounts before any cents conversion.
 
-The network-isolated PostgreSQL 17 proof observes stale-A refusal, a valid B post at +1,234 cents,
-and its void at -1,234 cents. Eleven mutation guards cover the apply-time writer lock, recipient and
-row-lock checks, both recorder bodies/overloads, immutable-ledger helpers and triggers, exact RLS
-policies/ACLs, and unconditional trigger shape, so a green proof cannot come from an unused guard.
+The network-isolated PostgreSQL 17 proof observes stale-A refusal, positive sub-cent refusal, a
+valid B post at +1,234 cents, and its void at -1,234 cents. Sixteen mutation guards cover the
+apply-time writer lock, recipient and row-lock checks, both recorder bodies/overloads, payment and
+ledger RLS/policies/ACLs/constraints, immutable-ledger helpers and triggers, and unconditional
+trigger shape, so a green proof cannot come from an unused guard.
 
 This migration is source-only and not applied live. It requires a fresh migration apply gate and
 Mason's explicit in-chat approval before production changes.
