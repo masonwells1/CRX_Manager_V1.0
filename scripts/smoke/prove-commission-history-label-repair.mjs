@@ -16,14 +16,14 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const BASE_PROVER = path.join(HERE, 'prove-commission-history-as-of.mjs');
 const SNAPSHOT = path.join(ROOT, 'supabase', 'migrations', '20260903230000_commission_report_snapshot_contract.sql');
-const REPLAY_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020000_commission_history_report_replay_guard.sql');
-// Renumbered 20260905020100 -> 20260905190000 so it runs LAST in the ordered plan;
+const REPLAY_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905200000_commission_history_report_replay_guard.sql');
+// Renumbered 20260905020100 -> 20260905190000 -> 20260905210000 so it runs LAST in the ordered plan;
 // this proof still applies it before the recipient guard on purpose, exercising the
 // pre-020200 settlement-recorder pin. prove-commission-migration-plan-order.mjs
 // walks the real filename-ordered plan and exercises the post-020200 pin.
-const REPAIR = path.join(ROOT, 'supabase', 'migrations', '20260905190000_repair_commission_history_label_snapshots.sql');
-const RECIPIENT_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020200_refuse_stale_commission_payment_recipient.sql');
-const BUSINESS_DATE_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020300_enforce_commission_payment_business_date.sql');
+const REPAIR = path.join(ROOT, 'supabase', 'migrations', '20260905210000_repair_commission_history_label_snapshots.sql');
+const RECIPIENT_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905200200_refuse_stale_commission_payment_recipient.sql');
+const BUSINESS_DATE_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905200300_enforce_commission_payment_business_date.sql');
 const GENERATED = path.join(HERE, `.commission-history-label-repair-${process.pid}.mjs`);
 const NAME = `crx-commission-label-repair-${process.pid}-${Date.now().toString(36)}`.toLowerCase();
 const PROOF_LABEL_KEY = 'com.croprx.commission-proof';

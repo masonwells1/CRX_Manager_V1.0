@@ -6,18 +6,22 @@ of `.claude/schema-registry.json`, through ledger version `20260904152221`.** Th
 migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
 `20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
-ordering high-water is the newest applied authored NAME:
-**`20260904180000_invoice_season_follows_invoice_date`** (verified 2026-09-05).
-Seven local commission follow-ups (`20260905020000` through `20260905190000`) are not applied.
+ordering high-water is the newest applied row's effective stamp:
+**`20260905185938_refuse_null_job_field_acres`** (#606, applied live 2026-09-05 under a bare ledger
+name, so the stamp is synthesized from its version; verified live 2026-09-05 evening, 999 rows).
+Seven local commission follow-ups (`20260905200000` through `20260905210000`) are not applied. They
+were restamped above that row on 2026-09-05 evening because six of them had sorted below it and
+the ordering guard would have refused each one.
 They harden snapshot replay, refuse a payment batch if its recipient became stale before posting,
 park an America/Chicago payout business-date guard, pair commission source-date inheritance with
 Chicago-based source document dates, make balance-report recipient labels follow the latest
 earned-state observation at the requested cutoff (including paid-only rows), and — last in the
 ordered plan on purpose — append corrected labels for 34 un-settled opening commission snapshots.
-That label repair (`20260905190000`, renumbered from `20260905020100` on 2026-09-05) refuses to run
+That label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 to run last,
+then restamped again with the rest of the set) refuses to run
 once any commission payment has been posted; running it last means such a refusal stops nothing
 else, whereas at its old position it would have halted the payout guard and the date fixes behind
-it. The date candidates at `20260905020400` and `20260905020500` close the September 30 boundary
+it. The date candidates at `20260905200400` and `20260905200500` close the September 30 boundary
 only when applied together.
 None changes an existing immutable ledger row. Refresh
 `.claude/schema-registry.json` only after a reviewed live apply.
@@ -54,11 +58,14 @@ migrations are applied live with **no file on `main`**. Six belong to PR #535:
 `20260904180000_invoice_season_follows_invoice_date`, applied live and owned by open PR #599. Do not
 reconstruct any of these nine; land the owning PRs after their own review gates. PR #592 has already
 restamped its two NOT-YET-APPLIED files to `20260905020000_commission_history_report_replay_guard`
-and `20260905020100_repair_commission_history_label_snapshots` (the latter since renumbered again to
-`20260905190000` so it runs last). The #582 candidate is deliberately
-`20260904185900`, after the live high-water and before those two pending commission migrations,
-matching Mason's explicit delivery priority of #582 before the commission report. If that order is
-reversed, #582 must be restamped after a fresh ledger read before any apply.
+and `20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: the
+whole seven-file set now sits at `20260905200000` through `20260905210000`, above the applied
+high-water, with the repair still last). The #606 candidate, the field-acreage guard first tracked
+as #582 (`20260904185900` on disk), was applied
+live on 2026-09-05 as ledger version `20260905185938` under the bare name
+`refuse_null_job_field_acres` — that row is now the ordering high-water, which is why the commission
+set had to move above it. The disk file still carries its authored stamp; row 916 of
+`docs/reference/migration-history.md` records that name mismatch for the #606 lane to reconcile.
 
 The consequence still bites until all three owning PRs merge: `main` does not describe production,
 so any migration whose safety argument rests on "the live body equals the last committed body" must verify against

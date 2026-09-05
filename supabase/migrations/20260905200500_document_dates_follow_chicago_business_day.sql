@@ -3,7 +3,7 @@
 --
 -- WHY THIS EXISTS
 -- ---------------
--- 20260905020400 made a commission inherit its SOURCE DOCUMENT's date. Adversarial review
+-- 20260905200400 made a commission inherit its SOURCE DOCUMENT's date. Adversarial review
 -- (migration-drift-reviewer, BLOCKER B1) then caught that the document is itself stamped
 -- from the UTC clock on four of the five broken paths, so the inherited date was still
 -- wrong. Confirmed against live pg_proc.prosrc on 2026-09-05. This migration converts

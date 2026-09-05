@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync(
-  'supabase/migrations/20260905020300_enforce_commission_payment_business_date.sql',
+  'supabase/migrations/20260905200300_enforce_commission_payment_business_date.sql',
   'utf8',
 ).replace(/\r\n/g, '\n');
 const reports = readFileSync('src/pages/Reports.tsx', 'utf8').replace(/\r\n/g, '\n');
@@ -60,7 +60,7 @@ describe('commission payment Chicago business-date guard', () => {
       'COMMISSION_PAYMENT_BUSINESS_DATE_PREFLIGHT: existing function or trigger drift',
     );
     expect(attributes).toContain(
-      'supabase/migrations/20260905020300_enforce_commission_payment_business_date.sql text eol=lf',
+      'supabase/migrations/20260905200300_enforce_commission_payment_business_date.sql text eol=lf',
     );
   });
 

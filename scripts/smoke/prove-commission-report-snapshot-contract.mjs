@@ -78,8 +78,8 @@ const reviewedBalanceDefinition = extractReviewedFunction(
 const continuation = `
   // ── Snapshot follow-up: real wrapper, replay, and catalog mutations ─────
   const snapshotSource = readFileSync(${JSON.stringify(MIGRATION)}, 'utf8');
-  const replayGuardSource = readFileSync(${JSON.stringify(path.join(ROOT, 'supabase', 'migrations', '20260905020000_commission_history_report_replay_guard.sql'))}, 'utf8');
-  const latestRecipientLabelSource = readFileSync(${JSON.stringify(path.join(ROOT, 'supabase', 'migrations', '20260905185619_latest_commission_recipient_label.sql'))}, 'utf8');
+  const replayGuardSource = readFileSync(${JSON.stringify(path.join(ROOT, 'supabase', 'migrations', '20260905200000_commission_history_report_replay_guard.sql'))}, 'utf8');
+  const latestRecipientLabelSource = readFileSync(${JSON.stringify(path.join(ROOT, 'supabase', 'migrations', '20260905200600_latest_commission_recipient_label.sql'))}, 'utf8');
   const snapshotSmokePath = ${JSON.stringify(SNAPSHOT)};
   copyIntoContainer(snapshotSmokePath, 'commission-report-snapshot.sql');
   applySql(snapshotSource);

@@ -20,8 +20,10 @@ header was re-read on 2026-09-05. The F2 item below was last re-verified against
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
 
-Seven local commission candidates (`20260905020000` through `20260905190000`) remain unapplied.
-The label repair (`20260905190000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
+Seven local commission candidates (`20260905200000` through `20260905210000`) remain unapplied;
+the set was restamped on 2026-09-05 evening because #606 applied live as ledger row
+`20260905185938` and the ordering guard would have refused the six files stamped earlier that day.
+The label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
 now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes. The settlement-recipient guard closes the live case where a batch prepared for A
