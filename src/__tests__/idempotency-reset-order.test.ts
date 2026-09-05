@@ -420,6 +420,23 @@ function stripNoise(line: string): string {
  * search for. They still must not be satisfiable by prose, which is what this removes.
  * Quotes are tracked (not blanked) so a `//` inside a string is not mistaken for the
  * start of a comment.
+ *
+ * NOT HANDLED, stated rather than fixed (gpt-5.6-sol round 4, which exercised these
+ * directly). This is a scanner, not a TypeScript lexer:
+ *  - a REGEX LITERAL containing a quote — `const p = /['"]/;` — opens a false string
+ *    state, so a comment on the following line survives;
+ *  - a `//` inside a template literal's `${...}` interpolation survives, because the
+ *    whole template is copied without parsing the interpolation;
+ *  - strings are deliberately KEPT (the pins locate a call by its RPC name), so three
+ *    ordinary string constants naming the call, the assert and the reset would still
+ *    satisfy all three offsets.
+ *
+ * So this raises the bar from "any comment satisfies the pin" to "only a contrived
+ * regex/template construct or a deliberate set of string constants does". It is not
+ * proof of executable order — that needs the TypeScript AST, which belongs to its own
+ * change rather than to this one. The behavioural tests in QuoteBuilder.test.tsx and
+ * CustomerDetail.test.tsx are what actually prove the ordering; these pins exist to
+ * make a silent revert loud.
  */
 function stripCommentsOnly(code: string): string {
   let out = '';

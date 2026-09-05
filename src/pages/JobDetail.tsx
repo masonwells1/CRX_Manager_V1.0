@@ -1890,8 +1890,17 @@ export default function JobDetail() {
           const previewedJobNumber = assertRpcResult<string>(data, 'next_job_number');
           if (!cancelled) setJobNumber(previewedJobNumber);
         } catch (err: unknown) {
+          // Supabase errors are PLAIN OBJECTS, not Error instances, so
+          // `new Error(String(err))` yields "[object Object]" and throws away the
+          // only useful part of the report — the message and code. Carry the
+          // message across so Sentry records INSUFFICIENT_ROLE rather than nothing.
+          const reportedMessage = err instanceof Error
+            ? err.message
+            : (typeof err === 'object' && err !== null && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : String(err));
           Sentry.captureException(
-            err instanceof Error ? err : new Error(String(err)),
+            err instanceof Error ? err : new Error(reportedMessage),
             { tags: { source: 'rpc', action: 'next_job_number' } },
           );
           if (!cancelled) {

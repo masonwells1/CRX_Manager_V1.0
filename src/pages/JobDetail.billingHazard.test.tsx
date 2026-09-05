@@ -1060,7 +1060,10 @@ describe('JobDetail — a failed job-number lookup is explained', () => {
     // OTHER half: a source-order pin that greps for `Sentry.captureException` survives
     // a wrong argument or an unreachable call, and would not notice either.
     expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(
-      expect.any(Error),
+      // The MESSAGE, not just `expect.any(Error)`: a Supabase error is a plain
+      // object, so a naive `new Error(String(err))` reports "[object Object]" and
+      // still satisfies a bare any-Error assertion.
+      expect.objectContaining({ message: expect.stringContaining('INSUFFICIENT_ROLE') }),
       { tags: { source: 'rpc', action: 'next_job_number' } },
     );
   }, 30000);
@@ -1112,6 +1115,14 @@ describe('JobDetail — a failed job-number lookup is explained', () => {
       </MemoryRouter>,
     );
 
+    // Wait until the request is genuinely IN FLIGHT before navigating. Without this
+    // the Link exists immediately, the click can land while loadLookups() is still
+    // running, and the test would pass without ever exercising the race — and would
+    // then FAIL against a stricter effect that returns early after the lookups.
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some(([name]) => name === 'next_job_number')).toBe(true),
+      { timeout: 15000 },
+    );
     fireEvent.click(await screen.findByRole('link', { name: 'Open an existing job' }));
     // Only NOW does the number request come back, and it fails.
     releaseNumber({ data: null, error: { message: 'INSUFFICIENT_ROLE' } });

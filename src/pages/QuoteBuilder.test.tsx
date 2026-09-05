@@ -822,6 +822,60 @@ describe('QuoteBuilder', () => {
     ).toBe(`test-idem-key-${quoteB.id}-0`);
   });
 
+  /**
+   * The second-order cost of scoping the key, raised by the gpt-5.6-sol review of
+   * 5dad64e2 as a NEW interaction the scoping itself created.
+   *
+   * `reloadAfterStaleSave` releases the CURRENT render's scope. While one page-wide key
+   * existed that was always the right one. Once the key is scoped, the stale-save dialog
+   * — which stays open across a route change — can be recovered on a DIFFERENT quote:
+   * clicking Reload would then retire quote B's key and strand quote A's rejected one,
+   * so returning to A replays the same rejected key and re-opens the same conflict.
+   *
+   * The recovery is now bound to the quote that produced it. Retaining A's key is the
+   * safe direction: a retained key can still replay, a wrongly retired one cannot.
+   */
+  it('does not release quote B\'s key when A\'s conflict dialog is recovered after a route change', async () => {
+    const { quote: quoteA, product, section, item } = makeQuoteFixture('draft', 7);
+    const quoteB = { ...quoteA, id: 'quote-b', quote_number: 'Q-b', header_notes: 'Quote B header' };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (quoteReads++ === 0 ? quoteA : quoteB)
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'save_quote'
+        ? { data: null, error: { message: 'IDEMPOTENCY_PAYLOAD_CONFLICT' } }
+        : { data: null, error: null },
+    ));
+
+    renderQuoteBuilderWithQuoteSwitch(quoteA.id, quoteB.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+    // A's save is rejected, so A's recovery dialog opens.
+    expect(await screen.findByText('Reload Quote')).toBeInTheDocument();
+
+    // The operator navigates to B with that dialog still open, then recovers it.
+    fireEvent.click(screen.getByRole('link', { name: 'Jump to quote B' }));
+    await screen.findByDisplayValue('Quote B header');
+    fireEvent.click(screen.getByText('Reload Quote'));
+    await waitFor(() => expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument());
+
+    expect(
+      mockResetIdempotencyKey,
+      "recovering A's conflict must not retire quote B's key — B never had an unresolved save",
+    ).not.toHaveBeenCalledWith(quoteB.id);
+  });
+
   it('recovers a legacy cached save after the migration boundary and releases its unusable key', async () => {
     const { quote, product, section, item } = makeQuoteFixture('draft', 7);
     mockFrom.mockImplementation((table: string) => buildChain({

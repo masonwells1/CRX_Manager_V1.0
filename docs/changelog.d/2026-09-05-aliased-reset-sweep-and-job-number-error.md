@@ -208,3 +208,68 @@ The branch was two commits behind `origin/main` when the review ran (#601 landed
 `.claude/schema-registry.json` and `scripts/check-migration-hard-rules.mjs`; no file overlap with
 this PR). It is brought up to date after this commit, which is why the reviewed tree and the merged
 tree are recorded here as different SHAs.
+
+## Review round 4 — confirming review of the pushed head, and what it found in the round-3 fixes
+
+The head was sent back to `gpt-5.6-sol` because the round-3 fixes had not themselves been reviewed.
+It confirmed all six as correct — including, checked from source rather than taken on trust, that
+`(quoteId && isEditing) ? quoteId : 'new'` mirrors `p_quote_id` on every path (existing quote before
+its fetch, after its fetch, a new quote after `setQuoteId` but before navigation, and a successful
+create), that moving the hook below the `quoteId` declaration creates no conditional-hook violation,
+that `next_job_number()` inserts nothing and advances no sequence so "look up" is the honest word,
+and that every `CustomerDetail.test.tsx` conflict fixture still takes its named branch under the
+real `hasRpcCode`.
+
+It also found nine more. Three are fixed here; the rest are recorded.
+
+### Fixed
+
+- **Scoping the key broke the conflict dialog's recovery** (MEDIUM, a NEW interaction created by the
+  round-3 fix). `reloadAfterStaleSave` releases the CURRENT render's scope. While one page-wide key
+  existed that was always the right one; once scoped, an operator who navigates A → B with A's
+  stale-save dialog still open and then clicks Reload would retire B's key and strand A's rejected
+  one, so returning to A replays the rejected key and re-opens the same conflict. The recovery is
+  now bound to the quote that produced it. Retaining is the safe direction: a retained key can still
+  replay, a wrongly retired one cannot.
+- **Sentry lost the message on a plain PostgREST error** (LOW). Supabase errors are plain objects,
+  not `Error` instances, so `new Error(String(err))` reported `[object Object]` — every job-number
+  failure event arrived with no cause. The message is carried across now, and the test asserts the
+  captured message contains `INSUFFICIENT_ROLE` rather than merely `expect.any(Error)`, which the
+  broken form satisfied.
+- **The new route-change test never proved the request was in flight** (LOW). It created a pending
+  promise and clicked immediately, so the click could land while `loadLookups()` was still running —
+  the test would pass without exercising the race, and would then FAIL against a stricter effect
+  that returns early after the lookups. It now waits for the RPC before navigating.
+
+### Recorded, not fixed
+
+- **`stripCommentsOnly` is a scanner, not a TypeScript lexer** (LOW, new). A regex literal
+  containing a quote opens a false string state and lets the next line's comment survive; a `//`
+  inside a template interpolation survives too; and since strings are deliberately kept, a set of
+  string constants naming the call, the assert and the reset would still satisfy all three offsets.
+  The same weakness pre-exists in `stripCommentsAndStrings`, which hoisting preserved unchanged. The
+  helper's own comment now states all of this rather than implying more. It raises the bar from "any
+  comment satisfies the pin" to "only a contrived construct does"; the behavioural tests are what
+  actually prove the ordering, and a real AST guard is its own change.
+- **The hook mocks still key state only by `intentScope`** (LOW) — the real hook is per-instance and
+  keys by `[operation, userId, intentScope]`. The reviewer confirmed the two A→B assertions are
+  valid despite this, but resetting a different mocked operation sharing a scope could rotate these
+  keys in tests where production would not.
+- **JobDetail's cancellation covers only the three writes this PR added** (HIGH, PRE-EXISTING). The
+  effect does not check `cancelled` after `await loadLookups()`, and `fetchJob` never reads it at
+  all — so job A's late fetch can overwrite job B's loaded form, and a save then targets B while the
+  form holds A. Filed separately; fixing it properly needs a request-generation guard threaded
+  through `fetchJob`, which is a larger change than this PR's scope and would collide with it.
+- **QuoteBuilder can save the previous quote during a route change** (MEDIUM, PRE-EXISTING). Saving
+  after A → B but before B loads sends A, because `quoteId`, the form, the key scope and
+  `p_quote_id` all still hold A — they agree with each other, which is why the scoping fix is
+  correct, but they agree on the wrong record. Filed separately. Note for whoever takes it: any
+  guard must keep the scope expression and `p_quote_id` in agreement.
+
+### Verification
+
+The two new guards were mutation-tested: forcing the conflict-scope check true fails the new
+QuoteBuilder recovery test; reverting the Sentry construction to `new Error(String(err))` fails the
+strengthened JobDetail assertion. The job-number paths were additionally driven in a real browser
+against the real `assertRpcResult` and `sanitizeError` through a throwaway harness that stubs only
+`createClient` — empty reply, refused permission, and success all render as intended.
