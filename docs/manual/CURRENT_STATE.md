@@ -1,14 +1,12 @@
 # CRX Manager — Current State
 
 **Last verified: 2026-09-05 for the migration ledger (read-only `list_migrations` against project
-`rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-04 by the live-introspection regeneration
-of `.claude/schema-registry.json`, through ledger version `20260904040643`.** Two routine-only
-migrations have applied since that schema reading:
+`rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-05 by the live-introspection regeneration
+of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
+migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). Neither adds or changes a
-table, column, enum, generated column, or CHECK constraint, so the registry's schema shape remains
-current; its applied-migration list and ledger high-water are two entries behind live. The current
-effective ordering high-water is the newest applied authored NAME:
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
+ordering high-water is the newest applied authored NAME:
 **`20260904180000_invoice_season_follows_invoice_date`** (verified 2026-09-05).
 Four local commission follow-ups (`20260905020000` through `20260905020300`) are not applied.
 They harden snapshot replay, append corrected labels for 34 un-settled opening commission snapshots,
