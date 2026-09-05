@@ -10,6 +10,11 @@ const payments = readFileSync('src/pages/CommissionPayments.tsx', 'utf8').replac
 const attributes = readFileSync('.gitattributes', 'utf8').replace(/\r\n/g, '\n');
 
 describe('commission payment Chicago business-date guard', () => {
+  it('remains compatible with the guarded migration wrapper', () => {
+    expect(migration).not.toMatch(/^\s*(BEGIN|START\s+TRANSACTION)\s*;/im);
+    expect(migration).not.toMatch(/^\s*(COMMIT|ROLLBACK)\s*;/im);
+  });
+
   it('generates quick-pay and payment-dialog defaults on the report business calendar', () => {
     const markPaidStart = reports.indexOf('const handleMarkPaid = async');
     const markPaidEnd = reports.indexOf('\n  const ', markPaidStart + 30);

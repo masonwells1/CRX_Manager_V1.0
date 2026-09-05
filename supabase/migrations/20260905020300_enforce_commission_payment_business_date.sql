@@ -3,8 +3,6 @@
 -- on tomorrow while Chicago is still on today; accepting that generated date
 -- makes a just-posted settlement disappear from an as-of-today report.
 
-BEGIN;
-
 SET LOCAL lock_timeout = '10s';
 LOCK TABLE public.commission_payments IN SHARE ROW EXCLUSIVE MODE;
 
@@ -198,5 +196,3 @@ BEGIN
   END IF;
 END;
 $postflight$;
-
-COMMIT;
