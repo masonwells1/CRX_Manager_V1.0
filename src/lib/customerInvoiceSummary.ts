@@ -11,7 +11,7 @@
  * isolation, away from React and PostgREST. It is a READ-ONLY summary — nothing
  * here mutates an invoice.
  *
- * Money rule (CRX hard red line): every *_cents value is an INTEGER number of
+ * Money rule (CRX Hard Rule): every *_cents value is an INTEGER number of
  * cents. The reducers here sum cents as integers and NEVER touch floats; the UI
  * and PDF divide by 100 only at the display edge via formatCents. A per-type
  * subtotal is the integer sum of that type's rows, and the combined total is the

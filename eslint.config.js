@@ -51,35 +51,35 @@ export default tseslint.config(
       // ── CRX Project Rules ── Block patterns that have caused repeat bugs
       'no-restricted-globals': ['error', {
         name: 'confirm',
-        message: 'Use ConfirmModal instead of confirm(). See CLAUDE.md.',
+        message: 'Use ConfirmModal instead of confirm(). See docs/workflows/SAFE_DEVELOPMENT_RULES.md.',
       }, {
         name: 'alert',
-        message: 'Use toast() instead of alert(). See CLAUDE.md.',
+        message: 'Use toast() instead of alert(). See docs/workflows/SAFE_DEVELOPMENT_RULES.md.',
       }, {
         // Wave B audit B-6: window.prompt blocks silently on iOS Safari and
         // PWA-installed Chrome (returns null when the page isn't the active
         // top-level frame), making cancellations silently abort. Use
         // ReasonModal for any flow that needs a free-form reason.
         name: 'prompt',
-        message: 'Use ReasonModal instead of prompt(). See CLAUDE.md and src/components/ui/ReasonModal.tsx.',
+        message: 'Use ReasonModal instead of prompt(). See docs/workflows/SAFE_DEVELOPMENT_RULES.md and src/components/ui/ReasonModal.tsx.',
       }],
       'no-restricted-properties': ['error', {
         object: 'window',
         property: 'confirm',
-        message: 'Use ConfirmModal instead of window.confirm(). See CLAUDE.md.',
+        message: 'Use ConfirmModal instead of window.confirm(). See docs/workflows/SAFE_DEVELOPMENT_RULES.md.',
       }, {
         object: 'window',
         property: 'alert',
-        message: 'Use toast() instead of window.alert(). See CLAUDE.md.',
+        message: 'Use toast() instead of window.alert(). See docs/workflows/SAFE_DEVELOPMENT_RULES.md.',
       }, {
         object: 'window',
         property: 'prompt',
-        message: 'Use ReasonModal instead of window.prompt(). See CLAUDE.md and src/components/ui/ReasonModal.tsx.',
+        message: 'Use ReasonModal instead of window.prompt(). See docs/workflows/SAFE_DEVELOPMENT_RULES.md and src/components/ui/ReasonModal.tsx.',
       }],
       'no-restricted-imports': ['error', {
         paths: [{
           name: '@sentry/react',
-          message: 'Import { Sentry } from "../lib/sentry" instead. See CLAUDE.md.',
+          message: 'Import { Sentry } from "../lib/sentry" instead. See docs/workflows/SAFE_DEVELOPMENT_RULES.md.',
         }],
       }],
       'local-rules/require-assert-rpc-result': 'error',

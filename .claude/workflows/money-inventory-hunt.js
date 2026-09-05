@@ -48,8 +48,8 @@ const PREAMBLE = [
   '- READ-ONLY. NEVER call apply_migration. NEVER run mutating SQL (no INSERT/UPDATE/DELETE/DDL). SELECT + introspection only.',
   '- Do NOT edit, write, or delete any file. This workflow only FINDS; the command layer fixes.',
   '- Cite hard evidence for every finding: a file:line, a table/function name, or the exact read-only SQL you ran and what it returned. A finding with no concrete evidence is not a finding.',
-  '- Read CLAUDE.md + the relevant docs/reference/* for the project\'s own documented rules and ACCEPTED exceptions before flagging anything.',
-  '- Prefer precision over volume. Report only what you can substantiate. NO style/naming nits, NO defensive-coding-for-impossible-inputs, NO speculative flexibility. Correctness bugs and Hard-Red-Line / lifecycle / money / RLS / idempotency violations ONLY. At most your 8 most significant findings.',
+  '- Read AGENTS.md and the workflow/reference files it routes for the project\'s documented rules and ACCEPTED exceptions before flagging anything.',
+  '- Prefer precision over volume. Report only what you can substantiate. NO style/naming nits, NO defensive-coding-for-impossible-inputs, NO speculative flexibility. Correctness bugs and CRX Hard Rule / lifecycle / money / RLS / idempotency violations ONLY. At most your 8 most significant findings.',
   '',
   'THE 8 BUG CLASSES YOU ARE HUNTING (find NEW instances of these — this is the whole point):',
   BUG_CLASSES,
@@ -204,7 +204,7 @@ const DIMENSIONS = [
   {
     key: 'lifecycle-invariants', phase: 2,
     prompt:
-      'Hunt BUSINESS-LIFECYCLE correctness across quote/order/delivery/invoice/job/PO/return/commission/commission_payment (lifecycles documented in CLAUDE.md — note the quote lifecycle now includes closed_by_application, terminal, planned-only, and create_job_from_quote_section must reject it). (a) status strings written by frontend or RPC that are NOT in the live CHECK; (b) documented transitions no trigger/RPC enforces (the jobs enforcer cancel-from-terminal item is KNOWN/parked — look for NEW holes, e.g. around invoiced jobs, group-billed jobs, closed_by_application quotes); (c) the delivery two-step + item-lock bypassable via direct RPC or URL; (d) quote draw-down / Net-Free invariant holes; (e) invoice-type segregation (field_application vs chemical vs credit_memo rows leaking into each other\'s lists/reports). Use live pg_constraint + pg_proc.',
+      'Hunt BUSINESS-LIFECYCLE correctness across quote/order/delivery/invoice/job/PO/return/commission/commission_payment. Use QUOTE_TO_DELIVERY.md for quote/order/delivery/invoice context and INVENTORY_RULES.md for inventory/receiving effects. For all nine entities, compare every status written by current source against the live CHECK constraints in pg_constraint and inspect current function bodies in pg_proc; documentation provides context but never overrides live evidence. The quote lifecycle includes closed_by_application, terminal, planned-only, and create_job_from_quote_section must reject it. Check: (a) status strings written by frontend or RPC that are NOT in the live CHECK; (b) documented transitions no trigger/RPC enforces (the jobs enforcer cancel-from-terminal item is KNOWN/parked — look for NEW holes, e.g. around invoiced jobs, group-billed jobs, closed_by_application quotes); (c) the delivery two-step + item-lock bypassable via direct RPC or URL; (d) quote draw-down / Net-Free invariant holes; (e) invoice-type segregation (field_application vs chemical vs credit_memo rows leaking into each other\'s lists/reports).',
   },
   // ---- Phase 3: un-swept money/inventory-adjacent subsystems (added 2026-07-11) ----
   {

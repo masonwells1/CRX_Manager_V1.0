@@ -27,15 +27,40 @@ There is also a **Quick Delivery** shortcut that creates an order + delivery + d
 - `src/pages/QuoteBuilder.tsx` — multi-line quote editor (both `/quotes/new` and `/quotes/:id`)
 
 ### Status transitions
-```
-draft -> sent -> revised -> accepted -> declined -> expired -> cancelled
-```
+Allowed values: `draft`, `sent`, `revised`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short`.
+
+The database trigger `_enforce_quote_status_transition()` is authoritative. Without an explicit admin override, anything not listed raises `Invalid quote status transition`:
+
+| From | To |
+| --- | --- |
+| `draft` | `sent`, `cancelled` |
+| `sent` | `revised`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` |
+| `revised` | `sent`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` |
+| `accepted` | `sent` |
+| `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` | terminal — no outgoing edge |
+
+Three qualifications, all enforced in that same trigger:
+
+- A no-op update (`OLD.status = NEW.status`) is always allowed.
+- `_is_admin_override()` returns before both the edge table and the `closed_short` active-job condition, so an explicit admin override bypasses both.
+- `closed_short` has an additional safety condition: it is refused with `BOOKING_HAS_ACTIVE_JOBS` while any non-deleted job on the quote is `scheduled` or `in_progress`.
+
+The current `save_quote()` wrapper delegates to `_save_quote_below_cost_impl_20260810`, which carries a
+deliberate strict *subset* of the trigger's transition map (`draft→sent`;
+`sent→revised/accepted/declined/expired`; `revised→sent/accepted/declined/expired`). An invalid edge
+therefore fails earlier and with a clearer error, while the trigger remains authoritative. Migration
+`20260812115236_quote_items_cost_at_quote_snapshot.sql` defines that implementation, and
+`20260812115237_enforce_below_cost_admin_approval.sql` renames it and creates the current wrapper.
+
 - **draft**: Initial state. Can be edited freely.
 - **sent**: Quote was sent to the customer. A `quote_versions` snapshot is created.
+- **closed_by_application**: Terminal planned quote fulfilled through application jobs rather than converted to a chemical-sale order.
+- **closed_short**: Terminal partially drawn booking closed without fulfilling the remaining quantity.
 - **revised**: Edits were made after sending. New version snapshot created on next send.
 - **accepted**: Customer accepted. The `is_planned` flag can reserve inventory via holds.
 - **declined**: Customer said no.
 - **expired**: Past the `expires_at` date.
+- **cancelled**: Quote was cancelled before fulfillment. It is terminal and reachable from `draft`, `sent`, and `revised`.
 
 ### Key RPC
 - `save_quote()` — atomic save of header + sections + items in one transaction
