@@ -20,9 +20,12 @@ header was re-read on 2026-09-05. The F2 item below was last re-verified against
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 six-file disk-vs-live migration drift confirmed 2026-09-03 and the PR that owns it.
 
-The local, not-yet-applied `20260905020100_repair_commission_history_label_snapshots` candidate
-addresses 34 un-settled opening commission snapshots that hold an order UUID and unknown customer
-label despite available canonical labels. It is intentionally blocked if settlement history exists.
+Three local commission candidates (`20260905020000` through `20260905020200`) remain unapplied.
+The label repair addresses 34 un-settled opening snapshots that hold an order UUID and unknown
+customer label despite available canonical labels, and is intentionally blocked if settlement
+history exists. The settlement-recipient guard closes the live case where a batch prepared for A
+could still credit A after its commission was reassigned to B; until that candidate is separately
+approved and applied, production still carries that narrow stale-batch risk.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
 `20260903153402`.** It was the ordering boundary when this paragraph was written; F2 and then the

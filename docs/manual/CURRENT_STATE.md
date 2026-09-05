@@ -10,9 +10,10 @@ table, column, enum, generated column, or CHECK constraint, so the registry's sc
 current; its applied-migration list and ledger high-water are two entries behind live. The current
 effective ordering high-water is the newest applied authored NAME:
 **`20260904180000_invoice_season_follows_invoice_date`** (verified 2026-09-05).
-The local `20260905020100_repair_commission_history_label_snapshots` candidate is not applied;
-it appends corrected labels for 34 un-settled opening commission snapshots rather than changing
-immutable ledger rows. Refresh `.claude/schema-registry.json` only after a reviewed live apply.
+Three local commission follow-ups (`20260905020000` through `20260905020200`) are not applied.
+They harden snapshot replay, append corrected labels for 34 un-settled opening commission snapshots,
+and refuse a payment batch if its recipient became stale before posting. None changes an existing
+immutable ledger row. Refresh `.claude/schema-registry.json` only after a reviewed live apply.
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than

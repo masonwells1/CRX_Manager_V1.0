@@ -299,6 +299,87 @@ describe('Reports commission history', () => {
     expect(screen.getByText(/Balance and payout detail shown through 8\/21\/2026/)).toBeInTheDocument();
   });
 
+  it('keeps exports disabled when an older same-cutoff refresh finishes before the latest one', async () => {
+    renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+    await screen.findByText('CP-2026-0042');
+
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Export Payment Detail' })).toBeEnabled();
+    vi.mocked(exportToCSV).mockClear();
+
+    const pending: Array<{
+      asOf: string;
+      resolve: (value: RpcResponse) => void;
+    }> = [];
+    H.rpcHandler = (name, args) => {
+      if (name !== 'get_commission_history_report') {
+        return Promise.resolve({ data: null, error: { message: `Unexpected RPC ${name}` } });
+      }
+      return new Promise<RpcResponse>((resolve) => {
+        pending.push({ asOf: String(args.p_as_of_date), resolve });
+      });
+    };
+
+    // Both future dates clamp to Chicago-today. The old rows therefore have the
+    // same cutoff as both in-flight requests, which is the race that a shared
+    // page-level loading flag cannot distinguish.
+    const endDateInput = document.querySelectorAll<HTMLInputElement>('input[type="date"]')[1];
+    fireEvent.change(endDateInput, { target: { value: '2099-12-30' } });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    fireEvent.change(endDateInput, { target: { value: '2099-12-31' } });
+    await waitFor(() => expect(pending).toHaveLength(2));
+
+    const makeReport = (asOf: string, paymentNumber: string): RpcResponse => ({
+      data: {
+        as_of_date: asOf,
+        balance_rows: [{
+          recipient_id: 'recipient-race',
+          recipient_name: 'Race Proof Recipient',
+          total_earned: 25,
+          total_paid: 25,
+          outstanding_balance: 0,
+          pending_count: 0,
+          paid_count: 1,
+        }],
+        payment_detail_rows: [{
+          commission_id: 'commission-race',
+          commission_order_date: asOf,
+          customer_name: 'Race Proof Farm',
+          payment_date: asOf,
+          payment_id: 'payment-race',
+          payment_number: paymentNumber,
+          recipient_id: 'recipient-race',
+          recipient_name: 'Race Proof Recipient',
+          settled_amount: 25,
+          source_number: 'ORDER-RACE',
+          source_type: 'Order',
+        }],
+      },
+      error: null,
+    });
+
+    await act(async () => {
+      pending[0].resolve(makeReport(pending[0].asOf, 'CP-STALE-RACE'));
+    });
+
+    // The older fetchFinancial invocation has now cleared the shared `loading`
+    // flag. Export integrity must still follow the latest commission request.
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Export Payment Detail' })).toBeDisabled();
+    expect(exportToCSV).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending[1].resolve(makeReport(pending[1].asOf, 'CP-LATEST-RACE'));
+    });
+    await screen.findByText('CP-LATEST-RACE');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Export CSV' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Export Payment Detail' })).toBeEnabled();
+    });
+  });
+
   it('stamps both commission exports with the as-of date that was actually loaded', async () => {
     renderReports();
     fireEvent.click(screen.getByRole('button', { name: 'Financial' }));

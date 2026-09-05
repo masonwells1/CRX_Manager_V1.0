@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Network-isolated PostgreSQL 17 proof for the forward-only commission label
- * repair. The base prover establishes the real cutover fixture; this wrapper
- * then applies the published snapshot/replay guards and the local repair.
+ * repair and stale-recipient settlement guard. The base prover establishes
+ * the real cutover fixture; this wrapper then applies the published snapshot
+ * contract, replay guard, and local forward migrations.
  */
 
 import assert from 'node:assert/strict';
@@ -17,9 +18,10 @@ const BASE_PROVER = path.join(HERE, 'prove-commission-history-as-of.mjs');
 const SNAPSHOT = path.join(ROOT, 'supabase', 'migrations', '20260903230000_commission_report_snapshot_contract.sql');
 const REPLAY_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020000_commission_history_report_replay_guard.sql');
 const REPAIR = path.join(ROOT, 'supabase', 'migrations', '20260905020100_repair_commission_history_label_snapshots.sql');
+const RECIPIENT_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020200_refuse_stale_commission_payment_recipient.sql');
 const GENERATED = path.join(HERE, `.commission-history-label-repair-${process.pid}.mjs`);
 
-for (const required of [SNAPSHOT, REPLAY_GUARD, REPAIR]) {
+for (const required of [SNAPSHOT, REPLAY_GUARD, REPAIR, RECIPIENT_GUARD]) {
   assert.ok(readFileSync(required, 'utf8'), `missing migration: ${required}`);
 }
 
@@ -29,6 +31,7 @@ const continuation = `
   const snapshotSource = readFileSync(${JSON.stringify(SNAPSHOT)}, 'utf8');
   const replayGuardSource = readFileSync(${JSON.stringify(REPLAY_GUARD)}, 'utf8');
   const repairSource = readFileSync(${JSON.stringify(REPAIR)}, 'utf8');
+  const recipientGuardSource = readFileSync(${JSON.stringify(RECIPIENT_GUARD)}, 'utf8');
   applySql(snapshotSource);
   applySql(replayGuardSource);
   // The base prover intentionally leaves a post/void scenario committed to
@@ -94,6 +97,47 @@ GRANT EXECUTE ON FUNCTION public.record_commission_earned_state() TO authenticat
 COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'recorder_acl_drift');
 
   expectRepairFailure(\`BEGIN;
+CREATE FUNCTION public.record_commission_earned_state(p_unused integer)
+RETURNS integer LANGUAGE sql AS 'SELECT p_unused';
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_recorder_shadow_overload');
+
+  expectRepairFailure(\`BEGIN;
+ALTER TABLE public.commission_earned_state_ledger DISABLE ROW LEVEL SECURITY;
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_ledger_rls_disabled');
+
+  expectRepairFailure(\`BEGIN;
+GRANT SELECT ON TABLE public.commission_earned_state_ledger TO authenticated;
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_ledger_acl_drift');
+
+  expectRepairFailure(\`BEGIN;
+CREATE POLICY commission_earned_state_ledger_unexpected_select
+  ON public.commission_earned_state_ledger
+  FOR SELECT TO authenticated
+  USING (public.is_admin());
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_ledger_extra_policy');
+
+  expectRepairFailure(\`BEGIN;
+GRANT USAGE ON SEQUENCE public.commission_earned_state_ledger_id_seq TO authenticated;
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_ledger_sequence_acl_drift');
+
+  expectRepairFailure(\`BEGIN;
+ALTER TABLE public.commission_earned_state_ledger
+  DISABLE TRIGGER trg_commission_earned_state_ledger_immutable;
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_ledger_mutation_trigger_disabled');
+
+  expectRepairFailure(\`BEGIN;
+ALTER TABLE public.commission_settlement_events
+  DISABLE TRIGGER trg_commission_settlement_events_no_truncate;
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'settlement_ledger_truncate_trigger_disabled');
+
+  expectRepairFailure(\`BEGIN;
 DROP TRIGGER trg_commissions_record_earned_state ON public.commissions;
 CREATE TRIGGER trg_commissions_record_earned_state
   BEFORE INSERT OR UPDATE ON public.commissions
@@ -108,6 +152,16 @@ CREATE TRIGGER trg_commission_payments_record_settlement_event
   FOR EACH ROW EXECUTE FUNCTION public.record_commission_settlement_event();
 \${repairSource}
 COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'settlement_recorder_trigger_columns');
+
+  expectRepairFailure(\`BEGIN;
+DROP TRIGGER trg_commission_payments_record_settlement_event ON public.commission_payments;
+CREATE TRIGGER trg_commission_payments_record_settlement_event
+  BEFORE UPDATE OF status ON public.commission_payments
+  FOR EACH ROW
+  WHEN (OLD.status IS DISTINCT FROM NEW.status)
+  EXECUTE FUNCTION public.record_commission_settlement_event();
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'settlement_recorder_trigger_when_clause');
 
   expectRepairFailure(\`BEGIN;
 SET LOCAL session_replication_role = replica;
@@ -146,6 +200,15 @@ SELECT p.id, i.id, i.commission_id, 'posted', clock_timestamp(), p.payment_numbe
 SET LOCAL session_replication_role = origin;
 \${repairSource}
 COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_SETTLED:', 'settlement_history');
+
+  const driftedRepairPostimage = repairSource.replace(
+    '  v_customer_name text;\\nBEGIN',
+    '  v_customer_name text;\\nBEGIN\\n  PERFORM 1; -- MUTATION: unrelated recorder logic drift'
+  );
+  assert.notEqual(driftedRepairPostimage, repairSource,
+    'label-repair postimage mutation did not change the recorder');
+  expectRepairFailure(driftedRepairPostimage,
+    'COMMISSION_HISTORY_LABEL_REPAIR_POSTCOND:', 'earned_recorder_postimage_drift');
 
   applySql(repairSource);
   assert.ok(Number(scalar('SELECT count(*) FROM public.commission_earned_state_ledger;')) > beforeRepairLedgerCount + 1,
@@ -199,7 +262,275 @@ INSERT INTO public.commissions (
   // successful files once, and accepting an arbitrary changed recorder here
   // would overwrite a later reviewed hotfix.
   expectRepairFailure(repairSource, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'postimage_replay');
-  console.log('COMMISSION_HISTORY_LABEL_REPAIR_PROOF_PASS postgres=17 append_only=true opening_labels=3 future_job_label=true mutation_guards=6');
+
+  function expectRecipientGuardFailure(sql, token, label) {
+    const result = applySql(sql, { allowFailure: true });
+    const output = (result.stdout || '') + (result.stderr || '');
+    assert.notEqual(result.status, 0, label + ' unexpectedly succeeded');
+    assert.match(output, new RegExp(token), label + ' failed for wrong reason:\\n' + output);
+    console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_MUTATION_REJECTED ' + label);
+  }
+
+  const recipientGuardLockMatches = recipientGuardSource.match(
+    /LOCK TABLE public\\.commission_payments,\\s+public\\.commission_payment_items,\\s+public\\.commissions,\\s+public\\.commission_earned_state_ledger,\\s+public\\.commission_settlement_events\\s+IN SHARE ROW EXCLUSIVE MODE;/g
+  );
+  assert.equal(recipientGuardLockMatches?.length, 1,
+    'recipient guard must carry exactly one five-table writer-drain lock');
+  async function proveRecipientGuardApplyLock(lockStatement, expectedToBlock) {
+    const holder = startPsql(\`BEGIN;
+\${lockStatement}
+SELECT pg_sleep(5);
+ROLLBACK;\`);
+    let writer;
+    let output = '';
+    const attempts = expectedToBlock ? 30 : 1;
+    if (!expectedToBlock) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      writer = psql(\`BEGIN;
+SET LOCAL lock_timeout = '400ms';
+UPDATE public.commission_payments SET status = 'posted' WHERE false;
+ROLLBACK;\`, { allowFailure: true });
+      output = (writer.stdout || '') + (writer.stderr || '');
+      if (!expectedToBlock || writer.status !== 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (expectedToBlock) {
+      assert.notEqual(writer?.status, 0,
+        'recipient-guard apply lock never blocked payment writers:\\n' + output + holder.output());
+      assert.match(output, /canceling statement due to lock timeout/,
+        'recipient-guard writer blocked for the wrong reason:\\n' + output);
+    } else {
+      assert.equal(writer?.status, 0,
+        'weakened recipient-guard apply lock unexpectedly blocked a writer:\\n' + output);
+    }
+    assert.equal(await waitForExit(holder), 0, 'recipient-guard apply-lock holder failed:\\n' + holder.output());
+  }
+  await proveRecipientGuardApplyLock(recipientGuardLockMatches[0], true);
+  await proveRecipientGuardApplyLock(
+    recipientGuardLockMatches[0].replace('SHARE ROW EXCLUSIVE', 'ACCESS SHARE'),
+    false
+  );
+  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_MUTATION_CAUGHT weakened_apply_writer_lock');
+
+  applySql(recipientGuardSource);
+
+  const reassignedRecipient = 'c011ec70-0000-4000-8000-000000000140';
+  const reassignedCommission = 'c011ec70-0000-4000-8000-000000000141';
+  psql(\`BEGIN;
+INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at)
+VALUES ('\${reassignedRecipient}', 'commission-history-recipient-b@example.test',
+        jsonb_build_object('full_name', 'Commission History Recipient B', 'role', 'sales_rep'),
+        now(), now());
+INSERT INTO public.profiles (id, email, full_name, role, is_active)
+VALUES ('\${reassignedRecipient}', 'commission-history-recipient-b@example.test',
+        'Commission History Recipient B', 'sales_rep', true)
+ON CONFLICT (id) DO UPDATE
+  SET role = EXCLUDED.role,
+      is_active = true;
+SELECT set_config('request.jwt.claim.sub', '\${cutoverPreimage.admin}', true);
+INSERT INTO public.commissions (
+  id, order_id, customer_id, recipient, recipient_user_id, split_percentage,
+  commission_amount, order_profit, order_date, status
+) VALUES (
+  '\${reassignedCommission}', '\${cutoverPreimage.order}', '\${cutoverPreimage.customer}',
+  'Commission History Prover', '\${cutoverPreimage.admin}', 100, 12.34, 12.34,
+  CURRENT_DATE, 'pending'
+);
+INSERT INTO public.commission_payments (
+  payment_number, recipient_id, total_amount, status, payment_date
+) VALUES (
+  'RECIPIENT-GUARD-STALE-A', '\${cutoverPreimage.admin}', 12.34, 'unposted', CURRENT_DATE
+);
+INSERT INTO public.commission_payment_items (commission_payment_id, commission_id, amount)
+SELECT id, '\${reassignedCommission}', 12.34
+  FROM public.commission_payments
+ WHERE payment_number = 'RECIPIENT-GUARD-STALE-A';
+UPDATE public.commissions
+   SET recipient = 'Commission History Recipient B',
+       recipient_user_id = '\${reassignedRecipient}'
+ WHERE id = '\${reassignedCommission}';
+INSERT INTO public.commission_payments (
+  payment_number, recipient_id, total_amount, status, payment_date
+) VALUES (
+  'RECIPIENT-GUARD-CURRENT-B', '\${reassignedRecipient}', 12.34, 'unposted', CURRENT_DATE
+);
+INSERT INTO public.commission_payment_items (commission_payment_id, commission_id, amount)
+SELECT id, '\${reassignedCommission}', 12.34
+  FROM public.commission_payments
+ WHERE payment_number = 'RECIPIENT-GUARD-CURRENT-B';
+COMMIT;\`);
+
+  const stalePost = psql(\`BEGIN;
+SELECT set_config('request.jwt.claim.sub', '\${cutoverPreimage.admin}', true);
+UPDATE public.commission_payments
+   SET status = 'posted', posted_by = '\${cutoverPreimage.admin}'
+ WHERE payment_number = 'RECIPIENT-GUARD-STALE-A';
+COMMIT;\`, { allowFailure: true });
+  const stalePostOutput = (stalePost.stdout || '') + (stalePost.stderr || '');
+  assert.notEqual(stalePost.status, 0, 'stale recipient A payment unexpectedly posted');
+  assert.match(stalePostOutput, /COMMISSION_SETTLEMENT_RECIPIENT_CHANGED/,
+    'stale recipient A payment failed for the wrong reason:\\n' + stalePostOutput);
+  assert.equal(scalar(\`
+    SELECT status || '|' || (
+      SELECT count(*) FROM public.commission_settlement_events e
+       WHERE e.commission_payment_id = p.id
+    )
+      FROM public.commission_payments p
+     WHERE p.payment_number = 'RECIPIENT-GUARD-STALE-A'
+  \`), 'unposted|0', 'rejected stale payment left posted state or settlement history');
+
+  const missingRecipientGate = recipientGuardSource.replace(
+    '    IF EXISTS (\\n      SELECT 1\\n        FROM public.commission_payment_items i\\n        LEFT JOIN LATERAL (',
+    '    IF FALSE AND EXISTS (\\n      SELECT 1\\n        FROM public.commission_payment_items i\\n        LEFT JOIN LATERAL ('
+  );
+  assert.notEqual(missingRecipientGate, recipientGuardSource,
+    'recipient-currentness mutation did not change the migration');
+  applySql(extractFunctionStatement(missingRecipientGate, 'record_commission_settlement_event'));
+  const unsafeStalePost = psql(\`BEGIN;
+SELECT set_config('request.jwt.claim.sub', '\${cutoverPreimage.admin}', true);
+UPDATE public.commission_payments
+   SET status = 'posted', posted_by = '\${cutoverPreimage.admin}'
+ WHERE payment_number = 'RECIPIENT-GUARD-STALE-A';
+ROLLBACK;\`, { allowFailure: true });
+  assert.equal(unsafeStalePost.status, 0,
+    'disabled recipient-currentness gate did not expose the stale-recipient bug:\\n' +
+      (unsafeStalePost.stdout || '') + (unsafeStalePost.stderr || ''));
+  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_MUTATION_CAUGHT missing_recipient_currentness_gate');
+  applySql(extractFunctionStatement(recipientGuardSource, 'record_commission_settlement_event'));
+
+  async function proveRecipientRowLock(expectedToBlock) {
+    const holder = startPsql(\`BEGIN;
+UPDATE public.commissions
+   SET recipient = recipient
+ WHERE id = '\${reassignedCommission}';
+SELECT pg_sleep(5);
+ROLLBACK;\`);
+    let rowLockProbe;
+    let rowLockProbeOutput = '';
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      rowLockProbe = psql(\`BEGIN;
+SET LOCAL lock_timeout = '400ms';
+UPDATE public.commissions
+   SET recipient = recipient
+ WHERE id = '\${reassignedCommission}';
+ROLLBACK;\`, { allowFailure: true });
+      rowLockProbeOutput = (rowLockProbe.stdout || '') + (rowLockProbe.stderr || '');
+      if (rowLockProbe.status !== 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.notEqual(rowLockProbe?.status, 0,
+      'holder never acquired the commission row lock:\\n' + rowLockProbeOutput + holder.output());
+    assert.match(rowLockProbeOutput, /canceling statement due to lock timeout/,
+      'commission row-lock probe failed for the wrong reason:\\n' + rowLockProbeOutput);
+    const poster = psql(\`BEGIN;
+SET LOCAL lock_timeout = '400ms';
+SELECT set_config('request.jwt.claim.sub', '\${reassignedRecipient}', true);
+UPDATE public.commission_payments
+   SET status = 'posted', posted_by = '\${reassignedRecipient}'
+ WHERE payment_number = 'RECIPIENT-GUARD-CURRENT-B'
+ RETURNING id;
+ROLLBACK;\`, { allowFailure: true });
+    const output = (poster.stdout || '') + (poster.stderr || '');
+    if (expectedToBlock) {
+      assert.notEqual(poster.status, 0,
+        'valid recipient post did not wait on the commission row lock:\\n' + output);
+      assert.match(output, /canceling statement due to lock timeout/,
+        'valid recipient post blocked for the wrong reason:\\n' + output);
+    } else {
+      assert.equal(poster.status, 0,
+        'lock-free mutation should expose an unblocked post:\\n' + output);
+    }
+    assert.equal(await waitForExit(holder), 0, 'commission row-lock holder failed:\\n' + holder.output());
+  }
+
+  assert.equal(scalar(\`
+    SELECT p.status || '|' || count(i.id)
+      FROM public.commission_payments p
+      LEFT JOIN public.commission_payment_items i ON i.commission_payment_id = p.id
+     WHERE p.payment_number = 'RECIPIENT-GUARD-CURRENT-B'
+     GROUP BY p.status
+  \`), 'unposted|1', 'current-recipient concurrency fixture is incomplete');
+  await proveRecipientRowLock(true);
+  const missingCommissionLock = recipientGuardSource.replace(
+    /    PERFORM c\\.id[\\s\\S]*?     FOR UPDATE OF c;\\n/,
+    ''
+  );
+  assert.notEqual(missingCommissionLock, recipientGuardSource,
+    'commission-row-lock mutation did not change the migration');
+  applySql(extractFunctionStatement(missingCommissionLock, 'record_commission_settlement_event'));
+  await proveRecipientRowLock(false);
+  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_MUTATION_CAUGHT missing_commission_row_lock');
+  applySql(extractFunctionStatement(recipientGuardSource, 'record_commission_settlement_event'));
+
+  const driftedRecorder = recipientGuardSource.replace(
+    '  RETURN NEW;\\nEND;\\n$function$;',
+    '  PERFORM 1; -- MUTATION: reviewed body drift\\n  RETURN NEW;\\nEND;\\n$function$;'
+  );
+  assert.notEqual(driftedRecorder, recipientGuardSource,
+    'settlement-recorder body mutation did not change the migration');
+  applySql(extractFunctionStatement(driftedRecorder, 'record_commission_settlement_event'));
+  expectRecipientGuardFailure(recipientGuardSource,
+    'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'recorder_body_drift');
+  applySql(extractFunctionStatement(recipientGuardSource, 'record_commission_settlement_event'));
+
+  expectRecipientGuardFailure(\`BEGIN;
+CREATE FUNCTION public.record_commission_settlement_event(p_unused integer)
+RETURNS integer LANGUAGE sql AS 'SELECT p_unused';
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'settlement_recorder_shadow_overload');
+
+  expectRecipientGuardFailure(\`BEGIN;
+CREATE OR REPLACE FUNCTION public.prevent_commission_history_ledger_mutation()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $mutant$ BEGIN PERFORM 1; RETURN OLD; END $mutant$;
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'earned_ledger_mutation_guard_body_drift');
+
+  expectRecipientGuardFailure(\`BEGIN;
+CREATE POLICY commission_earned_state_ledger_unexpected_select
+  ON public.commission_earned_state_ledger
+  FOR SELECT TO authenticated
+  USING (public.is_admin());
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'earned_ledger_extra_policy');
+
+  expectRecipientGuardFailure(\`BEGIN;
+DROP TRIGGER trg_commission_payments_record_settlement_event ON public.commission_payments;
+CREATE TRIGGER trg_commission_payments_record_settlement_event
+  BEFORE UPDATE OF status ON public.commission_payments
+  FOR EACH ROW
+  WHEN (OLD.status IS DISTINCT FROM NEW.status)
+  EXECUTE FUNCTION public.record_commission_settlement_event();
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'settlement_recorder_trigger_when_clause');
+
+  psql(\`BEGIN;
+SELECT set_config('request.jwt.claim.sub', '\${reassignedRecipient}', true);
+UPDATE public.commission_payments
+   SET status = 'posted', posted_by = '\${reassignedRecipient}'
+ WHERE payment_number = 'RECIPIENT-GUARD-CURRENT-B';
+UPDATE public.commission_payments
+   SET status = 'voided', voided_by = '\${reassignedRecipient}'
+ WHERE payment_number = 'RECIPIENT-GUARD-CURRENT-B';
+COMMIT;\`);
+  const validSettlementHistory = scalar(\`
+    SELECT string_agg(event_kind || ':' || recipient_id::text || ':' || amount_cents::text,
+                      ',' ORDER BY id)
+      FROM public.commission_settlement_events
+     WHERE commission_payment_id = (
+       SELECT id FROM public.commission_payments
+        WHERE payment_number = 'RECIPIENT-GUARD-CURRENT-B'
+     )
+  \`);
+  assert.equal(validSettlementHistory,
+    'posted:' + reassignedRecipient + ':1234,voided:' + reassignedRecipient + ':-1234',
+    'valid reassigned-recipient post/void did not preserve exact-cent ledger history');
+
+  console.log('COMMISSION_HISTORY_LABEL_REPAIR_PROOF_PASS postgres=17 append_only=true opening_labels=3 future_job_label=true mutation_guards=15');
+  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_PROOF_PASS stale_rejected=true current_posted=true exact_cents=true void_preserved=true mutation_guards=8');
 `;
 
 try {

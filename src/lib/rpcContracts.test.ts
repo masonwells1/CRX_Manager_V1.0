@@ -2845,13 +2845,15 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   // The applied ledger migration moved both recorder helpers below the live
-  // registry high-water. The forward-only label-repair candidate re-emits only
-  // earned-state, so it is once again discovered until that candidate applies.
-  // It remains trigger-only (RETURNS trigger) and every non-owner EXECUTE grant
-  // is revoked; retaining this narrow entry is required for the candidate but
-  // must be removed after the next live registry refresh.
+  // registry high-water. The forward-only label and stale-recipient candidates
+  // re-emit them, so they are discovered again until those candidates apply.
+  // Both remain trigger-only (RETURNS trigger) and every non-owner EXECUTE grant
+  // is revoked; these narrow entries must be removed after the next truthful
+  // live registry refresh moves beyond the candidates.
   record_commission_earned_state:
     'local commission-label repair candidate re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission write owns the transaction',
+  record_commission_settlement_event:
+    'local stale-recipient guard re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission-payment status update owns the transaction',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',

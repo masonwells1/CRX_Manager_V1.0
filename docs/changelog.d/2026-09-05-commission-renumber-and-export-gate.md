@@ -14,8 +14,8 @@ recorded for row 911.
 - `20260904110000_repair_commission_history_label_snapshots.sql` -> `20260905020100_…`
 
 Relative order is preserved (replay guard still applies before the label repair, which is the order
-`prove-commission-history-label-repair.mjs` executes them in). **SQL content is byte-for-byte
-unchanged**, so every pin, hash and proof recorded against these files still holds. References were
+`prove-commission-history-label-repair.mjs` executes them in). The rename itself changed no SQL;
+the label repair later gained fail-closed catalog hardening in response to exact-head review. References were
 updated in `.gitattributes`, both smoke provers, `docs/manual/CURRENT_STATE.md`,
 `docs/manual/KNOWN_ISSUES.md`, `docs/reference/migration-history.md` (rows 914/915, which now carry
 the renumber rationale) and the replay-guard status changelog entry.
@@ -42,12 +42,14 @@ for the cutoff currently selected. The handlers also refuse and toast an error i
 other path, so the guard is not presentation-only. Both filenames now carry the as-of date that was
 actually loaded (`commission_balance_as_of_<date>`, `commission_payment_detail_as_of_<date>`).
 
-Covered by three new cases in `src/pages/Reports.commissionHistory.test.tsx`. Mutation-verified:
-reverting the gate to the pre-fix condition turns two of them red.
+Covered by four new cases in `src/pages/Reports.commissionHistory.test.tsx`, including two requests
+whose cutoffs clamp to the same business date. Mutation-verified: replacing the request-owned loading
+gate with the shared page loading flag makes the overlapping-request case fail.
 
-## Not addressed here
+## Live follow-up remains separately gated
 
-The remaining findings from that review are tracked, not fixed — notably that the live recorder
-still stamps UUID and `[Unknown customer]` labels until the renumbered repair is applied, and that
-recipient reassignment after an unposted payment batch can credit the wrong salesperson (that one is
-in an already-applied migration and is live today, independent of this PR).
+The live recorder still stamps UUID and `[Unknown customer]` labels until the renumbered repair is
+separately approved and applied. The recipient-reassignment defect is now fixed in source by the new
+forward migration `20260905020200_refuse_stale_commission_payment_recipient.sql`, documented in its
+own changelog entry. It remains live in production until that migration passes a future apply gate
+and receives Mason's explicit in-chat approval; merging this PR does not apply it.

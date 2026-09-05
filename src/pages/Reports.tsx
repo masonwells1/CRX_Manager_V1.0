@@ -163,6 +163,7 @@ export default function Reports() {
   const [commPaymentDetailData, setCommPaymentDetailData] = useState<CommissionPaymentDetailRow[]>([]);
   const [commissionAsOfDate, setCommissionAsOfDate] = useState('');
   const [commissionReportError, setCommissionReportError] = useState(false);
+  const [commissionReportLoading, setCommissionReportLoading] = useState(false);
   const commissionRequestId = useRef(0);
 
   // The cutoff the commission RPC would be asked for right now, derived exactly
@@ -177,7 +178,7 @@ export default function Reports() {
   // still shows the old cutoff's rows — a CSV carries neither the banner nor the
   // cutoff, so it must not be produced in either state.
   const commissionExportReady =
-    !loading
+    !commissionReportLoading
     && !commissionReportError
     && commissionAsOfDate !== ''
     && commissionAsOfDate === commissionRequestedAsOf;
@@ -350,6 +351,7 @@ export default function Reports() {
     const businessToday = todayInBusinessTz();
     const asOf = endDate && endDate < businessToday ? endDate : businessToday;
     const requestId = ++commissionRequestId.current;
+    setCommissionReportLoading(true);
     setCommissionReportError(false);
     try {
       const { data: reportData, error: reportError } = await supabase.rpc('get_commission_history_report', { p_as_of_date: asOf });
@@ -376,6 +378,10 @@ export default function Reports() {
       if (requestId !== commissionRequestId.current) return;
       setCommissionReportError(true);
       toast('error', `Commission report failed: ${sanitizeError(err)}`);
+    } finally {
+      if (requestId === commissionRequestId.current) {
+        setCommissionReportLoading(false);
+      }
     }
   }, [endDate, toast]);
 
