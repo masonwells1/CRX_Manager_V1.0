@@ -97,9 +97,55 @@ assertion while the heading assertion still passes — which is exactly why the 
 of that test, which checked the heading alone, could not see this. Test 5 now edits job B after
 the stale refetch returns and requires the page to register the edit.
 
+**Three more defects, found by the next review round.** Two from the exact-SHA review of
+`80e1161bc` and one from the Codex GitHub App. All three were real; two were pre-existing
+rather than introduced by this branch.
+
+1. **The form stayed editable while the next job loaded (P1, pre-existing).** `loading` is
+   seeded once, at mount (`useState(!isNew)`), so on a saved-job -> saved-job navigation it
+   stayed `false` for the entire load window. The page kept rendering the **previous** job's
+   values in a live form with Save enabled, while `id` — which `handleSave` writes to
+   (`id as string`) — had already flipped to the new job. Saving in that window wrote one
+   job's data onto another job's row with **no race required at all**, just a fast click.
+   This is the same corruption the ticket guard exists to prevent, reached by a completely
+   different route. Fixed by marking saved-record route transitions as loading, which swaps
+   the form for the existing skeleton until the new job's data lands.
+
+2. **The ticket was not unique per call (Medium, introduced here).** `fetchJob` read the
+   generation without claiming one, so every post-save / post-start / post-cancel refetch on
+   a single route shared one ticket and none superseded any other — an older response could
+   land on top of a newer one. Reachable because each handler guards only **itself** with an
+   in-flight flag (`starting`, `cancelling`, `saving`): the same handler cannot double-fire,
+   but two **different** handlers can overlap. Fixed by claiming a unique ticket per call.
+   Its position matters: the stale-call rejection must run **before** the bump, or a stale
+   call would burn a ticket and supersede the legitimate load in flight.
+
+3. **Invalidation ran too late (High, introduced here).** Route invalidation lived in a
+   passive `useEffect`. React commits the new route's render and only then runs passive
+   effects, so a job-A response settling in that gap would read a `routeIdRef` still naming
+   A, pass the guard, and install A's values on B's route. Moved into a **layout** effect,
+   which runs synchronously inside the commit, so no promise continuation can interleave
+   between the route changing and the ref moving.
+
+Each of the first two was mutation-tested individually and reddens exactly one test: removing
+the loading gate reddens only the new "hides the previous job's editable form" case; reverting
+the ticket to a plain read reddens only the new "newest same-route refetch wins" case.
+
 Full gates on the final source: `npm run typecheck` clean, `npm run lint` clean, `npm run test`
-exit 0 under `pipefail` with 351 files passed / 4991 passed / 123 skipped and no `Errors` line,
+exit 0 under `pipefail` with 351 files passed / 4993 passed / 123 skipped and no `Errors` line,
 `npm run build` succeeded.
+
+**Not verified — the layout-effect change is reasoned, not proven.** Downgrading
+`useLayoutEffect` back to `useEffect` reddens **nothing** in the suite, so defect 3 above has
+no regression test. The reason is a real limit of the harness, not an oversight: `act` flushes
+passive effects synchronously, so inside `act` the invalidation has always already run by the
+time an awaited promise resumes — the production window does not exist in jsdom. A test built
+specifically to force the ordering (releasing the held response from a sibling's layout effect
+during the new route's own commit, so it resolves as a microtask) was written and measured, and
+it passed **identically** with the layout effect and with a `useEffect` downgraded from it. It
+could not fail for the reason its title claimed, so it was deleted rather than kept as a false
+green. The change is retained because it is strictly earlier than what it replaces and cannot
+widen the window, but it should be treated as unproven.
 
 **Not verified.** No live-browser run against production data — the page is auth-gated and the
 race needs two overlapping job loads to reproduce by hand; the proof here is the real page

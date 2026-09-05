@@ -391,4 +391,115 @@ describe('JobDetail cross-record stale-load guard', () => {
       expect(dirtyStates.slice(editedFrom).some((d) => d === true)).toBe(true);
     });
   });
+
+  /**
+   * The guard above only decides which RESPONSE may be installed. It says nothing about
+   * what the operator can do with the form in the meantime — and that window was wide
+   * open. `loading` is seeded once, at mount (useState(!isNew)), so on a saved-job ->
+   * saved-job navigation it stayed false for the whole load: the page kept rendering the
+   * PREVIOUS job's values in a live, editable form with Save enabled, while `id` — which
+   * handleSave writes to — had already flipped to the new job. Saving in that window
+   * wrote one job's data onto another job's row with no race required at all, just a
+   * fast click. Reported by the Codex GitHub App on 170c2d91d.
+   */
+  it('hides the previous job\'s editable form while the next job is still loading', async () => {
+    const gateB = deferred();
+    let jobsCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        jobsCalls += 1;
+        if (jobsCalls === 1) return buildChain({ data: JOB_A, error: null });
+        return buildGatedChain({ data: JOB_B, error: null }, gateB.promise);
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    const router = mountAt('/jobs/job-a');
+    await screen.findByRole('heading', { name: 'J-AAAA-1001' });
+    // Job A is fully loaded and editable — this is the state the operator leaves.
+    expect(screen.getByRole('button', { name: /Save Changes/ })).toBeTruthy();
+
+    await act(async () => { await router.navigate('/jobs/job-b'); });
+
+    // Job B has NOT answered yet. Nothing of job A may still be on screen or reachable:
+    // a Save here would target job B while every field still holds job A's value.
+    expect(screen.queryByRole('heading', { name: 'J-AAAA-1001' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Save Changes/ })).toBeNull();
+    expect(screen.queryByLabelText(/Job Date/)).toBeNull();
+
+    await act(async () => { gateB.release(); await gateB.promise; });
+    await screen.findByRole('heading', { name: 'J-BBBB-2002' });
+  });
+
+  /**
+   * Two refetches on the SAME route, which the route-id operand cannot separate and the
+   * ticket could not either while fetchJob merely READ the generation without claiming
+   * one. Every post-save / post-start / post-cancel refetch then shared a single ticket,
+   * so none superseded any other and an older response could land on top of a newer one.
+   *
+   * Reachable because each handler guards only ITSELF with an in-flight flag (`starting`,
+   * `cancelling`, `saving`). The same handler cannot double-fire, but two DIFFERENT
+   * handlers can overlap — Start Job's refetch still open when Cancel Job's begins.
+   * (Codex round 2, finding 2.)
+   */
+  it('lets the newest same-route refetch win when two handlers overlap', async () => {
+    const staleGate = deferred();
+    let jobsCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        jobsCalls += 1;
+        if (jobsCalls === 1) return buildChain({ data: JOB_A, error: null });
+        // Start Job's refetch — held open, and carrying the OLDER answer.
+        if (jobsCalls === 2) return buildGatedChain({ data: JOB_A_STALE, error: null }, staleGate.promise);
+        // #3 is handleCancelJob's own `.update()` on `jobs`, not a read.
+        if (jobsCalls === 3) return buildChain({ data: [JOB_A], error: null });
+        // Cancel Job's refetch — answers immediately, and is the NEWER answer.
+        return buildChain({ data: JOB_A_FRESH, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: { ok: true }, error: null });
+
+    mountAt('/jobs/job-a');
+    await screen.findByRole('heading', { name: 'J-AAAA-1001' });
+    // Start Job is gated on a clean form, so wait for the baseline to be adopted.
+    await waitFor(() => expect(dirtyStates.some((d) => d === false)).toBe(true));
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start Job/ })); });
+    await waitFor(() => expect(jobsCalls).toBe(2));
+
+    // Cancel Job carries its own flag, so it fires while Start's refetch is still open.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Cancel Job/ })); });
+    const confirmButtons = screen.getAllByRole('button', { name: /Cancel Job/ });
+    await act(async () => { fireEvent.click(confirmButtons[confirmButtons.length - 1]); });
+    await waitFor(() => expect(jobsCalls).toBe(4));
+    await screen.findByRole('heading', { name: 'J-AAAA-FRESH' });
+
+    // The OLDER refetch lands last. It must install nothing.
+    await act(async () => { staleGate.release(); await staleGate.promise; });
+    expect(screen.queryByRole('heading', { name: 'J-AAAA-STALE' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'J-AAAA-FRESH' })).toBeTruthy();
+  });
+
+  /*
+   * DELIBERATELY NOT TESTED HERE: the pre-passive-effect window.
+   *
+   * React commits a render and only then runs passive effects. If route invalidation
+   * lived in a `useEffect`, a job-A response settling between the commit and that effect
+   * would read a `routeIdRef` still naming A, pass isCurrentLoad(), and install A's
+   * values on B's route. JobDetail therefore invalidates in a LAYOUT effect, which runs
+   * synchronously inside the commit, so no promise continuation can interleave.
+   *
+   * That change is NOT covered by a regression test, and the honest reason is that this
+   * harness cannot produce the window: `act` flushes passive effects synchronously, so
+   * inside `act` the invalidation has always already run by the time any awaited promise
+   * resumes. An attempt to force the ordering — releasing the held response from a
+   * sibling's layout effect during B's own commit, so it resolves as a microtask — was
+   * built and measured, and it passed identically with the layout effect and with a
+   * `useEffect` downgraded from it. It could not fail for the reason it named, so it was
+   * removed rather than kept as a green check that tests less than its title claims.
+   *
+   * What IS established: downgrading `useLayoutEffect` to `useEffect` reddens nothing in
+   * this file. Treat the layout effect as reasoned-and-strictly-earlier, not as proven.
+   */
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState , useCallback, useMemo, lazy, Suspense } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState , useCallback, useMemo, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon, ShieldAlert, CalendarClock, AlertTriangle, Sprout, Send } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -1659,25 +1659,34 @@ export default function JobDetail() {
     // issued while still on its own job shares the mounted run's ticket and proceeds
     // normally; one issued after the operator has moved on is caught by the id binding
     // below, since it carries the CURRENT ticket but the OLD job's id.
-    const generation = loadGenerationRef.current;
     const startedForId = id;
+    // Reject an ALREADY-stale call before touching ANYTHING — before the ticket bump
+    // below and before the two synchronous baseline writes. A handler that awaited an
+    // RPC and is only now calling us would otherwise (a) null the baseline and raise
+    // the settle guard for the job currently on screen, then bail after its own await
+    // and never lower them again, and (b) burn a ticket, superseding the legitimate
+    // load that IS in flight for this route. Either way the damage is done before the
+    // first await, so ordering is the fix, not the check.
+    //
+    // (a) is Codex CRX-SEC-001: the dirty engine would never adopt a baseline for the
+    // job on screen — isDirty frozen false, the unsaved-changes prompt dead, and the
+    // "save before Start/Complete" gates bypassed, all while the page still LOOKS right.
+    //
+    // The ticket cannot serve as this test: it is claimed one line below, so at entry it
+    // would always equal itself. Only the route is an independent witness this early.
+    if (routeIdRef.current !== startedForId) return;
+    // Claim a UNIQUE ticket per CALL, not per route. Reading the ref without bumping it
+    // let every post-save / post-start / post-cancel refetch on one route share a single
+    // ticket, so none of them superseded any other and an older response could land on
+    // top of a newer one. The handlers each carry their own in-flight flag, so the same
+    // handler cannot double-fire — but two DIFFERENT handlers can overlap (Start Job in
+    // flight, then Cancel Job), which is exactly that race. (Codex round 2, finding 2.)
+    const generation = ++loadGenerationRef.current;
     // Two halves, each load-bearing on its own. The ticket catches a superseded load of
     // the SAME record (only call order separates those). The id binding catches a call
     // issued from a stale closure after a route change, which carries a CURRENT ticket.
     const isCurrentLoad = () => loadGenerationRef.current === generation
       && routeIdRef.current === startedForId;
-    // Reject an ALREADY-stale call before touching anything. The two writes below are
-    // synchronous, so a handler that awaited an RPC and is only now calling us would
-    // otherwise null the baseline and raise the settle guard for the job currently on
-    // screen, then bail after its own await and never lower them again. The dirty
-    // engine would then never adopt a baseline for that job: isDirty frozen false,
-    // the unsaved-changes prompt dead, and the "save before Start/Complete" gates
-    // bypassed. Ordering matters more than the check — this MUST precede the writes.
-    // (Codex CRX-SEC-001, exact-SHA review of 170c2d91d.)
-    //
-    // The ticket cannot serve here: it is captured from the ref one line above, so at
-    // entry it always equals itself. Only the route is a witness this early.
-    if (routeIdRef.current !== startedForId) return;
     // Drop the baseline so the freshly-loaded form is re-adopted as clean once it
     // settles (also covers post-save refetches where loading stays false). The
     // settle guard defers adoption until this fetch's state has actually rendered.
@@ -1896,6 +1905,27 @@ export default function JobDetail() {
     // initialLoadDone is armed by the loading-settle effect (rAF after loading=false).
   }, [id, toast, navigate]);
 
+  // Route invalidation runs in a LAYOUT effect, not the passive one below. Passive
+  // effects are deferred: React commits the new route's render and can yield to the
+  // event loop before they run, and a job-A response settling in that gap would still
+  // read the OLD routeIdRef, pass isCurrentLoad(), and install A's values on B's route
+  // — the original data-corruption outcome. Layout effects run synchronously inside the
+  // commit, so no promise continuation can interleave between the route changing and
+  // this ref being updated. (Codex round 2, finding 1.)
+  //
+  // setLoading(true) is the other half, and it is not cosmetic. `loading` is seeded once
+  // at mount (useState(!isNew)), so on a saved-job -> saved-job navigation it stayed
+  // false for the whole load window: the form kept rendering the PREVIOUS job's values,
+  // fully editable, with Save live — while `id`, which handleSave writes to, had already
+  // become the new job's. An operator saving in that window wrote one job's data onto
+  // another's row, which is the exact corruption this page-level guard exists to prevent.
+  // Gating on `loading` swaps the form for the skeleton until the new job's data lands.
+  useLayoutEffect(() => {
+    loadGenerationRef.current += 1;
+    routeIdRef.current = id;
+    if (!isNew && id) setLoading(true);
+  }, [id, isNew]);
+
   useEffect(() => {
     // Await lookups FIRST so every lookup-driven re-render happens before the job
     // rows are populated and dirty-tracking is armed — otherwise a late-landing
@@ -1903,10 +1933,9 @@ export default function JobDetail() {
     // Take this run's ticket BEFORE any await, and before fetchJob captures it.
     // The route has no `key`, so this effect re-running IS the "operator moved to
     // another job" signal; the cleanup below bumps the ticket for unmount too.
+    // The layout effect above has already bumped and re-pointed routeIdRef for this
+    // commit; bumping again here is monotonic and harmless.
     const generation = ++loadGenerationRef.current;
-    // Record which job the route is on now. This effect has `id` in its deps, so it runs
-    // on every route change, and it commits before any pending promise can resume.
-    routeIdRef.current = id;
     const isCurrentLoad = () => loadGenerationRef.current === generation;
     // A superseded fetchJob bails without clearing the settle guard it raised, and
     // the new-job branch below never calls fetchJob at all — so on job -> /jobs/new
