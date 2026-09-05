@@ -23,6 +23,10 @@ const MIGRATION = path.join(
   ROOT, 'supabase', 'migrations',
   '20260903230000_commission_report_snapshot_contract.sql',
 );
+const LEDGER_MIGRATION = path.join(
+  ROOT, 'supabase', 'migrations',
+  '20260903150100_ledger_backed_commission_history.sql',
+);
 const GENERATED = path.join(HERE, `.commission-report-snapshot-${process.pid}.mjs`);
 const NAME = `crx-commission-snapshot-${process.pid}-${Date.now().toString(36)}`.toLowerCase();
 const PROOF_LABEL_KEY = 'com.croprx.commission-proof';
@@ -45,6 +49,28 @@ function cleanupTimedOutProof() {
 }
 
 assert.ok(readFileSync(MIGRATION, 'utf8'), `missing migration: ${MIGRATION}`);
+
+function extractReviewedFunction(source, signature) {
+  const startMarker = `CREATE OR REPLACE FUNCTION ${signature}`;
+  const start = source.indexOf(startMarker);
+  assert.notEqual(start, -1, `missing reviewed function source: ${signature}`);
+  const remainder = source.slice(start);
+  const bodyMarker = remainder.match(/\nAS (\$[A-Za-z0-9_]*\$)\n/);
+  assert.ok(bodyMarker, `missing reviewed function body marker: ${signature}`);
+  const closingMarker = `${bodyMarker[1]};`;
+  const end = remainder.indexOf(closingMarker, bodyMarker.index + bodyMarker[0].length);
+  assert.notEqual(end, -1, `missing reviewed function body close: ${signature}`);
+  return remainder.slice(0, end + closingMarker.length);
+}
+
+const reviewedWrapperDefinition = extractReviewedFunction(
+  readFileSync(MIGRATION, 'utf8'),
+  'public.get_commission_history_report(p_as_of_date date)',
+);
+const reviewedBalanceDefinition = extractReviewedFunction(
+  readFileSync(LEDGER_MIGRATION, 'utf8'),
+  'public.get_commission_balance_report(p_as_of_date date)',
+);
 
 // This continuation is evaluated inside the original prover, where psql(),
 // applySql(), scalar(), copyIntoContainer(), psql and cutoverPreimage already
@@ -175,6 +201,17 @@ COMMIT;\`, 'authenticated_grant_option');
 ALTER FUNCTION public.get_commission_history_report(date) COST 321;
 \${replayGuardSource}
 COMMIT;\`, 'wrapper_cost_drift');
+  const wrapperDefinition = ${JSON.stringify(reviewedWrapperDefinition)};
+  const wrapperDefaultDrift = wrapperDefinition.replace(
+    'p_as_of_date date)',
+    'p_as_of_date date DEFAULT CURRENT_DATE)',
+  );
+  assert.notEqual(wrapperDefaultDrift, wrapperDefinition,
+    'wrapper default-argument mutation could not alter the reviewed signature');
+  expectReplayGuardFailure(\`BEGIN;
+\${wrapperDefaultDrift}
+\${replayGuardSource}
+COMMIT;\`, 'wrapper_default_argument_drift');
   expectReplayGuardFailure(\`BEGIN;
 CREATE FUNCTION public.get_commission_balance_report(p_as_of_date text)
 RETURNS text
@@ -182,9 +219,7 @@ LANGUAGE sql
 AS 'SELECT p_as_of_date';
 \${replayGuardSource}
 COMMIT;\`, 'child_shadow_overload');
-  const balanceDefinition = scalar(
-    "SELECT pg_get_functiondef('public.get_commission_balance_report(date)'::regprocedure);",
-  );
+  const balanceDefinition = ${JSON.stringify(reviewedBalanceDefinition)};
   const balanceBodyDrift = balanceDefinition.replace(
     'PERFORM public.require_admin();',
     'PERFORM 1;',
@@ -192,7 +227,7 @@ COMMIT;\`, 'child_shadow_overload');
   assert.notEqual(balanceBodyDrift, balanceDefinition,
     'child body mutation could not remove the reviewed admin gate');
   expectReplayGuardFailure(\`BEGIN;
-\${balanceBodyDrift};
+\${balanceBodyDrift}
 \${replayGuardSource}
 COMMIT;\`, 'child_balance_body_drift');
   expectReplayGuardFailure(\`BEGIN;
@@ -207,7 +242,7 @@ COMMIT;\`, 'child_security_invoker');
 ALTER FUNCTION public.get_commission_payment_detail_report(date) SET search_path TO public;
 \${replayGuardSource}
 COMMIT;\`, 'child_search_path_drift');
-  console.log('COMMISSION_REPORT_SNAPSHOT_PROOF_PASS postgres=17 replay=ledger_then_snapshot mutation_guards=14');
+  console.log('COMMISSION_REPORT_SNAPSHOT_PROOF_PASS postgres=17 replay=ledger_then_snapshot mutation_guards=15');
   psql(\`
 SET session_replication_role = replica;
 UPDATE public.commission_history_cutover

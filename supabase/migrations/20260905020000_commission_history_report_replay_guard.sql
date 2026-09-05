@@ -149,6 +149,8 @@ BEGIN
      AND p.proname = 'get_commission_history_report'
      AND p.prokind = 'f'
      AND p.pronargs = 1
+     AND p.pronargdefaults = 0
+     AND p.proargdefaults IS NULL
      AND oidvectortypes(p.proargtypes) = 'date'
      AND p.proargnames IS NOT DISTINCT FROM ARRAY['p_as_of_date']::text[]
      AND p.prorettype = 'jsonb'::regtype
@@ -238,6 +240,8 @@ BEGIN
      AND p.proname = 'get_commission_history_report'
      AND p.prokind = 'f'
      AND p.pronargs = 1
+     AND p.pronargdefaults = 0
+     AND p.proargdefaults IS NULL
      AND oidvectortypes(p.proargtypes) = 'date'
      AND p.proargnames IS NOT DISTINCT FROM ARRAY['p_as_of_date']::text[]
      AND p.prorettype = 'jsonb'::regtype
