@@ -32,6 +32,14 @@ const claudeModelTuning = readChecked("docs/reference/claude-model-tuning.md");
 const codingGuidelines = readChecked("docs/reference/coding-guidelines.md");
 const sqlCanonicalPatterns = readChecked("docs/reference/sql-canonical-patterns.md");
 const safeDevelopmentRules = readChecked("docs/workflows/SAFE_DEVELOPMENT_RULES.md");
+const quoteToDelivery = readChecked("docs/workflows/QUOTE_TO_DELIVERY.md");
+const qaTesting = readChecked("docs/reference/qa-testing.md");
+const agentGuardrails = readChecked("docs/reference/agent-guardrails.md");
+const lifecycleAuditPrompts = [
+  readChecked(".claude/workflows/whole-codebase-audit.js"),
+  readChecked(".claude/workflows/overnight-bug-hunt.js"),
+  readChecked(".claude/workflows/money-inventory-hunt.js"),
+];
 const shipWorkflow = readChecked(".claude/commands/ship.md");
 const routingTable = agents.match(/## Start and Route([\s\S]*?)## Engineering Principles/)?.[1] || "";
 const routedGuidance = [...new Set(
@@ -129,6 +137,23 @@ record(
   /normal helper use requires no exemption marker/i.test(sqlCanonicalPatterns) &&
     !/When using helpers,\s+add[^\n]*idempotency-body-check:\s*exempt/i.test(sqlCanonicalPatterns),
   "canonical SQL guidance does not disable idempotency checks for normal helper use",
+);
+record(
+  lifecycleAuditPrompts.every((prompt) => /For all nine entities, compare every status written by current source against the live CHECK constraints in pg_constraint/i.test(prompt)),
+  "every lifecycle audit compares all nine entities with live CHECK constraints",
+);
+record(
+  /closed_by_application/.test(quoteToDelivery) && /closed_short/.test(quoteToDelivery),
+  "quote workflow documents every live terminal status",
+);
+record(/under `tests\/e2e\/`/.test(qaTesting), "QA reference points to the real E2E directory");
+record(
+  /Hunt EDGE FUNCTIONS \(7 in supabase\/functions: create-user, epa-lookup,/.test(lifecycleAuditPrompts[1]),
+  "overnight edge-function audit includes epa-lookup",
+);
+record(
+  /\.claude\/commands\|skills\|hooks\|workflows\|agents\|settings\.json/.test(agentGuardrails),
+  "ledger guardrail lists every Claude agent-surface directory",
 );
 record(/DECISION_LOG\.md[\s\S]*settled design choice[\s\S]*KNOWN_ISSUES\.md[\s\S]*problem is new/i.test(codingGuidelines), "every code change checks settled decisions and known issues");
 record(/^Read this before any multi-file, data, money, security, permission, production, migration, or customer-facing change\./m.test(safeDevelopmentRules), "safe-development trigger matches the lean routing table");

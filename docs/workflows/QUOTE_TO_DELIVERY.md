@@ -27,11 +27,11 @@ There is also a **Quick Delivery** shortcut that creates an order + delivery + d
 - `src/pages/QuoteBuilder.tsx` — multi-line quote editor (both `/quotes/new` and `/quotes/:id`)
 
 ### Status transitions
-```
-draft -> sent -> revised -> accepted -> declined -> expired -> cancelled
-```
+Allowed values: `draft`, `sent`, `revised`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short`.
 - **draft**: Initial state. Can be edited freely.
 - **sent**: Quote was sent to the customer. A `quote_versions` snapshot is created.
+- **closed_by_application**: Terminal planned quote fulfilled through application jobs rather than converted to a chemical-sale order.
+- **closed_short**: Terminal partially drawn booking closed without fulfilling the remaining quantity.
 - **revised**: Edits were made after sending. New version snapshot created on next send.
 - **accepted**: Customer accepted. The `is_planned` flag can reserve inventory via holds.
 - **declined**: Customer said no.

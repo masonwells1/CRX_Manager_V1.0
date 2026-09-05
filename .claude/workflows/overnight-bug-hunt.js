@@ -218,12 +218,12 @@ const DIMENSIONS = [
   {
     key: 'lifecycle-invariants', phase: 2,
     prompt:
-      'Hunt BUSINESS-LIFECYCLE correctness across quote/order/delivery/invoice/job/PO/return/commission/commission_payment. Use QUOTE_TO_DELIVERY.md for quote/order/delivery/invoice and INVENTORY_RULES.md for inventory/receiving effects. For job, PO, return, commission, and commission_payment, inspect current source plus live pg_constraint and pg_proc; do not infer rules from documentation that does not cover those entities. Check: (a) status strings written that are NOT in the live CHECK; (b) transitions no trigger/RPC enforces; (c) the delivery two-step + item-lock being bypassable; (d) quote draw-down / Net-Free invariant holes.',
+      'Hunt BUSINESS-LIFECYCLE correctness across quote/order/delivery/invoice/job/PO/return/commission/commission_payment. Use QUOTE_TO_DELIVERY.md for quote/order/delivery/invoice context and INVENTORY_RULES.md for inventory/receiving effects. For all nine entities, compare every status written by current source against the live CHECK constraints in pg_constraint and inspect current function bodies in pg_proc; documentation provides context but never overrides live evidence. Check: (a) status strings written that are NOT in the live CHECK; (b) transitions no trigger/RPC enforces; (c) the delivery two-step + item-lock being bypassable; (d) quote draw-down / Net-Free invariant holes.',
   },
   {
     key: 'edge-and-pdf', phase: 2,
     prompt:
-      'Hunt EDGE FUNCTIONS (6 in supabase/functions: create-user, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage) + customer-facing PDFs (src/lib/*Pdf.ts). Edge: CORS ALLOWED_ORIGIN enforced, JWT verified, admin-only actually gates on admin, idempotency on side-effects, disk-vs-deployed drift (use get_edge_function if available). PDF: cents without ÷100, off-brand color (crx-green #28A26A), hardcoded company address not from companyInfo.ts, page-overflow on long real data, broken asset refs.',
+      'Hunt EDGE FUNCTIONS (7 in supabase/functions: create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage) + customer-facing PDFs (src/lib/*Pdf.ts). Edge: CORS ALLOWED_ORIGIN enforced, JWT verified, admin-only actually gates on admin, idempotency on side-effects, disk-vs-deployed drift (use get_edge_function if available). PDF: cents without ÷100, off-brand color (crx-green #28A26A), hardcoded company address not from companyInfo.ts, page-overflow on long real data, broken asset refs.',
   },
   {
     key: 'docs-deps-tests', phase: 2,

@@ -116,7 +116,7 @@ const DIMENSIONS = [
   {
     key: 'business-lifecycle',
     prompt:
-      'Audit BUSINESS-LOGIC LIFECYCLE correctness across quote, order, delivery, invoice, job, PO, return, commission, and commission_payment. Use QUOTE_TO_DELIVERY.md for quote/order/delivery/invoice and INVENTORY_RULES.md for inventory/receiving effects. For job, PO, return, commission, and commission_payment, inspect current source plus live pg_constraint and pg_proc; do not infer rules from documentation that does not cover those entities. Flag: (a) status-string values written by frontend or RPCs that are NOT in the live CHECK constraint for that table (the "void" vs "voided" class); (b) lifecycle transitions that no trigger/RPC actually enforces; (c) the delivery scheduled→in_progress→completed two-step and item-lock rules being bypassable.',
+      'Audit BUSINESS-LOGIC LIFECYCLE correctness across quote, order, delivery, invoice, job, PO, return, commission, and commission_payment. Use QUOTE_TO_DELIVERY.md for quote/order/delivery/invoice context and INVENTORY_RULES.md for inventory/receiving effects. For all nine entities, compare every status written by current source against the live CHECK constraints in pg_constraint and inspect current function bodies in pg_proc; documentation provides context but never overrides live evidence. Flag: (a) status-string values written by frontend or RPCs that are NOT in the live CHECK constraint for that table (the "void" vs "voided" class); (b) lifecycle transitions that no trigger/RPC actually enforces; (c) the delivery scheduled→in_progress→completed two-step and item-lock rules being bypassable.',
   },
   {
     key: 'doc-drift',
