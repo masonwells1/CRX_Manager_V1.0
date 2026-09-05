@@ -11,5 +11,8 @@
 | Codex App (P2) | a STAGED, modified, or deleted file under an import folder was counted as importer litter, so a merged worktree carrying deliberate agent-instruction changes could fold into "no real changes" | fixed: only untracked (`??`) entries are importer dirt; the other statuses are real dirt and un-fold the worktree; pinned for `A `, ` M`, ` D`, and `AM` |
 | Codex App (P2, second pass) | the usage report kept its own short envelope list, so a `<scheduled-task>` or `<heartbeat>` record — machine envelopes the hooks already recognise — counted as a prompt Mason typed and could become a `--titles` session title | fixed: the report imports `isMachineGenerated` from `.claude/hooks/prompt-source-lib.mjs` (one list, anywhere in the text or as the opening tag) and adds only the desktop app's `<ci-monitor-event>` on top |
 
-Both Sol rounds returned `CODEX_PROOF_VERDICT: CLEAN`; the App finding was fixed on top of the
-second CLEAN head and re-proved before the push.
+| CodeRabbit (minor ×2, `CHANGES_REQUESTED` on b1044ba48) | subagent transcripts were opened without the modification-time pre-filter the main transcripts get, so a bounded report parsed historical files and inflated the parse diagnostics; and a refused tool result whose `tool_use` fell before the window start still counted as a denial, so the denial rate's numerator and denominator used different populations | fixed: the same `mtimeMs >= start` pre-filter applies to subagent files; a denial is counted only when its call is in the window, and the skipped results are reported as `unpairedDenials` in the diagnostics line |
+
+Sol rounds 1–4 returned `CODEX_PROOF_VERDICT: CLEAN` (rounds 3 and 4 re-bound the proof after the
+App fix and after `main` moved); the App and CodeRabbit findings were each fixed on top of a CLEAN
+head and re-proved before the push.

@@ -70,7 +70,11 @@ for (const dir of fs.readdirSync(root)) {
     if (fst.isDirectory()) {
       const sub = path.join(fp, "subagents");
       if (fs.existsSync(sub)) for (const g of fs.readdirSync(sub)) {
-        if (g.endsWith(".jsonl")) files.push({ fp: path.join(sub, g), dir, sub: true });
+        if (!g.endsWith(".jsonl")) continue;
+        const subFp = path.join(sub, g);
+        let subSt; try { subSt = fs.statSync(subFp); } catch { continue; }
+        if (subSt.mtimeMs < start) continue; // same window pre-filter as the main transcripts (CodeRabbit, PR #613)
+        files.push({ fp: subFp, dir, sub: true });
       }
       continue;
     }
@@ -80,7 +84,7 @@ for (const dir of fs.readdirSync(root)) {
   }
 }
 
-const diag = { files: files.length, lines: 0, parseFail: 0, noTimestamp: 0, outOfWindow: 0, dupUsageDisagree: 0, syntheticOrZero: 0 };
+const diag = { files: files.length, lines: 0, parseFail: 0, noTimestamp: 0, outOfWindow: 0, dupUsageDisagree: 0, syntheticOrZero: 0, unpairedDenials: 0 };
 const byModel = {};
 const sessions = new Map();
 const callBuckets = { "<100k": 0, "100-200k": 0, "200-400k": 0, "400-600k": 0, ">600k": 0 };
@@ -139,8 +143,12 @@ for (const f of files) {
             else if (/HOLD LATCH|hold-latch|HOLD is latched/i.test(head)) kind = "hold-latch";
             else if (part.is_error && /\b(?:hook|guard)\b/i.test(head) && /\b(?:denied|blocked|refus)/i.test(head)) kind = "other-hook";
             if (kind) {
+              // Count a denial only when its tool_use is in the window too: the rate's
+              // denominator is in-window unique tool calls, so a result whose call fell
+              // before `start` would inflate the numerator alone (CodeRabbit, PR #613).
+              const tu = toolById.get(rid);
+              if (!tu) { diag.unpairedDenials++; continue; }
               denialKinds[kind]++; s.denials++;
-              const tu = toolById.get(rid) || {};
               denied.push({ kind, tool: tu.name || "?", command: tu.command || "", session: s.id.slice(0, 8), msg: head.slice(0, 160) });
             }
           }
