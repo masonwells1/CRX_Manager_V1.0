@@ -734,7 +734,7 @@ if (shellTool) {
       namesEnforcementSurface(v)) ||
     enforcementSegments(v).some((seg) =>
       namesEnforcementSurface(seg) && !enforcementSegmentIsReadOnly(seg)))) {
-    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write, which the `ask` tier in .claude/settings.json gates.");
+    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write; the permission tiers in .claude/settings.json decide whether that native edit proceeds, prompts, or is refused, and every one of these paths is a risky path that cannot merge without the exact-SHA Codex proof.");
   }
 }
 
@@ -744,11 +744,13 @@ if (shellTool) {
 // `Edit` are deliberately NOT denied here: they are the only way a hook file can
 // ever be legitimately changed, there is no unlock any more, and denying them
 // would permanently strand hook maintenance the way the deleted lock did twice
-// in one session. They are gated by the `ask` tier instead. @unproven — that tier
-// is mode-dependent: under `dontAsk` it is a real denial, but a session in
-// bypass-permissions mode honours neither it nor any allow/deny rule, so native
-// writes to these paths are ungated there. Recorded, not hidden; closing it needs
-// a boundary outside this repository, which is branch protection.
+// in one session. Whether a native edit to these paths proceeds, prompts, or is
+// refused is decided by the permission tiers in .claude/settings.json (see the
+// 2026-09-05 changelog entries for the current tiering). @unproven — any tier
+// there is mode-dependent: a session in bypass-permissions mode honours neither
+// it nor any allow/deny rule, so native writes to these paths are ungated there.
+// Recorded, not hidden; closing it needs a boundary outside this repository,
+// which is branch protection plus the risky-path exact-SHA Codex proof at merge.
 // Read-only built-ins are exempt as well as the native editors. Fifth
 // gpt-5.6-sol round, MEDIUM: this rule applied to EVERY tool except the native
 // writers, and the hook is registered under `matcher: "*"`, so `Read`, `Grep`,

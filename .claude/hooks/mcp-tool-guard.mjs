@@ -19,7 +19,8 @@
 //     .claude/settings.json, or any .claude/hooks/*.mjs file.
 //   - kill_process / set_config_value: not gated here (no command/path text to
 //     check against these patterns; set_config_value was "ask"-gated in
-//     settings.json until 2026-09-05 and is now allowed - Mason's call).
+//     settings.json until 2026-09-05 and now sits in `deny` there, alongside
+//     the other Desktop Commander mutators - PR #605).
 //
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
 // broken guard must never brick a session.
