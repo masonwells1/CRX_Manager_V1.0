@@ -8,7 +8,11 @@ type RpcHandler = (name: string, args: Record<string, unknown>) => Promise<RpcRe
 const H = vi.hoisted(() => ({
   rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
   toast: vi.fn(),
-  auth: { role: 'admin' as const, profile: { id: 'admin-1', role: 'admin' }, deniedPages: [] as string[] },
+  auth: {
+    role: 'admin' as 'admin' | 'sales_rep',
+    profile: { id: 'admin-1', role: 'admin' as 'admin' | 'sales_rep' },
+    deniedPages: [] as string[],
+  },
   rpcHandler: null as RpcHandler | null,
 }));
 
@@ -114,6 +118,8 @@ beforeEach(() => {
   H.rpc = [];
   H.toast.mockReset();
   H.rpcHandler = null;
+  H.auth.role = 'admin';
+  H.auth.profile = { id: 'admin-1', role: 'admin' };
   vi.mocked(exportToCSV).mockClear();
 });
 
@@ -122,6 +128,19 @@ afterEach(() => {
 });
 
 describe('Reports commission history', () => {
+  it('does not expose or fetch the admin-only commission ledger for a sales rep', async () => {
+    H.auth.role = 'sales_rep';
+    H.auth.profile = { id: 'sales-rep-1', role: 'sales_rep' };
+    renderReports();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+
+    expect(screen.queryByRole('button', { name: 'Commission Balance' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(H.rpc.some(({ name }) => name === 'get_commission_history_report')).toBe(false);
+    });
+  });
+
   it('calls one snapshot RPC and renders both balance and payment-detail fields', async () => {
     renderReports();
 

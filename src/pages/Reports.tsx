@@ -185,6 +185,20 @@ export default function Reports() {
   const [commissionReportLoading, setCommissionReportLoading] = useState(false);
   const commissionRequestId = useRef(0);
 
+  // The route is shared with sales reps, but the historical commission ledger RPC is
+  // admin-only. Invalidate any in-flight admin response and leave the tab immediately if
+  // the current session loses admin access while this page is open.
+  useEffect(() => {
+    if (isAdmin || financialTab !== 'commission_balance') return;
+    commissionRequestId.current += 1;
+    setFinancialTab('pnl');
+    setCommBalanceData([]);
+    setCommPaymentDetailData([]);
+    setCommissionAsOfDate('');
+    setCommissionReportError(false);
+    setCommissionReportLoading(false);
+  }, [isAdmin, financialTab]);
+
   // The cutoff the commission RPC would be asked for right now, derived exactly
   // as fetchCommissionBalance derives it.
   const commissionRequestedAsOf = (() => {
@@ -364,6 +378,15 @@ export default function Reports() {
   }, [endDate, toast]);
 
   const fetchCommissionBalance = useCallback(async () => {
+    if (!isAdmin) {
+      commissionRequestId.current += 1;
+      setCommBalanceData([]);
+      setCommPaymentDetailData([]);
+      setCommissionAsOfDate('');
+      setCommissionReportError(false);
+      setCommissionReportLoading(false);
+      return;
+    }
     // The RPC's cutoff and future-date guard are Chicago-business-day based.
     // A viewer in another timezone must not accidentally ask for Chicago tomorrow,
     // and shared presets such as "This Season" may end after today.
@@ -402,7 +425,7 @@ export default function Reports() {
         setCommissionReportLoading(false);
       }
     }
-  }, [endDate, toast]);
+  }, [endDate, isAdmin, toast]);
 
   // ─── FINANCIAL parent fetcher ─────────────────────────────────
   const fetchFinancial = useCallback(async () => {
@@ -410,9 +433,9 @@ export default function Reports() {
     if (financialTab === 'pnl') await fetchPnL();
     if (financialTab === 'gross_sales') await fetchGrossSales();
     if (financialTab === 'customer_balance') await fetchCustomerBalance();
-    if (financialTab === 'commission_balance') await fetchCommissionBalance();
+    if (financialTab === 'commission_balance' && isAdmin) await fetchCommissionBalance();
     setLoading(false);
-  }, [financialTab, fetchPnL, fetchGrossSales, fetchCustomerBalance, fetchCommissionBalance]);
+  }, [financialTab, isAdmin, fetchPnL, fetchGrossSales, fetchCustomerBalance, fetchCommissionBalance]);
 
   // ─── OPERATIONAL sub-fetchers ───────────────────────────────
   const fetchChemHistory = useCallback(async () => {
@@ -870,7 +893,7 @@ export default function Reports() {
         { key: 'invoice_count', header: 'Invoices' },
         { key: 'oldest_unpaid_date', header: 'Oldest Unpaid', format: fmtDateCSV },
       ], 'customer_balance_listing');
-    } else if (financialTab === 'commission_balance') {
+    } else if (financialTab === 'commission_balance' && isAdmin) {
       if (!commissionExportReady) {
         toast('error', 'Commission export unavailable until the report finishes loading for the selected date.');
         return;
@@ -925,6 +948,7 @@ export default function Reports() {
   };
 
   const handleCommissionPaymentDetailCSV = () => {
+    if (!isAdmin) return;
     if (!commissionExportReady) {
       toast('error', 'Payment detail export unavailable until the report finishes loading for the selected date.');
       return;
@@ -1093,7 +1117,7 @@ export default function Reports() {
     { key: 'pnl', label: 'P&L' },
     { key: 'gross_sales', label: 'Gross Sales' },
     { key: 'customer_balance', label: 'Customer Balance' },
-    { key: 'commission_balance', label: 'Commission Balance' },
+    ...(isAdmin ? [{ key: 'commission_balance' as const, label: 'Commission Balance' }] : []),
   ];
 
   const operationalTabs: { key: OperationalTab; label: string }[] = [
@@ -1253,7 +1277,7 @@ export default function Reports() {
             ))}
           </div>
 
-          {dateFilterBar(handleFinancialCSV, financialTab === 'commission_balance' && !commissionExportReady)}
+          {dateFilterBar(handleFinancialCSV, isAdmin && financialTab === 'commission_balance' && !commissionExportReady)}
 
           {/* P&L summary cards */}
           {financialTab === 'pnl' && pnlData.length > 0 && (
@@ -1270,14 +1294,14 @@ export default function Reports() {
             </div>
           )}
 
-          {financialTab === 'commission_balance' && commissionAsOfDate && (
+          {isAdmin && financialTab === 'commission_balance' && commissionAsOfDate && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
               Balance and payout detail shown through {parseLocalDate(commissionAsOfDate).toLocaleDateString()}.
               {endDate > commissionAsOfDate && ' The selected range ends in the future, so this report is capped at today.'}
             </div>
           )}
 
-          {financialTab === 'commission_balance' && commissionReportError && (
+          {isAdmin && financialTab === 'commission_balance' && commissionReportError && (
             <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
               The selected commission report could not be loaded. Any results below are from the last successful run; empty tables are not a confirmed zero.
             </div>
@@ -1288,7 +1312,7 @@ export default function Reports() {
               {financialTab === 'pnl' && <DataTable data={pnlData as unknown as Record<string, unknown>[]} columns={pnlCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No P&L data" emptyDescription="Select a date range to generate P&L" loading={loading} />}
               {financialTab === 'gross_sales' && <DataTable data={grossSalesData as unknown as Record<string, unknown>[]} columns={grossSalesCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['group_name']} emptyTitle="No gross sales data" emptyDescription="Select a date range" loading={loading} />}
               {financialTab === 'customer_balance' && <DataTable data={custBalanceData as unknown as Record<string, unknown>[]} columns={custBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['farm_name']} emptyTitle="No outstanding balances" loading={loading} />}
-              {financialTab === 'commission_balance' && (
+              {isAdmin && financialTab === 'commission_balance' && (
                 <>
                   <h3 className="mb-4 text-base font-semibold text-nav-dark">Balance by salesperson</h3>
                   <DataTable data={commBalanceData as unknown as Record<string, unknown>[]} columns={commBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['recipient_name']} emptyTitle="No commission data" loading={loading || commissionReportLoading} />
@@ -1297,7 +1321,7 @@ export default function Reports() {
             </div>
           </Card>
 
-          {financialTab === 'commission_balance' && (
+          {isAdmin && financialTab === 'commission_balance' && (
             <Card padding={false}>
               <div className="p-5">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

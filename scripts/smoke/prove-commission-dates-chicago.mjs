@@ -51,6 +51,7 @@ const NAME = `crx-commission-dates-chicago-${process.pid}-${Date.now().toString(
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260905200400_commission_dates_follow_chicago_business_day.sql');
+const REVIEWED_PREIMAGE = path.join(ROOT, 'supabase', 'migrations', '20260722174029_commission_split_recipient_ids.sql');
 const REPLAY_STOP_BEFORE = '20260817120000_carry_allocated_line_cents_through_lifecycle.sql';
 const FUNCS = ['_insert_commissions_for_order', '_insert_commissions_for_job'];
 const ADMIN = '00000000-0000-4000-8000-00000000c001';
@@ -156,8 +157,23 @@ function cutoverCatalogState() {
                             FROM pg_trigger t WHERE t.tgname = 'commissions_chicago_date_cutover_compat')
     )::text`);
 }
-function functionDef(fn) {
-  return scalar(`SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '${fn}'`);
+
+// Fixture restoration must come from reviewed repository SQL, never executable DDL
+// reconstructed from the disposable database catalog. Otherwise a drifted fixture can
+// silently become its own restoration authority and make the mutation proof circular.
+const reviewedPreimageSql = readFileSync(REVIEWED_PREIMAGE, 'utf8').replace(/\r\n/g, '\n');
+function reviewedFunctionDefinition(fn) {
+  const startNeedle = `CREATE OR REPLACE FUNCTION public.${fn}(`;
+  const start = reviewedPreimageSql.indexOf(startNeedle);
+  assert.notEqual(start, -1, `${fn} is missing from the reviewed preimage migration`);
+  const segment = reviewedPreimageSql.slice(start);
+  const tagMatch = /\nAS (\$[A-Za-z0-9_]*\$)\n/.exec(segment);
+  assert.ok(tagMatch, `${fn} has no extractable dollar-quoted body in the reviewed preimage migration`);
+  const bodyStart = tagMatch.index + tagMatch[0].length;
+  const terminator = `\n${tagMatch[1]};`;
+  const end = segment.indexOf(terminator, bodyStart);
+  assert.notEqual(end, -1, `${fn} has no closing dollar quote in the reviewed preimage migration`);
+  return segment.slice(0, end + terminator.length);
 }
 
 const candidateSql = readFileSync(CANDIDATE, 'utf8');
@@ -317,9 +333,9 @@ try {
   assert.notEqual(before.order, before.doc, 'BEFORE: the defect requires the stamped date to differ from the document date');
   log('PHASE 2: the defect reproduces — a caller passing CURRENT_DATE stamps the session day, not the document date');
 
-  // PHASE 3: drift refusal. The helpers live in the schema BASELINE, not in a replayed
-  // post-baseline migration, so capture their definitions byte-for-byte to restore from.
-  const originalDefs = Object.fromEntries(FUNCS.map((fn) => [fn, functionDef(fn)]));
+  // PHASE 3: drift refusal. Restore only from the reviewed static preimage migration;
+  // never turn catalog state into executable DDL.
+  const originalDefs = Object.fromEntries(FUNCS.map((fn) => [fn, reviewedFunctionDefinition(fn)]));
   const restoreHelpers = () => {
     psql(Object.values(originalDefs).join('\n;\n'));
     assert.deepEqual(bodyState(), rebuild, 'pinned bodies not restored');
@@ -368,7 +384,7 @@ try {
   const STALE_CUSTOMER = '00000000-0000-4000-8000-00000000c101';
   const STALE_ORDER = '00000000-0000-4000-8000-00000000c102';
   const BARRIER_KEY = 20260905200400;
-  const originalSplitValidator = functionDef('validate_commission_split_json');
+  const originalSplitValidator = reviewedFunctionDefinition('validate_commission_split_json');
   psql(`
     INSERT INTO customers (id, farm_name) VALUES ('${STALE_CUSTOMER}', '[SMOKE] cached-helper customer')
       ON CONFLICT (id) DO NOTHING;
