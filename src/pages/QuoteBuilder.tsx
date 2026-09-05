@@ -445,6 +445,24 @@ export default function QuoteBuilder() {
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const initialLoadGenerationRef = useRef(0);
   const [installedLoadGeneration, setInstalledLoadGeneration] = useState(0);
+  // Serial number for quote loads. App.tsx routes every /quotes/:id to this one
+  // element with no `key`, so navigating between two saved quotes re-runs the id
+  // effect WITHOUT remounting. A load whose serial is no longer current has been
+  // superseded — by a route change, or by a newer reload of the same quote — and
+  // describes a record this page is no longer showing, so it must install
+  // nothing: not the form, not quoteId, not the row-version token.
+  const quoteLoadSerialRef = useRef(0);
+  // The quote the URL currently names, captured during render so it is already
+  // correct for any effect or handler that runs on the new route. The serial
+  // above orders CALLS; this binds a call to a RECORD, and the two operands have
+  // genuinely independent sources (one from this component's own call order, one
+  // from the router). Both are needed: `fetchQuote` is also called from stale
+  // closures that survive a navigation — the stale-save reload and the
+  // post-conversion refetch — and such a call MINTS THE NEWEST SERIAL for the
+  // quote the operator already left, so a serial check alone would certify the
+  // stale snapshot as current instead of rejecting it.
+  const routeQuoteIdRef = useRef<string | null>(id ?? null);
+  routeQuoteIdRef.current = id ?? null;
   const blocker = useUnsavedChanges(isDirty);
 
   // Status-based guards
@@ -792,11 +810,26 @@ export default function QuoteBuilder() {
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
   const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
+    const loadSerial = ++quoteLoadSerialRef.current;
+    // Two independent halves; neither subsumes the other, and each has its own
+    // regression test. `supersededByNewerLoad` orders CALLS, so reopening the
+    // SAME quote twice still resolves to the newer call. `routeLeftThisQuote`
+    // binds this call to a RECORD, so a load started from a stale closure
+    // cannot install merely because it holds the newest serial.
+    //
+    // Re-checked after every await. A load that must not install returns false
+    // without touching form state, toasts, navigation or `loading` — whichever
+    // load is current owns all of those now.
+    const supersededByNewerLoad = () => quoteLoadSerialRef.current !== loadSerial;
+    const routeLeftThisQuote = () => routeQuoteIdRef.current !== quoteId;
+    const mustNotInstall = () => supersededByNewerLoad() || routeLeftThisQuote();
+
     const quoteRes = await supabase
       .from('quotes')
       .select('*, customer:customers(*)')
       .eq('id', quoteId)
       .maybeSingle();
+    if (mustNotInstall()) return false;
 
     if (quoteRes.error || !quoteRes.data) {
       if (quoteRes.error) {
@@ -821,6 +854,7 @@ export default function QuoteBuilder() {
         .eq('quote_id', quoteId)
         .order('sort_order'),
     ]);
+    if (mustNotInstall()) return false;
 
     // Build and validate the complete editable snapshot before changing any
     // form state. A failed Reload must never replace an operator's local work
@@ -838,6 +872,8 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('id', quoteId)
       .maybeSingle();
+    if (mustNotInstall()) return false;
+
     const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
     const stableVersion = initialRowVersion === finalRowVersion
       && (initialRowVersion !== null || !requireStableRowVersion);
@@ -922,6 +958,8 @@ export default function QuoteBuilder() {
       .eq('quote_id', quoteId)
       .is('deleted_at', null)
       .not('quote_section_id', 'is', null);
+    if (mustNotInstall()) return false;
+
     if (sectionJobsError) {
       Sentry.captureException(sectionJobsError, { tags: { source: 'read', action: 'load_quote_section_jobs' } });
       toast('warning', 'Quote loaded, but scheduled-job badges could not be refreshed.');
@@ -938,6 +976,8 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
+    if (mustNotInstall()) return false;
+
     if (versionsError) {
       Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
       toast('warning', 'Quote loaded, but version history could not be refreshed.');
@@ -1030,6 +1070,11 @@ export default function QuoteBuilder() {
         .then(({ data }) => { if (data) setQuoteTemplates(data as QuoteTemplate[]); });
     }
     if (isEditing && id) {
+      // This effect also runs on a route change between two saved quotes, where
+      // the previous quote's form is still mounted and filled in. Present the
+      // skeleton until THIS id's snapshot installs, so the operator is never
+      // shown quote A's numbers under quote B's address.
+      setLoading(true);
       fetchQuote(id);
     } else {
       generateQuoteNumber().then(() => {
@@ -1370,6 +1415,17 @@ export default function QuoteBuilder() {
   }, [sections]);
 
   const saveQuote = async (newStatus?: QuoteStatus): Promise<string | null> => {
+    // Fail closed when the loaded quote is not the quote the URL names. The
+    // skeleton normally hides the form for the whole transition, but a load that
+    // ERRORS clears `loading` while deliberately keeping the previous quote's
+    // edits on screen — leaving a live Save button over the record the operator
+    // navigated away from. `p_quote_id` below is this same `quoteId`, so
+    // refusing before any RPC also means no idempotency key is ever minted
+    // against the wrong quote.
+    if (isEditing && quoteId !== id) {
+      toast('error', 'This quote has not finished loading. Refresh the page before saving so your changes go to the right quote.');
+      return null;
+    }
     if (!customerId) {
       toast('error', 'Please select a customer');
       return null;
