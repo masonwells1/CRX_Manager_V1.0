@@ -357,10 +357,20 @@ function GoToPoB() {
   );
 }
 
+function GoToPoA() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate('/purchase-orders/po-a')}>
+      go-to-po-a
+    </button>
+  );
+}
+
 function renderAtPoA() {
   return render(
     <MemoryRouter initialEntries={['/purchase-orders/po-a']}>
       <GoToPoB />
+      <GoToPoA />
       <Routes>
         <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
       </Routes>
@@ -371,6 +381,33 @@ function renderAtPoA() {
 async function navigateToPoB() {
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'go-to-po-b' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+async function navigateToPoA() {
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'go-to-po-a' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/**
+ * Release ONE parked query when several share a key, chosen by arrival order.
+ * Two fetches for the SAME purchase order park under the same key, and the
+ * ticket guard only matters when the OLDER of them answers LAST -- an ordering
+ * `release` cannot express, because it drains every match oldest-first.
+ */
+async function fireNthPending(key: string, index: number) {
+  await waitForPending(key);
+  const matches = pending.filter((entry) => entry.key === key);
+  const entry = matches[index];
+  if (!entry) {
+    throw new Error(`no parked "${key}" at index ${index} (parked: ${matches.length})`);
+  }
+  pending.splice(pending.indexOf(entry), 1);
+  await act(async () => {
+    entry.fire();
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
@@ -587,5 +624,100 @@ describe('PurchaseOrderDetail route-currency race', () => {
       expect(screen.getByRole('button', { name: /receive items/i })).toBeEnabled();
     });
     expectShowingNow('PO-B-2002');
+  });
+
+  it('drops a superseded fetch for the SAME purchase order (A -> B -> A)', async () => {
+    // The ticket's own job, and the one thing the route check cannot do: both
+    // fetches below were started for PO A, so their route ids AGREE and only
+    // call order separates them. Without this case the ticket half is carried
+    // by the route half and could be deleted with every test still green.
+    historyByPo['po-a'] = [historyRecordA];
+    renderAtPoA();
+    // PO A's first load is in flight. Leave it parked and walk away from it.
+    expect(await isWaiting('header:po-a')).toBe(true);
+
+    await navigateToPoB();
+    await loadPo('po-b');
+    await expectShowsPo('PO-B-2002');
+
+    // PO A changed while the operator was on PO B, so the abandoned load and
+    // the current one now disagree -- otherwise a stale overwrite of the same
+    // record would be invisible and the test would prove nothing.
+    posById['po-a'] = makePo('po-a', 'PO-A-1001', 'Vendor Alpha Revised');
+    historyByPo['po-a'] = [{ ...historyRecordA, lot_number: 'LOT-A-REVISED' }];
+
+    await navigateToPoA();
+
+    // Two header:po-a and two history:po-a fetches are parked: [0] the
+    // abandoned first load, carrying the pre-change values, and [1] the
+    // current one. Answer the CURRENT one and finish its load...
+    await fireNthPending('header:po-a', 1);
+    await release('items:po-a');
+    await fireNthPending('history:po-a', 1);
+    await expectShowsPo('Vendor Alpha Revised');
+    await expectShowsPo('LOT-A-REVISED');
+
+    // ...then let the ABANDONED answers land last. Same PO, same route, older
+    // calls -- the ticket is the only thing that can still tell them apart.
+    await fireNthPending('header:po-a', 0);
+    await fireNthPending('history:po-a', 0);
+
+    expectShowingNow('Vendor Alpha Revised');
+    expectAbsent('Vendor Alpha');
+    expectShowingNow('LOT-A-REVISED');
+    expectAbsent('LOT-A-ONLY');
+  });
+
+  it("drops a finished action's refetch when the operator navigated away mid-RPC", async () => {
+    // Every action handler on this page -- receive, reverse, save, submit,
+    // cancel -- calls fetchPO() after awaiting its RPC, from the closure of the
+    // render it started on. A ticket alone cannot catch that: the stale closure
+    // MINTS THE NEWEST TICKET for PO A, so an order-only guard certifies it as
+    // current and paints A over B. Only comparing the id the fetch started for
+    // against the live route catches it.
+    // Give PO A a receiving record: the stale refetch reloads history too, and
+    // an empty fixture would hide a stale install behind an empty list.
+    historyByPo['po-a'] = [historyRecordA];
+    renderAtPoA();
+    await loadPo('po-a');
+    await expectShowsPo('PO-A-1001');
+
+    // Hold the receive RPC open so the operator can navigate while it is in
+    // flight -- the whole point is that the handler resumes after the route
+    // has already changed.
+    let completeReceive: (() => void) | undefined;
+    mocks.rpc.mockImplementation((name: string) => {
+      if (name === 'get_notes_for_entity') return Promise.resolve({ data: [], error: null });
+      if (name === 'receive_po_items') {
+        return new Promise((resolve) => {
+          completeReceive = () =>
+            resolve({ data: { receiving_record_ids: ['rec-new'] }, error: null });
+        });
+      }
+      return Promise.resolve({ data: { receiving_record_ids: ['rec-new'] }, error: null });
+    });
+
+    expect(await submitReceive('3')).toBeDefined();
+    expect(completeReceive).toBeDefined();
+
+    await navigateToPoB();
+    await loadPo('po-b');
+    await expectShowsPo('PO-B-2002');
+
+    // PO A's receive lands now. Its success path refetches PO A.
+    await act(async () => {
+      completeReceive!();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // Let that stale refetch's own queries answer, so the guard is exercised on
+    // a real response rather than passing because nothing ever resolved.
+    await release('header:po-a');
+    await release('history:po-a');
+
+    expectShowingNow('PO-B-2002');
+    expectAbsent('PO-A-1001');
+    expectAbsent('Vendor Alpha');
+    expectAbsent('Atrazine 4L');
+    expectAbsent('LOT-A-ONLY');
   });
 });

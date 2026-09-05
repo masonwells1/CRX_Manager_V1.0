@@ -182,7 +182,15 @@ export default function PurchaseOrderDetail() {
   // the next PO starts loading. Blank them synchronously before the load effect
   // below runs: otherwise `fetchPO` sets the new header first and awaits the
   // lines separately, painting PO B's number above PO A's line items.
+  // The PO the operator is actually looking at, updated synchronously on every
+  // route change. A fetch compares the id it was STARTED for against this, so
+  // the two operands never share a source: one comes from the (possibly stale)
+  // closure, the other from the live route. Deriving both from `po` or `items`
+  // would compare a superseded load against itself and could never fire.
+  const routeIdRef = useRef(id);
+
   useLayoutEffect(() => {
+    routeIdRef.current = id;
     setPo(null);
     setItems([]);
     setReceivingHistory([]);
@@ -190,14 +198,26 @@ export default function PurchaseOrderDetail() {
     setHistoryLoading(true);
   }, [id]);
 
-  // Route-currency guard. A fetch started for one PO can still resolve after
-  // the operator has navigated to another one. Each fetch takes a ticket and
-  // may only write state -- including the loading flags it owns -- while it
-  // still holds the newest ticket. Without this, PO A's item query landing last
-  // would leave PO B's header above PO A's lines, and a receive submitted from
-  // that screen carries A's po_item_ids: `receive_po_items` derives the PO from
-  // the submitted ids and has no expected-PO parameter to cross-check, so the
-  // goods would be recorded against the wrong purchase order.
+  // Route-currency guard, two halves -- each closes a hole the other cannot.
+  //
+  // The TICKET orders calls. A fetch may only write state -- including the
+  // loading flags it owns -- while it still holds the newest ticket. Without
+  // it, PO A's item query landing last would leave PO B's header above PO A's
+  // lines, and a receive submitted from that screen carries A's po_item_ids:
+  // `receive_po_items` derives the PO from the submitted ids and has no
+  // expected-PO parameter to cross-check, so the goods would be recorded
+  // against the wrong purchase order.
+  //
+  // The ROUTE check binds a call to the PO it was started for. A ticket alone
+  // cannot do this: every action handler below (receive, reverse, save, submit,
+  // cancel) calls `fetchPO` after awaiting an RPC, from the closure of the
+  // render it started on. Navigate A -> B while that RPC is in flight and the
+  // stale closure re-fetches PO A and MINTS THE NEWEST TICKET for it, so the
+  // ticket check certifies A as current and paints A's header and lines at B's
+  // URL. Edit and Cancel then act on routed id B while the screen shows A.
+  // The same check also covers the gap between the reset above and the load
+  // effect below, where a PO A response can land before PO B has taken a
+  // ticket at all.
   const poFetchTokenRef = useRef(0);
   const historyFetchTokenRef = useRef(0);
 
@@ -213,9 +233,11 @@ export default function PurchaseOrderDetail() {
 
   const fetchPO = useCallback(async () => {
     const token = ++poFetchTokenRef.current;
+    const startedForId = id;
     // A superseded fetch owns nothing: it must not write data and must not
     // clear `loading`, which now belongs to the newer fetch still in flight.
-    const isCurrentFetch = () => poFetchTokenRef.current === token;
+    const isCurrentFetch = () =>
+      poFetchTokenRef.current === token && routeIdRef.current === startedForId;
 
     const { data: poData, error: poError } = await supabase
       .from('purchase_orders')
@@ -257,7 +279,9 @@ export default function PurchaseOrderDetail() {
 
   const fetchReceivingHistory = useCallback(async () => {
     const token = ++historyFetchTokenRef.current;
-    const isCurrentFetch = () => historyFetchTokenRef.current === token;
+    const startedForId = id;
+    const isCurrentFetch = () =>
+      historyFetchTokenRef.current === token && routeIdRef.current === startedForId;
 
     setHistoryLoading(true);
     // PR-07 follow-up: dropped receiver FK embed; resolved via profile_public_view.

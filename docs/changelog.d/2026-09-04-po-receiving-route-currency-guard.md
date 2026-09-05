@@ -28,12 +28,29 @@ byte-identical on `origin/main`.
 
 Three guards in `src/pages/PurchaseOrderDetail.tsx`:
 
-1. **Ticketed fetches.** `fetchPO` and `fetchReceivingHistory` each take a ticket from a
-   ref counter and re-check it after *every* await. A superseded fetch writes no state.
+1. **Ticketed fetches, bound to the route.** `fetchPO` and `fetchReceivingHistory` each
+   take a ticket from a ref counter *and* record the `:id` they were started for, then
+   re-check both after *every* await. A superseded fetch writes no state.
    Deliberately unlike the `VendorBillDetail.tsx` precedent this follows: there, the
    guarded early return leaves the shared `loading` flag true and can wedge the page on
    a spinner. Here the loading flags belong to whichever fetch still holds the newest
    ticket, so every early return leaves them consistent.
+
+   **Both halves are load-bearing; neither is sufficient alone.** The ticket orders
+   *calls*, which is the only thing that separates two fetches for the same PO — reopen
+   one record and an id comparison passes for both. The route check binds a call to the
+   PO it started for, which a ticket cannot do: all five action handlers (receive,
+   reverse, save, submit, cancel) call `fetchPO()` after awaiting their RPC, from the
+   closure of the render they started on. Navigate away mid-RPC and that stale closure
+   re-fetches the *old* PO and **mints the newest ticket for it**, so a ticket-only guard
+   actively certifies it as current and paints PO A over PO B — after which Edit and
+   Cancel act on routed id B while the screen shows A. Found by the `chatgpt-codex`
+   reviewer (P1) and, from the other direction, by CodeRabbit.
+
+   The two operands never share a source: one is the id captured in the (possibly stale)
+   closure, the other is a ref updated synchronously by the route-change effect below.
+   Deriving the expected PO from `po` or `items` instead would compare a superseded load
+   against itself — a check that passes every time and can never fire.
 2. **Blank on route change.** A `useLayoutEffect` on `[id]` clears `po`, `items` and
    `receivingHistory` and raises both loading flags before the load effect runs, so a
    stale render cannot mix two POs even for one frame.
@@ -64,7 +81,7 @@ The unfixed run books goods against the wrong PO and reports success. Reverted t
 `src/pages/PurchaseOrderDetail.routeRace.test.tsx` renders the real page, drives an
 A-then-B navigation with each query released under test control, and asserts the page
 never presents B's header with A's lines — and that a receive submitted from that state
-cannot carry A's item ids. 7 tests; full suite green (350 files, 4983 passed, exit 0).
+cannot carry A's item ids. 9 tests.
 
 Each guard was then removed **on its own** and the suite re-run, because a guard whose
 failure is carried by a neighbour is not actually tested:
@@ -77,8 +94,19 @@ failure is carried by a neighbour is not actually tested:
 | `fetchReceivingHistory` after the receiver-name await | drops PO A's receiver-name lookup |
 | `useLayoutEffect` route-change clear | never renders B's header above A's items |
 | `handleReceive` foreign-line refusal | refuses a receive from another PO |
+| `fetchPO` **route** check (ticket kept) | drops a finished action's refetch |
+| `fetchPO` **ticket** check (route kept) | drops a superseded fetch for the SAME PO |
+| `fetchReceivingHistory` **route** check (ticket kept) | drops a finished action's refetch |
+| `fetchReceivingHistory` **ticket** check (route kept) | drops a superseded fetch for the SAME PO |
 
 Every mutation was caught, each by exactly one distinct test, confirmed by exit code.
+
+The last four rows exist because of a trap this review surfaced. When the route check was
+first added, deleting the **ticket** check entirely left all tests green: every existing
+case navigated A→B, where the route check alone catches the stale write. One half was
+silently carrying the other, and the ticket half — the original fix — had become
+unprovable. The A→B→A cases were written specifically so that each half fails on its own,
+and both were watched failing before being restored.
 
 Two defects in the tests themselves were found this way and fixed:
 
@@ -100,6 +128,14 @@ deterministically — the race only decided which lines won afterwards.
 
 - Every surface that deep-links to `/purchase-orders/:id` was not enumerated;
   `EntityBadge` and `StaleTasksAlert` are two confirmed ones.
+- The browser-harness run above covers the original ticket guard. The route-binding half
+  added in review was proven against the real component under test — each half watched
+  failing alone, then restored — but was **not** re-run in the browser harness. The
+  navigate-away-mid-RPC path is exercised by test only.
+- The five action handlers are fixed at the point where they *write* state, which is the
+  shared choke point. Their in-flight RPCs are not cancelled on navigation, so a receive
+  started on PO A still completes against PO A. That is correct — the operator did submit
+  it — but the resulting toast lands on PO B's screen.
 - No server-side change was made. `receive_po_items` still derives the PO from the
   submitted item ids. Adding a `p_purchase_order_id` cross-check so the database itself
   rejects item ids from another PO is the strongest fix and would survive a frontend
