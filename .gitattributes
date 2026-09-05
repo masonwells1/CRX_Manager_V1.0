@@ -43,6 +43,10 @@ scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 # receives carries CR bytes, the candidate hash never matches, and the postflight
 # aborts a correct migration.
 supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql text eol=lf
+# Its prover embeds the reviewed live body as a JS template literal and installs it
+# verbatim, so a CRLF smudge on a Windows checkout puts CR bytes in the installed
+# prosrc and the live md5 can never reproduce. Pin the prover too, as both peers are.
+scripts/smoke/prove-next-invoice-number-year-chicago.mjs text eol=lf
 
 # The six migrations applied live on 2026-08-12 whose files were recovered from
 # the applying sessions' transcripts and landed afterwards. Same rule, same

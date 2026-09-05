@@ -40,13 +40,31 @@
 -- keep their exact values; nothing is renumbered and nothing is deleted. No grant
 -- moves — CREATE OR REPLACE preserves the ACL, which is
 -- {postgres=X/postgres,service_role=X/postgres} (EXECUTE is NOT held by anon or
--- authenticated), and this file deliberately contains no GRANT or REVOKE. Owner,
--- SECURITY DEFINER, and SET search_path = public, pg_temp are re-declared exactly as
--- live. The sequences themselves are untouched.
+-- authenticated), and this file deliberately contains no GRANT or REVOKE.
+-- SECURITY DEFINER and SET search_path = public, pg_temp are re-declared here.
+-- The OWNER is not re-declared, because CREATE OR REPLACE cannot change one — it is
+-- preserved, and both flights now PIN it (proowner = postgres) rather than assume it.
+-- For a SECURITY DEFINER function the owner IS the effective privilege, so an owner
+-- changed out of band must not pass silently. The sequences themselves are untouched.
 --
--- SCOPE. Swept all eight next_%_number generators on live 2026-09-05: only
--- next_invoice_number reads a year from now(). The other seven contain no
--- 'America/Chicago' because they embed no year at all. No other generator needs this.
+-- SCOPE — READ THIS BEFORE CONCLUDING THE FAMILY IS CLEAN.
+-- An earlier draft of this header claimed "the other seven embed no year at all".
+-- That was FALSE, and the way it was false is worth keeping: the sweep asked which
+-- generators read a year from now(), and only this one does. But SIX of the others
+-- read a year from CURRENT_DATE, and on this server CURRENT_DATE *is* the UTC
+-- calendar date (current_setting('TimeZone') = 'UTC', re-verified read-only
+-- 2026-09-05) — the same rollover, the same six-hour window, the same defect:
+--     next_application_record_number  v_year := extract(year FROM current_date)
+--     next_commission_payment_number  v_year := to_char(CURRENT_DATE, 'YYYY')
+--     next_cycle_count_number         v_year := EXTRACT(YEAR FROM CURRENT_DATE)
+--     next_job_number                 v_year := extract(year FROM current_date)
+--     next_po_number                  v_year := extract(year FROM current_date)
+--     next_return_number              v_year := extract(year FROM current_date)
+-- Only next_delivery_number (DEL-nnnnn) genuinely embeds no year.
+-- Each of those six uses v_year in its lock key, its MAX() scan and its returned
+-- number, exactly as this one does. They are NOT fixed by this file and they carry
+-- the same 31 December 2026 deadline; they are recorded as a follow-up in
+-- docs/manual/KNOWN_ISSUES.md. Do not read this migration as closing the family.
 --
 -- PREFLIGHT PIN. Refuses to run unless the installed body is byte-for-byte either the
 -- reviewed starting body or this file's own candidate body (so a replay is a no-op
@@ -63,7 +81,14 @@
 -- shown to yield 2026 at a UTC instant where the old one yields 2027.
 -- ============================================================================
 
-BEGIN;
+-- NO top-level BEGIN/COMMIT, deliberately. scripts/apply-migration-file.mjs wraps the
+-- migration AND its schema_migrations ledger row in ONE transaction, and
+-- assertWrappable() (.claude/hooks/migration-wrappability-lib.mjs) REFUSES any file
+-- carrying its own transaction control — a self-committing file can leave the schema
+-- changed with no ledger row. An earlier draft opened its own transaction here and was
+-- therefore unappliable through the only sanctioned door. The three statements below
+-- still share one transaction; the applier provides it, so a failed preflight or
+-- postflight still rolls the CREATE back.
 
 -- ── PREFLIGHT ───────────────────────────────────────────────────────────────
 DO $preflight$
@@ -75,6 +100,9 @@ DECLARE
   v_nargs        integer;
   v_ndefaults    integer;
   v_default_expr text;
+  v_secdef       boolean;
+  v_config       text;
+  v_owner        text;
 BEGIN
   SELECT count(*) INTO v_count
     FROM pg_proc p
@@ -117,6 +145,38 @@ BEGIN
     RAISE EXCEPTION
       'next_invoice_number: installed body has DRIFTED (md5 %, length %, cr-at %). Expected the reviewed live body or this file''s candidate. Re-review against the current body before applying.',
       v_md5, v_len, v_cr;
+  END IF;
+
+  -- SECURITY PRE-STATE. These three live OUTSIDE prosrc, so the body pin above says
+  -- nothing about them. Checking them only in the postflight would be too late to be
+  -- informative: the CREATE OR REPLACE re-declares SECURITY DEFINER and search_path,
+  -- so a live function that had been silently downgraded to SECURITY INVOKER, or had
+  -- its search_path stripped, would be quietly REPAIRED by this migration with no
+  -- operator signal that live had been tampered with. Fail loudly here instead.
+  SELECT p.prosecdef, p.proconfig::text, pg_get_userbyid(p.proowner)
+    INTO v_secdef, v_config, v_owner
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'next_invoice_number';
+
+  IF NOT v_secdef THEN
+    RAISE EXCEPTION
+      'next_invoice_number: the LIVE function is not SECURITY DEFINER. Live has been changed out of band — re-review before applying.';
+  END IF;
+
+  IF v_config IS DISTINCT FROM '{"search_path=public, pg_temp"}' THEN
+    RAISE EXCEPTION
+      'next_invoice_number: the LIVE search_path is %, expected {"search_path=public, pg_temp"}. Live has been changed out of band — re-review before applying.',
+      COALESCE(v_config, '(none)');
+  END IF;
+
+  -- For a SECURITY DEFINER function the OWNER *is* the effective privilege: the body
+  -- runs as them. CREATE OR REPLACE cannot change an owner, so this migration silently
+  -- inherits whoever it is — which is exactly why it must be pinned rather than assumed.
+  IF v_owner <> 'postgres' THEN
+    RAISE EXCEPTION
+      'next_invoice_number: owner is %, expected postgres. A SECURITY DEFINER body runs as its owner, so this is a privilege change — re-review before applying.',
+      v_owner;
   END IF;
 END;
 $preflight$;
@@ -199,6 +259,8 @@ DECLARE
   v_nargs        integer;
   v_ndefaults    integer;
   v_default_expr text;
+  v_owner        text;
+  v_unexpected   text;
   v_year_utc     text;
   v_year_chicago text;
 BEGIN
@@ -212,8 +274,9 @@ BEGIN
   END IF;
 
   SELECT md5(p.prosrc), length(p.prosrc), position(chr(13) in p.prosrc),
-         p.prosecdef, p.proconfig::text, p.proacl::text, p.oid
-    INTO v_md5, v_len, v_cr, v_secdef, v_config, v_acl, v_oid
+         p.prosecdef, p.proconfig::text, p.proacl::text, p.oid,
+         pg_get_userbyid(p.proowner)
+    INTO v_md5, v_len, v_cr, v_secdef, v_config, v_acl, v_oid, v_owner
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'next_invoice_number';
@@ -293,6 +356,48 @@ BEGIN
       'next_invoice_number: PUBLIC holds EXECUTE (%). Only postgres/service_role may hold it.', v_acl;
   END IF;
 
+  -- The three checks above name anon, authenticated and PUBLIC, but the failure text
+  -- claims "only postgres/service_role may hold it" — a stronger statement than they
+  -- verify. A grant to some OTHER role (a reporting role anon is not a member of, or
+  -- Supabase's authenticator) would have passed all three. Enumerate the ACL and hold
+  -- the check to what the message actually promises.
+  SELECT string_agg(DISTINCT g.grantee_name, ', ' ORDER BY g.grantee_name)
+    INTO v_unexpected
+    FROM pg_proc p
+    CROSS JOIN LATERAL aclexplode(p.proacl) a
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END
+    ) AS g(grantee_name)
+   WHERE p.oid = v_oid
+     AND a.privilege_type = 'EXECUTE'
+     AND g.grantee_name NOT IN ('postgres', 'service_role');
+
+  IF v_unexpected IS NOT NULL THEN
+    RAISE EXCEPTION
+      'next_invoice_number: EXECUTE is held by % (acl %). Only postgres/service_role may hold it.',
+      v_unexpected, v_acl;
+  END IF;
+
+  -- Assert the POSITIVE direction too. Every check above is a refusal; none of them
+  -- would notice a drift that REMOVED the legitimate grant, leaving a function nobody
+  -- can call. Precedent: 20260903160000 raises on "service_role lost EXECUTE — the
+  -- revoke was too broad". Skipped on a repo-only rebuild where the role is absent.
+  IF to_regrole('service_role') IS NOT NULL
+     AND NOT has_function_privilege('service_role', v_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION
+      'next_invoice_number: service_role LOST EXECUTE (acl %) — the function is now uncallable by the application.',
+      v_acl;
+  END IF;
+
+  -- The owner survived. CREATE OR REPLACE cannot change one, so this can only fail if
+  -- live was already tampered with — but for a SECURITY DEFINER body the owner is the
+  -- privilege it runs with, so it is asserted on both sides rather than assumed.
+  IF v_owner <> 'postgres' THEN
+    RAISE EXCEPTION
+      'next_invoice_number: owner is now %, expected postgres. A SECURITY DEFINER body runs as its owner.',
+      v_owner;
+  END IF;
+
   -- Behavioural assertion, at an instant INSIDE the divergence window.
   -- December is CST (UTC-6), so midnight UTC on 1 January is 6 pm Chicago on
   -- 31 December. The window where the two disagree is therefore 00:00-06:00 UTC
@@ -311,5 +416,3 @@ BEGIN
   END IF;
 END;
 $postflight$;
-
-COMMIT;

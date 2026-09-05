@@ -22,6 +22,7 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertWrappable } from "../../.claude/hooks/migration-wrappability-lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, "..", "..");
@@ -228,9 +229,31 @@ function main() {
   const installed = bodyMd5();
   ok(installed === LIVE_MD5, `installed body md5 ${installed} === live pin ${LIVE_MD5}`);
 
-  console.log("\n2. The migration applies, and the result matches the candidate pin");
+  console.log("\n0b. The file can pass through the ONLY sanctioned apply door");
+  // scripts/apply-migration-file.mjs calls assertWrappable() BEFORE its gate and dies on
+  // refusal, because that path wraps the migration AND its schema_migrations ledger row
+  // in one transaction. A file carrying its own BEGIN/COMMIT is rejected outright — and
+  // an earlier draft of this migration did exactly that. psql -f applies such a file
+  // happily, so without this check the suite could go fully green on a migration Mason
+  // could never actually apply. Same failure shape as step 0: a harness that does not
+  // reproduce the real channel proves nothing about it.
   const migrationSql = readFileSync(MIGRATION, "utf8");
-  psqlFile(writeTmp("migration.sql", migrationSql));
+  let wrappable = true;
+  let wrappableReason = "";
+  try {
+    assertWrappable(migrationSql, "20260905090000_next_invoice_number_year_chicago");
+  } catch (error) {
+    wrappable = false;
+    wrappableReason = String(error.message || error);
+  }
+  ok(wrappable, `assertWrappable accepts the file${wrappable ? "" : ` — ${wrappableReason}`}`);
+
+  console.log("\n2. The migration applies, and the result matches the candidate pin");
+  // Applied through the WRAPPED shape the real applier uses, not bare psql: the file
+  // itself opens no transaction, so this is what supplies the atomicity that steps 5
+  // and 7 rely on when they assert a refused apply leaves the body untouched.
+  writeTmp("migration.sql", `BEGIN;\n${migrationSql}\nCOMMIT;\n`);
+  psqlFile("/tmp/migration.sql");
   const afterApply = bodyMd5();
   ok(afterApply === CANDIDATE_MD5, `body md5 ${afterApply} === candidate pin ${CANDIDATE_MD5}`);
   ok(psql("SELECT prosrc LIKE '%America/Chicago%' FROM pg_proc WHERE proname='next_invoice_number'") === "t",
@@ -371,6 +394,29 @@ DROP FUNCTION public.next_invoice_number(text);`));
   }
   ok(nullRefused, "the migration REFUSES to apply against a NULL ACL");
   ok(/proacl is NULL/i.test(nullMessage), "the refusal names the NULL ACL as the reason");
+
+  // 7d — EXECUTE granted to a role that is NOT anon, NOT authenticated, and that anon is
+  // NOT a member of. Every check in 7a-7c passes this state; only the ACL enumeration
+  // catches it. Without this the failure message ("only postgres/service_role may hold
+  // it") would be claiming more than any assertion verified.
+  psqlFile(writeTmp("grant-third-party.sql", `
+REVOKE ALL ON FUNCTION public.next_invoice_number(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO service_role;
+REVOKE reporting_reader FROM anon;
+GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO reporting_reader;`));
+  ok(psql("SELECT has_function_privilege('anon', p.oid, 'EXECUTE')::text FROM pg_proc p " +
+          "WHERE p.proname='next_invoice_number'") === "false",
+     "anon can NOT reach EXECUTE in this state — so 7a/7b/7c would all pass it");
+  let thirdRefused = false;
+  let thirdMessage = "";
+  try {
+    psqlFile("/tmp/migration.sql");
+  } catch (error) {
+    thirdRefused = true;
+    thirdMessage = String(error.stderr || error.message || "");
+  }
+  ok(thirdRefused, "the migration still REFUSES — a third-party grantee is caught by the ACL enumeration");
+  ok(/reporting_reader/.test(thirdMessage), "the refusal names the actual unexpected grantee");
 
   console.log(`\n${failures === 0 ? "NEXT_INVOICE_NUMBER_YEAR_CHICAGO_PROOF_PASS" : `PROOF FAILED — ${failures} check(s)`}\n`);
 }

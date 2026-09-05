@@ -46,8 +46,32 @@ from the post-gate body, not an earlier one.
 No grant moves: `CREATE OR REPLACE` preserves the ACL (`{postgres=X/postgres,service_role=X/postgres}`
 — EXECUTE is **not** held by anon or authenticated) and the file contains no `GRANT`/`REVOKE`.
 
-**Scope check:** all eight `next_%_number` generators were swept on live. Only `next_invoice_number`
-reads a year from `now()`; the other seven embed no year at all.
+### Scope — the first sweep was wrong, and six sibling generators have the same bug
+
+The original claim here was "all eight `next_%_number` generators were swept on live; only
+`next_invoice_number` reads a year from `now()`, the other seven embed no year at all." The first
+half is true. **The second half is false**, and the way it is false is the lesson: the sweep searched
+for `now()`, so it answered its own question correctly and the wrong conclusion was drawn from it.
+
+Re-swept read-only on live 2026-09-05, `current_setting('TimeZone')` = **UTC**, so `CURRENT_DATE` on
+this server *is* the UTC calendar date — the same rollover, the same six-hour window, the same defect:
+
+| generator | how it takes the year |
+|---|---|
+| `next_application_record_number` | `extract(year FROM current_date)` |
+| `next_commission_payment_number` | `to_char(CURRENT_DATE, 'YYYY')` |
+| `next_cycle_count_number` | `EXTRACT(YEAR FROM CURRENT_DATE)` |
+| `next_job_number` | `extract(year FROM current_date)` |
+| `next_po_number` | `extract(year FROM current_date)` |
+| `next_return_number` | `extract(year FROM current_date)` |
+
+Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses its `v_year`
+in the advisory lock key, the `MAX()` scan and the returned number, exactly as `next_invoice_number`
+does — so a job created at 7 pm Chicago on 31 December 2026 is numbered `JOB-2027-0001` off a counter
+that has not started, and collides with the real first job of 2027.
+
+**They are not fixed by this change** and they carry the same 31 December 2026 deadline. Recorded as a
+follow-up in `docs/manual/KNOWN_ISSUES.md`. Do not read this migration as closing the family.
 
 ### Pins
 
@@ -66,7 +90,7 @@ md5 exactly before anything was written.
 
 ### Proof — `scripts/smoke/prove-next-invoice-number-year-chicago.mjs`
 
-Runs the real migration against a throwaway PostgreSQL 17 container. **31/31 checks pass**
+Runs the real migration against a throwaway PostgreSQL 17 container. **35/35 checks pass**
 (`NEXT_INVOICE_NUMBER_YEAR_CHICAGO_PROOF_PASS`):
 
 1. the reviewed body reproduces the live md5 — the pin is not fiction
@@ -155,7 +179,48 @@ Supabase roles do not exist, so the portability fix above survives. The literal 
 through an intermediate role, then drops the function and recreates it with no grants at all (a
 genuine NULL ACL), and watches the migration refuse all three — asserting in the indirect case that
 the ACL string does **not** contain `anon`, which is what makes the text match provably insufficient.
-It also confirms `anon` really can execute the function in the NULL-ACL state. **31/31 checks pass.**
+It also confirms `anon` really can execute the function in the NULL-ACL state.
+
+### The file could not have been applied through the only sanctioned door (BLOCKER, drift review)
+
+The migration opened its own transaction (`BEGIN;` … `COMMIT;`). `scripts/apply-migration-file.mjs`
+calls `assertWrappable()` **before** its gate and refuses any such file, because that path wraps the
+migration *and* its `schema_migrations` ledger row in one transaction — a self-committing file can
+leave the schema changed with no ledger row. So the parked deliverable was, as written, unappliable
+by the one route Mason would use. It is also a convention regression: of 904 migrations only 31 carry
+top-level transaction control and the newest is from 2026-07; neither of this file's two direct
+precedents has any.
+
+Both lines are removed. The three statements still share one transaction — the applier supplies it —
+so a failed preflight or postflight still rolls the `CREATE` back, which steps 5 and 7 verify.
+
+**The proof could not have caught this, and that is the same failure recorded above one layer out.**
+The harness applied the file with bare `psql -f`, which executes `BEGIN;…COMMIT;` happily. A harness
+that does not reproduce the real channel proves nothing about it. It now calls `assertWrappable()` as
+step 0b and applies through the wrapped shape the real applier uses.
+
+### Also from this round
+
+- **Owner is pinned, not assumed.** `CREATE OR REPLACE` cannot change a function's owner, and for a
+  `SECURITY DEFINER` body the owner *is* the privilege it runs with — so an owner changed out of band
+  would have passed every assertion. Both flights now require `postgres`. The header sentence claiming
+  the owner was "re-declared exactly as live" was wrong and is corrected.
+- **Security pre-state checked in the preflight.** `prosecdef` and `proconfig` were only checked
+  *after* the replace, where the file itself had just set them — so a live function silently
+  downgraded to `SECURITY INVOKER`, or stripped of its `search_path`, would have been quietly repaired
+  with no signal that live had been tampered with. Now it fails loudly instead.
+- **The ACL check no longer claims more than it verifies.** Its message says "only
+  postgres/service_role may hold it" while it tested only `anon`, `authenticated` and PUBLIC — a grant
+  to any *other* role passed. The ACL is now enumerated and any grantee outside that pair is refused;
+  proof step 7d grants to a third-party role that `anon` is provably not a member of and watches the
+  refusal name it.
+- **The positive direction is asserted too.** Every other check is a refusal; none would have noticed
+  drift that *removed* `service_role`'s EXECUTE, leaving a function nobody can call.
+- **`.gitattributes` LF pin added for the prover**, not just the migration. It embeds the reviewed
+  live body as a template literal and installs it verbatim, so a CRLF smudge on a Windows checkout
+  would make the live md5 unreproducible. Both peer provers are pinned; this one was not.
+
+**35/35 checks pass.**
 - **`.gitattributes` LF pin added** for this file. Every other md5-pinned migration carries one; on a
   Windows checkout with `core.autocrlf=true` an unpinned file is smudged to CRLF, the body PostgreSQL
   receives carries CR bytes, and the candidate hash can never match.

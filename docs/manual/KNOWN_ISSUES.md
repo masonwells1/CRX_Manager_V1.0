@@ -1,9 +1,13 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-04 for both the migration-ledger facts and the F2 entry.** The
+**Last verified: 2026-09-05 for the migration-ledger facts; 2026-09-04 for the F2 entry.** The
 ordering boundary is the newest applied authored NAME:
-**`20260903230000_commission_report_snapshot_contract`** (ledger version `20260904040643`, read-only
-`list_migrations` on 2026-09-04). F2
+**`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`; live
+read-only ledger read on 2026-09-05: 998 rows, `max(version)` `20260904152221`). This SUPERSEDES the
+earlier boundary recorded here, `20260903230000_commission_report_snapshot_contract` (version
+`20260904040643`) — that row is still applied and still correct as history, it is simply no longer
+the newest name. Note how little the counters tell you: `max(version)` and the boundary row's version
+are the same string here, purely by coincidence of apply order. F2
 (`20260903160000_gate_number_generators_active_profile_role`) applied earlier the same day as ledger
 version `20260904023121` and was the boundary until the commission snapshot landed after it. Read
 ordering from the NAME — it is what
@@ -310,9 +314,37 @@ and `20260904180000` (both applied live 2026-09-04) and the settled ~2026-07-10 
   was `20260904180000`), but a parked file's timestamp perishes. Re-derive it immediately before
   apply and expect renumbering.
 
-Also re-run `scripts/smoke/prove-next-invoice-number-year-chicago.mjs` (31/31 at parking time, real
+Also re-run `scripts/smoke/prove-next-invoice-number-year-chicago.mjs` (35/35 at parking time, real
 PostgreSQL 17 container) and confirm the live body still matches pin `b53499d0…` — a drifted body
 must be re-reviewed, and the migration refuses it anyway.
+
+**SIX SIBLING GENERATORS HAVE THE SAME DEFECT AND ARE NOT FIXED BY THAT FILE.** An earlier version of
+this entry — and of the migration header and changelog — claimed the other seven `next_%_number`
+generators "embed no year at all". That was **false**. The sweep asked which generators read a year
+from `now()`, and only `next_invoice_number` does; but six of the others read a year from
+`CURRENT_DATE`, and `current_setting('TimeZone')` on live is **UTC**, so `CURRENT_DATE` *is* the UTC
+calendar date — identical rollover, identical six-hour window (re-verified read-only 2026-09-05):
+
+| generator | year source | prefix |
+|---|---|---|
+| `next_application_record_number` | `extract(year FROM current_date)` | `APP-<year>-nnnn` |
+| `next_commission_payment_number` | `to_char(CURRENT_DATE, 'YYYY')` | `CP-<year>-nnnn` |
+| `next_cycle_count_number` | `EXTRACT(YEAR FROM CURRENT_DATE)` | `CC-<year>-nnnn` |
+| `next_job_number` | `extract(year FROM current_date)` | `JOB-<year>-nnnn` |
+| `next_po_number` | `extract(year FROM current_date)` | `PO-<year>-nnnn` |
+| `next_return_number` | `extract(year FROM current_date)` | `RET-<year>-nnnn` |
+
+Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
+its advisory lock key, its `MAX()` scan **and** its returned number, exactly as `next_invoice_number`
+does — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001` off a counter that
+has not started, and collides with the real first job of 2027. **Same 31 December 2026 deadline.**
+The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
+they were deliberately not bundled into the parked migration because that file is pinned to one
+function's body md5. **Do not close this family when `20260905090000` is applied.**
+
+The general lesson, worth more than the six fixes: **a sweep proves only the question it asked.**
+Searching for `now()` cannot clear `CURRENT_DATE`, and on a UTC server the two are the same bug.
+Sweep the *concept* — "where does a business date come from" — not one spelling of it.
 
 **Two review findings worth carrying forward as general lessons**, both from this file:
 
