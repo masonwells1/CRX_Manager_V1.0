@@ -78,8 +78,27 @@ test 3 with a distinct symptom: removing `setLoading(false)` leaves the stuck sk
 (heading never found); removing the guard reset leaves the dirty engine frozen at false
 (`expected false to be true`).
 
+**A defect this fix introduced, caught by review before merge.** The exact-SHA `gpt-5.6-sol`
+review of head `170c2d91d` blocked with CRX-SEC-001 (High), and it was real. `fetchJob`'s first
+two statements are **synchronous**: it nulls `baselineRef` and raises `baselineSettleGuardRef`
+before its own await. The route check sat *after* that await, so a refetch issued from a stale
+handler closure would disarm the dirty engine of the job **currently on screen** on its way in,
+then bail on the far side and never lower the guard again. The mount-effect reset does not help,
+because the effect does not re-run when a handler fires later. Job B kept rendering its own data
+correctly while `isDirty` was frozen at false — so the unsaved-changes prompt stopped firing and
+the "save before Start/Complete" gates waved edits through. A silent failure, strictly worse than
+the loud one, and reachable from the same `handleStart` / `handleComplete` / save paths.
+
+Fixed by rejecting an already-stale call at the top of `fetchJob`, **before** either write. The
+ticket cannot serve as the test there — it is read from the ref one line above, so at entry it
+always equals itself; only the route is a witness that early. Mutation-checked: removing that
+one line reddens **only** the extended stale-handler test, and it fails on the dirty-tracking
+assertion while the heading assertion still passes — which is exactly why the original version
+of that test, which checked the heading alone, could not see this. Test 5 now edits job B after
+the stale refetch returns and requires the page to register the edit.
+
 Full gates on the final source: `npm run typecheck` clean, `npm run lint` clean, `npm run test`
-exit 0 under `pipefail` with 350 files passed / 4981 passed / 123 skipped and no `Errors` line,
+exit 0 under `pipefail` with 351 files passed / 4991 passed / 123 skipped and no `Errors` line,
 `npm run build` succeeded.
 
 **Not verified.** No live-browser run against production data — the page is auth-gated and the

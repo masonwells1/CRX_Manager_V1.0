@@ -1666,6 +1666,18 @@ export default function JobDetail() {
     // issued from a stale closure after a route change, which carries a CURRENT ticket.
     const isCurrentLoad = () => loadGenerationRef.current === generation
       && routeIdRef.current === startedForId;
+    // Reject an ALREADY-stale call before touching anything. The two writes below are
+    // synchronous, so a handler that awaited an RPC and is only now calling us would
+    // otherwise null the baseline and raise the settle guard for the job currently on
+    // screen, then bail after its own await and never lower them again. The dirty
+    // engine would then never adopt a baseline for that job: isDirty frozen false,
+    // the unsaved-changes prompt dead, and the "save before Start/Complete" gates
+    // bypassed. Ordering matters more than the check — this MUST precede the writes.
+    // (Codex CRX-SEC-001, exact-SHA review of 170c2d91d.)
+    //
+    // The ticket cannot serve here: it is captured from the ref one line above, so at
+    // entry it always equals itself. Only the route is a witness this early.
+    if (routeIdRef.current !== startedForId) return;
     // Drop the baseline so the freshly-loaded form is re-adopted as clean once it
     // settles (also covers post-save refetches where loading stays false). The
     // settle guard defers adoption until this fetch's state has actually rendered.
@@ -1901,8 +1913,11 @@ export default function JobDetail() {
     // the guard would stick true, the dirty engine would never adopt a baseline,
     // and the unsaved-changes prompt would silently stop protecting that form.
     // The run starting HERE owns the guard: reset it before anyone awaits. Only
-    // fetchJob raises it, and it does so synchronously at entry, so no superseded
-    // run can raise it again after this point.
+    // fetchJob raises it, synchronously at entry — and its entry check rejects any
+    // call already bound to a different job, so nothing can raise it again on this
+    // job's behalf after this point. Both halves are needed: this reset alone does
+    // not help against a stale handler that calls fetchJob LATER, because the effect
+    // does not re-run when it does (Codex CRX-SEC-001).
     baselineSettleGuardRef.current = false;
     (async () => {
       await loadLookups();

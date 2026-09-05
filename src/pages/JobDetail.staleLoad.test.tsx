@@ -376,5 +376,19 @@ describe('JobDetail cross-record stale-load guard', () => {
       expect(screen.getByRole('heading', { name: 'J-BBBB-2002' })).toBeTruthy();
     });
     expect(screen.queryByRole('heading', { name: 'J-AAAA-1001' })).toBeNull();
+
+    // The heading alone is NOT enough. fetchJob's first two statements are synchronous:
+    // it nulls baselineRef and raises baselineSettleGuardRef before its own await. A
+    // stale call that only bails LATER has already disarmed job B's dirty engine on its
+    // way in, and nothing lowers the guard again — B keeps rendering correctly while
+    // isDirty is frozen at false. That is the silent half of the bug: the unsaved-changes
+    // prompt stops firing and the "save before Start/Complete" gates wave edits through.
+    // So edit B here and require the page to notice. (Codex CRX-SEC-001.)
+    const editedFrom = dirtyStates.length;
+    const jobDate = screen.getByLabelText(/Job Date/) as HTMLInputElement;
+    await act(async () => { fireEvent.change(jobDate, { target: { value: '2026-11-03' } }); });
+    await waitFor(() => {
+      expect(dirtyStates.slice(editedFrom).some((d) => d === true)).toBe(true);
+    });
   });
 });
