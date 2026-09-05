@@ -81,7 +81,7 @@ Apply `docs/reference/coding-guidelines.md` to every code change. In particular,
 | NEVER install additional icon libraries | Lucide React only — keeps bundle size consistent |
 | NEVER create a second Supabase client | Use `src/lib/db.ts` — multiple clients cause auth state issues |
 | NEVER import Sentry outside `src/lib/sentry` | Keeps monitoring configuration, context, and breadcrumbs consistent |
-| NEVER use `confirm()` / `window.confirm()` or `alert()` | Use `ConfirmModal` and toasts so behavior is accessible and consistent |
+| NEVER use `confirm()` / `window.confirm()`, `alert()`, or `prompt()` | Use `ConfirmModal`, toasts, and `ReasonModal` so behavior is accessible and consistent |
 
 ### Deployment
 | Rule | Consequence of breaking |

@@ -45,10 +45,12 @@ Three qualifications, all enforced in that same trigger:
 - `_is_admin_override()` returns before both the edge table and the `closed_short` active-job condition, so an explicit admin override bypasses both.
 - `closed_short` has an additional safety condition: it is refused with `BOOKING_HAS_ACTIVE_JOBS` while any non-deleted job on the quote is `scheduled` or `in_progress`.
 
-`save_quote()` carries its own transition map that is a deliberate strict *subset* of the trigger's
-(`draft→sent`; `sent→revised/accepted/declined/expired`; `revised→sent/accepted/declined/expired`), so an
-invalid edge fails earlier and with a clearer error. The trigger remains the authority — see migration
-`20260812115236_quote_items_cost_at_quote_snapshot.sql` for the current subset.
+The current `save_quote()` wrapper delegates to `_save_quote_below_cost_impl_20260810`, which carries a
+deliberate strict *subset* of the trigger's transition map (`draft→sent`;
+`sent→revised/accepted/declined/expired`; `revised→sent/accepted/declined/expired`). An invalid edge
+therefore fails earlier and with a clearer error, while the trigger remains authoritative. Migration
+`20260812115236_quote_items_cost_at_quote_snapshot.sql` defines that implementation, and
+`20260812115237_enforce_below_cost_admin_approval.sql` renames it and creates the current wrapper.
 
 - **draft**: Initial state. Can be edited freely.
 - **sent**: Quote was sent to the customer. A `quote_versions` snapshot is created.
