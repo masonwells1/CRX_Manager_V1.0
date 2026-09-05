@@ -209,20 +209,70 @@ eq(r.stdout.trim(), "", "read-shaped leaf (search_) on an unregistered UUID pass
 // reinstalled connector must NOT fall through to the classifier.
 r = runHook({ tool_name: ALT_UUID + "delete_project", tool_input: { project_id: "x" } });
 ok(isDeny(r), "unknown mutation (delete_project) on an unregistered UUID is denied");
-ok(r.stdout.includes("UNREGISTERED connector UUID"), "denial names the unregistered-UUID cause");
+ok(r.stdout.includes("has no exact entry for connector UUID"), "denial names the missing exact settings entry");
 r = runHook({ tool_name: ALT_UUID + "future_write_tool", tool_input: {} });
 ok(isDeny(r), "never-seen leaf (future_write_tool) on an unregistered UUID is denied");
 r = runHook({ tool_name: ALT_UUID + "Create_Event", tool_input: {} });
 ok(isDeny(r), "non-read leaf in mixed case on an unregistered UUID is denied");
 r = runHook({ tool_name: ALT_UUID + "import-claude-design-from-url", tool_input: {} });
 ok(isDeny(r), "hyphenated non-read leaf on an unregistered UUID is denied (regex accepts hyphens)");
-// A REGISTERED non-Supabase connector (the Vercel UUID named in .claude/settings.json)
-// is left to settings.json: its unknown leaves are not this guard's business.
+// Registration is PER TOOL (Codex P1 on 68c1c32f0): one listed leaf never settles the
+// rest of the server. The Vercel UUID has an exact `deploy_to_vercel` entry in
+// .claude/settings.json; `unpause_project` has none and is not read-shaped.
 const VERCEL_UUID = "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__";
-r = runHook({ tool_name: VERCEL_UUID + "unpause_project", tool_input: { project_id: "x" } });
-eq(r.stdout.trim(), "", "non-read leaf on a REGISTERED connector UUID (Vercel) passes through to settings.json");
 r = runHook({ tool_name: VERCEL_UUID + "deploy_to_vercel", tool_input: {} });
-eq(r.stdout.trim(), "", "deploy_to_vercel on the registered Vercel UUID is left to its ask entry");
+eq(r.stdout.trim(), "", "deploy_to_vercel on the Vercel UUID has an exact settings entry and is left to its ask tier");
+r = runHook({ tool_name: VERCEL_UUID + "unpause_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "unpause_project on the Vercel UUID has no exact entry and is denied (per-tool registration)");
+r = runHook({ tool_name: VERCEL_UUID + "list_deployments", tool_input: {} });
+eq(r.stdout.trim(), "", "read-shaped leaf on the Vercel UUID passes");
+
+// Codex probe on 68c1c32f0: a reinstalled Supabase connector with ONLY list_projects
+// registered must still have its mutations denied. Fixture settings via CLAUDE_PROJECT_DIR.
+function withProjectSettings(entries, fn) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mcp-tool-guard-registry-"));
+  try {
+    mkdirSync(path.join(dir, ".claude"));
+    writeFileSync(path.join(dir, ".claude", "settings.json"), JSON.stringify({ permissions: entries }));
+    fn(dir);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+const PARTIAL_UUID = "mcp__7a7a7a7a-1111-4222-8333-444444444444__";
+withProjectSettings({ allow: [PARTIAL_UUID + "list_projects"] }, (dir) => {
+  r = runHook({ tool_name: PARTIAL_UUID + "list_projects", tool_input: {} }, dir);
+  eq(r.stdout.trim(), "", "the one exactly registered leaf passes");
+  r = runHook({ tool_name: PARTIAL_UUID + "delete_project", tool_input: {} }, dir);
+  ok(isDeny(r), "delete_project on a partially registered UUID is still denied");
+  r = runHook({ tool_name: PARTIAL_UUID + "future_write_tool", tool_input: {} }, dir);
+  ok(isDeny(r), "future_write_tool on a partially registered UUID is still denied");
+  r = runHook({ tool_name: PARTIAL_UUID + "deploy_edge_function", tool_input: {} }, dir);
+  ok(isDeny(r), "deploy_edge_function on a partially registered UUID is still denied");
+  ok(r.stdout.includes("Supabase live-action leaf"), "denial names the Supabase live-action leaf");
+});
+// A UUID whose settings entry names a leaf only Supabase has (list_tables) IS the Supabase
+// connector: the complete Supabase policy applies to every tool on it.
+const SB_UUID = "mcp__8b8b8b8b-1111-4222-8333-444444444444__";
+withProjectSettings({ allow: [SB_UUID + "list_tables"] }, (dir) => {
+  r = runHook({ tool_name: SB_UUID + "list_projects", tool_input: {} }, dir);
+  eq(r.stdout.trim(), "", "identified Supabase UUID: read-only allowlist leaf passes");
+  r = runHook({ tool_name: SB_UUID + "execute_sql", tool_input: { query: "select 1" } }, dir);
+  eq(r.stdout.trim(), "", "identified Supabase UUID: execute_sql is left to the live-db guards");
+  r = runHook({ tool_name: SB_UUID + "get_event", tool_input: {} }, dir);
+  ok(isDeny(r), "identified Supabase UUID: a read-shaped leaf NOT on the allowlist is denied (complete policy)");
+  ok(r.stdout.includes("identified as the Supabase connector"), "denial explains the identification");
+  r = runHook({ tool_name: SB_UUID + "delete_project", tool_input: {} }, dir);
+  ok(isDeny(r), "identified Supabase UUID: unknown mutation denied");
+  r = runHook({ tool_name: SB_UUID + "pause_project", tool_input: {} }, dir);
+  ok(isDeny(r), "identified Supabase UUID: lifecycle leaf denied");
+});
+// Kebab-case leaves on the NAMED Supabase servers hit the same fail-closed branch
+// (Codex P1 on 68c1c32f0).
+r = runHook({ tool_name: "mcp__supabase__future-write-tool", tool_input: {} });
+ok(isDeny(r), "hyphenated unknown leaf on mcp__supabase__ is denied");
+r = runHook({ tool_name: "mcp__claude_ai_Supabase__delete-project", tool_input: {} });
+ok(isDeny(r), "hyphenated unknown leaf on mcp__claude_ai_Supabase__ is denied");
+r = runHook({ tool_name: "mcp__Supabase__pause-project", tool_input: {} });
+ok(isDeny(r), "hyphenated lifecycle leaf on mcp__Supabase__ is denied");
 r = runHook({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function", tool_input: {} });
 eq(r.stdout.trim(), "", "deploy_edge_function on the REGISTERED UUID is still left to the ask tier");
 
