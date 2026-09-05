@@ -894,6 +894,24 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
           assert.match(result.stdout, /"permissionDecision":"deny"/, `evidence under a JUNCTIONED state dir must deny: ${JSON.stringify(payload.tool_input)}`);
         }
         assert.equal(run({ tool_name: "Read", tool_input: { file_path: path.join(junctionRoot, ".claude", "session-state", "OVERNIGHT-INTENT.flag") } }).stdout, "", "a flag read through the junctioned state dir stays allowed");
+        // The payload `cwd` BELOW the checkout root (Codex GitHub App review of
+        // 22e2be806, P1): probing `<cwd>/.claude/session-state` from `<repo>/src`
+        // finds nothing, membership rule 3 switches off, and the external name of
+        // the junction target reads as `clear`. The checkout's state directory is
+        // found by walking up from the working directory, so a read issued from
+        // any subdirectory is still this checkout's read.
+        const subdirCwd = path.join(junctionRoot, "src", "pages");
+        mkdirSync(subdirCwd, { recursive: true });
+        for (const payload of [
+          { tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: path.join(externalDir, "migration-review-20260901120000_x.json") } },
+          { tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: externalHardLink } },
+          { tool_name: "NotebookRead", cwd: subdirCwd, tool_input: { notebook_path: path.join(externalDir, "migration-review-20260901120000_x.json") } },
+        ]) {
+          const result = run(payload);
+          assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+          assert.match(result.stdout, /"permissionDecision":"deny"/, `evidence read by its external name from a SUBDIRECTORY cwd must deny: ${JSON.stringify(payload.tool_input)}`);
+        }
+        assert.equal(run({ tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: path.join(externalDir, "OVERNIGHT-INTENT.flag") } }).stdout, "", "a flag read by its external name from a subdirectory cwd stays allowed");
       } else {
         console.log("review-proof-guard.test: junction/directory-symlink creation refused — junctioned state-dir cases skipped");
       }

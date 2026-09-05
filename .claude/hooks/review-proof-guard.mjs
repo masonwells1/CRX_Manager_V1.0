@@ -113,7 +113,35 @@ function realStateDirOf(baseDir) {
     return null;
   }
 }
-const cwdStateDirReal = realStateDirOf(hookCwd || process.cwd());
+// The payload `cwd` can sit BELOW the checkout root — a Read issued from
+// `<repo>/src` arrives with that cwd — and probing `<cwd>/.claude/session-state`
+// then finds nothing, so rule 3 silently switched off and the junction target
+// read by its external name classified "clear" (Codex GitHub App review of
+// 22e2be806, P1 — reproduced with cwd=<repo>/src). Walk from each starting
+// directory up to the filesystem root and take the nearest ancestor that owns a
+// state directory: that is this checkout's. CLAUDE_PROJECT_DIR is an extra
+// candidate, not the only one — the harness pins it to the PRIMARY checkout
+// even when the session runs inside a worktree, so on its own it would name the
+// wrong checkout's state directory. Over-inclusion here can only deny more.
+function ownStateDirsOf(startDirs) {
+  const found = [];
+  for (const start of startDirs) {
+    if (start == null || String(start) === "") continue;
+    let dir = path.resolve(String(start));
+    for (;;) {
+      const real = realStateDirOf(dir);
+      if (real != null) {
+        if (!found.some((known) => samePath(known, real))) found.push(real);
+        break;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return found;
+}
+const ownStateDirsReal = ownStateDirsOf([hookCwd, process.cwd(), process.env.CLAUDE_PROJECT_DIR]);
 function classifyReadTarget(candidate) {
   const lexical = path.resolve(hookCwd || process.cwd(), String(candidate));
   let resolved;
@@ -128,7 +156,7 @@ function classifyReadTarget(candidate) {
   if (reviewProofPathMentioned(resolved) || reviewProofPathMentioned(lexical)) return "proof";
   const inStateDir = STATE_DIR_REAL_PATH_RE.test(resolved) ||
     STATE_DIR_REAL_PATH_RE.test(lexical) ||
-    (cwdStateDirReal != null && samePath(path.dirname(resolved), cwdStateDirReal));
+    ownStateDirsReal.some((stateDir) => samePath(path.dirname(resolved), stateDir));
   if (inStateDir && (STATE_DIR_EVIDENCE_RE.test(resolved) || STATE_DIR_EVIDENCE_RE.test(lexical))) return "evidence";
   if (inStateDir && stats.nlink > 1) return "aliased";
   return "clear";
