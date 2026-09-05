@@ -170,7 +170,7 @@ const DIMENSIONS = [
   {
     key: 'edge-functions',
     prompt:
-      'Audit the 7 Edge Functions in supabase/functions (create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage). Read each index.ts. Flag: (a) CORS — ALLOWED_ORIGIN enforced, no wildcard origin reflection; (b) auth — JWT verified; admin-only functions actually gate on an admin role check; (c) idempotency on side-effecting operations; (d) errors swallowed instead of surfaced/logged; (e) disk-vs-live drift — if the Supabase get_edge_function / list_edge_functions MCP tools are available, compare the deployed body to disk and flag divergence (this caught a real false-positive last week where disk ≠ deployed).',
+      'Audit the Edge Functions in supabase/functions (create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage). Read each index.ts and report any additional current function discovered during the required scope derivation. Flag: (a) CORS — ALLOWED_ORIGIN enforced, no wildcard origin reflection; (b) auth — JWT verified; admin-only functions actually gate on an admin role check; (c) idempotency on side-effecting operations; (d) errors swallowed instead of surfaced/logged; (e) disk-vs-live drift — if the Supabase get_edge_function / list_edge_functions MCP tools are available, compare the deployed body to disk and flag divergence (this caught a real false-positive last week where disk ≠ deployed).',
   },
   {
     key: 'business-lifecycle',

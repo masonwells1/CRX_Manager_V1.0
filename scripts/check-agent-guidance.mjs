@@ -45,12 +45,15 @@ const lifecycleAuditPrompts = [
 const shipWorkflow = readChecked(".claude/commands/ship.md");
 const routingTable = agents.match(/## Start and Route([\s\S]*?)## Engineering Principles/)?.[1] || "";
 const protectedDelivery = agents.match(/## Safety and Protected Delivery([\s\S]*?)## Verification and Closeout/)?.[1] || "";
+const protectedApprovalBullet = protectedDelivery.match(/^- Get Mason’s explicit approval in the current conversation before[^\r\n]*$/m)?.[0] || "";
+const migrationExceptionSentence = protectedApprovalBullet.match(/The only migration exception[^.]*?destructive migrations\./i)?.[0] || "";
 const routedGuidance = [...new Set(
   [...routingTable.matchAll(/`([^`]+\.(?:md|json))`/g)].map((match) => match[1]),
 )];
 const requiredRouteRows = [
   ["First session or unfamiliar area", ["docs/manual/AGENT_ONBOARDING.md", "docs/manual/ARCHITECTURE.md"]],
   ["Any code change", ["docs/reference/coding-guidelines.md", "docs/reference/gotchas.md", "docs/workflows/SAFE_DEVELOPMENT_RULES.md"]],
+  ["Architecture, difficult debugging, workflow/migration tracing, structural audit, or PR impact", ["graphify"]],
   ["Database, migration, or RLS", ["docs/workflows/DATABASE_CHANGE_CHECKLIST.md", "docs/workflows/RLS_SECURITY_GUIDE.md", ".claude/schema-registry.json"]],
   ["Quote-to-cash or inventory", ["docs/workflows/QUOTE_TO_DELIVERY.md", "docs/workflows/INVENTORY_RULES.md"]],
   ["Frontend/UI", ["docs/workflows/UI_PATTERNS.md"]],
@@ -140,7 +143,7 @@ const migrationExceptionChecks = [
   ["destructive migrations remain prohibited", /never permits destructive migrations/i],
 ];
 for (const [name, pattern] of migrationExceptionChecks) {
-  record(pattern.test(protectedDelivery), `AGENTS.md hands-free exception requires ${name}`);
+  record(pattern.test(migrationExceptionSentence), `AGENTS.md hands-free exception sentence requires ${name}`);
 }
 record(/## Safety and Protected Delivery[\s\S]*\.claude\/commands\/ship\.md/.test(agents), "AGENTS.md routes volatile delivery mechanics to the ship workflow");
 record(/docs\/workflows\/SAFE_DEVELOPMENT_RULES\.md/.test(agents), "AGENTS.md routes detailed engineering rules on demand");
@@ -158,7 +161,7 @@ record(
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(agents), "AGENTS.md has no volatile project counts");
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(claude), "CLAUDE.md has no volatile project counts");
 record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAUDE.md declares AGENTS.md canonical");
-record(/explicit approval in the current conversation/i.test(protectedDelivery), "AGENTS.md defines current-conversation approval gates");
+record(/explicit approval in the current conversation/i.test(protectedApprovalBullet), "AGENTS.md defines the current-conversation approval sentence");
 const protectedActionChecks = [
   ["force-pushing", /force-pushing/i],
   ["applying a live migration", /applying a live migration/i],
@@ -174,7 +177,7 @@ const protectedActionChecks = [
   ["ownership changes", /ownership/i],
 ];
 for (const [name, pattern] of protectedActionChecks) {
-  record(pattern.test(protectedDelivery), `AGENTS.md requires current approval before ${name}`);
+  record(pattern.test(protectedApprovalBullet), `AGENTS.md approval sentence protects ${name}`);
 }
 const alwaysLoadedGuidance = `${agents}\n${claude}\n${cursorRules}`;
 record(!/VERDICT\s*:/i.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
@@ -214,8 +217,8 @@ record(
   "QA reference points to the real E2E directory and is reachable from routed guidance",
 );
 record(
-  /Audit the 7 Edge Functions in supabase\/functions \(create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage\)/.test(wholeCodebaseAudit)
-    && /Hunt EDGE FUNCTIONS \(7 in supabase\/functions: create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage\)/.test(lifecycleAuditPrompts[1]),
+  /Audit the Edge Functions in supabase\/functions \(create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage\)/.test(wholeCodebaseAudit)
+    && /Hunt EDGE FUNCTIONS in supabase\/functions \(create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage\)/.test(lifecycleAuditPrompts[1]),
   "whole-codebase and overnight edge-function audits include epa-lookup",
 );
 record(

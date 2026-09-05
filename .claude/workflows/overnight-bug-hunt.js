@@ -223,7 +223,7 @@ const DIMENSIONS = [
   {
     key: 'edge-and-pdf', phase: 2,
     prompt:
-      'Hunt EDGE FUNCTIONS (7 in supabase/functions: create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage) + customer-facing PDFs (src/lib/*Pdf.ts). Edge: CORS ALLOWED_ORIGIN enforced, JWT verified, admin-only actually gates on admin, idempotency on side-effects, disk-vs-deployed drift (use get_edge_function if available). PDF: cents without ÷100, off-brand color (crx-green #28A26A), hardcoded company address not from companyInfo.ts, page-overflow on long real data, broken asset refs.',
+      'Hunt EDGE FUNCTIONS in supabase/functions (create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage); include any additional current function discovered during scope derivation. Also audit customer-facing PDFs (src/lib/*Pdf.ts). Edge: CORS ALLOWED_ORIGIN enforced, JWT verified, admin-only actually gates on admin, idempotency on side-effects, disk-vs-deployed drift (use get_edge_function if available). PDF: cents without ÷100, off-brand color (crx-green #28A26A), hardcoded company address not from companyInfo.ts, page-overflow on long real data, broken asset refs.',
   },
   {
     key: 'docs-deps-tests', phase: 2,
