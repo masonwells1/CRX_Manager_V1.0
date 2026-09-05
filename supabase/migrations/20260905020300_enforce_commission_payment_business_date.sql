@@ -5,6 +5,7 @@
 
 BEGIN;
 
+SET LOCAL lock_timeout = '10s';
 LOCK TABLE public.commission_payments IN SHARE ROW EXCLUSIVE MODE;
 
 DO $preflight$

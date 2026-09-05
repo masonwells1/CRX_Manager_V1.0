@@ -26,6 +26,7 @@ describe('commission payment Chicago business-date guard', () => {
   });
 
   it('serializes the preflight and refuses an existing future-dated payment', () => {
+    const timeout = migration.indexOf("SET LOCAL lock_timeout = '10s';");
     const lock = migration.indexOf(
       'LOCK TABLE public.commission_payments IN SHARE ROW EXCLUSIVE MODE;',
     );
@@ -34,7 +35,8 @@ describe('commission payment Chicago business-date guard', () => {
       "p.payment_date > timezone('America/Chicago', statement_timestamp())::date",
     );
 
-    expect(lock).toBeGreaterThan(-1);
+    expect(timeout).toBeGreaterThan(-1);
+    expect(timeout).toBeLessThan(lock);
     expect(lock).toBeLessThan(preflight);
     expect(futureScan).toBeGreaterThan(preflight);
     expect(migration).toContain(
