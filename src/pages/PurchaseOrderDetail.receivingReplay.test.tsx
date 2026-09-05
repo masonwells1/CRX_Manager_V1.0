@@ -100,7 +100,13 @@ vi.mock('../lib/db', async () => ({
   sanitizeError: (await vi.importActual<typeof import('../lib/errorSanitizer')>(
     '../lib/errorSanitizer',
   )).sanitizeError,
-  assertRpcResult: (value: unknown) => value,
+  // The REAL assertRpcResult, never a passthrough stub. A stub that never throws
+  // deletes the "returned no data" path from every test in the file, which is how
+  // two live defects stayed hidden in other suites tonight. Here it changes no
+  // outcome — the success paths return an object — and that is exactly why it is
+  // safe to use the real one, so a future test that DOES depend on the throw
+  // inherits a harness that can still fail.
+  assertRpcResult: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).assertRpcResult,
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -189,6 +195,9 @@ vi.mock('../lib/receivingPdf', () => ({
   generateReceivingPdf: vi.fn(),
 }));
 
+// What receive_po_items answers. Set per test; every other rpc stays benign.
+let receiveResponse: unknown = { data: { receiving_record_ids: ['rr-1'] }, error: null };
+
 async function openReceiveAndSubmit() {
   await waitFor(() => expect(screen.getByRole('button', { name: /Receive Items/i })).toBeTruthy());
   fireEvent.click(screen.getByRole('button', { name: /Receive Items/i }));
@@ -210,6 +219,17 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
       return query([]);
     });
     mocks.resolveIntent.mockResolvedValue(undefined);
+    // Answer receive_po_items with whatever the test sets, and every OTHER rpc with
+    // a benign empty result. A blanket mockResolvedValue handed the receiving
+    // payload to every caller on the page — including RelatedNotes'
+    // get_notes_for_entity — which the real assertRpcResult turns into an unhandled
+    // rejection. The passthrough stub this file used to carry hid that entirely.
+    receiveResponse = { data: { receiving_record_ids: ['rr-1'] }, error: null };
+    mocks.rpc.mockImplementation((name: string) => (
+      name === 'receive_po_items'
+        ? Promise.resolve(receiveResponse)
+        : Promise.resolve({ data: [], error: null })
+    ));
     mocks.intent.unresolvedIntent = null;
     mocks.intent.isIntentLocked = false;
     mocks.intent.isRetryExpired = false;
@@ -218,10 +238,7 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
   });
 
   it('keeps the receiving form open when the local cleanup fails after the receipt committed', async () => {
-    mocks.rpc.mockResolvedValue({
-      data: { receiving_record_ids: ['rr-1'] },
-      error: null,
-    });
+    receiveResponse = { data: { receiving_record_ids: ['rr-1'] }, error: null };
     // The receipt COMMITTED; only the local record could not be cleared.
     mocks.resolveIntent.mockRejectedValue(new Error('QuotaExceededError'));
 
@@ -253,7 +270,7 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
   });
 
   it('closes the receiving form on the ordinary path where cleanup succeeds', async () => {
-    mocks.rpc.mockResolvedValue({ data: { receiving_record_ids: ['rr-1'] }, error: null });
+    receiveResponse = { data: { receiving_record_ids: ['rr-1'] }, error: null };
 
     render(
       <MemoryRouter initialEntries={['/purchase-orders/po-1']}>
@@ -275,7 +292,7 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
 
   it('does not regenerate the receiving slip when the receipt already committed elsewhere', async () => {
     // The server refuses the replay and hands back the committed receipt.
-    mocks.rpc.mockResolvedValue({
+    receiveResponse = {
       data: null,
       error: {
         code: 'P0001',
@@ -285,7 +302,7 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
           result: { receiving_record_ids: ['rr-1'] },
         }),
       },
-    });
+    };
 
     render(
       <MemoryRouter initialEntries={['/purchase-orders/po-1']}>
@@ -326,10 +343,7 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
     mocks.intent.isIntentLocked = true;
 
     // The server recognises the key and returns the STORED result as plain success.
-    mocks.rpc.mockResolvedValue({
-      data: { receiving_record_ids: ['rr-1'] },
-      error: null,
-    });
+    receiveResponse = { data: { receiving_record_ids: ['rr-1'] }, error: null };
 
     render(
       <MemoryRouter initialEntries={['/purchase-orders/po-1']}>
@@ -368,7 +382,7 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
   it('does not tell a retrying operator that nothing was received', async () => {
     mocks.intent.unresolvedIntent = LOCKED_REQUEST;
     mocks.intent.isIntentLocked = true;
-    mocks.rpc.mockResolvedValue({ data: { receiving_record_ids: ['rr-1'] }, error: null });
+    receiveResponse = { data: { receiving_record_ids: ['rr-1'] }, error: null };
 
     render(
       <MemoryRouter initialEntries={['/purchase-orders/po-1']}>
