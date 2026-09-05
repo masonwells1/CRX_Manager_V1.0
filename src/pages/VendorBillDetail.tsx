@@ -122,9 +122,6 @@ export default function VendorBillDetail() {
   // each render's closure, so a handler that awaited across a route change still
   // sees the bill it started on and cannot tell that it is answering late.
   const currentBillIdRef = useRef(id);
-  useEffect(() => {
-    currentBillIdRef.current = id;
-  }, [id]);
 
   // The route id alone CANNOT tell a late response whether it is still answering
   // the edit that produced it. Leaving bill A and returning to A — or simply
@@ -139,16 +136,33 @@ export default function VendorBillDetail() {
   // every route change and every editor open, so A -> B -> A and
   // open -> close -> open are both distinguishable from never having left.
   const editSessionRef = useRef(0);
-  // Bumped DURING RENDER, not in an effect. `currentBillIdRef` above is written by
-  // an effect, which runs after render — a response landing in that gap still read
-  // the OLD id and passed a check that should already have failed. Deriving the
-  // change during render closes that window, and the same-value rewrite under
-  // StrictMode's double render is harmless.
+  // Advanced in a LAYOUT effect, and deliberately in neither of the two obvious
+  // places.
+  //
+  // Not a passive `useEffect`: that is deferred past paint, so a response landing
+  // in the gap still read the OLD id and passed a check that should already have
+  // failed. Not during render either, which is where this started: React may
+  // render a screen and then discard it — this app wraps its lazy routes in
+  // `<Suspense>` (`App.tsx`), so an interrupted navigation does exactly that — and
+  // React does not roll back a ref written by an abandoned render. The counter
+  // advanced for a bill the operator never actually moved to, and a legitimate
+  // in-flight save for the bill still on screen was then judged stale: the wrong
+  // "an earlier edit finished" warning, and a re-save writing a second activity
+  // row for one edit. (gpt-5.6-sol on 862cd144d.)
+  //
+  // A layout effect is the commit-phase middle: it runs synchronously before the
+  // browser paints, so it is no later than the render-phase write from the
+  // operator's point of view — nothing can be on screen ahead of it — and React
+  // never runs it for a render it throws away. The id guard keeps StrictMode's
+  // double-invoked mount from counting twice.
   const lastRouteIdForSessionRef = useRef(id);
-  if (lastRouteIdForSessionRef.current !== id) {
-    lastRouteIdForSessionRef.current = id;
-    editSessionRef.current += 1;
-  }
+  useLayoutEffect(() => {
+    currentBillIdRef.current = id;
+    if (lastRouteIdForSessionRef.current !== id) {
+      lastRouteIdForSessionRef.current = id;
+      editSessionRef.current += 1;
+    }
+  }, [id]);
 
   // Route changes must retire every visible bill-specific form while preserving
   // any unresolved durable payment record under the old bill's storage scope.

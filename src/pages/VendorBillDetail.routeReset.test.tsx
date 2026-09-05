@@ -24,7 +24,7 @@ import { IDBFactory } from 'fake-indexeddb';
 const BILL_A = '11111111-1111-4111-8111-111111111111';
 const BILL_B = '33333333-3333-4333-8333-333333333333';
 
-const H = vi.hoisted(() => ({ rpc: vi.fn(), toast: vi.fn() }));
+const H = vi.hoisted(() => ({ rpc: vi.fn(), toast: vi.fn(), captureException: vi.fn() }));
 
 const bill = {
   id: BILL_A,
@@ -93,7 +93,17 @@ vi.mock('../components/ui/Toast', () => ({
   useToast: () => STABLE_TOAST_CONTEXT,
   ToastProvider: ({ children }: { children: ReactNode }) => children,
 }));
-vi.mock('../lib/sentry', () => ({ Sentry: new Proxy({}, { get: () => () => undefined }) }));
+// `captureException` is observable on purpose: on the discard path it is the only
+// thing the page does, which makes it the sentinel proving the late response
+// actually REACHED and finished the handler. Without it these tests could only
+// wait a fixed number of milliseconds and then assert an absence — a test that
+// starts passing for the wrong reason the moment anything defers that work.
+// (gpt-5.6-sol on 862cd144d.) Every other Sentry member stays a no-op.
+vi.mock('../lib/sentry', () => ({
+  Sentry: new Proxy({} as Record<string, unknown>, {
+    get: (_target, prop) => (prop === 'captureException' ? H.captureException : () => undefined),
+  }),
+}));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../hooks/usePageMeta', () => ({ usePageMeta: vi.fn() }));
 
@@ -121,9 +131,23 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
     globalThis.indexedDB = new IDBFactory();
     H.rpc.mockReset();
     H.toast.mockReset();
+    H.captureException.mockReset();
     activeBillRow = bill;
   });
   afterEach(() => cleanup());
+
+  // The late response has reached and finished the handler. On the discard path
+  // the page's only act is this Sentry report, so awaiting it is a POSITIVE proof
+  // that the work happened — which is what makes the negative UI assertions after
+  // it meaningful rather than merely early.
+  const waitForStaleResponseDiscarded = () => waitFor(() => {
+    expect(H.captureException).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tags: expect.objectContaining({ reason: 'stale-route-response' }),
+      }),
+    );
+  });
 
   it('retires the previous bill overage prompt when the route id changes', async () => {
     // update_vendor_bill refuses with the cumulative-overage code, which is what
@@ -214,8 +238,8 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
         data: null,
         error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' },
       });
-      await new Promise((resolve) => { setTimeout(resolve, 50); });
     });
+    await waitForStaleResponseDiscarded();
 
     // It must be discarded outright: no overage prompt over bill B, and B's own
     // editor left exactly as the operator opened it.
@@ -273,8 +297,8 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
         data: null,
         error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' },
       });
-      await new Promise((resolve) => { setTimeout(resolve, 50); });
     });
+    await waitForStaleResponseDiscarded();
 
     // The session token, not the bill id, is what refuses it.
     expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
@@ -319,10 +343,126 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
         data: null,
         error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' },
       });
-      await new Promise((resolve) => { setTimeout(resolve, 50); });
     });
+    await waitForStaleResponseDiscarded();
 
     // A cancelled edit must not be resurrected by its own late answer.
     expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
+  });
+
+  // Found by MUTATING the route-change session bump: deleting it left every test
+  // above green. The A -> B -> A test does not actually pin it, because the
+  // operator reopens the editor there and `openEditModal` bumps the session on its
+  // own — the route bump was carried by its partner and pinned by nothing.
+  //
+  // This is the case only the route bump can catch: the same round trip WITHOUT
+  // reopening the editor. The route id is back to A, the editor session never
+  // advanced, so a stale refusal reads as current and raises the overage prompt on
+  // a page with no editor open at all. Confirming it then fails the entry guard on
+  // the null editModalBillId — an error where the prompt offered an action.
+  it('discards a stale refusal after a round trip that never reopens the editor', async () => {
+    let releaseEdit: (value: unknown) => void = () => {};
+    H.rpc.mockImplementation((name: string) => {
+      if (name === 'update_vendor_bill') {
+        return new Promise((resolve) => { releaseEdit = resolve; });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_A}`]}>
+        <GoToOtherBill />
+        <GoToBillA />
+        <Routes>
+          <Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Edit Bill/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    await waitFor(() => expect(H.rpc).toHaveBeenCalledWith('update_vendor_bill', expect.anything()));
+
+    // Leave to bill B and come straight back. The editor is NEVER reopened, so
+    // nothing but the route change can retire the in-flight session.
+    activeBillRow = billB;
+    fireEvent.click(screen.getByRole('button', { name: 'go-to-bill-b' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    activeBillRow = bill;
+    fireEvent.click(screen.getByRole('button', { name: 'go-to-bill-a' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /Save Changes/i })).toBeNull();
+
+    await act(async () => {
+      releaseEdit({
+        data: null,
+        error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' },
+      });
+    });
+    await waitForStaleResponseDiscarded();
+
+    expect(screen.queryByPlaceholderText(OVERAGE_PROMPT)).toBeNull();
+  });
+
+  // gpt-5.6-sol on 862cd144d: every test above releases a REFUSAL, so none of
+  // them touches the committed branch. That left the half of the session check
+  // that guards a late SUCCESS unpinned — a refactor could drop it from the
+  // success path alone and this file would stay green while a stale success
+  // closed a replacement editor and threw away unsaved figures.
+  //
+  // It also pins the round-2 split directly: on the committed branch the key is
+  // retired and the record refreshed UNCONDITIONALLY, while the success toast and
+  // the editor close are session-scoped. The operator must be told an EARLIER
+  // edit landed — never that the edit in front of them saved, because it did not.
+  it('does not close a replacement editor when an earlier edit succeeds late', async () => {
+    let releaseEdit: (value: unknown) => void = () => {};
+    H.rpc.mockImplementation((name: string) => {
+      if (name === 'update_vendor_bill') {
+        return new Promise((resolve) => { releaseEdit = resolve; });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_A}`]}>
+        <Routes>
+          <Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Edit Bill/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    await waitFor(() => expect(H.rpc).toHaveBeenCalledWith('update_vendor_bill', expect.anything()));
+
+    // Close and reopen the SAME bill's editor. The route never changes, so this
+    // is the case a route-id check cannot see: a second editing session, on the
+    // same record, with its own unsaved figures.
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Save Changes/i })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: /Edit Bill/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy());
+
+    // The FIRST session's edit now commits.
+    await act(async () => {
+      releaseEdit({
+        data: { success: true, bill_id: BILL_A, old_total_cents: 100000, new_total_cents: 112000 },
+        error: null,
+      });
+    });
+
+    // Positive sentinel: the committed-but-stale branch ran to completion.
+    await waitFor(() => {
+      expect(H.toast).toHaveBeenCalledWith('warning', expect.stringContaining('An earlier edit to this bill finished'));
+    });
+
+    // The replacement editor is still open with the operator's figures in it...
+    expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy();
+    // ...and nothing claimed the edit on screen was the one that saved.
+    expect(H.toast).not.toHaveBeenCalledWith('success', 'Bill updated');
   });
 });

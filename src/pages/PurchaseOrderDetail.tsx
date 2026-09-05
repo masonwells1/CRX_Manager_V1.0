@@ -429,16 +429,24 @@ export default function PurchaseOrderDetail() {
         // retry replays under the SAME key and reconciles against the committed
         // receipt. Clearing the key here is what would let a retry mint a fresh one
         // and receive the goods a second time.
+        let cleanupFailed = false;
         try {
           await receiveIntent.resolveIntent();
         } catch (resolveErr) {
+          cleanupFailed = true;
           // Telemetry alone is NOT enough here, and treating it as enough was the
           // defect (gpt-5.6-sol on c127bd535). Retaining the key prevents a
-          // double-receive, but it does not preserve LIVENESS: an unresolved intent
-          // makes the recovery effect force the receive modal back open with THIS
-          // receipt's payload, and handleReceive then replays the frozen request. So
-          // the operator cannot receive a different shipment until this clears, and a
-          // silent success message would leave them to discover that as a mystery.
+          // double-receive, but it does not preserve LIVENESS: the intent stays
+          // PENDING, so handleReceive replays the frozen request and the operator
+          // cannot receive a different shipment until this clears. A silent success
+          // message would leave them to discover that as a mystery.
+          //
+          // `cleanupFailed` keeps the modal open below. It must be a LOCAL flag, not
+          // a re-read of the recovery effect's state: that effect is edge-triggered
+          // on the identity of `unresolvedIntent`, and a failed resolve leaves the
+          // very same object in place. Nothing re-runs it, so the form the earlier
+          // wording promised would "reopen" was in fact closed one line later and
+          // never came back on its own. (gpt-5.6-sol on 862cd144d.)
           //
           // Say what happened and what to do. Submitting the reopened form again is
           // safe: it replays under the same key, reconciles against the receipt that
@@ -460,9 +468,9 @@ export default function PurchaseOrderDetail() {
           toast(
             'warning',
             'These goods WERE received and recorded — that part is safe and will not be undone. '
-            + 'A local record could not be cleared, so the receiving form reopens showing this same '
-            + 'receipt. Submitting it again is safe and will not receive twice; it may clear the '
-            + 'record. If it keeps reappearing, reload the page, and if it still persists this '
+            + 'A local record could not be cleared, so the receiving form stays open showing this '
+            + 'same receipt. Submitting it again is safe and will not receive twice; it may clear '
+            + 'the record. If it keeps coming back, reload the page, and if it still persists this '
             + 'browser cannot clear it — report it, and do not attempt other receipts on this '
             + 'device until it is resolved.',
           );
@@ -549,8 +557,19 @@ export default function PurchaseOrderDetail() {
           }
         }
 
-        // Offer PDF download
-        if (receivingRecordIds && receivingRecordIds.length > 0 && po) {
+        // Offer PDF download.
+        //
+        // Scoped to a first, non-replay commit for the same reason as the
+        // over-receive alert above: the slip is stamped with `new Date()` and the
+        // CURRENT operator, but a replay is answering for a receipt that committed
+        // EARLIER, possibly in another tab or by another person. Regenerating it
+        // here produced a receiving document stating the wrong time and the wrong
+        // receiver — a paper record that goes in a vendor file. Nothing is lost by
+        // skipping it: the receipt is in receiving history, whose own download
+        // button (`handleDownloadHistoryPdf`) prints from the STORED record, so it
+        // carries the real `received_at` and `received_by_name`.
+        // (gpt-5.6-sol on 862cd144d.)
+        if (receivingRecordIds && receivingRecordIds.length > 0 && po && !completedElsewhere) {
           try {
             const { downloadReceivingPdf } = await import('../lib/receivingPdf');
             await downloadReceivingPdf({
@@ -575,7 +594,11 @@ export default function PurchaseOrderDetail() {
             // PDF download is non-critical
           }
         }
-        setReceiveOpen(false);
+        // Keep the form open when the local cleanup failed, so the warning toast's
+        // "the receiving form stays open showing this same receipt" is TRUE. The
+        // reopen it used to promise never happened: closing here left the operator
+        // with an expiring toast and no visible trace of the blocked intent.
+        if (!cleanupFailed) setReceiveOpen(false);
         fetchPO();
         fetchReceivingHistory();
         return completedElsewhere;
