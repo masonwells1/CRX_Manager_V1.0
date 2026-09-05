@@ -138,6 +138,9 @@ function makeJob(overrides: Record<string, unknown>) {
 }
 
 const JOB_A = makeJob({ id: 'job-a', job_number: 'J-AAAA-1001', job_date: '2026-03-01', notes: 'A notes' });
+// Two loads of the SAME job, distinguishable only by which call fetched them.
+const JOB_A_STALE = makeJob({ id: 'job-a', job_number: 'J-AAAA-STALE', job_date: '2026-03-01' });
+const JOB_A_FRESH = makeJob({ id: 'job-a', job_number: 'J-AAAA-FRESH', job_date: '2026-04-02' });
 const JOB_B = makeJob({ id: 'job-b', job_number: 'J-BBBB-2002', job_date: '2026-07-15', notes: 'B notes' });
 
 /** Mounts the real page under a router whose location the test can drive. */
@@ -270,5 +273,55 @@ describe('JobDetail cross-record stale-load guard', () => {
     expect(dirtyStates.some((d) => d === false)).toBe(true);
     await act(async () => { fireEvent.change(jobDate, { target: { value: '2026-10-02' } }); });
     await waitFor(() => expect(dirtyStates.some((d) => d === true)).toBe(true));
+  });
+
+  /**
+   * The case that proves the guard is gating the CALL and not the RECORD.
+   *
+   * The three tests above all switch between DIFFERENT jobs, so every one of them would
+   * still pass against an `if (loadedId !== routeId) return` guard — which is exactly the
+   * broken shape this bug class keeps attracting. Reopening the SAME job twice produces two
+   * in-flight calls whose record ids are EQUAL: an id comparison passes for both and the
+   * page adopts the older response anyway. Only call order separates them here, so this is
+   * the test that can tell a real guard from one that reads as present but cannot fire.
+   *
+   * Mutation-checked 2026-09-05, against the id-only guard in its STRONGEST form — the
+   * loaded record's id compared to a ref updated synchronously on route change, i.e. two
+   * genuinely independent operands. That guard leaves tests 1-3 green and reddens ONLY
+   * this one, which is the whole reason this case has to exist.
+   *
+   * (The weaker variant, comparing against `id` from fetchJob's own closure, reddens three
+   * of the four — a superseded run closes over the OLD id, so it compares a stale value
+   * against itself and can never fire. Two operands, one stale source, is a tautology.)
+   */
+  it('adopts the newest load when the SAME job is reopened and the first call lands last', async () => {
+    const staleA = deferred();
+    let jobsCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        jobsCalls += 1;
+        if (jobsCalls === 1) return buildGatedChain({ data: JOB_A_STALE, error: null }, staleA.promise);
+        if (jobsCalls === 2) return buildChain({ data: JOB_B, error: null });
+        return buildChain({ data: JOB_A_FRESH, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    const router = mountAt('/jobs/job-a');
+    await waitFor(() => expect(jobsCalls).toBe(1));
+
+    // Away and back to the SAME job. Both in-flight calls carry id 'job-a'.
+    await act(async () => { await router.navigate('/jobs/job-b'); });
+    await screen.findByRole('heading', { name: 'J-BBBB-2002' });
+    await act(async () => { await router.navigate('/jobs/job-a'); });
+    await screen.findByRole('heading', { name: 'J-AAAA-FRESH' });
+
+    // The FIRST call for job A finally answers, after the second one already landed.
+    await act(async () => { staleA.release(); await staleA.promise; });
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'J-AAAA-FRESH' })).toBeTruthy();
+    });
+    expect(screen.queryByRole('heading', { name: 'J-AAAA-STALE' })).toBeNull();
   });
 });

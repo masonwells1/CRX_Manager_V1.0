@@ -44,8 +44,17 @@ settle on its way out, or the guard would have traded a data bug for a dead page
 
 **Proof observed.** New `src/pages/JobDetail.staleLoad.test.tsx` mounts the real page under a
 router whose location the test drives, with deferred-promise gates (not timers, so the ordering
-holds on any machine at any speed). Three tests: `A -> B` with A resolving last, `new -> B` with
-the new run's lookups resolving last, and the reverse `A -> new`.
+holds on any machine at any speed). Four tests: `A -> B` with A resolving last, `new -> B` with
+the new run's lookups resolving last, the reverse `A -> new`, and `A -> B -> A` where the SAME
+job is reopened so only call ORDER separates the two in-flight loads.
+
+That last case is what proves the guard gates the **call** and not the record. The other three
+switch between DIFFERENT jobs, so all three stay green against an id-only guard in its strongest
+form — the loaded record's id compared to a ref updated synchronously on route change, two
+genuinely independent operands. Mutation-checked: that guard reddens **only** the `A -> B -> A`
+case. (The weaker id-only variant, comparing against `id` from `fetchJob`'s own closure, reddens
+three of the four — a superseded run closes over the OLD id, so it compares a stale value against
+itself and can never fire.)
 
 Confirmed fail-first: against the unguarded source, tests 1 and 2 both fail with the production
 symptom — the heading renders the **stale** job's identity (`J-AAAA-1001`, `J-NEWNEW-9999`) in
@@ -55,7 +64,7 @@ test 3 with a distinct symptom: removing `setLoading(false)` leaves the stuck sk
 (`expected false to be true`).
 
 Full gates on the final source: `npm run typecheck` clean, `npm run lint` clean, `npm run test`
-exit 0 under `pipefail` with 350 files passed / 4979 passed / 123 skipped and no `Errors` line,
+exit 0 under `pipefail` with 350 files passed / 4980 passed / 123 skipped and no `Errors` line,
 `npm run build` succeeded.
 
 **Not verified.** No live-browser run against production data — the page is auth-gated and the
