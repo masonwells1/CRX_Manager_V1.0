@@ -15,7 +15,7 @@ export const meta = {
 // real project and hard-locks the run to READ-ONLY.
 // ---------------------------------------------------------------------------
 const PREAMBLE = [
-  'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at C:\\CRX_Manager.',
+  'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at the repo root of the current worktree.',
   'It is a production agricultural-retail ERP. New money storage uses bigint cents. Existing PostgreSQL numeric-dollar storage is not an approved exception until exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified. The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 7 Edge Functions; treat any count as a lead to confirm live, never a fact.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database. The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql" or "supabase list tables"). Live project id is rhyzpcqhnizqbxphqdkr. You MAY run read-only SQL (SELECT, pg_catalog, information_schema) to ground every finding against the live DB.',
@@ -70,13 +70,14 @@ const VERDICT_SCHEMA = {
 }
 
 function normalizeVerdict(verdict) {
+  const verifiedSeverities = ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW']
   const valid = verdict
     && ['VERIFIED', 'REFUTED', 'UNVERIFIED'].includes(verdict.status)
     && typeof verdict.reasoning === 'string'
     && verdict.reasoning.trim()
     && typeof verdict.verifiedAgainst === 'string'
     && verdict.verifiedAgainst.trim()
-    && !(verdict.status === 'VERIFIED' && ['FALSE_POSITIVE', 'UNVERIFIED'].includes(verdict.revisedSeverity))
+    && !(verdict.status === 'VERIFIED' && !verifiedSeverities.includes(verdict.revisedSeverity))
     && !(verdict.status === 'REFUTED' && verdict.revisedSeverity !== 'FALSE_POSITIVE')
     && !(verdict.status === 'UNVERIFIED' && verdict.revisedSeverity !== 'UNVERIFIED')
 
@@ -164,9 +165,24 @@ const DIMENSIONS = [
 
 // Optional focus: pass args = { only: ['db-security', ...] } to re-run a subset
 // of dimensions (e.g. to recover dimensions whose verifiers flaked on a prior run).
-const A = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+// The workflow harness may pass args as an object or a JSON-encoded string.
+let ARGS_INVALID = false
+const A = (() => {
+  if (!args) return {}
+  if (typeof args === 'string') {
+    try {
+      const parsed = JSON.parse(args)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+    } catch {}
+    ARGS_INVALID = true
+    return {}
+  }
+  if (typeof args === 'object' && !Array.isArray(args)) return args
+  ARGS_INVALID = true
+  return {}
+})()
 const HAS_ONLY = Object.prototype.hasOwnProperty.call(A, 'only')
-const INVALID_ONLY = HAS_ONLY && !Array.isArray(A.only)
+const INVALID_ONLY = ARGS_INVALID || (HAS_ONLY && (!Array.isArray(A.only) || A.only.length === 0))
 const REQUESTED_ONLY = Array.isArray(A.only) && A.only.length ? [...new Set(A.only)] : []
 const UNKNOWN_ONLY = REQUESTED_ONLY.filter((key) => !DIMENSIONS.some((d) => d.key === key))
 const SELECTED = INVALID_ONLY

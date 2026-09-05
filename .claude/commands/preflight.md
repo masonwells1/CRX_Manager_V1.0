@@ -18,6 +18,7 @@ Categorize the changed files:
 - **Edge Function** changed → set `EDGE_CHANGED=true` (any `supabase/functions/**/*.ts`)
 - **Schema registry** changed → set `REGISTRY_CHANGED=true` (`.claude/schema-registry.json`)
 - **Agent surface** changed → set `AGENT_SURFACE_CHANGED=true` (any `.claude/{commands,skills,hooks,workflows,agents}/` file, `.claude/settings.json`, any `.codex/` file, `.cursorrules`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, `scripts/check-*`, `scripts/validate-*`, `scripts/verify-*`, `scripts/normalize-eol.mjs`, `scripts/agent-health-check.mjs`, `scripts/run-claude-review.mjs`, `scripts/write-codex-push-proof.mjs`, or `scripts/sync-agent-workflows.mjs`)
+- **Ledger-triggering change** detected → set `LEDGER_REQUIRED=true` when `AGENT_SURFACE_CHANGED` is true or a new `supabase/migrations/*.sql` file is added
 
 ## Step 2: Dispatch reviewer subagents (in PARALLEL)
 
@@ -55,7 +56,7 @@ npm run build
 npm run test -- --reporter=verbose 2>&1 | tail -15
 ```
 
-These full checks run here, at pre-push where applicable, and in GitHub CI; they no longer repeat on every `git commit`. The fast pre-commit hook instead runs private-artifact containment, the hard ledger guard, staged SQL/frontend validation, and conditional agent-parity/dependency checks. If `AGENT_SURFACE_CHANGED` is true and the commit stages no ledger file (a NEW `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` entry — preferred, and the one that avoids collisions — or `docs/CHANGELOG.md`, any `docs/manual/*.md`, `docs/reference/agent-guardrails.md`, `docs/reference/migration-history.md`, or a `docs/loops/` ledger), the commit is rejected. A changelog.d entry counts only when ADDED and carrying a real description under a date heading matching its filename — warn about this in the preflight report so the ledger entry gets written BEFORE the commit attempt, and never suggest `--no-verify`. `npm run typecheck` remains mandatory before build because `npm run build` (vite/esbuild) only *transpiles* — it never type-checks, so a pure type error (e.g. `TS2349`) can pass build; that exact gap shipped a Field Mode prod crash on 2026-06-14.
+These full checks run here, at pre-push where applicable, and in GitHub CI; they no longer repeat on every `git commit`. The fast pre-commit hook instead runs private-artifact containment, the hard ledger guard, staged SQL/frontend validation, and conditional agent-parity/dependency checks. If `LEDGER_REQUIRED` is true and the commit stages no ledger file (a NEW `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` entry — preferred, and the one that avoids collisions — or `docs/CHANGELOG.md`, any `docs/manual/*.md`, `docs/reference/agent-guardrails.md`, `docs/reference/migration-history.md`, or a `docs/loops/` ledger), the commit is rejected. A changelog.d entry counts only when ADDED and carrying a real description under a date heading matching its filename — warn about this in the preflight report so the ledger entry gets written BEFORE the commit attempt, and never suggest `--no-verify`. `npm run typecheck` remains mandatory before build because `npm run build` (vite/esbuild) only *transpiles* — it never type-checks, so a pure type error (e.g. `TS2349`) can pass build; that exact gap shipped a Field Mode prod crash on 2026-06-14.
 
 ## Step 3b: Prevention-control checks
 

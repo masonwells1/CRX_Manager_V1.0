@@ -319,6 +319,42 @@ for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js'])
   assert.equal(result.unverified[0].verdict.status, 'UNVERIFIED')
 }
 
+for (const revisedSeverity of [undefined, 'CRITICAL']) {
+  const finding = {
+    title: 'Example audit severity defect',
+    severity: 'HIGH',
+    area: 'RLS',
+    file: 'supabase/migrations/example.sql:10',
+    evidence: 'The policy permits a row outside the current user scope.',
+    impact: 'A user could read another account row.',
+    recommendation: 'Bind the policy to the authenticated user.',
+    confidence: 'high',
+  }
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') {
+        return { dimension: 'db-security', summary: 'Reviewed the current policy.', findings: [finding] }
+      }
+      if (options.label?.startsWith('verify:')) {
+        return {
+          status: 'VERIFIED',
+          revisedSeverity,
+          reasoning: 'A verified result must carry a supported severity.',
+          verifiedAgainst: 'supabase/migrations/example.sql:10',
+        }
+      }
+      throw new Error(`Unexpected agent label: ${options.label}`)
+    },
+    JSON.stringify({ only: ['db-security'] })
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', `invalid VERIFIED severity ${String(revisedSeverity)} must block`)
+  assert.equal(result.confirmed.length, 0)
+  assert.equal(result.unverified.length, 1)
+  assert.equal(result.unverified[0].verdict.status, 'UNVERIFIED')
+}
+
 {
   const { result } = await executeWorkflow(
     './whole-codebase-audit.js',
@@ -334,6 +370,22 @@ for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js'])
   assert.equal(result.dimensionsRun.length, 0)
   assert.equal(result.blocked.length, 1)
   assert.equal(result.blocked[0].dimension, 'db-securty')
+}
+
+for (const args of [{ only: 'db-security' }, { only: [] }, JSON.stringify({ only: 'db-security' })]) {
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      throw new Error(`A malformed audit selection must not dispatch an agent: ${options.label}`)
+    },
+    args
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', 'a malformed audit selection must block')
+  assert.equal(result.complete, false)
+  assert.equal(result.clean, false)
+  assert.equal(result.dimensionsRun.length, 0)
+  assert.equal(result.blocked.length, 1)
 }
 
 {
