@@ -1831,4 +1831,59 @@ describe('QuoteBuilder', () => {
     // looking at is a different quote.
     expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Q-AAA-1'));
   });
+
+  // Raised by the exact-SHA gpt-5.6-sol review of this branch, as CRX-1/High.
+  // A route-only binding is not enough, because a route id is not unique over
+  // time: leave quote A for B and come back, and the id matches again. The reply
+  // would then be accepted into a DIFFERENT editing session of the same quote and
+  // report edits saved that were never sent. The load serial separates the two
+  // sessions, because returning to quote A re-runs its load.
+  it('drops a late save_quote reply for quote A after the operator left and came BACK to quote A', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveReply = openableGate();
+    let saveCalls = 0;
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveCalls += 1;
+      if (saveCalls === 1) {
+        await saveReply.opened;
+        // Quote A's own authoritative token, one past the 3 its FIRST load held.
+        return { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+      }
+      return { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {}, {
+      // The second load of quote A carries distinct content, so the test can tell
+      // which of the two editing sessions of the SAME quote is on screen.
+      loadPlan: { 'quote-a': [{}, { quoteNumber: 'Q-AAA-REOPENED' }] },
+    });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(saveCalls).toBe(1));
+
+    // Leave quote A with its save still in flight, then come straight back to it.
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+    await goToQuote(router, 'quote-a');
+    expect(await screen.findAllByText('Q-AAA-REOPENED')).not.toHaveLength(0);
+
+    saveReply.open();
+    await flushPendingWork();
+
+    // The reply belongs to the session the operator abandoned, so it may not
+    // report success over the freshly loaded one — that dirty-clear would mark
+    // edits made after the return as saved when they were never sent.
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Quote saved as draft');
+
+    // The decisive check. The reopened session loaded at version 3, so version 3
+    // is what it must still save against — proving the abandoned save's token
+    // was neither installed over it nor cleared.
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_id: 'quote-a',
+      p_quote_payload: expect.objectContaining({ row_version_expected: 3 }),
+    })));
+  });
 });

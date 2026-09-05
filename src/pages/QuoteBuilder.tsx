@@ -1550,13 +1550,30 @@ export default function QuoteBuilder() {
 
     try {
       const idemKey = getSaveQuoteIdempotencyKey();
-      // Which record this request belongs to, captured BEFORE it is sent. The
-      // entry check at the top of this function cannot stand in for it: that ran
-      // before the request existed, and everything installed below is written
-      // AFTER the reply lands. `runWithBelowCostApproval` can also park this
-      // await on an operator decision, which widens the window from a round trip
-      // to however long that dialog stays open.
+      // Which record, and which editing session of it, this request belongs to —
+      // captured BEFORE it is sent. The entry check at the top of this function
+      // cannot stand in for either: that ran before the request existed, and
+      // everything installed below is written AFTER the reply lands.
+      // `runWithBelowCostApproval` can also park this await on an operator
+      // decision, which widens the window from a round trip to however long that
+      // dialog stays open.
+      //
+      // Two operands, and each is load-bearing on its own.
+      //
+      // The route id is NOT unique over time. Leaving quote A for B and returning
+      // to A restores it, so a route-only check would accept this reply into a
+      // DIFFERENT editing session of the same quote: the callers would clear the
+      // dirty flag over edits made after the return, which were never part of this
+      // request, and report them saved. The load serial is what separates those
+      // sessions, because returning to A re-runs `fetchQuote` and mints a new one.
+      //
+      // The serial alone is not enough either, for the reason documented at its
+      // declaration: `fetchQuote` is also called from stale closures, and such a
+      // call mints the NEWEST serial for a record the operator has already left.
       const routeAtSend = routeQuoteIdRef.current;
+      const loadAtSend = quoteLoadSerialRef.current;
+      const editingSessionChanged = () =>
+        routeQuoteIdRef.current !== routeAtSend || quoteLoadSerialRef.current !== loadAtSend;
       const quoteNumberAtSend = quoteNumber;
       const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_quote', withBelowCostReason('save_quote', {
         p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
@@ -1566,16 +1583,21 @@ export default function QuoteBuilder() {
         p_idempotency_key: idemKey,
       }, reason)));
 
-      // The route moved while this save was in flight. Quote A's failure is not
-      // quote B's, so neither the stale-write recovery dialog nor a bare error
+      // The editing session this save belonged to is gone. Quote A's failure is
+      // not quote B's, so neither the stale-write recovery dialog nor a bare error
       // toast may land here. It is not swallowed either: the operator left
-      // believing this saved. Name the quote, because the page they are looking
-      // at is a different one and an unqualified failure would read as its own.
+      // believing this saved. Name the quote, because what they are looking at is
+      // a different one — or a freshly reloaded copy of the same one — and an
+      // unqualified failure would read as belonging to it.
+      //
+      // Latching `quoteVersionRecoveryRequiredRef` here would be actively wrong on
+      // the return-to-A path: it would strand a freshly loaded quote behind a
+      // "reload before saving" gate it has already satisfied.
       //
       // Deliberately does NOT touch the idempotency key. This request failed, so
       // the key must survive for the retry (F1) exactly as it does on the
       // in-route error paths below.
-      if (error && routeQuoteIdRef.current !== routeAtSend) {
+      if (error && editingSessionChanged()) {
         toast('error', `Quote ${quoteNumberAtSend || 'you were editing'} could not be saved. Reopen it and try again — your changes were not stored.`);
         return null;
       }
@@ -1599,8 +1621,8 @@ export default function QuoteBuilder() {
         toast('error', 'Quote save completed without an ID. Refresh before making further changes.');
         return null;
       }
-      // The route moved while this save was in flight, so nothing below belongs
-      // to the quote now on screen: the authoritative row-version token, the
+      // The editing session that sent this save is gone, so nothing below belongs
+      // to what is on screen now: the authoritative row-version token, the
       // commission baseline, `setQuoteId`, and — through the `null` return — the
       // callers' dirty-clear, success toast and navigation. Every caller gates
       // its post-save work on a non-null id, so returning `null` suppresses them.
@@ -1611,7 +1633,7 @@ export default function QuoteBuilder() {
       // result. Rotating it in a second, earlier place would also re-introduce
       // the reset-before-verify ordering that `idempotency-reset-order.test.ts`
       // pins this file against.
-      if (routeQuoteIdRef.current !== routeAtSend) return null;
+      if (editingSessionChanged()) return null;
       // The save committed, but conversion and other chained actions must not
       // continue unless this tab can install the exact authoritative token.
       if (!installAuthoritativeQuoteRowVersion(result.row_version, 'saved')) {
