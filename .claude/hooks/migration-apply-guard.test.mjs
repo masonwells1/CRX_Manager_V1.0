@@ -13,6 +13,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck, stripCommentsQuoteAware } from "./live-testdata-lib.mjs";
+import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -113,14 +114,32 @@ const BENIGN_SQL = "CREATE TABLE widgets (id bigint primary key); ALTER TABLE wi
 const DESTRUCTIVE_SQL = "DROP TABLE customers;";
 const MIG = "20990101000000_test_mig";
 const CRX_PROJECT = "rhyzpcqhnizqbxphqdkr";
+const proofEvidenceHash = (stateDir, protectedBaseCommit = null) => migrationProofEvidenceHash({
+  projectDir: path.resolve(stateDir, "..", ".."),
+  stateDir,
+  protectedBaseCommit,
+});
+
+function fixtureReviewerPolicyCommit(stateDir) {
+  const root = path.resolve(stateDir, "..", "..");
+  const result = spawnSync("git", ["-C", root, "rev-parse", "origin/main^{commit}"], {
+    encoding: "utf8",
+    env: hermeticEnv(),
+  });
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
 
 function writeProof(stateDir, query, extra = {}) {
+  const protectedBaseCommit = fixtureReviewerPolicyCommit(stateDir);
   writeFileSync(path.join(stateDir, `migration-review-${MIG}.json`), JSON.stringify({
     migration: MIG,
     timestamp: new Date().toISOString(),
     reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
     findings: "clean",
     queryHash: sha(query),
+    evidenceHash: proofEvidenceHash(stateDir, protectedBaseCommit),
+    reviewerPolicyCommit: protectedBaseCommit,
+    protectedBaseCommit,
     ...extra,
   }));
 }
@@ -263,6 +282,19 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = runHook(call(BENIGN_SQL), tmp);
     ok(!isDeny(r), "valid proof + benign migration → allowed");
 
+    writeProof(stateDir, BENIGN_SQL, { reviewerPolicyCommit: undefined });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "reviewer proof missing its protected policy commit is denied");
+    writeProof(stateDir, BENIGN_SQL, { reviewerPolicyCommit: "0".repeat(40) });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "reviewer proof bound to a different protected policy commit is denied");
+    writeProof(stateDir, BENIGN_SQL);
+
+    writeProof(stateDir, BENIGN_SQL, { protectedBaseCommit: undefined });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "reviewer proof missing its protected base commit is denied");
+    writeProof(stateDir, BENIGN_SQL);
+
     writeProof(stateDir, BENIGN_SQL, { queryHash: undefined });
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "interactive proof without queryHash is denied");
@@ -289,8 +321,8 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     // 4. No flag file at all + destructive + valid proof → allowed (Mason is
     //    present; his in-chat OK is the gate — prose, the hook doesn't block).
-    writeProof(stateDir, DESTRUCTIVE_SQL);
     writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
+    writeProof(stateDir, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(!isDeny(r), "interactive session (no autopilot flag): destructive migration with proof is not hook-blocked");
 
@@ -303,8 +335,8 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     // 6. ARMED + benign + reviewer proof but NO Codex proof file → DENIED
     //    (the second-model gate must prove it actually ran).
-    writeProof(stateDir, BENIGN_SQL);
     writeMigrationFile(tmp, MIG, BENIGN_SQL);
+    writeProof(stateDir, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "ARMED run: no Codex proof file → denied — the Codex gate is enforced");
     ok(/codex/i.test(r.stdout), "deny message names the Codex gate");
@@ -312,14 +344,19 @@ function armAutopilot(stateDir, hoursFromNow) {
     // Helper: write the separate content-bound Codex proof (R4 mechanism).
     const codexProofPath = path.join(stateDir, `codex-review-mig-${MIG}.json`);
     const writeCodexProof = (query, overrides = {}) =>
-      writeFileSync(codexProofPath, JSON.stringify({
+      (() => {
+        const protectedBaseCommit = fixtureReviewerPolicyCommit(stateDir);
+        return writeFileSync(codexProofPath, JSON.stringify({
         queryHash: sha(query),
         verdict: "clean",
         model: "gpt-5.6-sol",
         reasoning_effort: "high",
         timestamp: new Date().toISOString(),
+        evidenceHash: proofEvidenceHash(stateDir, protectedBaseCommit),
+        protectedBaseCommit,
         ...overrides,
       }));
+      })();
 
     // 6b. Codex proof with a NEEDS-WORK verdict → DENIED (Codex R4 P1: a run
     //     that happened but did not pass must not unlock the apply).
@@ -359,6 +396,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       timestamp: new Date().toISOString(),
       reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
       findings: "clean",
+      evidenceHash: proofEvidenceHash(stateDir),
       // queryHash deliberately omitted
     }));
     r = runHook(call(BENIGN_SQL), tmp);
@@ -420,8 +458,8 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 7c. Explicit disarm (flag DELETED, as autopilot-arm.mjs --off does) →
     //     interactive rules return.
     rmSync(path.join(stateDir, "AUTOPILOT.on"));
-    writeProof(stateDir, DESTRUCTIVE_SQL);
     writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
+    writeProof(stateDir, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(!isDeny(r), "flag deleted by explicit disarm → interactive rules apply again");
     writeMigrationFile(tmp, MIG, BENIGN_SQL);
@@ -476,6 +514,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // provenance and gutted the deny loop above. Order matters, so it is explicit.
     makePendingSetInputs(tmp);
     writeMigrationFile(tmp, MIG, PARKED);
+    writeProof(stateDir, PARKED);
     for (const tool_name of SPELLINGS) {
       const r = runHook({
         tool_name,
@@ -614,6 +653,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       writeAppliedSnapshot(s, { applied: ["20260808150400_round_money_to_whole_cents", MIG] });
     }
     writeMigrationFile(linked, OTHER, BENIGN_SQL);
+    writeProof(linkedState, BENIGN_SQL);
     r = runHook(callFrom(linked, BENIGN_SQL, OTHER), primary);
     ok(isDeny(r), "the session's own worktree proof does NOT cover a different migration name");
     ok(r.stdout.includes("without subagent review proof"),
@@ -679,6 +719,7 @@ function armAutopilot(stateDir, hoursFromNow) {
         reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
         findings: "clean",
         queryHash: sha(BENIGN_SQL),
+        evidenceHash: proofEvidenceHash(stateDir),
       }));
       return runHook({
         tool_name: "mcp__supabase__apply_migration",

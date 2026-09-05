@@ -16,12 +16,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { evaluateMigrationApply, normalizeMigName, resolveMigrationSource, originFetchAgeMs } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
+import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // .claude/hooks/ → repo root → scripts/
@@ -93,8 +94,14 @@ function fixture({
       typeof snapshot === "string" ? snapshot : JSON.stringify(snapshot),
       "utf8");
   }
-  if (proof !== null) writeFileSync(path.join(stateDir, `migration-review-${SAFE}.json`), JSON.stringify(proof), "utf8");
-  if (codexProof !== null) writeFileSync(path.join(stateDir, `codex-review-mig-${SAFE}.json`), JSON.stringify(codexProof), "utf8");
+  // Real proofs always carry the wrapper's full evidence fingerprint. Fixtures
+  // inherit one unless a case explicitly supplies a bad/missing value.
+  const withEvidenceHash = (candidate) => {
+    if (Object.hasOwn(candidate, "evidenceHash")) return candidate;
+    return { ...candidate, evidenceHash: migrationProofEvidenceHash({ projectDir: root, stateDir }) };
+  };
+  if (proof !== null) writeFileSync(path.join(stateDir, `migration-review-${SAFE}.json`), JSON.stringify(withEvidenceHash(proof)), "utf8");
+  if (codexProof !== null) writeFileSync(path.join(stateDir, `codex-review-mig-${SAFE}.json`), JSON.stringify(withEvidenceHash(codexProof)), "utf8");
   if (autopilot !== null) writeFileSync(path.join(stateDir, "AUTOPILOT.on"), autopilot, "utf8");
   if (baseline !== null) {
     const baselineDir = path.join(root, "supabase", "baselines");
@@ -105,6 +112,27 @@ function fixture({
       "utf8");
   }
   return root;
+}
+
+// apply-migration-file deliberately clears an apply ledger after every attempt;
+// a second attempted apply is a new evidence set, not permission to reuse the
+// first attempt's snapshot or proof. Provenance tests that make two attempts
+// restore their fixture ledger and re-mint only the deterministic evidence hash
+// before exercising the independent second assertion.
+function restoreFixtureLedgerAndEvidence(root) {
+  const stateDir = path.join(root, ".claude", "session-state");
+  writeFileSync(path.join(stateDir, "applied-migrations.json"), JSON.stringify({
+    captured_at: iso(0),
+    applied: [{ version: "20260101000000", name: "20260101000000_baseline" }],
+  }), "utf8");
+  const evidenceHash = migrationProofEvidenceHash({ projectDir: root, stateDir });
+  for (const name of [`migration-review-${SAFE}.json`, `codex-review-mig-${SAFE}.json`]) {
+    const file = path.join(stateDir, name);
+    if (!existsSync(file)) continue;
+    const proof = JSON.parse(readFileSync(file, "utf8"));
+    proof.evidenceHash = evidenceHash;
+    writeFileSync(file, JSON.stringify(proof), "utf8");
+  }
 }
 
 // The pending-set preflight (2026-08-26) reads origin/main. Stubbed to the
@@ -149,6 +177,39 @@ function makeOriginMain(root) {
   writeFileSync(path.join(root, ".git", "FETCH_HEAD"), "fixture\n", "utf8");
 }
 
+// Real second-door runs resolve the reviewer policy from origin/main.  The
+// fixture proof predates its synthetic origin/main ref, so stamp that trusted
+// commit only after makeOriginMain has made the ref real.  Direct library tests
+// inject null instead: those tests isolate a different rule and must not depend
+// on a temporary repository's ref layout.
+function stampFixtureReviewerPolicy(root) {
+  const ref = spawnSync("git", ["-C", root, "rev-parse", "origin/main^{commit}"], {
+    encoding: "utf8",
+    env: cleanEnv(),
+  });
+  if (ref.status !== 0) throw new Error(`fixture reviewer policy ref unavailable: ${ref.stderr}`);
+  const reviewerPolicyCommit = ref.stdout.trim();
+  const stateDir = path.join(root, ".claude", "session-state");
+  const proofFiles = [
+    path.join(stateDir, `migration-review-${SAFE}.json`),
+    path.join(stateDir, `codex-review-mig-${SAFE}.json`),
+  ];
+  for (const file of proofFiles) {
+    if (!existsSync(file)) continue;
+    const proof = JSON.parse(readFileSync(file, "utf8"));
+    proof.reviewerPolicyCommit = reviewerPolicyCommit;
+    proof.protectedBaseCommit = reviewerPolicyCommit;
+    writeFileSync(file, JSON.stringify(proof), "utf8");
+  }
+  const evidenceHash = migrationProofEvidenceHash({ projectDir: root, stateDir, protectedBaseCommit: reviewerPolicyCommit });
+  for (const file of proofFiles) {
+    if (!existsSync(file)) continue;
+    const proof = JSON.parse(readFileSync(file, "utf8"));
+    proof.evidenceHash = evidenceHash;
+    writeFileSync(file, JSON.stringify(proof), "utf8");
+  }
+}
+
 const evaluate = (root, over = {}) => evaluateMigrationApply({
   name: MIG,
   query: SQL,
@@ -158,11 +219,46 @@ const evaluate = (root, over = {}) => evaluateMigrationApply({
   gitWorktreeList: noWorktrees,
   gitTrackedMigrations: onlyThisMigration,
   originFetchAge: () => 0,
+  reviewerPolicyCommit: null,
   ...over,
 });
 
 // ── BASELINE: the fixture must ALLOW, or every deny below proves nothing ─────
 allows(evaluate(fixture()), "known-good interactive fixture is allowed");
+
+// A policy ref alone is not enough: the reviewed checkout must actually contain
+// that exact protected base. Otherwise source history and schema evidence can be
+// stale while the proof merely records a newer origin/main charter.
+{
+  const root = fixture();
+  makeOriginMain(root);
+  const git = (...args) => spawnSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-C", root, ...args], { encoding: "utf8", env: cleanEnv() });
+  const oldHead = git("rev-parse", "HEAD").stdout.trim();
+  ok(git("commit", "--allow-empty", "-m", "advance protected base").status === 0, "fixture advances protected origin/main");
+  ok(git("update-ref", "refs/remotes/origin/main", "HEAD").status === 0, "fixture origin/main advances beyond candidate");
+  ok(git("checkout", "-q", "-b", "stale-candidate", oldHead).status === 0, "fixture candidate remains behind protected base");
+  stampFixtureReviewerPolicy(root);
+  denies(
+    evaluate(root, { reviewerPolicyCommit: undefined }),
+    "not evidence-bound",
+    "a proof made from a candidate that does not contain protected origin/main is refused",
+  );
+}
+
+// The MCP apply hook calls evaluateMigrationApply() directly. A revoke inside a
+// savepoint may be rolled back while this source-only gate still sees it, so the
+// shared path must reject transaction control before it can trust ACL lifecycle.
+{
+  const rollbackAclSql = `CREATE FUNCTION public.rollback_acl_target() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;
+SAVEPOINT acl_probe;
+REVOKE EXECUTE ON FUNCTION public.rollback_acl_target() FROM PUBLIC, anon;
+ROLLBACK TO SAVEPOINT acl_probe;\n`;
+  denies(
+    evaluate(fixture({ migrationFile: rollbackAclSql }), { query: rollbackAclSql }),
+    "ROLLBACK",
+    "shared MCP apply path refuses a savepoint that could roll back an anonymous-execution revoke",
+  );
+}
 
 // ── CHECK 1: ordering preflight ─────────────────────────────────────────────
 // Each case asserts the SPECIFIC message for its condition, not just the guard
@@ -478,6 +574,48 @@ denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers:
 allows(evaluate(fixture({ autopilot: armed(), codexProof: goodCodex })),
   "known-good ARMED fixture is allowed");
 
+denies(evaluate(fixture({
+  autopilot: armed(),
+  proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: HASH, evidenceHash: "0".repeat(64) },
+  codexProof: goodCodex,
+})),
+"not evidence-bound", "an armed run refuses a reviewer proof whose evidenceHash does not bind its full review input");
+
+denies(evaluate(fixture({
+  autopilot: armed(),
+  codexProof: { ...goodCodex, evidenceHash: "0".repeat(64) },
+})),
+"evidenceHash does not match", "an armed run refuses a Codex proof whose evidenceHash does not bind its full review input");
+
+{
+  const root = fixture({ autopilot: armed(), codexProof: goodCodex });
+  mkdirSync(path.join(root, "src"), { recursive: true });
+  writeFileSync(path.join(root, "src", "new-rpc-caller.ts"), "export const call = 'receive_po_items';\n", "utf8");
+  denies(evaluate(root), "not evidence-bound",
+    "a source caller added after review invalidates the reviewer proof rather than reusing its old fingerprint");
+}
+
+// The producer's transitive trust dependencies are review inputs too. A temporary
+// weakening of either executable resolver or SECURITY DEFINER scanner must change
+// the fingerprint before a proof can authorize an apply.
+for (const dependency of [
+  "scripts/write-codex-push-proof.mjs",
+  "scripts/migration-security-definer-guard.mjs",
+]) {
+  const root = fixture();
+  const target = path.join(root, ...dependency.split("/"));
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, "trusted dependency\n", "utf8");
+  const stateDir = path.join(root, ".claude", "session-state");
+  const proofPath = path.join(stateDir, `migration-review-${SAFE}.json`);
+  const proof = JSON.parse(readFileSync(proofPath, "utf8"));
+  proof.evidenceHash = migrationProofEvidenceHash({ projectDir: root, stateDir });
+  writeFileSync(proofPath, JSON.stringify(proof), "utf8");
+  writeFileSync(target, "temporarily weakened dependency\n", "utf8");
+  denies(evaluate(root), "not evidence-bound",
+    `${dependency} changed after review invalidates the proof`);
+}
+
 denies(
   evaluate(fixture({
     autopilot: armed(),
@@ -529,6 +667,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
     gitTrackedMigrations: onlyThisMigration,
     originFetchAge: () => 0,
+    reviewerPolicyCommit: null,
   });
   ok(viaHookShape.decision === viaScriptShape.decision, "both doors reach the identical verdict");
 }
@@ -555,6 +694,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   mkdirSync(path.join(okRoot, "supabase", "migrations"), { recursive: true });
   writeFileSync(path.join(okRoot, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
   makeOriginMain(okRoot);
+  stampFixtureReviewerPolicy(okRoot);
   const dry = runScript(okRoot);
   ok(dry.status === 0, `dry run on a passing gate exits 0 (got ${dry.status}: ${dry.stderr})`);
   ok(dry.stdout.includes("APPLY GATE PASSED"), "dry run reports the gate passed");
@@ -661,9 +801,6 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }), "utf8");
     // Nothing older is waiting here; this block is about proof-name matching.
     const aliasTracked = () => `supabase/migrations/${alias}.sql\n`;
-    // A genuine, fresh, clean proof for the LEGACY migration — nothing forged.
-    writeFileSync(path.join(stateDir, `migration-review-${legacy}.json`),
-      JSON.stringify({ migration: legacy, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: legacyHash }), "utf8");
     // The alias file is written to the PERMITTED directory on purpose. That is
     // literally what the PR #470 attack did — `cp <reviewed>.sql <alias>.sql` — so
     // source provenance alone does NOT stop it, and these cases must keep proving
@@ -672,6 +809,18 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
     writeFileSync(path.join(root, "supabase", "migrations", `${alias}.sql`), legacySql, "utf8");
     writeFileSync(path.join(root, "supabase", "migrations", `${legacy}.sql`), legacySql, "utf8");
+    // A genuine, fresh, clean proof for the LEGACY migration — nothing forged.
+    // Its evidence hash is calculated only after the complete reviewer source
+    // surface exists, exactly as the real proof wrapper does.
+    writeFileSync(path.join(stateDir, `migration-review-${legacy}.json`),
+      JSON.stringify({
+        migration: legacy,
+        timestamp: iso(0),
+        reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
+        findings: "clean",
+        queryHash: legacyHash,
+        evidenceHash: migrationProofEvidenceHash({ projectDir: root, stateDir }),
+      }), "utf8");
 
     // FIXED (PR: exact proof-name on the MCP path). requireExactProofName now
     // DEFAULTS to true, so the hook — which passes no such flag — refuses the alias.
@@ -682,6 +831,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
       originFetchAge: () => 0,
+      reviewerPolicyCommit: null,
     });
     denies(byDefault, "without subagent review proof", "the DEFAULT now refuses the aliased legacy name (was the bug)");
 
@@ -693,6 +843,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
       originFetchAge: () => 0,
+      reviewerPolicyCommit: null,
       requireExactProofName: false,
     });
     ok(lenient.decision === "allow", "opt-in substring matching is still the vulnerable behaviour (no longer the default)");
@@ -703,6 +854,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
       originFetchAge: () => 0,
+      reviewerPolicyCommit: null,
       requireExactProofName: true,
     });
     denies(strict, "without subagent review proof", "exact proof-name matching refuses the aliased legacy name");
@@ -716,6 +868,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
       originFetchAge: () => 0,
+      reviewerPolicyCommit: null,
       requireExactProofName: true,
     });
     denies(honest, "MIGRATION ORDERING GUARD",
@@ -743,6 +896,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     // origin/main and a FETCH_HEAD in the fixture. Without it the mirror assertion
     // below fails for that reason instead of the identity rule it is testing.
     makeOriginMain(okRoot2);
+    stampFixtureReviewerPolicy(okRoot2);
     const outside = mkdtempSync(path.join(os.tmpdir(), "crx-copy-"));
     roots.push(outside);
     const copy = path.join(outside, `${MIG}.sql`);
@@ -755,6 +909,8 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     ok(res.stderr.includes("it is not that file"),
       "the refusal says the passed file is not the approved artifact");
     ok(!res.stdout.includes("Transmitting"), "an out-of-tree copy never transmits");
+    restoreFixtureLedgerAndEvidence(okRoot2);
+    stampFixtureReviewerPolicy(okRoot2);
     // Load-bearing pair: the repository file itself still applies, so the rule is
     // about identity and not about refusing everything.
     const realFile = path.join(okRoot2, "supabase", "migrations", `${MIG}.sql`);
@@ -793,7 +949,9 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     mkdirSync(path.join(parkedRoot, "supabase", "migrations"), { recursive: true });
     const permittedFile = path.join(parkedRoot, "supabase", "migrations", `${MIG}.sql`);
     writeFileSync(permittedFile, SQL, "utf8");
+    restoreFixtureLedgerAndEvidence(parkedRoot);
     makeOriginMain(parkedRoot); // merged gate also runs the pending-set preflight
+    stampFixtureReviewerPolicy(parkedRoot);
     const moved = spawnSync(process.execPath, [scriptPath, permittedFile], {
       encoding: "utf8",
       env: cleanEnv({ CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" }),
@@ -875,6 +1033,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       evaluateMigrationApply({
         name: parkedName, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
         projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+        reviewerPolicyCommit: null,
       }),
       "MIGRATION SOURCE GUARD",
       "a migration parked in scripts/.staging-migrations/ cannot be applied from there");
@@ -887,6 +1046,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
         evaluateMigrationApply({
           name: `${parkedName}.sql${suffix}`, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
           projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+          reviewerPolicyCommit: null,
         }),
         "MIGRATION SOURCE GUARD",
         `a "${suffix}" draft is refused without the rule ever naming that suffix`);
@@ -914,6 +1074,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
         evaluateMigrationApply({
           name, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
           projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
+          reviewerPolicyCommit: null,
         }),
         "MIGRATION SOURCE GUARD",
         `a name spelled ${JSON.stringify(name)} cannot reach outside the permitted directory`);
@@ -934,6 +1095,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
         name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
         projectDir: mine, cwd: mine,
         gitWorktreeList: () => `worktree ${mine}\n\nworktree ${sibling}\n`,
+        reviewerPolicyCommit: null,
       }),
       "MIGRATION SOURCE GUARD",
       "a migration file in a sibling worktree does not satisfy provenance for this session");
@@ -954,6 +1116,20 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     writeFileSync(
       path.join(linked, "supabase", "baselines", "manifest.json"),
       JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }), "utf8");
+    const linkedState = path.join(linked, ".claude", "session-state");
+    mkdirSync(linkedState, { recursive: true });
+    writeFileSync(path.join(linkedState, "applied-migrations.json"), JSON.stringify({
+      captured_at: iso(0),
+      applied: [{ version: "20260101000000", name: "20260101000000_baseline" }],
+    }), "utf8");
+    writeFileSync(path.join(linkedState, `migration-review-${SAFE}.json`), JSON.stringify({
+      migration: MIG,
+      timestamp: iso(0),
+      reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
+      findings: "clean",
+      queryHash: HASH,
+      evidenceHash: migrationProofEvidenceHash({ projectDir: linked, stateDir: linkedState }),
+    }), "utf8");
     allows(
       evaluateMigrationApply({
         name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
@@ -964,8 +1140,37 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
         // that has no real origin/main — a denial for the wrong reason.
         gitTrackedMigrations: onlyThisMigration,
         originFetchAge: () => 0,
+        reviewerPolicyCommit: null,
       }),
       "a migration built in the worktree the session is working in satisfies provenance");
+  }
+
+  // A matching proof in the PRIMARY checkout is not a substitute for one in the
+  // active linked worktree. Before this assertion existed, the proof scanner
+  // accepted any session sibling and compared its proof against primary bytes;
+  // a linked worktree could then change callers or policy after that review.
+  {
+    const primary = fixture();
+    const linked = mkdtempSync(path.join(os.tmpdir(), "crx-proof-sibling-"));
+    roots.push(linked);
+    const linkedState = path.join(linked, ".claude", "session-state");
+    mkdirSync(path.join(linked, "supabase", "migrations"), { recursive: true });
+    mkdirSync(path.join(linked, "supabase", "baselines"), { recursive: true });
+    mkdirSync(linkedState, { recursive: true });
+    writeFileSync(path.join(linked, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
+    writeFileSync(path.join(linked, "supabase", "baselines", "manifest.json"), readFileSync(path.join(primary, "supabase", "baselines", "manifest.json")));
+    writeFileSync(path.join(linkedState, "applied-migrations.json"), readFileSync(path.join(primary, ".claude", "session-state", "applied-migrations.json")));
+    denies(
+      evaluateMigrationApply({
+        name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
+        projectDir: primary, cwd: linked,
+        gitWorktreeList: () => `worktree ${primary}\n\nworktree ${linked}\n`,
+        gitTrackedMigrations: onlyThisMigration,
+        originFetchAge: () => 0,
+        reviewerPolicyCommit: null,
+      }),
+      "without subagent review proof",
+      "a primary-only proof cannot authorize an active linked worktree");
   }
 
   // CRLF ON DISK must not refuse a legitimate apply. A worktree checked out before
@@ -1007,6 +1212,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       // and not about the content being rejected for some other reason.
       rmSync(linkPath);
       writeFileSync(linkPath, SQL, "utf8");
+      restoreFixtureLedgerAndEvidence(root);
       allows(evaluate(root), "the same bytes as a real file in the permitted directory are allowed");
     } else {
       console.log("  SKIP symlink-escape case — this platform/account cannot create symlinks");
@@ -1133,6 +1339,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
           projectDir: viaJunction, cwd: viaJunction, gitWorktreeList: noWorktrees,
           gitTrackedMigrations: onlyThisMigration,
           originFetchAge: () => 0,
+          reviewerPolicyCommit: null,
         }),
         "a checkout reached through a junction still satisfies provenance");
     } else {
@@ -1324,6 +1531,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
   writeFileSync(path.join(root, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
   makeOriginMain(root);
+  stampFixtureReviewerPolicy(root);
   const snapshot = path.join(root, ".claude", "session-state", "applied-migrations.json");
   ok(existsSync(snapshot), "fixture starts with a snapshot present");
 
