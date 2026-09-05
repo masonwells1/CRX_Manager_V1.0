@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 
 const {
@@ -822,5 +822,205 @@ describe('CustomerDetail stale whole-record save', () => {
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
       p_customer_payload: expect.objectContaining({ row_version_expected: null, farm_name: 'Local edit after crop update' }),
     })));
+  });
+});
+
+/**
+ * The tab loader's race, which is NOT the one the primary record has.
+ *
+ * Every tab load started by the route/tab effect is ordered by `tabRequestSeq`,
+ * and the route-change effect bumps that sequence — so a load already in flight
+ * for the previous customer stops installing on its own. What a sequence cannot
+ * order is a load started AFTER the route moved, from a closure that outlived it.
+ * LogInteractionModal captures `onLogged` on an earlier render and invokes it only
+ * once its save RPC and activity-log write resolve; that callback still names the
+ * previous customer while minting the NEWEST sequence. A sequence-only guard
+ * therefore does not miss the stale write — it certifies it.
+ *
+ * These drive the real modal rather than a stand-in, so the closure under test is
+ * the one production actually creates.
+ */
+describe('CustomerDetail tab loads bind to a customer, not only to call order', () => {
+  const records: Record<string, Record<string, unknown>> = {
+    'customer-1': { id: 'customer-1', farm_name: 'Original Farm', row_version: 1, crops: [], default_commission_split: null },
+    'customer-2': { id: 'customer-2', farm_name: 'Second Farm', row_version: 2, crops: [], default_commission_split: null },
+  };
+  const loggedInteraction = { success: true, interaction_id: 'interaction-1', follow_up_requested: false, follow_up_note_id: null, follow_up_error: null };
+
+  function openGate() {
+    let open!: () => void;
+    const reached = new Promise<void>((resolve) => { open = resolve; });
+    return { reached, open };
+  }
+
+  function timelineRow(label: string) {
+    return [{ id: `activity-${label}`, description: label, created_at: '2026-09-01T12:00:00.000Z', performed_by: null, event_type: 'call_logged' }];
+  }
+
+  /**
+   * Settles only when awaited, so every `.eq()` in the chain has been applied by
+   * the time `settle` reads them — that is how each read reports which customer it
+   * was actually started for, rather than which one the route is on.
+   */
+  function lazyChain(settle: (filters: Record<string, unknown>) => Promise<QueryResult>): Record<string, unknown> {
+    const filters: Record<string, unknown> = {};
+    const chain: Record<string, unknown> = {};
+    const self = (..._args: unknown[]) => chain;
+    for (const name of ['neq', 'is', 'in', 'gt', 'order', 'limit', 'select', 'insert', 'update', 'delete']) chain[name] = self;
+    chain.eq = (column: unknown, value: unknown) => { filters[String(column)] = value; return chain; };
+    chain.maybeSingle = () => settle(filters);
+    chain.single = () => settle(filters);
+    chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => settle(filters).then(resolve, reject);
+    chain.catch = (reject: (reason: unknown) => unknown) => settle(filters).catch(reject);
+    chain.finally = (callback: () => void) => settle(filters).finally(callback);
+    return chain;
+  }
+
+  /**
+   * `activityFeed` receives the customer each timeline read names and that read's
+   * 1-based ordinal for that customer, so a test can hold one open or vary its
+   * rows without having to guess at call ordering across the other tables.
+   */
+  function installTables(activityFeed: (customerId: string, nth: number) => Promise<QueryResult>) {
+    const timelineReads: Record<string, number> = {};
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return lazyChain(async (filters) => (
+          // Only the snapshot read filters on `id`; the parent-selector list does not.
+          filters.id === undefined ? { data: [], error: null } : { data: records[String(filters.id)] ?? null, error: null }
+        ));
+      }
+      if (table === 'activity_feed') {
+        return lazyChain(async (filters) => {
+          const wanted = String(filters.customer_id);
+          timelineReads[wanted] = (timelineReads[wanted] ?? 0) + 1;
+          return activityFeed(wanted, timelineReads[wanted]);
+        });
+      }
+      return query({ data: [], error: null });
+    });
+  }
+
+  /**
+   * Fill in and submit the real modal. The page's trigger and the modal's own
+   * submit are both labelled "Log Call", so the submit is taken from the dialog.
+   */
+  async function logAnInteraction() {
+    fireEvent.click(screen.getAllByRole('button', { name: 'Log Call' })[0]);
+    const dialog = await screen.findByRole('dialog');
+    const summary = dialog.querySelector('textarea');
+    if (!summary) throw new Error('the interaction modal rendered without a summary field');
+    fireEvent.change(summary, { target: { value: 'Talked through the spring program' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Log Call' }));
+  }
+
+  /**
+   * The modal toasts, then calls `onLogged`, then closes — all synchronously. Once
+   * the toast has landed the stale refresh has already been fired.
+   */
+  async function waitForTheRefreshToFire() {
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', 'Interaction logged'));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    customerIdempotencyState.generation = 0;
+    dirtyStates.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('refuses a timeline refresh fired for the customer the operator has already left', async () => {
+    // `onLogged` was captured while customer 1 was open and runs only after the
+    // save RPC answers. Firing it mints the newest sequence while still naming
+    // customer 1, so a sequence-only guard reports "current" and installs customer
+    // 1's timeline under customer 2's name.
+    const savedInteraction = openGate();
+    installTables(async (customerId) => ({
+      data: timelineRow(customerId === 'customer-1' ? 'Original Farm timeline entry' : 'Second Farm timeline entry'),
+      error: null,
+    }));
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'log_customer_interaction') return { data: null, error: null };
+      await savedInteraction.reached;
+      return { data: loggedInteraction, error: null };
+    });
+
+    renderDetailWithCustomerSwitch();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'timeline' }));
+    expect(await screen.findByText('Original Farm timeline entry')).toBeInTheDocument();
+
+    await logAnInteraction();
+    // Leave for customer 2 while that interaction save is still in flight.
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+    expect(await screen.findByText('Second Farm timeline entry')).toBeInTheDocument();
+
+    savedInteraction.open();
+    await waitForTheRefreshToFire();
+    await waitFor(() => expect(screen.getByText('Second Farm timeline entry')).toBeInTheDocument());
+    expect(screen.queryByText('Original Farm timeline entry')).not.toBeInTheDocument();
+  });
+
+  it('keeps the newer timeline load for the SAME customer when the older one lands last', async () => {
+    // No route change here, so the record binding cannot separate these two loads
+    // — only call order can. Without the sequence half the slow first read lands
+    // last and reverts the timeline to before the call just logged.
+    const slowFirstRead = openGate();
+    installTables(async (customerId, nth) => {
+      if (nth === 1) await slowFirstRead.reached;
+      return { data: timelineRow(nth === 1 ? `${customerId} timeline before the call` : `${customerId} timeline including the call`), error: null };
+    });
+    mockRpc.mockResolvedValue({ data: loggedInteraction, error: null });
+
+    renderDetail();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'timeline' }));
+
+    // That first read is still open; log a call, whose refresh answers immediately.
+    await logAnInteraction();
+    expect(await screen.findByText('customer-1 timeline including the call')).toBeInTheDocument();
+
+    slowFirstRead.open();
+    await waitFor(() => expect(screen.getByText('customer-1 timeline including the call')).toBeInTheDocument());
+    expect(screen.queryByText('customer-1 timeline before the call')).not.toBeInTheDocument();
+  });
+
+  it('does not let the refused refresh strand the open customer behind a spinner', async () => {
+    // Why the refusal happens BEFORE the call takes a sequence number. Refusing it
+    // afterwards still burns a sequence, which invalidates the load that
+    // legitimately belongs to the customer now on screen; that load then returns
+    // having installed no rows AND without clearing tabLoading, so the tab spins
+    // for good.
+    const savedInteraction = openGate();
+    const secondCustomerTimeline = openGate();
+    installTables(async (customerId) => {
+      if (customerId === 'customer-2') await secondCustomerTimeline.reached;
+      return { data: timelineRow(customerId === 'customer-1' ? 'Original Farm timeline entry' : 'Second Farm timeline entry'), error: null };
+    });
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'log_customer_interaction') return { data: null, error: null };
+      await savedInteraction.reached;
+      return { data: loggedInteraction, error: null };
+    });
+
+    renderDetailWithCustomerSwitch();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'timeline' }));
+    expect(await screen.findByText('Original Farm timeline entry')).toBeInTheDocument();
+
+    await logAnInteraction();
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+    await screen.findByText('Loading timeline...');
+
+    // The stale refresh for customer 1 fires while customer 2's own load is open.
+    savedInteraction.open();
+    await waitForTheRefreshToFire();
+    secondCustomerTimeline.open();
+
+    expect(await screen.findByText('Second Farm timeline entry')).toBeInTheDocument();
+    expect(screen.queryByText('Loading timeline...')).not.toBeInTheDocument();
   });
 });

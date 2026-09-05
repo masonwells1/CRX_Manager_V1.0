@@ -467,11 +467,44 @@ export default function CustomerDetail() {
   }, [id, isNew]);
 
   const fetchTabData = useCallback(async (selectedTab: string) => {
+    // `id` is closed over per route, so it names the customer this load was
+    // started FOR; the ref always holds the one the route is on NOW.
+    const routeLeftThisCustomer = () => currentIdRef.current !== id;
+
+    // Refuse a call that is stale before it begins, and do it BEFORE taking a
+    // sequence number. The sequence orders calls started by the route/tab effect,
+    // and the route-change effect bumps it, so a load already in flight for the
+    // previous customer stops installing. What it cannot order is a call started
+    // AFTER the route moved from a closure that outlived it: LogInteractionModal
+    // captures `onLogged` on an earlier render and invokes it only once its save
+    // RPC and activity-log write resolve, so that callback still names the
+    // PREVIOUS customer while minting the NEWEST sequence. A sequence check does
+    // not merely miss that write, it certifies it as current.
+    //
+    // Refusing at the door rather than after the first await matters twice over.
+    // Such a call would otherwise burn a sequence — invalidating the load that
+    // legitimately belongs to the customer now on screen, which then returns
+    // having installed nothing AND without clearing `tabLoading` — and it would
+    // have already flipped this tab into a loading state nothing goes on to
+    // clear. Either way the open customer is stranded behind a permanent spinner.
+    if (routeLeftThisCustomer()) return;
+
     const seq = ++tabRequestSeq.current;
-    const isStale = () => seq !== tabRequestSeq.current;
+    const supersededByNewerLoad = () => seq !== tabRequestSeq.current;
+    // The route half is re-checked after each await as well. The door check
+    // cannot cover a route change that happens while this load is in flight, and
+    // the sequence bump that normally covers it lives in a passive effect, which
+    // React schedules AFTER the commit — whereas `currentIdRef` is written in a
+    // layout effect, at the commit. A reply landing in that gap is superseded by
+    // a route the sequence does not know about yet.
+    const isStale = () => supersededByNewerLoad() || routeLeftThisCustomer();
     setTabLoading(true);
     if (selectedTab === 'fields') {
       const { data, error: fieldError } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
+      // Before the error branch, not after: a superseded load must not toast over
+      // the customer now on screen, and must not reach the assertRpcResult throw
+      // below — an unhandled rejection whose failure belongs to another record.
+      if (isStale()) return;
       if (fieldError) {
         Sentry.captureException(fieldError, { tags: { source: 'fetch', action: 'load_customer_fields' } });
         toast('error', 'Failed to load fields');
@@ -614,6 +647,9 @@ export default function CustomerDetail() {
           .eq('customer_id', id!)
           .order('created_at', { ascending: false })
           .limit(50);
+        // Guarded before the toast: a superseded timeline read must not report
+        // its failure over the customer the operator is looking at now.
+        if (isStale()) return;
         if (tlError) toast('error', 'Failed to load timeline');
 
         // PR-07 follow-up: resolve performer names via profile_public_view (safe
@@ -650,12 +686,14 @@ export default function CustomerDetail() {
         .select('id')
         .eq('customer_id', id!)
         .is('deleted_at', null);
+      if (isStale()) return;
       if (orderIdsError) toast('error', 'Failed to load order history');
       if (orderIds && orderIds.length > 0) {
         const { data: allItems, error: allItemsError } = await supabase
           .from('order_items')
           .select('product_name, price_per_unit, total_units_needed, total_price, quantity_delivered, section_name, order_id')
           .in('order_id', orderIds.map((o: { id: string }) => o.id));
+        if (isStale()) return;
         if (allItemsError) toast('error', 'Failed to load purchase history');
         // Aggregate by product
         const productMap: Record<string, PurchaseHistoryItem> = {};
