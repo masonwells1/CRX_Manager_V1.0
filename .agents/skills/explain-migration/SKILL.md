@@ -46,8 +46,7 @@ For each change, answer:
 
 ## Step 4: Spot the Safety Concerns
 
-Cross-reference against the **CRX Hard Rules** in `AGENTS.md` (that section was previously
-called "Hard Red Lines" in `CLAUDE.md`; the policy now lives in `AGENTS.md`) and
+Cross-reference against the **CRX Hard Rules** in `AGENTS.md` and
 `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`. Flag explicitly if you see:
 
 - ⚠️ **SECURITY DEFINER without `SET search_path`** — search_path attack risk
