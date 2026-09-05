@@ -35,6 +35,21 @@ const mocks = vi.hoisted(() => ({
   classifyFailure: vi.fn(),
   downloadReceivingPdf: vi.fn(),
   captureException: vi.fn(),
+  // Mutable durable-intent state. The first version of this file hard-coded
+  // `unresolvedIntent: null` and `isIntentLocked: false`, which mocked away the
+  // exact production state the tests claimed to exercise — after a real failed
+  // resolveIntent() the hook stays LOCKED and the button reads "Retry Exact
+  // Receiving", not "Confirm & Receive". (gpt-5.6-sol on 2ff8bdafc.)
+  intent: {
+    unresolvedIntent: null as unknown,
+    isIntentLocked: false,
+    isRetryExpired: false,
+    isForeignIntentLocked: false,
+  },
+  // When the durable store is genuinely broken, preparation rejects too — not just
+  // the post-commit cleanup. That is the retry case the preparation catch must
+  // describe honestly.
+  beginIntentShouldReject: false,
 }));
 
 const po = {
@@ -116,16 +131,43 @@ vi.mock('../hooks/useUncertainMutationIntent', () => ({
   UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE: 'other surface',
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE: 'reconciliation',
   useUncertainMutationIntent: () => ({
-    isForeignIntentLocked: false,
-    isRetryExpired: false,
-    isIntentLocked: false,
-    unresolvedIntent: null,
-    beginIntent: async (intent: unknown) => intent,
+    get isForeignIntentLocked() { return mocks.intent.isForeignIntentLocked; },
+    get isRetryExpired() { return mocks.intent.isRetryExpired; },
+    get isIntentLocked() { return mocks.intent.isIntentLocked; },
+    get unresolvedIntent() { return mocks.intent.unresolvedIntent; },
+    beginIntent: async (intent: unknown) => {
+      if (mocks.beginIntentShouldReject) throw new Error('QuotaExceededError');
+      return intent;
+    },
     getIdempotencyKey: () => 'idem-1',
     resolveIntent: mocks.resolveIntent,
     classifyFailure: mocks.classifyFailure,
   }),
 }));
+
+// A frozen request exactly as the durable hook would hand one back after a lost
+// response: same shape the page builds, already committed-or-not on the server.
+const LOCKED_REQUEST = {
+  performedBy: 'admin-1',
+  itemsPayload: [{
+    po_item_id: 'po-item-1',
+    quantity: 4,
+    condition: 'good',
+    lot_number: null,
+    notes: null,
+    storage_location: 'Main Warehouse',
+  }],
+  finalPayload: [{
+    po_item_id: 'po-item-1',
+    quantity: 4,
+    condition: 'good',
+    lot_number: null,
+    notes: null,
+    storage_location: 'Main Warehouse',
+  }],
+  allowOverReceive: false,
+  storageLocation: 'Main Warehouse',
+};
 
 vi.mock('../lib/criticalAction', () => ({
   runCriticalAction: async (options: {
@@ -168,6 +210,11 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
       return query([]);
     });
     mocks.resolveIntent.mockResolvedValue(undefined);
+    mocks.intent.unresolvedIntent = null;
+    mocks.intent.isIntentLocked = false;
+    mocks.intent.isRetryExpired = false;
+    mocks.intent.isForeignIntentLocked = false;
+    mocks.beginIntentShouldReject = false;
   });
 
   it('keeps the receiving form open when the local cleanup fails after the receipt committed', async () => {
@@ -261,5 +308,90 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
     // A slip printed here would carry THIS moment and THIS operator for a receipt
     // that committed earlier. Receiving history reprints it correctly instead.
     expect(mocks.downloadReceivingPdf).not.toHaveBeenCalled();
+  });
+
+  // THE CASE THE FIRST FIX MISSED ENTIRELY (gpt-5.6-sol on 2ff8bdafc).
+  //
+  // An ordinary retry of an IDENTICAL request is not an error. `check_idempotency_intent`
+  // matches the fingerprint and `receive_po_items` does `RETURN v_replay -> 'result'`
+  // — a normal success, no error, no replay marker
+  // (20260831233000_bind_section9_replays_to_intent.sql). Every assignment of
+  // `completedElsewhere = true` lives in the RPC error branch, so the previous gate
+  // could never close on this path, and the test written for it passed against the
+  // MISMATCH path instead. This is the common replay: it needs the frozen-request
+  // flag, not the error flag.
+  it('does not regenerate the receiving slip on an ordinary same-payload retry', async () => {
+    // A receipt was submitted, the response was lost, and the intent stayed locked.
+    mocks.intent.unresolvedIntent = LOCKED_REQUEST;
+    mocks.intent.isIntentLocked = true;
+
+    // The server recognises the key and returns the STORED result as plain success.
+    mocks.rpc.mockResolvedValue({
+      data: { receiving_record_ids: ['rr-1'] },
+      error: null,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/purchase-orders/po-1']}>
+        <Routes>
+          <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    // The recovery effect restores the frozen request and opens the form at review.
+    // The button says "Retry Exact Receiving" — the real locked-state label, which
+    // the earlier all-defaults mock could never have produced.
+    const retry = await screen.findByRole('button', { name: /Retry Exact Receiving/i });
+    fireEvent.click(retry);
+
+    // Positive sentinel: the submission completed.
+    await waitFor(() => {
+      expect(mocks.rpc).toHaveBeenCalledWith('receive_po_items', expect.anything());
+    });
+    await waitFor(() => {
+      expect(mocks.toast).toHaveBeenCalledWith('success', expect.stringContaining('Receiving reconciled'));
+    });
+
+    // No second slip stamped with this moment and this operator.
+    expect(mocks.downloadReceivingPdf).not.toHaveBeenCalled();
+    // And nothing claims THIS attempt performed the receipt.
+    expect(mocks.toast).not.toHaveBeenCalledWith('success', 'Items received and inventory updated');
+  });
+
+  // gpt-5.6-sol on 2ff8bdafc: the retry after a failed cleanup is the MOST likely
+  // way to reach the preparation catch, because the same broken store that failed
+  // the cleanup also fails preparation. Telling that operator "Nothing was received"
+  // contradicts the warning they just read and sends them to another device, where
+  // no local pending intent exists, a fresh key is minted, and the goods can be
+  // received twice.
+  it('does not tell a retrying operator that nothing was received', async () => {
+    mocks.intent.unresolvedIntent = LOCKED_REQUEST;
+    mocks.intent.isIntentLocked = true;
+    mocks.rpc.mockResolvedValue({ data: { receiving_record_ids: ['rr-1'] }, error: null });
+
+    render(
+      <MemoryRouter initialEntries={['/purchase-orders/po-1']}>
+        <Routes>
+          <Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const retry = await screen.findByRole('button', { name: /Retry Exact Receiving/i });
+
+    // The local store is still broken, so preparation itself now rejects.
+    mocks.beginIntentShouldReject = true;
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      expect(mocks.toast).toHaveBeenCalledWith('error', expect.stringContaining('do NOT receive these goods again'));
+    });
+    expect(mocks.toast).not.toHaveBeenCalledWith(
+      'error',
+      'Receiving could not be safely prepared. Nothing was received; refresh and try again.',
+    );
+    // Nothing was sent to the server on this attempt.
+    expect(mocks.rpc).not.toHaveBeenCalledWith('receive_po_items', expect.anything());
   });
 });

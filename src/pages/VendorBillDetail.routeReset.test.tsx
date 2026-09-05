@@ -24,7 +24,12 @@ import { IDBFactory } from 'fake-indexeddb';
 const BILL_A = '11111111-1111-4111-8111-111111111111';
 const BILL_B = '33333333-3333-4333-8333-333333333333';
 
-const H = vi.hoisted(() => ({ rpc: vi.fn(), toast: vi.fn(), captureException: vi.fn() }));
+const H = vi.hoisted(() => ({
+  rpc: vi.fn(),
+  toast: vi.fn(),
+  captureException: vi.fn(),
+  captureMessage: vi.fn(),
+}));
 
 const bill = {
   id: BILL_A,
@@ -101,7 +106,11 @@ vi.mock('../components/ui/Toast', () => ({
 // (gpt-5.6-sol on 862cd144d.) Every other Sentry member stays a no-op.
 vi.mock('../lib/sentry', () => ({
   Sentry: new Proxy({} as Record<string, unknown>, {
-    get: (_target, prop) => (prop === 'captureException' ? H.captureException : () => undefined),
+    get: (_target, prop) => {
+      if (prop === 'captureException') return H.captureException;
+      if (prop === 'captureMessage') return H.captureMessage;
+      return () => undefined;
+    },
   }),
 }));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
@@ -132,6 +141,7 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
     H.rpc.mockReset();
     H.toast.mockReset();
     H.captureException.mockReset();
+    H.captureMessage.mockReset();
     activeBillRow = bill;
   });
   afterEach(() => cleanup());
@@ -457,12 +467,82 @@ describe('VendorBillDetail route change with the overage prompt open', () => {
 
     // Positive sentinel: the committed-but-stale branch ran to completion.
     await waitFor(() => {
-      expect(H.toast).toHaveBeenCalledWith('warning', expect.stringContaining('An earlier edit to this bill finished'));
+      expect(H.toast).toHaveBeenCalledWith('warning', expect.stringContaining('An earlier edit to this bill saved'));
     });
 
     // The replacement editor is still open with the operator's figures in it...
     expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy();
     // ...and nothing claimed the edit on screen was the one that saved.
     expect(H.toast).not.toHaveBeenCalledWith('success', 'Bill updated');
+
+    // The message must NOT tell the operator the on-screen figures are refreshed.
+    // fetchBill() updates `bill`; it does not rewrite the fields of an editor that
+    // is already open, and the old wording ("the bill has been refreshed — check
+    // the figures on screen") pointed them at the stale values as though they were
+    // the new ones. Saving those reverts the edit that just committed.
+    // (gpt-5.6-sol on 2ff8bdafc.)
+    const warning = H.toast.mock.calls.find(
+      (call) => call[0] === 'warning' && String(call[1]).includes('An earlier edit'),
+    );
+    expect(String(warning?.[1])).toMatch(/loaded BEFORE that change/);
+    expect(String(warning?.[1])).toMatch(/close and reopen the editor/i);
+    expect(String(warning?.[1])).not.toMatch(/bill has been refreshed/i);
+  });
+
+  // gpt-5.6-sol on 2ff8bdafc. The previous version called `fetchBill()` on EVERY
+  // stale-commit path. When the operator has navigated away, that is the closure
+  // from the render that started the edit, so it queries the bill they LEFT: it
+  // sets the shared `loading` flag, then returns at its own `activeBillIdRef` guard
+  // WITHOUT clearing it — wedging the bill actually on screen on a permanent
+  // loading spinner. That call site was the only way to reach the leak.
+  it('does not wedge the bill on screen when an edit for another bill succeeds late', async () => {
+    let releaseEdit: (value: unknown) => void = () => {};
+    H.rpc.mockImplementation((name: string) => {
+      if (name === 'update_vendor_bill') {
+        return new Promise((resolve) => { releaseEdit = resolve; });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_A}`]}>
+        <GoToOtherBill />
+        <Routes>
+          <Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Edit Bill/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Save Changes/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    await waitFor(() => expect(H.rpc).toHaveBeenCalledWith('update_vendor_bill', expect.anything()));
+
+    // Move to bill B and let it finish loading.
+    activeBillRow = billB;
+    fireEvent.click(screen.getByRole('button', { name: 'go-to-bill-b' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy());
+
+    // Bill A's edit commits while B is on screen.
+    await act(async () => {
+      releaseEdit({
+        data: { success: true, bill_id: BILL_A, old_total_cents: 100000, new_total_cents: 112000 },
+        error: null,
+      });
+    });
+
+    // Positive sentinel: the stale-commit branch ran to completion.
+    await waitFor(() => {
+      expect(H.captureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('committed after the operator left'),
+        expect.anything(),
+      );
+    });
+
+    // Bill B must still be usable — a wedged page loses this button to the spinner.
+    expect(screen.getByRole('button', { name: /Edit Bill/i })).toBeTruthy();
+    // And no warning about "this bill" while a different bill is on screen.
+    expect(H.toast).not.toHaveBeenCalledWith('warning', expect.stringContaining('An earlier edit to this bill'));
   });
 });

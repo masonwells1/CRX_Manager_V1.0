@@ -308,9 +308,19 @@ export default function PurchaseOrderDetail() {
 
     let request: ReceivePoIntent;
     let idemKey: string;
+    // Whether this submission is a RETRY of a frozen request rather than a fresh
+    // receive. `completedElsewhere` cannot answer that: an ordinary same-payload
+    // replay is returned by receive_po_items as a NORMAL success — the SQL does
+    // `RETURN v_replay -> 'result'` with no error and no replay marker
+    // (20260831233000_bind_section9_replays_to_intent.sql), so every
+    // `completedElsewhere = true` assignment sits in the RPC ERROR branch and none
+    // of them fires. Gating post-commit side effects on it alone left the common
+    // replay completely unguarded. (gpt-5.6-sol on 2ff8bdafc.)
+    let wasLockedReplay = false;
     try {
       const lockedRequest = receiveIntent.unresolvedIntent;
       if (lockedRequest) {
+        wasLockedReplay = true;
         // A committed receipt reduces the live remaining quantity. Revalidating
         // against that refreshed state would deadlock the exact replay that must
         // reconcile a lost response, so locked retries use the frozen request.
@@ -378,6 +388,25 @@ export default function PurchaseOrderDetail() {
       idemKey = receiveIntent.getIdempotencyKey();
     } catch (error) {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { tags: { source: 'durable-intent', page: 'purchase-order-detail' } });
+      // "Nothing was received" is only true for a FIRST attempt. When a frozen
+      // request is already pending, this same catch is reached by a RETRY — and the
+      // storage failure that broke the earlier post-commit cleanup is exactly what
+      // breaks preparation now, so the retry after a committed receipt is the most
+      // likely way to land here. Telling that operator nothing was received
+      // contradicts the warning they just read and pushes them to receive again from
+      // another browser or device, where no local pending intent exists, a FRESH key
+      // is minted, and the server has no way to recognise the duplicate — the one
+      // outcome this whole intent mechanism exists to prevent.
+      // (gpt-5.6-sol on 2ff8bdafc.)
+      if (wasLockedReplay) {
+        toast(
+          'error',
+          'This retry could not be prepared, so nothing further was sent — but do NOT receive these '
+          + 'goods again on another device. An earlier attempt may already have recorded them. '
+          + 'Reload this page and check the receiving history below before doing anything else.',
+        );
+        return;
+      }
       toast('error', 'Receiving could not be safely prepared. Nothing was received; refresh and try again.');
       return;
     }
@@ -522,7 +551,7 @@ export default function PurchaseOrderDetail() {
         // and the "remaining" quantity it reports is derived from `items` held in
         // memory, which the earlier commit has already moved past. On a replay it
         // would send a duplicate alert quoting the wrong numbers.
-        if (po && !completedElsewhere) {
+        if (po && !completedElsewhere && !wasLockedReplay) {
           const overItems = request.itemsPayload
             .filter((ip) => {
               const poItem = items.find((i) => i.id === ip.po_item_id);
@@ -564,12 +593,27 @@ export default function PurchaseOrderDetail() {
         // CURRENT operator, but a replay is answering for a receipt that committed
         // EARLIER, possibly in another tab or by another person. Regenerating it
         // here produced a receiving document stating the wrong time and the wrong
-        // receiver — a paper record that goes in a vendor file. Nothing is lost by
-        // skipping it: the receipt is in receiving history, whose own download
-        // button (`handleDownloadHistoryPdf`) prints from the STORED record, so it
-        // carries the real `received_at` and `received_by_name`.
+        // receiver — a paper record that goes in a vendor file.
+        //
+        // What is traded, stated honestly rather than as "nothing is lost", which
+        // was an overstatement (gpt-5.6-sol on 2ff8bdafc): receiving history's own
+        // download button (`handleDownloadHistoryPdf`) prints from the STORED
+        // record, so it carries the real `received_at` and `received_by_name` — but
+        // it prints ONE record per row (`items: [record]`), so a multi-line receipt
+        // cannot be reproduced there as a single grouped slip, and its product and
+        // receiver names are joined from CURRENT data rather than an at-receipt
+        // snapshot. A correct one-line-at-a-time reprint beats a single slip
+        // asserting a receiving time and a receiver that never happened, so the
+        // trade is deliberate — but it is a trade.
         // (gpt-5.6-sol on 862cd144d.)
-        if (receivingRecordIds && receivingRecordIds.length > 0 && po && !completedElsewhere) {
+        //
+        // `wasLockedReplay` is the half that actually matters in practice: the
+        // ordinary retry of an identical request comes back as a NORMAL success, so
+        // `completedElsewhere` stays false and this gate never closed for the very
+        // case it was written for. A retry of a frozen request is answering for a
+        // receipt that may already have committed, so it gets the same treatment.
+        // (gpt-5.6-sol on 2ff8bdafc.)
+        if (receivingRecordIds && receivingRecordIds.length > 0 && po && !completedElsewhere && !wasLockedReplay) {
           try {
             const { downloadReceivingPdf } = await import('../lib/receivingPdf');
             await downloadReceivingPdf({
@@ -607,7 +651,23 @@ export default function PurchaseOrderDetail() {
       setLoading: setSaving,
       sentryTag: 'receive_po_items',
       onSuccess: (completedElsewhere) => {
-        if (!completedElsewhere) toast('success', 'Items received and inventory updated');
+        // `completedElsewhere` already announced itself with its own warning toast
+        // in the RPC error branch — adding a second message here would report one
+        // outcome twice.
+        if (completedElsewhere) return;
+        // "Items received and inventory updated" asserts that THIS submission
+        // performed the receipt. On a retry of a frozen request that is not
+        // established: the server returns a cached result for a receipt that may
+        // have committed on an earlier attempt, and it arrives as an ORDINARY
+        // success, so nothing above has said anything yet. Both cases end with the
+        // goods recorded exactly once — say that, which is true either way and does
+        // not credit this attempt with work it may not have done.
+        // (gpt-5.6-sol on 2ff8bdafc.)
+        if (wasLockedReplay) {
+          toast('success', 'Receiving reconciled — these goods are recorded once, and the PO is up to date.');
+          return;
+        }
+        toast('success', 'Items received and inventory updated');
       },
     });
   };

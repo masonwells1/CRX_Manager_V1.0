@@ -303,6 +303,45 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-09-05 — receiving can record goods against the WRONG purchase order (live on `main`)
+
+**Severity: BLOCKER. Live in production now. NOT introduced by PR #535** — `fetchPO` is byte-identical
+on `origin/main`. Found by an exact-SHA `gpt-5.6-sol` gate reviewing PR #535 (head `2ff8bdafc`).
+**Mason's call, 2026-09-05: fix it in its OWN session, not by widening #535.**
+
+`fetchPO` in `src/pages/PurchaseOrderDetail.tsx` (~line 191) is a `useCallback([id, toast])` that
+awaits the `purchase_orders` header query, calls `setPo`, then awaits a SECOND query for
+`purchase_order_items` and calls `setItems` — with **no check that `id` is still the current route**
+at any point. `fetchReceivingHistory` has the same shape. React Router reuses this component when
+only the `:id` param changes (the file's own comment says so), and the route effect clears neither
+`po` nor `items`.
+
+**The sequence:** open PO A (header resolved, item query still in flight) → navigate to PO B → B's
+header and items resolve → **A's older item query resolves LAST and overwrites `items` with A's
+lines while `po` stays B**. The screen shows B's PO number above A's line items. Receiving from that
+screen submits A's `po_item_id` values, and `receive_po_items` derives the affected PO **from the
+submitted item ids** — there is no `p_purchase_order_id` to cross-check — so the goods are recorded
+against A. The same race can file A's receiving history under B and produce a B-labelled PDF for an
+A record.
+
+**Why nothing existing catches it.** The durable intent scope and idempotency key prevent replaying
+one key twice; they do not verify that submitted item ids belong to the routed PO. The RPC has no
+expected-PO parameter. `VendorBillDetail.tsx` solves the analogous problem with an `activeBillIdRef`
+checked after every await — `PurchaseOrderDetail` simply never got that treatment.
+
+**Likelihood is low, impact is high:** it needs a fast navigation between two POs while a query is in
+flight, and live volume is small. It is an inventory-integrity defect, so it should be fixed next
+rather than backlogged indefinitely.
+
+**When fixing, copy the `activeBillIdRef` pattern but NOT its bug:** that guarded early return leaves
+the shared `loading` flag `true`, which wedges the page on a spinner (found in the same gate). A
+fetch-generation counter, where only the newest in-flight fetch owns the loading flags, avoids both
+defects. Consider also verifying payload item ids against the routed PO before submit as defence in
+depth. A server-side `p_purchase_order_id` cross-check would be strongest but is a NEW migration
+against an applied money/inventory RPC and needs Mason's explicit approval.
+
+---
+
 ## OPEN (prevention rule) 2026-09-03 — a `LOCK TABLE` does not serialize the OLD body of the function a migration replaces
 
 **Severity: the specific instance is CLOSED and unrealised; the RULE is open and applies to every

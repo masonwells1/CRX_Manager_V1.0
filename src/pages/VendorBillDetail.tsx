@@ -514,15 +514,45 @@ export default function VendorBillDetail() {
         // session-scoped. (gpt-5.6-sol on 862cd144d.)
         //
         // Do NOT claim the edit on screen saved — it did not; an EARLIER one did.
-        // Say that, leave the operator's current figures untouched, and refresh the
-        // record underneath them. fetchBill() re-reads the CURRENT route and guards
-        // on activeBillIdRef, so it is safe to call from a stale session.
-        toast(
-          'warning',
-          'An earlier edit to this bill finished after you left it. The bill has been refreshed — '
-          + 'check the figures on screen before saving again.',
-        );
-        fetchBill();
+        //
+        // Two different stale cases, and they must NOT be treated alike
+        // (gpt-5.6-sol on 2ff8bdafc, which caught both halves of the previous
+        // version of this branch).
+        if (currentBillIdRef.current === targetBillId) {
+          // SAME bill, a later editing session. Refreshing the record is right and
+          // this fetchBill closure is for this route.
+          //
+          // But be precise about what refreshes. fetchBill() updates `bill`; it does
+          // NOT rewrite editSubtotal/editAdjustment/dates/notes in an editor that is
+          // ALREADY OPEN — those were copied from `bill` when the editor opened,
+          // BEFORE this edit committed. The old wording ("the bill has been
+          // refreshed — check the figures on screen") pointed the operator AT the
+          // stale fields as if they were the refreshed ones; saving them reverts the
+          // edit that just committed. Name the fields as stale and give the one
+          // action that actually loads the new values.
+          toast(
+            'warning',
+            'An earlier edit to this bill saved after you reopened the editor. The figures in this '
+            + 'form were loaded BEFORE that change — close and reopen the editor to see the current '
+            + 'values before saving, or your save will overwrite what just landed.',
+          );
+          fetchBill();
+          return;
+        }
+        // DIFFERENT bill on screen. Deliberately no toast and NO fetch.
+        //
+        // This `fetchBill` is the closure from the render that started the edit, so
+        // it queries the bill the operator has LEFT. It sets the shared `loading`
+        // flag first and then returns at its own `activeBillIdRef` guard WITHOUT
+        // clearing it — wedging the bill the operator is actually looking at on a
+        // permanent loading screen. Calling it here was the only way to reach that
+        // leak. The commit is already recorded and the key retired; the next visit
+        // to this bill re-reads it, and a warning naming "this bill" would be about
+        // a bill that is not on screen.
+        Sentry.captureMessage('vendor-bill edit committed after the operator left the bill', {
+          level: 'info',
+          tags: { source: 'vendor-bill-edit', reason: 'stale-route-commit' },
+        });
         return;
       }
       toast('success', 'Bill updated');
