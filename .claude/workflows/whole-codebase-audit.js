@@ -16,7 +16,7 @@ export const meta = {
 // ---------------------------------------------------------------------------
 const PREAMBLE = [
   'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at C:\\CRX_Manager.',
-  'It is a production agricultural-retail ERP. New money storage uses bigint cents. Existing PostgreSQL numeric-dollar storage is not an approved exception until exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified. The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 6 Edge Functions; treat any count as a lead to confirm live, never a fact.',
+  'It is a production agricultural-retail ERP. New money storage uses bigint cents. Existing PostgreSQL numeric-dollar storage is not an approved exception until exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified. The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 7 Edge Functions; treat any count as a lead to confirm live, never a fact.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database. The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql" or "supabase list tables"). Live project id is rhyzpcqhnizqbxphqdkr. You MAY run read-only SQL (SELECT, pg_catalog, information_schema) to ground every finding against the live DB.',
   '',
@@ -138,7 +138,7 @@ const DIMENSIONS = [
   {
     key: 'edge-functions',
     prompt:
-      'Audit the 7 Edge Functions in supabase/functions (create-user, process-blend-ticket, process-document, reset-user-password, seed-admin, send-email, setup-blend-tickets-storage). Read each index.ts. Flag: (a) CORS — ALLOWED_ORIGIN enforced, no wildcard origin reflection; (b) auth — JWT verified; admin-only functions actually gate on an admin role check; (c) idempotency on side-effecting operations; (d) errors swallowed instead of surfaced/logged; (e) disk-vs-live drift — if the Supabase get_edge_function / list_edge_functions MCP tools are available, compare the deployed body to disk and flag divergence (this caught a real false-positive last week where disk ≠ deployed).',
+      'Audit the 7 Edge Functions in supabase/functions (create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage). Read each index.ts. Flag: (a) CORS — ALLOWED_ORIGIN enforced, no wildcard origin reflection; (b) auth — JWT verified; admin-only functions actually gate on an admin role check; (c) idempotency on side-effecting operations; (d) errors swallowed instead of surfaced/logged; (e) disk-vs-live drift — if the Supabase get_edge_function / list_edge_functions MCP tools are available, compare the deployed body to disk and flag divergence (this caught a real false-positive last week where disk ≠ deployed).',
   },
   {
     key: 'business-lifecycle',

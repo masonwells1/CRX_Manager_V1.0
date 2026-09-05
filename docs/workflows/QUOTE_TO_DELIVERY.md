@@ -39,6 +39,8 @@ The database trigger `_enforce_quote_status_transition()` is authoritative. With
 | `accepted` | `sent` through the guarded revert workflow |
 | `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` | Terminal; no ordinary outgoing transition |
 
+`closed_short` has an additional safety condition: the quote cannot have a non-deleted application job in `scheduled` or `in_progress`; the trigger refuses that transition with `BOOKING_HAS_ACTIVE_JOBS`.
+
 - **draft**: Initial state. Can be edited freely.
 - **sent**: Quote was sent to the customer. A `quote_versions` snapshot is created.
 - **closed_by_application**: Terminal planned quote fulfilled through application jobs rather than converted to a chemical-sale order.

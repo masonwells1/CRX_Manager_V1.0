@@ -32,6 +32,7 @@ The earlier third-party principles and Karpathy experiment-loop passage Mason as
 
 ## Verify Against the Goal
 
+- Use `docs/reference/qa-testing.md` for the repository's test layout, command choices, and browser-verification guidance.
 - Define observable completion before implementing. For a bug, reproduce the failing behavior when practical; for a feature, name the user-visible or data result that proves it works.
 - Run the smallest meaningful check first and expand verification according to risk. Do not run broad suites repeatedly without a new reason.
 - A new test can repeat the same mistaken assumption as the implementation. Observe the actual UI, RPC result, database invariant, or integration path required by `AGENTS.md`.

@@ -156,13 +156,18 @@ record(
 record(
   /_enforce_quote_status_transition\(\)` is authoritative/.test(quoteToDelivery)
     && /`draft` \| `sent`, `cancelled`/.test(quoteToDelivery)
+    && /closed_short` has an additional safety condition[\s\S]*BOOKING_HAS_ACTIVE_JOBS/.test(quoteToDelivery)
     && /\*\*cancelled\*\*: Quote was cancelled/.test(quoteToDelivery),
   "quote workflow preserves the authoritative transition map and terminal descriptions",
 );
-record(/under `tests\/e2e\/`/.test(qaTesting), "QA reference points to the real E2E directory");
 record(
-  /Hunt EDGE FUNCTIONS \(7 in supabase\/functions: create-user, epa-lookup,/.test(lifecycleAuditPrompts[1]),
-  "overnight edge-function audit includes epa-lookup",
+  /under `tests\/e2e\/`/.test(qaTesting) && /docs\/reference\/qa-testing\.md/.test(codingGuidelines),
+  "QA reference points to the real E2E directory and is reachable from routed guidance",
+);
+record(
+  /Audit the 7 Edge Functions in supabase\/functions \(create-user, epa-lookup,/.test(wholeCodebaseAudit)
+    && /Hunt EDGE FUNCTIONS \(7 in supabase\/functions: create-user, epa-lookup,/.test(lifecycleAuditPrompts[1]),
+  "whole-codebase and overnight edge-function audits include epa-lookup",
 );
 record(
   /\.claude\/commands\|skills\|hooks\|workflows\|agents\|settings\.json/.test(agentGuardrails),
