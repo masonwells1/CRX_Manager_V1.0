@@ -15,8 +15,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const BASE_PROVER = path.join(HERE, 'prove-commission-history-as-of.mjs');
 const SNAPSHOT = path.join(ROOT, 'supabase', 'migrations', '20260903230000_commission_report_snapshot_contract.sql');
-const REPLAY_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260903231000_commission_history_report_replay_guard.sql');
-const REPAIR = path.join(ROOT, 'supabase', 'migrations', '20260904110000_repair_commission_history_label_snapshots.sql');
+const REPLAY_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020000_commission_history_report_replay_guard.sql');
+const REPAIR = path.join(ROOT, 'supabase', 'migrations', '20260905020100_repair_commission_history_label_snapshots.sql');
 const GENERATED = path.join(HERE, `.commission-history-label-repair-${process.pid}.mjs`);
 
 for (const required of [SNAPSHOT, REPLAY_GUARD, REPAIR]) {

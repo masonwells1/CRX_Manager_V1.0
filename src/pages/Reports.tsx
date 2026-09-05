@@ -165,6 +165,23 @@ export default function Reports() {
   const [commissionReportError, setCommissionReportError] = useState(false);
   const commissionRequestId = useRef(0);
 
+  // The cutoff the commission RPC would be asked for right now, derived exactly
+  // as fetchCommissionBalance derives it.
+  const commissionRequestedAsOf = (() => {
+    const businessToday = todayInBusinessTz();
+    return endDate && endDate < businessToday ? endDate : businessToday;
+  })();
+  // Exporting is only honest when the rows in state are a COMPLETED, error-free
+  // load of the cutoff currently selected. A failed refresh deliberately keeps
+  // the previous rows on screen behind a warning banner, and a pending refresh
+  // still shows the old cutoff's rows — a CSV carries neither the banner nor the
+  // cutoff, so it must not be produced in either state.
+  const commissionExportReady =
+    !loading
+    && !commissionReportError
+    && commissionAsOfDate !== ''
+    && commissionAsOfDate === commissionRequestedAsOf;
+
   // ─── OPERATIONAL data ───────────────────────────────────────
   const [chemHistoryData, setChemHistoryData] = useState<ChemicalHistoryRow[]>([]);
   const [chemProductId, setChemProductId] = useState('');
@@ -829,6 +846,10 @@ export default function Reports() {
         { key: 'oldest_unpaid_date', header: 'Oldest Unpaid', format: fmtDateCSV },
       ], 'customer_balance_listing');
     } else if (financialTab === 'commission_balance') {
+      if (!commissionExportReady) {
+        toast('error', 'Commission export unavailable until the report finishes loading for the selected date.');
+        return;
+      }
       exportToCSV(commBalanceData as unknown as Record<string, unknown>[], [
         { key: 'recipient_name', header: 'Salesperson' },
         { key: 'total_earned', header: 'Earned', format: fmtCSV },
@@ -836,7 +857,7 @@ export default function Reports() {
         { key: 'outstanding_balance', header: 'Outstanding', format: fmtCSV },
         { key: 'pending_count', header: 'Pending' },
         { key: 'paid_count', header: 'Paid Count' },
-      ], 'commission_balance');
+      ], `commission_balance_as_of_${commissionAsOfDate}`);
     }
     toast('success', 'Report exported');
   };
@@ -879,6 +900,10 @@ export default function Reports() {
   };
 
   const handleCommissionPaymentDetailCSV = () => {
+    if (!commissionExportReady) {
+      toast('error', 'Payment detail export unavailable until the report finishes loading for the selected date.');
+      return;
+    }
     exportToCSV(commPaymentDetailData as unknown as Record<string, unknown>[], [
       { key: 'payment_number', header: 'Payment Number' },
       { key: 'payment_date', header: 'Payment Date', format: fmtDateOnlyCSV },
@@ -888,7 +913,7 @@ export default function Reports() {
       { key: 'customer_name', header: 'Customer' },
       { key: 'commission_order_date', header: 'Commission Date', format: fmtDateOnlyCSV },
       { key: 'settled_amount', header: 'Settled Amount', format: fmtCSV },
-    ], 'commission_payment_detail');
+    ], `commission_payment_detail_as_of_${commissionAsOfDate}`);
     toast('success', 'Payment detail exported');
   };
 
@@ -1054,7 +1079,7 @@ export default function Reports() {
   ];
 
   // ─── Date filter bar (shared across profitability/financial/operational)
-  const dateFilterBar = (onCSV: () => void) => (
+  const dateFilterBar = (onCSV: () => void, csvDisabled = false) => (
     <Card>
       <div className="flex flex-wrap items-end gap-3">
         <div>
@@ -1106,7 +1131,7 @@ export default function Reports() {
         )}
 
         <div className="ml-auto">
-          <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={onCSV}>
+          <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={onCSV} disabled={csvDisabled}>
             Export CSV
           </Button>
         </div>
@@ -1203,7 +1228,7 @@ export default function Reports() {
             ))}
           </div>
 
-          {dateFilterBar(handleFinancialCSV)}
+          {dateFilterBar(handleFinancialCSV, financialTab === 'commission_balance' && !commissionExportReady)}
 
           {/* P&L summary cards */}
           {financialTab === 'pnl' && pnlData.length > 0 && (
@@ -1255,7 +1280,7 @@ export default function Reports() {
                     <h3 className="text-base font-semibold text-nav-dark">Payment reconciliation</h3>
                     <p className="mt-1 text-sm text-secondary">Each posted payment is tied to the commission lines it settled as of the selected date.</p>
                   </div>
-                  <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={handleCommissionPaymentDetailCSV} disabled={commPaymentDetailData.length === 0}>
+                  <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={handleCommissionPaymentDetailCSV} disabled={!commissionExportReady || commPaymentDetailData.length === 0}>
                     Export Payment Detail
                   </Button>
                 </div>

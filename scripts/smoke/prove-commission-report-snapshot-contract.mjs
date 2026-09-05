@@ -33,7 +33,7 @@ assert.ok(readFileSync(MIGRATION, 'utf8'), `missing migration: ${MIGRATION}`);
 const continuation = `
   // ── Snapshot follow-up: real wrapper, replay, and catalog mutations ─────
   const snapshotSource = readFileSync(${JSON.stringify(MIGRATION)}, 'utf8');
-  const replayGuardSource = readFileSync(${JSON.stringify(path.join(ROOT, 'supabase', 'migrations', '20260903231000_commission_history_report_replay_guard.sql'))}, 'utf8');
+  const replayGuardSource = readFileSync(${JSON.stringify(path.join(ROOT, 'supabase', 'migrations', '20260905020000_commission_history_report_replay_guard.sql'))}, 'utf8');
   const snapshotSmokePath = ${JSON.stringify(SNAPSHOT)};
   copyIntoContainer(snapshotSmokePath, 'commission-report-snapshot.sql');
   applySql(snapshotSource);

@@ -19,7 +19,7 @@ three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
 
-The local, not-yet-applied `20260904110000_repair_commission_history_label_snapshots` candidate
+The local, not-yet-applied `20260905020100_repair_commission_history_label_snapshots` candidate
 addresses 34 un-settled opening commission snapshots that hold an order UUID and unknown customer
 label despite available canonical labels. It is intentionally blocked if settlement history exists.
 

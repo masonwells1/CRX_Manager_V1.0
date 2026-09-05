@@ -10,7 +10,7 @@ regeneration is outstanding — F2's `20260903160000_gate_number_generators_acti
 Recording the F2 apply and refreshing the registry is PR #594's lane, not this one.
 The current effective ordering high-water is the newest applied
 authored NAME: **`20260903230000_commission_report_snapshot_contract`** (verified 2026-09-04).
-The local `20260904110000_repair_commission_history_label_snapshots` candidate is not applied;
+The local `20260905020100_repair_commission_history_label_snapshots` candidate is not applied;
 it appends corrected labels for 34 un-settled opening commission snapshots rather than changing
 immutable ledger rows. Refresh `.claude/schema-registry.json` only after a reviewed live apply.
 

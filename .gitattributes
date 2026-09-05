@@ -183,7 +183,7 @@ scripts/smoke/prove-number-generator-gates.mjs text eol=lf
 # the disposable prover streams both source files verbatim into PostgreSQL.
 # Keep the SQL and proof inputs byte-identical across Windows and Linux.
 supabase/migrations/20260903230000_commission_report_snapshot_contract.sql text eol=lf
-supabase/migrations/20260903231000_commission_history_report_replay_guard.sql text eol=lf
+supabase/migrations/20260905020000_commission_history_report_replay_guard.sql text eol=lf
 scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf
 scripts/smoke/smoke-commission-report-snapshot-contract.sql text eol=lf
 # The invoice_date Chicago-fallback migration pins four live function bodies by md5 and

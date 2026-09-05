@@ -104,6 +104,7 @@ vi.mock('../components/reports/YearEndSummaryDialog', () => ({ default: () => nu
 
 import Reports from './Reports';
 import { todayInBusinessTz } from '../lib/dateUtils';
+import { exportToCSV } from '../lib/csvExport';
 
 const renderReports = () => render(<MemoryRouter><Reports /></MemoryRouter>);
 
@@ -112,6 +113,7 @@ beforeEach(() => {
   H.rpc = [];
   H.toast.mockReset();
   H.rpcHandler = null;
+  vi.mocked(exportToCSV).mockClear();
 });
 
 afterEach(() => {
@@ -295,5 +297,76 @@ describe('Reports commission history', () => {
     expect(screen.getAllByText('Newer Recipient').length).toBeGreaterThan(0);
     expect(screen.queryByText('Older Recipient')).not.toBeInTheDocument();
     expect(screen.getByText(/Balance and payout detail shown through 8\/21\/2026/)).toBeInTheDocument();
+  });
+
+  it('stamps both commission exports with the as-of date that was actually loaded', async () => {
+    renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+    await screen.findByText('CP-2026-0042');
+
+    const businessToday = todayInBusinessTz();
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Export Payment Detail' }));
+
+    expect(exportToCSV).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      `commission_balance_as_of_${businessToday}`,
+    );
+    expect(exportToCSV).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      `commission_payment_detail_as_of_${businessToday}`,
+    );
+  });
+
+  it('refuses to export the previous cutoff after a failed refresh', async () => {
+    renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+    await screen.findByText('CP-2026-0042');
+
+    // The first load succeeded, so exporting is legitimate at this point.
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Export Payment Detail' })).toBeEnabled();
+    vi.mocked(exportToCSV).mockClear();
+
+    H.rpcHandler = () => Promise.resolve({ data: null, error: { message: 'network unavailable' } });
+    const endDateInput = document.querySelectorAll<HTMLInputElement>('input[type="date"]')[1];
+    fireEvent.change(endDateInput, { target: { value: '2026-08-20' } });
+    await screen.findByRole('alert');
+
+    // The stale rows are still on screen behind the warning banner, but a CSV
+    // would carry neither the banner nor the cutoff they belong to.
+    expect(screen.getByText('CP-2026-0042')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Export Payment Detail' })).toBeDisabled();
+    expect(exportToCSV).not.toHaveBeenCalled();
+  });
+
+  it('refuses to export a cutoff whose report has not loaded yet', async () => {
+    renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+    await screen.findByText('CP-2026-0042');
+    vi.mocked(exportToCSV).mockClear();
+
+    // Hold the next refresh open so the component stays mid-load.
+    let releaseRefresh: (() => void) | null = null;
+    H.rpcHandler = () => new Promise<{ data: unknown; error: { message: string } | null }>((resolve) => {
+      releaseRefresh = () => resolve({ data: null, error: { message: 'cancelled' } });
+    });
+
+    const endDateInput = document.querySelectorAll<HTMLInputElement>('input[type="date"]')[1];
+    fireEvent.change(endDateInput, { target: { value: '2026-08-20' } });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Export CSV' })).toBeDisabled();
+    });
+    expect(screen.getByRole('button', { name: 'Export Payment Detail' })).toBeDisabled();
+    expect(exportToCSV).not.toHaveBeenCalled();
+
+    await act(async () => { releaseRefresh?.(); });
   });
 });
