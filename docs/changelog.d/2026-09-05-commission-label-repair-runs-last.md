@@ -14,7 +14,9 @@ would have passed that day. No migration was applied.
 
 - Renamed the repair to `20260905190000_repair_commission_history_label_snapshots.sql` (`git mv`,
   above the live applied high-water name `20260904180000_invoice_season_follows_invoice_date`) so it
-  is the last of the seven parked commission files. A refusal there stops nothing else.
+  was the last of the then-seven parked commission files. After the pre-apply consolidation of
+  `20260905200500` into the atomic `20260905200400` cutover, it remains last of the six-file plan.
+  A refusal there stops nothing else.
 - Widened its settlement-recorder pin from the single pre-`020200` body to the two-value
   `IN ('feb0f260…', '9054ce6c…')` shape `020200` already uses for the earned recorder, because the
   guard now runs first and replaces that recorder. No other statement changed.

@@ -3,10 +3,9 @@
  * Disposable PostgreSQL 17 proof for
  *   supabase/migrations/20260905200400_commission_dates_follow_chicago_business_day.sql
  *
- * The commission-creating helpers stop trusting the caller's date and derive it from the
- * record the commission belongs to (orders.order_date / invoices.invoice_date). Five live
- * callers pass the server's UTC CURRENT_DATE, which after ~7pm Chicago is already
- * tomorrow — and on September 30 that also moves the crop season.
+ * The candidate atomically replaces the commission helpers AND their four UTC-stamping
+ * document writers. A fixed-order writer drain occurs before any preflight/DDL, so the
+ * old and new halves cannot commit in different migration transactions.
  *
  * Built on the same harness as prove-invoice-date-fallbacks-chicago.mjs: restores the
  * supported schema baseline, replays the ledger-selected post-baseline migrations, and
@@ -39,7 +38,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,6 +67,26 @@ function psql(sql, options = {}) {
   );
   if (!options.allowFailure && r.status !== 0) throw new Error(`psql failed:\n${r.stdout}\n${r.stderr}`);
   return r;
+}
+function psqlProcess(options = {}) {
+  return spawn('docker', [
+    'exec', '-i', NAME, 'psql', '-U', options.user ?? 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1',
+    ...(options.wrap ? ['-1'] : []),
+  ], { stdio: ['pipe', 'pipe', 'pipe'] });
+}
+function collect(child) {
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  return new Promise((resolve) => child.on('close', (status) => resolve({ status, stdout, stderr })));
+}
+async function waitFor(predicate, label) {
+  for (let i = 0; i < 100; i += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for ${label}`);
 }
 // scripts/apply-migration-file.mjs transmits every wrappable file inside ONE transaction.
 // Mirror that with the SAME classifier so files using SET LOCAL / LOCK TABLE at top level
@@ -305,12 +324,27 @@ try {
 
   restoreHelpers();
 
-  // PHASE 4: the real apply.
-  const applied = psql('\\i /tmp/candidate.sql', { allowFailure: true, wrap: wrapByName.get('candidate.sql') ?? false });
+  // PHASE 4: a pre-cutover writer holds the same ROW EXCLUSIVE lock normal DML
+  // holds. The real candidate must wait before its first preflight/DDL; while it
+  // waits, neither helper body may be replaced. Release drains that writer, then
+  // the one wrapped migration installs all six functions before later writes run.
+  const holder = psqlProcess();
+  const holderDone = collect(holder);
+  holder.stdin.write("BEGIN; LOCK TABLE public.orders IN ROW EXCLUSIVE MODE; SELECT 'WRITER_LOCK_HELD';\n");
+  await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'orders' AND l.mode = 'RowExclusiveLock' AND l.granted)") === 't', 'old writer lock');
+  const applying = psqlProcess({ wrap: wrapByName.get('candidate.sql') ?? false });
+  const applyingDone = collect(applying);
+  applying.stdin.end('\\i /tmp/candidate.sql\n');
+  await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'orders' AND l.mode = 'ShareRowExclusiveLock' AND NOT l.granted)") === 't', 'candidate waiting on writer drain');
+  assert.deepEqual(bodyState(), rebuild, 'while the old writer holds its lock, no partial helper DDL may be visible');
+  holder.stdin.end('COMMIT;\n');
+  assert.equal((await holderDone).status, 0, 'writer holder must release cleanly');
+  const applied = await applyingDone;
   assert.equal(applied.status, 0, `the candidate must apply over the pinned bodies:\n${applied.stdout}\n${applied.stderr}`);
   const afterBodies = bodyState();
   for (const fn of FUNCS) assert.notEqual(afterBodies[fn], PINS[fn], `${fn} should have been replaced`);
   log('PHASE 4: the candidate applied over the pinned bodies');
+  log('PHASE 4 lock: old writer blocked all candidate preflight/DDL; after release the unified migration completed');
 
   const after = commissionProbe('after');
   log(`PHASE 4 probe(after):  zone=${after.zone} session=${after.session} chicago=${after.chicago} doc=${after.doc} order_stamped=${after.order} job_stamped=${after.job}`);
@@ -334,9 +368,35 @@ try {
   assert.match(colDefault, /America\/Chicago/, `orders.order_date default should be Chicago-based, got ${colDefault}`);
   log(`PHASE 6: orders.order_date default is now ${colDefault}`);
 
-  // PHASE 7: mutation — the postflight must be load-bearing.
+  // PHASE 6a: a lock-removal mutant is a negative control. It is EXPECTED to
+  // finish while the old writer lock is held, which is exactly why the real
+  // candidate's lock is required. The harness rejects that mutant by asserting
+  // the early completion; a weak lock that does not conflict is caught the same way.
   restoreHelpers();
-  const mutated = candidateSql.replace(/    v_order_date,\n    'pending'/, "    p_order_date,\n    'pending'");
+  const lockBlock = "SET LOCAL lock_timeout = '10s';\nLOCK TABLE public.orders,\n           public.invoices,\n           public.jobs,\n           public.commissions\n  IN SHARE ROW EXCLUSIVE MODE;\n";
+  const lockMutant = candidateSql.replace(lockBlock, "SET LOCAL lock_timeout = '10s';\n-- MUTATION: writer-drain lock removed.\n");
+  assert.notEqual(lockMutant, candidateSql, 'lock mutation did not alter the candidate');
+  copyText(lockMutant, 'lock-mutant.sql', workDir);
+  const mutantHolder = psqlProcess();
+  const mutantHolderDone = collect(mutantHolder);
+  // Use invoices here: the candidate's ALTER TABLE orders would otherwise create an
+  // accidental late drain even after the intentional four-table lock was removed.
+  // An old invoice/job writer is a real affected path and has no later table DDL to
+  // save the mutant from completing while that writer remains active.
+  mutantHolder.stdin.write("BEGIN; LOCK TABLE public.invoices IN ROW EXCLUSIVE MODE; SELECT 'WRITER_LOCK_HELD';\n");
+  await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'invoices' AND l.mode = 'RowExclusiveLock' AND l.granted)") === 't', 'mutant writer lock');
+  const lockMutantRun = psqlProcess({ wrap: true });
+  const lockMutantDone = collect(lockMutantRun);
+  lockMutantRun.stdin.end('\\i /tmp/lock-mutant.sql\n');
+  const lockMutantResult = await lockMutantDone;
+  assert.equal(lockMutantResult.status, 0, `a removed-lock mutant should expose the race by completing before old-writer release:\n${lockMutantResult.stdout}\n${lockMutantResult.stderr}`);
+  mutantHolder.stdin.end('COMMIT;\n');
+  assert.equal((await mutantHolderDone).status, 0, 'mutant writer holder must release cleanly');
+  log('PHASE 6a: MUTATION — removing the writer-drain lock completes while an old writer is active; the harness rejects that weakened candidate');
+
+  // PHASE 7: mutation — the helper postflight must be load-bearing.
+  restoreHelpers();
+  const mutated = candidateSql.replace('v_order_date, \'pending\'', 'p_order_date, \'pending\'');
   assert.notEqual(mutated, candidateSql, 'mutation did not alter the candidate');
   copyText(mutated, 'mutant.sql', workDir);
   const mutantRun = psql('\\i /tmp/mutant.sql', { allowFailure: true, wrap: wrapByName.get('mutant.sql') ?? false });

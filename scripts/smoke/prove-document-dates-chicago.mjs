@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * Disposable PostgreSQL 17 proof for
- *   supabase/migrations/20260905200500_document_dates_follow_chicago_business_day.sql
+ *   supabase/migrations/20260905200400_commission_dates_follow_chicago_business_day.sql
  *
  * The four document-date writers stop stamping orders.order_date / invoices.invoice_date
  * (and, in transfer_job_to_invoice, the due date and the derived SEASON) from the UTC
- * clock. Together with 20260905200400 this closes the September 30 commission risk;
- * 020400 alone did not, because the document it derives from was itself UTC-stamped.
+ * clock. The candidate also installs the two commission helpers in the SAME wrapper
+ * transaction, so no old document writer can commit in a gap before the helpers land.
  *
  * Same harness as prove-invoice-date-fallbacks-chicago.mjs / prove-commission-dates-chicago.mjs:
  * restores the supported schema baseline, replays the ledger-selected post-baseline
@@ -58,7 +58,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-document-dates-chicago-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
-const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260905200500_document_dates_follow_chicago_business_day.sql');
+const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260905200400_commission_dates_follow_chicago_business_day.sql');
 const REPLAY_STOP_BEFORE = '20260817120000_carry_allocated_line_cents_through_lifecycle.sql';
 
 // name -> the number of CURRENT_DATE values the candidate converts, read from its own

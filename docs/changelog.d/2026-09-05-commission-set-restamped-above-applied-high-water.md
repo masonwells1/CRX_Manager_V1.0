@@ -4,7 +4,7 @@
 `20260905185938` under the bare name `refuse_null_job_field_acres`. The ordering guard the governed
 apply path runs (`checkMigrationOrdering`, via `.claude/hooks/migration-apply-lib.mjs`) synthesizes
 `<version>_<name>` for timestamp-less ledger names, so that row's effective stamp is
-`20260905185938` — newer than six of the seven parked commission candidates, which were stamped
+`20260905185938` — newer than six of the then-seven parked commission candidates, which were stamped
 `20260905020000`..`20260905185619` earlier that day. Each of those six would have been refused as an
 out-of-order replay; the guard was working, the filenames were stale. Found by the migration drift
 reviewer on the label-repair reorder and verified from the guard's source plus a live read-only
@@ -19,7 +19,6 @@ repair still last:
 | `20260905020200_refuse_stale_commission_payment_recipient.sql` | `20260905200200_…` |
 | `20260905020300_enforce_commission_payment_business_date.sql` | `20260905200300_…` |
 | `20260905020400_commission_dates_follow_chicago_business_day.sql` | `20260905200400_…` |
-| `20260905020500_document_dates_follow_chicago_business_day.sql` | `20260905200500_…` |
 | `20260905185619_latest_commission_recipient_label.sql` | `20260905200600_…` |
 | `20260905190000_repair_commission_history_label_snapshots.sql` | `20260905210000_…` |
 
@@ -60,6 +59,13 @@ streams the file's bytes without normalizing them, installed a CRLF body and the
 its own postflight (`COMMISSION_RECIPIENT_LABEL_POSTFLIGHT_DRIFT`). The ordering proof could not
 see this because it normalizes line endings before applying. The pin is added and the file
 re-checked-out as LF; the snapshot-contract prover passes again.
+
+**Follow-up correction (before any apply):** the former `20260905200500` file was deliberately
+folded into `20260905200400` after a concurrency review found that two migration transactions
+could admit an old document writer between them. The pending set now contains **six** files;
+`20260905200500` is superseded, never applied, and must not be recreated as a separate step.
+The unified file drains document and commission writers before all six replacements, with a
+disposable PostgreSQL 17 two-session proof and a lock-removal mutation as its acceptance gate.
 
 No migration was applied and no live data changed. Applying the set still requires Mason's
 explicit in-chat approval and the governed apply path.

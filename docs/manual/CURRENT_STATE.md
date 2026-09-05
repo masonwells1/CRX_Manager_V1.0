@@ -9,7 +9,7 @@ migration list includes both routine-only migrations from that refresh:
 ordering high-water is the newest applied row's effective stamp:
 **`20260905185938_refuse_null_job_field_acres`** (#606, applied live 2026-09-05 under a bare ledger
 name, so the stamp is synthesized from its version; verified live 2026-09-05 evening, 999 rows).
-Seven local commission follow-ups (`20260905200000` through `20260905210000`) are not applied. They
+Six local commission follow-ups (`20260905200000` through `20260905210000`, with no `20260905200500` file) are not applied. They
 were restamped above that row on 2026-09-05 evening because six of them had sorted below it and
 the ordering guard would have refused each one.
 They harden snapshot replay, refuse a payment batch if its recipient became stale before posting,
@@ -21,8 +21,9 @@ That label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09
 then restamped again with the rest of the set) refuses to run
 once any commission payment has been posted; running it last means such a refusal stops nothing
 else, whereas at its old position it would have halted the payout guard and the date fixes behind
-it. The date candidates at `20260905200400` and `20260905200500` close the September 30 boundary
-only when applied together.
+it. The unified date candidate at `20260905200400` closes the September 30 boundary atomically:
+it drains old writers, then replaces both commission helpers and all four source-document writers
+in one migration transaction. `20260905200500` was superseded before apply and is not a file.
 None changes an existing immutable ledger row. Refresh
 `.claude/schema-registry.json` only after a reviewed live apply.
 
@@ -59,8 +60,8 @@ migrations are applied live with **no file on `main`**. Six belong to PR #535:
 reconstruct any of these nine; land the owning PRs after their own review gates. PR #592 has already
 restamped its two NOT-YET-APPLIED files to `20260905020000_commission_history_report_replay_guard`
 and `20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: the
-whole seven-file set now sits at `20260905200000` through `20260905210000`, above the applied
-high-water, with the repair still last). The #606 candidate, the field-acreage guard first tracked
+six-file set now sits at `20260905200000` through `20260905210000`, with no `20260905200500`
+file, above the applied high-water and with the repair still last). The #606 candidate, the field-acreage guard first tracked
 as #582 (`20260904185900` on disk), was applied
 live on 2026-09-05 as ledger version `20260905185938` under the bare name
 `refuse_null_job_field_acres` — that row is now the ordering high-water, which is why the commission

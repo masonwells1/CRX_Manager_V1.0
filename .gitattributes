@@ -201,17 +201,12 @@ supabase/migrations/20260905200300_enforce_commission_payment_business_date.sql 
 # parked commission file with no pin here; on a CRLF checkout the snapshot-contract prover
 # installed a CRLF body and the migration refused its own postflight (found 2026-09-05).
 supabase/migrations/20260905200600_latest_commission_recipient_label.sql text eol=lf
-# 20260905200400 installs two md5-PINNED function bodies (pre- and post-image, measured
-# by scripts/smoke/prove-commission-dates-chicago.mjs). A CRLF checkout would install
-# bodies whose md5 can never match an LF-computed pin, so the migration would refuse
-# itself and any later migration pinning the same functions.
+# 20260905200400 atomically installs six md5-pinned, Chicago-date function bodies
+# (two commission helpers and four source-document writers). Both dedicated PG17
+# proofs read it byte-for-byte; a CRLF checkout would change body hashes and make the
+# candidate refuse itself.
 supabase/migrations/20260905200400_commission_dates_follow_chicago_business_day.sql text eol=lf
 scripts/smoke/prove-commission-dates-chicago.mjs text eol=lf
-# 20260905200500 re-emits four ~12-71KB function bodies copied byte-for-byte from the
-# migrations that installed them, each pinned by md5 pre- and post-image. A CRLF checkout
-# would install bodies whose md5 can never match an LF-computed pin, so the migration
-# would refuse itself.
-supabase/migrations/20260905200500_document_dates_follow_chicago_business_day.sql text eol=lf
 scripts/smoke/prove-document-dates-chicago.mjs text eol=lf
 scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf
 scripts/smoke/smoke-commission-report-snapshot-contract.sql text eol=lf

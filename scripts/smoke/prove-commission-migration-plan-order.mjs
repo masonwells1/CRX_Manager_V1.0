@@ -14,8 +14,9 @@
  * A second ordering hazard, found 2026-09-05 evening: the ordering guard the apply path
  * runs (checkMigrationOrdering) refuses any file stamped older than the newest APPLIED
  * ledger row. #606 landed live that day as version 20260905185938 under a bare name, so
- * the six files then stamped 20260905020000..185619 would each have been refused. The
- * whole set was restamped 20260905200000..210000; the LEDGER phase below proves the
+ * the five surviving files then stamped 20260905020000..185619 would each have been refused.
+ * (The former standalone 020500 was superseded before apply by the unified 020400 cutover.)
+ * The six-file set was restamped 20260905200000..210000; the LEDGER phase below proves the
  * renumbered names clear the guard and that the old names did not.
  *
  * What this proves, in one disposable container seeded by the commission-history
@@ -62,13 +63,12 @@ const PARKED_PREFIX = '20260905';
 // the snapshot is present it is unioned in, so the bar can only rise, never fall.
 const LIVE_HIGH_WATER_ROW = '20260905185938_refuse_null_job_field_acres';
 // The names the parked set carried before the 2026-09-05 evening renumber — the
-// negative control for the LEDGER phase. Six of these sort below the row above.
+// negative control for the LEDGER phase. Five of these sort below the row above.
 const PRE_RENUMBER_NAMES = [
   '20260905020000_commission_history_report_replay_guard.sql',
   '20260905020200_refuse_stale_commission_payment_recipient.sql',
   '20260905020300_enforce_commission_payment_business_date.sql',
   '20260905020400_commission_dates_follow_chicago_business_day.sql',
-  '20260905020500_document_dates_follow_chicago_business_day.sql',
   '20260905185619_latest_commission_recipient_label.sql',
   '20260905190000_repair_commission_history_label_snapshots.sql',
 ];
@@ -158,8 +158,8 @@ assert.equal(parkedNames.length, PRE_RENUMBER_NAMES.length,
   `parked set is ${parkedNames.length} files but the negative control lists ${PRE_RENUMBER_NAMES.length}; update PRE_RENUMBER_NAMES`);
 // Negative control first: the SAME guard against the SAME ledger refuses the old names.
 const refusedBefore = PRE_RENUMBER_NAMES.filter((name) => checkMigrationOrdering({ name, sql: '', appliedNames }).ok === false);
-assert.equal(refusedBefore.length, 6,
-  `negative control: expected the ordering guard to refuse six pre-renumber names, it refused ${refusedBefore.length}: ${refusedBefore.join(', ')}`);
+assert.equal(refusedBefore.length, 5,
+  `negative control: expected the ordering guard to refuse five pre-renumber names, it refused ${refusedBefore.length}: ${refusedBefore.join(', ')}`);
 // The renumbered names must clear it on their own stamps — never via the escape hatch.
 for (const name of parkedNames) {
   const sql = readFileSync(trailing[trailingNames.indexOf(name)], 'utf8');
@@ -168,9 +168,9 @@ for (const name of parkedNames) {
   assert.ok(verdict.ok && !verdict.abstained, `${name} is refused by the ordering guard: ${verdict.reason || 'abstained'}`);
 }
 const ledgerHighWater = checkMigrationOrdering({ name: parkedNames[0], sql: '', appliedNames }).newestApplied;
-// Pin WHICH six were refused and WHAT the bar was, so a moved ledger or a wrong snapshot fails
-// loudly instead of coincidentally still counting to six.
-assert.deepEqual(refusedBefore, PRE_RENUMBER_NAMES.slice(0, 6),
+// Pin WHICH five were refused and WHAT the bar was, so a moved ledger or a wrong snapshot fails
+// loudly instead of coincidentally still counting to five.
+assert.deepEqual(refusedBefore, PRE_RENUMBER_NAMES.slice(0, 5),
   'negative control refused a different set of pre-renumber names than expected');
 assert.equal(ledgerHighWater, LIVE_HIGH_WATER_ROW.slice(0, 14),
   `ledger high-water moved: expected ${LIVE_HIGH_WATER_ROW.slice(0, 14)}, guard reports ${ledgerHighWater}; re-read live and re-stamp if needed`);

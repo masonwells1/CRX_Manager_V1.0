@@ -234,8 +234,8 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // retry through either finds the same receipt. Same shape as
   // _cancel_return_intent_impl_20260812 below.
   //
-  // This became visible on disk only with 20260905200500, which re-emits the
-  // body under the live name to convert its UTC dates. The literal is faithful
+  // This became visible on disk only with the unified 20260905200400 cutover,
+  // which re-emits the body under the live name to convert its UTC dates. The literal is faithful
   // to what is installed live; changing it would repoint an in-flight money
   // path's idempotency cache and orphan existing receipts, so it is registered
   // here rather than rewritten.
