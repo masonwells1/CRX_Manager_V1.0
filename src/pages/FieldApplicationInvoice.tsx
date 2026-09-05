@@ -1299,6 +1299,13 @@ export default function FieldApplicationInvoice() {
   }, [loadJobNotifications]);
 
   const deriveShares = useCallback(async (fieldIds: string[], appliedAcresMap: Record<string, number>) => {
+    // Invalidate FIRST, not on the success path. Both callers are user edits to a pricing input
+    // (locations picked, applied acres changed), so by the time we are here the on-screen preview
+    // is already stale — and the two non-success exits below would otherwise keep it: clearing
+    // every location returns early, and a failed derivation falls into the catch. Either way the
+    // screen would keep showing prices for locations or acres no longer in the form
+    // (CodeRabbit review of head 9e8dee739, 2026-09-04).
+    invalidatePreview();
     if (fieldIds.length === 0) {
       setShares([]);
       setPrimaryCustomerTier(1);
@@ -1323,8 +1330,6 @@ export default function FieldApplicationInvoice() {
       setShares(legacyShares);
       const primary = (result.customers || []).find((c) => c.is_primary) || result.customers?.[0];
       setPrimaryCustomerTier(primary?.tier ?? 1);
-      // Reset preview whenever shares change — it's stale until user re-clicks Preview
-      invalidatePreview();
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'derive_customer_shares_from_fields' } });
       toast('error', 'Failed to derive customer shares');

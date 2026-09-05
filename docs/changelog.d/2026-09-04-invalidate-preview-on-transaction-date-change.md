@@ -46,6 +46,26 @@ Proven by mutation again: a second new test holds the preview RPC open, changes 
 Oct 1 boundary while it is in flight, then resolves it. Removing the one-line guard makes that test
 **fail** with the stale breakdown rendered; restoring it returns 26/26.
 
+### Corrected — the "all four inputs" claim was not yet true
+
+CodeRabbit, reviewing head `9e8dee739`, caught that the paragraph above overstated the code as
+written. Three of the four inputs invalidated unconditionally, but the locations path did not:
+`deriveShares` called `invalidatePreview()` only after a **successful** RPC. Its two other exits
+kept the stale preview — clearing every location returns early on the empty field list, and a
+failed derivation lands in the `catch`. In both cases the screen kept showing prices for locations
+or acres no longer in the form.
+
+`invalidatePreview()` now runs at the **top** of `deriveShares`, before the empty-list branch and
+before the RPC, and the success-only call is gone. Both callers are user edits to a pricing input,
+so the on-screen preview is already stale by the time the function is entered; there is no path
+that should reach it and keep the old breakdown.
+
+Two more mutation-proven tests cover the exits that were leaking — clearing every location, and a
+failed derivation. **Both initially passed against the broken code**, because they asserted from
+the locations tab, and leaving the customers tab unmounts the preview-only discount input whether
+or not the invalidation works. Re-pointed to assert on the customers tab, they fail with the
+hoisted call removed and pass with it restored: 28/28.
+
 The spinner's `setPreviewing(false)` is deliberately left ungated. The counter means "inputs
 changed", not "a request is running" — gating the spinner on it would hang the spinner forever when
 an operator edits an input without re-previewing.

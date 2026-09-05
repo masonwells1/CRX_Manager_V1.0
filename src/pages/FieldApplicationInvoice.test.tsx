@@ -93,25 +93,37 @@ vi.mock('react-router-dom', () => ({
 vi.mock('../components/field-app/SelectLocationsModal', () => ({
   default: ({ isOpen, onSelect }: { isOpen: boolean; onSelect: (fields: unknown[]) => void }) =>
     isOpen ? (
-      <button
-        type="button"
-        data-testid="mock-select-one-field"
-        onClick={() =>
-          onSelect([
-            {
-              id: 'field-1',
-              field_name: 'North 80',
-              crop_type: 'corn',
-              total_acres: 40,
-              measured_acres: 40,
-              override_acres: null,
-              customer_name: 'Farm A',
-            },
-          ])
-        }
-      >
-        pick field
-      </button>
+      <>
+        <button
+          type="button"
+          data-testid="mock-select-one-field"
+          onClick={() =>
+            onSelect([
+              {
+                id: 'field-1',
+                field_name: 'North 80',
+                crop_type: 'corn',
+                total_acres: 40,
+                measured_acres: 40,
+                override_acres: null,
+                customer_name: 'Farm A',
+              },
+            ])
+          }
+        >
+          pick field
+        </button>
+        {/* Clearing every location is a real operator action and its own code path:
+            deriveShares returns early on an empty list, so it is the case where a
+            success-only preview invalidation would have left stale prices on screen. */}
+        <button
+          type="button"
+          data-testid="mock-select-no-fields"
+          onClick={() => onSelect([])}
+        >
+          clear fields
+        </button>
+      </>
     ) : null,
 }));
 
@@ -477,6 +489,66 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
     });
 
     expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+  });
+
+  it('discards a rendered preview when every location is cleared', async () => {
+    // deriveShares returns EARLY on an empty field list. A success-only invalidation never runs
+    // on that path, so the breakdown for the removed locations stayed on screen.
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    expect(await screen.findByTitle(/Early-pay discount earned/i)).toBeInTheDocument();
+
+    // Preview switches to the customers tab, so go back before touching the locations panel.
+    fireEvent.click(screen.getByRole('button', { name: /^Locations/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Change Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-no-fields'));
+
+    // Assert back on the CUSTOMERS tab. Asserting from the locations tab would pass even with a
+    // broken invalidation, because leaving the customers tab unmounts the discount input anyway.
+    fireEvent.click(screen.getByRole('button', { name: /^Customers/i }));
+    await waitFor(() => {
+      expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('discards a rendered preview when share derivation fails', async () => {
+    // The catch branch is the other non-success exit. A failed derivation left the old prices up.
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    expect(await screen.findByTitle(/Early-pay discount earned/i)).toBeInTheDocument();
+
+    // Next derivation fails; every other RPC keeps the shared routing from beforeEach.
+    const routeRpc = mockRpc.getMockImplementation()!;
+    mockRpc.mockImplementation((name: string, args: unknown) => {
+      if (name === 'derive_customer_shares_from_fields') {
+        return Promise.resolve({ data: null, error: { message: 'derive exploded' } });
+      }
+      return routeRpc(name, args);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Locations/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Change Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+
+    // Same reason as above: assert from the customers tab, not the locations tab.
+    fireEvent.click(screen.getByRole('button', { name: /^Customers/i }));
+    await waitFor(() => {
+      expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+    });
   });
 });
 
