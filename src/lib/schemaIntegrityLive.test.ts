@@ -414,9 +414,45 @@ describe.skipIf(!isLiveDB)('Live DB: CHECK Constraint Values', () => {
 
 // ─── Known Function Overloads (intentional) ──────────────────────────
 // Functions that legitimately have multiple overloads in pg_proc.
-// next_invoice_number: no-args version (column default) + type-aware version
+//
+// This list is read by THREE tests that pull in different directions, so an
+// entry is never harmless in all of them:
+//   - "no public function has more than 1 overload" treats it as an ALLOWLIST —
+//     an in-scope overloaded function MISSING from this list fails.
+//   - "known overloaded functions actually have overloads" asserts every entry
+//     really has count(*) > 1 — a STALE entry fails.
+//   - "known overloaded functions list is small (<=2 entries)" caps its length,
+//     and unlike the other two it runs WITHOUT live credentials.
+// A name therefore belongs here only if live pg_proc shows it carrying more
+// than one overload, and only if there are at most two such names.
+//
+// Emptied 2026-09-05 after checking live pg_proc. Both live tests were failing.
+//
+// `next_invoice_number` and `check_rate_limit` were listed here. Live has
+// exactly ONE version of each (`next_invoice_number` pronargs 1,
+// `check_rate_limit` pronargs 4), so the second test failed on both. The old
+// comment also claimed next_invoice_number had a "no-args version (column
+// default) + type-aware version"; that was wrong on its own terms —
+// `invoices.invoice_number` defaults to
+// `next_invoice_number('field_application'::text)`, which passes an argument,
+// and migration 20260526151856 dropped the zero-arg form.
+//
+// The FIRST test was failing too, which nobody had recorded: live carries 8
+// overloaded functions in `public`, all owned by the `plpgsql_check` extension
+// (2.7), and none were listed. They are not listed now either — they are
+// excluded at the query instead, because they are not the drift this guard is
+// for and because the <=2 cap above exists to keep genuine app exceptions rare.
+// Putting 8 extension names here would have forced that cap up and destroyed
+// the signal it carries. See the query comment for the measured scope.
+//
+// Both failures stayed latent only because the live half sits behind
+// `describe.skipIf(!isLiveDB)`, `isLiveDB` is false without credentials, and no
+// workflow runs `test:schema-live`.
+//
+// Empty is the correct live state: no migration-created public function has
+// intentional overloads.
 
-const KNOWN_OVERLOADED_FUNCTIONS = ['next_invoice_number', 'check_rate_limit'];
+const KNOWN_OVERLOADED_FUNCTIONS: string[] = [];
 
 // ─── Live DB: Idempotency Body Check (PR-19, 2026-05-10) ───────────────
 // schemaIntegrity.test.ts maintains a list of mutating RPCs that MUST use
@@ -770,10 +806,23 @@ describe.skipIf(!isLiveDB)('Live DB: Required SECURITY INVOKER functions', () =>
 describe.skipIf(!isLiveDB)('Live DB: No Unintended Function Overloads', () => {
   it('no public function has more than 1 overload (except known exceptions)', async () => {
     const result = await queryInformationSchema(`
-      SELECT proname, count(*) as overload_count
-      FROM pg_proc
-      WHERE pronamespace = 'public'::regnamespace
-      GROUP BY proname
+      SELECT p.proname, count(*) as overload_count
+      FROM pg_proc p
+      WHERE p.pronamespace = 'public'::regnamespace
+        -- Exclude functions owned by an installed extension. This guard exists to
+        -- catch accidental overloads introduced by OUR migrations (the bug class
+        -- behind 40+ March 2026 issues); an extension's own functions are never
+        -- created by a migration and cannot be that drift. plpgsql_check 2.7 is
+        -- installed into public and legitimately ships 8 overloaded functions,
+        -- which made this test fail for every listed and unlisted name alike.
+        -- Measured 2026-09-05 against live: 634 public functions, 24 excluded as
+        -- extension-owned, 610 still in scope — so this narrows the population,
+        -- it does not disable the check.
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_depend d
+          WHERE d.objid = p.oid AND d.deptype = 'e'
+        )
+      GROUP BY p.proname
       HAVING count(*) > 1
     `);
 
