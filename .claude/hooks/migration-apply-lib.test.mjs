@@ -1105,7 +1105,14 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   // load-bearing: without it a rule that refused every worktree would pass every
   // deny case here and quietly break the way migrations are actually built.
   {
-    const primary = fixture({ migrationFile: null });
+    const primary = fixture({
+      migrationFile: null,
+      // This deliberately differs from the linked ledger that the proof hashes.
+      // The active linked checkout is the apply target, so its reviewed ledger
+      // must govern ordering; using the primary's newer floor would wrongly
+      // reject this otherwise valid session-owned proof.
+      snapshot: { captured_at: iso(0), applied: [{ version: "20280101000000", name: "20280101000000_primary_only" }] },
+    });
     const linked = mkdtempSync(path.join(os.tmpdir(), "crx-linked-"));
     roots.push(linked);
     mkdirSync(path.join(linked, "supabase", "migrations"), { recursive: true });

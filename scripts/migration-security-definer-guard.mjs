@@ -91,25 +91,60 @@ function readDoubleQuotedIdentifier(text, start) {
   return null;
 }
 
+function startsUnicodeEscapedIdentifier(text, start) {
+  return (text[start] === 'u' || text[start] === 'U') && text[start + 1] === '&' && text[start + 2] === '"';
+}
+
+function readUnicodeEscapedIdentifier(text, start) {
+  if (!startsUnicodeEscapedIdentifier(text, start)) return null;
+  const quoted = readDoubleQuotedIdentifier(text, start + 2);
+  if (quoted === null) return null;
+  // The default Unicode escape is a backslash. An explicit UESCAPE clause is
+  // deliberately not modeled here: configuration syntax we cannot decode must
+  // fail closed rather than being mistaken for a harmless parameter.
+  const after = skipWhitespaceAndComments(text, quoted.end);
+  if (after === null || startsKeyword(text, after, 'uescape')) return null;
+  let value = '';
+  for (let index = 0; index < quoted.value.length;) {
+    if (quoted.value[index] !== '\\') { value += quoted.value[index++]; continue; }
+    if (quoted.value[index + 1] === '\\') { value += '\\'; index += 2; continue; }
+    const plus = quoted.value[index + 1] === '+';
+    const digits = quoted.value.slice(index + (plus ? 2 : 1), index + (plus ? 8 : 5));
+    if (!/^[0-9a-f]{4}(?:[0-9a-f]{2})?$/i.test(digits) || (plus && digits.length !== 6) || (!plus && digits.length !== 4)) return null;
+    const codePoint = Number.parseInt(digits, 16);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return null;
+    value += String.fromCodePoint(codePoint);
+    index += plus ? 8 : 5;
+  }
+  return { value, end: quoted.end };
+}
+
+function readConfigurationIdentifier(text, start) {
+  const unicode = readUnicodeEscapedIdentifier(text, start);
+  if (unicode !== null) return unicode;
+  const quoted = readDoubleQuotedIdentifier(text, start);
+  if (quoted !== null) return quoted;
+  const bare = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(text.slice(start));
+  return bare === null ? null : { value: bare[0], end: start + bare[0].length };
+}
+
 function isStandardConformingStringsParameter(text, start) {
-  if (startsKeyword(text, start, 'standard_conforming_strings')) return true;
-  const identifier = readDoubleQuotedIdentifier(text, start);
-  return identifier === null ? false : identifier.value.toLowerCase() === 'standard_conforming_strings';
+  const identifier = readConfigurationIdentifier(text, start);
+  return identifier !== null && identifier.value.toLowerCase() === 'standard_conforming_strings';
 }
 
 function isSearchPathParameter(text, start) {
-  if (startsKeyword(text, start, 'search_path')) return true;
-  const identifier = readDoubleQuotedIdentifier(text, start);
-  return identifier === null ? false : identifier.value.toLowerCase() === 'search_path';
+  const identifier = readConfigurationIdentifier(text, start);
+  return identifier !== null && identifier.value.toLowerCase() === 'search_path';
 }
 
 function setConfigNameEnd(text, start) {
-  if (startsKeyword(text, start, 'set_config')) return start + 'set_config'.length;
-  const identifier = readDoubleQuotedIdentifier(text, start);
+  const identifier = readConfigurationIdentifier(text, start);
   return identifier !== null && identifier.value.toLowerCase() === 'set_config' ? identifier.end : null;
 }
 
 function unsafeStandardConformingStringsChange(text, start) {
+  if (startsUnicodeEscapedIdentifier(text, start) && readUnicodeEscapedIdentifier(text, start) === null) return true;
   if (startsKeyword(text, start, 'set')) {
     let index = skipWhitespaceAndComments(text, start + 3);
     if (index === null) return true;
@@ -117,7 +152,7 @@ function unsafeStandardConformingStringsChange(text, start) {
       index = skipWhitespaceAndComments(text, index + (startsKeyword(text, index, 'local') ? 5 : 7));
       if (index === null) return true;
     }
-    return isStandardConformingStringsParameter(text, index);
+    return readConfigurationIdentifier(text, index) === null || isStandardConformingStringsParameter(text, index);
   }
   const setConfigEnd = setConfigNameEnd(text, start);
   if (setConfigEnd === null) return false;
@@ -138,6 +173,7 @@ function unsafeStandardConformingStringsChange(text, start) {
 // on an actual routine body (before that body is blanked), so ordinary
 // migration-level SET statements retain their established semantics.
 function unsafeRoutineBodySearchPathChange(text, start) {
+  if (startsUnicodeEscapedIdentifier(text, start) && readUnicodeEscapedIdentifier(text, start) === null) return true;
   if (startsKeyword(text, start, 'set')) {
     let index = skipWhitespaceAndComments(text, start + 3);
     if (index === null) return true;
@@ -145,11 +181,11 @@ function unsafeRoutineBodySearchPathChange(text, start) {
       index = skipWhitespaceAndComments(text, index + (startsKeyword(text, index, 'local') ? 5 : 7));
       if (index === null) return true;
     }
-    return isSearchPathParameter(text, index);
+    return readConfigurationIdentifier(text, index) === null || isSearchPathParameter(text, index);
   }
   if (startsKeyword(text, start, 'reset')) {
     const index = skipWhitespaceAndComments(text, start + 5);
-    return index === null || isSearchPathParameter(text, index) || startsKeyword(text, index, 'all');
+    return index === null || readConfigurationIdentifier(text, index) === null || isSearchPathParameter(text, index) || startsKeyword(text, index, 'all');
   }
   const setConfigEnd = setConfigNameEnd(text, start);
   if (setConfigEnd === null) return false;
@@ -202,7 +238,7 @@ function hasUnsafeRoutineBodySearchPathChange(body) {
         index = close + tag.length; continue;
       }
     }
-    if ((ch === 's' || ch === 'S' || ch === 'r' || ch === 'R' || ch === '"') && unsafeRoutineBodySearchPathChange(body, index)) return true;
+    if ((ch === 's' || ch === 'S' || ch === 'r' || ch === 'R' || ch === 'u' || ch === 'U' || ch === '"') && unsafeRoutineBodySearchPathChange(body, index)) return true;
     if (ch === '"') {
       const identifier = readDoubleQuotedIdentifier(body, index);
       if (identifier === null) return true;
@@ -224,7 +260,7 @@ export function executableSql(sql) {
     // through SET (including comment-separated tokens) or set_config() would
     // make its treatment of backslash escapes unknowable, so reject it before
     // handling any quoted content.
-    if ((ch === 's' || ch === 'S' || ch === '"') && unsafeStandardConformingStringsChange(src, i)) return null;
+    if ((ch === 's' || ch === 'S' || ch === 'u' || ch === 'U' || ch === '"') && unsafeStandardConformingStringsChange(src, i)) return null;
     const escape = (ch === 'e' || ch === 'E') && src[i + 1] === "'" && !/[A-Za-z0-9_$]/.test(src[i - 1] || '');
     if (ch === '-' && src[i + 1] === '-') {
       let end = i + 2; while (end < src.length && src[end] !== '\n' && src[end] !== '\r') end++;

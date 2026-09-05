@@ -414,6 +414,22 @@ REVOKE ALL ON FUNCTION public.return_body_path_probe() FROM PUBLIC, anon;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(returnBody), ['unparseable-security-definer-sql']);
 });
 
+test('fails closed for Unicode-escaped search_path settings in SECURITY DEFINER bodies', () => {
+  const body = (statement) => `CREATE FUNCTION public.unicode_path_probe() RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$ BEGIN ${statement}; END; $$;
+REVOKE ALL ON FUNCTION public.unicode_path_probe() FROM PUBLIC, anon;`;
+  for (const statement of [
+    'SET U&"search_path" = attacker, public',
+    'SET LOCAL U&"search_path" = attacker, public',
+    'SET SESSION U&"search_path" = attacker, public',
+    'RESET U&"search_path"',
+    'SET U&"search\\005fpath" = attacker, public',
+    "SET U&\"search!005fpath\" UESCAPE '!' = attacker, public",
+    "PERFORM U&\"set_config\"('search_path', 'attacker, public', true)",
+  ]) assert.deepEqual(securityDefinerMissingAnonRevokes(body(statement)), ['unparseable-security-definer-sql'], statement);
+  assert.equal(executableSql('SET U&"standard_conforming_strings" = off;'), null);
+});
+
 test('does not demand an anon revoke for invoker-security functions', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.safe_fn() RETURNS void LANGUAGE sql AS $$ SELECT; $$;'), []);
 });

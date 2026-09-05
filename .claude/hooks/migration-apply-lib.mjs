@@ -527,7 +527,11 @@ export function evaluateMigrationApply({
   // refuses the apply and tells the operator how to produce one. Only the
   // library's internal "this name has no timestamp" case abstains.
   {
-    const snapPath = path.join(stateDir, "applied-migrations.json");
+    // The proof and the ordering gate must consume the same session-worktree
+    // ledger. Reading the primary checkout here while hashing the active
+    // worktree's ledger would certify one ordering floor and apply against
+    // another.
+    const snapPath = path.join(activeProofStateDir, "applied-migrations.json");
     // The recapture target must be the project THIS apply is aimed at. Reading it
     // from the environment printed a literal `<your project ref>` in every normal
     // hook run — neither manifest exports SUPABASE_PROJECT_REF — and a stray env
