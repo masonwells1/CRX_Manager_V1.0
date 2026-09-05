@@ -23,9 +23,16 @@ left.
 
 Two supporting details:
 
-- The counter advances **during render**, not in an effect. `currentBillIdRef` is written by an
-  effect, which runs after render, so a response landing in that gap read the OLD id and passed a
-  check that should already have failed. Deriving the change during render closes that window.
+- The counter advances in a **layout effect**, together with `currentBillIdRef`. Not a passive
+  `useEffect`: that is deferred past paint, so a response landing in the gap read the OLD id and
+  passed a check that should already have failed. Not during render either — that is where this
+  started, and a later `gpt-5.6-sol` round found it unsafe: React may render a screen and then
+  discard it (lazy routes here sit under `<Suspense>`), and it does not roll back a ref an abandoned
+  render wrote, so a save for the bill still on screen could be judged stale. A layout effect runs
+  synchronously before paint — no later than the render-phase write from the operator's point of
+  view — and never runs for a render React throws away. **This bullet originally described the
+  render-phase version; it is corrected here so the shipped record does not recommend the approach
+  that was withdrawn.**
 - `openEditModal` now clears `editOverageMessage`. The route-change effect already did; a same-bill
   reopen did not, so a prompt raised for the previous session could survive into the new one.
 
