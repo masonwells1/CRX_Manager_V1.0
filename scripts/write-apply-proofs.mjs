@@ -43,6 +43,7 @@ import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.m
 import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
 import { routineReferencesIn } from './migration-routine-references.mjs';
+import { applicationRpcCallSites } from './rpc-call-site-matcher.mjs';
 
 const rawArgs = process.argv.slice(2);
 
@@ -195,25 +196,6 @@ for (const name of names) {
     console.error(`invalid migration basename: ${JSON.stringify(name)} — pass one migration name without a path or .sql suffix.`);
     process.exit(1);
   }
-}
-
-function applicationRpcCallSites(name, snapshot) {
-  const files = [
-    ...snapshot.paths('src/', (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative)),
-    ...snapshot.paths('supabase/functions/', (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative)),
-  ];
-  const rpc = new RegExp(`\\.rpc\\(\\s*(['"])${name}\\1`, 'g');
-  const sites = [];
-  for (const file of files) {
-    const text = snapshot.text(file);
-    for (const match of text.matchAll(rpc)) {
-      const line = text.slice(0, match.index).split(/\r?\n/).length;
-      const excerpt = text.split(/\r?\n/)[line - 1]?.trim() || '(call spans lines)';
-      const source = file.startsWith('supabase/functions/') ? 'edge-function' : 'frontend';
-      sites.push(`  ${source} RPC: ${file}:${line}\n    ${excerpt}`);
-    }
-  }
-  return sites;
 }
 
 function buildEmbeddedEvidence(migRelPath, snapshot) {

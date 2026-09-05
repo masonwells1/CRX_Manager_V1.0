@@ -10,13 +10,24 @@ function isIdentifierCharacter(character) {
   return /^[$_\p{L}\p{N}]$/u.test(character);
 }
 
+function isDollarTagStart(character) {
+  return /^[_\p{L}]$/u.test(character);
+}
+
+function isDollarTagCharacter(character) {
+  // PostgreSQL dollar-quote tags are identifiers except that `$` itself is
+  // the delimiter, not tag content. Reusing isIdentifierCharacter here made
+  // `$body$` consume the closing delimiter as part of its tag.
+  return /^[_\p{L}\p{N}]$/u.test(character);
+}
+
 function dollarQuoteDelimiter(text, index) {
   if (text[index] !== '$') return null;
   let cursor = index + 1;
   if (text[cursor] === '$') return '$$';
-  if (!isIdentifierStart(text[cursor] || '')) return null;
+  if (!isDollarTagStart(text[cursor] || '')) return null;
   cursor += 1;
-  while (cursor < text.length && isIdentifierCharacter(text[cursor])) cursor += 1;
+  while (cursor < text.length && isDollarTagCharacter(text[cursor])) cursor += 1;
   return text[cursor] === '$' ? text.slice(index, cursor + 1) : null;
 }
 
@@ -124,7 +135,7 @@ function consumeParenthesized(text, start) {
       const quoted = consumeQuoted(text, cursor);
       if (!quoted) return null;
       cursor = quoted.next - 1;
-    } else if (text[cursor] === '$') {
+    } else if (text[cursor] === '$' && !isIdentifierCharacter(text[cursor - 1] || '')) {
       const delimiter = dollarQuoteDelimiter(text, cursor);
       if (delimiter) {
         const end = text.indexOf(delimiter, cursor + delimiter.length);
@@ -169,6 +180,11 @@ function maskComments(text) {
 }
 
 export function statementEnd(text, start) {
+  // This module records routine declarations and ACLs, not arbitrary PL/pgSQL
+  // blocks. Restrict dollar-body handling to a routine declaration so a legacy
+  // non-routine DO block with dollar-like text cannot poison source-history
+  // collection for unrelated functions.
+  const routineStatement = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(text.slice(start));
   for (let cursor = start; cursor < text.length; cursor += 1) {
     if (text[cursor] === '-' && text[cursor + 1] === '-') {
       cursor += 2; while (cursor < text.length && text[cursor] !== '\n' && text[cursor] !== '\r') cursor += 1;
@@ -184,7 +200,7 @@ export function statementEnd(text, start) {
       const quoted = consumeQuoted(text, cursor);
       if (!quoted) return null;
       cursor = quoted.next - 1;
-    } else if (text[cursor] === '$') {
+    } else if (routineStatement && text[cursor] === '$' && !isIdentifierCharacter(text[cursor - 1] || '')) {
       const delimiter = dollarQuoteDelimiter(text, cursor);
       if (delimiter) {
         const end = text.indexOf(delimiter, cursor + delimiter.length);

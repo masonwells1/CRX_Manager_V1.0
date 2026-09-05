@@ -515,9 +515,12 @@ function readSqlIdentifier(text, start) {
   return bare === null ? null : { value: bare[0].toLowerCase(), end: start + bare[0].length };
 }
 
-function hasSystemCatalogDml(sql) {
-  const dml = /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+/gi;
-  for (const match of sql.matchAll(dml)) {
+function hasSystemCatalogMutation(sql) {
+  // Every source-level mutation form is unsafe against PostgreSQL system
+  // catalogs. The producer deliberately does not model their effects, so a
+  // catalog target fails closed whether the mutation is direct or in a body.
+  const mutation = /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE(?:\s+TABLE)?|COPY)\s+/gi;
+  for (const match of sql.matchAll(mutation)) {
     let index = skipWhitespaceAndComments(sql, match.index + match[0].length);
     if (index === null) return true;
     // PostgreSQL accepts UPDATE ONLY table_name. It does not make a catalog
@@ -551,7 +554,7 @@ function hasForbiddenSecurityDefinerMutation(sql) {
     || /\b(?:REASSIGN\s+OWNED|OWNER\s+TO)\b/i.test(keywordSql)
     || /\b(?:ALTER|CREATE|DROP)\s+(?:ROLE|GROUP|USER)\b/i.test(keywordSql)
     || hasRoleMembershipMutation(sql)
-    || hasSystemCatalogDml(sql);
+    || hasSystemCatalogMutation(sql);
 }
 
 function dropRoutineEvents(sql) {

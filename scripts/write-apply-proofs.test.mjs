@@ -115,3 +115,17 @@ REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;`;
     ['unparseable-security-definer-sql'],
   );
 });
+
+test('proof production rejects MERGE, TRUNCATE, and COPY system-catalog mutations', () => {
+  const safe = `CREATE FUNCTION public.post_return_credit(p_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN RETURN; END; $$;
+REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;`;
+  for (const mutation of [
+    'MERGE INTO pg_catalog.pg_proc AS target USING public.source AS source ON false WHEN MATCHED THEN UPDATE SET proacl = NULL;',
+    'TRUNCATE "pg_catalog".pg_default_acl;',
+    'COPY pg_catalog.pg_auth_members FROM STDIN;',
+  ]) assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\n${mutation}`),
+    ['unparseable-security-definer-sql'],
+  );
+});

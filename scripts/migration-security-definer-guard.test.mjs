@@ -78,6 +78,19 @@ test('fails closed for quoted catalog targets and catalog mutations hidden in ex
   );
 });
 
+test('fails closed for MERGE, TRUNCATE, and COPY mutations targeting system catalogs', () => {
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  for (const mutation of [
+    'MERGE INTO pg_catalog.pg_proc AS target USING public.source AS source ON false WHEN MATCHED THEN UPDATE SET proacl = NULL;',
+    'TRUNCATE TABLE "pg_catalog".pg_default_acl;',
+    'COPY pg_catalog.pg_auth_members FROM STDIN;',
+    'DO $$ BEGIN MERGE INTO pg_catalog.pg_proc AS target USING public.source AS source ON false WHEN MATCHED THEN UPDATE SET proacl = NULL; END; $$;',
+  ]) assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\n${mutation}`),
+    ['unparseable-security-definer-sql'],
+  );
+});
+
 test('fails closed for quoted names and unsupported ACL forms that can restore execution', () => {
   const quoted = `CREATE FUNCTION public."danger-fn"() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT; $$;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['danger-fn']);

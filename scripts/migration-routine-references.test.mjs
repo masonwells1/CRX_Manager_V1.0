@@ -33,6 +33,23 @@ test('keeps quoted semicolons and Unicode dollar tags out of routine boundaries'
   );
 });
 
+test('captures the complete named dollar-quoted routine body before its statement terminator', () => {
+  const result = routineReferencesIn(`
+    CREATE FUNCTION public.named_body() RETURNS void LANGUAGE plpgsql AS $body$
+    BEGIN
+      PERFORM 1;
+      DELETE FROM public.audit_log WHERE false;
+    END;
+    $body$;
+    REVOKE EXECUTE ON FUNCTION public.named_body() FROM anon;
+  `);
+
+  assert.equal(result.error, null);
+  assert.equal(result.entries.length, 2);
+  assert.match(result.entries[0].statement, /DELETE FROM public\.audit_log/);
+  assert.match(result.entries[0].statement, /\$body\$;/);
+});
+
 test('captures routine declarations and ACLs separated by nested PostgreSQL comments', () => {
   const result = routineReferencesIn(`
     CREATE /* outer ; /* nested ; */ still outer */ FUNCTION public.nested_comment() RETURNS void LANGUAGE sql AS $$ SELECT; $$;
