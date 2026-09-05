@@ -59,6 +59,25 @@ test('fails closed for ownership mutations and direct system-catalog writes', ()
   );
 });
 
+test('fails closed for quoted catalog targets and catalog mutations hidden in executable bodies', () => {
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  for (const mutation of [
+    'UPDATE "pg_catalog".pg_proc SET proacl = NULL;',
+    'UPDATE pg_catalog."pg_auth_members" SET roleid = member;',
+    'DELETE FROM "pg_catalog"."pg_policy";',
+  ]) assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\n${mutation}`),
+    ['unparseable-security-definer-sql'],
+  );
+  for (const wrapper of [
+    `DO $$ BEGIN UPDATE pg_catalog.pg_proc SET proacl = NULL; END; $$;`,
+    `CREATE FUNCTION public.catalog_body_probe() RETURNS void LANGUAGE plpgsql AS $$ BEGIN UPDATE pg_catalog.pg_proc SET proacl = NULL; END; $$;`,
+  ]) assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\n${wrapper}`),
+    ['unparseable-security-definer-sql'],
+  );
+});
+
 test('fails closed for quoted names and unsupported ACL forms that can restore execution', () => {
   const quoted = `CREATE FUNCTION public."danger-fn"() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT; $$;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['danger-fn']);

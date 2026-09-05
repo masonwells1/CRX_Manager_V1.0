@@ -102,3 +102,16 @@ SET search_path = public, pg_temp AS $$ BEGIN PERFORM set_config('search_path', 
 REVOKE ALL ON FUNCTION public.body_path_probe() FROM PUBLIC, anon;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(bodyChange), ['unparseable-security-definer-sql']);
 });
+
+test('proof production rejects catalog mutations in bodies and quoted catalog targets', () => {
+  const safe = `CREATE FUNCTION public.post_return_credit(p_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN RETURN; END; $$;
+REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;`;
+  for (const mutation of [
+    'DO $$ BEGIN UPDATE pg_catalog.pg_proc SET proacl = NULL; END; $$;',
+    'UPDATE "pg_catalog"."pg_policy" SET polroles = NULL;',
+  ]) assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\n${mutation}`),
+    ['unparseable-security-definer-sql'],
+  );
+});

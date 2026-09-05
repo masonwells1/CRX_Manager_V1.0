@@ -253,7 +253,7 @@ export function executableSql(sql) {
         const rawBody = src.slice(i + (escape ? 2 : 1), end - 1);
         if (hasUnsafeRoutineBodySearchPathChange(rawBody)) return null;
         const body = executableSql(rawBody);
-        if (body === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(body)) return null;
+        if (body === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(body) || hasForbiddenSecurityDefinerMutation(body)) return null;
       }
       out = blank(out, end - i); i = end; continue;
     }
@@ -275,7 +275,7 @@ export function executableSql(sql) {
           const rawBody = src.slice(i + tag.length, close);
           if (hasUnsafeRoutineBodySearchPathChange(rawBody)) return null;
           const body = executableSql(rawBody);
-          if (body === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(body)) return null;
+          if (body === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(body) || hasForbiddenSecurityDefinerMutation(body)) return null;
         }
         out = blank(out, end - i); i = end; continue;
       }
@@ -508,6 +508,52 @@ function hasRoleMembershipMutation(sql) {
   return false;
 }
 
+function readSqlIdentifier(text, start) {
+  const quoted = readDoubleQuotedIdentifier(text, start);
+  if (quoted !== null) return { value: quoted.value.toLowerCase(), end: quoted.end };
+  const bare = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(text.slice(start));
+  return bare === null ? null : { value: bare[0].toLowerCase(), end: start + bare[0].length };
+}
+
+function hasSystemCatalogDml(sql) {
+  const dml = /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+/gi;
+  for (const match of sql.matchAll(dml)) {
+    let index = skipWhitespaceAndComments(sql, match.index + match[0].length);
+    if (index === null) return true;
+    // PostgreSQL accepts UPDATE ONLY table_name. It does not make a catalog
+    // mutation less privileged, so normalize it before reading the target.
+    if (startsKeyword(sql, index, 'only')) {
+      index = skipWhitespaceAndComments(sql, index + 4);
+      if (index === null) return true;
+    }
+    let target = readSqlIdentifier(sql, index);
+    if (target === null) return true;
+    index = skipWhitespaceAndComments(sql, target.end);
+    if (index === null) return true;
+    if (target.value === 'pg_catalog' && sql[index] === '.') {
+      index = skipWhitespaceAndComments(sql, index + 1);
+      if (index === null) return true;
+      target = readSqlIdentifier(sql, index);
+      if (target === null) return true;
+    }
+    if (target.value.startsWith('pg_')) return true;
+  }
+  return false;
+}
+
+// Source-level ACL proof cannot model a catalog, ownership, or role mutation.
+// This predicate is intentionally reusable for the top-level migration and
+// every executable routine/DO body before that body is removed from the token
+// stream; otherwise a body could hide the same privileged change.
+function hasForbiddenSecurityDefinerMutation(sql) {
+  const keywordSql = maskQuotedIdentifierContents(sql);
+  return keywordSql === null
+    || /\b(?:REASSIGN\s+OWNED|OWNER\s+TO)\b/i.test(keywordSql)
+    || /\b(?:ALTER|CREATE|DROP)\s+(?:ROLE|GROUP|USER)\b/i.test(keywordSql)
+    || hasRoleMembershipMutation(sql)
+    || hasSystemCatalogDml(sql);
+}
+
 function dropRoutineEvents(sql) {
   const events = [];
   const re = /\bDROP\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:IF\s+EXISTS\s+)?(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
@@ -560,10 +606,7 @@ export function securityDefinerMissingAnonRevokes(sql) {
   // silently change a routine's effective ACL or configuration after a valid
   // declaration, so any ownership transfer or direct system-catalog DML
   // blocks proof generation rather than attempting an incomplete model.
-  if (
-    /\b(?:REASSIGN\s+OWNED|OWNER\s+TO)\b/i.test(executable)
-    || /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:(?:pg_catalog\s*\.\s*)?pg_[A-Za-z0-9_]+)\b/i.test(executable)
-  ) return ['unparseable-security-definer-sql'];
+  if (hasForbiddenSecurityDefinerMutation(executable)) return ['unparseable-security-definer-sql'];
   const declarations = [
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
     ...executable.matchAll(SECURITY_DEFINER_ALTER).map((match) => ({ match, kind: 'alter' })),
@@ -571,12 +614,6 @@ export function securityDefinerMissingAnonRevokes(sql) {
   // A source-only proof has no role-inheritance graph. Any role definition or
   // membership mutation can alter effective anonymous access, so reject it
   // regardless of whether this migration also declares a routine.
-  if (
-    /\b(?:ALTER|CREATE|DROP)\s+(?:ROLE|GROUP|USER)\b/i.test(executable)
-    || hasRoleMembershipMutation(executable)
-  ) {
-    return ['unparseable-security-definer-sql'];
-  }
   // Keep all routines declared in this migration, not only SECURITY DEFINER
   // ones. An ACL event for an undeclared routine may be changing an existing
   // SECURITY DEFINER function, whose current body and ACL are not available to

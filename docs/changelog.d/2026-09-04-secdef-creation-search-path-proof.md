@@ -7,3 +7,4 @@
 - Refuse proof generation on ownership transfers, `REASSIGN OWNED`, or direct PostgreSQL system-catalog writes because source-level ACL evidence cannot safely model their effective privileges.
 - Normalize PostgreSQL-equivalent lower-case quoted routine names and `pg_catalog` built-in argument-type spellings during ACL tracking, so an alternate spelling cannot grant anonymous execution to a tracked owner-privileged routine.
 - Refuse proof generation when an executable SECURITY DEFINER body changes `search_path`, resets settings, or calls `set_config` with a search-path or dynamically computed setting name.
+- Inspect every executable `DO`, function, and procedure body before it is blanked, and reject role, ownership, or PostgreSQL-catalog mutations there as well as at the migration top level. Quoted catalog identifiers are normalized so `"pg_catalog"."pg_proc"` cannot evade that check.
