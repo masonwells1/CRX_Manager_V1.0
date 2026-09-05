@@ -9,6 +9,7 @@
 | Sol 1 | `--denials` could overwrite any path while the script called itself read-only | fixed: refuses an existing file, writes with the exclusive flag, header names the one write exception and why its text is not redacted |
 | Sol 2 | hand-made files under `.agents/skills/source-command-*` are classified like the CLI's own output | accepted: the worktree is still named and labelled; cleanup eligibility never reads this classification |
 | Codex App (P2) | a STAGED, modified, or deleted file under an import folder was counted as importer litter, so a merged worktree carrying deliberate agent-instruction changes could fold into "no real changes" | fixed: only untracked (`??`) entries are importer dirt; the other statuses are real dirt and un-fold the worktree; pinned for `A `, ` M`, ` D`, and `AM` |
+| Codex App (P2, second pass) | the usage report kept its own short envelope list, so a `<scheduled-task>` or `<heartbeat>` record — machine envelopes the hooks already recognise — counted as a prompt Mason typed and could become a `--titles` session title | fixed: the report imports `isMachineGenerated` from `.claude/hooks/prompt-source-lib.mjs` (one list, anywhere in the text or as the opening tag) and adds only the desktop app's `<ci-monitor-event>` on top |
 
 Both Sol rounds returned `CODEX_PROOF_VERDICT: CLEAN`; the App finding was fixed on top of the
 second CLEAN head and re-proved before the push.

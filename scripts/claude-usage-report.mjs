@@ -22,7 +22,10 @@
 //    without usage never shadows one that has it;
 //  - tool calls are deduplicated by tool_use id and tool results by tool_use_id;
 //  - synthetic / zero-usage assistant records are counted in diagnostics, never as calls;
-//  - human prompts exclude compaction summaries, meta lines, and machine envelopes;
+//  - human prompts exclude compaction summaries, meta lines, and machine envelopes — the envelope
+//    list is the hooks' own (`isMachineGenerated` in .claude/hooks/prompt-source-lib.mjs) plus the
+//    desktop app's <ci-monitor-event>, so a scheduled-task or heartbeat record is never counted as
+//    a prompt Mason typed, nor shown as a session title under --titles (Codex App review of #613);
 //  - main and subagent transcripts are tracked separately on the session record;
 //  - parse failures, missing timestamps, and out-of-window records are reported, not dropped silently;
 //  - hook denials are attributed to the exact tool_use they answered.
@@ -35,6 +38,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import { isMachineGenerated } from "../.claude/hooks/prompt-source-lib.mjs";
 
 const args = process.argv.slice(2);
 const opt = (flag, dflt) => { const i = args.indexOf(flag); return i >= 0 && args[i + 1] ? args[i + 1] : dflt; };
@@ -90,7 +94,11 @@ const denialKinds = { "review-proof": 0, "maintenance-producer": 0, "hold-latch"
 let humanPrompts = 0, apiCalls = 0;
 const projectOf = (dir) => /crx/i.test(dir) ? "CRX" : /farmrx/i.test(dir) ? "FarmRx" : "other";
 const bucketOf = (ctx) => ctx < 1e5 ? "<100k" : ctx < 2e5 ? "100-200k" : ctx < 4e5 ? "200-400k" : ctx < 6e5 ? "400-600k" : ">600k";
-const ENVELOPE = /^\s*<(?:task-notification|system-reminder|local-command|command-name|ci-monitor-event)/i;
+// Machine envelopes: the hook library's list (task-notification, scheduled-task, system-reminder,
+// local-command-caveat, command-name, local-command-stdout, heartbeat — anywhere in the text or as
+// the opening tag) plus the desktop app's CI monitor event, which the hooks do not carry.
+const CI_MONITOR_ENVELOPE_RE = /^\s*<ci-monitor-event\b/i;
+const isEnvelope = (text) => isMachineGenerated(text) || CI_MONITOR_ENVELOPE_RE.test(text);
 
 function session(f) {
   const id = path.basename(f.fp, ".jsonl");
@@ -114,7 +122,7 @@ for (const f of files) {
       const isHuman = !o.isMeta && !o.isCompactSummary && !o.isVisibleInTranscriptOnly;
       const noteHuman = (text) => { humanPrompts++; s.prompts++; if (!s.title) s.title = text.slice(0, 80).replace(/\s+/g, " "); };
       if (typeof c === "string") {
-        if (isHuman && !ENVELOPE.test(c)) noteHuman(c);
+        if (isHuman && !isEnvelope(c)) noteHuman(c);
       } else if (Array.isArray(c)) {
         let text = "";
         for (const part of c) {
@@ -137,7 +145,7 @@ for (const f of files) {
             }
           }
         }
-        if (text && isHuman && !ENVELOPE.test(text)) noteHuman(text);
+        if (text && isHuman && !isEnvelope(text)) noteHuman(text);
       }
     }
 
