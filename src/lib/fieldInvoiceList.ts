@@ -5,7 +5,7 @@
  * Keeps the data-shaping (which columns a list row shows) and the footer
  * reducers OUT of the React component so they can be unit-tested in isolation.
  *
- * Money rule (CRX hard red line): every *_cents value is an INTEGER number of
+ * Money rule (CRX Hard Rule): every *_cents value is an INTEGER number of
  * cents. The reducers here sum cents as integers and NEVER touch floats — the
  * UI divides by 100 only at the display edge via formatCents.
  */

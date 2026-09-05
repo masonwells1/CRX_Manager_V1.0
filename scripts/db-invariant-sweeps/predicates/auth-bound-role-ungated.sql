@@ -3,7 +3,7 @@
 -- never reference any role-check helper (require_admin / is_admin / is_sales_rep) and never read a role column.
 -- This is exactly the create_direct_order hole fixed 2026-06-10 (W1): it bound auth.uid() — so every forgery
 -- and ungated-mutator sweep skipped it — yet had NO role gate, letting any authenticated user (incl. driver)
--- create orders + prebooks + commissions via direct RPC. The CLAUDE.md "next sweep class" lesson, standing.
+-- create orders + prebooks + commissions via direct RPC. This remains a standing sweep class.
 -- Contract: EXPECT ZERO unallowlisted rows. A hit is an auth-bound-but-role-ungated mutator — verify against
 --   the live body + its UI route's allowedRoles. If the function has no UI/Edge caller, the fix is REVOKE
 --   EXECUTE FROM authenticated (server-internal helper); if it has a privileged UI route, add the canonical

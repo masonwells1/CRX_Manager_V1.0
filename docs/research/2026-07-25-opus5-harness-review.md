@@ -1,5 +1,7 @@
 # Harness review — cross-agent sync + Claude Opus 5 tuning
 
+> Navigation note (2026-09-04): the cited agent-contract sections were later condensed and model-tuning guidance moved from `CLAUDE.md` to `docs/reference/claude-model-tuning.md`; this dated research remains historical evidence, not current routing.
+
 **Date:** 2026-07-25
 **Scope:** `AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, `.claude/hooks/`, `.claude/commands/`, `.claude/skills/`, `.claude/workflows/`, `.codex/hooks.json`, `.agents/`, `docs/workflows/AGENT_COLLABORATION.md`, `docs/manual/AGENT_ONBOARDING.md`
 **Status:** APPLIED. One item remains open — the P1 in §1.1a, which Mason approved on 2026-07-25 as its own separate PR. The two P2s Codex raised (§2.1a, §2.4) are **settled decisions, not open work**.
