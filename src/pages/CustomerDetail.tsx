@@ -117,7 +117,6 @@ export default function CustomerDetail() {
   const {
     getKey: getSaveCustomerIdempotencyKey,
     resetKey: resetSaveCustomerIdempotencyKey,
-    resetKeyFor: resetSaveCustomerIdempotencyKeyFor,
   } = useIdempotencyKey('save_customer', profile?.id || '', saveCustomerIntentScope);
   // Which scope produced the conflict the stale-save dialog is currently offering to
   // recover. Scoping the key made this necessary: the dialog stays open across a route
@@ -126,9 +125,7 @@ export default function CustomerDetail() {
   // release B's key and strand A's rejected one — returning to A would replay it and
   // re-open the same conflict. Recorded when the conflict opens, checked before
   // anything is released. Same defect and same fix as QuoteBuilder's.
-  // `payloadRejected` records WHY the dialog opened, because the two reasons have
-  // opposite safe directions once the route has moved on. See the recovery below.
-  const staleSaveConflictScopeRef = useRef<{ scope: string; payloadRejected: boolean } | null>(null);
+  const staleSaveConflictScopeRef = useRef<string | null>(null);
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>(() => makeBlankCustomer(profile?.id));
@@ -346,23 +343,27 @@ export default function CustomerDetail() {
         // conflict. Releasing here after a route change would retire the wrong
         // scope's key and strand the rejected one; leaving it retained is the
         // safe direction, because a retained key can still replay.
-        const conflictOrigin = staleSaveConflictScopeRef.current;
-        if (conflictOrigin === null || conflictOrigin.scope === saveCustomerIntentScope) {
+        // Release ONLY when the reload that just succeeded is for the same customer
+        // that produced the conflict. If the route moved on, the originating
+        // customer's key stays retained — deliberately, and even though its dialog is
+        // closing here.
+        //
+        // An earlier revision retired it in that case, reasoning that a
+        // payload-rejected key can only ever be rejected again. That is wrong, and it
+        // was a duplicate-write hazard: the key rejects the CHANGED payload, but
+        // replaying the ORIGINAL one returns the server's cached receipt. On a create
+        // that receipt carries the id of a row that may already have committed, and it
+        // is the only deterministic way to learn the create's outcome. Deleting it
+        // lets a later retry mint a fresh key and insert the record a second time.
+        //
+        // So the cost of retaining is one unearned conflict dialog when the operator
+        // returns to that customer, which then self-heals on its own reload. The cost
+        // of retiring is a possible duplicate customer. Retaining is the safe direction.
+        if (
+          staleSaveConflictScopeRef.current === null
+          || staleSaveConflictScopeRef.current === saveCustomerIntentScope
+        ) {
           resetSaveCustomerIdempotencyKey();
-          staleSaveConflictScopeRef.current = null;
-        } else if (conflictOrigin.payloadRejected) {
-          // The route moved on, so this reload installed a DIFFERENT customer and the
-          // rule above correctly refuses to release the current scope's key. But the
-          // dialog closes here, so the originating customer's key must not be left in
-          // the map: returning to that customer would replay it and earn the same
-          // conflict again.
-          //
-          // Safe only for a payload conflict, where the server has already proven the
-          // key is bound to a different payload and can only ever reject it again. A
-          // stale-row or commission-split refusal is the opposite case: that key may
-          // still be the replay handle for an earlier save whose response was lost, so
-          // it stays retained until its own customer is reloaded.
-          resetSaveCustomerIdempotencyKeyFor(conflictOrigin.scope);
           staleSaveConflictScopeRef.current = null;
         }
         setIsDirty(false);
@@ -386,7 +387,7 @@ export default function CustomerDetail() {
     // saveCustomerIntentScope is required, not cosmetic: without it this callback
     // compares the conflict's recorded scope against a STALE one, which is the exact
     // confusion the check exists to prevent.
-  }, [fetchCustomerSnapshot, resetSaveCustomerIdempotencyKey, resetSaveCustomerIdempotencyKeyFor, saveCustomerIntentScope]);
+  }, [fetchCustomerSnapshot, resetSaveCustomerIdempotencyKey, saveCustomerIntentScope]);
 
   useEffect(() => {
     // Fetch all customers for parent selector
@@ -845,10 +846,7 @@ export default function CustomerDetail() {
           || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
           // Bind the dialog to the customer that produced it, so the recovery cannot
           // release a different customer's key if the route changes while it is open.
-          staleSaveConflictScopeRef.current = {
-            scope: saveCustomerIntentScope,
-            payloadRejected: hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT),
-          };
+          staleSaveConflictScopeRef.current = saveCustomerIntentScope;
           setStaleSaveOpen(true);
         } else {
           toast('error', error.message);
@@ -867,7 +865,7 @@ export default function CustomerDetail() {
         if (rowVersionResult.kind === 'recovery') {
           // The save succeeded and its key was retired on the line above, so there is
           // no rejected key here to retire a second time.
-          staleSaveConflictScopeRef.current = { scope: saveCustomerIntentScope, payloadRejected: false };
+          staleSaveConflictScopeRef.current = saveCustomerIntentScope;
           setStaleSaveOpen(true);
           toast('warning', 'Customer saved, but its save-protection version could not be confirmed. Reload before editing or saving it again.');
         }
@@ -925,7 +923,7 @@ export default function CustomerDetail() {
         // a later whole-record save must reload instead of overwriting unseen work.
         // A direct crop mutation, not a save_customer call — no idempotency key of
         // that operation is outstanding, so there is nothing to retire on recovery.
-        staleSaveConflictScopeRef.current = { scope: saveCustomerIntentScope, payloadRejected: false };
+        staleSaveConflictScopeRef.current = saveCustomerIntentScope;
         setStaleSaveOpen(true);
         toast('warning', 'Crops were updated, but another customer edit may have completed at the same time. Your current edits were kept; reload before saving other customer changes.');
       }

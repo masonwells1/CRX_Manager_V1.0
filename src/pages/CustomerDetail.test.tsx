@@ -510,7 +510,7 @@ describe('CustomerDetail stale whole-record save', () => {
    * Reload, retires B's key and strands A's rejected one — so returning to A replays
    * the rejected key and re-opens the same conflict.
    */
-  it('retires customer A\'s rejected key, not B\'s, when A\'s conflict dialog is recovered after a route change', async () => {
+  it('retires neither customer\'s key when A\'s conflict dialog is recovered after a route change', async () => {
     // A's save is REJECTED, so A's dialog opens and A's key is permanently unusable.
     mockRpc.mockResolvedValue({ data: null, error: { message: 'IDEMPOTENCY_PAYLOAD_CONFLICT' } });
 
@@ -549,14 +549,21 @@ describe('CustomerDetail stale whole-record save', () => {
       mockResetIdempotencyKey,
       "recovering A's conflict must not retire customer B's key — B never had an unresolved save",
     ).not.toHaveBeenCalledWith('customer-2');
-    // The other half: closing the dialog must not abandon A's key in the map. The
-    // server rejected it on payload fingerprint, so it can only ever be rejected
-    // again — leaving it would earn the operator a second unearned conflict the
-    // moment they returned to customer A.
+    // And it must not retire A's key either, even though A's dialog is what closed.
+    //
+    // An earlier revision did retire it, on the reasoning that a payload-rejected key
+    // can only ever be rejected again. That was a duplicate-write hazard: the key
+    // rejects the CHANGED payload, but replaying the ORIGINAL one returns the server's
+    // cached receipt, which on a create is the only way to learn the id of a row that
+    // may already have committed. Retiring it lets a later retry insert twice.
+    //
+    // Retaining costs one unearned conflict dialog on returning to A, which self-heals
+    // on A's own reload. That is the cheaper side of the trade, so this asserts the
+    // key survives.
     expect(
       mockResetIdempotencyKey,
-      "recovering A's conflict must retire A's own permanently rejected key",
-    ).toHaveBeenCalledWith('customer-1');
+      "A's key is the receipt handle for a create that may have committed — recovery on another customer must not retire it",
+    ).not.toHaveBeenCalledWith('customer-1');
   });
 
   it('ignores a slow snapshot for the previous customer that lands after the route moved on', async () => {

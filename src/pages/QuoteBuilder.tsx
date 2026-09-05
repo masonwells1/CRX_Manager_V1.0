@@ -375,7 +375,6 @@ export default function QuoteBuilder() {
   const {
     getKey: getSaveQuoteIdempotencyKey,
     resetKey: resetSaveQuoteIdempotencyKey,
-    resetKeyFor: resetSaveQuoteIdempotencyKeyFor,
   } = useIdempotencyKey('save_quote', profile?.id || '', saveQuoteIntentScope);
   // Which scope produced the conflict the stale-save dialog is currently offering to
   // recover. Scoping the key made this necessary: the dialog stays open across a route
@@ -383,9 +382,7 @@ export default function QuoteBuilder() {
   // operator who navigates A -> B with A's dialog open and then clicks Reload would
   // release B's key and leave A's rejected one in place. Recorded at the moment the
   // conflict opens, checked before anything is released.
-  // `payloadRejected` records WHY the dialog opened, because the two reasons have
-  // opposite safe directions once the route has moved on. See the recovery below.
-  const staleSaveConflictScopeRef = useRef<{ scope: string; payloadRejected: boolean } | null>(null);
+  const staleSaveConflictScopeRef = useRef<string | null>(null);
   const [isPlanned, setIsPlanned] = useState(false);
   const [wasPlanned, setWasPlanned] = useState(false);
 
@@ -1036,24 +1033,26 @@ export default function QuoteBuilder() {
         // open, releasing here would retire the wrong scope's key and strand the
         // rejected one; leaving it retained is the safe direction, because a
         // retained key can still replay.
-        const conflictOrigin = staleSaveConflictScopeRef.current;
-        if (conflictOrigin === null || conflictOrigin.scope === saveQuoteIntentScope) {
+        // Release ONLY when the reload that just succeeded is for the same quote that
+        // produced the conflict. If the route moved on, the originating quote's key
+        // stays retained — deliberately, and even though its dialog is closing here.
+        //
+        // An earlier revision retired it in that case, reasoning that a
+        // payload-rejected key can only ever be rejected again. That is wrong, and it
+        // was a duplicate-write hazard: the key rejects the CHANGED payload, but
+        // replaying the ORIGINAL one returns the server's cached receipt. On a create
+        // that receipt carries the id of a row that may already have committed, and it
+        // is the only deterministic way to learn the create's outcome. Deleting it
+        // lets a later retry mint a fresh key and insert the record a second time.
+        //
+        // So the cost of retaining is one unearned conflict dialog when the operator
+        // returns to that quote, which then self-heals on its own reload. The cost of
+        // retiring is a possible duplicate quote. Retaining is the safe direction.
+        if (
+          staleSaveConflictScopeRef.current === null
+          || staleSaveConflictScopeRef.current === saveQuoteIntentScope
+        ) {
           resetSaveQuoteIdempotencyKey();
-          staleSaveConflictScopeRef.current = null;
-        } else if (conflictOrigin.payloadRejected) {
-          // The route moved on, so this reload installed a DIFFERENT quote and the
-          // rule above correctly refuses to release the current scope's key. But the
-          // dialog closes here, so the originating quote's key must not be abandoned
-          // in the map: returning to that quote would replay it and earn the same
-          // conflict a second time.
-          //
-          // Safe only for a payload conflict. There the server has already proven
-          // this key is bound to a different payload, so replaying it can never
-          // return anything but the same rejection — retiring it costs nothing and
-          // clears the trap. A stale-row or commission-split refusal is the opposite
-          // case: that key may still be the replay handle for an earlier save whose
-          // response was lost, so it is left retained until its own quote is reloaded.
-          resetSaveQuoteIdempotencyKeyFor(conflictOrigin.scope);
           staleSaveConflictScopeRef.current = null;
         }
         if (resetCreateVersionAfterReloadRef.current) {
@@ -1093,7 +1092,6 @@ export default function QuoteBuilder() {
     resetCreateVersionAttempt,
     resetRestoreVersionAttempt,
     resetSaveQuoteIdempotencyKey,
-    resetSaveQuoteIdempotencyKeyFor,
     // Required, not cosmetic: without it this callback compares the conflict's
     // recorded scope against a STALE one, which is the exact confusion the check
     // exists to prevent.
@@ -1622,10 +1620,7 @@ export default function QuoteBuilder() {
           quoteVersionRecoveryRequiredRef.current = true;
           // Bind the dialog to the quote that produced it, so the recovery cannot
           // release a different quote's key if the route changes while it is open.
-          staleSaveConflictScopeRef.current = {
-            scope: saveQuoteIntentScope,
-            payloadRejected: hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT),
-          };
+          staleSaveConflictScopeRef.current = saveQuoteIntentScope;
           setStaleSaveOpen(true);
           return null;
         }

@@ -330,10 +330,10 @@ nothing to cause. Self-healing on the next recovery, but only after that unearne
 The dialog now records WHY it opened, not only which record opened it, because the two reasons have
 opposite safe directions once the route has moved on:
 
-- **`IDEMPOTENCY_PAYLOAD_CONFLICT`** — the server has already proven this key is bound to a
-  different payload. Replaying it can only ever produce the same rejection, so retiring it costs
-  nothing and clears the trap. Retiring is what the hook's own contract prescribes ("after the
-  server proves the key is bound to a different payload").
+- **`IDEMPOTENCY_PAYLOAD_CONFLICT`** — retired, on the reasoning that the server has already proven
+  this key is bound to a different payload, so replaying it can only ever produce the same
+  rejection. **This reasoning was WRONG and the change was reverted in round 7 — see below. Do not
+  reinstate it.**
 - **`QUOTE_STALE_WRITE` / `CUSTOMER_STALE_WRITE` / `COMMISSION_SPLIT_CONFLICT`** — the opposite
   case. That key may still be the replay handle for an EARLIER save whose response was lost; in
   fact a stale-write refusal is exactly what an earlier silent commit looks like. Retiring it
@@ -373,3 +373,75 @@ because its anchor line still existed.
 
 Mutation-tested: forcing `payloadRejected` false fails the new assertion in BOTH pages' route-change
 recovery tests, and nothing else.
+
+## Review round 7 — `gpt-5.6-sol` at `1dc247a36`: the round-6 fix was a duplicate-write hazard
+
+**VERDICT: DO NOT MERGE.** One BLOCKER, and it was against the change round 6 had just shipped. This
+section records the reversal and the reasoning, because the wrong version is the intuitive one and
+will be proposed again.
+
+### The blocker
+
+Round 6 retired a payload-rejected idempotency key from its ORIGINATING scope when the recovery
+dialog was dismissed after a route change. The stated justification — preserved above, struck
+through — was that such a key "can only ever produce the same rejection, so retiring it costs
+nothing."
+
+That is false, and it is false in the direction that creates money records:
+
+1. On `/quotes/new` or `/customers/new`, payload P1 is submitted under key K.
+2. The server COMMITS the create and caches the result, including the new row's id. The client
+   receives `{ data: null, error: null }` and correctly retains K.
+3. The operator edits the form to P2 and retries under K.
+4. The server compares P2 against the cached P1 fingerprint and raises
+   `IDEMPOTENCY_PAYLOAD_CONFLICT`.
+5. The route changes; the operator clicks Reload; round 6's branch deletes K.
+6. The cached response for P1 — carrying the id of a row that DID commit — can never be replayed.
+   A later retry mints a fresh key and inserts the record a second time.
+
+**The key is not only a retry token. It is the receipt.** It rejects the CHANGED payload while still
+redeeming the ORIGINAL one, and on a create that receipt is the only deterministic way to learn what
+committed. This distinction was stated correctly in this very document, in the "Binding the retained
+key to the submitted PAYLOAD" bullet above — and then contradicted twenty lines later. The reviewer
+caught the contradiction as a separate finding, which is the cheapest possible way to be told that
+one's own document is arguing with itself.
+
+### The reversal
+
+Both pages return to releasing only when the reload that succeeded is for the record that produced
+the conflict. When the route has moved on, the originating key **stays retained**, and the
+`resetKeyFor` branch, the `payloadRejected` flag and the structured conflict ref are all removed. The
+ref is a plain `string | null` again.
+
+The Codex App finding that prompted round 6 is answered on its merits rather than obeyed: an
+abandoned key earns the operator one unearned conflict dialog on returning to that record, which
+then self-heals on that record's own reload. That is the SAFER state. A spurious dialog is cheaper
+than a duplicated quote or customer, and no client-side rule can tell "the operator edited and
+retried" apart from "the first attempt may already have committed" — which is precisely what the
+idempotency key exists to answer.
+
+The two round-6 tests that asserted the retirement are inverted to assert retention, with the
+reasoning inline. The reviewer flagged them separately: they had staged an immediate
+`IDEMPOTENCY_PAYLOAD_CONFLICT` with no prior cached receipt, a sequence the real server cannot
+produce, and so locked the unsafe behaviour into the suite behind a causally impossible mock.
+
+### What this round says about the proof that preceded it
+
+Round 6 was pushed with CI green, lint and typecheck green, a 4999-test suite green, a mutation test,
+and a live browser proof in which the bug was reproduced and then shown fixed. All of it held. The
+browser proof exercised the EDIT path; **the blocker lives on the CREATE path**, which it never
+touched. A proof that runs the wrong half of the state space is not weak evidence — it is confident
+evidence about the wrong thing, which is worse, because it ends the search.
+
+### Findings routed elsewhere, not fixed here
+
+- **HIGH** — a late `save_quote` response installs quote A's row version, commission baseline,
+  dirty-clear and success toast over quote B. The pre-send guard does not cover state written after
+  the request starts. Same bug class as #610/#611/#616 in a path none of them covered; routed to the
+  QuoteBuilder lane.
+- **HIGH** — `JobDetail`'s `fetchJob` never receives the effect's `cancelled` flag, so job A's
+  response still overwrites job B. Pre-existing; routed to the #611 lane to confirm against its
+  current head, which rewrote that ticketing.
+- Lower-severity findings on float money math in the quote totals, `searchParams` over-triggering
+  the JobDetail load effect, and the lexical ordering pin's false-pass shapes are recorded in the
+  proof artifact and left to their owners.

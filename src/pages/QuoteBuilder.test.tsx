@@ -838,7 +838,7 @@ describe('QuoteBuilder', () => {
    * The recovery is now bound to the quote that produced it. Retaining A's key is the
    * safe direction: a retained key can still replay, a wrongly retired one cannot.
    */
-  it('retires quote A\'s rejected key, not B\'s, when A\'s conflict dialog is recovered after a route change', async () => {
+  it('retires neither quote\'s key when A\'s conflict dialog is recovered after a route change', async () => {
     const { quote: quoteA, product, section, item } = makeQuoteFixture('draft', 7);
     const quoteB = { ...quoteA, id: 'quote-b', quote_number: 'Q-b', header_notes: 'Quote B header' };
     let quoteReads = 0;
@@ -877,14 +877,21 @@ describe('QuoteBuilder', () => {
       mockResetIdempotencyKey,
       "recovering A's conflict must not retire quote B's key — B never had an unresolved save",
     ).not.toHaveBeenCalledWith(quoteB.id);
-    // The other half: closing the dialog must not abandon A's key in the map. The
-    // server rejected it on payload fingerprint, so it can only ever be rejected
-    // again — leaving it would earn the operator a second unearned conflict the
-    // moment they returned to quote A.
+    // And it must not retire A's key either, even though A's dialog is what closed.
+    //
+    // An earlier revision did retire it, on the reasoning that a payload-rejected key
+    // can only ever be rejected again. That was a duplicate-write hazard: the key
+    // rejects the CHANGED payload, but replaying the ORIGINAL one returns the server's
+    // cached receipt, which on a create is the only way to learn the id of a row that
+    // may already have committed. Retiring it lets a later retry insert twice.
+    //
+    // Retaining costs one unearned conflict dialog on returning to A, which self-heals
+    // on A's own reload. That is the cheaper side of the trade, so this asserts the
+    // key survives.
     expect(
       mockResetIdempotencyKey,
-      "recovering A's conflict must retire A's own permanently rejected key",
-    ).toHaveBeenCalledWith(quoteA.id);
+      "A's key is the receipt handle for a create that may have committed — recovery on another quote must not retire it",
+    ).not.toHaveBeenCalledWith(quoteA.id);
   });
 
   it('recovers a legacy cached save after the migration boundary and releases its unusable key', async () => {
