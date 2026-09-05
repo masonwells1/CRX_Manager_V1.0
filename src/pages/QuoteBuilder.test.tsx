@@ -1720,6 +1720,49 @@ describe('QuoteBuilder', () => {
     expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
   });
 
+  // Raised by the exact-SHA gpt-5.6-sol review of `a9793c311`, as a P2. The save
+  // guard reads the load serial, and the serial is a SHARED resource: a doomed load
+  // that takes a number on its way to rejecting itself supersedes whatever is
+  // legitimately in flight for the quote on screen. Refusing at the door is the
+  // only place that cannot burn one.
+  it('refuses a doomed reload at the door, without reading the database or taking a load serial', async () => {
+    const quoteA = makeSwitchFixture('quote-a', 'Q-AAA-1');
+    const quoteB = makeSwitchFixture('quote-b', 'Q-BBB-2');
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'save_quote'
+        ? { data: null, error: { message: 'QUOTE_STALE_WRITE' } }
+        : { data: null, error: null },
+    ));
+    const router = renderQuoteSwitch([quoteA, quoteB], {}, {
+      failSectionsFor: 'quote-b',
+      loadPlan: { 'quote-a': [{}, { quoteNumber: 'Q-AAA-RELOADED' }] },
+    });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await screen.findByRole('button', { name: /Reload Quote/i });
+
+    // Move to quote B. The reload dialog's closure still names quote A, so firing
+    // it now is a load for a quote the operator has left.
+    await goToQuote(router, 'quote-b');
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('Could not load the complete quote'),
+    ));
+
+    const readsBeforeDoomedReload = mockFrom.mock.calls.filter((c) => c[0] === 'quotes').length;
+    fireEvent.click(await screen.findByRole('button', { name: /Reload Quote/i }));
+    await flushPendingWork();
+
+    // The decisive check. The doomed load must turn round at the door: no read
+    // issued, so no serial consumed, so nothing legitimately in flight for the
+    // quote on screen can be superseded by it.
+    expect(mockFrom.mock.calls.filter((c) => c[0] === 'quotes').length)
+      .toBe(readsBeforeDoomedReload);
+    // And it still must not install, which is what the sibling test above pins.
+    expect(screen.queryAllByText('Q-AAA-RELOADED')).toHaveLength(0);
+  });
+
   it('refuses the save when a failed switch leaves quote A on screen under quote B address', async () => {
     const quoteA = makeSwitchFixture('quote-a', 'Q-AAA-1');
     const quoteB = makeSwitchFixture('quote-b', 'Q-BBB-2');

@@ -809,6 +809,18 @@ export default function QuoteBuilder() {
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
   const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
+    // Refuse at the door, BEFORE taking a serial. A load for a quote the operator
+    // has already left is doomed either way — it would reject itself below — but
+    // taking a number on the way past is NOT free. The serial is a shared resource:
+    // burning one supersedes the legitimate load of the quote now on screen, which
+    // then installs nothing and strands the page behind a skeleton that never
+    // clears, and it makes an unrelated in-flight SAVE of that quote look like it
+    // belongs to an editing session that ended.
+    //
+    // Reachable through the delayed post-conversion `fetchQuote(savedId)` below and
+    // through `reloadAfterStaleSave`, both of which run from closures that survive a
+    // navigation. Same discipline as CustomerDetail's tab loader.
+    if (routeQuoteIdRef.current !== quoteId) return false;
     const loadSerial = ++quoteLoadSerialRef.current;
     // Two independent halves; neither subsumes the other, and each has its own
     // regression test. `supersededByNewerLoad` orders CALLS, so reopening the

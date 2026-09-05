@@ -110,6 +110,40 @@ Adopting the suggestion here would have re-landed a reverted change and traded a
 High. It stays out of this diff, and this paragraph exists so the next reviewer does not have to
 rediscover why.
 
+### Second review round — P2 at `a9793c311`, accepted and fixed at the root
+
+> `fetchQuote(B)` increments this global serial before rejecting itself because the route is A.
+> If A has a save in flight, `editingSessionChanged()` therefore treats that unrelated rejected
+> load as an A session change and returns `null` after A's save committed.
+
+Correct, and it is a defect **this branch introduced**: before the save guard read the serial,
+a doomed load could not affect a save at all. Note the direction of failure — the save
+*commits*, the database is right, and only the on-screen confirmation is suppressed. The
+operator sees an apparently unsaved quote, saves again, and lands in stale-write recovery on a
+document that drives cost and price.
+
+Fixed at the cause rather than by swapping operands. `fetchQuote` took its serial on the first
+line and only checked the route *after* its awaits, so a load for a quote the operator had
+already left still **burned a serial on its way to rejecting itself**. The serial is a shared
+resource; spending one is never free. The route check now runs **before** the increment, so a
+doomed load turns round at the door.
+
+This also removes a pre-existing live defect on the load path, not just the one against the new
+save guard: a doomed load that steals the serial supersedes the legitimate load of the quote now
+on screen, which then installs nothing while `loading` stays true — the page strands behind a
+skeleton that never clears. That is the same failure proven live on `main` for CustomerDetail in
+#616, and this is the same door-refusal discipline used there.
+
+Rejected the alternative of adding a third ref that counts only route commits. It would have
+left the ticket theft in place — still stranding the load path — and bought a second counter to
+work around a bug rather than fix it. Reachable through both surviving-closure callers: the
+delayed post-conversion `fetchQuote(savedId)` the reviewer named, and `reloadAfterStaleSave`.
+
+Proof: a fourth regression test fires the reload dialog's closure for quote A while the route is
+on quote B and asserts the doomed load issues **no database read at all** — no read, no serial
+consumed. Removing the door refusal fails exactly that test, and the failure shows the extra read
+(3 → 4).
+
 ### Not verified / flagged, not fixed
 
 - The `catch` block's toast is still unguarded: a malformed reply for quote A, which makes
