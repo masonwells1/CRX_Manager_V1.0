@@ -93,25 +93,37 @@ vi.mock('react-router-dom', () => ({
 vi.mock('../components/field-app/SelectLocationsModal', () => ({
   default: ({ isOpen, onSelect }: { isOpen: boolean; onSelect: (fields: unknown[]) => void }) =>
     isOpen ? (
-      <button
-        type="button"
-        data-testid="mock-select-one-field"
-        onClick={() =>
-          onSelect([
-            {
-              id: 'field-1',
-              field_name: 'North 80',
-              crop_type: 'corn',
-              total_acres: 40,
-              measured_acres: 40,
-              override_acres: null,
-              customer_name: 'Farm A',
-            },
-          ])
-        }
-      >
-        pick field
-      </button>
+      <>
+        <button
+          type="button"
+          data-testid="mock-select-one-field"
+          onClick={() =>
+            onSelect([
+              {
+                id: 'field-1',
+                field_name: 'North 80',
+                crop_type: 'corn',
+                total_acres: 40,
+                measured_acres: 40,
+                override_acres: null,
+                customer_name: 'Farm A',
+              },
+            ])
+          }
+        >
+          pick field
+        </button>
+        {/* Clearing every location is a real operator action and its own code path:
+            deriveShares returns early on an empty list, so it is the case where a
+            success-only preview invalidation would have left stale prices on screen. */}
+        <button
+          type="button"
+          data-testid="mock-select-no-fields"
+          onClick={() => onSelect([])}
+        >
+          clear fields
+        </button>
+      </>
     ) : null,
 }));
 
@@ -234,6 +246,20 @@ describe('FieldApplicationInvoice — new invoice (no id)', () => {
     expect(screen.getByLabelText('Due Date')).toBeRequired();
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
     expect(mockToast).toHaveBeenCalledWith('error', 'Choose a custom due date before saving.');
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('refuses a blank transaction date before calling the save RPC', async () => {
+    await renderPage();
+
+    const dateLabel = screen.getByText('Transaction Date');
+    const dateInput = dateLabel.parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeInstanceOf(HTMLInputElement);
+
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    expect(mockToast).toHaveBeenCalledWith('error', 'Choose a transaction date before saving.');
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
@@ -383,6 +409,145 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
       // The new invoice id maps to cust-A; the typed $25.00 must arrive as 2500 cents.
       expect(discounts['new-inv-1']).toBeDefined();
       expect(discounts['new-inv-1'].amount_cents).toBe(2500);
+    });
+  });
+
+  // The transaction date decides the SEASON, and the season selects the
+  // customer_application_rates row — so it changes the PRICE exactly as much as locations,
+  // chemicals and the service selector do, all of which already invalidate the preview.
+  // Before this guard, previewing on one side of October 1 and then moving the date across it
+  // left the OLD per-acre rate on screen while save charged the new one, so the breakdown the
+  // operator approves was not the one billed (Codex push-proof review, 2026-09-04).
+  it('discards a rendered preview when the transaction date changes', async () => {
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    // The discount input only exists while previewData is set, so it is a faithful proxy for
+    // "a server-computed preview is on screen".
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    expect(await screen.findByTitle(/Early-pay discount earned/i)).toBeInTheDocument();
+
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+
+    await waitFor(() => {
+      expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('drops a preview response that arrives after the transaction date changed', async () => {
+    // The race the previous test does NOT cover: clearing previewData on a date change does
+    // nothing about a Preview RPC that is ALREADY in flight. Without a version guard that
+    // request resolves later and unconditionally repaints a breakdown priced for the OLD date
+    // — across the Oct 1 season boundary, a different per-acre rate than save will use.
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    // Hold the preview RPC open; every other RPC keeps the shared routing from beforeEach.
+    const routeRpc = mockRpc.getMockImplementation()!;
+    let resolvePreview!: (value: unknown) => void;
+    mockRpc.mockImplementation((name: string, args: unknown) => {
+      if (name === 'preview_field_app_invoice_split') {
+        return new Promise((resolve) => {
+          resolvePreview = resolve;
+        });
+      }
+      return routeRpc(name, args);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    await waitFor(() => expect(typeof resolvePreview).toBe('function'));
+    expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+
+    // Operator moves the date across the season boundary while the request is still open.
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+
+    // The old-date answer lands now. It must be discarded, not rendered.
+    await act(async () => {
+      resolvePreview({
+        data: {
+          per_customer: [{ customer_id: 'cust-A', customer_name: 'Farm A', is_primary: true, tier: 1, total_cents: 100000, lines: [] }],
+          grand_total_cents: 100000,
+          customer_count: 1,
+          shares_detail: { rows: [], customers: [], total_applied_acres: 40, field_count: 1, fallback_used_field_ids: [] },
+        },
+        error: null,
+      });
+    });
+
+    expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+  });
+
+  it('discards a rendered preview when every location is cleared', async () => {
+    // deriveShares returns EARLY on an empty field list. A success-only invalidation never runs
+    // on that path, so the breakdown for the removed locations stayed on screen.
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    expect(await screen.findByTitle(/Early-pay discount earned/i)).toBeInTheDocument();
+
+    // Preview switches to the customers tab, so go back before touching the locations panel.
+    fireEvent.click(screen.getByRole('button', { name: /^Locations/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Change Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-no-fields'));
+
+    // Assert back on the CUSTOMERS tab. Asserting from the locations tab would pass even with a
+    // broken invalidation, because leaving the customers tab unmounts the discount input anyway.
+    fireEvent.click(screen.getByRole('button', { name: /^Customers/i }));
+    await waitFor(() => {
+      expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('discards a rendered preview when share derivation fails', async () => {
+    // The catch branch is the other non-success exit. A failed derivation left the old prices up.
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    expect(await screen.findByTitle(/Early-pay discount earned/i)).toBeInTheDocument();
+
+    // Next derivation fails; every other RPC keeps the shared routing from beforeEach.
+    const routeRpc = mockRpc.getMockImplementation()!;
+    mockRpc.mockImplementation((name: string, args: unknown) => {
+      if (name === 'derive_customer_shares_from_fields') {
+        return Promise.resolve({ data: null, error: { message: 'derive exploded' } });
+      }
+      return routeRpc(name, args);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Locations/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Change Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+
+    // Same reason as above: assert from the customers tab, not the locations tab.
+    fireEvent.click(screen.getByRole('button', { name: /^Customers/i }));
+    await waitFor(() => {
+      expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
     });
   });
 });

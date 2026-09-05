@@ -19,6 +19,7 @@ import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
 import { formatCents as fmt } from '../lib/money';
+import { todayInBusinessTz } from '../lib/dateUtils';
 import { billableAcres, acreDivergence, appliedMatchesSystem } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
@@ -214,7 +215,17 @@ export default function FieldApplicationInvoice() {
   const [transferringToScheduling, setTransferringToScheduling] = useState(false);
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [transactionDate, setTransactionDate] = useState(new Date().toISOString().slice(0, 10));
+  // todayInBusinessTz(), NOT new Date().toISOString() and NOT localToday().
+  // toISOString() converts to UTC, so from ~7 pm Chicago this pre-filled TOMORROW — the same
+  // UTC/Chicago bug the server-side invoice_date fallbacks fixed on 2026-09-04. Because this
+  // page ALWAYS sends invoice_date, the server fallback never engages here, so the wrong day
+  // could only be fixed on the client. On 2026-09-30 after 7 pm it pre-filled 2026-10-01,
+  // filing the invoice in season 2027.
+  // localToday() fixes that only for a browser whose own clock is Chicago. An invoice date is a
+  // company-wide accounting fact, so it must follow Crop RX's business timezone regardless of
+  // where the user is sitting — otherwise a salesman on Pacific time creates 2026-09-30
+  // invoices while Chicago is already on 2026-10-01, landing them in the wrong season.
+  const [transactionDate, setTransactionDate] = useState(todayInBusinessTz());
   const [notes, setNotes] = useState(''); // header_notes (printed)
   // #33: ChemMan billing details. Header/footer notes + PO + due date already
   // existed on invoices; payment_terms / internal_notes / discount are new (migration
@@ -386,6 +397,19 @@ export default function FieldApplicationInvoice() {
   const [primaryCustomerTier, setPrimaryCustomerTier] = useState<number>(1);
   const [previewData, setPreviewData] = useState<PreviewFieldAppSplitResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  // Bumped by invalidatePreview() on EVERY pricing input change. handlePreview captures this
+  // value before the RPC and drops the response if it no longer matches, so a preview that
+  // was computed for the old form can never repaint the screen after the operator has moved
+  // on. Clearing previewData alone is not enough: the in-flight request still resolves and
+  // would unconditionally setPreviewData(result) (Codex GitHub App review of PR #599 head
+  // 755f42a7e, 2026-09-04). Same request-id idiom as jobNotifLoadReqRef above.
+  const previewReqRef = useRef(0);
+  // The one place a stale preview is discarded. Use this instead of a bare setPreviewData(null)
+  // at every input that can change the price, so a new input site cannot forget the version bump.
+  const invalidatePreview = useCallback(() => {
+    previewReqRef.current += 1;
+    setPreviewData(null);
+  }, []);
   // #26: source job number for the ChemMan "<jobnumber>-<NNN>" split-ref. Set
   // when this field invoice was transferred from / linked to a job (job_id);
   // null for a pure engine-built invoice (then the split-ref falls back to the
@@ -1275,6 +1299,13 @@ export default function FieldApplicationInvoice() {
   }, [loadJobNotifications]);
 
   const deriveShares = useCallback(async (fieldIds: string[], appliedAcresMap: Record<string, number>) => {
+    // Invalidate FIRST, not on the success path. Both callers are user edits to a pricing input
+    // (locations picked, applied acres changed), so by the time we are here the on-screen preview
+    // is already stale — and the two non-success exits below would otherwise keep it: clearing
+    // every location returns early, and a failed derivation falls into the catch. Either way the
+    // screen would keep showing prices for locations or acres no longer in the form
+    // (CodeRabbit review of head 9e8dee739, 2026-09-04).
+    invalidatePreview();
     if (fieldIds.length === 0) {
       setShares([]);
       setPrimaryCustomerTier(1);
@@ -1299,13 +1330,11 @@ export default function FieldApplicationInvoice() {
       setShares(legacyShares);
       const primary = (result.customers || []).find((c) => c.is_primary) || result.customers?.[0];
       setPrimaryCustomerTier(primary?.tier ?? 1);
-      // Reset preview whenever shares change — it's stale until user re-clicks Preview
-      setPreviewData(null);
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'derive_customer_shares_from_fields' } });
       toast('error', 'Failed to derive customer shares');
     }
-  }, [toast]);
+  }, [toast, invalidatePreview]);
 
   const handleLocationsSelected = useCallback((selectedFields: (Field & { customer_name?: string })[]) => {
     const newLocations: FieldLocation[] = selectedFields.map((f, idx) => {
@@ -1353,7 +1382,7 @@ export default function FieldApplicationInvoice() {
   const handleChemicalsChange = (updated: ChemicalLine[]) => {
     setChemicals(updated);
     setDirty(true);
-    setPreviewData(null);
+    invalidatePreview();
   };
 
   const handlePreview = async () => {
@@ -1362,6 +1391,10 @@ export default function FieldApplicationInvoice() {
       return;
     }
     setPreviewing(true);
+    // Snapshot the input version this request is being computed for. Any pricing change while
+    // the RPC is in flight bumps previewReqRef, and the check at the response below then throws
+    // this answer away instead of repainting a breakdown for a form that no longer exists.
+    const reqVersion = previewReqRef.current;
     try {
       const { data, error } = await supabase.rpc('preview_field_app_invoice_split', {
         p_locations: locations.map((l, idx) => ({
@@ -1393,6 +1426,11 @@ export default function FieldApplicationInvoice() {
       });
       if (error) throw error;
       const result = assertRpcResult<PreviewFieldAppSplitResult>(data, 'preview_field_app_invoice_split');
+      // A pricing input changed while this was in flight, so `result` was priced for a form the
+      // operator has already left. Showing it would put a breakdown on screen that save will not
+      // reproduce — across the Oct 1 season boundary that is a different per-acre rate. Drop it
+      // and leave the preview cleared; the operator re-clicks Preview for the current form.
+      if (previewReqRef.current !== reqVersion) return;
       setPreviewData(result);
       setActiveTab('customers');
     } catch (err) {
@@ -1410,6 +1448,10 @@ export default function FieldApplicationInvoice() {
   // silent data corruption). 'cannot_compare' / 'no_label_max' never gate a save.
   const handleSave = async () => {
     if (!profile) return;
+    if (!transactionDate) {
+      toast('error', 'Choose a transaction date before saving.');
+      return;
+    }
     if ((isNew || ['draft', 'unposted'].includes(status)) && paymentTerms === 'Custom date…' && !dueDate) {
       toast('error', 'Choose a custom due date before saving.');
       return;
@@ -1484,6 +1526,14 @@ export default function FieldApplicationInvoice() {
 
   const performSave = async (overrideReasonForAudit?: string) => {
     if (!profile) return;
+    // The date input can be cleared even though new invoices start on today's Chicago
+    // business date. Sending an empty string reaches the date cast in PostgreSQL and
+    // produces a raw RPC error instead of using the server fallback, so refuse it here
+    // with an actionable message before allocating an idempotency key or starting save.
+    if (!transactionDate) {
+      toast('error', 'Choose a transaction date before saving.');
+      return;
+    }
     if (fetchingWeather !== null) {
       toast('error', 'Wait for Get Weather to finish before saving.');
       return;
@@ -2023,9 +2073,11 @@ export default function FieldApplicationInvoice() {
             const n = m ? Number(m[1]) : NaN;
             days = Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
           }
-          // A cleared transaction-date input falls back to today — the DB defaults
-          // invoice_date to CURRENT_DATE on save, so the print still matches.
-          const base = transactionDate || new Date().toLocaleDateString('en-CA');
+          // A cleared transaction-date input falls back to today for THIS print calculation only.
+          // Saving is different: handleSave gives the user an actionable refusal before the
+          // override flow, and performSave repeats the guard directly before the RPC as a
+          // defense-in-depth check. Do not read this line as "the server fills it in".
+          const base = transactionDate || todayInBusinessTz();
           const d = new Date(base + 'T00:00:00Z');
           d.setUTCDate(d.getUTCDate() + days);
           return d.toISOString().slice(0, 10);
@@ -2610,7 +2662,14 @@ export default function FieldApplicationInvoice() {
             <input
               type="date"
               value={transactionDate}
-              onChange={(e) => { setTransactionDate(e.target.value); setDirty(true); }}
+              // invalidatePreview(): the transaction date decides the SEASON, and the season
+              // selects the customer_application_rates row, so this input changes the PRICE just
+              // as much as locations (:1314), chemicals (:1367) and the service selector (:2665)
+              // do -- all three already invalidate the preview. Without this, previewing on
+              // 2026-09-30 and then moving the date to 2026-10-01 leaves the season-2026 per-acre
+              // rate on screen while save charges the season-2027 rate, so the customer breakdown
+              // Mason approves is not the one billed (Codex push-proof review, 2026-09-04).
+              onChange={(e) => { setTransactionDate(e.target.value); setDirty(true); invalidatePreview(); }}
               disabled={!canEdit}
               className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
             />
@@ -2637,7 +2696,7 @@ export default function FieldApplicationInvoice() {
             <label className="block text-xs font-medium text-gray-500 mb-1">Application Service</label>
             <ApplicationServicePicker
               value={appServiceId}
-              onChange={(v) => { setAppServiceId(v); setDirty(true); setPreviewData(null); }}
+              onChange={(v) => { setAppServiceId(v); setDirty(true); invalidatePreview(); }}
               disabled={!canEdit}
             />
           </div>
