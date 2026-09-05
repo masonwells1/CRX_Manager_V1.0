@@ -788,10 +788,18 @@ export default function CycleCounts() {
       },
       toast,
       setLoading: setCompleting,
-      successMessage: 'Cycle count completed',
+      // Name the count in the success message. The RPC can land after the operator has
+      // opened a different count, and a bare "Cycle count completed" toast then reads
+      // as a statement about whatever is on screen now.
+      successMessage: `Cycle count ${activeCount.count_number} completed`,
       sentryTag: 'complete_cycle_count',
       onSuccess: () => {
-        closeDetail();
+        // The completion really did happen, so the list always refreshes. But
+        // closeDetail() is session-specific: if the operator moved on while the RPC
+        // was in flight, closing here would shut a DIFFERENT count's open modal out
+        // from under them. Only the session that asked for this completion may close
+        // the detail view it was looking at.
+        if (stillCurrentSession()) closeDetail();
         fetchCounts();
       },
     });

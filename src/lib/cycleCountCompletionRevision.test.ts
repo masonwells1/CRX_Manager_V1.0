@@ -209,7 +209,19 @@ describe('cycle count completion revision contract', () => {
     expect(page).toContain('latestItemRevisionRef.current.set(activeCount.id, countState.item_revision)');
     // Must sit with the state adoption it shadows: adopting into state while leaving
     // the ref behind is the wedge itself.
-    const adoption = page.slice(page.indexOf('const items = await refreshCountItems(activeCount.id, isCurrentSession)'));
+    // Assert the marker EXISTS before slicing on it. `indexOf` returns -1 when the
+    // call form changes, and `slice(-1)` then quietly hands back the final character
+    // of the file instead of failing — so a renamed or re-signatured
+    // `refreshCountItems` would turn this invariant into a vacuous pass rather than a
+    // clear failure. That is the same shape as the guards this suite exists to police.
+    const adoptionIndex = page.indexOf(
+      'const items = await refreshCountItems(activeCount.id, isCurrentSession)',
+    );
+    expect(
+      adoptionIndex,
+      'refreshCountItems call-form marker not found — update this marker to match CycleCounts.tsx',
+    ).toBeGreaterThan(-1);
+    const adoption = page.slice(adoptionIndex);
     expectBefore(
       adoption,
       'item_revision: countState.item_revision',
