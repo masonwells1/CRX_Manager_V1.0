@@ -69,16 +69,47 @@ completed-failure run still counts as a blocking check on later attempts at the 
 transient GraphQL error can require a new commit. That is a separate open defect in this gate, not a
 reason to fail open here.
 
+### Three more holes found by the exact-SHA review, all in the new code
+
+The first round of this change was rated BLOCKED, and all three findings were real. They are worth
+recording because each is a way a verification step can look right and verify nothing.
+
+**1. The gate laundered its own unverified request into a confirmed one.** Adding
+`coderabbit-review-requested` is itself a `labeled` event, so the gate raises the very event that
+then re-enters it. That path saw marker + command, called it "the confirmed CodeRabbit request", and
+returned success — without ever checking for an acknowledgement. So the unverifiable state the new
+code carefully preserved was converted into a reported success seconds later, defeating the entire
+change. The duplicate path now re-derives the answer from the comments themselves: find the command
+for this head, then look for a CodeRabbit reply newer than it. Marker + command is **dedupe state,
+not proof**.
+
+**2. "One lookup succeeded" was the wrong test for a confirmed absence.** The success flag was
+latched once and never reset, so an early empty read followed by five failed polls reported a
+*confirmed* absence — and the caller then deleted the command and cleared the marker. CodeRabbit may
+well have answered during the interval nobody could observe, which would let a retry buy a second
+paid review. Absence is now confirmed only when the **final** lookup, after the whole wait, succeeded.
+
+**3. Any later CodeRabbit comment counted as an acknowledgement.** Author plus increasing id is not
+causal linkage: a delayed auto-generated summary — the one CodeRabbit posts unprompted, quoting
+`@coderabbitai review` in its own tips block — would have read as an answer to a command it knew
+nothing about. Comments are now classified. The summary is excluded by its own HTML marker, and the
+measured refusal tell (`Action not completed`) is treated as a **fourth outcome**: CodeRabbit heard
+the command and declined it, which still costs the attempt. That state keeps the command and marker
+rather than clearing them, because presenting a spent attempt as untried invites another one.
+
 ### Proven by mutation, not by coverage
 
-105/105 tests pass, and the new refusals were each verified to actually fire by removing them and
-watching the suite go red — a guard nobody has watched refuse anything is not a proven guard:
+110/110 tests pass, and every new refusal was verified to actually fire by removing it and watching
+the suite go red — a guard nobody has watched refuse anything is not a proven guard:
 
 | mutation | tests that went red |
 |---|---|
 | `reviewDecision` check removed | 2 (including the one that submits the verdict during the quiet period) |
 | acknowledgement poll removed | 5 |
 | unverifiable collapsed into confirmed-absent | 1 |
+| terminal-lookup rule latched back to "any lookup succeeded" | 2 |
+| duplicate path hard-coded back to "confirmed" | 3 |
+| comment classification removed | 3 |
 
 The harness gained a `coderabbitai[bot]` acknowledgement, a GraphQL `reviewDecision`, and an
 `actionsComments` view. That last one matters: CodeRabbit's reply is a real comment that stays on the

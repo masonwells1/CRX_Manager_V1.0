@@ -388,11 +388,28 @@ function validateAuthorizationState(pullRequest, defaultBranch) {
 // The third must never be collapsed into the second: treating an unverifiable
 // lookup as a confirmed absence would clear the dedupe marker on a request that
 // may well be live, and invite a relabel that buys a SECOND paid review.
+// CodeRabbit's own auto-generated summary. It posts this WITHOUT being asked, even
+// with automatic reviews disabled, and it quotes `@coderabbitai review` inside its
+// tips block. A delayed one landing after our command would otherwise read as an
+// acknowledgement of a command it knows nothing about.
+const CODERABBIT_SUMMARY_MARKER = 'auto-generated comment: summarize by coderabbit.ai';
+// The measured tell for a command CodeRabbit REFUSED. This is not the same as
+// silence: a refusal means it heard the command and still costed the attempt, so a
+// retry is not free and the state must not be cleared as if nothing happened.
+const CODERABBIT_REFUSAL_MARKER = 'action not completed';
+
+function classifyCodeRabbitComment(body) {
+  const text = normalize(body);
+  if (text.includes(CODERABBIT_SUMMARY_MARKER)) return 'summary';
+  if (text.includes(CODERABBIT_REFUSAL_MARKER)) return 'refusal';
+  return 'acknowledgement';
+}
+
 async function awaitCodeRabbitAcknowledgement({
   github, owner, repo, pullNumber, sinceCommentId, attempts, pollMs, settle, core,
 }) {
   let lastError = null;
-  let sawAnyLookupSucceed = false;
+  let lastLookupSucceeded = false;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0 && pollMs > 0) await settle(pollMs);
@@ -401,29 +418,38 @@ async function awaitCodeRabbitAcknowledgement({
         github.rest.issues.listComments,
         { owner, repo, issue_number: pullNumber, per_page: 100 },
       );
-      sawAnyLookupSucceed = true;
-      // Strictly AFTER our command. CodeRabbit posts an auto-generated summary
-      // comment on a PR even with automatic reviews disabled, and that comment
-      // quotes `@coderabbitai review` inside its own tips block — so an earlier
-      // coderabbitai[bot] comment proves nothing about this request. Compare by
-      // comment id, which is monotonic per repository and, unlike created_at,
-      // cannot tie at one-second resolution.
-      const acknowledgement = comments.find((comment) => (
+      lastLookupSucceeded = true;
+      // Strictly AFTER our command. Compare by comment id, which is monotonic per
+      // repository and, unlike created_at, cannot tie at one-second resolution.
+      const replies = comments.filter((comment) => (
         normalize(comment?.user?.login) === CODERABBIT_BOT_LOGIN
         && Number(comment?.id || 0) > Number(sinceCommentId || 0)
       ));
+      const refusal = replies.find((comment) => classifyCodeRabbitComment(comment.body) === 'refusal');
+      if (refusal) {
+        return { acknowledged: false, verified: true, refused: true, commentId: refusal.id };
+      }
+      const acknowledgement = replies.find(
+        (comment) => classifyCodeRabbitComment(comment.body) === 'acknowledgement',
+      );
       if (acknowledgement) {
         return { acknowledged: true, verified: true, commentId: acknowledgement.id };
       }
     } catch (error) {
+      lastLookupSucceeded = false;
       lastError = error;
       core.warning(`Acknowledgement lookup attempt ${attempt + 1} failed: ${error.message}`);
     }
   }
 
-  // One successful lookup that found nothing is a real observation; if EVERY
-  // attempt errored we know nothing at all.
-  return sawAnyLookupSucceed
+  // Absence is only CONFIRMED when the FINAL lookup — the one after the whole wait
+  // — succeeded. An early empty read followed by outages is not evidence of
+  // absence: CodeRabbit may have answered during the interval nobody could see,
+  // and treating that as confirmed would delete a command and clear a dedupe
+  // marker for a request that is actually live, letting a retry buy a second paid
+  // review. `lastLookupSucceeded` is therefore reset on every failure rather than
+  // latched once.
+  return lastLookupSucceeded
     ? { acknowledged: false, verified: true }
     : { acknowledged: false, verified: false, error: lastError };
 }
@@ -628,6 +654,45 @@ async function requestedMarkerHasCommand({ github, owner, repo, pullNumber, head
   return comments.some((comment) => isActionsReviewComment(comment, headSha));
 }
 
+// Marker + command is DEDUPE state, not proof that a review was requested. The
+// label event this gate raises by adding REQUESTED_LABEL queues another run, and
+// that run used to see marker + command and report a "confirmed" duplicate — so an
+// unverifiable (or unheard) request was laundered into a confirmed one by the very
+// next event, defeating the acknowledgement check entirely. This re-derives the
+// answer from the comments themselves: find the command for this head, then look
+// for a CodeRabbit reply newer than it.
+async function inspectExistingRequest({ github, owner, repo, pullNumber, headSha }) {
+  let comments;
+  try {
+    comments = await github.paginate(
+      github.rest.issues.listComments,
+      { owner, repo, issue_number: pullNumber, per_page: 100 },
+    );
+  } catch (error) {
+    return { verified: false, acknowledged: false, error };
+  }
+
+  const command = comments
+    .filter((comment) => isActionsReviewComment(comment, headSha))
+    .sort((left, right) => Number(right.id || 0) - Number(left.id || 0))[0];
+  if (!command) return { verified: true, acknowledged: false, commandMissing: true };
+
+  const replies = comments.filter((comment) => (
+    normalize(comment?.user?.login) === CODERABBIT_BOT_LOGIN
+    && Number(comment?.id || 0) > Number(command.id || 0)
+  ));
+  if (replies.some((comment) => classifyCodeRabbitComment(comment.body) === 'refusal')) {
+    return { verified: true, acknowledged: false, refused: true, commandId: command.id };
+  }
+  return {
+    verified: true,
+    acknowledged: replies.some(
+      (comment) => classifyCodeRabbitComment(comment.body) === 'acknowledgement',
+    ),
+    commandId: command.id,
+  };
+}
+
 // The single reconciliation routine. Every event that must re-derive gate state
 // from the LIVE pull request goes through here — label events and metadata
 // edits alike. `reasonPrefix` is the only thing that varied between the former
@@ -702,9 +767,49 @@ async function reconcileLabelEvent({
     }
 
     if (markerConfirmed) {
+      // Marker + command is not proof. Ask the comments whether CodeRabbit
+      // actually answered before calling this request confirmed — otherwise this
+      // path launders an unheard or unverifiable request into a success on the
+      // very next label event, which is the event this gate raises itself.
+      const existing = await inspectExistingRequest({
+        github, owner, repo, pullNumber, headSha,
+      });
       await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-      core.notice(`Preserved the confirmed CodeRabbit request for ${headSha} after a label event.`);
-      return { status: 'duplicate', headSha };
+
+      if (existing.acknowledged) {
+        core.notice(`Preserved the acknowledged CodeRabbit request for ${headSha} after a label event.`);
+        return { status: 'duplicate', headSha, acknowledged: true };
+      }
+
+      if (existing.refused) {
+        // Heard and declined. The attempt was spent, so the command and marker
+        // stay: presenting this as untried would invite another paid attempt.
+        core.setFailed(`CodeRabbit refused the review command for ${headSha}; the spent attempt's command and marker were preserved.`);
+        return { status: 'blocked', headSha, acknowledged: false, refused: true };
+      }
+
+      if (!existing.verified) {
+        core.setFailed(`Could not confirm whether CodeRabbit acknowledged the request for ${headSha} (${existing.error?.message || 'lookup failed'}); the command and marker were preserved so a retry cannot buy a second review.`);
+        return { status: 'blocked', headSha, acknowledged: false };
+      }
+
+      // Confirmed unheard. Same treatment as the request path: clear the pairing
+      // so a deliberate retry is possible, and never clear the marker while the
+      // command it dedupes still stands.
+      let cleared = false;
+      try {
+        if (existing.commandId) {
+          await github.rest.issues.deleteComment({
+            owner, repo, comment_id: existing.commandId,
+          });
+        }
+        await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+        cleared = true;
+      } catch (cleanupError) {
+        core.warning(`Could not clear the unacknowledged request: ${cleanupError.message}`);
+      }
+      core.setFailed(`CodeRabbit never acknowledged the review command for ${headSha}, so no review was requested${cleared ? '; the command and marker were cleared for a deliberate retry' : ' and the command could not be removed, so the marker was preserved'}.`);
+      return { status: 'blocked', headSha, acknowledged: false };
     }
     return resetCandidate({
       github,
@@ -1278,6 +1383,22 @@ async function runGate({ github, context, core, config, attemptState }) {
   });
 
   if (!acknowledgement.acknowledged) {
+    if (acknowledgement.refused) {
+      // CodeRabbit HEARD the command and declined it. Measured behaviour: a
+      // refusal still costs the attempt. So this is the one non-acknowledged
+      // outcome where the command and marker must STAY — deleting them would
+      // present a spent attempt as though nothing had been tried, and the next
+      // relabel would spend another.
+      await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+      return blockCandidate({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: `CodeRabbit REFUSED the review command for ${expectedHeadSha} (it replied, but declined); the attempt was still spent, so the command and requested marker were preserved rather than presenting this as an untried candidate`,
+      });
+    }
     if (!acknowledgement.verified) {
       // UNVERIFIABLE, not absent. Keep the command and the dedupe marker exactly
       // as they are: the request may be live, and clearing the marker here would
