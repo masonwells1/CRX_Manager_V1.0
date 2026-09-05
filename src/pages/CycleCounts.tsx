@@ -119,6 +119,9 @@ export default function CycleCounts() {
   // this component outlives the detail modal, so an unkeyed value would let count A's
   // revision decide count B's completion.
   const latestItemRevisionRef = useRef(new Map<string, number>());
+  // Identifies the newest openDetail call, so a slower earlier one cannot paint its
+  // rows over the count the operator is now looking at. See openDetail.
+  const openDetailRequestRef = useRef(0);
   const itemWriteSequenceRef = useRef(0);
   const completionInFlightRef = useRef(false);
 
@@ -260,6 +263,28 @@ export default function CycleCounts() {
 
   // Open detail modal
   const openDetail = async (count: CountRow) => {
+    // Which openDetail call owns the shared detail state. Every response-derived
+    // write below is gated on still being the newest call.
+    //
+    // This is NOT a pre-existing defect left alone: `main` reaches `setCountItems`
+    // after ONE await, and this branch added the revision seed read ahead of the
+    // items query, so there are now TWO — a WIDER window in which opening a second
+    // count lets the first one land on top of it. Guarding `setActiveCount` by id
+    // (below) and leaving `setCountItems` unguarded made the function read as
+    // protected while the dangerous write stayed open: `setCountItems` is what puts
+    // another count's rows on screen, and `updateCountedQty` derives `p_item_id`
+    // from that state, so an inventory adjustment could be sent against a different
+    // count's item. One half of a pairing guarded is the shape this branch has been
+    // finding elsewhere all along. (CodeRabbit on de2c43a83; widening confirmed
+    // against origin/main.)
+    //
+    // An id comparison alone would not be enough anyway: reopening the SAME count
+    // twice gives two calls whose ids match, and the older response would still be
+    // adopted. The token distinguishes calls, not records.
+    const requestId = openDetailRequestRef.current + 1;
+    openDetailRequestRef.current = requestId;
+    const isCurrentRequest = () => openDetailRequestRef.current === requestId;
+
     setActiveCount(count);
     setShowDetail(true);
     setLoadingItems(true);
@@ -288,8 +313,8 @@ export default function CycleCounts() {
       // Could not confirm a revision: drop any stale entry rather than let an
       // unconfirmed leftover outrank the row actually loaded. The read then falls
       // back to activeCount, which the fail-closed check downstream already handles.
-      latestItemRevisionRef.current.delete(count.id);
-    } else if (typeof revisionRow?.item_revision === 'number') {
+      if (isCurrentRequest()) latestItemRevisionRef.current.delete(count.id);
+    } else if (typeof revisionRow?.item_revision === 'number' && isCurrentRequest()) {
       // Deliberately overwrites a newer value an in-flight write may have just
       // recorded. That is the same fail-safe ordering the comment above describes for
       // activeCount: seeding the OLDER revision makes completion warn rather than
@@ -307,6 +332,13 @@ export default function CycleCounts() {
       .select('*, product:products(product_name)')
       .eq('cycle_count_id', count.id)
       .order('created_at');
+
+    // Everything below writes SHARED detail state — the rows on screen, the loading
+    // flag, and an error message about them. A superseded call must touch none of
+    // it. `setLoadingItems(false)` is deliberately inside the gate too: the newest
+    // call owns that flag, and letting a stale one clear it would drop the spinner
+    // while the current count is still loading.
+    if (!isCurrentRequest()) return;
 
     if (error) {
       Sentry.captureException(error);
