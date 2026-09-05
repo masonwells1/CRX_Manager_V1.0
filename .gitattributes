@@ -36,6 +36,14 @@ supabase/migrations/20260729222311_bind_save_field_actor.sql text eol=lf
 supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 
+# next_invoice_number year -> Chicago (2026-09-05). PARKED, not yet applied, but
+# the rule is the same and matters BEFORE the apply, not after: the file pins
+# md5(prosrc) b53499d0… -> 7cbf50dd…, and on a Windows checkout with
+# core.autocrlf=true an unpinned file is smudged to CRLF, so the body PostgreSQL
+# receives carries CR bytes, the candidate hash never matches, and the postflight
+# aborts a correct migration.
+supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql text eol=lf
+
 # The six migrations applied live on 2026-08-12 whose files were recovered from
 # the applying sessions' transcripts and landed afterwards. Same rule, same
 # reason, and here it is load-bearing in a way that is easy to miss: these bytes
