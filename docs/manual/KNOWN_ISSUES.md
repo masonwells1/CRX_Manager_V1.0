@@ -20,7 +20,7 @@ header was re-read on 2026-09-05. The F2 item below was last re-verified against
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
 
-Six local commission candidates (`20260905020000` through `20260905020500`) remain unapplied.
+Seven local commission candidates (`20260905020000` through `20260905185619`) remain unapplied.
 The label repair addresses 34 un-settled opening snapshots that hold an order UUID and unknown
 customer label despite available canonical labels, and is intentionally blocked if settlement
 history exists. The settlement-recipient guard closes the live case where a batch prepared for A
@@ -30,6 +30,9 @@ business-date guard is separately approved and applied, a noncanonical writer ca
 commission payment date after the current America/Chicago business date. The final two candidates
 make commission dates inherit their source documents and move the affected source-document writers
 off UTC `CURRENT_DATE`; they close the September 30 boundary only as a pair and neither is live.
+The final label-selection candidate replaces alphabetical historical-name selection with the latest
+earned-state label at the requested cutoff for both earned and paid-only balance rows; until it is
+separately approved and applied, production can still display an older salesperson name.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
 `20260903153402`.** It was the ordering boundary when this paragraph was written; later migrations

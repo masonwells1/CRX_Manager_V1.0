@@ -79,6 +79,7 @@ const continuation = `
   // ── Snapshot follow-up: real wrapper, replay, and catalog mutations ─────
   const snapshotSource = readFileSync(${JSON.stringify(MIGRATION)}, 'utf8');
   const replayGuardSource = readFileSync(${JSON.stringify(path.join(ROOT, 'supabase', 'migrations', '20260905020000_commission_history_report_replay_guard.sql'))}, 'utf8');
+  const latestRecipientLabelSource = readFileSync(${JSON.stringify(path.join(ROOT, 'supabase', 'migrations', '20260905185619_latest_commission_recipient_label.sql'))}, 'utf8');
   const snapshotSmokePath = ${JSON.stringify(SNAPSHOT)};
   copyIntoContainer(snapshotSmokePath, 'commission-report-snapshot.sql');
   applySql(snapshotSource);
@@ -243,6 +244,157 @@ ALTER FUNCTION public.get_commission_payment_detail_report(date) SET search_path
 \${replayGuardSource}
 COMMIT;\`, 'child_search_path_drift');
   console.log('COMMISSION_REPORT_SNAPSHOT_PROOF_PASS postgres=17 replay=ledger_then_snapshot mutation_guards=15');
+
+  // ── Latest recipient label: earned and paid-only real paths ─────────────
+  applySql(latestRecipientLabelSource);
+  const latestLabelReportBeforeReplay = adminScalar(
+    \`SELECT public.get_commission_history_report(DATE '\${asOfDate}')::text;\`,
+  );
+  applySql(latestRecipientLabelSource);
+  const latestLabelReportAfterReplay = adminScalar(
+    \`SELECT public.get_commission_history_report(DATE '\${asOfDate}')::text;\`,
+  );
+  assert.equal(latestLabelReportAfterReplay, latestLabelReportBeforeReplay,
+    'latest-recipient-label migration replay changed the report');
+
+  const earnedRecipient = 'c011ec70-0000-4000-8000-000000000201';
+  const paidRecipient = 'c011ec70-0000-4000-8000-000000000202';
+  const latestLabelFixture = \`
+BEGIN;
+SELECT set_config('request.jwt.claim.sub', '\${cutoverPreimage.admin}', true);
+INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at)
+VALUES
+  ('\${earnedRecipient}', 'earned-label@example.test', jsonb_build_object('full_name', 'Zulu Earned New', 'role', 'sales_rep'), now(), now()),
+  ('\${paidRecipient}', 'paid-label@example.test', jsonb_build_object('full_name', 'Zulu Paid New', 'role', 'sales_rep'), now(), now());
+INSERT INTO public.profiles (id, email, full_name, role, is_active)
+VALUES
+  ('\${earnedRecipient}', 'earned-label@example.test', 'Zulu Earned New', 'sales_rep', true),
+  ('\${paidRecipient}', 'paid-label@example.test', 'Zulu Paid New', 'sales_rep', true)
+ON CONFLICT (id) DO UPDATE
+SET email = EXCLUDED.email,
+    full_name = EXCLUDED.full_name,
+    role = EXCLUDED.role,
+    is_active = EXCLUDED.is_active;
+
+INSERT INTO public.commissions (
+  id, order_id, customer_id, recipient, recipient_user_id, split_percentage,
+  commission_amount, order_profit, order_date, status
+) VALUES
+  ('c011ec70-0000-4000-8000-000000000211', '\${cutoverPreimage.order}', '\${cutoverPreimage.customer}', 'Alpha Earned Old', '\${earnedRecipient}', 100, 10, 10, DATE '\${asOfDate}', 'pending'),
+  ('c011ec70-0000-4000-8000-000000000212', '\${cutoverPreimage.order}', '\${cutoverPreimage.customer}', 'Zulu Earned New', '\${earnedRecipient}', 100, 20, 20, DATE '\${asOfDate}', 'pending'),
+  ('c011ec70-0000-4000-8000-000000000213', '\${cutoverPreimage.order}', '\${cutoverPreimage.customer}', 'Alpha Paid Old', '\${paidRecipient}', 100, 15, 15, DATE '\${asOfDate}', 'pending');
+
+INSERT INTO public.commission_payments (
+  id, payment_number, recipient_id, total_amount, status, payment_date
+) VALUES (
+  'c011ec70-0000-4000-8000-000000000214',
+  'PROVER-LATEST-PAID-LABEL', '\${paidRecipient}', 15, 'unposted', DATE '\${asOfDate}'
+);
+INSERT INTO public.commission_payment_items (
+  commission_payment_id, commission_id, amount
+) VALUES (
+  'c011ec70-0000-4000-8000-000000000214',
+  'c011ec70-0000-4000-8000-000000000213', 15
+);
+UPDATE public.commission_payments
+   SET status = 'posted', posted_by = '\${cutoverPreimage.admin}'
+ WHERE id = 'c011ec70-0000-4000-8000-000000000214';
+UPDATE public.commissions
+   SET deleted_at = clock_timestamp()
+ WHERE id = 'c011ec70-0000-4000-8000-000000000213';
+UPDATE public.commissions
+   SET recipient = 'Zulu Paid New'
+ WHERE id = 'c011ec70-0000-4000-8000-000000000213';
+
+DO $latest_label_proof$
+DECLARE
+  v_earned record;
+  v_paid record;
+BEGIN
+  SELECT * INTO STRICT v_earned
+  FROM public.get_commission_balance_report(DATE '\${asOfDate}')
+  WHERE recipient_id = '\${earnedRecipient}'::uuid;
+  IF v_earned.recipient_name IS DISTINCT FROM 'Zulu Earned New'
+     OR v_earned.total_earned IS DISTINCT FROM 30::numeric
+     OR v_earned.total_paid IS DISTINCT FROM 0::numeric
+     OR v_earned.outstanding_balance IS DISTINCT FROM 30::numeric
+     OR v_earned.pending_count IS DISTINCT FROM 2::bigint
+     OR v_earned.paid_count IS DISTINCT FROM 0::bigint THEN
+    RAISE EXCEPTION 'LATEST_RECIPIENT_LABEL_EARNED_FAIL: %', row_to_json(v_earned);
+  END IF;
+
+  SELECT * INTO STRICT v_paid
+  FROM public.get_commission_balance_report(DATE '\${asOfDate}')
+  WHERE recipient_id = '\${paidRecipient}'::uuid;
+  IF v_paid.recipient_name IS DISTINCT FROM 'Zulu Paid New'
+     OR v_paid.total_earned IS DISTINCT FROM 0::numeric
+     OR v_paid.total_paid IS DISTINCT FROM 15::numeric
+     OR v_paid.outstanding_balance IS DISTINCT FROM (-15)::numeric
+     OR v_paid.pending_count IS DISTINCT FROM 0::bigint
+     OR v_paid.paid_count IS DISTINCT FROM 1::bigint THEN
+    RAISE EXCEPTION 'LATEST_RECIPIENT_LABEL_PAID_ONLY_FAIL: %', row_to_json(v_paid);
+  END IF;
+END
+$latest_label_proof$;
+
+SET LOCAL session_replication_role = replica;
+DELETE FROM public.commission_earned_state_ledger
+ WHERE commission_id = 'c011ec70-0000-4000-8000-000000000213';
+SET LOCAL session_replication_role = origin;
+
+DO $settlement_fallback_proof$
+DECLARE
+  v_paid record;
+BEGIN
+  SELECT * INTO STRICT v_paid
+  FROM public.get_commission_balance_report(DATE '\${asOfDate}')
+  WHERE recipient_id = '\${paidRecipient}'::uuid;
+  IF v_paid.recipient_name IS DISTINCT FROM 'Alpha Paid Old'
+     OR v_paid.total_earned IS DISTINCT FROM 0::numeric
+     OR v_paid.total_paid IS DISTINCT FROM 15::numeric
+     OR v_paid.outstanding_balance IS DISTINCT FROM (-15)::numeric
+     OR v_paid.pending_count IS DISTINCT FROM 0::bigint
+     OR v_paid.paid_count IS DISTINCT FROM 1::bigint THEN
+    RAISE EXCEPTION 'LATEST_RECIPIENT_LABEL_SETTLEMENT_FALLBACK_FAIL: %', row_to_json(v_paid);
+  END IF;
+END
+$settlement_fallback_proof$;
+\\\\echo COMMISSION_REPORT_LATEST_RECIPIENT_LABEL_PASS earned=true paid_only=true settlement_fallback=true replay=true
+ROLLBACK;
+\`;
+  const latestLabelProof = psql(latestLabelFixture, { allowFailure: true });
+  const latestLabelProofOutput = (latestLabelProof.stdout || '') + (latestLabelProof.stderr || '');
+  assert.equal(latestLabelProof.status, 0,
+    'latest recipient label real-path proof failed:\\n' + latestLabelProofOutput);
+  assert.match(latestLabelProofOutput, /COMMISSION_REPORT_LATEST_RECIPIENT_LABEL_PASS/);
+  console.log('COMMISSION_REPORT_LATEST_RECIPIENT_LABEL_REAL_PATH_PASS earned=true paid_only=true settlement_fallback=true replay=true');
+
+  const latestLabelFunction = extractFunctionStatement(
+    latestRecipientLabelSource,
+    'get_commission_balance_report',
+  );
+  const oldestEarnedLabelMutation = latestLabelFunction.replace(
+    'ORDER BY s.recipient_group_key, s.effective_at DESC, s.id DESC',
+    'ORDER BY s.recipient_group_key, s.effective_at ASC, s.id ASC',
+  );
+  assert.notEqual(oldestEarnedLabelMutation, latestLabelFunction,
+    'latest earned label ordering mutation did not change the function');
+  applySql(oldestEarnedLabelMutation);
+  const staleLabelProof = psql(latestLabelFixture, { allowFailure: true });
+  const staleLabelOutput = (staleLabelProof.stdout || '') + (staleLabelProof.stderr || '');
+  assert.notEqual(staleLabelProof.status, 0,
+    'oldest-label mutation unexpectedly passed the latest-label fixture');
+  assert.match(staleLabelOutput,
+    /LATEST_RECIPIENT_LABEL_(EARNED|PAID_ONLY)_FAIL/,
+    'oldest-label mutation failed for the wrong reason:\\n' + staleLabelOutput);
+  applySql(latestLabelFunction);
+  console.log('COMMISSION_REPORT_LATEST_RECIPIENT_LABEL_MUTATION_REJECTED oldest_earned_label');
+  // The delegated base prover later replays the already-live ledger migration,
+  // whose fail-closed contract accepts only its own reviewed report body. Restore
+  // that preimage after this scoped forward-migration proof so the inherited
+  // replay test remains meaningful and unchanged.
+  applySql(balanceDefinition);
+
   psql(\`
 SET session_replication_role = replica;
 UPDATE public.commission_history_cutover
