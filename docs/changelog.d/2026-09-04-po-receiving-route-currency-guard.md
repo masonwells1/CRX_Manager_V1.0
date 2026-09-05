@@ -33,8 +33,19 @@ Three guards in `src/pages/PurchaseOrderDetail.tsx`:
    re-check both after *every* await. A superseded fetch writes no state.
    Deliberately unlike the `VendorBillDetail.tsx` precedent this follows: there, the
    guarded early return leaves the shared `loading` flag true and can wedge the page on
-   a spinner. Here the loading flags belong to whichever fetch still holds the newest
-   ticket, so every early return leaves them consistent.
+   a spinner. Here every early return leaves a loading flag that some *other* live fetch
+   still owns and will lower.
+
+   **An earlier draft of this entry claimed that outright and was wrong** — CodeRabbit
+   caught it at the reviewed head. `fetchReceivingHistory` raised `historyLoading` before
+   taking its guard, so the same stale-closure path described below reintroduced exactly
+   the `VendorBillDetail` wedge: a receive finishing on PO A calls
+   `fetchReceivingHistory()` while the operator is on PO B, that call takes the newest
+   ticket and raises the skeleton, and the guard then rejects it *after* the await — with
+   no later fetch coming to lower the flag, because PO B has already settled. PO B's
+   receiving card sat on its pulse placeholder until a reload. It now refuses a
+   route-stale call **at the door**, before raising the flag; `fetchPO` needs no such
+   screen because it never raises `loading` itself.
 
    **Both halves are load-bearing; neither is sufficient alone.** The ticket orders
    *calls*, which is the only thing that separates two fetches for the same PO — reopen
@@ -81,7 +92,7 @@ The unfixed run books goods against the wrong PO and reports success. Reverted t
 `src/pages/PurchaseOrderDetail.routeRace.test.tsx` renders the real page, drives an
 A-then-B navigation with each query released under test control, and asserts the page
 never presents B's header with A's lines — and that a receive submitted from that state
-cannot carry A's item ids. 9 tests.
+cannot carry A's item ids. 10 tests.
 
 Each guard was then removed **on its own** and the suite re-run, because a guard whose
 failure is carried by a neighbour is not actually tested:
@@ -96,12 +107,24 @@ failure is carried by a neighbour is not actually tested:
 | `handleReceive` foreign-line refusal | refuses a receive from another PO |
 | `fetchPO` **route** check (ticket kept) | drops a finished action's refetch |
 | `fetchPO` **ticket** check (route kept) | drops a superseded fetch for the SAME PO |
-| `fetchReceivingHistory` **route** check (ticket kept) | drops a finished action's refetch |
 | `fetchReceivingHistory` **ticket** check (route kept) | drops a superseded fetch for the SAME PO |
+| `fetchReceivingHistory` route screen **at the door** | leaves PO B's receiving history settled |
 
-Every mutation was caught, each by exactly one distinct test, confirmed by exit code.
+Every mutation in the table was caught, each by exactly one distinct test, confirmed by
+exit code.
 
-The last four rows exist because of a trap this review surfaced. When the route check was
+**One guard is deliberately kept without a test, and it must not be quietly deleted.**
+Adding the door screen made `fetchReceivingHistory`'s *post-await* route check unprovable
+here: with the door closed, no test path reaches that check while the ticket still points
+at the same call, so removing it now leaves all 10 tests green. It is kept anyway because
+it defends a window this harness cannot reproduce — the route-change `useLayoutEffect`
+updates the route ref, and React does not run the passive load effect that mints the next
+history ticket until afterwards, so a PO A response landing in between is the newest
+ticket at a changed route. `act()` flushes both effects together, so the gap cannot be
+opened under test. This is the same expiry described below, in the opposite direction:
+a newly added guard silently carried an existing one. Recorded rather than removed.
+
+The A→B→A rows exist because of a trap this review surfaced. When the route check was
 first added, deleting the **ticket** check entirely left all tests green: every existing
 case navigated A→B, where the route check alone catches the stale write. One half was
 silently carrying the other, and the ticket half — the original fix — had become
@@ -131,7 +154,9 @@ deterministically — the race only decided which lines won afterwards.
 - The browser-harness run above covers the original ticket guard. The route-binding half
   added in review was proven against the real component under test — each half watched
   failing alone, then restored — but was **not** re-run in the browser harness. The
-  navigate-away-mid-RPC path is exercised by test only.
+  navigate-away-mid-RPC path is exercised by test only. The same is true of the history
+  door screen added after CodeRabbit's review: the wedge it fixes, and its fix, were both
+  watched in the test suite, not in the browser.
 - The five action handlers are fixed at the point where they *write* state, which is the
   shared choke point. Their in-flight RPCs are not cancelled on navigation, so a receive
   started on PO A still completes against PO A. That is correct — the operator did submit

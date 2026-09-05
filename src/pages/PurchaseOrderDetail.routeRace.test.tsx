@@ -709,15 +709,63 @@ describe('PurchaseOrderDetail route-currency race', () => {
       completeReceive!();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    // Let that stale refetch's own queries answer, so the guard is exercised on
-    // a real response rather than passing because nothing ever resolved.
+    // Let that stale refetch's own query answer, so the guard is exercised on
+    // a real response rather than passing because nothing ever resolved. Only
+    // the header query parks: the stale history refetch is refused at the door
+    // (see the settled-history test below), so there is nothing to release.
     await release('header:po-a');
-    await release('history:po-a');
 
     expectShowingNow('PO-B-2002');
     expectAbsent('PO-A-1001');
     expectAbsent('Vendor Alpha');
     expectAbsent('Atrazine 4L');
     expectAbsent('LOT-A-ONLY');
+  });
+
+  it("leaves PO B's receiving history settled when a stale action refetch resolves", async () => {
+    // The guards above stop a stale refetch WRITING the wrong PO's data. They
+    // do not, on their own, stop it raising the history skeleton: the stale
+    // call took the newest ticket, so the post-await guard rejects it only
+    // after `setHistoryLoading(true)` has already run -- and no later fetch is
+    // coming to lower the flag, because the operator is settled on PO B. The
+    // result is PO B's receiving card stuck on its skeleton until a reload.
+    // This is the `VendorBillDetail` wedge the ticket design exists to avoid,
+    // reintroduced through the action handlers' back door.
+    renderAtPoA();
+    await loadPo('po-a');
+    await expectShowsPo('PO-A-1001');
+
+    let completeReceive: (() => void) | undefined;
+    mocks.rpc.mockImplementation((name: string) => {
+      if (name === 'get_notes_for_entity') return Promise.resolve({ data: [], error: null });
+      if (name === 'receive_po_items') {
+        return new Promise((resolve) => {
+          completeReceive = () =>
+            resolve({ data: { receiving_record_ids: ['rec-new'] }, error: null });
+        });
+      }
+      return Promise.resolve({ data: { receiving_record_ids: ['rec-new'] }, error: null });
+    });
+
+    expect(await submitReceive('3')).toBeDefined();
+    expect(completeReceive).toBeDefined();
+
+    await navigateToPoB();
+    await loadPo('po-b');
+    await expectShowsPo('PO-B-2002');
+    // PO B has no receiving records, so its settled card reads this. If a stale
+    // call raises the skeleton, this text is replaced by the pulse placeholder.
+    expectShowingNow('No items have been received yet.');
+
+    await act(async () => {
+      completeReceive!();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await release('header:po-a');
+
+    // A refused call must not have started a history query either -- parking
+    // one would mean it got past the door with the flag already raised.
+    expect(await isWaiting('history:po-a')).toBe(false);
+    expectShowingNow('No items have been received yet.');
   });
 });

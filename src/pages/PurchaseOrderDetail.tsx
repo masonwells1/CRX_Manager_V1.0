@@ -278,6 +278,15 @@ export default function PurchaseOrderDetail() {
   }, [id, toast]);
 
   const fetchReceivingHistory = useCallback(async () => {
+    // Refuse a call minted by a stale render closure BEFORE raising the loading
+    // flag. The action handlers re-fetch after awaiting their RPC, so a receive
+    // started on PO A can call this while the operator is already on PO B. Such
+    // a call takes the newest ticket, so the guard below rejects it only AFTER
+    // the await -- and by then it has already put the history card on its
+    // skeleton with no later fetch coming to take it off. Unlike `fetchPO`,
+    // which never raises `loading` itself, this one must screen at the door.
+    if (routeIdRef.current !== id) return;
+
     const token = ++historyFetchTokenRef.current;
     const startedForId = id;
     const isCurrentFetch = () =>
