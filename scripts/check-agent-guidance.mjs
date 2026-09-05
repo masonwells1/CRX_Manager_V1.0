@@ -44,9 +44,29 @@ const lifecycleAuditPrompts = [
 ];
 const shipWorkflow = readChecked(".claude/commands/ship.md");
 const routingTable = agents.match(/## Start and Route([\s\S]*?)## Engineering Principles/)?.[1] || "";
+const protectedDelivery = agents.match(/## Safety and Protected Delivery([\s\S]*?)## Verification and Closeout/)?.[1] || "";
 const routedGuidance = [...new Set(
   [...routingTable.matchAll(/`([^`]+\.(?:md|json))`/g)].map((match) => match[1]),
 )];
+const requiredRouteRows = [
+  ["First session or unfamiliar area", ["docs/manual/AGENT_ONBOARDING.md", "docs/manual/ARCHITECTURE.md"]],
+  ["Any code change", ["docs/reference/coding-guidelines.md", "docs/reference/gotchas.md", "docs/workflows/SAFE_DEVELOPMENT_RULES.md"]],
+  ["Database, migration, or RLS", ["docs/workflows/DATABASE_CHANGE_CHECKLIST.md", "docs/workflows/RLS_SECURITY_GUIDE.md", ".claude/schema-registry.json"]],
+  ["Quote-to-cash or inventory", ["docs/workflows/QUOTE_TO_DELIVERY.md", "docs/workflows/INVENTORY_RULES.md"]],
+  ["Frontend/UI", ["docs/workflows/UI_PATTERNS.md"]],
+  ["Delegation, agent collaboration, or agent-surface changes", ["docs/workflows/AGENT_COLLABORATION.md", "docs/reference/agent-guardrails.md"]],
+  ["Push, PR finalization, merge, or release", [".claude/commands/ship.md"]],
+  ["Settled decisions, known problems, or current status", ["docs/manual/DECISION_LOG.md", "docs/manual/KNOWN_ISSUES.md", "docs/manual/CURRENT_STATE.md"]],
+  ["Mason asks how the system or agent process works", ["docs/manual/OWNER_PLAYBOOK.md"]],
+];
+const routingRows = new Map(
+  [...routingTable.matchAll(/^\|\s*([^|\r\n]+?)\s*\|\s*([^|\r\n]+?)\s*\|\s*$/gm)]
+    .map((match) => [match[1].trim(), match[2]]),
+);
+const missingRequiredRoutes = requiredRouteRows.flatMap(([task, paths]) => {
+  const row = routingRows.get(task) || "";
+  return paths.filter((relative) => !row.includes(`\`${relative}\``)).map((relative) => `${task} -> ${relative}`);
+});
 const settings = JSON.parse(read(".claude/settings.json"));
 const codexHooksText = read(".codex/hooks.json");
 const codexHooks = JSON.parse(codexHooksText);
@@ -112,14 +132,23 @@ record(/Mutating RPCs must accept and enforce `p_idempotency_key text DEFAULT NU
 record(/Money must resolve to exact whole cents/i.test(agents), "AGENTS.md retains exact-money requirements");
 record(/Use `src\/lib\/db\.ts` as the only Supabase client[\s\S]*assertRpcResult\(\)[\s\S]*checkMutationResult\(\)/i.test(agents), "AGENTS.md retains Supabase client and result-check requirements");
 record(/never use `--no-verify`[\s\S]*never push directly to `main`/i.test(agents), "AGENTS.md retains protected-delivery bans");
-record(/Mason explicitly pre-authorized[\s\S]*unexpired autopilot arm flag[\s\S]*migration-apply-guard proof[\s\S]*Codex verdict[\s\S]*never permits destructive migrations/i.test(agents), "AGENTS.md retains hands-free migration conditions");
+const migrationExceptionChecks = [
+  ["Mason pre-authorizes the hands-free run", /hands-free run Mason explicitly pre-authorized/i],
+  ["the autopilot arm is unexpired", /unexpired autopilot arm flag/i],
+  ["migration-apply-guard proof is fresh", /fresh migration-apply-guard proof/i],
+  ["the Codex verdict is fresh", /fresh Codex verdict/i],
+  ["destructive migrations remain prohibited", /never permits destructive migrations/i],
+];
+for (const [name, pattern] of migrationExceptionChecks) {
+  record(pattern.test(protectedDelivery), `AGENTS.md hands-free exception requires ${name}`);
+}
 record(/## Safety and Protected Delivery[\s\S]*\.claude\/commands\/ship\.md/.test(agents), "AGENTS.md routes volatile delivery mechanics to the ship workflow");
 record(/docs\/workflows\/SAFE_DEVELOPMENT_RULES\.md/.test(agents), "AGENTS.md routes detailed engineering rules on demand");
 record(/docs\/workflows\/AGENT_COLLABORATION\.md/.test(agents), "AGENTS.md routes collaboration details on demand");
 record(/Delegation, agent collaboration, or agent-surface changes/i.test(agents), "AGENTS.md routes delegation guidance on demand");
 record(/docs\/reference\/claude-model-tuning\.md/.test(claude), "CLAUDE.md routes model tuning on demand");
 const missingGuidance = routedGuidance.filter((relative) => !existsSync(path.join(ROOT, relative)));
-record(routedGuidance.length >= 18, "AGENTS.md retains the complete task-routing table", `${routedGuidance.length} paths`);
+record(missingRequiredRoutes.length === 0, "AGENTS.md retains every required task/path route", missingRequiredRoutes.join(", "));
 record(missingGuidance.length === 0, "every path in the AGENTS.md routing table resolves", missingGuidance.join(", "));
 record(
   existsSync(path.join(ROOT, ".claude/skills/graphify/SKILL.md")) &&
@@ -129,7 +158,24 @@ record(
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(agents), "AGENTS.md has no volatile project counts");
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(claude), "CLAUDE.md has no volatile project counts");
 record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAUDE.md declares AGENTS.md canonical");
-record(/explicit approval in the current conversation/i.test(agents), "AGENTS.md defines current-conversation approval gates");
+record(/explicit approval in the current conversation/i.test(protectedDelivery), "AGENTS.md defines current-conversation approval gates");
+const protectedActionChecks = [
+  ["force-pushing", /force-pushing/i],
+  ["applying a live migration", /applying a live migration/i],
+  ["changing live data", /changing live data/i],
+  ["deploying an Edge Function", /deploying an Edge Function/i],
+  ["out-of-band production changes", /out-of-band production change/i],
+  ["deleting data", /deleting data/i],
+  ["changing secrets", /changing secrets/i],
+  ["authentication changes", /authentication/i],
+  ["permission changes", /permissions/i],
+  ["billing changes", /billing/i],
+  ["domain changes", /domains/i],
+  ["ownership changes", /ownership/i],
+];
+for (const [name, pattern] of protectedActionChecks) {
+  record(pattern.test(protectedDelivery), `AGENTS.md requires current approval before ${name}`);
+}
 const alwaysLoadedGuidance = `${agents}\n${claude}\n${cursorRules}`;
 record(!/VERDICT\s*:/i.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
 record(/Reviewer prompts must request every correctness, safety, and scope finding/i.test(claudeModelTuning), "Claude reviewer prompts retain the uncapped-finding default");
