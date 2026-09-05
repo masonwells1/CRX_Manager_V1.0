@@ -37,6 +37,33 @@
 -- a field-application invoice raised on a Chicago evening was dated tomorrow, moving its
 -- season, due date and aging.
 --
+-- WHAT THIS FILE DOES **NOT** CLOSE — public.create_quick_delivery (DEAD DEFAULT)
+-- ------------------------------------------------------------------------------
+-- The gpt-5.6-sol review of b4bc0edfb found `p_scheduled_date date DEFAULT CURRENT_DATE` on
+-- _create_quick_delivery_intent_impl_20260802. It is converted above. But live carries the SAME
+-- default on the PUBLIC WRAPPER public.create_quick_delivery, and the wrapper's body resolves its
+-- own p_scheduled_date and passes it POSITIONALLY into the implementation:
+--
+--     RETURN public._create_quick_delivery_intent_impl_20260802(
+--       p_customer_id, p_items, p_driver_id, p_scheduled_date, ...
+--
+-- So the implementation's default can never fire through the wrapper — the wrapper always supplies
+-- a value. The converted default above is therefore DEAD in the app's real call path, and the
+-- WRAPPER's default is the one an omitting caller actually reaches. Read from live pg_proc on
+-- 2026-09-05: both functions, pronargdefaults = 6, arg defaults
+-- 'NULL::uuid, CURRENT_DATE, NULL::text, NULL::uuid, NULL::text, false'.
+--
+-- The wrapper is NOT converted here. It is not one of the four writers this file re-emits, and
+-- changing an argument default requires CREATE OR REPLACE of its whole 5,112-byte body — a
+-- separate re-emit with its own md5 pin, which would widen a money migration already mid-landing
+-- (Mason's standing ruling, 2026-09-05). It is tracked as its own change.
+--
+-- Live exposure today is NIL, not merely low: the only caller is
+-- src/components/deliveries/QuickDeliveryModal.tsx:381, which always passes p_scheduled_date
+-- (seeded from localToday(), which reads the BROWSER clock — a separate frontend defect of the
+-- same family, also not fixed here). The wrapper default becomes reachable the moment a second
+-- caller, a script, or a SQL console omits the argument.
+--
 -- HOW THIS FILE WAS PRODUCED
 -- --------------------------
 -- Not transcribed. Each body was copied byte-for-byte out of the migration that installed
@@ -1683,7 +1710,13 @@ $function$;
 -- Body copied byte-for-byte from 20260706130000_stock_policy_warn_not_block.sql
 -- (verified md5 5ace886f56af66ad8de02194cc97a96c against live before conversion).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public._create_quick_delivery_intent_impl_20260802(p_customer_id uuid, p_items jsonb, p_driver_id uuid DEFAULT NULL::uuid, p_scheduled_date date DEFAULT CURRENT_DATE, p_delivery_notes text DEFAULT NULL::text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text, p_skip_invoice boolean DEFAULT false)
+-- p_scheduled_date's DEFAULT is converted here too. It is an ARGUMENT default: those live in
+-- pg_proc.proargdefaults, NOT in prosrc, so the original POSTFLIGHT_UTC_RESIDUAL scan below
+-- could not see it — this file would have installed a UTC CURRENT_DATE while its own guard
+-- reported success. Caught by the gpt-5.6-sol review of b4bc0edfb; the postflight now reads
+-- proargdefaults too. See DEAD DEFAULT in the header for why the public wrapper
+-- public.create_quick_delivery, not this one, is the copy an omitting caller actually reaches.
+CREATE OR REPLACE FUNCTION public._create_quick_delivery_intent_impl_20260802(p_customer_id uuid, p_items jsonb, p_driver_id uuid DEFAULT NULL::uuid, p_scheduled_date date DEFAULT (now() AT TIME ZONE 'America/Chicago')::date, p_delivery_notes text DEFAULT NULL::text, p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text, p_skip_invoice boolean DEFAULT false)
  RETURNS jsonb
  LANGUAGE plpgsql
  SECURITY DEFINER
@@ -2702,6 +2735,20 @@ $function$;
 -- two implementations are owner-only, the quote owner implementation retains its
 -- service-role maintenance path, and transfer_job_to_invoice remains available to its
 -- authenticated UI and service-role callers. None is reachable through PUBLIC or anon.
+--
+-- B10 per-function caller analysis. Every REVOKE below is a no-op reassertion: each grantee
+-- set here is byte-identical to what production already holds, read from pg_proc.proacl on
+-- 2026-09-05 (postgres is the owner in all four and keeps EXECUTE implicitly):
+--   _convert_quote_to_order_owner_impl          live {postgres, service_role}
+--   _draw_down_quote_below_cost_impl_20260810   live {postgres}
+--   _create_quick_delivery_intent_impl_20260802 live {postgres}
+--   transfer_job_to_invoice                     live {postgres, authenticated, service_role}
+-- No caller loses a privilege it has today; this block exists so a future CREATE OR REPLACE
+-- cannot quietly widen the boundary.
+-- caller-analysis: transfer_job_to_invoice :: two authenticated UI callsites — src/components/field-invoices/UnbilledApplicationsPanel.tsx:185 and src/pages/JobDetail.tsx:2763 — both retain EXECUTE via the GRANT to authenticated immediately below; verified by grep against the working tree, not the caller graph, which is stale (2026-08-16) and still records the JobDetail callsite at its old line 2501.
+-- caller-analysis: _convert_quote_to_order_owner_impl :: no frontend caller; reached only through its public wrapper running as owner, plus a service_role maintenance path that the GRANT below preserves.
+-- caller-analysis: _draw_down_quote_below_cost_impl_20260810 :: no frontend caller; owner-only private implementation, reached only through its public wrapper.
+-- caller-analysis: _create_quick_delivery_intent_impl_20260802 :: no frontend caller; the UI calls the public wrapper public.create_quick_delivery (src/components/deliveries/QuickDeliveryModal.tsx:377), which runs as owner and invokes this implementation internally.
 REVOKE ALL ON FUNCTION public._convert_quote_to_order_owner_impl(uuid, uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._convert_quote_to_order_owner_impl(uuid, uuid, text)
@@ -2727,6 +2774,16 @@ BEGIN
   FOR r IN
     SELECT p.oid, p.proname, p.prosrc, p.prosecdef, p.proconfig,
            p.proowner::regrole::text AS owner,
+           p.pronargdefaults,
+           -- pg_get_expr's SECOND argument is the RELATION the expression belongs to. An argument
+           -- default references no table, so it must be 0. The p.oid form — the one that mirrors
+           -- how prosrc is read on the line above, and the one reached for first — returns NULL
+           -- for EVERY function, silently, with no error, and a residual check built on it would
+           -- scan NULL and pass forever. Verified against live on 2026-09-05:
+           -- public.create_quick_delivery has pronargdefaults = 6 and proargdefaults NOT NULL, and
+           -- pg_get_expr(proargdefaults, p.oid) still returned NULL while (…, 0) returned
+           -- 'NULL::uuid, CURRENT_DATE, NULL::text, NULL::uuid, NULL::text, false'.
+           pg_get_expr(p.proargdefaults, 0) AS arg_defaults,
            acl.execute_grantees, acl.has_grant_option, acl.owner_is_grantor
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       CROSS JOIN LATERAL (
@@ -2754,6 +2811,26 @@ BEGIN
     IF v_code ~* '\mcurrent_date\M' THEN
       RAISE EXCEPTION
         'POSTFLIGHT_UTC_RESIDUAL: public.% still evaluates CURRENT_DATE in code after conversion; a document date would still follow the UTC clock.', r.proname;
+    END IF;
+
+    -- The check above reads prosrc, which is the BODY ONLY. Argument DEFAULT expressions are
+    -- stored separately in pg_proc.proargdefaults, so before this block existed the file could
+    -- (and did) install `p_scheduled_date date DEFAULT CURRENT_DATE` while reporting success.
+    IF r.pronargdefaults > 0 THEN
+      -- Fail closed if the reader itself goes dark. Without this, a wrong second argument to
+      -- pg_get_expr (or a future catalog change) turns the residual check below into a
+      -- tautology that passes on NULL — the guard would report clean precisely because it had
+      -- stopped looking. A NULL here means "cannot verify", never "verified clean".
+      IF r.arg_defaults IS NULL THEN
+        RAISE EXCEPTION
+          'POSTFLIGHT_DEFAULTS_UNREADABLE: public.% declares % argument default(s) but pg_get_expr(proargdefaults, 0) returned NULL, so the UTC residual check below cannot see them. Refusing to certify.',
+          r.proname, r.pronargdefaults;
+      END IF;
+
+      IF r.arg_defaults ~* '\mcurrent_date\M' THEN
+        RAISE EXCEPTION
+          'POSTFLIGHT_UTC_RESIDUAL_DEFAULT: public.% still carries CURRENT_DATE in an ARGUMENT DEFAULT after conversion; a caller that omits that argument would still get the UTC clock.', r.proname;
+      END IF;
     END IF;
 
     IF (SELECT count(*) FROM regexp_matches(r.prosrc, 'America/Chicago', 'g')) < 1 THEN

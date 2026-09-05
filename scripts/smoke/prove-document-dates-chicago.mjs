@@ -140,6 +140,19 @@ function chicagoCount(fn) {
   return Number(scalar(`SELECT count(*) FROM regexp_matches((SELECT p.prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname='public' AND p.proname='${fn}'), 'America/Chicago', 'g')`));
 }
 
+// Argument DEFAULT expressions are NOT in prosrc — they live in pg_proc.proargdefaults, which is
+// why every prosrc-based check above is blind to them. pg_get_expr's second argument is the
+// RELATION the expression belongs to; an argument default references no table, so it must be 0.
+// `viaProOid` exists only so PHASE 9 can prove the wrong-but-obvious form really does go dark.
+function argDefaults(fn) {
+  return scalar(`SELECT COALESCE(pg_get_expr(p.proargdefaults, 0), '<NULL>') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname='public' AND p.proname='${fn}'`);
+}
+function argDefaultsViaProOid(fn) {
+  return scalar(`SELECT COALESCE(pg_get_expr(p.proargdefaults, p.oid), '<NULL>') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname='public' AND p.proname='${fn}'`);
+}
+
+const QUICK_IMPL = '_create_quick_delivery_intent_impl_20260802';
+
 const candidateSql = readFileSync(CANDIDATE, 'utf8');
 assert.equal(candidateSql.includes('\r'), false, 'candidate must be LF');
 
@@ -217,6 +230,15 @@ try {
   }
   log(`PHASE 2: the defect reproduces — code CURRENT_DATE per writer ${JSON.stringify(before)}, matching the candidate's own claims`);
 
+  // PHASE 2b: the SECOND defect, the one prosrc cannot see. The clean rebuild must install the
+  // quick-delivery implementation with a UTC CURRENT_DATE in its ARGUMENT DEFAULT. If this ever
+  // stops reproducing, the phases below would be proving nothing.
+  const defaultsBefore = argDefaults(QUICK_IMPL);
+  assert.match(defaultsBefore, /current_date/i,
+    `BEFORE: ${QUICK_IMPL} should carry CURRENT_DATE in an argument default, got: ${defaultsBefore}`);
+  assert.equal(codeCurrentDateCount(QUICK_IMPL) > 0, true, 'sanity: the body defect must also be present');
+  log(`PHASE 2b: the argument-default defect reproduces — ${QUICK_IMPL} defaults are "${defaultsBefore}", invisible to every prosrc check`);
+
   // PHASE 3: ACL and body-drift refusal.
   const originalDefs = Object.fromEntries(WRITERS.map((fn) => [fn, functionDef(fn)]));
   const restoreWriters = () => {
@@ -287,6 +309,16 @@ $eval$;`, { allowFailure: true });
   assert.notEqual(installed, session, 'the installed expression must NOT follow the session clock');
   log(`PHASE 4b: under ${zone} the session day is ${session} but the installed expression evaluates ${installed} (Chicago ${chicago}) — it follows Chicago, not the session clock`);
 
+  // PHASE 4c: the argument default is converted too, and the reader that sees it is alive.
+  const defaultsAfter = argDefaults(QUICK_IMPL);
+  assert.doesNotMatch(defaultsAfter, /current_date/i,
+    `AFTER: ${QUICK_IMPL} still carries CURRENT_DATE in an argument default: ${defaultsAfter}`);
+  assert.match(defaultsAfter, /America\/Chicago/,
+    `AFTER: ${QUICK_IMPL} argument default must carry the Chicago conversion: ${defaultsAfter}`);
+  assert.notEqual(defaultsAfter, '<NULL>',
+    'the argument-default reader returned NULL after apply — a NULL here would make PHASE 8 vacuous');
+  log(`PHASE 4c: the argument default converted too — "${defaultsBefore}" -> "${defaultsAfter}"`);
+
   // PHASE 5: replay safety.
   const replay = psql('\\i /tmp/candidate.sql', { allowFailure: true, wrap: wrapByName.get('candidate.sql') ?? false });
   assert.equal(replay.status, 0, `re-applying must succeed, not abort on its own output:\n${(replay.stderr || '').slice(-1200)}`);
@@ -321,6 +353,43 @@ $eval$;`, { allowFailure: true });
   assert.equal(roleCanExecute('anon', quickSignature), false,
     'the ACL mutant grant must roll back with the candidate transaction');
   log('PHASE 7: MUTATION — an extra anon grant before postflight aborts in POSTFLIGHT_ACL and installs nothing');
+
+  // PHASE 8: mutation — revert ONLY the argument default, leaving every body conversion intact.
+  // The old prosrc-based POSTFLIGHT_UTC_RESIDUAL cannot see this, so if the run aborts it can only
+  // be the new argument-default check doing the work.
+  const defaultMutated = candidateSql.replace(
+    "p_scheduled_date date DEFAULT (now() AT TIME ZONE 'America/Chicago')::date",
+    'p_scheduled_date date DEFAULT CURRENT_DATE',
+  );
+  assert.notEqual(defaultMutated, candidateSql, 'default mutation did not alter the candidate — the anchor text moved');
+  copyText(defaultMutated, 'default-mutant.sql', workDir);
+  const defaultMutantRun = psql('\\i /tmp/default-mutant.sql', { allowFailure: true, wrap: wrapByName.get('default-mutant.sql') ?? false });
+  const defaultMutantOut = `${defaultMutantRun.stdout}\n${defaultMutantRun.stderr}`;
+  assert.match(defaultMutantOut, /POSTFLIGHT_UTC_RESIDUAL_DEFAULT/,
+    'a candidate leaving CURRENT_DATE in an ARGUMENT DEFAULT must abort in POSTFLIGHT_UTC_RESIDUAL_DEFAULT');
+  assert.doesNotMatch(defaultMutantOut, /POSTFLIGHT_UTC_RESIDUAL:/,
+    'the body check must NOT be what caught this — that would mean the argument-default check is untested');
+  assert.deepEqual(bodyState(), rebuild, 'the default mutant must install nothing (its transaction rolled back)');
+  log('PHASE 8: MUTATION — reverting ONLY the argument default aborts in POSTFLIGHT_UTC_RESIDUAL_DEFAULT (body check silent) and installs nothing');
+
+  // PHASE 9: prove the fail-closed reader assertion. Swapping pg_get_expr's second argument from 0
+  // to p.oid is the wrong-but-obvious form: it returns NULL for every function, silently, and would
+  // turn PHASE 8's check into a tautology that passes on NULL. The candidate must refuse to certify
+  // rather than report clean. First, demonstrate the reader really does go dark.
+  const darkReader = argDefaultsViaProOid(QUICK_IMPL);
+  assert.equal(darkReader, '<NULL>',
+    `pg_get_expr(proargdefaults, p.oid) was expected to return NULL, got: ${darkReader}`);
+  const readerMutated = candidateSql.replace(
+    'pg_get_expr(p.proargdefaults, 0) AS arg_defaults',
+    'pg_get_expr(p.proargdefaults, p.oid) AS arg_defaults',
+  );
+  assert.notEqual(readerMutated, candidateSql, 'reader mutation did not alter the candidate — the anchor text moved');
+  copyText(readerMutated, 'reader-mutant.sql', workDir);
+  const readerMutantRun = psql('\\i /tmp/reader-mutant.sql', { allowFailure: true, wrap: wrapByName.get('reader-mutant.sql') ?? false });
+  assert.match(`${readerMutantRun.stdout}\n${readerMutantRun.stderr}`, /POSTFLIGHT_DEFAULTS_UNREADABLE/,
+    'a blinded argument-default reader must abort in POSTFLIGHT_DEFAULTS_UNREADABLE, not pass on NULL');
+  assert.deepEqual(bodyState(), rebuild, 'the reader mutant must install nothing (its transaction rolled back)');
+  log(`PHASE 9: MUTATION — blinding the reader (pg_get_expr second arg 0 -> p.oid, which returns ${darkReader}) aborts in POSTFLIGHT_DEFAULTS_UNREADABLE instead of passing on NULL`);
 
   log('\nALL PHASES PASSED');
 } finally {
