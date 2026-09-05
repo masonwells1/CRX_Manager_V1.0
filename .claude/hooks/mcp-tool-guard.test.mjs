@@ -264,7 +264,24 @@ withProjectSettings({ allow: [SB_UUID + "list_tables"] }, (dir) => {
   ok(isDeny(r), "identified Supabase UUID: unknown mutation denied");
   r = runHook({ tool_name: SB_UUID + "pause_project", tool_input: {} }, dir);
   ok(isDeny(r), "identified Supabase UUID: lifecycle leaf denied");
+  // Codex P1 on af30d4c17: the ask entries name specific servers, so a deploy on an
+  // identified-but-unlisted UUID must NOT pass as "gated elsewhere".
+  r = runHook({ tool_name: SB_UUID + "deploy_edge_function", tool_input: { name: "send-email" } }, dir);
+  ok(isDeny(r), "identified Supabase UUID without an exact deploy entry: deploy_edge_function is denied");
+  ok(r.stdout.includes("deploy prompt"), "denial explains the missing ask entry");
 });
+withProjectSettings({ allow: [SB_UUID + "list_tables"], ask: [SB_UUID + "deploy_edge_function"] }, (dir) => {
+  r = runHook({ tool_name: SB_UUID + "deploy_edge_function", tool_input: { name: "send-email" } }, dir);
+  eq(r.stdout.trim(), "", "identified Supabase UUID WITH an exact ask entry: deploy_edge_function is left to the ask tier");
+});
+// Same rule on the named servers: the repo ask list names supabase/Supabase/claude_ai_Supabase,
+// so a differently named Supabase server has no prompt and must be denied.
+r = runHook({ tool_name: "mcp__supabase__deploy_edge_function", tool_input: { name: "x" } });
+eq(r.stdout.trim(), "", "deploy_edge_function on mcp__supabase__ (exact ask entry exists) is left to the ask tier");
+r = runHook({ tool_name: "mcp__claude_ai_Supabase__deploy_edge_function", tool_input: { name: "x" } });
+eq(r.stdout.trim(), "", "deploy_edge_function on mcp__claude_ai_Supabase__ (exact ask entry exists) is left to the ask tier");
+r = runHook({ tool_name: "mcp__other_supabase__deploy_edge_function", tool_input: { name: "x" } });
+ok(isDeny(r), "deploy_edge_function on a Supabase-named server with no ask entry is denied");
 // Kebab-case leaves on the NAMED Supabase servers hit the same fail-closed branch
 // (Codex P1 on 68c1c32f0).
 r = runHook({ tool_name: "mcp__supabase__future-write-tool", tool_input: {} });

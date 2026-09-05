@@ -26,7 +26,8 @@
 //     allowlist and is not one of the three leaves another gate already owns
 //     (execute_sql -> live-testdata/live-db guards; apply_migration ->
 //     migration-apply-guard; deploy_edge_function -> the `ask` tier, Mason's
-//     deploy gate). Added 2026-09-05 (GitHub Codex P1 on PR #605): once the repo
+//     deploy gate - passed ONLY when that exact tool name has a settings entry,
+//     since the ask entries are per server name/UUID). Added 2026-09-05 (GitHub Codex P1 on PR #605): once the repo
 //     inherits Auto mode an UNLISTED tool goes to the classifier instead of
 //     being refused, so a new or renamed Supabase mutation absent from the finite
 //     settings.json deny list could be accepted. Mirrors the fail-closed rule in
@@ -81,7 +82,7 @@ const DC_WRITE_RE = /^mcp__[\w-]+__(write_file|edit_file|edit_block|move_file|cr
 // Leaf syntax is the full MCP leaf alphabet incl. hyphens: a kebab-case
 // mutation (`future-write-tool`) must hit the same fail-closed branch
 // (GitHub Codex P1 on PR #605 head 68c1c32f0).
-const SUPABASE_TOOL_RE = /^mcp__(?:[\w-]*supabase|50e15046-cf2c-49da-b8df-ceef27768f63)__([\w-]+)$/i;
+const SUPABASE_TOOL_RE = /^mcp__([\w-]*supabase|50e15046-cf2c-49da-b8df-ceef27768f63)__([\w-]+)$/i;
 const SUPABASE_READ_ONLY_TOOLS = new Set([
   "generate_typescript_types", "get_advisors", "get_cost", "get_edge_function",
   "get_logs", "get_organization", "get_project", "get_project_url",
@@ -137,8 +138,12 @@ const SUPABASE_DISTINCTIVE_LEAVES = new Set(
 const READ_SHAPED_LEAF_RE = /^(?:get|list|search|read|find|query|describe|fetch|show|view|check|inspect|compare|validate|render|extract|convert|download|suggest|analy[sz]e|display|lookup|count|preview)(?:_|$)/i;
 const SETTINGS_UUID_LEAF_RE = /^mcp__([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})__([\w-]+)$/i;
 
-// Map<uuid, Set<leaf>> of every exact per-tool entry across the settings files.
-function settingsUuidEntries() {
+// { exact: Set<lower-cased entry>, byUuid: Map<uuid, Set<leaf>> } of every exact
+// per-tool `mcp__<server>__<leaf>` entry across the settings files.
+let settingsCache = null;
+function settingsMcpEntries() {
+  if (settingsCache) return settingsCache;
+  const exact = new Set();
   const found = new Map();
   const hookDir = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(hookDir, "..", "..");
@@ -157,7 +162,9 @@ function settingsUuidEntries() {
       const perms = parsed?.permissions && typeof parsed.permissions === "object" ? parsed.permissions : {};
       for (const tier of ["allow", "ask", "deny"]) {
         for (const entry of Array.isArray(perms[tier]) ? perms[tier] : []) {
-          const m = SETTINGS_UUID_LEAF_RE.exec(String(entry).trim());
+          const text = String(entry).trim();
+          if (/^mcp__[\w-]+__[\w-]+$/i.test(text)) exact.add(text.toLowerCase());
+          const m = SETTINGS_UUID_LEAF_RE.exec(text);
           if (!m) continue;
           const uuid = m[1].toLowerCase();
           if (!found.has(uuid)) found.set(uuid, new Set());
@@ -168,7 +175,22 @@ function settingsUuidEntries() {
       process.stderr.write(`[mcp-tool-guard] could not read ${file}: ${err?.message || err}\n`);
     }
   }
-  return found;
+  settingsCache = { exact, byUuid: found };
+  return settingsCache;
+}
+
+// deploy_edge_function is "gated elsewhere" ONLY by its exact `ask` entry in
+// settings.json - there is no deploy hook. Those entries name specific servers
+// (supabase, Supabase, claude_ai_Supabase, the registered UUID), so on any other
+// Supabase-looking server the leaf would reach the classifier instead of Mason's
+// deploy prompt (GitHub Codex P1 on PR #605 head af30d4c17). Pass it only when
+// THIS exact tool name has a settings entry; otherwise deny and say how.
+function denyUnlessDeployRegistered(server) {
+  if (settingsMcpEntries().exact.has(toolName.toLowerCase())) nothing();
+  out("block",
+    `MCP TOOL GUARD (${toolName}): deploy_edge_function on Supabase server "${server}" has no exact entry in any Claude settings file, ` +
+    "so it would skip Mason's deploy prompt and reach the permission classifier. Edge Function deploys need his approval in the current " +
+    "conversation: add `" + toolName + "` to the `ask` list in .claude/settings.json (fail closed).");
 }
 
 const supabaseLeaf = SUPABASE_TOOL_RE.exec(toolName);
@@ -178,9 +200,10 @@ if (!supabaseLeaf) {
     const uuid = uuidMatch[1].toLowerCase();
     const leaf = uuidMatch[2];
     const leafLower = leaf.toLowerCase();
-    const registered = settingsUuidEntries().get(uuid) || new Set();
+    const registered = settingsMcpEntries().byUuid.get(uuid) || new Set();
     const identifiedAsSupabase = [...registered].some((l) => SUPABASE_DISTINCTIVE_LEAVES.has(l));
     if (identifiedAsSupabase) {
+      if (leafLower === "deploy_edge_function") denyUnlessDeployRegistered(uuid);
       if (SUPABASE_READ_ONLY_TOOLS.has(leafLower) || SUPABASE_GATED_ELSEWHERE.has(leafLower)) nothing();
       out("block",
         `MCP TOOL GUARD (${toolName}): connector UUID ${uuid} is identified as the Supabase connector by its settings entries, ` +
@@ -200,7 +223,8 @@ if (!supabaseLeaf) {
   }
 }
 if (supabaseLeaf) {
-  const leaf = supabaseLeaf[1].toLowerCase();
+  const leaf = supabaseLeaf[2].toLowerCase();
+  if (leaf === "deploy_edge_function") denyUnlessDeployRegistered(supabaseLeaf[1]);
   if (SUPABASE_READ_ONLY_TOOLS.has(leaf) || SUPABASE_GATED_ELSEWHERE.has(leaf)) nothing();
   out("block",
     `MCP TOOL GUARD (${toolName}): Supabase tool "${leaf}" is not on the exact read-only allowlist and is denied (fail closed). ` +
