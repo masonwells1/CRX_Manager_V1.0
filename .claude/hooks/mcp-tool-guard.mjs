@@ -82,7 +82,7 @@ const DC_WRITE_RE = /^mcp__[\w-]+__(write_file|edit_file|edit_block|move_file|cr
 // Leaf syntax is the full MCP leaf alphabet incl. hyphens: a kebab-case
 // mutation (`future-write-tool`) must hit the same fail-closed branch
 // (GitHub Codex P1 on PR #605 head 68c1c32f0).
-const SUPABASE_TOOL_RE = /^mcp__([\w-]*supabase|50e15046-cf2c-49da-b8df-ceef27768f63)__([\w-]+)$/i;
+const SUPABASE_TOOL_RE = /^mcp__([\w-]*supabase[\w-]*|50e15046-cf2c-49da-b8df-ceef27768f63)__([\w-]+)$/i;
 const SUPABASE_READ_ONLY_TOOLS = new Set([
   "generate_typescript_types", "get_advisors", "get_cost", "get_edge_function",
   "get_logs", "get_organization", "get_project", "get_project_url",
@@ -201,6 +201,15 @@ function gatedTierRegistered(name) {
   return Boolean(tiers && (tiers.has("ask") || tiers.has("deny")));
 }
 
+// The established SQL routes retain their existing downstream guards. A new
+// connector identity must not inherit that authority from a read-tool entry.
+function gateReplacementSql(server, leaf) {
+  if (leaf !== "execute_sql") return;
+  const established = new Set(["supabase", "claude_ai_supabase", "50e15046-cf2c-49da-b8df-ceef27768f63"]);
+  if (established.has(server.toLowerCase()) || gatedTierRegistered(toolName)) return;
+  out("block", `MCP TOOL GUARD (${toolName}): execute_sql on a replacement or renamed Supabase connector requires an exact ask/deny entry. Read-tool registration or an allow entry does not authorize SQL on this connector.`);
+}
+
 function denyUnlessDeployRegistered(server) {
   if (gatedTierRegistered(toolName)) nothing();
   out("block",
@@ -219,6 +228,7 @@ if (!supabaseLeaf) {
     const registered = settingsMcpEntries().byUuid.get(uuid) || new Set();
     const identifiedAsSupabase = [...registered].some((l) => SUPABASE_DISTINCTIVE_LEAVES.has(l));
     if (identifiedAsSupabase) {
+      gateReplacementSql(uuid, leafLower);
       if (leafLower === "deploy_edge_function") denyUnlessDeployRegistered(uuid);
       if (SUPABASE_READ_ONLY_TOOLS.has(leafLower) || SUPABASE_GATED_ELSEWHERE.has(leafLower)) nothing();
       out("block",
@@ -242,6 +252,7 @@ if (!supabaseLeaf) {
 }
 if (supabaseLeaf) {
   const leaf = supabaseLeaf[2].toLowerCase();
+  gateReplacementSql(supabaseLeaf[1], leaf);
   if (leaf === "deploy_edge_function") denyUnlessDeployRegistered(supabaseLeaf[1]);
   if (SUPABASE_READ_ONLY_TOOLS.has(leaf) || SUPABASE_GATED_ELSEWHERE.has(leaf)) nothing();
   out("block",

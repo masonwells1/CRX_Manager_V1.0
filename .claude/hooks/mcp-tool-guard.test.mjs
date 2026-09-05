@@ -256,7 +256,7 @@ withProjectSettings({ allow: [SB_UUID + "list_tables"] }, (dir) => {
   r = runHook({ tool_name: SB_UUID + "list_projects", tool_input: {} }, dir);
   eq(r.stdout.trim(), "", "identified Supabase UUID: read-only allowlist leaf passes");
   r = runHook({ tool_name: SB_UUID + "execute_sql", tool_input: { query: "select 1" } }, dir);
-  eq(r.stdout.trim(), "", "identified Supabase UUID: execute_sql is left to the live-db guards");
+  ok(isDeny(r), "identified Supabase UUID: execute_sql requires an exact ask/deny entry");
   r = runHook({ tool_name: SB_UUID + "get_event", tool_input: {} }, dir);
   ok(isDeny(r), "identified Supabase UUID: a read-shaped leaf NOT on the allowlist is denied (complete policy)");
   ok(r.stdout.includes("identified as the Supabase connector"), "denial explains the identification");
@@ -317,4 +317,24 @@ ok(isDeny(r), "hyphenated lifecycle leaf on mcp__Supabase__ is denied");
 r = runHook({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function", tool_input: {} });
 eq(r.stdout.trim(), "", "deploy_edge_function on the REGISTERED UUID is still left to the ask tier");
 
+for (const server of ["supabase_prod", "my_supabase_connector"]) {
+  r = runHook({ tool_name: `mcp__${server}__pause_project`, tool_input: {} });
+  ok(isDeny(r), "suffix-qualified Supabase lifecycle action is denied");
+  r = runHook({ tool_name: `mcp__${server}__future_write_tool`, tool_input: {} });
+  ok(isDeny(r), "suffix-qualified Supabase unknown mutation is denied");
+  r = runHook({ tool_name: `mcp__${server}__list_tables`, tool_input: {} });
+  eq(r.stdout.trim(), "", "suffix-qualified Supabase reads still pass");
+  r = runHook({ tool_name: `mcp__${server}__execute_sql`, tool_input: { query: "select 1" } });
+  ok(isDeny(r), "renamed Supabase SQL requires exact approval registration");
+}
+withProjectSettings({ allow: [SB_UUID + "list_tables", SB_UUID + "execute_sql"] }, (dir) => {
+  r = runHook({ tool_name: SB_UUID + "execute_sql", tool_input: { query: "update public.profiles set role = 'admin'" } }, dir);
+  ok(isDeny(r), "replacement UUID SQL allow entry cannot authorize a profile write");
+});
+for (const tier of ["ask", "deny"]) {
+  withProjectSettings({ allow: [SB_UUID + "list_tables"], [tier]: [SB_UUID + "execute_sql"] }, (dir) => {
+    r = runHook({ tool_name: SB_UUID + "execute_sql", tool_input: { query: "select 1" } }, dir);
+    eq(r.stdout.trim(), "", `replacement UUID SQL defers to its explicit ${tier} rule`);
+  });
+}
 console.log(`mcp-tool-guard: ${pass} assertions passed`);
