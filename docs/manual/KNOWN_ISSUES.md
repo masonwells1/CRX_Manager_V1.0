@@ -303,11 +303,18 @@ NOT changed: it reasons about command text, an 8.3 token can also be hash-styled
 round of the "command-text guard never converges" pattern this repository has already recorded
 three times on this guard.
 
-**Recommended fix — an owner action, not a guard edit.** Disable short-name generation on the
-volume and strip the existing aliases (`fsutil 8dot3name set C: 1`, then
-`fsutil 8dot3name strip /s C:\CRX_Manager` from an elevated prompt; both are documented Windows
-administration commands and reversible). With no aliases there is nothing for either branch to
-miss. An agent must not run these: they change a system setting.
+**Recommended fix — an owner action, not a guard edit.** Two separate steps, with different
+risk. (1) `fsutil 8dot3name set C: 1` (elevated prompt) stops Windows creating short names for
+NEW files on the volume; this is a policy toggle and is reversible (`set C: 0`). It does not remove
+the aliases existing files already have, so on its own it does not close the hole for the proofs
+already on disk. (2) `fsutil 8dot3name strip /s C:\CRX_Manager` removes the existing aliases under
+that folder. This step is NOT reversible: turning generation back on does not recreate the removed
+names, and Microsoft's reference for the command warns that programs which stored a short path
+(typically in the registry) can break; it tells you to back up first. Before running (2), run it
+with `/t` (test mode) to list what would change and any registry entries that mention a short
+name, keep the scope to the repository folder (never the whole volume), and take a restore point.
+With no aliases under the repository there is nothing for either branch to miss. An agent must not
+run either command: they change a system setting.
 
 **Durable fix — a design change, not a guard edit, deferred from this PR.** A file an agent can
 rename can be rewritten; a text rule over command strings cannot decide what a name resolves to.

@@ -53,8 +53,12 @@ exact-SHA `gpt-5.6-sol` rounds found a real bypass in each successive version:
   view missed `x="a\""; function cat {` (round 3).
 
 That is the "command-text guard never converges" pattern this repository has recorded before, so
-both narrowings were withdrawn rather than taken to a fourth round. The guard's behaviour on those
-two classes is byte-for-byte the base behaviour; every reproduced bypass is a pinned deny case, and
+both narrowings were withdrawn rather than taken to a fourth round. The ALLOW side of those two
+classes is the base behaviour: no command the base guard refused is allowed now. One deny-side
+hardening from round 2 is retained on purpose: the redefinition pattern (`REDEFINES_COMMANDS_RE`)
+now accepts a scope prefix in a function name (`[\w.:-]+` instead of `[\w.-]+`), so
+`function global:Get-Content { … }` is recognised as a redefinition and refused where the base
+guard let it through; the test corpus pins it. Every reproduced bypass is a pinned deny case, and
 each over-block is pinned as a recorded choice with its workaround: a pipeline with no `-exec`
 (`find … -name x | xargs du -m`) for the home data directory, and a bracket class
 (`"export [f]unction"`) for the word.
