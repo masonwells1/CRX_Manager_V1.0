@@ -451,6 +451,17 @@ export default function QuoteBuilder() {
   // describes a record this page is no longer showing, so it must install
   // nothing: not the form, not quoteId, not the row-version token.
   const quoteLoadSerialRef = useRef(0);
+  // The quote the URL currently names, captured during render so it is already
+  // correct for any effect or handler that runs on the new route. The serial
+  // above orders CALLS; this binds a call to a RECORD, and the two operands have
+  // genuinely independent sources (one from this component's own call order, one
+  // from the router). Both are needed: `fetchQuote` is also called from stale
+  // closures that survive a navigation — the stale-save reload and the
+  // post-conversion refetch — and such a call MINTS THE NEWEST SERIAL for the
+  // quote the operator already left, so a serial check alone would certify the
+  // stale snapshot as current instead of rejecting it.
+  const routeQuoteIdRef = useRef<string | null>(id ?? null);
+  routeQuoteIdRef.current = id ?? null;
   const blocker = useUnsavedChanges(isDirty);
 
   // Status-based guards
@@ -799,17 +810,25 @@ export default function QuoteBuilder() {
 
   const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
     const loadSerial = ++quoteLoadSerialRef.current;
-    // Re-checked after every await. A superseded load returns false without
-    // touching form state, toasts, navigation or `loading`: the load that
-    // superseded it owns all of those now.
-    const superseded = () => quoteLoadSerialRef.current !== loadSerial;
+    // Two independent halves; neither subsumes the other, and each has its own
+    // regression test. `supersededByNewerLoad` orders CALLS, so reopening the
+    // SAME quote twice still resolves to the newer call. `routeLeftThisQuote`
+    // binds this call to a RECORD, so a load started from a stale closure
+    // cannot install merely because it holds the newest serial.
+    //
+    // Re-checked after every await. A load that must not install returns false
+    // without touching form state, toasts, navigation or `loading` — whichever
+    // load is current owns all of those now.
+    const supersededByNewerLoad = () => quoteLoadSerialRef.current !== loadSerial;
+    const routeLeftThisQuote = () => routeQuoteIdRef.current !== quoteId;
+    const mustNotInstall = () => supersededByNewerLoad() || routeLeftThisQuote();
 
     const quoteRes = await supabase
       .from('quotes')
       .select('*, customer:customers(*)')
       .eq('id', quoteId)
       .maybeSingle();
-    if (superseded()) return false;
+    if (mustNotInstall()) return false;
 
     if (quoteRes.error || !quoteRes.data) {
       if (quoteRes.error) {
@@ -834,7 +853,7 @@ export default function QuoteBuilder() {
         .eq('quote_id', quoteId)
         .order('sort_order'),
     ]);
-    if (superseded()) return false;
+    if (mustNotInstall()) return false;
 
     // Build and validate the complete editable snapshot before changing any
     // form state. A failed Reload must never replace an operator's local work
@@ -852,7 +871,7 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('id', quoteId)
       .maybeSingle();
-    if (superseded()) return false;
+    if (mustNotInstall()) return false;
 
     const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
     const stableVersion = initialRowVersion === finalRowVersion
@@ -938,7 +957,7 @@ export default function QuoteBuilder() {
       .eq('quote_id', quoteId)
       .is('deleted_at', null)
       .not('quote_section_id', 'is', null);
-    if (superseded()) return false;
+    if (mustNotInstall()) return false;
 
     if (sectionJobsError) {
       Sentry.captureException(sectionJobsError, { tags: { source: 'read', action: 'load_quote_section_jobs' } });
@@ -956,7 +975,7 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
-    if (superseded()) return false;
+    if (mustNotInstall()) return false;
 
     if (versionsError) {
       Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
