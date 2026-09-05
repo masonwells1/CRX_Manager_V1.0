@@ -294,6 +294,12 @@ function hasFixedSecurityDefinerCreateSearchPath(definition) {
   // routine configuration, so mask their contents before looking for SET.
   const keywordDefinition = maskQuotedIdentifierContents(definition);
   if (keywordDefinition === null) return false;
+  // PostgreSQL accepts more than one SET option on a routine. The last
+  // search_path setting wins, and quoted parameter names can spell it too.
+  // This narrow source guard can only prove the safe form when this is the
+  // sole SET option; any other setting is withheld from proof rather than
+  // risking an override that the parser did not model.
+  if ([...keywordDefinition.matchAll(/\bSET\b/gi)].length !== 1) return false;
   const settings = [...keywordDefinition.matchAll(
     /\bSET\s+search_path\s*(?:TO|=)\s*([\s\S]*?)(?=\s+\b(?:AS|LANGUAGE|TRANSFORM|WINDOW|SUPPORT|COST|ROWS|SET|SECURITY|IMMUTABLE|STABLE|VOLATILE|LEAKPROOF|CALLED|RETURNS|STRICT)\b|\s*$)/gi,
   )];

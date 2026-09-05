@@ -3,3 +3,4 @@
 - Refuse migration proof generation for every `SECURITY DEFINER` function or procedure creation form unless it declares the fixed `public, pg_temp` search path. ACL revokes alone cannot prevent owner-context object shadowing.
 - Expanded the RLS reviewer charter and correction-guard regression tests to cover plain `CREATE FUNCTION`, `CREATE PROCEDURE`, and `CREATE OR REPLACE PROCEDURE` forms, including a widened-path negative case.
 - Treat quoted identifiers as data rather than configuration while detecting that path, so a routine signature or output-column name cannot impersonate the required directive.
+- Reject duplicate, quoted, and `FROM CURRENT` path settings, so a safe-looking initial path cannot be overridden later in the routine declaration.

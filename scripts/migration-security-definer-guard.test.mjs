@@ -136,9 +136,13 @@ test('requires the fixed search path for every SECURITY DEFINER creation form', 
     const unsafe = `CREATE ${routine.kind} public.${routine.name}() ${routine.declaration} SECURITY DEFINER AS $$ SELECT 1; $$;`;
     const safe = `CREATE ${routine.kind} public.${routine.name}() ${routine.declaration} SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT 1; $$;`;
     const widened = `CREATE ${routine.kind} public.${routine.name}() ${routine.declaration} SECURITY DEFINER SET search_path = public, pg_temp, attacker AS $$ SELECT 1; $$;`;
+    const fromCurrentOverride = `CREATE ${routine.kind} public.${routine.name}() ${routine.declaration} SECURITY DEFINER SET search_path = public, pg_temp SET search_path FROM CURRENT AS $$ SELECT 1; $$;`;
+    const quotedOverride = `CREATE ${routine.kind} public.${routine.name}() ${routine.declaration} SECURITY DEFINER SET search_path = public, pg_temp SET "search_path" = attacker, public AS $$ SELECT 1; $$;`;
     assert.deepEqual(securityDefinerMissingAnonRevokes(`${unsafe}\n${routine.revoke}`), ['unparseable-security-definer-sql']);
     assert.deepEqual(securityDefinerMissingAnonRevokes(`${safe}\n${routine.revoke}`), []);
     assert.deepEqual(securityDefinerMissingAnonRevokes(`${widened}\n${routine.revoke}`), ['unparseable-security-definer-sql']);
+    assert.deepEqual(securityDefinerMissingAnonRevokes(`${fromCurrentOverride}\n${routine.revoke}`), ['unparseable-security-definer-sql']);
+    assert.deepEqual(securityDefinerMissingAnonRevokes(`${quotedOverride}\n${routine.revoke}`), ['unparseable-security-definer-sql']);
   }
   const quotedOutputColumn = `CREATE FUNCTION public.quoted_output_path_decoy()
 RETURNS TABLE ("SET search_path = public, pg_temp AS" integer)
