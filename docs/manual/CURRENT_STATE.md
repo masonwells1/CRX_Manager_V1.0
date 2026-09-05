@@ -8,10 +8,12 @@ migration list includes both routine-only migrations from that refresh:
 `20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
 ordering high-water is the newest applied authored NAME:
 **`20260904180000_invoice_season_follows_invoice_date`** (verified 2026-09-05).
-Four local commission follow-ups (`20260905020000` through `20260905020300`) are not applied.
+Six local commission follow-ups (`20260905020000` through `20260905020500`) are not applied.
 They harden snapshot replay, append corrected labels for 34 un-settled opening commission snapshots,
-refuse a payment batch if its recipient became stale before posting, and park an America/Chicago
-payout business-date guard. None changes an existing immutable ledger row. Refresh
+refuse a payment batch if its recipient became stale before posting, park an America/Chicago
+payout business-date guard, and pair commission source-date inheritance with Chicago-based source
+document dates. The final two candidates close the September 30 boundary only when applied together.
+None changes an existing immutable ledger row. Refresh
 `.claude/schema-registry.json` only after a reviewed live apply.
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and

@@ -1,4 +1,9 @@
 -- Commission dates follow the source document's business date, never the UTC clock.
+-- idempotency-body-check: exempt
+-- The two re-emitted INSERT helpers are owner-only SECURITY INVOKER internals.
+-- Their already-authorized SECURITY DEFINER callers own the operation-level
+-- idempotency boundary; exposing a second key here would split one business
+-- operation across two unrelated replay caches.
 --
 -- ############################################################################
 -- PARTIAL FIX — THIS DOES NOT CLOSE THE SEPTEMBER 30 RISK ON ITS OWN.
