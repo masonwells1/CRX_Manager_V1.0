@@ -38,7 +38,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { isMachineGenerated } from "../.claude/hooks/prompt-source-lib.mjs";
+import { authoredByMason, isMachineGenerated } from "../.claude/hooks/prompt-source-lib.mjs";
 
 const args = process.argv.slice(2);
 const opt = (flag, dflt) => { const i = args.indexOf(flag); return i >= 0 && args[i + 1] ? args[i + 1] : dflt; };
@@ -103,6 +103,19 @@ const bucketOf = (ctx) => ctx < 1e5 ? "<100k" : ctx < 2e5 ? "100-200k" : ctx < 4
 // the opening tag) plus the desktop app's CI monitor event, which the hooks do not carry.
 const CI_MONITOR_ENVELOPE_RE = /^\s*<ci-monitor-event\b/i;
 const isEnvelope = (text) => isMachineGenerated(text) || CI_MONITOR_ENVELOPE_RE.test(text);
+// A peer session's <cross-session-message> is deliberately NOT a machine envelope
+// in the hooks (a sibling agent chose those words), but it is not a prompt Mason
+// typed either. `authoredByMason` strips peer blocks (and fenced/inline code and
+// quoted lines) and keeps what he wrote around them; a record whose authored
+// remainder is empty is not counted, and the title comes from that remainder so a
+// peer block never becomes the session title under --titles (Codex App, PR #613).
+const PEER_ENVELOPE_RE = /<cross-session-message\b/i;
+const masonWords = (text) => {
+  if (isEnvelope(text)) return "";
+  const authored = authoredByMason(text).replace(/\s+/g, " ").trim();
+  if (authored) return authored;
+  return PEER_ENVELOPE_RE.test(text) ? "" : text;
+};
 
 function session(f) {
   const id = path.basename(f.fp, ".jsonl");
@@ -126,7 +139,8 @@ for (const f of files) {
       const isHuman = !o.isMeta && !o.isCompactSummary && !o.isVisibleInTranscriptOnly;
       const noteHuman = (text) => { humanPrompts++; s.prompts++; if (!s.title) s.title = text.slice(0, 80).replace(/\s+/g, " "); };
       if (typeof c === "string") {
-        if (isHuman && !isEnvelope(c)) noteHuman(c);
+        const words = isHuman ? masonWords(c) : "";
+        if (words) noteHuman(words);
       } else if (Array.isArray(c)) {
         let text = "";
         for (const part of c) {
@@ -153,7 +167,8 @@ for (const f of files) {
             }
           }
         }
-        if (text && isHuman && !isEnvelope(text)) noteHuman(text);
+        const words = text && isHuman ? masonWords(text) : "";
+        if (words) noteHuman(words);
       }
     }
 
