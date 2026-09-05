@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promptModulesFor } from "./prompt-router.mjs";
 import { postToolModulesFor } from "./posttool-router.mjs";
+import { dedupeContextBlocks } from "./hook-router-runtime.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const PROMPT = path.join(ROOT, ".claude", "hooks", "prompt-router.mjs");
@@ -40,6 +41,24 @@ const promptCases = [
 for (const [prompt, marker] of promptCases) {
   const output = run(PROMPT, { prompt });
   ok(output?.hookSpecificOutput?.additionalContext.includes(marker), `prompt router preserves ${marker}`);
+}
+
+// The landing policy is embedded by BOTH the gauntlet and the ship-intent
+// reminders; one prompt that trips both must carry it once (2026-09-04).
+{
+  const both = run(PROMPT, { prompt: "review this code, then ship it" });
+  const context = both?.hookSpecificOutput?.additionalContext || "";
+  ok(context.includes("Codex Review Gauntlet") && context.includes("Ship-It reminder"), "one prompt trips both reminders");
+  eq((context.match(/LANDING POLICY: Mason authorized/g) || []).length, 1, "the full landing policy appears exactly once");
+  ok(context.includes("LANDING POLICY: as stated above (unchanged)."), "the second reminder points at the policy instead of repeating it");
+  const shipOnly = run(PROMPT, { prompt: "implement this fix" });
+  eq((shipOnly?.hookSpecificOutput?.additionalContext.match(/LANDING POLICY: Mason authorized/g) || []).length, 1, "a single reminder still carries the full policy");
+  ok(!shipOnly?.hookSpecificOutput?.additionalContext.includes("as stated above"), "nothing is replaced when the policy appears once");
+  // Pure helper, mutation-pinned: only an exact whole-block repeat is replaced.
+  eq(dedupeContextBlocks(["A\n\nPOLICY\n\nB", "C\n\nPOLICY"], [{ text: "POLICY", replacement: "P2" }]), ["A\n\nPOLICY\n\nB", "C\n\nP2"], "second occurrence replaced, first kept");
+  eq(dedupeContextBlocks(["POLICY-ish", "POLICY"], [{ text: "POLICY", replacement: "P2" }]), ["POLICY-ish", "P2"], "a superstring counts as carrying the block (exact substring match)");
+  eq(dedupeContextBlocks(["A", "B"], [{ text: "POLICY", replacement: "P2" }]), ["A", "B"], "contexts without the block are untouched");
+  eq(dedupeContextBlocks(["A\n\nPOLICY", "B\n\nPOLICY"], []), ["A\n\nPOLICY", "B\n\nPOLICY"], "no blocks configured → no rewriting");
 }
 
 const temp = mkdtempSync(path.join(os.tmpdir(), "crx-hook-router-"));

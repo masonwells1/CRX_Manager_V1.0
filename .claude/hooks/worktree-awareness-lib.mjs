@@ -948,3 +948,105 @@ export function fleetSummaryLine(ledgerCount, parkedCount) {
   const p = Number(parkedCount) || 0;
   return `Fleet: ${l} loop ledger${l === 1 ? "" : "s"} active · ${p} parked migration${p === 1 ? "" : "s"} awaiting apply — run /fleet for the full picture`;
 }
+
+// ── Compact sibling report (2026-09-04) ──────────────────────────────────────
+// With 74 worktrees the SessionStart report reached ~22KB: two lines per
+// worktree plus one "PARKED STATE UNKNOWN" clause per worktree, most of them
+// word-for-word identical. That text rides in EVERY API call's context for the
+// whole session. The helpers below keep every ACTIONABLE line verbatim —
+// unmerged work, unknown merge state, unreadable checkouts, real uncommitted
+// changes — and fold only the provably finished worktrees into one counted line
+// that still names each of them. Nothing is hidden; repeated text is said once.
+
+// Porcelain line whose path is a Codex CLI `/import` skill directory. The Codex
+// CLI writes `.agents/skills/source-command-<name>/SKILL.md` into a checkout by
+// itself; the repo's generator never emits that shape (FOREIGN_SKILL_DIR_RE in
+// scripts/sync-agent-workflows.mjs; KNOWN_ISSUES 2026-09-02). They are harness
+// output, not work — reported and LABELLED here, never dropped.
+export const CODEX_IMPORT_DIRT_RE = /^\.agents\/skills\/source-command-[^/]+\//;
+export function isCodexImportDirtLine(line) {
+  const m = /^.{2} "?(.+?)"?$/.exec(String(line || "").replace(/\r$/, ""));
+  if (!m) return false;
+  return CODEX_IMPORT_DIRT_RE.test(m[1].replace(/\\/g, "/"));
+}
+
+// Split `git status --porcelain` text into { total, importer, real } line counts.
+export function classifyDirt(porcelainText) {
+  const lines = String(porcelainText || "")
+    .split("\n")
+    .map((l) => l.replace(/\r$/, ""))
+    .filter((l) => l.trim());
+  const importer = lines.filter(isCodexImportDirtLine).length;
+  return { total: lines.length, importer, real: lines.length - importer };
+}
+
+// Short label for a worktree path: its last segment, or the parent segment when
+// the last one is the repo name every Codex worktree ends in (`…/pr449/CRX_Manager`).
+export function shortWorktreeName(wtPath) {
+  const parts = String(wtPath || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts.length === 0) return String(wtPath || "");
+  const last = parts[parts.length - 1];
+  const parent = parts.length >= 2 ? parts[parts.length - 2] : "";
+  // Only the EXACT repo-name leaf (`CRX_Manager`, `CRX_Manager_V1.0`) defers to
+  // its parent; a folder that merely starts with it (`crx-manager-bug-backlog`)
+  // is its own name. `C:/CRX_Manager` is the main checkout: its parent is a
+  // drive root, not a name.
+  if (/^crx[_-]?manager(?:[_-]v[\d.]+)?$/i.test(last) && parent && !/^[A-Za-z]:$/.test(parent)) return parent;
+  return last;
+}
+
+// Human wording for a classifyDirt() result (null = the checkout was unreadable).
+export function describeDirt(dirt) {
+  if (!dirt) return "unreadable/absent";
+  if (dirt.total === 0) return "clean";
+  const files = `${dirt.total} dirty file${dirt.total === 1 ? "" : "s"}`;
+  if (dirt.importer === 0) return files;
+  if (dirt.real === 0) return `${files} (all Codex-import skill dirs)`;
+  return `${files} (${dirt.importer} Codex-import skill dirs, ${dirt.real} real)`;
+}
+
+// siblings: [{ path, branchLabel, mergedLabel, dirt }] → report lines.
+// DETAILED (two lines, unchanged wording) when the worktree is not provably
+// finished: unmerged, merge-state unknown, unreadable, or holding real changes.
+// FOLDED (one counted line naming each) when origin/main already contains its
+// HEAD — branch or detached alike — and it holds no real changes. A detached
+// HEAD gets no free pass: its commit must prove ancestry like any branch.
+export function formatSiblingReport(siblings) {
+  const detailed = [];
+  const folded = [];
+  for (const s of siblings || []) {
+    // Only a label that POSITIVELY says origin/main contains the commit folds;
+    // UNMERGED, unknown, a bare "detached", or anything unexpected stays detailed.
+    const notFinished = !/^MERGED into origin\/main$/.test(String(s.mergedLabel || ""));
+    const realDirt = !s.dirt || s.dirt.real > 0;
+    if (notFinished || realDirt) {
+      detailed.push(`  • ${s.path}\n      branch: ${s.branchLabel} — ${s.mergedLabel} — ${describeDirt(s.dirt)}`);
+    } else {
+      folded.push(s);
+    }
+  }
+  const lines = [...detailed];
+  if (folded.length > 0) {
+    const importerOnly = folded.filter((s) => s.dirt.importer > 0).length;
+    const names = folded.map((s) => shortWorktreeName(s.path)).join(", ");
+    const note = importerOnly > 0 ? `; ${importerOnly} carry only Codex-import skill dirs` : "";
+    lines.push(`  • ${folded.length} finished worktree${folded.length === 1 ? "" : "s"} (in origin/main, no real changes${note}): ${names}`);
+  }
+  return lines;
+}
+
+// "path: reason" strings → one entry per DISTINCT reason, naming the worktrees
+// that share it. A bare reason (no path prefix) passes through unchanged.
+export function groupUnknownReasons(reasons) {
+  const byReason = new Map();
+  for (const entry of reasons || []) {
+    const text = String(entry || "");
+    const idx = text.indexOf(": ");
+    const wt = idx === -1 ? "" : text.slice(0, idx);
+    const reason = idx === -1 ? text : text.slice(idx + 2);
+    if (!byReason.has(reason)) byReason.set(reason, []);
+    if (wt) byReason.get(reason).push(shortWorktreeName(wt));
+  }
+  return [...byReason.entries()].map(([reason, wts]) =>
+    wts.length === 0 ? reason : `${reason} (${wts.length} worktree${wts.length === 1 ? "" : "s"}: ${wts.join(", ")})`);
+}
