@@ -280,50 +280,6 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## FIXED IN CODE, MERGE PENDING 2026-09-05 (PRE-EXISTING on `main` and live in production) — purchase-order receiving could book goods against the WRONG purchase order
-
-**Found by a `gpt-5.6-sol` adversarial gate on 2026-09-05 while reviewing PR #535, and given its
-own session by Mason rather than widening that PR.** It is **not** a regression from #535: the
-affected function is byte-identical on `origin/main`. No entry for it existed in this file before
-now — the earlier write-up lived only on an unmerged branch, so this is an ADD, not an update.
-
-**What went wrong.** React Router reuses `src/pages/PurchaseOrderDetail.tsx` when only the `:id`
-param changes, so the previous PO's header, lines and receiving history stayed in state while the
-next PO loaded. `fetchPO` awaited the header query, called `setPo`, then awaited a *second* query
-for the line items and called `setItems` — with no check that the URL still pointed at the PO the
-fetch had started for. Nothing cleared `po` / `items` / `receivingHistory` on a route change; the
-route effect only reset the submit key and closed the receive modal.
-
-Open PO A, navigate to PO B, let B load, then let A's slower line-item query land: `items` is
-overwritten with PO A's lines while the header still reads PO B. A receive submitted from that
-screen carries PO A's `po_item_id` values, and `receive_po_items` derives the affected PO from the
-submitted item ids alone — there is no expected-PO parameter — so the goods are recorded against
-PO A **and the operator is told it succeeded**.
-
-Proven in a real browser against a harness that stubs only `@supabase/supabase-js`, so the real
-`db.ts`, `sanitizeError` and `assertRpcResult` run. Unfixed: `PO-B-2002` header over PO A's line,
-RPC carrying `po_item_id: item-a1`. Fixed: PO B's line only, RPC carrying `item-b1`.
-
-**Not only a race.** Because `fetchPO` set the new header before awaiting the new lines and nothing
-raised `loading` on a route change, PO B's number rendered over PO A's lines on *every* PO→PO
-navigation, deterministically; the race only decided which lines won afterwards.
-
-**The fix** (three guards, each mutation-tested alone): ticketed fetches that re-check currency
-after every await and keep the loading flags owned by the newest fetch; a `useLayoutEffect` that
-blanks the previous PO's state on route change; and a `handleReceive` refusal when any on-screen
-line belongs to a different PO than the routed `id`. Details and the mutation matrix are in
-`docs/changelog.d/2026-09-04-po-receiving-route-currency-guard.md`.
-
-**Still open — recommended, needs Mason's approval.** The fix is entirely client-side. Adding a
-`p_purchase_order_id` cross-check to `receive_po_items` would make the database itself reject item
-ids from another PO, which a future frontend refactor cannot undo. That is a new migration against
-an applied money/inventory RPC, so it was deliberately NOT written here.
-
-**Not enumerated:** every surface that deep-links to `/purchase-orders/:id`. `EntityBadge` and
-`StaleTasksAlert` are two confirmed ones.
-
----
-
 ## OPEN 2026-09-04 — the migration drift reviewer's overload check can only see AUTHORED history, and its sanctioned runner can never show it the live catalog
 
 **Deferred deliberately by Mason on 2026-09-04**, split out of PR #594 so the uncontested
