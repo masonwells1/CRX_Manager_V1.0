@@ -16,7 +16,7 @@ export const meta = {
 // ---------------------------------------------------------------------------
 const PREAMBLE = [
   'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at the repo root of the current worktree.',
-  'It is a production agricultural-retail ERP. New money storage uses bigint cents. Existing PostgreSQL numeric-dollar storage is not an approved exception until exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified. The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 7 Edge Functions; treat any count as a lead to confirm live, never a fact.',
+  'It is a production agricultural-retail ERP. New money storage uses bigint cents. Existing PostgreSQL numeric-dollar storage is not an approved exception until exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified. Derive the current application, database, migration, and Edge Function scope from the repo and live read-only evidence; never rely on remembered counts.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database. The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql" or "supabase list tables"). Live project id is rhyzpcqhnizqbxphqdkr. You MAY run read-only SQL (SELECT, pg_catalog, information_schema) to ground every finding against the live DB.',
   'EVIDENCE STATUS: Return executionStatus=BLOCKED if any required repo or live-DB source is unavailable. An empty findings array may be VERIFIED only after the requested sources ran; summarize them concretely in evidenceSummary.',

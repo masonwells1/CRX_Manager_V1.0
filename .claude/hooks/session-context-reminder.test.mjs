@@ -12,6 +12,7 @@ function runRaw(input) {
     encoding: "utf8",
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "", "session reminder must not emit hidden errors");
   return result.stdout;
 }
 
