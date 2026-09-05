@@ -183,8 +183,12 @@ export function statementEnd(text, start) {
   // This module records routine declarations and ACLs, not arbitrary PL/pgSQL
   // blocks. Restrict dollar-body handling to a routine declaration so a legacy
   // non-routine DO block with dollar-like text cannot poison source-history
-  // collection for unrelated functions.
-  const routineStatement = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(text.slice(start));
+  // collection for unrelated functions. Comments are SQL trivia, so classify
+  // the same statement after offset-preserving comment masking; otherwise a
+  // leading or interstitial comment would silently truncate its routine body.
+  const commentMasked = maskComments(text.slice(start));
+  if (commentMasked === null) return null;
+  const routineStatement = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i.test(commentMasked);
   for (let cursor = start; cursor < text.length; cursor += 1) {
     if (text[cursor] === '-' && text[cursor + 1] === '-') {
       cursor += 2; while (cursor < text.length && text[cursor] !== '\n' && text[cursor] !== '\r') cursor += 1;

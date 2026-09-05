@@ -61,6 +61,23 @@ test('captures routine declarations and ACLs separated by nested PostgreSQL comm
     result.entries.flatMap(({ routines }) => routines.map(({ key }) => key)),
     ['nested_comment', 'nested_comment'],
   );
+  assert.match(result.entries[0].statement, /SELECT; \$\$;/);
+});
+
+test('captures complete named routine bodies despite leading and interstitial comments', () => {
+  for (const sql of [
+    `/* lead */ CREATE FUNCTION public.leading_comment_body() RETURNS void LANGUAGE plpgsql AS $body$
+    BEGIN PERFORM 1; DELETE FROM public.audit_log WHERE false; END;
+    $body$;`,
+    `CREATE /* interstitial */ FUNCTION public.interstitial_comment_body() RETURNS void LANGUAGE plpgsql AS $body$
+    BEGIN PERFORM 1; DELETE FROM public.audit_log WHERE false; END;
+    $body$;`,
+  ]) {
+    const result = routineReferencesIn(sql);
+    assert.equal(result.error, null);
+    assert.equal(result.entries.length, 1);
+    assert.match(result.entries[0].statement, /DELETE FROM public\.audit_log/);
+  }
 });
 
 test('keeps escaped quotes and semicolons inside PostgreSQL escape strings', () => {
