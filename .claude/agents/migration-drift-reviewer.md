@@ -35,6 +35,30 @@ Example: if registry has `orders.status: [confirmed, partially_fulfilled, fulfil
 ### CHECK 2 — Function overload collision
 For each `CREATE OR REPLACE FUNCTION <name>(<args>)` in the migration:
 1. Search the entire `supabase/migrations/` directory for prior `CREATE OR REPLACE FUNCTION <name>(<different_args>)`.
+
+   **METHOD — mandatory, not a preference.** The complete repository, including all ~900
+   migration files, is ALREADY CHECKED OUT LOCALLY at your working directory. Answer this check
+   in TWO bounded local phases. In neither phase may you read history remotely: do NOT use any
+   remote/GitHub file-reading tool (`fetch_blob` or similar) to enumerate history — walking the
+   corpus file-by-file over the
+   network exhausts the run before it reaches a verdict, and an unfinished review is worth less
+   than a fast one. Measured 2026-09-03, the local one-pass grep answered PHASE A in 0.17 s,
+   where the per-file remote walk died twice — after 598 and 751 fetches — with no verdict at
+   all.
+
+   *PHASE A — discovery.* ONE local `grep -rniE` over `supabase/migrations/` covering every
+   function name in this migration at once. This finds candidates and nothing more. **A
+   name-level match does NOT decide this check** — and `-o` in particular prints only the matched
+   text, discarding both the argument list and any preceding `DROP FUNCTION`, which are exactly
+   what steps 2 and 3 below consume. Clearing CHECK 2 on phase A alone is a false clean.
+
+   *PHASE B — read the candidates.* For every file phase A named, read the full
+   `CREATE OR REPLACE FUNCTION` declaration: its complete argument list, and whether a
+   `DROP FUNCTION` for that name precedes it in the same migration. Only then apply steps 2 and
+   3. Phase B is bounded by the NUMBER OF MATCHES — typically a handful — never by the ~900-file
+   corpus, so the prohibition above forbids walking the corpus, never reading the specific files
+   phase A identified.
+
 2. If a previous definition with DIFFERENT argument types exists AND the new migration does NOT first `DROP FUNCTION` the old one, severity = **BLOCKER**.
 3. Postgres allows multiple overloads; the bug is when the caller expects to resolve to one but hits the other.
 

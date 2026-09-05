@@ -1,9 +1,12 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-04 for the migration-ledger facts; 2026-09-03 for the F2 entry.** The
+**Last verified: 2026-09-04 for both the migration-ledger facts and the F2 entry.** The
 ordering boundary is the newest applied authored NAME:
 **`20260903230000_commission_report_snapshot_contract`** (ledger version `20260904040643`, read-only
-`list_migrations` on 2026-09-04). Read ordering from the NAME — it is what
+`list_migrations` on 2026-09-04). F2
+(`20260903160000_gate_number_generators_active_profile_role`) applied earlier the same day as ledger
+version `20260904023121` and was the boundary until the commission snapshot landed after it. Read
+ordering from the NAME — it is what
 the ordering guard compares and it moves far less often than the counters. Two further reading
 traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
 reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
@@ -11,13 +14,15 @@ because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, �
 — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` here as a point-in-time
 observation, not a fact** — any lane applying a migration moves them, so
 re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
-F2 item below was re-verified against live on this date (function bodies, grants, the
-`invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
+F2 item below was re-verified against live on this date (post-apply function bodies, grants, and a
+three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
-`20260903153402`.** It is also the current ordering boundary named above. Verified independently
+`20260903153402`.** It was the ordering boundary when this paragraph was written; F2 and then the
+commission snapshot have since applied above it, so read the boundary from the header, not here.
+Verified independently
 against production on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job`
 is at md5 `18d08d5f40aea91fe13ac3e5a686c549` with exactly one overload, so no duplicate function was
 created. This **supersedes every earlier statement in this file that F06 was merged but not
@@ -419,6 +424,60 @@ undefined `getKeyFor` threw inside the click handler and the RPC never fired, so
 failed for a reason unrelated to its assertion. Both mocks now mirror the hook's full surface.
 
 ---
+
+## OPEN 2026-09-04 — the migration drift reviewer's overload check can only see AUTHORED history, and its sanctioned runner can never show it the live catalog
+
+**Deferred deliberately by Mason on 2026-09-04**, split out of PR #594 so the uncontested
+search-method fix could land alone. This is a **pre-existing hole on `main`**, not one that PR
+introduced: `git diff origin/main` on that branch removed no rule and lowered no severity.
+
+**What CHECK 2 in `.claude/agents/migration-drift-reviewer.md` actually does.** It greps
+`supabase/migrations/` for an earlier `CREATE OR REPLACE FUNCTION` of the same name with different
+argument types, and calls it a BLOCKER when the new migration does not first `DROP FUNCTION` the
+old one. That is a search of the *authored files in this repository* — nothing else.
+
+**Hole 1 — live-only drift is invisible.** An overload that exists in the live database but was
+never authored into a migration file (applied by hand, applied from a branch whose file never
+landed, or created by a since-reverted migration) leaves no trace for the grep to find. CHECK 2
+reports clean, the new function is created beside the unseen one, and callers can resolve to the
+wrong overload. The 2026-03 incident class this check exists to catch is exactly that outcome.
+
+**Hole 2 — the sanctioned proof runner cannot close hole 1.**
+`scripts/write-apply-proofs.mjs` (`buildReviewerCharterPrompt`, ~line 75) executes this charter as a
+sandboxed read-only Codex run whose prompt carries **only the charter text and the migration path**.
+It injects no catalog query result, and the charter itself tells the reviewer it cannot call Supabase
+MCP. So a rule of the form "require live `pg_proc` evidence before clearing this check" would emit a
+finding on **every** migration containing a `CREATE OR REPLACE FUNCTION`, forever — the run would
+return BLOCKERS, no function migration could be applied through the sanctioned path, and the gate
+would be routed around. A gate that always fails is a gate that gets bypassed. This was found by an
+exact-SHA `gpt-5.6-sol` proof on PR #594 and is why the rule was withdrawn rather than shipped.
+
+**What a real fix has to solve, so the next attempt does not rediscover it:**
+
+1. **Get live evidence into the runner.** Either `write-apply-proofs.mjs` runs the catalog query
+   itself and injects the rows into the charter prompt, or the orchestrator records them as task
+   evidence the charter is told to look for. Without one of those, no evidence rule is satisfiable.
+2. **Compare argument types canonically, not as rendered text.** `oid::regprocedure::text` renders
+   BOTH the schema and the argument types **search_path-dependently**. Two identically named types
+   in different schemas can render as an exact string match while Postgres resolves different type
+   OIDs and creates a second overload. Evidence must carry `proargtypes` (the canonical input-type
+   OID vector), or types rendered under an explicitly stated search_path.
+3. **Never let a COUNT acquit.** A count cannot tell `f(integer)` from `f(text)`: live holds
+   `f(integer)`, the migration adds `f(text)` with no `DROP FUNCTION`, the pre-apply count reads
+   **1**, and applying leaves **2** overloads. `pronargs` is a count and has the same defect.
+   Candidate-authored prose asserting "exactly one overload" is not evidence either.
+4. **Keep detection and acquittal separate.** Local history must decide the default verdict with no
+   database access, so the check always reaches a verdict. Live evidence's only job is to *acquit* a
+   history-detected BLOCKER in the stale case where a later `DROP` removed an overload the files
+   still show. Absence of live evidence must leave the BLOCKER standing — never a HIGH demanding
+   evidence the run cannot fetch, and never clean.
+
+**Blast radius, so this is not read as urgent.** Nothing regressed: the reviewer behaves exactly as
+it did before PR #594, and the live-only-drift gap has been there as long as the check has. What
+changed on 2026-09-04 is that it is now written down instead of only being known.
+
+---
+
 ## SETTLED 2026-09-03 (basis) / FIXED IN CODE, MIGRATION PENDING LIVE APPLY (UTC fallbacks) — "invoice due dates derive from the invoice date, not the Chicago posting date"
 
 **Report (`codex-transaction-review`, 2026-09-03):** due dates derive from `invoice_date` rather
@@ -1210,7 +1269,24 @@ these call sites. **Fix shape:** reorder every post-RPC reset after `assertRpcRe
 click-level reset, tests for transport failure / failure envelope / lost-response replay / success /
 changed intent. Money path → exact-SHA `gpt-5.6-sol` proof, then CodeRabbit.
 
-**F2 — `next_*_number` generators callable by any authenticated session with no active-profile or
+## RESOLVED 2026-09-04 (migration `20260903160000` APPLIED LIVE as ledger version `20260904023121`; code merged in PR #583, squash `3a6d52fc7`) — F2
+
+**Closed and proven live, not assumed.** All eight generators now raise `AUTH_REQUIRED` with no
+`auth.uid()` and `INSUFFICIENT_ROLE` unless the caller is an `is_active = true` profile in the
+allowed role set, gated **before** the advisory lock. Direct `authenticated` EXECUTE was revoked
+from the six the browser never calls; `next_cycle_count_number` and `next_job_number` keep it
+because `CycleCounts.tsx` and `JobDetail.tsx` call them directly. `anon` holds EXECUTE on none.
+**Observed on live 2026-09-04:** deactivated `sales_rep` → `INSUFFICIENT_ROLE`; unauthenticated →
+`AUTH_REQUIRED`; active `admin` → a cycle-count number issued normally. Account identifiers and the
+issued number are deliberately not recorded — this repository is public and the *outcome* is the
+proof. Full apply and proof provenance is row 910 of
+`docs/reference/migration-history.md`. **Residual, filed to the F06 lane, NOT fixed here:**
+`src/pages/JobDetail.tsx:1861-1862` discards the RPC error, so a refused user sees a silently blank
+job-number field instead of a toast; `CycleCounts.tsx` handles the same refusal correctly. The
+original diagnosis is kept below.
+
+**F2 (ORIGINAL DIAGNOSIS — the hole described here is now closed) — `next_*_number` generators
+callable by any authenticated session with no active-profile or
 role gate.** Eight `SECURITY DEFINER` generators (`next_application_record_number`,
 `next_commission_payment_number`, `next_cycle_count_number`, `next_delivery_number`,
 `next_invoice_number`, `next_job_number`, `next_po_number`, `next_return_number`) grant `EXECUTE` to
@@ -1232,7 +1308,13 @@ directly and would break. A TARGETED revoke of the other six is right, and is wh
 **Fix shape:** new migration, all eight, in-body active-profile + role gates, plus direct
 `authenticated` EXECUTE revoked from the six with no browser caller, through `migration-review`.
 
-**Status 2026-09-03 — FIX WRITTEN AND PROVEN, NOT YET APPLIED.**
+**HISTORICAL PRE-APPLY NOTE, 2026-09-03 — superseded by the applied-live status at the top of this
+entry. Kept for the derivation, NOT as a status.** Everything from here to the end of this entry
+describes the state before the 2026-09-04 apply; where it says "not applied", read "not applied
+*yet, as of 2026-09-03*". The current status is the heading above: APPLIED LIVE as ledger version
+`20260904023121`, verified against production.
+
+**Status as it stood 2026-09-03 — fix written and proven, apply still pending.**
 `supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql` on branch
 `claude/f2-number-generator-gates-e12d02` covers all **eight**, gates in-body before each advisory
 lock, **and narrows the grants**: direct `authenticated` EXECUTE is REVOKED from the six generators
@@ -1256,9 +1338,12 @@ showing a guard actually fires. `typecheck`/`lint` clean.
 above:** that the branch "re-emits no `GRANT`/`REVOKE`" (it now revokes from six), and that
 `_complete_delivery_authorized_impl` "checks authentication but not role" (it checks role; verified
 against live `prosrc`). Both were true when written.
-**Not applied live and not merged** — the live apply needs Mason's in-chat approval, a same-session
-apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict. This item stays OPEN until that lands;
-`codex/section1-security-hardening-20260725` stays until then per the branch-retention note below.
+**The 2026-09-03 precondition, now SATISFIED — kept for provenance.** As of that date this read
+"not applied live and not merged: the live apply needs Mason's in-chat approval, a same-session
+apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict, and this item stays OPEN until that
+lands." All three were obtained on 2026-09-04 and the migration applied; the item is RESOLVED per
+the heading above. **The branch-retention note still stands on its own terms:**
+`codex/section1-security-hardening-20260725` is retained per the note below and must not be deleted.
 
 **F3 — nine enforcement-file patterns missing from the `.claude/settings.json` `ask` list.**
 `scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, `scripts/normalize-eol.mjs`,
