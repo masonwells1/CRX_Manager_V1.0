@@ -13,13 +13,12 @@
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
+// The producer was retired unapplied on 2026-09-05 (Mason's decision). Its four
+// exact invocations used to be allow-listed here because the script itself
+// enforced the committed-blob and exact-head-proof checks; with the script gone
+// those checks are gone too, so a replacement file at the same path must not be
+// runnable through the old exact spellings. Every mention now fails closed.
 const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
-const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
-]);
 
 export function maintenanceProducerCommandMentioned(command) {
   const value = String(command || "");
@@ -375,8 +374,7 @@ export function maintenanceProducerCommandMentioned(command) {
 export function checkMaintenanceProducerInvocation(command) {
   const value = String(command || "").trim();
   if (!maintenanceProducerCommandMentioned(value)) return null;
-  if (MAINTENANCE_PRODUCER_ALLOWED_COMMANDS.has(value)) return null;
-  return "Blocked maintenance producer invocation. Use one exact repository-relative node command only; chaining, wrappers, substitutions, alternate spellings, reordered or unknown arguments, and indirect writers are denied.";
+  return "Blocked maintenance producer invocation. The 2026-08-12 maintenance producer was retired unapplied on 2026-09-05 and no invocation of that path is allowed; chaining, wrappers, substitutions, alternate spellings, and indirect writers are denied as before.";
 }
 
 // Ordered [pattern, reason] checks. First match wins. Verbatim from the
