@@ -29,28 +29,35 @@ duplicate names, from `count(distinct name)`, not truncation) and `max(version)`
 any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
 not evidence that something went wrong, and it should not be re-pinned on every apply.
 
-**Disk-vs-live drift, confirmed 2026-09-03 — OWNED BY PR #535, NOT AN ORPHAN.** Six `20260831*`
-migrations are applied live with **no file on `main`**:
+**F2 number-generator gate is APPLIED LIVE and merged** at effective ledger version
+`20260904023121`. This refresh verified all eight generator security/grant shapes; the F2 entry in
+`docs/manual/KNOWN_ISSUES.md` carries the detailed matrix.
+
+**Disk-vs-live drift, confirmed 2026-09-04 — NINE FILES OWNED BY OPEN PRs #535, #592, AND #599.** Nine
+migrations are applied live with **no file on `main`**. Six belong to PR #535:
 `20260831160000_harden_receiving_reversal_and_ap_reporting`,
 `20260831161000_require_cumulative_po_bill_confirmation`,
 `20260831162000_fail_closed_historical_commission_balance`,
 `20260831212415_guard_cycle_count_completion_revision`,
 `20260831233000_bind_section9_replays_to_intent`, and
-`20260831235900_serialize_gauntlet_write_boundaries`. `main`'s newest tracked migration is
-`20260827041500`. **All six DO have files on PR #535's branch
+`20260831235900_serialize_gauntlet_write_boundaries`. **All six DO have files on PR #535's branch
 `codex/gauntlet-s9-safety-20260831`** — verified 2026-09-03 with `git ls-tree` against that branch,
-6/6 present — so merging #535 closes the drift completely and there is nothing to adopt or
-reconstruct. Do not go hunting for missing files; check that branch first.
+6/6 present. The other two are `20260903150100_ledger_backed_commission_history` and
+`20260903230000_commission_report_snapshot_contract`; both source files are on open PR #592's
+`codex/commission-history-migration-apply-20260903` branch. The ninth is
+`20260904180000_invoice_season_follows_invoice_date`, applied live and owned by open PR #599. Do not
+reconstruct any of these nine; land the owning PRs after their own review gates. PR #592 has already
+restamped its two NOT-YET-APPLIED files to `20260905020000_commission_history_report_replay_guard`
+and `20260905020100_repair_commission_history_label_snapshots`. The #582 candidate is deliberately
+`20260904185900`, after the live high-water and before those two pending commission migrations,
+matching Mason's explicit delivery priority of #582 before the commission report. If that order is
+reversed, #582 must be restamped after a fresh ledger read before any apply.
 
-The consequence still bites until #535 merges: `main` does not describe production, so any migration
-whose safety argument rests on "the live body equals the last committed body" must verify against
-**live**, not against disk. `20260903160000` does exactly that — it pins md5 hashes read from live
-`pg_proc.prosrc` rather than diffing against tracked files.
-
-**A seventh repository/production gap is currently owned by PR #599.** Live includes
-`20260904180000_invoice_season_follows_invoice_date`, but its file is not yet on `main`; it is carried
-by open PR #599 (`claude/vibrant-sinoussi-81a492`). This is why the two local commission candidates
-were renumbered above that live name even though the source file is absent from this branch's base.
+The consequence still bites until all three owning PRs merge: `main` does not describe production,
+so any migration whose safety argument rests on "the live body equals the last committed body" must verify against
+**live**, not against disk. The local `20260904185900` save-job candidate pins the 2026-09-03 F06
+post-apply `pg_proc.prosrc` body and rechecks that exact pre-image at apply time rather than inferring
+it from migration filenames alone.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
 `20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
@@ -59,8 +66,8 @@ the live apply followed separately and is now confirmed. Verified independently 
 on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job` is at md5
 `18d08d5f40aea91fe13ac3e5a686c549` — the candidate body, which replaced the 20260820120000 body
 (`227ab7b6bc2023724adf6952a221d2a8`) — with exactly one overload, so no duplicate function was
-created. F06's earlier 990-row / `20260903025854` / `20260831212415` ledger figures are superseded by
-the 993-row capture above.
+created. F06's earlier 990-row / `20260903025854` / `20260831212415` ledger figures were superseded
+first by the 993-row F06 capture and then by the current 998-row capture above.
 
 **The sequencing lesson outlives the fact.** For the window between that merge and that apply, this
 file correctly recorded F06 as merged but NOT applied: `main` carried the migration while production

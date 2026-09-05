@@ -18,7 +18,7 @@ re-read live rather than trusting them, and do not re-pin them here on every app
 header was re-read on 2026-09-05. The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-six-file disk-vs-live migration drift confirmed 2026-09-03 and the PR that owns it.
+nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
 
 Six local commission candidates (`20260905020000` through `20260905020500`) remain unapplied.
 The label repair addresses 34 un-settled opening snapshots that hold an order UUID and unknown
@@ -32,9 +32,9 @@ make commission dates inherit their source documents and move the affected sourc
 off UTC `CURRENT_DATE`; they close the September 30 boundary only as a pair and neither is live.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
-`20260903153402`.** It was the ordering boundary when this paragraph was written; F2 and then the
-commission snapshot have since applied above it, so read the boundary from the header, not here.
-Verified independently
+`20260903153402`.** It was the ordering boundary when this paragraph was written; later migrations
+have since applied above it. It remains the installed `save_job` source body for the local row-916
+follow-up. Verified independently
 against production on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job`
 is at md5 `18d08d5f40aea91fe13ac3e5a686c549` with exactly one overload, so no duplicate function was
 created. This **supersedes every earlier statement in this file that F06 was merged but not
@@ -1354,16 +1354,23 @@ Keep this separate from the equal-unit exact-decimal fix, and replace the conver
 exact rational/decimal conversion in a focused follow-up.
 
 
-## OPEN 2026-09-04 — Invalid job acreage still needs a server-side refusal
+## OPEN 2026-09-04 — Server acreage refusal is written and proven, not yet applied
 
 An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
 `null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every
 nonblank non-finite or negative acreage at the top of `performSave`, including the
 expired-license override path, before saving state, payload work, or `save_job`. Intentional
 blank acreage retains its established payload meaning of zero. The live `save_job` function
-already refuses non-finite and negative field acreage before any write. The issue stays open
-because a missing acreage key or JSON-null acreage is still coalesced to zero; a separate forward
-migration must refuse those two cases authoritatively. The unrelated different-unit chemical
+already refuses non-finite and negative field acreage before any write. The issue stays open in
+production because a missing acreage key or JSON-null acreage can still store SQL NULL in the
+nullable `job_fields.acres_to_treat` column even though the header sum treats it as zero. Local
+forward migration `20260904185900_refuse_null_job_field_acres.sql` refuses those two cases
+authoritatively before any write, with distinct diagnostics. Its current-main disposable proof
+passes exact source/candidate pins, A1-A4 behavior, eleven apply-abort mutations, and four runtime
+break-it canaries after the required restamp above the live migration high-water. No live apply is
+authorized. Other present but nonnumeric scalar values still fail closed at PostgreSQL's numeric
+cast with its native error; friendlier diagnostics for that separate malformed-input class are not
+part of this candidate. Do not author a competing migration. The unrelated different-unit chemical
 conversion issue above also remains open.
 
 
