@@ -50,7 +50,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
-import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
+import { BelowCostApprovalHandledError, isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
@@ -1587,13 +1587,33 @@ export default function QuoteBuilder() {
       const editingSessionChanged = () =>
         routeQuoteIdRef.current !== routeAtSend || quoteLoadSerialRef.current !== loadAtSend;
       const quoteNumberAtSend = quoteNumber;
-      const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_quote', withBelowCostReason('save_quote', {
-        p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
-        p_quote_payload: quotePayload as Json,
-        p_sections: sectionsPayload,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      }, reason)));
+      const { data, error } = await runWithBelowCostApproval((reason) => {
+        // `reason` is non-null ONLY on the post-approval retry, so this never
+        // touches the first send.
+        //
+        // The below-cost dialog parks that first send on an operator decision,
+        // and it is a GLOBAL dialog that names the product and nothing else —
+        // never which quote is being approved. If the operator moved to another
+        // quote (or reloaded this one) while it was open, the approval they just
+        // gave was given while looking at a different record, so it may not be
+        // spent on this one. Refuse the retry rather than send it.
+        //
+        // Refusing HERE, before the request exists, is what makes this safe to
+        // report plainly: the first attempt was rejected by PostgreSQL, which
+        // rolls back, and the retry is never sent — so unlike the lost-reply
+        // case below, the outcome is known and the message may say so.
+        if (reason !== null && editingSessionChanged()) {
+          toast('error', `Quote ${quoteNumberAtSend || 'you were editing'} was not saved. The below-cost approval finished after you left that quote, so it was not applied — reopen the quote and save again.`);
+          throw new BelowCostApprovalHandledError();
+        }
+        return supabase.rpc('save_quote', withBelowCostReason('save_quote', {
+          p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
+          p_quote_payload: quotePayload as Json,
+          p_sections: sectionsPayload,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        }, reason));
+      });
 
       // The editing session this save belonged to is gone. Quote A's failure is
       // not quote B's, so neither the stale-write recovery dialog nor a bare error

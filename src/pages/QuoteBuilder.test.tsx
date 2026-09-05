@@ -200,6 +200,10 @@ vi.mock('../components/ui/UnsavedChangesModal', () => ({ default: () => null }))
 
 import { preferredQuoteNotes } from '../lib/quoteNotes';
 import QuoteBuilder from './QuoteBuilder';
+// The REAL provider, not a stand-in. The hazard these tests cover is a property
+// of the real one: it is mounted above the route, so its approval dialog — and
+// the retry parked behind it — survive a navigation between quotes.
+import { BelowCostApprovalProvider } from '../contexts/BelowCostApprovalContext';
 
 function renderQuoteBuilder(id?: string) {
   const path = id ? `/quotes/${id}/edit` : '/quotes/new';
@@ -1528,7 +1532,7 @@ describe('QuoteBuilder', () => {
   function renderQuoteSwitch(
     fixtures: ReturnType<typeof makeSwitchFixture>[],
     gates: Record<string, Promise<void>>,
-    options: { failSectionsFor?: string; loadPlan?: QuoteLoadPlan } = {},
+    options: { failSectionsFor?: string; loadPlan?: QuoteLoadPlan; belowCostApproval?: boolean } = {},
   ) {
     const byId = new Map(fixtures.map((f) => [f.quote.id, f]));
     const loadCounts = new Map<string, number>();
@@ -1582,7 +1586,12 @@ describe('QuoteBuilder', () => {
       [{ path: '/quotes/:id', element: <QuoteBuilder /> }],
       { initialEntries: [`/quotes/${fixtures[0].quote.id}`] },
     );
-    render(<RouterProvider router={router} />);
+    // Mounted OUTSIDE the router, mirroring App.tsx's RootLayout: the provider
+    // sits above the route, so navigating between quotes neither unmounts the
+    // approval dialog nor abandons the retry waiting on it.
+    render(options.belowCostApproval
+      ? <BelowCostApprovalProvider><RouterProvider router={router} /></BelowCostApprovalProvider>
+      : <RouterProvider router={router} />);
     return router;
   }
 
@@ -1936,5 +1945,91 @@ describe('QuoteBuilder', () => {
       p_quote_id: 'quote-a',
       p_quote_payload: expect.objectContaining({ row_version_expected: 3 }),
     })));
+  });
+
+  // ── ...and neither may an approval given while looking at another quote ────
+  //
+  // Raised by the exact-SHA gpt-5.6-sol review of `d6b12058b`, as a High. The
+  // below-cost dialog is GLOBAL and mounted above the route, so the send it is
+  // holding survives a navigation — and it names the product, never the quote.
+  // The operator can therefore be shown "approve this below-cost price" while
+  // looking at quote B and, by approving, write quote A.
+  const BELOW_COST_ERROR = {
+    message: 'BELOW_COST_REASON_REQUIRED: {"operation":"save_quote","product_name":"Roundup PowerMAX"}',
+  };
+
+  async function approveBelowCost() {
+    const reasonBox = await screen.findByLabelText(/Approval reason/i);
+    fireEvent.change(reasonBox, { target: { value: 'matched a competitor quote' } });
+    fireEvent.click(screen.getByRole('button', { name: /Approve and Retry/i }));
+    await flushPendingWork();
+  }
+
+  // The positive control for the test below. Without it, a broken dialog harness
+  // — no retry ever sent — would satisfy the refusal assertions perfectly.
+  it('sends the below-cost retry when the operator is still on the quote being approved', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveArgs: unknown[] = [];
+    mockRpc.mockImplementation(async (name: string, args: unknown) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveArgs.push(args);
+      return saveArgs.length === 1
+        ? { data: null, error: BELOW_COST_ERROR }
+        : { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+    });
+    renderQuoteSwitch([quoteA, quoteB], {}, { belowCostApproval: true });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+
+    await approveBelowCost();
+
+    expect(saveArgs).toHaveLength(2);
+    expect(saveArgs[1]).toEqual(expect.objectContaining({ p_quote_id: 'quote-a' }));
+    expect(mockToast).toHaveBeenCalledWith('success', 'Quote saved as draft');
+  });
+
+  it('refuses the below-cost retry for quote A once the operator has moved to quote B', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    let saveCalls = 0;
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveCalls += 1;
+      return saveCalls === 1
+        ? { data: null, error: BELOW_COST_ERROR }
+        : { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {}, { belowCostApproval: true });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    // Quote A's save is now parked on the dialog rather than on the network.
+    await screen.findByLabelText(/Approval reason/i);
+
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+    // The dialog is still up, over quote B, and nothing on it says quote A —
+    // which is exactly why the approval it collects cannot be trusted to mean
+    // quote A. It names a product and a shortfall, and no record at all.
+    expect(screen.getByRole('button', { name: /Approve and Retry/i })).toBeInTheDocument();
+    expect(screen.queryAllByText(/Q-AAA-1/)).toHaveLength(0);
+
+    await approveBelowCost();
+
+    // The decisive check. The retry is never sent, so quote A is not written
+    // from consent the operator gave while looking at a different quote.
+    expect(saveCalls).toBe(1);
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Quote saved as draft');
+    // Not silent, either: they approved something, so they are told it did not
+    // apply and to which quote. Nothing was written on this path — the first
+    // attempt was rejected by PostgreSQL — so unlike the lost-reply message this
+    // one is entitled to say the quote was not saved.
+    expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Q-AAA-1'));
+    const [, refusalMessage] = mockToast.mock.calls.find(
+      (call) => call[0] === 'error' && String(call[1]).includes('Q-AAA-1'),
+    )!;
+    expect(refusalMessage).toMatch(/was not saved/i);
   });
 });

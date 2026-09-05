@@ -210,3 +210,60 @@ Two more found while checking this change, both pre-existing and both left alone
 None of this is a regression from this change; it is the same bug class, unowned, on the rest of
 the page. It is recorded here so the next lane starts from the list instead of rediscovering it
 one review round at a time.
+
+### Fourth review round — High at `d6b12058b`, accepted in part
+
+> **Below-cost approval can mutate an abandoned quote.** The new session guard runs only after
+> `runWithBelowCostApproval()` finishes. That wrapper can display its global approval modal and
+> then retry the mutation before the checks below run. (1) Save quote A below cost. (2) Navigate
+> to quote B while the first attempt is awaiting its response. (3) The approval modal appears over
+> B without identifying A. (4) "Approve and Retry" writes A's captured pricing/status. (5) The new
+> guard then drops the success response, concealing that A changed.
+
+Verified from `src/contexts/BelowCostApprovalContext.tsx`: the runner awaits `attempt(null)`,
+parses the below-cost error, awaits an operator reason from a modal mounted **above the route**,
+then calls `attempt(reason)` again. Both halves of the reproduction are real, and they are two
+different problems with two different owners.
+
+**Fixed here — the retry is refused before it is sent.** The retry callback belongs to this file,
+and `reason` is non-null only on the retry, so `saveQuote` can decline its own second send without
+touching the shared context. An approval collected while the operator was looking at a different
+quote is not consent to write this one, so it is not spent on it. The first attempt was rejected by
+PostgreSQL, which rolls back, and the retry never goes out — so the outcome here is genuinely
+**known**, and unlike the lost-reply message above, this message is entitled to say the quote was
+not saved. It names the quote and says to reopen it and save again.
+
+Refusing the send also removes the concealment the finding's step (5) describes: with nothing
+written, there is no success to drop.
+
+**Not fixed here, and not this branch's to fix — `BelowCostApprovalModal` never says which record
+it is approving.** It shows a product name, a price, a cost and a shortfall. The operator is asked
+to approve a below-cost price with no way to see which quote it belongs to. That is a consent
+defect in a shared component on a money path, and this page is not its only caller:
+`restore_quote_version` (:2376), `draw_down_quote` (:2565) and `convert_quote_to_order` (:2785)
+route through the same modal and would each need the same treatment. Flagged for Mason as a
+separate decision rather than widened into this diff.
+
+**Proof.** Two tests, both on the **real** `BelowCostApprovalProvider`, mounted above the router
+the way `App.tsx` mounts it — not a stand-in runner, because the hazard is a property of the real
+one: its dialog, and the send parked behind it, survive a navigation.
+
+| Test | What it holds |
+|---|---|
+| sends the below-cost retry when the operator is still on the quote being approved | the positive control: without it, a dialog harness that never produced a retry would satisfy the refusal test perfectly |
+| refuses the below-cost retry for quote A once the operator has moved to quote B | the fix |
+
+With the refusal disabled, exactly one test fails, and it fails on the defect itself: `save_quote`
+was called a second time — quote A written from an approval given while quote B was on screen.
+
+**One shared guard was widened to keep counting this call site.**
+`src/lib/assertRpcCoverage.test.ts` recognised a wrapped RPC only when the runner callback's body
+*is* the `supabase.rpc(...)` call. Adding a check before the call turned that arrow into a block
+and the call site stopped being counted at all — the guard failed **open**, reporting the file as
+an orphan assertion rather than reporting the RPC. It now also matches a block-bodied runner
+callback, stopping at the first `supabase.rpc` inside it. Every file in `src/` was scanned before
+the change: this is the only block-bodied runner callback in the repo, so no other file's count
+moved, and the baseline stays at zero.
+
+- `npm run typecheck`, `npm run lint`, `npm run build` clean.
+- `npm run test`: exit code 0, 351 files / 5006 passed / 123 skipped, no failures, no `Errors` line.
