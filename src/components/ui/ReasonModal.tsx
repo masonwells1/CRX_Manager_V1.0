@@ -47,7 +47,7 @@ const defaultIcons: Record<ReasonVariant, LucideIcon> = {
  * void reasons, etc. — window.prompt is unreliable on iOS Safari and
  * PWA-installed Chrome (returns null silently when the page isn't the
  * active top-level frame), and is also against the project rule against
- * native browser dialogs (CLAUDE.md "Hard Red Lines").
+ * native browser dialogs (AGENTS.md CRX Hard Rules).
  *
  * Wave B audit B-6.
  */

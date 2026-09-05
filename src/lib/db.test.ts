@@ -37,7 +37,7 @@ describe('checkMutationResult', () => {
   // Audit #14 (2026-05-12): `data: null` is a silent RLS denial when `.select()`
   // was chained — `.select()` returns `[]` or `[...rows]` on success, `null`
   // means the mutation was visible to RLS but no row matched. The convention
-  // documented in CLAUDE.md is to always `.select()` after `.update()` /
+  // documented in the AGENTS.md-routed database guidance is to always `.select()` after `.update()` /
   // `.delete()` so this guard catches the silent failure. Mutations without
   // `.select()` shouldn't go through `checkMutationResult` at all.
   it('throws when data is null (Audit #14 — silent RLS denial)', () => {
