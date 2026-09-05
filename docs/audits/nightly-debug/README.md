@@ -31,7 +31,7 @@ Started: 2026-06-15 ~22:50 America/Chicago · Branch: `claude/priceless-austin-0
 | 🟡 Yellow | Migration / RPC / edge-fn / RLS / money-logic | **Draft + validate** (rolled-back txn vs live, zero prod footprint) + Codex note → **park** for Mason's morning OK |
 | 🔴 Red | Push to `main`, deploy, live-migration apply, prod data mutation/delete | **Never autonomous** — always waits for Mason |
 
-This honors the CLAUDE.md Hard Red Lines: no push / deploy / live migration / data delete /
+This honors the AGENTS.md CRX Hard Rules: no push / deploy / live migration / data delete /
 unrelated-file commit without Mason's explicit OK in chat. Nothing prod-facing happens while
 he's asleep — he wakes to a branch of verified safe fixes + a stack of prepared, proven
 risky fixes awaiting approval.

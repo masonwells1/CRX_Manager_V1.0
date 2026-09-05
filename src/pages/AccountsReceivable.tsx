@@ -16,7 +16,7 @@ import CustomerTransactionReview from './CustomerTransactionReview';
 // NOT change any page's logic or roles. The old routes still work; converting them
 // to redirects and sharing a single customer picker across tabs are follow-ups.
 // NOTE: /payments (PaymentAllocation) is intentionally NOT merged here — it is
-// admin+sales_rep and must stay its own page (CLAUDE.md red line).
+// admin+sales_rep and must stay its own page (AGENTS.md CRX Hard Rule).
 
 const TABS = [
   { key: 'aging', label: 'AR Aging' },

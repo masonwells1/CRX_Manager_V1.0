@@ -43,7 +43,7 @@ This is a **diagnosis, not a treatment.** You produce a report. You change nothi
 
 ## Read first (to learn the *intended* patterns before judging the actual code)
 
-1. `CLAUDE.md` — Architecture Rules, Hard Red Lines, Schema Gotchas, Canonical Patterns, Code Drift Prevention Rules.
+1. `AGENTS.md`, then the workflow and reference files it routes for this audit — architecture, CRX Hard Rules, schema gotchas, canonical patterns, and code-drift prevention.
 2. `docs/workflows/SAFE_DEVELOPMENT_RULES.md`, `docs/workflows/UI_PATTERNS.md`.
 3. `docs/reference/pages-routes.md`, `docs/reference/code-patterns.md`.
 4. The entry points: `src/App.tsx`, `src/lib/db.ts`, `src/types/index.ts`, `src/contexts/AuthContext.tsx`, `src/lib/activityLogger.ts`, `src/lib/sentry.ts`.

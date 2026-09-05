@@ -15,16 +15,17 @@ export const meta = {
 // real project and hard-locks the run to READ-ONLY.
 // ---------------------------------------------------------------------------
 const PREAMBLE = [
-  'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at C:\\CRX_Manager.',
-  'It is a production agricultural-retail ERP. New money storage uses bigint cents. Existing PostgreSQL numeric-dollar storage is not an approved exception until exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified. The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 6 Edge Functions; treat any count as a lead to confirm live, never a fact.',
+  'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at the repo root of the current worktree.',
+  'It is a production agricultural-retail ERP. New money storage uses bigint cents. Existing PostgreSQL numeric-dollar storage is not an approved exception until exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified. Derive the current application, database, migration, and Edge Function scope from the repo and live read-only evidence; never rely on remembered counts.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database. The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql" or "supabase list tables"). Live project id is rhyzpcqhnizqbxphqdkr. You MAY run read-only SQL (SELECT, pg_catalog, information_schema) to ground every finding against the live DB.',
+  'EVIDENCE STATUS: Return executionStatus=BLOCKED if any required repo or live-DB source is unavailable. An empty findings array may be VERIFIED only after the requested sources ran; summarize them concretely in evidenceSummary.',
   '',
   'HARD RULES (do not violate):',
   '- READ-ONLY. NEVER call apply_migration. NEVER run mutating SQL (no INSERT/UPDATE/DELETE/DDL). SELECT and introspection only.',
   '- Do NOT edit, write, or delete any file. This is a review, not a fix.',
   '- Cite hard evidence for every finding: a file:line, a table/function name, or the exact read-only SQL you ran and what it returned.',
-  '- Read CLAUDE.md and the relevant docs/reference/* files for the project\'s own documented rules and ACCEPTED exceptions before flagging anything.',
+  '- Read AGENTS.md and the workflow/reference files it routes for the project\'s documented rules and ACCEPTED exceptions before flagging anything.',
   '- Known accepted findings — do NOT re-report: profile_public_view uses SECURITY DEFINER semantics by design; customer RLS is intentionally lower-bound-only; reportPdf.ts columnStyles uses one allowed `any`. Numeric-dollar storage is never suppressed by type alone: audit every such column, including commissions.commission_amount, and report dirty values, inexact arithmetic, or a missing active finite whole-cent CHECK.',
   '- Prefer precision over volume. Report only what you can substantiate. Do NOT pad with speculative or style-only nits. Report at most your 10 most significant findings for this dimension.',
 ].join('\n')
@@ -33,6 +34,8 @@ const FINDINGS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    executionStatus: { type: 'string', enum: ['VERIFIED', 'BLOCKED'] },
+    evidenceSummary: { type: 'string', description: 'Concrete files/queries checked, or the exact required-source blocker.' },
     dimension: { type: 'string' },
     summary: { type: 'string', description: 'One short paragraph: what you checked and the overall health of this dimension.' },
     findings: {
@@ -54,19 +57,75 @@ const FINDINGS_SCHEMA = {
       },
     },
   },
-  required: ['dimension', 'summary', 'findings'],
+  required: ['executionStatus', 'evidenceSummary', 'dimension', 'summary', 'findings'],
 }
 
 const VERDICT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    isReal: { type: 'boolean', description: 'true ONLY if independently confirmed with concrete evidence.' },
-    revisedSeverity: { type: 'string', enum: ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW', 'FALSE_POSITIVE'] },
+    status: { type: 'string', enum: ['VERIFIED', 'REFUTED', 'UNVERIFIED'], description: 'Use UNVERIFIED when access, tools, or evidence are incomplete.' },
+    revisedSeverity: { type: 'string', enum: ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW', 'FALSE_POSITIVE', 'UNVERIFIED'] },
     reasoning: { type: 'string' },
     verifiedAgainst: { type: 'string', description: 'Exactly what you checked — the read-only SQL you ran, or the file:line you read.' },
   },
-  required: ['isReal', 'revisedSeverity', 'reasoning', 'verifiedAgainst'],
+  required: ['status', 'revisedSeverity', 'reasoning', 'verifiedAgainst'],
+}
+
+const REQUIRED_FINDING_FIELDS = ['title', 'severity', 'area', 'file', 'evidence', 'impact', 'recommendation', 'confidence']
+const FINDING_SEVERITIES = ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW']
+const FINDING_CONFIDENCES = ['high', 'medium', 'low']
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isCompleteReview(review) {
+  return Boolean(
+    review
+      && review.executionStatus === 'VERIFIED'
+      && isNonEmptyString(review.evidenceSummary)
+      && isNonEmptyString(review.dimension)
+      && isNonEmptyString(review.summary)
+      && Array.isArray(review.findings)
+  )
+}
+
+function isCompleteFinding(finding) {
+  return Boolean(
+    finding
+      && REQUIRED_FINDING_FIELDS.every((field) => isNonEmptyString(finding[field]))
+      && FINDING_SEVERITIES.includes(finding.severity)
+      && FINDING_CONFIDENCES.includes(finding.confidence)
+  )
+}
+
+function normalizeVerdict(verdict) {
+  const verifiedSeverities = ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW']
+  const valid = verdict
+    && ['VERIFIED', 'REFUTED', 'UNVERIFIED'].includes(verdict.status)
+    && typeof verdict.reasoning === 'string'
+    && verdict.reasoning.trim()
+    && typeof verdict.verifiedAgainst === 'string'
+    && verdict.verifiedAgainst.trim()
+    && !(verdict.status === 'VERIFIED' && !verifiedSeverities.includes(verdict.revisedSeverity))
+    && !(verdict.status === 'REFUTED' && verdict.revisedSeverity !== 'FALSE_POSITIVE')
+    && !(verdict.status === 'UNVERIFIED' && verdict.revisedSeverity !== 'UNVERIFIED')
+
+  if (!valid) {
+    return {
+      status: 'UNVERIFIED',
+      revisedSeverity: 'UNVERIFIED',
+      reasoning: 'Verifier returned no complete, internally consistent evidence verdict.',
+      verifiedAgainst: 'No complete verifier evidence returned.',
+      isReal: null,
+    }
+  }
+
+  return {
+    ...verdict,
+    isReal: verdict.status === 'VERIFIED' ? true : verdict.status === 'REFUTED' ? false : null,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -111,17 +170,17 @@ const DIMENSIONS = [
   {
     key: 'edge-functions',
     prompt:
-      'Audit the 7 Edge Functions in supabase/functions (create-user, process-blend-ticket, process-document, reset-user-password, seed-admin, send-email, setup-blend-tickets-storage). Read each index.ts. Flag: (a) CORS — ALLOWED_ORIGIN enforced, no wildcard origin reflection; (b) auth — JWT verified; admin-only functions actually gate on an admin role check; (c) idempotency on side-effecting operations; (d) errors swallowed instead of surfaced/logged; (e) disk-vs-live drift — if the Supabase get_edge_function / list_edge_functions MCP tools are available, compare the deployed body to disk and flag divergence (this caught a real false-positive last week where disk ≠ deployed).',
+      'Audit the Edge Functions in supabase/functions (create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage). Read each index.ts and report any additional current function discovered during the required scope derivation. Flag: (a) CORS — ALLOWED_ORIGIN enforced, no wildcard origin reflection; (b) auth — JWT verified; admin-only functions actually gate on an admin role check; (c) idempotency on side-effecting operations; (d) errors swallowed instead of surfaced/logged; (e) disk-vs-live drift — if the Supabase get_edge_function / list_edge_functions MCP tools are available, compare the deployed body to disk and flag divergence (this caught a real false-positive last week where disk ≠ deployed).',
   },
   {
     key: 'business-lifecycle',
     prompt:
-      'Audit BUSINESS-LOGIC LIFECYCLE correctness. The documented lifecycles (quote, order, delivery, invoice, job, PO, return, commission, commission_payment) live in CLAUDE.md. Flag: (a) status-string values written by frontend or RPCs that are NOT in the live CHECK constraint for that table (the "void" vs "voided" class) — read live CHECK constraints from pg_constraint and compare; (b) lifecycle transitions that no trigger/RPC actually enforces; (c) the delivery scheduled→in_progress→completed two-step and item-lock rules being bypassable. Use live SQL for constraints.',
+      'Audit BUSINESS-LOGIC LIFECYCLE correctness across quote, order, delivery, invoice, job, PO, return, commission, and commission_payment. Use QUOTE_TO_DELIVERY.md for quote/order/delivery/invoice context and INVENTORY_RULES.md for inventory/receiving effects. For all nine entities, compare every status written by current source against the live CHECK constraints in pg_constraint and inspect current function bodies in pg_proc; documentation provides context but never overrides live evidence. Flag: (a) status-string values written by frontend or RPCs that are NOT in the live CHECK constraint for that table (the "void" vs "voided" class); (b) lifecycle transitions that no trigger/RPC actually enforces; (c) the delivery scheduled→in_progress→completed two-step and item-lock rules being bypassable.',
   },
   {
     key: 'doc-drift',
     prompt:
-      'Audit DOCUMENTATION DRIFT. Compare counts claimed in CLAUDE.md and docs/reference/* against reality: pages (count src/pages + `lazy(` occurrences in src/App.tsx), migrations (count supabase/migrations/*.sql), RPCs (live pg_proc count in public), tables (live count), tests. Report every stale number as claimed-vs-actual. Also flag reference docs (migration-history.md, rpc-functions.md, pages-routes.md, database-schema.md) that are missing entries for recent additions.',
+      'Audit DOCUMENTATION DRIFT. Compare counts claimed in docs/reference/* against reality: pages (count src/pages + `lazy(` occurrences in src/App.tsx), migrations (count supabase/migrations/*.sql), RPCs (live pg_proc count in public), tables (live count), tests. Report every stale number as claimed-vs-actual, and flag any volatile count added to always-loaded AGENTS.md or CLAUDE.md. Also flag reference docs (migration-history.md, rpc-functions.md, pages-routes.md, database-schema.md) that are missing entries for recent additions.',
   },
   {
     key: 'deps-cve',
@@ -137,16 +196,37 @@ const DIMENSIONS = [
 
 // Optional focus: pass args = { only: ['db-security', ...] } to re-run a subset
 // of dimensions (e.g. to recover dimensions whose verifiers flaked on a prior run).
-const SELECTED =
-  args && Array.isArray(args.only) && args.only.length
-    ? DIMENSIONS.filter((d) => args.only.includes(d.key))
+// The workflow harness may pass args as an object or a JSON-encoded string.
+let ARGS_INVALID = false
+const A = (() => {
+  if (!args) return {}
+  if (typeof args === 'string') {
+    try {
+      const parsed = JSON.parse(args)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+    } catch {}
+    ARGS_INVALID = true
+    return {}
+  }
+  if (typeof args === 'object' && !Array.isArray(args)) return args
+  ARGS_INVALID = true
+  return {}
+})()
+const HAS_ONLY = Object.prototype.hasOwnProperty.call(A, 'only')
+const INVALID_ONLY = ARGS_INVALID || (HAS_ONLY && (!Array.isArray(A.only) || A.only.length === 0))
+const REQUESTED_ONLY = Array.isArray(A.only) && A.only.length ? [...new Set(A.only)] : []
+const UNKNOWN_ONLY = REQUESTED_ONLY.filter((key) => !DIMENSIONS.some((d) => d.key === key))
+const SELECTED = INVALID_ONLY
+  ? []
+  : REQUESTED_ONLY.length
+    ? DIMENSIONS.filter((d) => REQUESTED_ONLY.includes(d.key))
     : DIMENSIONS
 
 function verifyPrompt(d, f) {
   return [
     PREAMBLE,
     '',
-    'ADVERSARIAL VERIFICATION. A prior audit agent (dimension: ' + d.key + ') reported the finding below. Your job is to REFUTE it. Default to isReal=false unless you can independently confirm it with hard evidence.',
+    'ADVERSARIAL VERIFICATION. A prior audit agent (dimension: ' + d.key + ') reported the finding below. Challenge it against current evidence. REFUTED requires concrete counter-evidence; missing or inconclusive evidence is UNVERIFIED.',
     '',
     'FINDING:',
     '- Title: ' + f.title,
@@ -158,12 +238,12 @@ function verifyPrompt(d, f) {
     '',
     'Independently verify against the CURRENT code on disk and the LIVE database (read-only). Specifically check:',
     '1. Does the cited file:line / table / function actually exhibit this right now?',
-    '2. Is it already mitigated elsewhere — a trigger, an RLS policy, a PreToolUse hook, a deployed-vs-disk difference, or a documented ACCEPTED exception in CLAUDE.md?',
+    '2. Is it already mitigated elsewhere — a trigger, an RLS policy, a PreToolUse hook, a deployed-vs-disk difference, or a documented ACCEPTED exception in AGENTS.md or a workflow/reference file it routes?',
     '3. Is the severity calibrated correctly?',
     '',
-    'Set isReal=true ONLY if you confirmed it with concrete evidence. Use revisedSeverity=FALSE_POSITIVE if refuted. In verifiedAgainst, state exactly what you ran or read.',
+    'Return status=VERIFIED only with concrete confirming evidence. Return REFUTED + revisedSeverity=FALSE_POSITIVE only with concrete counter-evidence. Return UNVERIFIED + revisedSeverity=UNVERIFIED when access, tools, or evidence are incomplete. In verifiedAgainst, state exactly what you ran or read.',
     '',
-    'IMPORTANT: You MUST finish by returning your verdict via the StructuredOutput tool — never end with prose only. If you are still uncertain after checking, still return a verdict with isReal=false and revisedSeverity=FALSE_POSITIVE rather than stopping.',
+    'IMPORTANT: You MUST finish by returning your verdict via the StructuredOutput tool — never end with prose only. Uncertainty is UNVERIFIED, never REFUTED or FALSE_POSITIVE.',
   ].join('\n')
 }
 
@@ -181,26 +261,72 @@ const results = await pipeline(
       phase: 'Audit',
       schema: FINDINGS_SCHEMA,
     }),
-  (review, d) =>
-    parallel(
-      ((review && review.findings) || []).map((f) => () =>
+  (review, d) => {
+    if (!isCompleteReview(review)) {
+      const blockedReason = review?.executionStatus === 'BLOCKED'
+        ? `Finder reported blocked evidence: ${review.evidenceSummary || review.summary || 'unspecified blocker'}`
+        : 'Finder returned no VERIFIED evidence status or omitted evidence/findings/summary.'
+      const partialFindings = Array.isArray(review?.findings)
+        ? review.findings.map((f) => ({
+            ...f,
+            dimension: d.key,
+            status: 'UNVERIFIED',
+            reason: `${blockedReason} Partial finding preserved without adversarial verification.`,
+          }))
+        : []
+      return [{
+        dimension: d.key,
+        status: 'BLOCKED',
+        reason: blockedReason,
+      }, ...partialFindings]
+    }
+
+    const malformed = review.findings
+      .filter((f) => !isCompleteFinding(f))
+      .map((f) => ({
+        ...f,
+        dimension: d.key,
+        status: 'UNVERIFIED',
+        reason: 'Finder omitted required evidence fields or returned an unsupported enum value.',
+      }))
+
+    return parallel(
+      review.findings.filter(isCompleteFinding).map((f) => () =>
         agent(verifyPrompt(d, f), {
           label: 'verify:' + d.key + ':' + f.severity,
           phase: 'Verify',
           schema: VERDICT_SCHEMA,
-        }).then((v) => ({
-          ...f,
-          dimension: d.key,
-          verdict: v,
-          finalSeverity: v && v.revisedSeverity && v.revisedSeverity !== 'FALSE_POSITIVE' ? v.revisedSeverity : f.severity,
-        }))
+        }).then((v) => {
+          const verdict = normalizeVerdict(v)
+          return {
+            ...f,
+            dimension: d.key,
+            status: verdict.status,
+            verdict,
+            finalSeverity: verdict.status === 'VERIFIED' ? verdict.revisedSeverity : f.severity,
+          }
+        })
       )
-    )
+    ).then((verified) => [...verified, ...malformed])
+  }
 )
 
-const all = results.flat().filter(Boolean)
-const confirmed = all.filter((f) => f.verdict && f.verdict.isReal)
-const refuted = all.filter((f) => !f.verdict || !f.verdict.isReal)
+const selectionBlocked = UNKNOWN_ONLY.map((key) => ({
+  dimension: String(key),
+  status: 'BLOCKED',
+  reason: `Unknown requested audit dimension: ${String(key)}`,
+}))
+if (INVALID_ONLY) selectionBlocked.push({
+  dimension: 'only',
+  status: 'BLOCKED',
+  reason: 'Invalid audit selection: args.only must be an array.',
+})
+const all = [...selectionBlocked, ...results.flat().filter(Boolean)]
+const confirmed = all.filter((f) => f.status === 'VERIFIED')
+const refuted = all.filter((f) => f.status === 'REFUTED')
+const unverified = all.filter((f) => f.status === 'UNVERIFIED')
+const blocked = all.filter((f) => f.status === 'BLOCKED')
+const overallStatus = blocked.length || unverified.length ? 'BLOCKED' : 'VERIFIED'
 
 const order = { BLOCKER: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
 confirmed.sort((a, b) => (order[a.finalSeverity] ?? 9) - (order[b.finalSeverity] ?? 9))
@@ -225,14 +351,23 @@ log(
     bySeverity.LOW +
     ' LOW), ' +
     refuted.length +
-    ' refuted, across ' +
+    ' refuted, ' +
+    unverified.length +
+    ' unverified, ' +
+    blocked.length +
+    ' blocked, across ' +
     SELECTED.length +
     ' dimensions.'
 )
 
 return {
   dimensionsRun: SELECTED.map((d) => d.key),
-  counts: { confirmed: confirmed.length, refuted: refuted.length, bySeverity },
+  overallStatus,
+  complete: overallStatus === 'VERIFIED',
+  clean: overallStatus === 'VERIFIED' && confirmed.length === 0,
+  counts: { confirmed: confirmed.length, refuted: refuted.length, unverified: unverified.length, blocked: blocked.length, bySeverity },
   confirmed,
   refuted,
+  unverified,
+  blocked,
 }

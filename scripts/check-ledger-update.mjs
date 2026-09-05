@@ -31,6 +31,7 @@ const TRIGGER_RES = [
   /^\.claude\/(commands|skills|hooks|workflows|agents)\//,
   /^\.claude\/settings\.json$/,
   /^\.codex\//,
+  /^\.cursorrules$/,
   /^AGENTS\.md$/,
   /^CLAUDE\.md$/,
   /^\.husky\//,

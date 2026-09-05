@@ -22,11 +22,10 @@ Mason does not need to remember this command name. Treat plain-English requests 
 
 ## Read First
 
-1. `CLAUDE.md`
-2. `docs/workflows/SAFE_DEVELOPMENT_RULES.md`
-3. `docs/reference/gotchas.md`
-4. The workflow doc relevant to the handoff topic.
-5. Any prior audit, prompt, or disposition doc being handed off.
+1. `AGENTS.md` — shared contract and task-routing table
+2. `CLAUDE.md` — Claude-only routing
+3. Only the workflow and reference files `AGENTS.md` routes for this handoff's scope
+4. Any prior audit, prompt, or disposition doc being handed off.
 
 ## Step 0 - State Check
 
@@ -90,7 +89,7 @@ TZ='America/Chicago' date +%F
 
 Slug rules: lowercase kebab-case, under 50 characters, topic-specific.
 
-Use this structure. When Claude is the author (project `CLAUDE.md` routes "Durable handoff artifact" to this workflow), swap the roles: **Author:** Claude, **Intended reviewer:** the receiving session.
+Use this structure. When Claude is the author (project `CLAUDE.md` routes "Durable handoff" to this workflow), swap the roles: **Author:** Claude, **Intended reviewer:** the receiving session.
 
 ```markdown
 # Codex to Claude Handoff - <Topic>

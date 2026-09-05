@@ -7,8 +7,9 @@ Step-by-step guide for ANY database schema change. Follow every step — skippin
 ## Before You Start
 
 1. **Read the existing schema** — check `docs/reference/database-schema.md` to understand what already exists
-2. **Check for related tables** — if you're adding a column to `orders`, think about whether `order_items`, `deliveries`, or `invoices` also need changes
-3. **Plan the migration** — write out what SQL you need before creating the file
+2. **Read the canonical SQL patterns** — use `docs/reference/sql-canonical-patterns.md` for SECURITY DEFINER, actor binding, idempotency, and mutation-result shapes
+3. **Check for related tables** — if you're adding a column to `orders`, think about whether `order_items`, `deliveries`, or `invoices` also need changes
+4. **Plan the migration** — write out what SQL you need before creating the file
 
 ---
 
@@ -125,6 +126,9 @@ The only sanctioned way to apply a migration to the live database:
    proof and policy before the call is allowed through).
 5. If the apply fails, do NOT retry variations against live — fix the migration file,
    re-run `/migration-review`, and apply again through the same gate.
+6. After a successful schema change, run the `regen-schema-registry` workflow against
+   that same database source. Do not use stamp-only mode as a substitute for live
+   introspection; the schema-aware hooks must see the new columns and constraints.
 
 ---
 

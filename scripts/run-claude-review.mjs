@@ -461,7 +461,7 @@ export function buildClaudeReviewPrompt({
     "- Production push, production deploy, migration application, and destructive data actions require Mason's explicit approval.",
     "",
     "Review focus:",
-    "- CRX red lines from CLAUDE.md and docs/workflows/SAFE_DEVELOPMENT_RULES.md.",
+    "- CRX hard rules from AGENTS.md and docs/workflows/SAFE_DEVELOPMENT_RULES.md.",
     "- Agent workflow drift between .claude, .agents, and .codex.",
     "- Missing tests or checks for the changed workflow.",
     "- Any production, database, money, RLS, migration, Edge Function, or destructive-action risk.",

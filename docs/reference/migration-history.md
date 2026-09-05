@@ -1151,7 +1151,7 @@ These 10 historical migrations apply by timestamp order like all others; they si
 
 > ✅ **Migration 334 (20260516000000) applied live 2026-05-16.** Audit #7 closure — `transfer_job_to_invoice` had 2 unsafe `(cents * qty)::bigint` patterns in the v_share loop. Wrapped with `safe_cents_qty()` (price_override branch) + `ROUND()` (pct-split branch). Closes the last deferred safe-cents follow-up. Live `prosrc` verification confirmed both fixes present and old unsafe pattern absent.
 
-> ⚠️ **Migrations 286–291 (2026-05-10) are committed but NOT YET APPLIED to live Supabase.** Mason will apply each via Supabase MCP `apply_migration` after review. See `docs/archive/2026-spring/2026-05-09-execution-summary.md`. Run `node scripts/regenerate-schema-registry.mjs` after applying any subset.
+> ⚠️ **Migrations 286–291 (2026-05-10) are committed but NOT YET APPLIED to live Supabase.** Mason will apply each via Supabase MCP `apply_migration` after review. See `docs/archive/2026-spring/2026-05-09-execution-summary.md`. Run the `regen-schema-registry` live-introspection workflow after applying any subset; the no-argument script only updates a timestamp.
 
 > ✅ **Migrations 307–308 (20260511090000, 20260511100000) applied live 2026-05-11.** Phase 1.4 (profile role-lock trigger) + Phase 1.D (apply_prepay_to_invoice hardening). Schema registry regenerated.
 

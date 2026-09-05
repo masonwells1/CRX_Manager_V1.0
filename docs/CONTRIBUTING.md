@@ -1,7 +1,9 @@
 # Contributing to CRX Manager
 
-Quick reference for contributors and future-Mason. The full project conventions
-live in [`CLAUDE.md`](../CLAUDE.md) at the repo root.
+Quick reference for contributors and future-Mason. The short shared contract is
+[`AGENTS.md`](../AGENTS.md); detailed engineering rules live in
+[`SAFE_DEVELOPMENT_RULES.md`](workflows/SAFE_DEVELOPMENT_RULES.md). `CLAUDE.md`
+contains Claude-only routing.
 
 ---
 
@@ -84,6 +86,6 @@ full migration safety protocol.
 
 After ANY migration:
 
-1. `node scripts/regenerate-schema-registry.mjs`
+1. Run the `regen-schema-registry` workflow: collect its six live read-only Supabase query results, then run `node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json>`. The no-argument command only updates the timestamp and is not a schema refresh.
 2. `bash scripts/validate-sql-migrations.sh` — verify no new violations
 3. Update the relevant entry in `docs/reference/migration-history.md`

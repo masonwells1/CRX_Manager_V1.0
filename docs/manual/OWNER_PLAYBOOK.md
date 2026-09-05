@@ -110,7 +110,7 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 
 ## More detail, if you want it
 
-- `docs/workflows/SAFE_DEVELOPMENT_RULES.md` — the full technical rulebook agents follow on every change (this playbook is the plain-English front door to it).
+- `docs/workflows/SAFE_DEVELOPMENT_RULES.md` — the detailed technical rulebook agents follow for code, production, data, security, money, and other risky changes (this playbook is the plain-English front door to it).
 - `docs/runbooks/incident-rollback.md` — the detailed step-by-step for each of the three rollback scenarios.
 - `docs/operations/production-runbook.md` — the deeper reference on how deploys, backups, and month-end close work.
-- `AGENTS.md` — the shared contract every coding agent in this repo follows, if you ever want the unabridged version.
+- `AGENTS.md` — the short shared contract every coding agent in this repo follows; detailed procedures are linked from it.

@@ -58,7 +58,7 @@
     {
       "predicate": "anon-exec-secdef",
       "violation_key": "adjust_inventory(p_inventory_id uuid, p_delta numeric, p_reason text, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Self-gates on auth.uid()/role as its first executable statement (anon rejected at runtime). Accepted inert grant-debt per CLAUDE.md Schema-Gotchas; real control is the in-body gate.",
+      "justification": "Self-gates on auth.uid()/role as its first executable statement (anon rejected at runtime). Accepted inert grant-debt; real control is the in-body gate.",
       "dated": "2026-06-10"
     },
     {
@@ -124,7 +124,7 @@
     {
       "predicate": "anon-exec-secdef",
       "violation_key": "get_customer_statement(p_customer_id uuid, p_start_date date, p_end_date date)",
-      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt per CLAUDE.md.",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt.",
       "dated": "2026-06-10"
     },
     {

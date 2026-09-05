@@ -282,6 +282,273 @@ for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js'])
 }
 
 {
+  const finding = {
+    title: 'Example audit defect',
+    severity: 'HIGH',
+    area: 'RLS',
+    file: 'supabase/migrations/example.sql:10',
+    evidence: 'The policy permits a row outside the current user scope.',
+    impact: 'A user could read another account\'s row.',
+    recommendation: 'Bind the policy to the authenticated user.',
+    confidence: 'high',
+  }
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') {
+        return { executionStatus: 'VERIFIED', evidenceSummary: 'Read the current policy source.', dimension: 'db-security', summary: 'Reviewed the current policy.', findings: [finding] }
+      }
+      if (options.label?.startsWith('verify:')) {
+        return {
+          status: 'VERIFIED',
+          revisedSeverity: 'FALSE_POSITIVE',
+          reasoning: 'This deliberately inconsistent verdict must fail closed.',
+          verifiedAgainst: 'supabase/migrations/example.sql:10',
+        }
+      }
+      throw new Error(`Unexpected agent label: ${options.label}`)
+    },
+    { only: ['db-security'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', 'an inconsistent audit verdict must block')
+  assert.equal(result.clean, false)
+  assert.equal(result.confirmed.length, 0, 'an invalid VERIFIED verdict must not count as confirmed')
+  assert.equal(result.refuted.length, 0, 'an invalid VERIFIED verdict must not count as refuted')
+  assert.equal(result.unverified.length, 1)
+  assert.equal(result.unverified[0].verdict.status, 'UNVERIFIED')
+}
+
+for (const revisedSeverity of [undefined, 'CRITICAL']) {
+  const finding = {
+    title: 'Example audit severity defect',
+    severity: 'HIGH',
+    area: 'RLS',
+    file: 'supabase/migrations/example.sql:10',
+    evidence: 'The policy permits a row outside the current user scope.',
+    impact: 'A user could read another account row.',
+    recommendation: 'Bind the policy to the authenticated user.',
+    confidence: 'high',
+  }
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') {
+        return { executionStatus: 'VERIFIED', evidenceSummary: 'Read the current policy source.', dimension: 'db-security', summary: 'Reviewed the current policy.', findings: [finding] }
+      }
+      if (options.label?.startsWith('verify:')) {
+        return {
+          status: 'VERIFIED',
+          revisedSeverity,
+          reasoning: 'A verified result must carry a supported severity.',
+          verifiedAgainst: 'supabase/migrations/example.sql:10',
+        }
+      }
+      throw new Error(`Unexpected agent label: ${options.label}`)
+    },
+    JSON.stringify({ only: ['db-security'] })
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', `invalid VERIFIED severity ${String(revisedSeverity)} must block`)
+  assert.equal(result.confirmed.length, 0)
+  assert.equal(result.unverified.length, 1)
+  assert.equal(result.unverified[0].verdict.status, 'UNVERIFIED')
+}
+
+{
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      throw new Error(`An unknown audit dimension must not dispatch an agent: ${options.label}`)
+    },
+    { only: ['db-securty'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', 'an unknown audit dimension must block')
+  assert.equal(result.complete, false)
+  assert.equal(result.clean, false)
+  assert.equal(result.dimensionsRun.length, 0)
+  assert.equal(result.blocked.length, 1)
+  assert.equal(result.blocked[0].dimension, 'db-securty')
+}
+
+for (const args of [{ only: 'db-security' }, { only: [] }, JSON.stringify({ only: 'db-security' })]) {
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      throw new Error(`A malformed audit selection must not dispatch an agent: ${options.label}`)
+    },
+    args
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', 'a malformed audit selection must block')
+  assert.equal(result.complete, false)
+  assert.equal(result.clean, false)
+  assert.equal(result.dimensionsRun.length, 0)
+  assert.equal(result.blocked.length, 1)
+}
+
+{
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') return null
+      throw new Error(`A missing finder must not dispatch a verifier: ${options.label}`)
+    },
+    { only: ['db-security'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', 'missing whole-audit finder output must block')
+  assert.equal(result.complete, false)
+  assert.equal(result.clean, false)
+  assert.equal(result.confirmed.length, 0)
+  assert.equal(result.refuted.length, 0)
+  assert.equal(result.unverified.length, 0)
+  assert.equal(result.blocked.length, 1)
+  assert.equal(result.blocked[0].dimension, 'db-security')
+}
+
+{
+  const partialFinding = {
+    title: 'Partial audit defect',
+    severity: 'HIGH',
+    area: 'RLS',
+    file: 'supabase/migrations/example.sql:10',
+    evidence: 'The policy appears to permit a row outside the current user scope.',
+    impact: 'A user might read another account row.',
+    recommendation: 'Re-run with live policy evidence available.',
+    confidence: 'medium',
+  }
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') {
+        return {
+          executionStatus: 'BLOCKED',
+          evidenceSummary: 'Repository source was read, but the live database was unavailable.',
+          dimension: 'db-security',
+          summary: 'Partial evidence only.',
+          findings: [partialFinding],
+        }
+      }
+      throw new Error(`A blocked finder must not dispatch a verifier: ${options.label}`)
+    },
+    { only: ['db-security'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED')
+  assert.equal(result.clean, false)
+  assert.equal(result.blocked.length, 1)
+  assert.equal(result.unverified.length, 1, 'partial finder evidence must remain visible')
+  assert.equal(result.unverified[0].title, partialFinding.title)
+  assert.equal(result.unverified[0].status, 'UNVERIFIED')
+}
+
+{
+  const malformedFinding = {
+    title: 'Evidence-free audit defect',
+    severity: 'HIGH',
+    area: 'RLS',
+    file: 'supabase/migrations/example.sql:10',
+    impact: 'A user might read another account row.',
+    recommendation: 'Supply concrete evidence before verification.',
+    confidence: 'low',
+  }
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') {
+        return {
+          executionStatus: 'VERIFIED',
+          evidenceSummary: 'Read the current policy source.',
+          dimension: 'db-security',
+          summary: 'A finder returned one incomplete finding.',
+          findings: [malformedFinding],
+        }
+      }
+      throw new Error(`An incomplete finding must not dispatch a verifier: ${options.label}`)
+    },
+    { only: ['db-security'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', 'a malformed whole-audit finding must block')
+  assert.equal(result.blocked.length, 0)
+  assert.equal(result.unverified.length, 1, 'malformed findings must remain visible and block')
+  assert.match(result.unverified[0].reason, /omitted required evidence fields/)
+}
+
+{
+  const finding = {
+    title: 'Verified audit defect',
+    severity: 'HIGH',
+    area: 'RLS',
+    file: 'supabase/migrations/example.sql:10',
+    evidence: 'The current policy permits a row outside the intended scope.',
+    impact: 'A user can read another account row.',
+    recommendation: 'Bind the policy to the authenticated user.',
+    confidence: 'high',
+  }
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') {
+        return {
+          executionStatus: 'VERIFIED',
+          evidenceSummary: 'Read the current policy and its caller.',
+          dimension: 'db-security',
+          summary: 'One evidence-backed finding requires action.',
+          findings: [finding],
+        }
+      }
+      if (options.label?.startsWith('verify:')) {
+        return {
+          status: 'VERIFIED',
+          revisedSeverity: 'MEDIUM',
+          reasoning: 'The exposure is real but limited to a narrow role.',
+          verifiedAgainst: 'supabase/migrations/example.sql:10 and the current caller',
+        }
+      }
+      throw new Error(`Unexpected agent label: ${options.label}`)
+    },
+    { only: ['db-security'] }
+  )
+
+  assert.equal(result.overallStatus, 'VERIFIED', 'complete finder and verifier evidence must complete')
+  assert.equal(result.complete, true)
+  assert.equal(result.clean, false, 'a verified finding must keep the audit non-clean')
+  assert.equal(result.confirmed.length, 1)
+  assert.equal(result.confirmed[0].verdict.isReal, true)
+  assert.equal(result.confirmed[0].finalSeverity, 'MEDIUM', 'verifier severity must win')
+  assert.equal(result.counts.bySeverity.MEDIUM, 1)
+}
+
+{
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') {
+        return {
+          executionStatus: 'VERIFIED',
+          evidenceSummary: 'Read the current policy and completed the requested evidence checks.',
+          dimension: 'db-security',
+          summary: 'No findings remained after the completed evidence pass.',
+          findings: [],
+        }
+      }
+      throw new Error(`An empty completed finder must not dispatch a verifier: ${options.label}`)
+    },
+    { only: ['db-security'] }
+  )
+
+  assert.equal(result.overallStatus, 'VERIFIED', 'completed empty evidence may report verified')
+  assert.equal(result.complete, true)
+  assert.equal(result.clean, true, 'clean requires a completed evidence pass with no findings')
+  assert.equal(result.confirmed.length, 0)
+  assert.equal(result.blocked.length, 0)
+  assert.equal(result.unverified.length, 0)
+}
+
+{
   const mediumFinding = {
     severity: 'MED',
     title: 'Documented lifecycle drift',

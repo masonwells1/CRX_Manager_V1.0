@@ -108,7 +108,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 
 Production currently has 156 public base tables (+2 views), 440 callable function overloads across 432 names, and 129 trigger-function overloads. The repository contains 869 migration files, including local candidates that may not yet be live. Seven JWT-protected Edge Functions are active in production.
 
-See [CLAUDE.md](./CLAUDE.md) for the complete table list, RLS policy matrix, and RPC function inventory.
+See the [database schema reference](./docs/reference/database-schema.md) for the table and RLS policy inventory, and the [RPC reference](./docs/reference/rpc-functions.md) for database functions.
 
 ## Deployment
 
@@ -120,7 +120,10 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environme
 
 | File | Contents |
 |------|----------|
-| [CLAUDE.md](./CLAUDE.md) | Complete project reference — architecture, schema, RPCs, business logic, feature inventory |
+| [AGENTS.md](./AGENTS.md) | Short shared contract and task-routing entry point for coding agents |
+| [Agent onboarding](./docs/manual/AGENT_ONBOARDING.md) | First-session reading order, recurring failure modes, and verification expectations |
+| [Architecture](./docs/manual/ARCHITECTURE.md) | System architecture, data flow, business logic, and code-location map |
+| [Reference docs](./docs/reference/) | Current schema, RPC, route, pattern, and guardrail references |
 | [TESTING.md](./TESTING.md) | Testing guide (beginner-friendly) — setup, running tests, troubleshooting |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Deployment instructions — Vercel setup, env vars, rollback |
 

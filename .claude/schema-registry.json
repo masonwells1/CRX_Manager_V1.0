@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-09-03",
+    "generated_at": "2026-09-05",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260903153402",
+    "migrations_high_water": "20260904152221",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -375,6 +375,11 @@
       "20260831233000_bind_section9_replays_to_intent",
       "20260831235900_serialize_gauntlet_write_boundaries",
       "20260903150000_job_chemicals_persist_driver",
+      "20260903150100_ledger_backed_commission_history",
+      "20260903160000_gate_number_generators_active_profile_role",
+      "20260903230000_commission_report_snapshot_contract",
+      "20260904160000_invoice_date_fallbacks_chicago",
+      "20260904180000_invoice_season_follows_invoice_date",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1295,7 +1300,10 @@
     "blend_ticket_images",
     "blend_ticket_products",
     "blend_ticket_to_order_items",
+    "commission_earned_state_ledger",
+    "commission_history_cutover",
     "commission_payment_items",
+    "commission_settlement_events",
     "commissions",
     "cost_history",
     "credit_memo_applications",
@@ -1528,6 +1536,31 @@
         "blend_tickets_status_check"
       ]
     },
+    "commission_earned_state_ledger.event_kind": {
+      "values": [
+        "baseline",
+        "legacy_excluded",
+        "inserted",
+        "revised",
+        "cancelled",
+        "soft_deleted",
+        "restored"
+      ],
+      "constraints": [
+        "commission_earned_state_ledger_event_kind_chk"
+      ]
+    },
+    "commission_earned_state_ledger.source_type": {
+      "values": [
+        "order",
+        "job",
+        "invoice",
+        "commission"
+      ],
+      "constraints": [
+        "commission_earned_state_ledger_source_type_chk"
+      ]
+    },
     "commission_payments.payment_method": {
       "values": [
         "check",
@@ -1551,6 +1584,15 @@
       ],
       "constraints": [
         "commission_payments_status_check"
+      ]
+    },
+    "commission_settlement_events.event_kind": {
+      "values": [
+        "posted",
+        "voided"
+      ],
+      "constraints": [
+        "commission_settlement_events_event_kind_chk"
       ]
     },
     "commissions.status": {
@@ -2851,6 +2893,66 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "commission_earned_state_ledger",
+      "constraint": "commission_earned_state_ledger_amount_cents_non_negative_chk",
+      "def": "CHECK ((amount_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commission_history_cutover",
+      "constraint": "commission_history_cutover_created_at_chk",
+      "def": "CHECK ((created_at = cutover_at))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commission_history_cutover",
+      "constraint": "commission_history_cutover_first_complete_day_chk",
+      "def": "CHECK ((first_supported_date = (((cutover_at AT TIME ZONE 'America/Chicago'::text))::date + 1)))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commission_history_cutover",
+      "constraint": "commission_history_cutover_opening_count_non_negative_chk",
+      "def": "CHECK ((opening_commission_count >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commission_history_cutover",
+      "constraint": "commission_history_cutover_opening_digest_chk",
+      "def": "CHECK ((opening_commission_digest ~ '^[0-9a-f]{32}$'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commission_history_cutover",
+      "constraint": "commission_history_cutover_singleton_chk",
+      "def": "CHECK (singleton)",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commission_payment_items",
+      "constraint": "commission_payment_items_amount_whole_cents_chk",
+      "def": "CHECK (((amount IS NULL) OR ((amount = round(amount, 2)) AND (amount > '-Infinity'::numeric) AND (amount < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commission_payments",
+      "constraint": "commission_payments_total_amount_whole_cents_chk",
+      "def": "CHECK (((total_amount IS NULL) OR ((total_amount = round(total_amount, 2)) AND (total_amount > '-Infinity'::numeric) AND (total_amount < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commission_payments",
+      "constraint": "commission_payments_void_history_chk",
+      "def": "CHECK ((((status = 'voided'::text) AND (voided_at IS NOT NULL) AND (voided_by IS NOT NULL)) OR ((status <> 'voided'::text) AND (voided_at IS NULL) AND (voided_by IS NULL))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commission_settlement_events",
+      "constraint": "commission_settlement_events_event_amount_direction_chk",
+      "def": "CHECK ((((event_kind = 'posted'::text) AND (amount_cents >= 0)) OR ((event_kind = 'voided'::text) AND (amount_cents <= 0))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "commissions",
       "constraint": "chk_commission_amount",
       "def": "CHECK ((commission_amount >= (0)::numeric))",
@@ -2867,6 +2969,24 @@
       "constraint": "chk_commission_source",
       "def": "CHECK (((order_id IS NOT NULL) OR (job_id IS NOT NULL)))",
       "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commissions",
+      "constraint": "commissions_cancellation_history_pair_chk",
+      "def": "CHECK ((((cancelled_at IS NULL) AND (cancelled_amount_cents IS NULL)) OR ((cancelled_at IS NOT NULL) AND (cancelled_amount_cents IS NOT NULL))))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commissions",
+      "constraint": "commissions_cancelled_amount_cents_non_negative_chk",
+      "def": "CHECK (((cancelled_amount_cents IS NULL) OR (cancelled_amount_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commissions",
+      "constraint": "commissions_commission_amount_whole_cents_chk",
+      "def": "CHECK (((commission_amount IS NULL) OR ((commission_amount = round(commission_amount, 2)) AND (commission_amount > '-Infinity'::numeric) AND (commission_amount < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "credit_memo_applications",
@@ -4262,6 +4382,38 @@
         "manually_corrected_fields"
       ]
     },
+    "commission_earned_state_ledger": {
+      "no_default": [
+        "commission_id",
+        "event_kind",
+        "effective_at",
+        "recipient_group_key",
+        "recipient_name",
+        "source_type",
+        "source_number",
+        "customer_name",
+        "order_date",
+        "amount_cents",
+        "is_earned"
+      ],
+      "with_default": [
+        "id",
+        "recorded_at",
+        "created_at"
+      ]
+    },
+    "commission_history_cutover": {
+      "no_default": [
+        "cutover_at",
+        "first_supported_date",
+        "opening_commission_count",
+        "opening_commission_digest"
+      ],
+      "with_default": [
+        "singleton",
+        "created_at"
+      ]
+    },
     "commission_payment_items": {
       "no_default": [
         "commission_payment_id",
@@ -4285,6 +4437,28 @@
         "payment_date",
         "created_at",
         "updated_at"
+      ]
+    },
+    "commission_settlement_events": {
+      "no_default": [
+        "commission_payment_id",
+        "commission_payment_item_id",
+        "commission_id",
+        "event_kind",
+        "effective_at",
+        "payment_number",
+        "payment_date",
+        "recipient_group_key",
+        "recipient_name",
+        "source_type",
+        "source_number",
+        "customer_name",
+        "commission_order_date",
+        "amount_cents"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
       ]
     },
     "commissions": {
@@ -6307,6 +6481,32 @@
       "application_service_id",
       "manually_corrected_fields"
     ],
+    "commission_earned_state_ledger": [
+      "id",
+      "commission_id",
+      "event_kind",
+      "effective_at",
+      "recorded_at",
+      "recorded_by",
+      "recipient_id",
+      "recipient_group_key",
+      "recipient_name",
+      "source_type",
+      "source_number",
+      "customer_name",
+      "order_date",
+      "amount_cents",
+      "is_earned",
+      "created_at"
+    ],
+    "commission_history_cutover": [
+      "singleton",
+      "cutover_at",
+      "first_supported_date",
+      "opening_commission_count",
+      "opening_commission_digest",
+      "created_at"
+    ],
     "commission_payment_items": [
       "id",
       "commission_payment_id",
@@ -6329,7 +6529,28 @@
       "season",
       "created_by",
       "created_at",
-      "updated_at"
+      "updated_at",
+      "voided_at",
+      "voided_by"
+    ],
+    "commission_settlement_events": [
+      "id",
+      "commission_payment_id",
+      "commission_payment_item_id",
+      "commission_id",
+      "event_kind",
+      "effective_at",
+      "payment_number",
+      "payment_date",
+      "recipient_id",
+      "recipient_group_key",
+      "recipient_name",
+      "source_type",
+      "source_number",
+      "customer_name",
+      "commission_order_date",
+      "amount_cents",
+      "created_at"
     ],
     "commissions": [
       "id",
@@ -6350,7 +6571,9 @@
       "order_number",
       "customer_name",
       "job_id",
-      "invoice_id"
+      "invoice_id",
+      "cancelled_at",
+      "cancelled_amount_cents"
     ],
     "cost_history": [
       "id",

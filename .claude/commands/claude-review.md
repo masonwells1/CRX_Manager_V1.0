@@ -91,7 +91,7 @@ Verify BLOCKER and HIGH findings against source, tests, migration evidence, smok
 
 ## Step 4 - Report To Mason
 
-Severity in plain English: BLOCKER = do not ship, breaks prod / data / money / a red line; HIGH = real bug, fix before merge; MED = should fix soon; LOW/NIT = optional polish.
+Severity in plain English: BLOCKER = do not ship, breaks production/data/money or a CRX Hard Rule; HIGH = real bug, fix before merge; MED = should fix soon; LOW/NIT = optional polish.
 
 Report:
 

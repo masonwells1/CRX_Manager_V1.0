@@ -165,7 +165,7 @@ The failure classes `AGENTS.md` keeps Codex pointed at:
   unconstrained legacy columns stay reportable and must not be suppressed as approved exceptions.
 - (3) Idempotency — idempotency_keys lookups not scoped to operation= (key-only lookups return another op's cached row); RPCs that declare p_idempotency_key but ignore it.
 - (4) Migration drift — CHECK-constraint regressions (new list must be a superset), function-overload collisions, missing SET search_path = public, pg_temp, updated_at on tables that lack it.
-- (5) Lifecycle violations per CLAUDE.md (quote/order/delivery/invoice/return state machines).
+- (5) Lifecycle violations in the workflow documents routed by `AGENTS.md` (especially quote/order/delivery/invoice/return state machines).
 
 Notes:
 - Every adversarial review explicitly pins `gpt-5.6-sol` with high reasoning. Do not inherit

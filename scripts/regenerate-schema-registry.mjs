@@ -22,11 +22,11 @@
 //     "generated_columns":     [ { "table_name": "...", "column_name": "...", "generation_expression": "..." }, ... ],
 //     "check_constraints":     [ { "table_name": "...", "constraint_name": "...", "def": "CHECK (...)" }, ... ],
 //     "columns":               [ { "table_name": "...", "cols": [...], "not_null_no_default": [...], "not_null_with_default": [...] }, ... ],
-//     "applied_names":         [ { "name": "..." }, ... ]   -- OPTIONAL, see Q6 below
+//     "applied_names":         [ { "name": "..." }, ... ]   -- REQUIRED for a real refresh; see Q6
 //   }
 //   (status_enums and tables_without_updated_at are DERIVED — no separate query needed.)
-//   applied_names is OPTIONAL for backward compatibility: input without this key still
-//   works exactly as before, it just omits _meta.applied_migration_names from the output.
+//   Input without applied_names is tolerated only for backward compatibility. It carries
+//   the previous name list forward with a warning, so Q6 must run on every real refresh.
 //
 // QUERIES TO RUN (read-only, public schema, via Supabase MCP execute_sql):
 //
@@ -69,7 +69,7 @@
 //     -- If the MCP response is too large, split with `AND c.table_name <= 'mmm'` /
 //     -- `AND c.table_name > 'mmm'` and concatenate the row arrays.
 //
-// (Q6) applied_names (OPTIONAL — powers name-based staleness comparison in
+// (Q6) applied_names (REQUIRED — powers name-based staleness comparison in
 //      session-staleness.mjs; server-assigned `version` can be LOWER than the
 //      migration filename's timestamp for migrations applied via the Supabase
 //      MCP, which makes the numeric high-water compare false-positive forever
@@ -78,7 +78,7 @@
 //
 // CHEAPEST WORKFLOW:
 //   Open Claude Code in this repo and say: "regenerate the schema-registry from Supabase"
-//   (the /regen-schema-registry skill). Claude runs Q1–Q5 via MCP, assembles the input
+//   (the /regen-schema-registry skill). Claude runs Q1–Q6 via MCP, assembles the input
 //   JSON, and runs this script with --from-introspection.
 
 import { writeFileSync, readFileSync } from "node:fs";

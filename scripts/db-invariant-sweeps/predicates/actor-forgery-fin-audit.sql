@@ -1,7 +1,7 @@
 -- predicate (i): actor-forgery into the financial audit log   (blind-spot closer for predicate (c))
 -- Authenticated-executable SECDEF routines that reference a forgeable actor-shaped parameter
 -- (p_%by / p_actor% / p_user%) INSIDE a financial_audit_log INSERT before an executable, uncaught
--- canonical ACTOR_MISMATCH refusal. financial_audit_log is append-only / immutable (a CLAUDE.md hard red line), so
+-- canonical ACTOR_MISMATCH refusal. financial_audit_log is append-only / immutable (a CRX Hard Rule), so
 -- stamping its actor (actor_user_id / actor_role) from a caller-supplied id lets an authenticated
 -- admin/sales_rep forge WHO performed a money-ledger event. This is the exact class fixed for
 -- link_blend_ticket_to_order / unlink_blend_ticket_from_order in migration 20260617171500 (Live

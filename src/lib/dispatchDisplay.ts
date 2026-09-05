@@ -383,7 +383,7 @@ export function chemicalChargeCents(
 }
 
 /**
- * Terminal job-lifecycle statuses (CLAUDE.md Job lifecycle:
+ * Terminal job-lifecycle statuses (see the AGENTS.md-routed lifecycle documents:
  * `scheduled → in_progress → completed → cancelled → invoiced`). A terminal
  * job's dispatch has nothing left for the applicator to DO — it belongs in
  * the FieldView "Done" section, not mixed in with today's actionable work.

@@ -1,57 +1,7 @@
-# Cursor Rules for CRX Manager V1.0
+# Cursor Routing for CRX Manager
 
-## Project
-Agricultural product distribution management system for Crop RX Solutions.
-React 18 + TypeScript + Vite + Tailwind CSS + Supabase (PostgreSQL, Auth, Storage, Realtime).
-Deployed to Vercel. Tests with Playwright.
+Read and follow `AGENTS.md`; it is the canonical shared contract for owner communication, authority, safety, engineering principles, verification, and task-specific document routing.
 
-## User Context
-The project owner is a beginner with zero coding experience. Explain changes simply. Do not assume prior knowledge.
+Do not duplicate project rules, counts, status, or file inventories here. Load only the workflow and reference documents that `AGENTS.md` routes for the current task.
 
-## Stack Rules
-- Use React 18 with TypeScript (strict mode)
-- Use Tailwind CSS for all styling. Brand color: `crx-green` (#28A26A)
-- Use Lucide React for all icons. Do not install other icon or UI libraries
-- Use Supabase client from `src/lib/db.ts` (singleton). Never create additional Supabase clients
-- All shared TypeScript types live in `src/types/index.ts`
-- All pages are lazy-loaded via `React.lazy()` in `src/App.tsx`
-
-## Database Rules
-- All schema changes MUST go through migration files in `supabase/migrations/`
-- RLS (Row Level Security) is enabled on ALL 25 tables -- never disable it
-- After every `.update()` or `.delete()`, call `checkMutationResult()` from `src/lib/db.ts`
-- Three user roles: admin, sales_rep, driver. RLS helpers: `is_admin()`, `is_sales_rep()`, `is_driver()`
-
-## Code Patterns
-- Log important actions with `logActivity()` from `src/lib/activityLogger.ts`
-- Use `generateIdempotencyKey()` from `src/lib/idempotency.ts` for critical writes
-- Compress images before upload with `compressImage()` from `src/lib/imageCompression.ts`
-- Check online status with `useOnlineStatus()` hook for offline-capable features
-
-## File Structure
-- Pages: `src/pages/` (one file per route)
-- Components: `src/components/` (grouped by feature)
-- Utilities: `src/lib/` (database, PDF, CSV, OCR, offline, etc.)
-- Hooks: `src/hooks/`
-- Types: `src/types/index.ts`
-- Migrations: `supabase/migrations/`
-- Tests: `tests/e2e/`
-
-## Environment
-- Env vars: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (must have VITE_ prefix)
-- Dev server: `npm run dev` (port 5173)
-- Build: `npm run build`
-- Tests: `npm run test:e2e`
-
-## Key Documentation
-- `CONTEXT.md` -- Full business context, data model, all 25 tables
-- `DATABASE_RELATIONSHIPS.md` -- Entity relationships
-- `SCHEMA_QUICK_REFERENCE.sql` -- Complete SQL schema
-- `TESTING.md` -- Testing guide
-- `DEPLOYMENT.md` -- Deployment guide
-
-## Current State
-- Tier 1-3 security/performance hardening: COMPLETE
-- Deployed to Vercel (private staging)
-- Test coverage: minimal (3 E2E files). Next task: comprehensive test coverage
-- Admin user: mason@croprxsolutions.com
+Mason cannot safely review code or diffs. Own routine technical choices, explain outcomes and risk in plain English, and give one recommended next step.

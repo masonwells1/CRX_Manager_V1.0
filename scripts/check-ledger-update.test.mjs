@@ -35,6 +35,7 @@ eq(ledgerCheck([".claude/workflows/migration-review.js"]).ok, false, "workflow c
 eq(ledgerCheck([".claude/settings.json"]).ok, false, "settings change without ledger is blocked");
 eq(ledgerCheck([".codex/hooks/production-action-guard.mjs"]).ok, false, "Codex guard change without ledger is blocked");
 eq(ledgerCheck([".codex/hooks.json"]).ok, false, "Codex hook manifest change without ledger is blocked");
+eq(ledgerCheck([".cursorrules"]).ok, false, "Cursor guidance change without ledger is blocked");
 eq(ledgerCheck(["AGENTS.md"]).ok, false, "shared-contract change without ledger is blocked");
 eq(ledgerCheck(["CLAUDE.md"]).ok, false, "CLAUDE.md change without ledger is blocked");
 eq(ledgerCheck([".husky/pre-commit"]).ok, false, "pre-commit hook change without ledger is blocked");

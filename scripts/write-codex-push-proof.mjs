@@ -691,7 +691,7 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
     "Inspect only this packet. Do not traverse outside this directory. Do NOT modify anything,",
     "push, deploy, or run any write/network command — this is a read-only review.",
     "",
-    "Judge against the CRX red lines (see AGENTS.md): money as integer cents; Row Level",
+    "Judge against the CRX Hard Rules (see AGENTS.md): money as integer cents; Row Level",
     "Security and SECURITY DEFINER safety (search_path, grants, actor-forgery); idempotency",
     "on mutating RPCs; migration drift (CHECK supersets, function-overload collisions);",
     "entity-lifecycle invariants; and any production / data-loss / secret-exposure risk.",
