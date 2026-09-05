@@ -38,7 +38,8 @@ eligibility. This change does presentation only.
   prints no prompt text unless `--titles` is passed. `docs/manual/OWNER_PLAYBOOK.md` tells Mason
   how to ask for it. Not scheduled: Astra's condition was one validated reporting cycle first.
 
-**Proof.** `node .claude/hooks/worktree-awareness-lib.test.mjs`, `node .claude/hooks/hook-router.test.mjs`,
+**Proof.** `node scripts/claude-usage-report.test.mjs` (also in the automatic agent-workflow suite),
+`node .claude/hooks/worktree-awareness-lib.test.mjs`, `node .claude/hooks/hook-router.test.mjs`,
 `npm run test:agent-workflows`, and the live hook run against this checkout's 74 sibling worktrees
 (report size before/after recorded in the PR).
 
