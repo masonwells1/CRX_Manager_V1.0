@@ -261,7 +261,11 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 2. Valid proof, unarmed, benign → allow.
     writeProof(stateDir, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
-    ok(!isDeny(r), "valid proof + benign migration → allowed");
+    eq(r.stdout, "", "valid proof + benign migration must preserve the normal permission check");
+    for (const server of ["other_supabase", "8b8b8b8b-1111-4222-8333-444444444444"]) {
+      r = runHook({ ...call(BENIGN_SQL), tool_name: `mcp__${server}__apply_migration` }, tmp);
+      eq(r.stdout, "", "replacement migration with valid proof cannot override its permission tier");
+    }
 
     writeProof(stateDir, BENIGN_SQL, { queryHash: undefined });
     r = runHook(call(BENIGN_SQL), tmp);

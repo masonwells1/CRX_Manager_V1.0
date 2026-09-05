@@ -109,9 +109,7 @@ const SUPABASE_GATED_ELSEWHERE = new Set(["execute_sql", "apply_migration", "dep
 //      Supabase policy applies: exact read-only allowlist passes, the three
 //      leaves other gates own pass to those gates, everything else is denied.
 //   2. OTHERWISE, PER-TOOL: a leaf passes only if the exact
-//      `mcp__<uuid>__<leaf>` entry exists in a settings file (any tier for an
-//      ordinary tool; `ask` or `deny` for a Supabase live-action leaf, since an
-//      `allow` line is itself the bypass - Codex P1 on 6de456ac5), or it is on the
+//      `mcp__<uuid>__<leaf>` ask/deny entry exists in a settings file, or it is on the
 //      Supabase read-only allowlist, or it is read-shaped by verb (get_/list_/
 //      search_/read_/find_/query_/...). EVERYTHING ELSE is denied: a single
 //      registered leaf never settles the other tools on that server, so a
@@ -238,13 +236,13 @@ if (!supabaseLeaf) {
         "live schema, data, branch and project changes travel only through the reviewed migration path or a Mason-approved gate.");
     }
     const liveAction = SUPABASE_SENSITIVE_LEAVES.has(leafLower);
-    const settled = liveAction ? gatedTierRegistered(toolName) : registered.has(leafLower);
+    const settled = gatedTierRegistered(toolName);
     if (!settled && !SUPABASE_READ_ONLY_TOOLS.has(leafLower) && !READ_SHAPED_LEAF_RE.test(leaf)) {
       const kind = liveAction ? "a Supabase live-action leaf (only an `ask` or `deny` entry settles it; an `allow` line does not count)" : "not a read-shaped tool";
       out("block",
         `MCP TOOL GUARD (${toolName}): "${leaf}" is ${kind} and has no qualifying exact entry for connector UUID ${uuid} in any Claude settings file ` +
         "(repo .claude/settings.json, .claude/settings.local.json, ~/.claude/settings.json), so it is denied rather than left to the " +
-        "permission classifier. The connector UUID changes on reinstall. Register the exact tool (an allow/ask/deny entry) to settle it; " +
+        "permission classifier. The connector UUID changes on reinstall. Register the exact tool in ask/deny (an allow entry does not count) to settle it; " +
         "if this is the reinstalled Supabase connector, add the UUID to .claude/hooks/mcp-tool-guard.mjs SUPABASE_TOOL_RE instead so the " +
         "exact read-only allowlist applies (fail closed).");
     }

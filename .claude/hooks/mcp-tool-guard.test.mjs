@@ -300,8 +300,20 @@ withProjectSettings({ ask: [ALLOW_UUID + "pause_project"], deny: [ALLOW_UUID + "
   r = runHook({ tool_name: ALLOW_UUID + "create_project", tool_input: {} }, dir);
   eq(r.stdout.trim(), "", "create_project with an exact deny entry is left to the deny tier");
   r = runHook({ tool_name: ALLOW_UUID + "sync_env", tool_input: {} }, dir);
-  eq(r.stdout.trim(), "", "an ordinary (non-live-action) tool is settled by an allow entry");
+  ok(isDeny(r), "an unidentified mutation cannot be settled by an allow entry");
 });
+for (const leaf of ["delete_project", "sync_env", "future_write_tool"]) {
+  withProjectSettings({ allow: [ALLOW_UUID + leaf] }, (dir) => {
+    r = runHook({ tool_name: ALLOW_UUID + leaf, tool_input: {} }, dir);
+    ok(isDeny(r), `${leaf}: a saved allow entry cannot authorize an unidentified mutation`);
+  });
+  for (const tier of ["ask", "deny"]) {
+    withProjectSettings({ [tier]: [ALLOW_UUID + leaf] }, (dir) => {
+      r = runHook({ tool_name: ALLOW_UUID + leaf, tool_input: {} }, dir);
+      eq(r.stdout, "", `${leaf}: defer to the exact ${tier} permission`);
+    });
+  }
+}
 withProjectSettings({ allow: [SB_UUID + "list_tables", SB_UUID + "deploy_edge_function"] }, (dir) => {
   r = runHook({ tool_name: SB_UUID + "deploy_edge_function", tool_input: { name: "x" } }, dir);
   ok(isDeny(r), "identified Supabase UUID with deploy_edge_function only in allow: still denied");

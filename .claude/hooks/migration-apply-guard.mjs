@@ -29,10 +29,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { evaluateMigrationApply } from "./migration-apply-lib.mjs";
 
-function out(decision, reason) {
-  const payload = decision === "block"
-    ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
-    : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
+function deny(reason) {
+  const payload = { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
   process.stdout.write(JSON.stringify(payload));
   process.exit(0);
 }
@@ -67,7 +65,7 @@ try {
   });
 } catch (err) {
   // A crash in the rule book must not wave a live migration through.
-  out("block",
+  deny(
     `MIGRATION APPLY GUARD: the apply-gate evaluation itself failed ` +
     `(${err?.message || err}). Refusing the apply rather than proceeding with the gate in an ` +
     `unknown state. Fix ${path.join(".claude", "hooks", "migration-apply-lib.mjs")} — do not route ` +
@@ -79,8 +77,10 @@ try {
 // permit a live apply — the exact inversion of this file's own rule that an
 // unknown gate state must refuse (CodeRabbit, PR #460).
 if (verdict?.decision !== "allow") {
-  out("block", verdict?.reason ||
+  deny(verdict?.reason ||
     `MIGRATION APPLY GUARD: the apply gate returned no recognisable decision ` +
     `(${JSON.stringify(verdict?.decision ?? null)}). An unknown verdict is not a pass. Refusing the apply.`);
 }
-out("allow");
+// Technical proof is necessary, but does not grant owner permission. Leave a
+// successful evaluation silent so the tool's ask/deny tier still applies.
+process.exit(0);
