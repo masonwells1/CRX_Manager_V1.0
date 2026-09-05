@@ -117,7 +117,7 @@ describe('cycle count completion revision contract', () => {
     expectBefore(
       page,
       ".select('item_revision, status')",
-      'const items = await refreshCountItems(activeCount.id)',
+      'const items = await refreshCountItems(activeCount.id, isCurrentSession)',
     );
   });
 
@@ -209,7 +209,7 @@ describe('cycle count completion revision contract', () => {
     expect(page).toContain('latestItemRevisionRef.current.set(activeCount.id, countState.item_revision)');
     // Must sit with the state adoption it shadows: adopting into state while leaving
     // the ref behind is the wedge itself.
-    const adoption = page.slice(page.indexOf('const items = await refreshCountItems(activeCount.id)'));
+    const adoption = page.slice(page.indexOf('const items = await refreshCountItems(activeCount.id, isCurrentSession)'));
     expectBefore(
       adoption,
       'item_revision: countState.item_revision',

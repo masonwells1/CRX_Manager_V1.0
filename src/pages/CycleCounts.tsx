@@ -119,9 +119,21 @@ export default function CycleCounts() {
   // this component outlives the detail modal, so an unkeyed value would let count A's
   // revision decide count B's completion.
   const latestItemRevisionRef = useRef(new Map<string, number>());
-  // Identifies the newest openDetail call, so a slower earlier one cannot paint its
-  // rows over the count the operator is now looking at. See openDetail.
-  const openDetailRequestRef = useRef(0);
+  // Identifies the current DETAIL SESSION: which count is open, and which visit to
+  // it. Bumped by openDetail, so both a switch (A -> B) and a reopen (A -> A)
+  // supersede anything still in flight — an id comparison catches only the switch.
+  // See closeDetail for why hiding the modal deliberately does not bump it.
+  //
+  // It is a session rather than an openDetail request because the completion path
+  // writes this same shared state after its own awaits, from a different function.
+  // An earlier version bumped this only in openDetail and guarded only openDetail's
+  // writes; completing count A, closing the modal mid-flight and opening count B
+  // still painted A's rows under B's heading, and updateCountedQty then derived
+  // p_item_id from them — an inventory adjustment against a product the operator
+  // was not looking at. Guarding one entry point made the whole file read as
+  // protected. Every response-derived write to activeCount/countItems must be
+  // gated on still being the session that started the work.
+  const detailSessionRef = useRef(0);
   const itemWriteSequenceRef = useRef(0);
   const completionInFlightRef = useRef(false);
 
@@ -261,10 +273,25 @@ export default function CycleCounts() {
     });
   };
 
+  // Hiding the detail modal deliberately does NOT end the detail session, and the
+  // reason is worth stating because the review that found the completion-path bug
+  // asked for the opposite.
+  //
+  // Ending the session on close would abort a completion the operator had already
+  // asked for, and tell them they "moved to a different cycle count" when they did
+  // not. It is also unnecessary: the danger is a superseded response painting over
+  // a DIFFERENT count, and every route to a different count goes through openDetail,
+  // which bumps the session — including reopening the same count. With the modal
+  // closed there is nothing on screen to paint over, so the late write is harmless
+  // and the completion the operator requested still lands.
+  const closeDetail = () => {
+    setShowDetail(false);
+  };
+
   // Open detail modal
   const openDetail = async (count: CountRow) => {
-    // Which openDetail call owns the shared detail state. Every response-derived
-    // write below is gated on still being the newest call.
+    // Which detail session owns the shared detail state. Every response-derived
+    // write below is gated on still being the current session.
     //
     // This is NOT a pre-existing defect left alone: `main` reaches `setCountItems`
     // after ONE await, and this branch added the revision seed read ahead of the
@@ -281,9 +308,9 @@ export default function CycleCounts() {
     // An id comparison alone would not be enough anyway: reopening the SAME count
     // twice gives two calls whose ids match, and the older response would still be
     // adopted. The token distinguishes calls, not records.
-    const requestId = openDetailRequestRef.current + 1;
-    openDetailRequestRef.current = requestId;
-    const isCurrentRequest = () => openDetailRequestRef.current === requestId;
+    const session = detailSessionRef.current + 1;
+    detailSessionRef.current = session;
+    const isCurrentSession = () => detailSessionRef.current === session;
 
     setActiveCount(count);
     setShowDetail(true);
@@ -313,8 +340,8 @@ export default function CycleCounts() {
       // Could not confirm a revision: drop any stale entry rather than let an
       // unconfirmed leftover outrank the row actually loaded. The read then falls
       // back to activeCount, which the fail-closed check downstream already handles.
-      if (isCurrentRequest()) latestItemRevisionRef.current.delete(count.id);
-    } else if (typeof revisionRow?.item_revision === 'number' && isCurrentRequest()) {
+      if (isCurrentSession()) latestItemRevisionRef.current.delete(count.id);
+    } else if (typeof revisionRow?.item_revision === 'number' && isCurrentSession()) {
       // Deliberately overwrites a newer value an in-flight write may have just
       // recorded. That is the same fail-safe ordering the comment above describes for
       // activeCount: seeding the OLDER revision makes completion warn rather than
@@ -338,7 +365,7 @@ export default function CycleCounts() {
     // it. `setLoadingItems(false)` is deliberately inside the gate too: the newest
     // call owns that flag, and letting a stale one clear it would drop the spinner
     // while the current count is still loading.
-    if (!isCurrentRequest()) return;
+    if (!isCurrentSession()) return;
 
     if (error) {
       Sentry.captureException(error);
@@ -353,12 +380,21 @@ export default function CycleCounts() {
     setLoadingItems(false);
   };
 
-  const refreshCountItems = async (cycleCountId: string): Promise<CountItemRow[] | null> => {
+  // `isCurrentSession` is not optional on purpose. This function ends in a write to
+  // the shared detail state after an await, so every caller has to say which detail
+  // session it is refreshing FOR — a caller that cannot answer that has no business
+  // painting rows. Making it a required parameter is what stops the next completion
+  // path from being added without a guard, which is exactly how this was missed.
+  const refreshCountItems = async (
+    cycleCountId: string,
+    isCurrentSession: () => boolean
+  ): Promise<CountItemRow[] | null> => {
     const { data, error } = await supabase
       .from('cycle_count_items')
       .select('*, product:products(product_name)')
       .eq('cycle_count_id', cycleCountId)
       .order('created_at');
+    if (!isCurrentSession()) return null;
     if (error) {
       Sentry.captureException(error);
       toast('error', 'Failed to refresh count items before completion');
@@ -482,8 +518,15 @@ export default function CycleCounts() {
   };
 
   // Complete the cycle count
-  const waitForAuthoritativeCountItems = async (): Promise<CompletionSnapshot | null> => {
+  const waitForAuthoritativeCountItems = async (
+    isCurrentSession: () => boolean
+  ): Promise<CompletionSnapshot | null> => {
     if (!activeCount) return null;
+    // Superseded before we started: the operator has opened a different count (or
+    // reopened this one). Returning null aborts the completion, which is the safe
+    // direction — the alternative is committing an inventory adjustment for a count
+    // nobody is looking at, from a snapshot taken after they moved on.
+    if (!isCurrentSession()) return null;
     // Wait ONLY on writes belonging to the count being completed. This set is
     // component-wide and outlives the detail modal, so awaiting all of it made
     // completing count B block on a stalled save from count A — indefinitely, since
@@ -496,6 +539,7 @@ export default function CycleCounts() {
         .filter((entry) => entry.cycleCountId === completingCountId)
         .map((entry) => entry.promise)
     );
+    if (!isCurrentSession()) return null;
     // Failed writes are tracked per cycle count, not component-wide. A failure
     // left behind in count A must not block completing count B: this set
     // outlives the detail modal, so an unscoped check wedged every other count
@@ -512,6 +556,11 @@ export default function CycleCounts() {
       .select('item_revision, status')
       .eq('id', activeCount.id)
       .single();
+    // Gate the toasts below as well as the writes: a superseded completion has no
+    // standing to tell the operator anything about the count they have moved on
+    // from, and "This cycle count is no longer in progress" over a count they just
+    // opened would be a lie about the wrong record.
+    if (!isCurrentSession()) return null;
     if (countStateError) {
       Sentry.captureException(countStateError);
       toast('error', 'Failed to refresh the cycle count revision before completion');
@@ -539,7 +588,7 @@ export default function CycleCounts() {
     const reviewedRevision =
       latestItemRevisionRef.current.get(activeCount.id) ?? activeCount.item_revision;
 
-    const items = await refreshCountItems(activeCount.id);
+    const items = await refreshCountItems(activeCount.id, isCurrentSession);
     if (!items) return null;
 
     setActiveCount((previousCount) =>
@@ -589,12 +638,22 @@ export default function CycleCounts() {
   const handleComplete = async () => {
     if (!activeCount || !profile) return;
     if (completionInFlightRef.current) return;
+    // Capture the detail session HERE, synchronously with the operator's click, and
+    // carry it through every await below. Capturing further down would read the
+    // session as it is after a switch has already happened, which is the value that
+    // makes a superseded call look current.
+    const session = detailSessionRef.current;
+    const isCurrentSession = () => detailSessionRef.current === session;
     completionInFlightRef.current = true;
     setPreparingCompletion(true);
 
     try {
-      const snapshot = await waitForAuthoritativeCountItems();
+      const snapshot = await waitForAuthoritativeCountItems(isCurrentSession);
       if (!snapshot) return;
+      // The confirmation state below is shared with the rest of the page, so it is a
+      // response-derived write like any other and cannot be opened for a count the
+      // operator has left.
+      if (!isCurrentSession()) return;
 
       const uncounted = snapshot.items.filter((i) => !i.is_counted);
       if (uncounted.length > 0) {
@@ -604,16 +663,27 @@ export default function CycleCounts() {
         return;
       }
 
-      await executeComplete(snapshot);
+      await executeComplete(snapshot, isCurrentSession);
     } finally {
       completionInFlightRef.current = false;
       setPreparingCompletion(false);
     }
   };
 
-  const executeComplete = async (snapshot?: CompletionSnapshot) => {
+  // `isCurrentSession` is omitted only by the confirmation dialog's onConfirm, which
+  // fires synchronously from the operator's click — so capturing here is capturing at
+  // the click, the same guarantee handleComplete gets. Every other caller threads its
+  // own, because by then the click is several awaits behind us.
+  const executeComplete = async (
+    snapshot?: CompletionSnapshot,
+    isCurrentSession?: () => boolean
+  ) => {
+    const sessionAtEntry = detailSessionRef.current;
+    const stillCurrentSession =
+      isCurrentSession ?? (() => detailSessionRef.current === sessionAtEntry);
     setCompleteConfirmOpen(false);
     if (!activeCount || !profile) return;
+    if (!stillCurrentSession()) return;
 
     if (!snapshot) {
       // This branch runs from the confirmation dialog, and it deliberately does
@@ -632,8 +702,8 @@ export default function CycleCounts() {
       completionInFlightRef.current = true;
       setPreparingCompletion(true);
       try {
-        const refreshedSnapshot = await waitForAuthoritativeCountItems();
-        if (refreshedSnapshot) await executeComplete(refreshedSnapshot);
+        const refreshedSnapshot = await waitForAuthoritativeCountItems(stillCurrentSession);
+        if (refreshedSnapshot) await executeComplete(refreshedSnapshot, stillCurrentSession);
       } finally {
         completionInFlightRef.current = false;
         setPreparingCompletion(false);
@@ -648,6 +718,21 @@ export default function CycleCounts() {
         // replayed A's key, the server wrapper raised a payload conflict, and
         // every retry for B failed until the page was reloaded.
         const completionScope = `complete:${activeCount.id}:${snapshot.itemRevision}`;
+        // Last check before the RPC commits an inventory adjustment. runCriticalAction
+        // introduces its own async boundary between the caller's check and this call,
+        // so the session can end in between; this is the write that moves real stock,
+        // so it gets its own gate rather than inheriting one from upstream.
+        //
+        // THROW rather than return: returning from this action is how runCriticalAction
+        // is told the work succeeded, so a silent return would fire the success toast
+        // and close the modal for a completion that never ran. Bailing out before
+        // getKeyFor also means no idempotency key is minted, so there is nothing left
+        // behind to retire or replay.
+        if (!stillCurrentSession()) {
+          throw new Error(
+            'You moved to a different cycle count before this one finished. Nothing was completed — reopen the count and try again.'
+          );
+        }
         const key = completeCycleCountIdem.getKeyFor(completionScope);
         // complete_cycle_count RETURNS void — .throwOnError() for fire-and-forget.
         try {
@@ -672,7 +757,7 @@ export default function CycleCounts() {
           // in and say plainly what happened; the reviewed-revision baseline
           // advances with them, so the next click completes what is on screen.
           if (hasRpcCode(completionErr, RpcErrorCodes.CYCLE_COUNT_STALE_REVISION)) {
-            await waitForAuthoritativeCountItems();
+            await waitForAuthoritativeCountItems(stillCurrentSession);
             throw new Error(
               'Someone changed a counted quantity while this count was being completed. The list has been refreshed — review the updated quantities, then complete again.'
             );
@@ -706,7 +791,7 @@ export default function CycleCounts() {
       successMessage: 'Cycle count completed',
       sentryTag: 'complete_cycle_count',
       onSuccess: () => {
-        setShowDetail(false);
+        closeDetail();
         fetchCounts();
       },
     });
@@ -738,7 +823,7 @@ export default function CycleCounts() {
       successMessage: 'Cycle count cancelled',
       sentryTag: 'cancel_cycle_count',
       onSuccess: () => {
-        setShowDetail(false);
+        closeDetail();
         fetchCounts();
       },
     });
@@ -768,7 +853,7 @@ export default function CycleCounts() {
       await logActivity({ event: 'cycle_count_reversed', description: `Cycle count ${activeCount.count_number} reversed — inventory adjustments undone`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
 
       toast('success', `Cycle count ${activeCount.count_number} reversed. Inventory restored.`);
-      setShowDetail(false);
+      closeDetail();
       fetchCounts();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'reverse_cycle_count' } });
@@ -961,7 +1046,7 @@ export default function CycleCounts() {
       {/* Cycle Count Detail Modal */}
       <Modal
         open={showDetail}
-        onClose={() => setShowDetail(false)}
+        onClose={closeDetail}
         title={activeCount ? `Cycle Count: ${activeCount.count_number}` : 'Cycle Count'}
         size="large"
       >
