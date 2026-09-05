@@ -6,8 +6,12 @@ the boundary of its "still revisable" band: a migration whose filename version i
 the high-water is treated as pending and may be edited; anything at or below it is an applied
 migration and is protected from edits, renames and deletion.
 
-Five migrations had been applied live above the recorded mark, so all five sat inside the revisable
-band and the immutability rule did not cover them:
+**Corrected 2026-09-05 after Codex P2 on PR #601 — this list originally claimed five affected
+migrations; four is right.** The five below were all applied live above the recorded *ledger*
+mark, but the guard bands migrations by their **filename** stamp, not their apply-time version.
+`20260903150100_ledger_backed_commission_history` has filename stamp `20260903150100`, which is
+*below* the previous high-water `20260903153402`, so it was already protected and was never in the
+hole. The remaining four were:
 
 - `20260903150100_ledger_backed_commission_history` (applied as `20260903202611`)
 - `20260903160000_gate_number_generators_active_profile_role` (applied as `20260904023121`) — the F2 security gate
