@@ -496,6 +496,58 @@ describe('CustomerDetail stale whole-record save', () => {
     ).toBe('customer-stale-key-customer-2-0');
   });
 
+  /**
+   * The SECOND-ORDER cost of that scoping, and the mirror of a defect already fixed in
+   * QuoteBuilder. Flagged by the Codex GitHub App at head 0cd47568 — the same reviewer
+   * that named the quote instance, on the file where the scoping was introduced FIRST.
+   *
+   * `reloadAfterStaleSave` releases the CURRENT render's scope. While one page-wide key
+   * existed that was always the right one. Once scoped, an operator whose save on
+   * customer A is rejected, who navigates to B with the dialog still open and clicks
+   * Reload, retires B's key and strands A's rejected one — so returning to A replays
+   * the rejected key and re-opens the same conflict.
+   */
+  it('does not release customer B\'s key when A\'s conflict dialog is recovered after a route change', async () => {
+    // A's save is REJECTED, so A's dialog opens and A's key is permanently unusable.
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'IDEMPOTENCY_PAYLOAD_CONFLICT' } });
+
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 3, crops: [], default_commission_split: null }
+      : { id: 'customer-1', farm_name: 'Original Farm', row_version: 1, crops: [], default_commission_split: null });
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'customers') return query({ data: [], error: null });
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+      const settle = async (): Promise<QueryResult> => ({ data: record(requested), error: null });
+      chain.maybeSingle = () => settle();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => settle().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => settle().catch(reject);
+      chain.finally = (callback: () => void) => settle().finally(callback);
+      return chain;
+    });
+
+    renderDetailWithCustomerSwitch();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited A' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    // A's recovery dialog opens.
+    expect(await screen.findByText('Reload Customer')).toBeInTheDocument();
+
+    // The operator navigates to B with that dialog still open, then recovers it.
+    fireEvent.click(screen.getByText('Jump to customer 2'));
+    await screen.findByDisplayValue('Second Farm');
+    fireEvent.click(screen.getByText('Reload Customer'));
+    await waitFor(() => expect(screen.queryByText('Reload Customer')).not.toBeInTheDocument());
+
+    expect(
+      mockResetIdempotencyKey,
+      "recovering A's conflict must not retire customer B's key — B never had an unresolved save",
+    ).not.toHaveBeenCalledWith('customer-2');
+  });
+
   it('ignores a slow snapshot for the previous customer that lands after the route moved on', async () => {
     // The tab loader was sequence-guarded, but the PRIMARY record was not. Customer
     // 1's reads are held open here until customer 2 is already on screen, which is

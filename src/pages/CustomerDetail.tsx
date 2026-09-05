@@ -113,10 +113,19 @@ export default function CustomerDetail() {
   // RESIDUAL, stated rather than implied: two consecutive CREATES both scope to 'new',
   // so an unresolved create can still be inherited by the next one. Binding that needs
   // the request payload (PR #535's fingerprintIntentPayload), not the URL.
+  const saveCustomerIntentScope = id ?? '';
   const {
     getKey: getSaveCustomerIdempotencyKey,
     resetKey: resetSaveCustomerIdempotencyKey,
-  } = useIdempotencyKey('save_customer', profile?.id || '', id ?? '');
+  } = useIdempotencyKey('save_customer', profile?.id || '', saveCustomerIntentScope);
+  // Which scope produced the conflict the stale-save dialog is currently offering to
+  // recover. Scoping the key made this necessary: the dialog stays open across a route
+  // change, and `reloadAfterStaleSave` releases the CURRENT render's scope, so an
+  // operator who navigates A -> B with A's dialog open and then clicks Reload would
+  // release B's key and strand A's rejected one — returning to A would replay it and
+  // re-open the same conflict. Recorded when the conflict opens, checked before
+  // anything is released. Same defect and same fix as QuoteBuilder's.
+  const staleSaveConflictScopeRef = useRef<string | null>(null);
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>(() => makeBlankCustomer(profile?.id));
@@ -329,8 +338,18 @@ export default function CustomerDetail() {
       installedSnapshot = await fetchCustomerSnapshot(customerRowVersionRef.current !== null);
       if (installedSnapshot) {
         // The rejected key may represent a committed save whose response was
-        // lost. Rotate it only after a complete authoritative reload succeeds.
-        resetSaveCustomerIdempotencyKey();
+        // lost. Rotate it only after a complete authoritative reload succeeds —
+        // and only when that reload is for the SAME customer that produced the
+        // conflict. Releasing here after a route change would retire the wrong
+        // scope's key and strand the rejected one; leaving it retained is the
+        // safe direction, because a retained key can still replay.
+        if (
+          staleSaveConflictScopeRef.current === null
+          || staleSaveConflictScopeRef.current === saveCustomerIntentScope
+        ) {
+          resetSaveCustomerIdempotencyKey();
+          staleSaveConflictScopeRef.current = null;
+        }
         setIsDirty(false);
         setStaleSaveOpen(false);
       }
@@ -349,7 +368,10 @@ export default function CustomerDetail() {
       }));
     }
     return installedSnapshot;
-  }, [fetchCustomerSnapshot, resetSaveCustomerIdempotencyKey]);
+    // saveCustomerIntentScope is required, not cosmetic: without it this callback
+    // compares the conflict's recorded scope against a STALE one, which is the exact
+    // confusion the check exists to prevent.
+  }, [fetchCustomerSnapshot, resetSaveCustomerIdempotencyKey, saveCustomerIntentScope]);
 
   useEffect(() => {
     // Fetch all customers for parent selector
@@ -806,6 +828,9 @@ export default function CustomerDetail() {
         if (hasRpcCode(error, RpcErrorCodes.CUSTOMER_STALE_WRITE)
           || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)
           || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
+          // Bind the dialog to the customer that produced it, so the recovery cannot
+          // release a different customer's key if the route changes while it is open.
+          staleSaveConflictScopeRef.current = saveCustomerIntentScope;
           setStaleSaveOpen(true);
         } else {
           toast('error', error.message);
@@ -822,6 +847,7 @@ export default function CustomerDetail() {
         );
         customerRowVersionRef.current = rowVersionResult.rowVersion;
         if (rowVersionResult.kind === 'recovery') {
+          staleSaveConflictScopeRef.current = saveCustomerIntentScope;
           setStaleSaveOpen(true);
           toast('warning', 'Customer saved, but its save-protection version could not be confirmed. Reload before editing or saving it again.');
         }
@@ -877,6 +903,7 @@ export default function CustomerDetail() {
         // The crop change committed, but this tab cannot prove the returned token
         // belongs to this write. Keep the visible crop state and any form edits;
         // a later whole-record save must reload instead of overwriting unseen work.
+        staleSaveConflictScopeRef.current = saveCustomerIntentScope;
         setStaleSaveOpen(true);
         toast('warning', 'Crops were updated, but another customer edit may have completed at the same time. Your current edits were kept; reload before saving other customer changes.');
       }

@@ -273,3 +273,43 @@ QuoteBuilder recovery test; reverting the Sentry construction to `new Error(Stri
 strengthened JobDetail assertion. The job-number paths were additionally driven in a real browser
 against the real `assertRpcResult` and `sanitizeError` through a throwaway harness that stubs only
 `createClient` — empty reply, refused permission, and success all render as intended.
+
+## Review round 5 — the Codex GitHub App at `0cd47568`, and the mirror I missed twice
+
+Found at the moment of posting the CodeRabbit request, by checking whether a review already existed
+at the exact head. It did not, but a fresh Codex GitHub App finding did.
+
+**`CustomerDetail` had the identical conflict-recovery defect that round 4 fixed in `QuoteBuilder`.**
+`reloadAfterStaleSave` releases the CURRENT render's scope, and the stale-save dialog survives a
+route change — so an operator whose save on customer A is rejected, who navigates to B with the
+dialog open and clicks Reload, retires B's key and strands A's rejected one. Returning to A replays
+the rejected key and re-opens the same conflict.
+
+Same fix: the dialog records the scope that opened it, and the recovery releases only that scope.
+Applied at all THREE sites that open this dialog — the conflict branch, the row-version recovery
+after a successful save, and the crop-update recovery — so the guard is uniform rather than relying
+on a null fallback that would permit releasing the wrong scope.
+
+**This is the same mistake twice in one PR, in opposite directions.** Round 1 fixed
+`CustomerDetail`'s key scoping and recorded a deliberate decision that `QuoteBuilder` could not be
+scoped; round 3 showed that was wrong. Round 4 then fixed `QuoteBuilder`'s recovery path and did not
+look at `CustomerDetail`'s — which is where the pattern had started. The durable rule, now recorded
+in project memory: **when a reviewer names one instance of a class, treat every mirror site as
+guilty until proven innocent, and check the file the pattern came FROM, not only the file it was
+copied to.**
+
+### Verification
+
+Mutation-tested: forcing the new scope check true fails the new CustomerDetail recovery test.
+
+Driven in a real browser through the throwaway harness, on the real page with the real
+`assertRpcResult`, `hasRpcCode` and `db.ts`: loaded a customer, edited the farm name, saved against
+an `IDEMPOTENCY_PAYLOAD_CONFLICT` reply, and the genuine recovery dialog appeared ("This customer
+may have changed in another workflow… Your unsaved edits stay available until you choose Reload",
+with Keep editing / Reload Customer). Clicking Reload closed the dialog and restored the
+authoritative name, discarding the edit as designed — so the guard does not break the flow it
+protects.
+
+Incidentally confirmed live in that same browser session: `RelatedNotes` throws
+`get_notes_for_entity returned no data` as an UNCAUGHT promise rejection, which is the separate
+pre-existing defect already filed rather than fixed here.
