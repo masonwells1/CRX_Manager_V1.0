@@ -1,4 +1,4 @@
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { PackageCheck, Pencil, Ban, Download, Send, RotateCcw, MessageSquarePlus } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -177,6 +177,50 @@ export default function PurchaseOrderDetail() {
   const [receivingHistory, setReceivingHistory] = useState<ReceivingRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  // React Router reuses this component when only the :id param changes, so the
+  // previous PO's header, lines and receiving history are still in state when
+  // the next PO starts loading. Blank them synchronously before the load effect
+  // below runs: otherwise `fetchPO` sets the new header first and awaits the
+  // lines separately, painting PO B's number above PO A's line items.
+  // The PO the operator is actually looking at, updated synchronously on every
+  // route change. A fetch compares the id it was STARTED for against this, so
+  // the two operands never share a source: one comes from the (possibly stale)
+  // closure, the other from the live route. Deriving both from `po` or `items`
+  // would compare a superseded load against itself and could never fire.
+  const routeIdRef = useRef(id);
+
+  useLayoutEffect(() => {
+    routeIdRef.current = id;
+    setPo(null);
+    setItems([]);
+    setReceivingHistory([]);
+    setLoading(true);
+    setHistoryLoading(true);
+  }, [id]);
+
+  // Route-currency guard, two halves -- each closes a hole the other cannot.
+  //
+  // The TICKET orders calls. A fetch may only write state -- including the
+  // loading flags it owns -- while it still holds the newest ticket. Without
+  // it, PO A's item query landing last would leave PO B's header above PO A's
+  // lines, and a receive submitted from that screen carries A's po_item_ids:
+  // `receive_po_items` derives the PO from the submitted ids and has no
+  // expected-PO parameter to cross-check, so the goods would be recorded
+  // against the wrong purchase order.
+  //
+  // The ROUTE check binds a call to the PO it was started for. A ticket alone
+  // cannot do this: every action handler below (receive, reverse, save, submit,
+  // cancel) calls `fetchPO` after awaiting an RPC, from the closure of the
+  // render it started on. Navigate A -> B while that RPC is in flight and the
+  // stale closure re-fetches PO A and MINTS THE NEWEST TICKET for it, so the
+  // ticket check certifies A as current and paints A's header and lines at B's
+  // URL. Edit and Cancel then act on routed id B while the screen shows A.
+  // The same check also covers the gap between the reset above and the load
+  // effect below, where a PO A response can land before PO B has taken a
+  // ticket at all.
+  const poFetchTokenRef = useRef(0);
+  const historyFetchTokenRef = useRef(0);
+
   /* Reverse receiving modal */
   const [reverseOpen, setReverseOpen] = useState(false);
   const [reverseRecord, setReverseRecord] = useState<ReceivingRecord | null>(null);
@@ -188,11 +232,29 @@ export default function PurchaseOrderDetail() {
   const canReceive = canManagePO;
 
   const fetchPO = useCallback(async () => {
+    // Refuse a call minted by a stale render closure before it can TAKE THE
+    // TICKET. Rejecting it later is not enough: the route effect has already
+    // raised `loading` for the PO being navigated to, and a stale call that
+    // takes the newest ticket disqualifies that live fetch -- so its answer is
+    // refused as superseded, this one's is refused as route-stale, and neither
+    // survivor is left to lower the flag. The destination PO then sits on its
+    // skeleton until a reload. Found by the `gpt-5.6-sol` push-proof review.
+    if (routeIdRef.current !== id) return;
+
+    const token = ++poFetchTokenRef.current;
+    const startedForId = id;
+    // A superseded fetch owns nothing: it must not write data and must not
+    // clear `loading`, which now belongs to the newer fetch still in flight.
+    const isCurrentFetch = () =>
+      poFetchTokenRef.current === token && routeIdRef.current === startedForId;
+
     const { data: poData, error: poError } = await supabase
       .from('purchase_orders')
       .select('*')
       .eq('id', id!)
       .maybeSingle();
+
+    if (!isCurrentFetch()) return;
 
     if (poError) {
       Sentry.captureException(poError, { tags: { source: 'fetch', action: 'load_purchase_order' } });
@@ -206,6 +268,9 @@ export default function PurchaseOrderDetail() {
         .from('purchase_order_items')
         .select('*, product:products(*, product_family:product_families(name))')
         .eq('purchase_order_id', id!);
+
+      if (!isCurrentFetch()) return;
+
       if (itemsError) {
         Sentry.captureException(itemsError, { tags: { source: 'fetch', action: 'load_purchase_order_items' } });
         toast('error', 'Failed to load purchase order products');
@@ -213,11 +278,29 @@ export default function PurchaseOrderDetail() {
         return;
       }
       setItems((itemsData || []) as unknown as PurchaseOrderItem[]);
+    } else {
+      // A missing PO must not leave the previously loaded PO's lines on screen.
+      setPo(null);
+      setItems([]);
     }
     setLoading(false);
   }, [id, toast]);
 
   const fetchReceivingHistory = useCallback(async () => {
+    // Refuse a call minted by a stale render closure BEFORE raising the loading
+    // flag. The action handlers re-fetch after awaiting their RPC, so a receive
+    // started on PO A can call this while the operator is already on PO B. Such
+    // a call takes the newest ticket, so the guard below rejects it only AFTER
+    // the await -- and by then it has already put the history card on its
+    // skeleton with no later fetch coming to take it off. Unlike `fetchPO`,
+    // which never raises `loading` itself, this one must screen at the door.
+    if (routeIdRef.current !== id) return;
+
+    const token = ++historyFetchTokenRef.current;
+    const startedForId = id;
+    const isCurrentFetch = () =>
+      historyFetchTokenRef.current === token && routeIdRef.current === startedForId;
+
     setHistoryLoading(true);
     // PR-07 follow-up: dropped receiver FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
@@ -225,6 +308,8 @@ export default function PurchaseOrderDetail() {
       .select('*, product:products(product_name)')
       .eq('purchase_order_id', id!)
       .order('received_at', { ascending: false });
+
+    if (!isCurrentFetch()) return;
 
     if (error) {
       // Supabase RETURNS this error (doesn't throw) — surface it instead of
@@ -243,6 +328,7 @@ export default function PurchaseOrderDetail() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', receiverIds);
+        if (!isCurrentFetch()) return;
         (receivers || []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) receiverMap[p.id] = p.full_name ?? ''; });
       }
       const rows = (data as Array<ReceivingRecord & { product?: { product_name: string }; received_by?: string | null }>).map((r) => ({
@@ -315,6 +401,17 @@ export default function PurchaseOrderDetail() {
         // reconcile a lost response, so locked retries use the frozen request.
         request = await receiveIntent.beginIntent(lockedRequest);
       } else {
+        // Defence in depth behind the route-currency guard. `receive_po_items`
+        // resolves the affected PO from the submitted po_item_ids alone, so a
+        // payload built from another PO's lines silently books goods against
+        // that PO. Refuse rather than submit when what is on screen does not
+        // belong to the PO in the address bar.
+        const foreignLine = items.find((item) => item.purchase_order_id !== id);
+        if (foreignLine || (po && po.id !== id)) {
+          toast('error', 'This purchase order is still loading. Refresh the page before receiving items.');
+          return;
+        }
+
         const itemsPayload = items
           .filter((item) => parseFloat(receiveItems[item.id]?.qty || '0') > 0)
           .map((item) => {
