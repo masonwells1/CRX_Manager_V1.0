@@ -20,6 +20,29 @@ function dollarQuoteDelimiter(text, index) {
   return text[cursor] === '$' ? text.slice(index, cursor + 1) : null;
 }
 
+// PostgreSQL block comments can nest. Keep one implementation for every
+// scanner below so a comment cannot change statement boundaries in one path
+// while being treated as SQL in another.
+function skipBlockComment(text, start) {
+  let depth = 1;
+  let cursor = start + 2;
+  while (cursor < text.length) {
+    if (text[cursor] === '/' && text[cursor + 1] === '*') {
+      depth += 1;
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === '*' && text[cursor + 1] === '/') {
+      depth -= 1;
+      cursor += 2;
+      if (depth === 0) return cursor;
+      continue;
+    }
+    cursor += 1;
+  }
+  return null;
+}
+
 function skipTrivia(text, start) {
   let cursor = start;
   while (cursor < text.length) {
@@ -30,9 +53,9 @@ function skipTrivia(text, start) {
       continue;
     }
     if (text[cursor] === '/' && text[cursor + 1] === '*') {
-      const end = text.indexOf('*/', cursor + 2);
-      if (end === -1) return null;
-      cursor = end + 2;
+      const next = skipBlockComment(text, cursor);
+      if (next === null) return null;
+      cursor = next;
       continue;
     }
     break;
@@ -68,9 +91,9 @@ function consumeParenthesized(text, start) {
     if (text[cursor] === '-' && text[cursor + 1] === '-') {
       cursor += 2; while (cursor < text.length && text[cursor] !== '\n' && text[cursor] !== '\r') cursor += 1;
     } else if (text[cursor] === '/' && text[cursor + 1] === '*') {
-      const end = text.indexOf('*/', cursor + 2);
-      if (end === -1) return null;
-      cursor = end + 1;
+      const next = skipBlockComment(text, cursor);
+      if (next === null) return null;
+      cursor = next - 1;
     } else if (text[cursor] === "'") {
       cursor += 1;
       while (cursor < text.length) {
@@ -122,10 +145,10 @@ function maskComments(text) {
       cursor -= 1;
     } else if (text[cursor] === '/' && text[cursor + 1] === '*') {
       const start = cursor;
-      const end = text.indexOf('*/', cursor + 2);
-      if (end === -1) return null;
-      for (let index = start; index <= end + 1; index += 1) chars[index] = ' ';
-      cursor = end + 1;
+      const next = skipBlockComment(text, cursor);
+      if (next === null) return null;
+      for (let index = start; index < next; index += 1) chars[index] = ' ';
+      cursor = next - 1;
     }
   }
   return chars.join('');
@@ -136,9 +159,9 @@ export function statementEnd(text, start) {
     if (text[cursor] === '-' && text[cursor + 1] === '-') {
       cursor += 2; while (cursor < text.length && text[cursor] !== '\n' && text[cursor] !== '\r') cursor += 1;
     } else if (text[cursor] === '/' && text[cursor + 1] === '*') {
-      const end = text.indexOf('*/', cursor + 2);
-      if (end === -1) return null;
-      cursor = end + 1;
+      const next = skipBlockComment(text, cursor);
+      if (next === null) return null;
+      cursor = next - 1;
     } else if (text[cursor] === "'") {
       cursor += 1;
       while (cursor < text.length) {

@@ -32,3 +32,16 @@ test('keeps quoted semicolons and Unicode dollar tags out of routine boundaries'
     ['x;y', 'x;y'],
   );
 });
+
+test('captures routine declarations and ACLs separated by nested PostgreSQL comments', () => {
+  const result = routineReferencesIn(`
+    CREATE /* outer ; /* nested ; */ still outer */ FUNCTION public.nested_comment() RETURNS void LANGUAGE sql AS $$ SELECT; $$;
+    REVOKE /* outer /* nested */ still outer */ EXECUTE ON FUNCTION public.nested_comment() FROM anon;
+  `);
+
+  assert.equal(result.error, null);
+  assert.deepEqual(
+    result.entries.flatMap(({ routines }) => routines.map(({ key }) => key)),
+    ['nested_comment', 'nested_comment'],
+  );
+});
