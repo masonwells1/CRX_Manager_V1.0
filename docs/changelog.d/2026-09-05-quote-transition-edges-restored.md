@@ -36,10 +36,10 @@ parentheses for one opening.
 ### Rejected — `.claude/agents/compliance-reviewer.md`, markdownlint MD022
 
 Style nitpick, declined. `markdownlint` is not configured or run anywhere in this repository, so the
-rule is the reviewer's own linter rather than a project gate. All eleven `### CHECK n` headings in
-that file are followed directly by their content; CHECK 10 is the file's consistent style, not an
-outlier. The comment's prose also misreads its own tool output — it asks for a blank line *before*
-the heading, while the attached MD022 detail reports `Below`, and line 87 is already blank.
+rule is the reviewer's own linter rather than a project gate. CHECK 10 deliberately has a prose
+lead-in rather than an immediate bullet, and the file already has the blank lines MD022 expects both
+before and after that heading. The comment's prose also misreads its own tool output — it asks for a
+blank line *before* the heading while the attached MD022 detail reports `Below`.
 
 ## Verification
 

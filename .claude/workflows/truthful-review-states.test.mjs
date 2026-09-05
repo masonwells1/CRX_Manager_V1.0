@@ -296,7 +296,7 @@ for (const workflow of ['./overnight-bug-hunt.js', './money-inventory-hunt.js'])
     './whole-codebase-audit.js',
     async (_prompt, options) => {
       if (options.label === 'audit:db-security') {
-        return { dimension: 'db-security', summary: 'Reviewed the current policy.', findings: [finding] }
+        return { executionStatus: 'VERIFIED', evidenceSummary: 'Read the current policy source.', dimension: 'db-security', summary: 'Reviewed the current policy.', findings: [finding] }
       }
       if (options.label?.startsWith('verify:')) {
         return {
@@ -334,7 +334,7 @@ for (const revisedSeverity of [undefined, 'CRITICAL']) {
     './whole-codebase-audit.js',
     async (_prompt, options) => {
       if (options.label === 'audit:db-security') {
-        return { dimension: 'db-security', summary: 'Reviewed the current policy.', findings: [finding] }
+        return { executionStatus: 'VERIFIED', evidenceSummary: 'Read the current policy source.', dimension: 'db-security', summary: 'Reviewed the current policy.', findings: [finding] }
       }
       if (options.label?.startsWith('verify:')) {
         return {
@@ -386,6 +386,95 @@ for (const args of [{ only: 'db-security' }, { only: [] }, JSON.stringify({ only
   assert.equal(result.clean, false)
   assert.equal(result.dimensionsRun.length, 0)
   assert.equal(result.blocked.length, 1)
+}
+
+{
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') return null
+      throw new Error(`A missing finder must not dispatch a verifier: ${options.label}`)
+    },
+    { only: ['db-security'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED', 'missing whole-audit finder output must block')
+  assert.equal(result.complete, false)
+  assert.equal(result.clean, false)
+  assert.equal(result.confirmed.length, 0)
+  assert.equal(result.refuted.length, 0)
+  assert.equal(result.unverified.length, 0)
+  assert.equal(result.blocked.length, 1)
+  assert.equal(result.blocked[0].dimension, 'db-security')
+}
+
+{
+  const partialFinding = {
+    title: 'Partial audit defect',
+    severity: 'HIGH',
+    area: 'RLS',
+    file: 'supabase/migrations/example.sql:10',
+    evidence: 'The policy appears to permit a row outside the current user scope.',
+    impact: 'A user might read another account row.',
+    recommendation: 'Re-run with live policy evidence available.',
+    confidence: 'medium',
+  }
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') {
+        return {
+          executionStatus: 'BLOCKED',
+          evidenceSummary: 'Repository source was read, but the live database was unavailable.',
+          dimension: 'db-security',
+          summary: 'Partial evidence only.',
+          findings: [partialFinding],
+        }
+      }
+      throw new Error(`A blocked finder must not dispatch a verifier: ${options.label}`)
+    },
+    { only: ['db-security'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED')
+  assert.equal(result.clean, false)
+  assert.equal(result.blocked.length, 1)
+  assert.equal(result.unverified.length, 1, 'partial finder evidence must remain visible')
+  assert.equal(result.unverified[0].title, partialFinding.title)
+  assert.equal(result.unverified[0].status, 'UNVERIFIED')
+}
+
+{
+  const malformedFinding = {
+    title: 'Evidence-free audit defect',
+    severity: 'HIGH',
+    area: 'RLS',
+    file: 'supabase/migrations/example.sql:10',
+    impact: 'A user might read another account row.',
+    recommendation: 'Supply concrete evidence before verification.',
+    confidence: 'low',
+  }
+  const { result } = await executeWorkflow(
+    './whole-codebase-audit.js',
+    async (_prompt, options) => {
+      if (options.label === 'audit:db-security') {
+        return {
+          executionStatus: 'VERIFIED',
+          evidenceSummary: 'Read the current policy source.',
+          dimension: 'db-security',
+          summary: 'A finder returned one incomplete finding.',
+          findings: [malformedFinding],
+        }
+      }
+      throw new Error(`An incomplete finding must not dispatch a verifier: ${options.label}`)
+    },
+    { only: ['db-security'] }
+  )
+
+  assert.equal(result.overallStatus, 'BLOCKED')
+  assert.equal(result.blocked.length, 0)
+  assert.equal(result.unverified.length, 1, 'malformed findings must remain visible and block')
+  assert.match(result.unverified[0].reason, /omitted required evidence fields/)
 }
 
 {

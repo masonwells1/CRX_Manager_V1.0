@@ -42,7 +42,7 @@ The database trigger `_enforce_quote_status_transition()` is authoritative. With
 Three qualifications, all enforced in that same trigger:
 
 - A no-op update (`OLD.status = NEW.status`) is always allowed.
-- `_is_admin_override()` bypasses the edge table entirely.
+- `_is_admin_override()` returns before both the edge table and the `closed_short` active-job condition, so an explicit admin override bypasses both.
 - `closed_short` has an additional safety condition: it is refused with `BOOKING_HAS_ACTIVE_JOBS` while any non-deleted job on the quote is `scheduled` or `in_progress`.
 
 `save_quote()` carries its own transition map that is a deliberate strict *subset* of the trigger's

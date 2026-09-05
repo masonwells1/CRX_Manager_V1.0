@@ -19,6 +19,7 @@ const PREAMBLE = [
   'It is a production agricultural-retail ERP. New money storage uses bigint cents. Existing PostgreSQL numeric-dollar storage is not an approved exception until exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified. The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 7 Edge Functions; treat any count as a lead to confirm live, never a fact.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database. The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql" or "supabase list tables"). Live project id is rhyzpcqhnizqbxphqdkr. You MAY run read-only SQL (SELECT, pg_catalog, information_schema) to ground every finding against the live DB.',
+  'EVIDENCE STATUS: Return executionStatus=BLOCKED if any required repo or live-DB source is unavailable. An empty findings array may be VERIFIED only after the requested sources ran; summarize them concretely in evidenceSummary.',
   '',
   'HARD RULES (do not violate):',
   '- READ-ONLY. NEVER call apply_migration. NEVER run mutating SQL (no INSERT/UPDATE/DELETE/DDL). SELECT and introspection only.',
@@ -33,6 +34,8 @@ const FINDINGS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    executionStatus: { type: 'string', enum: ['VERIFIED', 'BLOCKED'] },
+    evidenceSummary: { type: 'string', description: 'Concrete files/queries checked, or the exact required-source blocker.' },
     dimension: { type: 'string' },
     summary: { type: 'string', description: 'One short paragraph: what you checked and the overall health of this dimension.' },
     findings: {
@@ -54,7 +57,7 @@ const FINDINGS_SCHEMA = {
       },
     },
   },
-  required: ['dimension', 'summary', 'findings'],
+  required: ['executionStatus', 'evidenceSummary', 'dimension', 'summary', 'findings'],
 }
 
 const VERDICT_SCHEMA = {
@@ -67,6 +70,34 @@ const VERDICT_SCHEMA = {
     verifiedAgainst: { type: 'string', description: 'Exactly what you checked — the read-only SQL you ran, or the file:line you read.' },
   },
   required: ['status', 'revisedSeverity', 'reasoning', 'verifiedAgainst'],
+}
+
+const REQUIRED_FINDING_FIELDS = ['title', 'severity', 'area', 'file', 'evidence', 'impact', 'recommendation', 'confidence']
+const FINDING_SEVERITIES = ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW']
+const FINDING_CONFIDENCES = ['high', 'medium', 'low']
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isCompleteReview(review) {
+  return Boolean(
+    review
+      && review.executionStatus === 'VERIFIED'
+      && isNonEmptyString(review.evidenceSummary)
+      && isNonEmptyString(review.dimension)
+      && isNonEmptyString(review.summary)
+      && Array.isArray(review.findings)
+  )
+}
+
+function isCompleteFinding(finding) {
+  return Boolean(
+    finding
+      && REQUIRED_FINDING_FIELDS.every((field) => isNonEmptyString(finding[field]))
+      && FINDING_SEVERITIES.includes(finding.severity)
+      && FINDING_CONFIDENCES.includes(finding.confidence)
+  )
 }
 
 function normalizeVerdict(verdict) {
@@ -230,9 +261,37 @@ const results = await pipeline(
       phase: 'Audit',
       schema: FINDINGS_SCHEMA,
     }),
-  (review, d) =>
-    parallel(
-      ((review && review.findings) || []).map((f) => () =>
+  (review, d) => {
+    if (!isCompleteReview(review)) {
+      const blockedReason = review?.executionStatus === 'BLOCKED'
+        ? `Finder reported blocked evidence: ${review.evidenceSummary || review.summary || 'unspecified blocker'}`
+        : 'Finder returned no VERIFIED evidence status or omitted evidence/findings/summary.'
+      const partialFindings = Array.isArray(review?.findings)
+        ? review.findings.map((f) => ({
+            ...f,
+            dimension: d.key,
+            status: 'UNVERIFIED',
+            reason: `${blockedReason} Partial finding preserved without adversarial verification.`,
+          }))
+        : []
+      return [{
+        dimension: d.key,
+        status: 'BLOCKED',
+        reason: blockedReason,
+      }, ...partialFindings]
+    }
+
+    const malformed = review.findings
+      .filter((f) => !isCompleteFinding(f))
+      .map((f) => ({
+        ...f,
+        dimension: d.key,
+        status: 'UNVERIFIED',
+        reason: 'Finder omitted required evidence fields or returned an unsupported enum value.',
+      }))
+
+    return parallel(
+      review.findings.filter(isCompleteFinding).map((f) => () =>
         agent(verifyPrompt(d, f), {
           label: 'verify:' + d.key + ':' + f.severity,
           phase: 'Verify',
@@ -242,28 +301,31 @@ const results = await pipeline(
           return {
             ...f,
             dimension: d.key,
+            status: verdict.status,
             verdict,
             finalSeverity: verdict.status === 'VERIFIED' ? verdict.revisedSeverity : f.severity,
           }
         })
       )
-    )
+    ).then((verified) => [...verified, ...malformed])
+  }
 )
 
-const all = results.flat().filter(Boolean)
-const confirmed = all.filter((f) => f.verdict.status === 'VERIFIED')
-const refuted = all.filter((f) => f.verdict.status === 'REFUTED')
-const unverified = all.filter((f) => f.verdict.status === 'UNVERIFIED')
-const blocked = UNKNOWN_ONLY.map((key) => ({
-  dimension: key,
+const selectionBlocked = UNKNOWN_ONLY.map((key) => ({
+  dimension: String(key),
   status: 'BLOCKED',
   reason: `Unknown requested audit dimension: ${String(key)}`,
 }))
-if (INVALID_ONLY) blocked.push({
+if (INVALID_ONLY) selectionBlocked.push({
   dimension: 'only',
   status: 'BLOCKED',
   reason: 'Invalid audit selection: args.only must be an array.',
 })
+const all = [...selectionBlocked, ...results.flat().filter(Boolean)]
+const confirmed = all.filter((f) => f.status === 'VERIFIED')
+const refuted = all.filter((f) => f.status === 'REFUTED')
+const unverified = all.filter((f) => f.status === 'UNVERIFIED')
+const blocked = all.filter((f) => f.status === 'BLOCKED')
 const overallStatus = blocked.length || unverified.length ? 'BLOCKED' : 'VERIFIED'
 
 const order = { BLOCKER: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }

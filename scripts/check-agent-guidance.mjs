@@ -166,8 +166,8 @@ record(
   "QA reference points to the real E2E directory and is reachable from routed guidance",
 );
 record(
-  /Audit the 7 Edge Functions in supabase\/functions \(create-user, epa-lookup,/.test(wholeCodebaseAudit)
-    && /Hunt EDGE FUNCTIONS \(7 in supabase\/functions: create-user, epa-lookup,/.test(lifecycleAuditPrompts[1]),
+  /Audit the 7 Edge Functions in supabase\/functions \(create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage\)/.test(wholeCodebaseAudit)
+    && /Hunt EDGE FUNCTIONS \(7 in supabase\/functions: create-user, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage\)/.test(lifecycleAuditPrompts[1]),
   "whole-codebase and overnight edge-function audits include epa-lookup",
 );
 record(
