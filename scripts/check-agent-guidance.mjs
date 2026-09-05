@@ -35,8 +35,9 @@ const safeDevelopmentRules = readChecked("docs/workflows/SAFE_DEVELOPMENT_RULES.
 const quoteToDelivery = readChecked("docs/workflows/QUOTE_TO_DELIVERY.md");
 const qaTesting = readChecked("docs/reference/qa-testing.md");
 const agentGuardrails = readChecked("docs/reference/agent-guardrails.md");
+const wholeCodebaseAudit = readChecked(".claude/workflows/whole-codebase-audit.js");
 const lifecycleAuditPrompts = [
-  readChecked(".claude/workflows/whole-codebase-audit.js"),
+  wholeCodebaseAudit,
   readChecked(".claude/workflows/overnight-bug-hunt.js"),
   readChecked(".claude/workflows/money-inventory-hunt.js"),
 ];
@@ -143,8 +144,20 @@ record(
   "every lifecycle audit compares all nine entities with live CHECK constraints",
 );
 record(
+  /enum: \['VERIFIED', 'REFUTED', 'UNVERIFIED'\]/.test(wholeCodebaseAudit)
+    && /Uncertainty is UNVERIFIED, never REFUTED or FALSE_POSITIVE/.test(wholeCodebaseAudit)
+    && /unverified: unverified\.length/.test(wholeCodebaseAudit),
+  "whole-codebase audit preserves incomplete evidence as UNVERIFIED",
+);
+record(
   /closed_by_application/.test(quoteToDelivery) && /closed_short/.test(quoteToDelivery),
   "quote workflow documents every live terminal status",
+);
+record(
+  /_enforce_quote_status_transition\(\)` is authoritative/.test(quoteToDelivery)
+    && /`draft` \| `sent`, `cancelled`/.test(quoteToDelivery)
+    && /\*\*cancelled\*\*: Quote was cancelled/.test(quoteToDelivery),
+  "quote workflow preserves the authoritative transition map and terminal descriptions",
 );
 record(/under `tests\/e2e\/`/.test(qaTesting), "QA reference points to the real E2E directory");
 record(
@@ -155,6 +168,7 @@ record(
   /\.claude\/commands\|skills\|hooks\|workflows\|agents\|settings\.json/.test(agentGuardrails),
   "ledger guardrail lists every Claude agent-surface directory",
 );
+record(/`… \\\| sl`/.test(agentGuardrails), "agent-guardrails table escapes its shell-pipe example");
 record(/DECISION_LOG\.md[\s\S]*settled design choice[\s\S]*KNOWN_ISSUES\.md[\s\S]*problem is new/i.test(codingGuidelines), "every code change checks settled decisions and known issues");
 record(/^Read this before any multi-file, data, money, security, permission, production, migration, or customer-facing change\./m.test(safeDevelopmentRules), "safe-development trigger matches the lean routing table");
 record(/mergeStateStatus[\s\S]*known-stale protection sub-resource/i.test(shipWorkflow), "ship workflow uses behavioral PR mergeability evidence");

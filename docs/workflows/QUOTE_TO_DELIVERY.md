@@ -28,6 +28,17 @@ There is also a **Quick Delivery** shortcut that creates an order + delivery + d
 
 ### Status transitions
 Allowed values: `draft`, `sent`, `revised`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short`.
+
+The database trigger `_enforce_quote_status_transition()` is authoritative. Without an explicit admin-override workflow, it permits:
+
+| From | Allowed next status |
+|------|---------------------|
+| `draft` | `sent`, `cancelled` |
+| `sent` | `revised`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` |
+| `revised` | `sent`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` |
+| `accepted` | `sent` through the guarded revert workflow |
+| `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` | Terminal; no ordinary outgoing transition |
+
 - **draft**: Initial state. Can be edited freely.
 - **sent**: Quote was sent to the customer. A `quote_versions` snapshot is created.
 - **closed_by_application**: Terminal planned quote fulfilled through application jobs rather than converted to a chemical-sale order.
@@ -36,6 +47,7 @@ Allowed values: `draft`, `sent`, `revised`, `accepted`, `declined`, `expired`, `
 - **accepted**: Customer accepted. The `is_planned` flag can reserve inventory via holds.
 - **declined**: Customer said no.
 - **expired**: Past the `expires_at` date.
+- **cancelled**: Quote was cancelled before fulfillment.
 
 ### Key RPC
 - `save_quote()` — atomic save of header + sections + items in one transaction

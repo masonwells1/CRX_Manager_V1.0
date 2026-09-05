@@ -228,8 +228,8 @@ try {
 
 console.log("── log-session — derived changelog entry ─────────────────────────");
 console.log(entry);
-console.log("── mechanical counts (compare to docs/reference; update those docs");
-console.log("   through the documentation workflow if drifted) ─────────────────────");
+console.log("── mechanical counts ─────────────────────────────────────────────────");
+console.log("   Compare to docs/reference; update those docs through the documentation workflow if drifted.");
 console.log(`   pages (src/pages/*.tsx):            ${pageCount === null ? "(src/pages unreadable)" : pageCount}`);
 console.log(`   migrations (supabase/migrations):   ${migCount === null ? "(dir unreadable)" : migCount}`);
 console.log("───────────────────────────────────────────────────────────────────");

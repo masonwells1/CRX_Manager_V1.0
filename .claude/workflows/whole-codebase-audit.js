@@ -61,12 +61,39 @@ const VERDICT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    isReal: { type: 'boolean', description: 'true ONLY if independently confirmed with concrete evidence.' },
-    revisedSeverity: { type: 'string', enum: ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW', 'FALSE_POSITIVE'] },
+    status: { type: 'string', enum: ['VERIFIED', 'REFUTED', 'UNVERIFIED'], description: 'Use UNVERIFIED when access, tools, or evidence are incomplete.' },
+    revisedSeverity: { type: 'string', enum: ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW', 'FALSE_POSITIVE', 'UNVERIFIED'] },
     reasoning: { type: 'string' },
     verifiedAgainst: { type: 'string', description: 'Exactly what you checked — the read-only SQL you ran, or the file:line you read.' },
   },
-  required: ['isReal', 'revisedSeverity', 'reasoning', 'verifiedAgainst'],
+  required: ['status', 'revisedSeverity', 'reasoning', 'verifiedAgainst'],
+}
+
+function normalizeVerdict(verdict) {
+  const valid = verdict
+    && ['VERIFIED', 'REFUTED', 'UNVERIFIED'].includes(verdict.status)
+    && typeof verdict.reasoning === 'string'
+    && verdict.reasoning.trim()
+    && typeof verdict.verifiedAgainst === 'string'
+    && verdict.verifiedAgainst.trim()
+    && !(verdict.status === 'VERIFIED' && ['FALSE_POSITIVE', 'UNVERIFIED'].includes(verdict.revisedSeverity))
+    && !(verdict.status === 'REFUTED' && verdict.revisedSeverity !== 'FALSE_POSITIVE')
+    && !(verdict.status === 'UNVERIFIED' && verdict.revisedSeverity !== 'UNVERIFIED')
+
+  if (!valid) {
+    return {
+      status: 'UNVERIFIED',
+      revisedSeverity: 'UNVERIFIED',
+      reasoning: 'Verifier returned no complete, internally consistent evidence verdict.',
+      verifiedAgainst: 'No complete verifier evidence returned.',
+      isReal: null,
+    }
+  }
+
+  return {
+    ...verdict,
+    isReal: verdict.status === 'VERIFIED' ? true : verdict.status === 'REFUTED' ? false : null,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +173,7 @@ function verifyPrompt(d, f) {
   return [
     PREAMBLE,
     '',
-    'ADVERSARIAL VERIFICATION. A prior audit agent (dimension: ' + d.key + ') reported the finding below. Your job is to REFUTE it. Default to isReal=false unless you can independently confirm it with hard evidence.',
+    'ADVERSARIAL VERIFICATION. A prior audit agent (dimension: ' + d.key + ') reported the finding below. Challenge it against current evidence. REFUTED requires concrete counter-evidence; missing or inconclusive evidence is UNVERIFIED.',
     '',
     'FINDING:',
     '- Title: ' + f.title,
@@ -161,9 +188,9 @@ function verifyPrompt(d, f) {
     '2. Is it already mitigated elsewhere — a trigger, an RLS policy, a PreToolUse hook, a deployed-vs-disk difference, or a documented ACCEPTED exception in AGENTS.md or a workflow/reference file it routes?',
     '3. Is the severity calibrated correctly?',
     '',
-    'Set isReal=true ONLY if you confirmed it with concrete evidence. Use revisedSeverity=FALSE_POSITIVE if refuted. In verifiedAgainst, state exactly what you ran or read.',
+    'Return status=VERIFIED only with concrete confirming evidence. Return REFUTED + revisedSeverity=FALSE_POSITIVE only with concrete counter-evidence. Return UNVERIFIED + revisedSeverity=UNVERIFIED when access, tools, or evidence are incomplete. In verifiedAgainst, state exactly what you ran or read.',
     '',
-    'IMPORTANT: You MUST finish by returning your verdict via the StructuredOutput tool — never end with prose only. If you are still uncertain after checking, still return a verdict with isReal=false and revisedSeverity=FALSE_POSITIVE rather than stopping.',
+    'IMPORTANT: You MUST finish by returning your verdict via the StructuredOutput tool — never end with prose only. Uncertainty is UNVERIFIED, never REFUTED or FALSE_POSITIVE.',
   ].join('\n')
 }
 
@@ -188,19 +215,23 @@ const results = await pipeline(
           label: 'verify:' + d.key + ':' + f.severity,
           phase: 'Verify',
           schema: VERDICT_SCHEMA,
-        }).then((v) => ({
-          ...f,
-          dimension: d.key,
-          verdict: v,
-          finalSeverity: v && v.revisedSeverity && v.revisedSeverity !== 'FALSE_POSITIVE' ? v.revisedSeverity : f.severity,
-        }))
+        }).then((v) => {
+          const verdict = normalizeVerdict(v)
+          return {
+            ...f,
+            dimension: d.key,
+            verdict,
+            finalSeverity: verdict.status === 'VERIFIED' ? verdict.revisedSeverity : f.severity,
+          }
+        })
       )
     )
 )
 
 const all = results.flat().filter(Boolean)
-const confirmed = all.filter((f) => f.verdict && f.verdict.isReal)
-const refuted = all.filter((f) => !f.verdict || !f.verdict.isReal)
+const confirmed = all.filter((f) => f.verdict.status === 'VERIFIED')
+const refuted = all.filter((f) => f.verdict.status === 'REFUTED')
+const unverified = all.filter((f) => f.verdict.status === 'UNVERIFIED')
 
 const order = { BLOCKER: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
 confirmed.sort((a, b) => (order[a.finalSeverity] ?? 9) - (order[b.finalSeverity] ?? 9))
@@ -225,14 +256,17 @@ log(
     bySeverity.LOW +
     ' LOW), ' +
     refuted.length +
-    ' refuted, across ' +
+    ' refuted, ' +
+    unverified.length +
+    ' unverified, across ' +
     SELECTED.length +
     ' dimensions.'
 )
 
 return {
   dimensionsRun: SELECTED.map((d) => d.key),
-  counts: { confirmed: confirmed.length, refuted: refuted.length, bySeverity },
+  counts: { confirmed: confirmed.length, refuted: refuted.length, unverified: unverified.length, bySeverity },
   confirmed,
   refuted,
+  unverified,
 }
