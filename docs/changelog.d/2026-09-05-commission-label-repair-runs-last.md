@@ -6,8 +6,9 @@ plan is filename-ordered (`scripts/list-post-baseline-migrations.mjs`) and halts
 file, so at that position one posted payment before rollout would have stopped
 `20260905020200_refuse_stale_commission_payment_recipient.sql` — the row lock plus latest-recipient
 check that blocks a payout to a stale recipient — and the September 30 date fixes behind it from ever
-installing. Both files were individually correct; the defect was purely the sequence. Live read-only
-on 2026-09-05: 0 settlement events, 8 payments, 0 posted — it applied cleanly that day by luck.
+installing. Both files were individually correct; the defect was purely the sequence. A live read-only
+check on 2026-09-05 found 0 settlement events and 0 posted payments, so the settled-data preflight
+would have passed that day. No migration was applied.
 
 **Fix: reorder, not skip.**
 
