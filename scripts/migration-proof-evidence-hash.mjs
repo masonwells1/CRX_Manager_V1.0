@@ -66,6 +66,7 @@ function collectPaths(root, stateDir) {
     // produced the verdict. A proof cannot survive either changing mid-review.
     'scripts/write-codex-push-proof.mjs',
     'scripts/migration-security-definer-guard.mjs',
+    'scripts/migration-routine-references.mjs',
     'scripts/migration-proof-evidence-hash.mjs',
     'scripts/migration-proof-reviewer-launch.mjs',
     normal(path.join(relativeStateDir, 'applied-migrations.json')),
@@ -82,7 +83,14 @@ function collectPaths(root, stateDir) {
   return { rootReal, paths: [...inputs].sort() };
 }
 
-export function captureMigrationProofEvidence({ projectDir, stateDir = path.join(projectDir, '.claude', 'session-state') }) {
+export function captureMigrationProofEvidence({
+  projectDir,
+  stateDir = path.join(projectDir, '.claude', 'session-state'),
+  protectedBaseCommit = null,
+}) {
+  if (protectedBaseCommit !== null && !/^[a-f0-9]{40}$/i.test(protectedBaseCommit)) {
+    throw new Error('migration-proof protected base must be a full commit SHA');
+  }
   const root = path.resolve(projectDir);
   const resolvedStateDir = path.resolve(stateDir);
   const { rootReal, paths } = collectPaths(root, resolvedStateDir);
@@ -93,7 +101,9 @@ export function captureMigrationProofEvidence({ projectDir, stateDir = path.join
     files.set(relative, stat ? readFileSync(full) : null);
   }
   const hash = createHash('sha256');
-  framed(hash, 'CRX_MIGRATION_PROOF_EVIDENCE_INPUTS_V2');
+  framed(hash, 'CRX_MIGRATION_PROOF_EVIDENCE_INPUTS_V3');
+  framed(hash, 'protected-origin-main');
+  framed(hash, protectedBaseCommit || 'UNBOUND');
   for (const relative of paths) {
     const bytes = files.get(relative);
     framed(hash, relative);
@@ -103,6 +113,7 @@ export function captureMigrationProofEvidence({ projectDir, stateDir = path.join
   const evidenceHash = hash.digest('hex');
   return {
     evidenceHash,
+    protectedBaseCommit,
     has(relative) { return files.get(normal(relative)) !== null && files.has(normal(relative)); },
     text(relative) {
       const bytes = files.get(normal(relative));

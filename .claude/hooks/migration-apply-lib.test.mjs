@@ -190,13 +190,22 @@ function stampFixtureReviewerPolicy(root) {
   if (ref.status !== 0) throw new Error(`fixture reviewer policy ref unavailable: ${ref.stderr}`);
   const reviewerPolicyCommit = ref.stdout.trim();
   const stateDir = path.join(root, ".claude", "session-state");
-  for (const file of [
+  const proofFiles = [
     path.join(stateDir, `migration-review-${SAFE}.json`),
     path.join(stateDir, `codex-review-mig-${SAFE}.json`),
-  ]) {
+  ];
+  for (const file of proofFiles) {
     if (!existsSync(file)) continue;
     const proof = JSON.parse(readFileSync(file, "utf8"));
     proof.reviewerPolicyCommit = reviewerPolicyCommit;
+    proof.protectedBaseCommit = reviewerPolicyCommit;
+    writeFileSync(file, JSON.stringify(proof), "utf8");
+  }
+  const evidenceHash = migrationProofEvidenceHash({ projectDir: root, stateDir, protectedBaseCommit: reviewerPolicyCommit });
+  for (const file of proofFiles) {
+    if (!existsSync(file)) continue;
+    const proof = JSON.parse(readFileSync(file, "utf8"));
+    proof.evidenceHash = evidenceHash;
     writeFileSync(file, JSON.stringify(proof), "utf8");
   }
 }
@@ -216,6 +225,25 @@ const evaluate = (root, over = {}) => evaluateMigrationApply({
 
 // ── BASELINE: the fixture must ALLOW, or every deny below proves nothing ─────
 allows(evaluate(fixture()), "known-good interactive fixture is allowed");
+
+// A policy ref alone is not enough: the reviewed checkout must actually contain
+// that exact protected base. Otherwise source history and schema evidence can be
+// stale while the proof merely records a newer origin/main charter.
+{
+  const root = fixture();
+  makeOriginMain(root);
+  const git = (...args) => spawnSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-C", root, ...args], { encoding: "utf8", env: cleanEnv() });
+  const oldHead = git("rev-parse", "HEAD").stdout.trim();
+  ok(git("commit", "--allow-empty", "-m", "advance protected base").status === 0, "fixture advances protected origin/main");
+  ok(git("update-ref", "refs/remotes/origin/main", "HEAD").status === 0, "fixture origin/main advances beyond candidate");
+  ok(git("checkout", "-q", "-b", "stale-candidate", oldHead).status === 0, "fixture candidate remains behind protected base");
+  stampFixtureReviewerPolicy(root);
+  denies(
+    evaluate(root, { reviewerPolicyCommit: undefined }),
+    "not evidence-bound",
+    "a proof made from a candidate that does not contain protected origin/main is refused",
+  );
+}
 
 // The MCP apply hook calls evaluateMigrationApply() directly. A revoke inside a
 // savepoint may be rolled back while this source-only gate still sees it, so the

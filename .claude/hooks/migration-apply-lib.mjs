@@ -898,17 +898,26 @@ export function evaluateMigrationApply({
   let evidenceMismatchedProof = null;
   let activeEvidenceHash = null;
   let protectedReviewerPolicyCommit = reviewerPolicyCommit ?? null;
-  try {
-    activeEvidenceHash = migrationProofEvidenceHash({
-      projectDir: activeProofRoot,
-      stateDir: activeProofStateDir,
-    });
-  } catch { /* unreadable active evidence is never a valid proof */ }
   if (reviewerPolicyCommit === undefined) try {
     protectedReviewerPolicyCommit = execFileSync(fixedGitExecutable(), ["--no-replace-objects", "rev-parse", "origin/main^{commit}"], {
       cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], env: protectedGitEnv(),
     }).trim();
   } catch { /* an unverifiable protected policy never authorizes an apply */ }
+  const requiresProtectedBase = reviewerPolicyCommit !== null;
+  let protectedBaseIsCurrent = !requiresProtectedBase;
+  if (requiresProtectedBase && /^[a-f0-9]{40}$/i.test(String(protectedReviewerPolicyCommit || ""))) try {
+    execFileSync(fixedGitExecutable(), ["--no-replace-objects", "merge-base", "--is-ancestor", protectedReviewerPolicyCommit, "HEAD"], {
+      cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], env: protectedGitEnv(),
+    });
+    protectedBaseIsCurrent = true;
+  } catch { /* a stale or detached candidate never authorizes a proof */ }
+  try {
+    activeEvidenceHash = migrationProofEvidenceHash({
+      projectDir: activeProofRoot,
+      stateDir: activeProofStateDir,
+      protectedBaseCommit: protectedReviewerPolicyCommit,
+    });
+  } catch { /* unreadable active evidence is never a valid proof */ }
   const freshCleanProofNames = [];
   for (const dir of authorizedProofDirs) {
     if (validProof) break;
@@ -978,7 +987,9 @@ export function evaluateMigrationApply({
             // is authorization, not a reason to accept stale evidence.
             const expectedEvidenceHash = activeEvidenceHash;
             if (!data.evidenceHash || !expectedEvidenceHash || data.evidenceHash !== expectedEvidenceHash
-              || (reviewerPolicyCommit !== null && (!protectedReviewerPolicyCommit || data.reviewerPolicyCommit !== protectedReviewerPolicyCommit))) {
+              || (requiresProtectedBase && (!protectedBaseIsCurrent || !protectedReviewerPolicyCommit
+                || data.reviewerPolicyCommit !== protectedReviewerPolicyCommit
+                || data.protectedBaseCommit !== protectedReviewerPolicyCommit))) {
               if (!evidenceMismatchedProof) evidenceMismatchedProof = { file: f, dir, data, expectedEvidenceHash };
               continue;
             }

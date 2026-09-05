@@ -114,9 +114,10 @@ const BENIGN_SQL = "CREATE TABLE widgets (id bigint primary key); ALTER TABLE wi
 const DESTRUCTIVE_SQL = "DROP TABLE customers;";
 const MIG = "20990101000000_test_mig";
 const CRX_PROJECT = "rhyzpcqhnizqbxphqdkr";
-const proofEvidenceHash = (stateDir) => migrationProofEvidenceHash({
+const proofEvidenceHash = (stateDir, protectedBaseCommit = null) => migrationProofEvidenceHash({
   projectDir: path.resolve(stateDir, "..", ".."),
   stateDir,
+  protectedBaseCommit,
 });
 
 function fixtureReviewerPolicyCommit(stateDir) {
@@ -129,14 +130,16 @@ function fixtureReviewerPolicyCommit(stateDir) {
 }
 
 function writeProof(stateDir, query, extra = {}) {
+  const protectedBaseCommit = fixtureReviewerPolicyCommit(stateDir);
   writeFileSync(path.join(stateDir, `migration-review-${MIG}.json`), JSON.stringify({
     migration: MIG,
     timestamp: new Date().toISOString(),
     reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
     findings: "clean",
     queryHash: sha(query),
-    evidenceHash: proofEvidenceHash(stateDir),
-    reviewerPolicyCommit: fixtureReviewerPolicyCommit(stateDir),
+    evidenceHash: proofEvidenceHash(stateDir, protectedBaseCommit),
+    reviewerPolicyCommit: protectedBaseCommit,
+    protectedBaseCommit,
     ...extra,
   }));
 }
@@ -287,6 +290,11 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r), "reviewer proof bound to a different protected policy commit is denied");
     writeProof(stateDir, BENIGN_SQL);
 
+    writeProof(stateDir, BENIGN_SQL, { protectedBaseCommit: undefined });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "reviewer proof missing its protected base commit is denied");
+    writeProof(stateDir, BENIGN_SQL);
+
     writeProof(stateDir, BENIGN_SQL, { queryHash: undefined });
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "interactive proof without queryHash is denied");
@@ -336,15 +344,19 @@ function armAutopilot(stateDir, hoursFromNow) {
     // Helper: write the separate content-bound Codex proof (R4 mechanism).
     const codexProofPath = path.join(stateDir, `codex-review-mig-${MIG}.json`);
     const writeCodexProof = (query, overrides = {}) =>
-      writeFileSync(codexProofPath, JSON.stringify({
+      (() => {
+        const protectedBaseCommit = fixtureReviewerPolicyCommit(stateDir);
+        return writeFileSync(codexProofPath, JSON.stringify({
         queryHash: sha(query),
         verdict: "clean",
         model: "gpt-5.6-sol",
         reasoning_effort: "high",
         timestamp: new Date().toISOString(),
-        evidenceHash: proofEvidenceHash(stateDir),
+        evidenceHash: proofEvidenceHash(stateDir, protectedBaseCommit),
+        protectedBaseCommit,
         ...overrides,
       }));
+      })();
 
     // 6b. Codex proof with a NEEDS-WORK verdict → DENIED (Codex R4 P1: a run
     //     that happened but did not pass must not unlock the apply).

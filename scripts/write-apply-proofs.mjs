@@ -42,6 +42,7 @@ import {
 import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.mjs';
 import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
+import { routineReferencesIn } from './migration-routine-references.mjs';
 
 const rawArgs = process.argv.slice(2);
 
@@ -117,6 +118,11 @@ function trustedReviewerPolicy() {
   });
   const commit = String(base.stdout || '').trim();
   if (base.status !== 0 || !/^[a-f0-9]{40}$/i.test(commit)) throw new Error('could not resolve protected origin/main reviewer policy');
+  const containsBase = spawnSync(git, ['--no-replace-objects', 'merge-base', '--is-ancestor', commit, 'HEAD'], {
+    cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
+    env: protectedGitEnv(),
+  });
+  if (containsBase.status !== 0) throw new Error(`candidate HEAD does not contain protected origin/main (${commit})`);
   const charters = new Map();
   for (const reviewer of REQUIRED_REVIEWERS) {
     const relative = `.claude/agents/${reviewer}.md`;
@@ -184,62 +190,6 @@ function extractTsDeclaration(ts, name) {
   return alias ? alias[0] : null;
 }
 
-const ROUTINE_REFERENCE_ANY = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?|ALTER\s+|(?:GRANT|REVOKE)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+)(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
-
-function routineNamesIn(sql) {
-  return [...new Set([...sql.matchAll(ROUTINE_REFERENCE_ANY)].map((match) => match[1]))];
-}
-
-function statementEnd(text, start) {
-  for (let i = start; i < text.length; i += 1) {
-    if (text[i] === '-' && text[i + 1] === '-') {
-      i += 2; while (i < text.length && text[i] !== '\n' && text[i] !== '\r') i += 1;
-    } else if (text[i] === '/' && text[i + 1] === '*') {
-      const end = text.indexOf('*/', i + 2);
-      if (end === -1) return text.length;
-      i = end + 1;
-    } else if (text[i] === "'") {
-      i += 1;
-      while (i < text.length) {
-        if (text[i] === "'" && text[i + 1] === "'") { i += 2; continue; }
-        if (text[i] === "'") break;
-        i += 1;
-      }
-    } else if (text[i] === '$') {
-      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text.slice(i));
-      if (tag) {
-        const close = text.indexOf(tag[0], i + tag[0].length);
-        if (close === -1) return text.length;
-        i = close + tag[0].length - 1;
-      }
-    } else if (text[i] === '"') {
-      i += 1;
-      while (i < text.length) {
-        if (text[i] === '"' && text[i + 1] === '"') { i += 2; continue; }
-        if (text[i] === '"') break;
-        i += 1;
-      }
-    } else if (text[i] === ';') return i;
-  }
-  return text.length;
-}
-
-function sqlStatements(text) {
-  const statements = []; let start = 0;
-  while (start < text.length) {
-    const end = statementEnd(text, start);
-    statements.push(text.slice(start, end + Number(end < text.length)));
-    start = end + 1;
-  }
-  return statements;
-}
-
-function routineHistoryRegexFor(name) {
-  return new RegExp(
-    `\\b(?:CREATE\\s+(?:OR\\s+REPLACE\\s+)?|ALTER\\s+|(?:GRANT|REVOKE)\\s+(?:ALL(?:\\s+PRIVILEGES)?|EXECUTE)\\s+ON\\s+)(?:FUNCTION|PROCEDURE|ROUTINE)\\s+(?:"?public"?\\s*\\.\\s*)?"?${name}"?\\s*\\(`,
-    'i',
-  );
-}
 for (const name of names) {
   if (path.isAbsolute(name) || path.basename(name) !== name || name.includes('..') || /[\\/\0]/.test(name)) {
     console.error(`invalid migration basename: ${JSON.stringify(name)} — pass one migration name without a path or .sql suffix.`);
@@ -324,19 +274,24 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
   // function: an ALTER SECURITY DEFINER or a direct ACL change can affect a
   // routine whose body, search_path, and prior grant history live in older
   // migrations. Include CREATE, ALTER, and routine ACL targets.
-  const fnNames = routineNamesIn(sql);
-  if (fnNames.length) {
+  const routineReferences = routineReferencesIn(sql);
+  if (routineReferences.error) throw new Error(routineReferences.error);
+  const routines = [...new Map(routineReferences.entries.flatMap(({ routines: found }) => found).map((routine) => [routine.key, routine])).values()];
+  if (routines.length) {
     const history = [];
     for (const file of snapshot.paths('supabase/migrations/', (relative) => relative.endsWith('.sql'))) {
       const text = snapshot.text(file);
-      for (const name of fnNames) {
-        const matchingStatements = sqlStatements(text).filter((statement) => routineHistoryRegexFor(name).test(statement));
-        for (const statement of matchingStatements) history.push(`${path.basename(file)}:\n${statement.trim()}`);
+      const sourceReferences = routineReferencesIn(text);
+      if (sourceReferences.error) throw new Error(`${file}: ${sourceReferences.error}`);
+      for (const { statement, routines: sourceRoutines } of sourceReferences.entries) {
+        if (sourceRoutines.some((routine) => routines.some((candidate) => candidate.key === routine.key))) {
+          history.push(`${path.basename(file)}:\n${statement.trim()}`);
+        }
       }
     }
     parts.push(
       '',
-      `───────── ROUTINE DEFINITION AND ACL HISTORY of ${fnNames.join(', ')} ─────────`,
+      `───────── ROUTINE DEFINITION AND ACL HISTORY of ${routines.map((routine) => routine.display).join(', ')} ─────────`,
       'Every source-level CREATE, ALTER, GRANT, and REVOKE statement for these routine names',
       'across supabase/migrations, in filename order. Use this to inspect existing routine',
       'bodies, search_path changes, overloads, and ACL history. It is source history, NOT a',
@@ -351,9 +306,10 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
   // helper reachable only from an already-authenticated SECDEF wrapper, but it can only
   // tell them apart if the bundle shows the grants AND the calling function's guard
   // prologue. State facts only — never a suggested verdict.
-  if (fnNames.length) {
+  if (routines.length) {
     const sections = [];
-    for (const name of fnNames) {
+    for (const routine of routines) {
+      const name = routine.key;
       const lines = [];
       // (a) Grants declared by the migration under review.
       const grants = sql.split(/\r?\n/).filter((l) =>
@@ -574,13 +530,21 @@ for (const name of names) {
   }
   const migRelPath = path.posix.join('supabase', 'migrations', `${name}.sql`);
 
+  let reviewerPolicy;
+  try { reviewerPolicy = trustedReviewerPolicy(); }
+  catch (error) {
+    console.error(`ERROR: could not load or bind protected reviewer policy: ${error.message || error}. NO proofs minted.`);
+    exitCode = 1;
+    continue;
+  }
+
   // Capture every reviewer input before constructing the prompt. The child sees
   // bytes from this immutable in-memory snapshot only; symlinks/reparse points
   // and paths outside the checkout are rejected before any content is exposed.
   let snapshot;
   let evidence;
   try {
-    snapshot = captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir });
+    snapshot = captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir, protectedBaseCommit: reviewerPolicy.commit });
     if (!snapshot.has(migRelPath)) throw new Error(`migration ${migRelPath} is not a regular captured migration file`);
     evidence = buildEmbeddedEvidence(migRelPath, snapshot);
   } catch (error) {
@@ -590,13 +554,6 @@ for (const name of names) {
   }
   const evidenceHash = snapshot.evidenceHash;
   const queryHash = hashSql(snapshot.text(migRelPath));
-  let reviewerPolicy;
-  try { reviewerPolicy = trustedReviewerPolicy(); }
-  catch (error) {
-    console.error(`ERROR: could not load protected reviewer policy: ${error.message || error}. NO proofs minted.`);
-    exitCode = 1;
-    continue;
-  }
   const missingAnonRevokes = securityDefinerMissingAnonRevokes(snapshot.text(migRelPath));
   if (missingAnonRevokes.length) {
     console.error(`ERROR: ${name} defines SECURITY DEFINER function(s) without an explicit REVOKE from anon: ${missingAnonRevokes.join(', ')}. ` +
@@ -605,7 +562,7 @@ for (const name of names) {
     continue;
   }
   try {
-    if (captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir }).evidenceHash !== evidenceHash) {
+    if (captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir, protectedBaseCommit: reviewerPolicy.commit }).evidenceHash !== evidenceHash) {
       console.error(`review evidence changed while its snapshot was being built for ${name}. NO proofs minted; re-run on a stable checkout.`);
       exitCode = 1;
       continue;
@@ -638,7 +595,7 @@ for (const name of names) {
   // input manifest: if any rendered candidate source or prompt-builder byte
   // moved mid-review, the reviewers judged something this proof would not describe.
   let evidenceHashAfter = null;
-  try { evidenceHashAfter = captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir }).evidenceHash; }
+  try { evidenceHashAfter = captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir, protectedBaseCommit: reviewerPolicy.commit }).evidenceHash; }
   catch { /* fail closed below */ }
   if (evidenceHashAfter !== evidenceHash) {
     console.error(`the review evidence bundle for ${name} changed while the reviews were running (schema registry, ledger, migration-history, prior declarations or types moved). NO proofs minted; re-run so both reviewers judge one stable bundle.`);
@@ -656,6 +613,7 @@ for (const name of names) {
     reviewers: REQUIRED_REVIEWERS,
     reviewerEvidence: 'each reviewer charter executed by the trusted Codex CLI with a terminal machine verdict; see codex-review-mig-*-capture.txt',
     reviewerPolicyCommit: reviewerPolicy.commit,
+    protectedBaseCommit: reviewerPolicy.commit,
     findings: 'clean',
     queryHash,
     // sha256 of the single evidence bundle both reviewers received, re-verified unchanged
@@ -669,6 +627,7 @@ for (const name of names) {
     JSON.stringify({
       queryHash,
       evidenceHash,
+      protectedBaseCommit: reviewerPolicy.commit,
       verdict: 'clean',
       model: CODEX_REVIEW_MODEL,
       reasoning_effort: CODEX_REVIEW_EFFORT,
