@@ -78,8 +78,12 @@ vi.mock('../lib/db', async () => ({
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ profile: { id: 'admin-1', role: 'admin', full_name: 'Admin' } }) }));
 vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({
-    getKey: () => `customer-stale-key-${customerIdempotencyState.generation}`,
+  useIdempotencyKey: (_operation: string, _userId: string, intentScope = '') => ({
+    // The mock MUST honour intentScope. A scope-blind stub returns one key for every
+    // customer, so a regression test for "customer B must not inherit A's key" would
+    // pass against a completely unscoped hook — it would assert a property of the mock
+    // rather than of the page (aliased-reset sweep, 2026-09-05).
+    getKey: () => `customer-stale-key-${intentScope}-${customerIdempotencyState.generation}`,
     resetKey: mockResetIdempotencyKey,
   }),
 }));
@@ -240,7 +244,7 @@ describe('CustomerDetail stale whole-record save', () => {
 
     expect(await screen.findByRole('button', { name: 'Reload Customer' })).toBeInTheDocument();
     expect(mockRpc).toHaveBeenLastCalledWith('save_customer', expect.objectContaining({
-      p_idempotency_key: 'customer-stale-key-0',
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
     }));
     expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Reload Customer' }));
@@ -248,7 +252,7 @@ describe('CustomerDetail stale whole-record save', () => {
     expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
     await waitFor(() => expect(mockRpc).toHaveBeenLastCalledWith('save_customer', expect.objectContaining({
-      p_idempotency_key: 'customer-stale-key-1',
+      p_idempotency_key: 'customer-stale-key-customer-1-1',
     })));
   });
 
@@ -362,7 +366,7 @@ describe('CustomerDetail stale whole-record save', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
-      p_idempotency_key: 'customer-stale-key-0',
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
     })));
     expect(
       mockResetIdempotencyKey,
@@ -380,7 +384,7 @@ describe('CustomerDetail stale whole-record save', () => {
     expect(
       new Set(saveKeys),
       'every retry of an unresolved save must carry the SAME key, or the server writes the customer twice',
-    ).toEqual(new Set(['customer-stale-key-0']));
+    ).toEqual(new Set(['customer-stale-key-customer-1-0']));
   });
 
   it('reloads the financials tab when the route switches customers without remounting the page', async () => {
@@ -415,6 +419,68 @@ describe('CustomerDetail stale whole-record save', () => {
 
     expect(await screen.findByText('$5,678.00')).toBeInTheDocument();
     expect(screen.queryByText('$1,234.00')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The cost of F1 retention, paid for by scoping — raised by the gpt-5.6-sol review of
+   * this change (LOW) and fixed here rather than deferred.
+   *
+   * Keeping the key across an ambiguous reply is the whole point of F1. But this page
+   * does NOT remount when only `:id` changes, so an UNSCOPED retained key would be
+   * handed to the next customer: B's save would travel under A's unresolved key, the
+   * server would fingerprint a different payload against it and answer
+   * IDEMPOTENCY_PAYLOAD_CONFLICT. It fails closed — no cross-customer write — but B
+   * gets a conflict dialog it did nothing to earn.
+   *
+   * The key is now scoped by route id, which is sound HERE because the RPC targets the
+   * route record (`p_customer_id: (isNew ? null : id)`).
+   */
+  it('does not hand customer B the unresolved key minted for customer A', async () => {
+    // A's save comes back ambiguous — no error, empty payload — so A's key is RETAINED.
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 3, crops: [], default_commission_split: null }
+      : { id: 'customer-1', farm_name: 'Original Farm', row_version: 1, crops: [], default_commission_split: null });
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'customers') return query({ data: [], error: null });
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+      const settle = async (): Promise<QueryResult> => ({ data: record(requested), error: null });
+      chain.maybeSingle = () => settle();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => settle().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => settle().catch(reject);
+      chain.finally = (callback: () => void) => settle().finally(callback);
+      return chain;
+    });
+
+    renderDetailWithCustomerSwitch();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited A' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
+    })));
+    expect(mockResetIdempotencyKey, "A's key must survive its ambiguous reply").not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Jump to customer 2'));
+    await waitFor(() => expect(screen.queryByDisplayValue('Edited A')).not.toBeInTheDocument());
+
+    fireEvent.change(await screen.findByDisplayValue('Second Farm'), { target: { value: 'Edited B' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_customer');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const lastSave = [...mockRpc.mock.calls].reverse().find(([name]) => name === 'save_customer');
+    expect(
+      (lastSave?.[1] as { p_idempotency_key: string }).p_idempotency_key,
+      "customer B must mint its OWN key — inheriting A's unresolved key earns B a conflict dialog it did not cause",
+    ).toBe('customer-stale-key-customer-2-0');
   });
 
   it('ignores a slow snapshot for the previous customer that lands after the route moved on', async () => {

@@ -73,6 +73,25 @@ route-changed branch — now correct, but still reported by a scanner that reads
 see an inline emptiness test. It stays pinned so the scan stays honest, and its fix is separately
 bound by a test that fails if the `data != null` check is deleted.
 
+## Review round 1 — the `gpt-5.6-sol` finding, fixed rather than deferred
+
+The exact-SHA `gpt-5.6-sol` review of `4ab55579` returned CLEAN with one LOW: `save_customer`'s key
+carried no per-customer scope, while this change makes it OUTLIVE an ambiguous reply. Since the page
+does not remount when only `:id` changes, customer B could inherit customer A's unresolved key; the
+server fingerprints a different payload against it and answers `IDEMPOTENCY_PAYLOAD_CONFLICT`, so it
+fails closed with no cross-customer write — but B gets a conflict dialog it did nothing to earn.
+
+Accepted and fixed: the key is now scoped by route id. That is sound *here specifically* because the
+RPC targets the route record (`p_customer_id: (isNew ? null : id)`) — route scope binds the record,
+not the payload, so it is not a general answer. **Residual, stated rather than implied:** two
+consecutive CREATES both scope to `'new'`, so an unresolved create can still be inherited by the
+next one. Binding that needs PR #535's `fingerprintIntentPayload`.
+
+**The regression test required fixing a second mock.** `CustomerDetail.test.tsx` stubbed
+`useIdempotencyKey` scope-blind — one key for every customer — so an A→B test would have passed
+against a completely unscoped hook, asserting a property of the mock rather than of the page. The
+mock now honours `intentScope`, and the new test was confirmed to fail without the scope.
+
 ## Found, NOT fixed — reported rather than silently widened
 
 An independent scan of ALL 274 reset call sites (literal, aliased and `idem.resetKey()` member

@@ -102,10 +102,21 @@ export default function CustomerDetail() {
   const { profile } = useAuth();
   const { runWithBelowCostApproval } = useBelowCostApproval();
   const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
+  // Scoped by the ROUTE ID because F1 makes this key OUTLIVE an ambiguous reply, and
+  // this page does not remount when only `:id` changes (no `<x>/:id` route in
+  // src/App.tsx carries a `key` prop). Unscoped, customer B would inherit customer A's
+  // unresolved key and its save would come back IDEMPOTENCY_PAYLOAD_CONFLICT — the
+  // server fails closed, so no cross-customer write, but B gets a conflict dialog it
+  // did nothing to earn. Route-id scoping is sound HERE specifically because the RPC
+  // targets the route record: it sends `p_customer_id: (isNew ? null : id)`.
+  //
+  // RESIDUAL, stated rather than implied: two consecutive CREATES both scope to 'new',
+  // so an unresolved create can still be inherited by the next one. Binding that needs
+  // the request payload (PR #535's fingerprintIntentPayload), not the URL.
   const {
     getKey: getSaveCustomerIdempotencyKey,
     resetKey: resetSaveCustomerIdempotencyKey,
-  } = useIdempotencyKey('save_customer', profile?.id || '');
+  } = useIdempotencyKey('save_customer', profile?.id || '', id ?? '');
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>(() => makeBlankCustomer(profile?.id));
