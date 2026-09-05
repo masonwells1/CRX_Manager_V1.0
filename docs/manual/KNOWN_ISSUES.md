@@ -280,6 +280,53 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## PARKED 2026-09-05 (WRITTEN, REVIEWED, PROVEN — NOT APPLIED) — invoice numbers take their year from UTC, so the last six hours of 31 December are numbered into the next year
+
+**Migration file:** `supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql`.
+**Deadline: 31 December 2026** — months out, which is why this is parked rather than rushed.
+**Mason applies it himself.** Nothing about it has been applied, and the standing hands-free
+migration allowance was deliberately not used.
+
+`public.next_invoice_number()` builds the year in an invoice number (`CS-2026-0007`) from a bare
+`now()`. The live database clock is UTC; the business runs America/Chicago. December is CST (UTC-6),
+so **midnight UTC on 1 January is 6 pm Chicago on 31 December** — for those six hours UTC has already
+rolled over and the business day has not. Verified read-only on live 2026-09-05: `2027-01-01 02:00
+UTC` is `2026-12-31 20:00` Chicago, UTC year 2027, Chicago year 2026.
+
+Not a cosmetic mislabel. The same `v_year` feeds the advisory lock key, the `MAX()` scan for the
+highest number issued that year, and the number returned — so an invoice written that evening is
+numbered off a **different counter** than the rest of the evening's work, in a year whose sequence
+has not started, and it collides with the real first invoices of 2027. Same class as `20260904160000`
+and `20260904180000` (both applied live 2026-09-04) and the settled ~2026-07-10 rule: a bare
+`now()`/`CURRENT_DATE` on live is a bug wherever a business date is meant.
+
+**Before applying, two items go stale on their own** (both recorded in
+`docs/changelog.d/2026-09-05-next-invoice-number-year-chicago.md`):
+
+- `.claude/session-state/applied-migrations.json` was captured 2026-08-27 and misses every 2026-09
+  apply. The apply guard hard-refuses above 24h, which is correct, but a *partial* refresh would
+  misclassify three already-applied migrations as pending. Refresh it from a live ledger read first.
+- The `20260905090000` stamp was the correct next slot on 2026-09-05 (effective high-water by NAME
+  was `20260904180000`), but a parked file's timestamp perishes. Re-derive it immediately before
+  apply and expect renumbering.
+
+Also re-run `scripts/smoke/prove-next-invoice-number-year-chicago.mjs` (31/31 at parking time, real
+PostgreSQL 17 container) and confirm the live body still matches pin `b53499d0…` — a drifted body
+must be re-reviewed, and the migration refuses it anyway.
+
+**Two review findings worth carrying forward as general lessons**, both from this file:
+
+- `md5(pg_proc.prosrc)` hashes only the text *between* the `$fn$` markers. Parameter names, types and
+  **defaults live outside it**, so a body pin matches perfectly while the declaration silently loses a
+  `DEFAULT`. PostgreSQL then refuses `CREATE OR REPLACE` ("cannot remove parameter defaults"), and the
+  repair it suggests — `DROP FUNCTION` — would restore the default `EXECUTE TO PUBLIC`. Pin
+  `pronargs`/`pronargdefaults`/`pg_get_expr(proargdefaults, 0)` alongside the body hash.
+- A **NULL `pg_proc.proacl` is the most open state, not the safest** — it means default privileges,
+  and the default for a function is `EXECUTE TO PUBLIC`. Any check shaped `IF acl IS NOT NULL AND …`
+  skips exactly the case it exists to catch. Use `has_function_privilege(role, oid, 'EXECUTE')`, which
+  also resolves EXECUTE reaching `anon` indirectly through role membership — invisible to a text match
+  on the ACL string.
+
 ## OPEN 2026-09-04 — the migration drift reviewer's overload check can only see AUTHORED history, and its sanctioned runner can never show it the live catalog
 
 **Deferred deliberately by Mason on 2026-09-04**, split out of PR #594 so the uncontested

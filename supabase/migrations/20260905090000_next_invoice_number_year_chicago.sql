@@ -194,6 +194,7 @@ DECLARE
   v_secdef boolean;
   v_config text;
   v_acl    text;
+  v_oid    oid;
   v_count  integer;
   v_nargs        integer;
   v_ndefaults    integer;
@@ -211,8 +212,8 @@ BEGIN
   END IF;
 
   SELECT md5(p.prosrc), length(p.prosrc), position(chr(13) in p.prosrc),
-         p.prosecdef, p.proconfig::text, COALESCE(p.proacl::text, '(null)')
-    INTO v_md5, v_len, v_cr, v_secdef, v_config, v_acl
+         p.prosecdef, p.proconfig::text, p.proacl::text, p.oid
+    INTO v_md5, v_len, v_cr, v_secdef, v_config, v_acl, v_oid
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'next_invoice_number';
@@ -256,12 +257,40 @@ BEGIN
   -- SECURITY DEFINER number generator — that is the B4/B9 anon-EXECUTE class, and it
   -- is invisible to a prosrc hash, so this is the only check that can catch an
   -- out-of-band grant added since the review.
-  IF v_acl IS NOT NULL AND (
-       v_acl LIKE '%anon=%' OR v_acl LIKE '%authenticated=%' OR v_acl LIKE '{=X/%' OR v_acl LIKE '%,=X/%'
-     ) THEN
+  -- A NULL proacl is NOT "no grants". It means DEFAULT privileges, and the default for
+  -- a function is EXECUTE TO PUBLIC — so NULL is the MOST open state, not the safest.
+  -- An earlier draft guarded this block with `v_acl IS NOT NULL`, which skipped the
+  -- whole assertion in exactly that case (and, because the SELECT coalesced NULL to the
+  -- string '(null)', the LIKE arms could never have matched it either). Rejected
+  -- explicitly now.
+  IF v_acl IS NULL THEN
     RAISE EXCEPTION
-      'next_invoice_number: EXECUTE is held by an application role or PUBLIC (%). Only postgres/service_role may hold it.',
-      v_acl;
+      'next_invoice_number: proacl is NULL, which means DEFAULT privileges — EXECUTE is held by PUBLIC. Revoke it from PUBLIC and grant deliberately before applying.';
+  END IF;
+
+  -- has_function_privilege resolves role MEMBERSHIP, so it also catches EXECUTE
+  -- reaching anon/authenticated INDIRECTLY through a role they belong to — which a text
+  -- match on the ACL string cannot see. to_regrole returns NULL instead of raising when
+  -- the role is absent, so a repo-only rebuild without Supabase's bootstrap roles still
+  -- passes.
+  IF to_regrole('anon') IS NOT NULL
+     AND has_function_privilege('anon', v_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION
+      'next_invoice_number: anon holds EXECUTE (acl %). Only postgres/service_role may hold it.', v_acl;
+  END IF;
+
+  IF to_regrole('authenticated') IS NOT NULL
+     AND has_function_privilege('authenticated', v_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION
+      'next_invoice_number: authenticated holds EXECUTE (acl %). Only postgres/service_role may hold it.', v_acl;
+  END IF;
+
+  -- Belt and braces: the literal PUBLIC forms in the ACL string ({=X/… and ,=X/…).
+  -- Redundant wherever anon/authenticated exist, and the only remaining signal on a
+  -- rebuild where they do not.
+  IF v_acl LIKE '{=X/%' OR v_acl LIKE '%,=X/%' THEN
+    RAISE EXCEPTION
+      'next_invoice_number: PUBLIC holds EXECUTE (%). Only postgres/service_role may hold it.', v_acl;
   END IF;
 
   -- Behavioural assertion, at an instant INSIDE the divergence window.

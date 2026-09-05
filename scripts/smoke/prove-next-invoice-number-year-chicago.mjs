@@ -147,7 +147,11 @@ CREATE SEQUENCE public.cm_invoice_number_seq;
 // came back green on a migration that could never have applied. A mock that
 // reproduces the bug under test proves nothing. Step 0 now asserts the setup
 // matches the live signature before anything else runs.
-function installLiveBody() {
+// `grants: false` reproduces a function that nobody ever revoked or granted on, so
+// pg_proc.proacl stays NULL. That is not "no privileges" — NULL means DEFAULT
+// privileges, and the default for a function is EXECUTE TO PUBLIC. Step 7 uses it to
+// prove the postflight refuses that state.
+function installLiveBody({ grants = true } = {}) {
   const sql = `
 CREATE OR REPLACE FUNCTION public.next_invoice_number(p_invoice_type text DEFAULT 'field_application'::text)
 RETURNS text
@@ -155,8 +159,8 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$${LIVE_BODY}$fn$;
-REVOKE ALL ON FUNCTION public.next_invoice_number(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO service_role;
+${grants ? `REVOKE ALL ON FUNCTION public.next_invoice_number(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO service_role;` : ""}
 
 -- invoices.invoice_number defaults through the function on live; reproducing that
 -- dependency means a DROP FUNCTION "repair" would fail here exactly as it would
@@ -301,6 +305,72 @@ $fn$;`));
   const chiOutside = psql(`SELECT extract(year FROM (${OUTSIDE} AT TIME ZONE 'America/Chicago')::date)::text`);
   ok(utcOutside === "2026" && chiOutside === "2026",
      `outside the window (23:30 UTC on 31 Dec) both agree on ${utcOutside} — the fix is narrow`);
+
+  console.log("\n7. The EXECUTE-privilege assertion actually FIRES (mutation test)");
+  // A guard nobody has watched refuse anything is not a proven guard. Codex found the
+  // first version of this assertion fail-open on a NULL ACL; these three mutations make
+  // the refusal observable instead of assumed.
+  installLiveBody();
+  ok(bodyMd5() === LIVE_MD5, "starting body restored to the reviewed live body (step 5 left a drifted one)");
+
+  // 7a — EXECUTE granted DIRECTLY to anon.
+  psqlFile(writeTmp("grant-anon.sql", `
+CREATE ROLE anon;
+GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO anon;`));
+  let anonRefused = false;
+  let anonMessage = "";
+  try {
+    psqlFile("/tmp/migration.sql");
+  } catch (error) {
+    anonRefused = true;
+    anonMessage = String(error.stderr || error.message || "");
+  }
+  ok(anonRefused, "the migration REFUSES to apply while anon holds EXECUTE directly");
+  ok(/anon holds EXECUTE/i.test(anonMessage), "the refusal names anon as the holder");
+  ok(bodyMd5() === LIVE_MD5, "the body is left untouched (transaction rolled back)");
+
+  // 7b — EXECUTE reaching anon INDIRECTLY through role membership. The ACL string
+  // never mentions anon, so the old text match could not have seen this at all.
+  psqlFile(writeTmp("grant-indirect.sql", `
+REVOKE EXECUTE ON FUNCTION public.next_invoice_number(text) FROM anon;
+CREATE ROLE reporting_reader;
+GRANT reporting_reader TO anon;
+GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO reporting_reader;`));
+  const indirectAcl = psql("SELECT proacl::text FROM pg_proc WHERE proname='next_invoice_number'");
+  ok(!/anon=/.test(indirectAcl),
+     `the ACL string does NOT mention anon (${indirectAcl}) — a text match would miss this`);
+  let indirectRefused = false;
+  let indirectMessage = "";
+  try {
+    psqlFile("/tmp/migration.sql");
+  } catch (error) {
+    indirectRefused = true;
+    indirectMessage = String(error.stderr || error.message || "");
+  }
+  ok(indirectRefused, "the migration REFUSES when anon reaches EXECUTE through role membership");
+  ok(/anon holds EXECUTE/i.test(indirectMessage), "the refusal still names anon");
+
+  // 7c — a NULL proacl. This is the exact state the earlier `v_acl IS NOT NULL` guard
+  // skipped, and it is the most open one PostgreSQL has.
+  psqlFile(writeTmp("null-acl.sql", `
+ALTER TABLE public.invoices ALTER COLUMN invoice_number DROP DEFAULT;
+DROP FUNCTION public.next_invoice_number(text);`));
+  installLiveBody({ grants: false });
+  const nullAcl = psql("SELECT COALESCE(proacl::text, '(NULL)') FROM pg_proc WHERE proname='next_invoice_number'");
+  ok(nullAcl === "(NULL)", "a function nobody granted on has a NULL ACL");
+  ok(psql("SELECT has_function_privilege('anon', p.oid, 'EXECUTE')::text FROM pg_proc p " +
+          "WHERE p.proname='next_invoice_number'") === "true",
+     "anon really CAN execute it in that state — NULL means EXECUTE TO PUBLIC, not 'no grants'");
+  let nullRefused = false;
+  let nullMessage = "";
+  try {
+    psqlFile("/tmp/migration.sql");
+  } catch (error) {
+    nullRefused = true;
+    nullMessage = String(error.stderr || error.message || "");
+  }
+  ok(nullRefused, "the migration REFUSES to apply against a NULL ACL");
+  ok(/proacl is NULL/i.test(nullMessage), "the refusal names the NULL ACL as the reason");
 
   console.log(`\n${failures === 0 ? "NEXT_INVOICE_NUMBER_YEAR_CHICAGO_PROOF_PASS" : `PROOF FAILED — ${failures} check(s)`}\n`);
 }

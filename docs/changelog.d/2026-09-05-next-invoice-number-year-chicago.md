@@ -66,7 +66,7 @@ md5 exactly before anything was written.
 
 ### Proof — `scripts/smoke/prove-next-invoice-number-year-chicago.mjs`
 
-Runs the real migration against a throwaway PostgreSQL 17 container. **15/15 checks pass**
+Runs the real migration against a throwaway PostgreSQL 17 container. **31/31 checks pass**
 (`NEXT_INVOICE_NUMBER_YEAR_CHICAGO_PROOF_PASS`):
 
 1. the reviewed body reproduces the live md5 — the pin is not fiction
@@ -120,7 +120,8 @@ The harness now (a) installs the function with the live default, (b) reproduces 
 `invoices.invoice_number` column default so a `DROP FUNCTION` repair would fail there exactly as on
 production, and (c) runs a **step 0** that asserts the setup's own signature equals the live one
 before any other check runs. It also now asserts the signature survives the re-emit and that a
-**zero-argument call still resolves**. 19/19 pass.
+**zero-argument call still resolves**. That took the suite from 15 checks to 19; the ACL mutation
+tests below took it to 31.
 
 ### Other review findings addressed
 
@@ -130,6 +131,31 @@ before any other check runs. It also now asserts the signature survives the re-e
   asserts the *security property*: no `anon`, no `authenticated`, no `PUBLIC` EXECUTE. That is both
   portable and the thing actually worth catching, since an out-of-band grant is invisible to a body
   hash.
+
+### The rebuild-portable ACL check was itself fail-open (Codex, exact-SHA review)
+
+The adversarial review of the frozen candidate found that the replacement assertion did not actually
+assert. Two compounding defects:
+
+1. It was guarded by `IF v_acl IS NOT NULL AND (…)`. A **NULL** `pg_proc.proacl` does not mean "nobody
+   has been granted anything" — it means **default privileges**, and PostgreSQL's default for a
+   function is `EXECUTE TO PUBLIC`. So the single most open state was the one state the check skipped.
+   (It could not have matched anyway: the query coalesced NULL to the literal string `'(null)'`, so
+   `v_acl IS NOT NULL` was always true and the `LIKE` arms simply never matched it.)
+2. Matching text in the ACL string cannot see EXECUTE that reaches `anon` **indirectly**, through
+   membership in some other role that holds it. The string never mentions `anon` at all.
+
+Both are now checked with `has_function_privilege('anon' | 'authenticated', oid, 'EXECUTE')`, which
+resolves role membership and NULL-ACL defaults the way PostgreSQL itself does, plus an explicit
+refusal on a NULL ACL. `to_regrole(...) IS NOT NULL` keeps the repo-only rebuild passing when those
+Supabase roles do not exist, so the portability fix above survives. The literal PUBLIC forms
+(`{=X/…`, `,=X/…`) are kept as a belt for that rebuild case.
+
+**Proven by mutation, not by reading.** Proof step 7 now grants EXECUTE to `anon` directly, then
+through an intermediate role, then drops the function and recreates it with no grants at all (a
+genuine NULL ACL), and watches the migration refuse all three — asserting in the indirect case that
+the ACL string does **not** contain `anon`, which is what makes the text match provably insufficient.
+It also confirms `anon` really can execute the function in the NULL-ACL state. **31/31 checks pass.**
 - **`.gitattributes` LF pin added** for this file. Every other md5-pinned migration carries one; on a
   Windows checkout with `core.autocrlf=true` an unpinned file is smudged to CRLF, the body PostgreSQL
   receives carries CR bytes, and the candidate hash can never match.
