@@ -1702,9 +1702,18 @@ export default function JobDetail() {
     // handler cannot double-fire — but two DIFFERENT handlers can overlap (Start Job in
     // flight, then Cancel Job), which is exactly that race. (Codex round 2, finding 2.)
     const generation = ++loadGenerationRef.current;
-    // Two halves, each load-bearing on its own. The ticket catches a superseded load of
-    // the SAME record (only call order separates those). The id binding catches a call
-    // issued from a stale closure after a route change, which carries a CURRENT ticket.
+    // The ticket carries this predicate: it catches a superseded load of the SAME record,
+    // where only call order separates the two runs in flight.
+    //
+    // The route clause is belt-and-braces and is NOT independently provable. An earlier
+    // version of this comment claimed it reddened the stale-handler test; that claim was
+    // wrong and has been retracted. Measured: removing this clause alone reddens nothing,
+    // and it still reddens nothing with the entry check above ALSO removed. The reason is
+    // structural — the layout effect writes loadGenerationRef and routeIdRef in the same
+    // commit, so a route change can never move one without the other, and the entry check
+    // rejects a stale-closure call before this predicate is ever consulted. Kept so the
+    // predicate stays correct if those two writes are ever decoupled; do not cite it as
+    // covered by a test.
     const isCurrentLoad = () => loadGenerationRef.current === generation
       && routeIdRef.current === startedForId;
     // Drop the baseline so the freshly-loaded form is re-adopted as clean once it

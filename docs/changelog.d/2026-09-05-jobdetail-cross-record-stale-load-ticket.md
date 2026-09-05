@@ -39,9 +39,10 @@ which job is on screen, so `fetchJob` also records the id it was **started for**
 against `routeIdRef`, updated by the mount effect on every id change. Two operands with
 genuinely independent sources, so the pair cannot collapse into a tautology.
 
-Each half is load-bearing on its own, verified by breaking them one at a time: dropping the
-`routeIdRef` clause reddens **only** the stale-handler-closure test; dropping the ticket clause
-reddens **only** the `A -> B -> A` test. Neither covers for the other.
+Each half was believed load-bearing on its own. **That claim was true when written and is false
+now** — see the corrected mutation table at the end of this entry. Later rounds added an entry
+check and a route epoch, and those made the post-await `routeIdRef` clause unprovable: it is
+retained as belt-and-braces, not as a tested guard.
 
 Bailing early also had to take ownership of two pieces of state the abandoned run used to
 settle on its way out, or the guard would have traded a data bug for a dead page:
@@ -66,10 +67,11 @@ stale closure.
 That last case is what proves the guard gates the **call** and not the record. The other three
 switch between DIFFERENT jobs, so all three stay green against an id-only guard in its strongest
 form — the loaded record's id compared to a ref updated synchronously on route change, two
-genuinely independent operands. Mutation-checked: that guard reddens **only** the `A -> B -> A`
-case. (The weaker id-only variant, comparing against `id` from `fetchJob`'s own closure, reddens
-three of the four — a superseded run closes over the OLD id, so it compares a stale value against
-itself and can never fire.)
+genuinely independent operands. Mutation-checked at the time: that guard reddened **only** the
+`A -> B -> A` case. **Superseded** — with the full round-2/3/4 guard stack in place it reddens
+**two** cases; see the corrected table below. (The weaker id-only variant, comparing against `id`
+from `fetchJob`'s own closure, reddens three of the four — a superseded run closes over the OLD
+id, so it compares a stale value against itself and can never fire.)
 
 Confirmed fail-first: against the unguarded source, tests 1 and 2 both fail with the production
 symptom — the heading renders the **stale** job's identity (`J-AAAA-1001`, `J-NEWNEW-9999`) in
@@ -158,6 +160,32 @@ Mutation-checked: neutering the epoch predicate to a constant `true` reddens **o
 edits job B and then lets A's cancel land, which is the sequence the review prescribed; the
 earlier stale-handler test could not catch it because it drives Start Job, the one lifecycle
 handler that does not clear `isDirty`.
+
+**Corrected mutation table — the whole table re-run after the epoch change.** Each round of this
+branch added a guard, and a new guard can make an older one unprovable, so every row was measured
+again against the final source rather than carried forward. Two rows recorded earlier had become
+false claims and are corrected here; the code comments that repeated them were rewritten.
+
+| # | Mutation | Tests reddened |
+|---|---|---|
+| M1 | drop the `routeIdRef` clause from `fetchJob`'s post-await predicate | **none — claim retracted** |
+| M2 | drop the ticket clause from that same predicate | `A -> B -> A`; newest-same-route-refetch (**two, not one**) |
+| M3 | remove the entry route check | stale-handler-closure |
+| M4 | remove the loading gate | hides-previous-editable-form |
+| M5 | ticket back to a plain read | newest-same-route-refetch |
+| M6 | `useLayoutEffect` back to `useEffect` | none (known harness limit, below) |
+| M7 | remove the post-await check entirely | four of eight |
+| M8 | epoch predicate neutered to `true` | dirty-protected-after-move |
+
+M1 is the row that had gone false. The post-await `routeIdRef` clause was genuinely load-bearing
+when it was the only route binding; the round-3 entry check now rejects a stale-closure call
+before that predicate is reached, so nothing gets far enough to exercise it. Two further
+mutations were run to confirm this is structural rather than a gap in the tests: removing the
+clause **and** the entry check together reddens exactly the same single test as removing the entry
+check alone, and stopping the layout effect from bumping the ticket does not make the clause
+provable either. The layout effect writes `loadGenerationRef` and `routeIdRef` in one commit, so
+a route change cannot move one without the other. The clause is kept as belt-and-braces against a
+future edit that separates those writes, and is now documented in the source as untested.
 
 Full gates on the final source: `npm run typecheck` clean, `npm run lint` clean, `npm run test`
 exit 0 under `pipefail` with 351 files passed / 4994 passed / 123 skipped and no `Errors` line,
