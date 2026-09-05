@@ -313,3 +313,63 @@ protects.
 Incidentally confirmed live in that same browser session: `RelatedNotes` throws
 `get_notes_for_entity returned no data` as an UNCAUGHT promise rejection, which is the separate
 pre-existing defect already filed rather than fixed here.
+
+## Review round 6 — the abandoned key, and the merge with #610
+
+### The finding
+
+The Codex GitHub App, reviewing head `d8bb7765a`, found the remaining half of the round-4/round-5
+fix. Both pages guarded the recovery so it could not release the WRONG scope's key after a route
+change — but the dialog still closed, and the originating record's key was then left in the hook's
+map with nothing pointing at it. Returning to that record replayed a key the server had already
+rejected on payload fingerprint, so the operator earned a second conflict dialog they had done
+nothing to cause. Self-healing on the next recovery, but only after that unearned failure.
+
+### The fix, and why it is conditional
+
+The dialog now records WHY it opened, not only which record opened it, because the two reasons have
+opposite safe directions once the route has moved on:
+
+- **`IDEMPOTENCY_PAYLOAD_CONFLICT`** — the server has already proven this key is bound to a
+  different payload. Replaying it can only ever produce the same rejection, so retiring it costs
+  nothing and clears the trap. Retiring is what the hook's own contract prescribes ("after the
+  server proves the key is bound to a different payload").
+- **`QUOTE_STALE_WRITE` / `CUSTOMER_STALE_WRITE` / `COMMISSION_SPLIT_CONFLICT`** — the opposite
+  case. That key may still be the replay handle for an EARLIER save whose response was lost; in
+  fact a stale-write refusal is exactly what an earlier silent commit looks like. Retiring it
+  would destroy the only means of learning that outcome, so it stays retained until its own record
+  is reloaded.
+
+Codex proposed a broader alternative for the round-1 QuoteBuilder thread — keying the retained key
+to a fingerprint of the complete save payload, so that editing a field after an ambiguous reply
+mints a new key instead of conflicting. That is declined deliberately: an ambiguous reply means the
+first write MAY have committed, and a payload-derived key would send the edited retry under a key
+the server cannot match to it, which is precisely the duplicate write F1 exists to prevent. The
+conflict dialog in that scenario is the system failing closed, not failing.
+
+Applied to both pages in the same commit, rather than to QuoteBuilder alone and CustomerDetail a
+round later, which is the mistake this PR has now made twice.
+
+### The merge with `main`
+
+`main` gained #610 while this branch was open — the QuoteBuilder route-switch fix for the
+async-load bug class this PR's investigation filed. The two changes touch the same file and the
+same flow, so the merge was resolved by content rather than by side:
+
+- `QuoteBuilder.tsx` merged without conflict. #610's `fetchQuote` now refuses to install a snapshot
+  once the route has left that quote, which strengthens this PR's recovery guard rather than
+  competing with it: the reload the recovery awaits can no longer install the wrong record.
+- `QuoteBuilder.test.tsx` conflicted on its import lines only, where both branches had added
+  helpers. Resolved as the union — `act`, `RouterProvider` and `createMemoryRouter` from #610,
+  `Link` from this branch — with both sides' tests retained and passing.
+
+### Verification
+
+The P1 thread on `JobDetail.billingHazard.test.tsx` reported 26 unhandled rejections and exit 1 for
+a specific four-file command. Re-running that exact command on the merged tree: 4 files, 103 tests,
+exit 0, no unhandled rejections and no `Errors` line. That finding was already resolved by the
+fixture seeding in the preceding commits; GitHub had carried the comment forward onto the new head
+because its anchor line still existed.
+
+Mutation-tested: forcing `payloadRejected` false fails the new assertion in BOTH pages' route-change
+recovery tests, and nothing else.

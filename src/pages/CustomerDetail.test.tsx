@@ -98,6 +98,9 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
     // rather than of the page (aliased-reset sweep, 2026-09-05).
     getKey: () => `customer-stale-key-${intentScope}-${customerIdempotencyState.generationFor(intentScope)}`,
     resetKey: () => mockResetIdempotencyKey(intentScope),
+    // Retires a NAMED scope rather than the rendered one, as the real hook does.
+    // Without this the page could not retire the key of a customer it has left.
+    resetKeyFor: (scopeValue: string) => mockResetIdempotencyKey(scopeValue),
   }),
 }));
 vi.mock('../hooks/useUnsavedChanges', () => ({ useUnsavedChanges: (dirty: boolean) => { dirtyStates.push(dirty); return { state: 'unblocked', reset: vi.fn(), proceed: vi.fn() }; } }));
@@ -507,7 +510,7 @@ describe('CustomerDetail stale whole-record save', () => {
    * Reload, retires B's key and strands A's rejected one — so returning to A replays
    * the rejected key and re-opens the same conflict.
    */
-  it('does not release customer B\'s key when A\'s conflict dialog is recovered after a route change', async () => {
+  it('retires customer A\'s rejected key, not B\'s, when A\'s conflict dialog is recovered after a route change', async () => {
     // A's save is REJECTED, so A's dialog opens and A's key is permanently unusable.
     mockRpc.mockResolvedValue({ data: null, error: { message: 'IDEMPOTENCY_PAYLOAD_CONFLICT' } });
 
@@ -546,6 +549,14 @@ describe('CustomerDetail stale whole-record save', () => {
       mockResetIdempotencyKey,
       "recovering A's conflict must not retire customer B's key — B never had an unresolved save",
     ).not.toHaveBeenCalledWith('customer-2');
+    // The other half: closing the dialog must not abandon A's key in the map. The
+    // server rejected it on payload fingerprint, so it can only ever be rejected
+    // again — leaving it would earn the operator a second unearned conflict the
+    // moment they returned to customer A.
+    expect(
+      mockResetIdempotencyKey,
+      "recovering A's conflict must retire A's own permanently rejected key",
+    ).toHaveBeenCalledWith('customer-1');
   });
 
   it('ignores a slow snapshot for the previous customer that lands after the route moved on', async () => {

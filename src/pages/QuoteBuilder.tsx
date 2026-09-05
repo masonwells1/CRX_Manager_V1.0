@@ -375,6 +375,7 @@ export default function QuoteBuilder() {
   const {
     getKey: getSaveQuoteIdempotencyKey,
     resetKey: resetSaveQuoteIdempotencyKey,
+    resetKeyFor: resetSaveQuoteIdempotencyKeyFor,
   } = useIdempotencyKey('save_quote', profile?.id || '', saveQuoteIntentScope);
   // Which scope produced the conflict the stale-save dialog is currently offering to
   // recover. Scoping the key made this necessary: the dialog stays open across a route
@@ -382,7 +383,9 @@ export default function QuoteBuilder() {
   // operator who navigates A -> B with A's dialog open and then clicks Reload would
   // release B's key and leave A's rejected one in place. Recorded at the moment the
   // conflict opens, checked before anything is released.
-  const staleSaveConflictScopeRef = useRef<string | null>(null);
+  // `payloadRejected` records WHY the dialog opened, because the two reasons have
+  // opposite safe directions once the route has moved on. See the recovery below.
+  const staleSaveConflictScopeRef = useRef<{ scope: string; payloadRejected: boolean } | null>(null);
   const [isPlanned, setIsPlanned] = useState(false);
   const [wasPlanned, setWasPlanned] = useState(false);
 
@@ -469,6 +472,24 @@ export default function QuoteBuilder() {
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const initialLoadGenerationRef = useRef(0);
   const [installedLoadGeneration, setInstalledLoadGeneration] = useState(0);
+  // Serial number for quote loads. App.tsx routes every /quotes/:id to this one
+  // element with no `key`, so navigating between two saved quotes re-runs the id
+  // effect WITHOUT remounting. A load whose serial is no longer current has been
+  // superseded — by a route change, or by a newer reload of the same quote — and
+  // describes a record this page is no longer showing, so it must install
+  // nothing: not the form, not quoteId, not the row-version token.
+  const quoteLoadSerialRef = useRef(0);
+  // The quote the URL currently names, captured during render so it is already
+  // correct for any effect or handler that runs on the new route. The serial
+  // above orders CALLS; this binds a call to a RECORD, and the two operands have
+  // genuinely independent sources (one from this component's own call order, one
+  // from the router). Both are needed: `fetchQuote` is also called from stale
+  // closures that survive a navigation — the stale-save reload and the
+  // post-conversion refetch — and such a call MINTS THE NEWEST SERIAL for the
+  // quote the operator already left, so a serial check alone would certify the
+  // stale snapshot as current instead of rejecting it.
+  const routeQuoteIdRef = useRef<string | null>(id ?? null);
+  routeQuoteIdRef.current = id ?? null;
   const blocker = useUnsavedChanges(isDirty);
 
   // Status-based guards
@@ -816,11 +837,26 @@ export default function QuoteBuilder() {
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
   const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
+    const loadSerial = ++quoteLoadSerialRef.current;
+    // Two independent halves; neither subsumes the other, and each has its own
+    // regression test. `supersededByNewerLoad` orders CALLS, so reopening the
+    // SAME quote twice still resolves to the newer call. `routeLeftThisQuote`
+    // binds this call to a RECORD, so a load started from a stale closure
+    // cannot install merely because it holds the newest serial.
+    //
+    // Re-checked after every await. A load that must not install returns false
+    // without touching form state, toasts, navigation or `loading` — whichever
+    // load is current owns all of those now.
+    const supersededByNewerLoad = () => quoteLoadSerialRef.current !== loadSerial;
+    const routeLeftThisQuote = () => routeQuoteIdRef.current !== quoteId;
+    const mustNotInstall = () => supersededByNewerLoad() || routeLeftThisQuote();
+
     const quoteRes = await supabase
       .from('quotes')
       .select('*, customer:customers(*)')
       .eq('id', quoteId)
       .maybeSingle();
+    if (mustNotInstall()) return false;
 
     if (quoteRes.error || !quoteRes.data) {
       if (quoteRes.error) {
@@ -845,6 +881,7 @@ export default function QuoteBuilder() {
         .eq('quote_id', quoteId)
         .order('sort_order'),
     ]);
+    if (mustNotInstall()) return false;
 
     // Build and validate the complete editable snapshot before changing any
     // form state. A failed Reload must never replace an operator's local work
@@ -862,6 +899,8 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('id', quoteId)
       .maybeSingle();
+    if (mustNotInstall()) return false;
+
     const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
     const stableVersion = initialRowVersion === finalRowVersion
       && (initialRowVersion !== null || !requireStableRowVersion);
@@ -946,6 +985,8 @@ export default function QuoteBuilder() {
       .eq('quote_id', quoteId)
       .is('deleted_at', null)
       .not('quote_section_id', 'is', null);
+    if (mustNotInstall()) return false;
+
     if (sectionJobsError) {
       Sentry.captureException(sectionJobsError, { tags: { source: 'read', action: 'load_quote_section_jobs' } });
       toast('warning', 'Quote loaded, but scheduled-job badges could not be refreshed.');
@@ -962,6 +1003,8 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
+    if (mustNotInstall()) return false;
+
     if (versionsError) {
       Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
       toast('warning', 'Quote loaded, but version history could not be refreshed.');
@@ -993,11 +1036,24 @@ export default function QuoteBuilder() {
         // open, releasing here would retire the wrong scope's key and strand the
         // rejected one; leaving it retained is the safe direction, because a
         // retained key can still replay.
-        if (
-          staleSaveConflictScopeRef.current === null
-          || staleSaveConflictScopeRef.current === saveQuoteIntentScope
-        ) {
+        const conflictOrigin = staleSaveConflictScopeRef.current;
+        if (conflictOrigin === null || conflictOrigin.scope === saveQuoteIntentScope) {
           resetSaveQuoteIdempotencyKey();
+          staleSaveConflictScopeRef.current = null;
+        } else if (conflictOrigin.payloadRejected) {
+          // The route moved on, so this reload installed a DIFFERENT quote and the
+          // rule above correctly refuses to release the current scope's key. But the
+          // dialog closes here, so the originating quote's key must not be abandoned
+          // in the map: returning to that quote would replay it and earn the same
+          // conflict a second time.
+          //
+          // Safe only for a payload conflict. There the server has already proven
+          // this key is bound to a different payload, so replaying it can never
+          // return anything but the same rejection — retiring it costs nothing and
+          // clears the trap. A stale-row or commission-split refusal is the opposite
+          // case: that key may still be the replay handle for an earlier save whose
+          // response was lost, so it is left retained until its own quote is reloaded.
+          resetSaveQuoteIdempotencyKeyFor(conflictOrigin.scope);
           staleSaveConflictScopeRef.current = null;
         }
         if (resetCreateVersionAfterReloadRef.current) {
@@ -1037,6 +1093,7 @@ export default function QuoteBuilder() {
     resetCreateVersionAttempt,
     resetRestoreVersionAttempt,
     resetSaveQuoteIdempotencyKey,
+    resetSaveQuoteIdempotencyKeyFor,
     // Required, not cosmetic: without it this callback compares the conflict's
     // recorded scope against a STALE one, which is the exact confusion the check
     // exists to prevent.
@@ -1060,6 +1117,11 @@ export default function QuoteBuilder() {
         .then(({ data }) => { if (data) setQuoteTemplates(data as QuoteTemplate[]); });
     }
     if (isEditing && id) {
+      // This effect also runs on a route change between two saved quotes, where
+      // the previous quote's form is still mounted and filled in. Present the
+      // skeleton until THIS id's snapshot installs, so the operator is never
+      // shown quote A's numbers under quote B's address.
+      setLoading(true);
       fetchQuote(id);
     } else {
       generateQuoteNumber().then(() => {
@@ -1400,6 +1462,17 @@ export default function QuoteBuilder() {
   }, [sections]);
 
   const saveQuote = async (newStatus?: QuoteStatus): Promise<string | null> => {
+    // Fail closed when the loaded quote is not the quote the URL names. The
+    // skeleton normally hides the form for the whole transition, but a load that
+    // ERRORS clears `loading` while deliberately keeping the previous quote's
+    // edits on screen — leaving a live Save button over the record the operator
+    // navigated away from. `p_quote_id` below is this same `quoteId`, so
+    // refusing before any RPC also means no idempotency key is ever minted
+    // against the wrong quote.
+    if (isEditing && quoteId !== id) {
+      toast('error', 'This quote has not finished loading. Refresh the page before saving so your changes go to the right quote.');
+      return null;
+    }
     if (!customerId) {
       toast('error', 'Please select a customer');
       return null;
@@ -1549,7 +1622,10 @@ export default function QuoteBuilder() {
           quoteVersionRecoveryRequiredRef.current = true;
           // Bind the dialog to the quote that produced it, so the recovery cannot
           // release a different quote's key if the route changes while it is open.
-          staleSaveConflictScopeRef.current = saveQuoteIntentScope;
+          staleSaveConflictScopeRef.current = {
+            scope: saveQuoteIntentScope,
+            payloadRejected: hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT),
+          };
           setStaleSaveOpen(true);
           return null;
         }
