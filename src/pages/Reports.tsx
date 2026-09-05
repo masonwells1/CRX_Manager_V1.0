@@ -87,7 +87,26 @@ interface RevenueSummary {
 // ─── Date preset logic ─────────────────────────────────────────
 // Crop season = October 1 to September 30
 function getPresetDates(preset: string): { start: string; end: string } {
-  const now = new Date();
+  // Anchored to the America/Chicago BUSINESS day, never the viewer's own clock.
+  // These presets drive company-wide reports — including the commission history
+  // cutoff, whose RPC already rejects a future Chicago date — so "today" and
+  // "this season" must mean the same thing to an admin in Denver at 11:30pm as
+  // to one in Chicago, where it is already tomorrow. On September 30 that
+  // disagreement moves the SEASON, not just the end date: local Sep 30 / Chicago
+  // Oct 1 would open "This Season" on the season that just closed.
+  //
+  // parseLocalDate() rebuilds the Chicago Y-M-D at LOCAL midnight, so the season
+  // helpers (which read getMonth/getFullYear) and formatLocalDate() all round-trip
+  // that same business day.
+  const now = parseLocalDate(todayInBusinessTz());
+  // Day arithmetic goes through setDate rather than subtracting milliseconds:
+  // across a local DST spring-forward, `now - 30 * 86400000` lands at 23:00 on
+  // the previous day and formatLocalDate() then reports a date one day early.
+  const daysBefore = (days: number): string => {
+    const d = parseLocalDate(todayInBusinessTz());
+    d.setDate(d.getDate() - days);
+    return formatLocalDate(d);
+  };
   switch (preset) {
     case 'this_season':
       return getSeasonDates(now);
@@ -99,14 +118,10 @@ function getPresetDates(preset: string): { start: string; end: string } {
       const s = computeSeason(now);
       return { start: seasonStartDate(s), end: formatLocalDate(now) };
     }
-    case 'last30': {
-      const d = new Date(now.getTime() - 30 * 86400000);
-      return { start: formatLocalDate(d), end: formatLocalDate(now) };
-    }
-    case 'last90': {
-      const d = new Date(now.getTime() - 90 * 86400000);
-      return { start: formatLocalDate(d), end: formatLocalDate(now) };
-    }
+    case 'last30':
+      return { start: daysBefore(30), end: formatLocalDate(now) };
+    case 'last90':
+      return { start: daysBefore(90), end: formatLocalDate(now) };
     default:
       return { start: '', end: '' };
   }

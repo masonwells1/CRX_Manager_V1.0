@@ -159,6 +159,49 @@ describe('Reports commission history', () => {
     });
   });
 
+  it('derives every date preset from the Chicago business day, not the viewer clock', async () => {
+    // 2026-10-01T02:00:00Z is 2026-09-30 21:00 in Chicago — the final evening of
+    // season 2026. A viewer whose OWN clock has already rolled into October 1
+    // (UTC, or anywhere east of Central) must still get September 30 and season
+    // 2026. Otherwise "This Season" silently opens on the season that just
+    // closed, and YTD/30d/90d drop the last selling day of the year.
+    //
+    // Pinned as an absolute instant, never a local-midnight Date: a local-time
+    // pin changes meaning with the host timezone and would go green on a Central
+    // box while red on a UTC CI runner.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-10-01T02:00:00Z'));
+    try {
+      renderReports();
+      fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+
+      const dates = () => document.querySelectorAll<HTMLInputElement>('input[type="date"]');
+
+      fireEvent.click(screen.getByRole('button', { name: 'This Season' }));
+      expect(dates()[0].value).toBe('2025-10-01');
+      expect(dates()[1].value).toBe('2026-09-30');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Last Season' }));
+      expect(dates()[0].value).toBe('2024-10-01');
+      expect(dates()[1].value).toBe('2025-09-30');
+
+      fireEvent.click(screen.getByRole('button', { name: 'YTD' }));
+      expect(dates()[0].value).toBe('2025-10-01');
+      expect(dates()[1].value).toBe('2026-09-30');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Last 30d' }));
+      expect(dates()[0].value).toBe('2026-08-31');
+      expect(dates()[1].value).toBe('2026-09-30');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Last 90d' }));
+      expect(dates()[0].value).toBe('2026-07-02');
+      expect(dates()[1].value).toBe('2026-09-30');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the last successful report and labels a failed refresh as unconfirmed', async () => {
     renderReports();
     fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
