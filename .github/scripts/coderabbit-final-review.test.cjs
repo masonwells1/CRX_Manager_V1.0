@@ -404,6 +404,18 @@ function makeHarness({
   review = undefined,
   removeLabelFailures = [],
   runId = 909090,
+  // GraphQL reviewDecision. `null` is the real shape for a pull request with no
+  // review verdict, which is why the default is null rather than undefined.
+  reviewDecision = null,
+  reviewDecisionFailure = false,
+  // Whether CodeRabbit answers the posted command, and how. 'ack' models the
+  // measured 6-11s reply; 'silent' models the measured bot-authored silence.
+  coderabbitAcknowledgement = 'ack',
+  // Comment-list calls that throw, counted across the WHOLE run. The
+  // acknowledgement poll shares github.paginate(listComments) with the
+  // pre-attempt snapshot and the ambiguous-post recovery, so these indices are
+  // global, not poll-relative.
+  deleteCommentFailure = false,
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -435,7 +447,29 @@ function makeHarness({
     };
   }
 
+  // CodeRabbit's reply to a posted command. Modelled as a real comment by
+  // `coderabbitai[bot]` with an id ABOVE the command's, which is the only thing
+  // the gate treats as an acknowledgement — an earlier coderabbitai[bot] comment
+  // (its auto-generated summary, which quotes the command in its own tips block)
+  // must not count, and one test pre-seeds exactly that.
+  function maybeAcknowledge() {
+    if (coderabbitAcknowledgement !== 'ack') return;
+    comments.push({
+      id: comments.length + 1,
+      body: '> [!TIP]\n> Review triggered.',
+      created_at: new Date().toISOString(),
+      user: { login: 'coderabbitai[bot]' },
+    });
+  }
+
   const github = {
+    // The gate reads reviewDecision through GraphQL because that is the same
+    // field both merge gates read; a REST re-derivation would be a second,
+    // divergeable source of truth.
+    graphql: async () => {
+      if (reviewDecisionFailure) throw new Error('graphql review decision failed');
+      return { repository: { pullRequest: { reviewDecision } } };
+    },
     rest: {
       actions: {
         getWorkflowRun: async ({ run_id: runId }) => {
@@ -488,6 +522,7 @@ function makeHarness({
               created_at: new Date().toISOString(),
               user: { login: 'github-actions[bot]' },
             });
+            maybeAcknowledge();
             throw new Error('connection closed after write');
           }
           if (commentFailure === 'ambiguous-untrusted') {
@@ -507,9 +542,11 @@ function makeHarness({
             user: { login: 'github-actions[bot]' },
           };
           comments.push(comment);
+          maybeAcknowledge();
           return { data: comment };
         },
         deleteComment: async ({ comment_id: commentId }) => {
+          if (deleteCommentFailure) throw new Error('comment delete rejected');
           const index = comments.findIndex((comment) => comment.id === commentId);
           if (index >= 0) comments.splice(index, 1);
         },
@@ -602,6 +639,14 @@ function makeHarness({
 
   return {
     comments,
+    // Comments the GATE is responsible for. CodeRabbit's acknowledgement is a real
+    // comment on the pull request and stays there even when the gate deletes its
+    // own command, so a test about what the gate posted or removed must filter by
+    // AUTHOR — asserting over the raw list would silently start asserting things
+    // about CodeRabbit's behaviour instead.
+    get actionsComments() {
+      return comments.filter((comment) => comment.user?.login === 'github-actions[bot]');
+    },
     context,
     core,
     errors,
@@ -612,7 +657,7 @@ function makeHarness({
   };
 }
 
-async function execute(harness) {
+async function execute(harness, configOverrides = {}) {
   return run({
     github: harness.github,
     context: harness.context,
@@ -622,6 +667,8 @@ async function execute(harness) {
       ignoredChecks: IGNORED_CHECKS,
       quietPeriodMs: 0,
       mergeabilityPollMs: 0,
+      ackPollMs: 0,
+      ...configOverrides,
     },
   });
 }
@@ -709,8 +756,9 @@ test('green frozen candidate posts exactly one review command and records the re
   const result = await execute(harness);
 
   assert.equal(result.status, 'requested');
-  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
-  assert.equal(harness.comments[0].body.split('\n')[0], REVIEW_COMMAND);
+  assert.equal(result.acknowledged, true, 'a request is only credited once CodeRabbit answers it');
+  assert.deepEqual(harness.actionsComments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.actionsComments[0].body.split('\n')[0], REVIEW_COMMAND);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.deepEqual(harness.failures, []);
@@ -810,7 +858,7 @@ test('duplicate ready events never post a second review command', async () => {
   const duplicate = await execute(harness);
 
   assert.equal(duplicate.status, 'duplicate');
-  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.deepEqual(harness.actionsComments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
 });
@@ -822,7 +870,7 @@ test('a stranded requested marker without a matching Actions comment self-heals 
   const result = await execute(harness);
 
   assert.equal(result.status, 'requested');
-  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.deepEqual(harness.actionsComments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.match(harness.notices.join('\n'), /any superseded review command/);
@@ -1455,7 +1503,7 @@ test('a post-comment snapshot API failure deletes the command and clears both la
   const result = await execute(harness);
 
   assert.equal(result.status, 'blocked');
-  assert.deepEqual(harness.comments, []);
+  assert.deepEqual(harness.actionsComments, []);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /could not complete the post-comment candidate snapshot/);
@@ -1662,7 +1710,7 @@ test('a head change while the command is posted deletes the raced comment and cl
   const result = await execute(harness);
 
   assert.equal(result.status, 'blocked');
-  assert.deepEqual(harness.comments, []);
+  assert.deepEqual(harness.actionsComments, []);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /changed while the review command was being posted/);
@@ -1681,7 +1729,7 @@ test('an ambiguous recovery still revalidates and deletes a command left on a ra
   const result = await execute(harness);
 
   assert.equal(result.status, 'blocked');
-  assert.deepEqual(harness.comments, []);
+  assert.deepEqual(harness.actionsComments, []);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /changed while the review command was being posted/);
@@ -1706,7 +1754,7 @@ test('an ambiguous comment failure preserves dedupe state when the command actua
   assert.equal(result.recovered, true);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
-  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.deepEqual(harness.actionsComments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
   assert.deepEqual(harness.failures, []);
 });
 
@@ -1772,9 +1820,183 @@ test('an old-head marker and command are deleted, not left beside the current-he
   // The superseded command must be GONE. Leaving it beside the new one spends a
   // second review out of the paid hourly allowance on one frozen candidate.
   assert.deepEqual(
-    harness.comments.map((comment) => comment.body),
+    harness.actionsComments.map((comment) => comment.body),
     [reviewCommandBody(HEAD)],
   );
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+});
+
+// ── reviewDecision refusal ───────────────────────────────────────────────────
+//
+// Mutation tests, not coverage: each one puts the gate in a state where EVERY
+// other validation passes, so the only thing that can refuse is the new check. If
+// the reviewDecision guard is deleted, these go green in the wrong direction —
+// status becomes 'requested' and a command appears.
+
+test('a CHANGES_REQUESTED verdict refuses the request and posts nothing', async () => {
+  const harness = makeHarness({ reviewDecision: 'CHANGES_REQUESTED' });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  // The control: this exact harness with no verdict posts and is credited. So the
+  // verdict is the only variable, and the refusal is attributable to it.
+  assert.deepEqual(harness.actionsComments, [], 'no paid review may be spent on a pull request that cannot merge');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.match(harness.failures[0], /reviewDecision=CHANGES_REQUESTED/);
+});
+
+test('the control for the CHANGES_REQUESTED refusal: the same candidate without the verdict is requested', async () => {
+  const harness = makeHarness({ reviewDecision: null });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'requested');
+  assert.equal(harness.actionsComments.length, 1);
+});
+
+test('APPROVED and REVIEW_REQUIRED verdicts do not refuse — only CHANGES_REQUESTED does', async () => {
+  for (const decision of ['APPROVED', 'REVIEW_REQUIRED']) {
+    const harness = makeHarness({ reviewDecision: decision });
+    const result = await execute(harness);
+    assert.equal(result.status, 'requested', `${decision} must not block the request`);
+  }
+});
+
+test('an unreadable review decision fails CLOSED rather than posting blind', async () => {
+  const harness = makeHarness({ reviewDecisionFailure: true });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.actionsComments, []);
+  assert.match(harness.failures[0], /could not read the pull request review decision/);
+});
+
+// The confirmation pass exists because state moves between the first snapshot and
+// the post. A verdict submitted during the quiet period must be caught there —
+// checking reviewDecision only once, before the wait, would miss it.
+test('a CHANGES_REQUESTED verdict submitted during the quiet period is caught by the confirmation pass', async () => {
+  const harness = makeHarness();
+  let graphqlCalls = 0;
+  harness.github.graphql = async () => {
+    graphqlCalls += 1;
+    return {
+      repository: {
+        pullRequest: { reviewDecision: graphqlCalls === 1 ? null : 'CHANGES_REQUESTED' },
+      },
+    };
+  };
+  const result = await execute(harness);
+
+  assert.equal(graphqlCalls >= 2, true, 'the review decision must be re-read after the quiet period');
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.actionsComments, [], 'the late verdict must be caught BEFORE the command is posted');
+  assert.match(harness.failures[0], /reviewDecision=CHANGES_REQUESTED/);
+});
+
+// ── CodeRabbit acknowledgement ───────────────────────────────────────────────
+//
+// Posting is not requesting. Every one of these would have reported `requested`
+// before the acknowledgement poll existed.
+
+test('an unacknowledged command is NOT a request: it fails and clears the marker', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.actionsComments, [], 'the inert command must not be left behind to look like a request');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false, 'the marker must be cleared so a retry is possible');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.match(harness.failures[0], /did not acknowledge the review command/);
+});
+
+test('an acknowledgement posted BEFORE the command does not count', async () => {
+  // CodeRabbit posts an auto-generated summary comment even with automatic
+  // reviews disabled, and that comment quotes `@coderabbitai review` inside its
+  // own tips block. Two sessions have already miscounted requests from it. An
+  // acknowledgement must be strictly newer than the command it answers.
+  const harness = makeHarness({
+    coderabbitAcknowledgement: 'silent',
+    existingComments: [{
+      id: 1,
+      body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n@coderabbitai review',
+      created_at: new Date().toISOString(),
+      user: { login: 'coderabbitai[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures[0], /did not acknowledge the review command/);
+});
+
+// The three-outcome rule. A lookup that FAILED is not a confirmed absence, and
+// collapsing the two would clear the dedupe marker on a request that may be live
+// — inviting a relabel that buys a SECOND paid review.
+test('an unverifiable acknowledgement lookup preserves the command and the marker', async () => {
+  const harness = makeHarness({
+    coderabbitAcknowledgement: 'silent',
+    // Call 1 is the pre-attempt snapshot; 2-4 are the acknowledgement poll.
+    commentListFailuresAt: [2, 3, 4],
+  });
+  const result = await execute(harness, { ackPollAttempts: 3 });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.actionsComments.length, 1, 'an unverifiable lookup must NOT delete a command that may be live');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true, 'the dedupe marker must survive an unverifiable lookup');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.match(harness.failures[0], /acknowledgement could not be checked/);
+});
+
+test('one successful lookup among failures is a real observation, not an unverifiable one', async () => {
+  const harness = makeHarness({
+    coderabbitAcknowledgement: 'silent',
+    commentListFailuresAt: [2, 3],
+  });
+  const result = await execute(harness, { ackPollAttempts: 3 });
+
+  assert.equal(result.status, 'blocked');
+  // The third attempt succeeded and saw no acknowledgement — a CONFIRMED absence,
+  // so the marker is cleared for a deliberate retry rather than preserved.
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /did not acknowledge the review command/);
+});
+
+// Never clear a marker while its command may still stand: that pairing is the
+// only thing preventing a duplicate paid review.
+test('a failed command deletion preserves the marker even on a confirmed non-acknowledgement', async () => {
+  const harness = makeHarness({
+    coderabbitAcknowledgement: 'silent',
+    deleteCommentFailure: true,
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.actionsComments.length, 1);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true, 'the marker must survive while the command it dedupes still stands');
+  assert.match(harness.failures[0], /the posted command could not be removed/);
+});
+
+test('a late acknowledgement inside the poll window still credits the request', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  let lookups = 0;
+  const listComments = harness.github.rest.issues.listComments;
+  harness.github.rest.issues.listComments = async (params) => {
+    const response = await listComments(params);
+    lookups += 1;
+    // Answers on the third poll, the way a slow acknowledgement would.
+    if (lookups === 3) {
+      response.data.push({
+        id: response.data.length + 1,
+        body: 'Review triggered.',
+        created_at: new Date().toISOString(),
+        user: { login: 'coderabbitai[bot]' },
+      });
+    }
+    return response;
+  };
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'requested');
+  assert.equal(result.acknowledged, true);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
 });
 

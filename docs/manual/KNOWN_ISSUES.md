@@ -371,6 +371,52 @@ Mason's call, not a defect to fix unilaterally.
 Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md` and
 `docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md`.
 
+## FIXED 2026-09-05 — the CodeRabbit gate reported "requested" without ever confirming a review was requested, and spent slots on unmergeable PRs
+
+Two defects in `.github/scripts/coderabbit-final-review.cjs`. Both are fixed; the entry stays because
+the *reasoning* is reusable and because the first one invalidates historical gate output.
+
+**1. Posting is not requesting — every "requested" was unverified.** The gate reported success as
+soon as GitHub accepted its comment. Measured on this repo, same PR, same head, same command text,
+minutes apart, with the comment AUTHOR as the only variable: `github-actions[bot]` posts went
+unacknowledged after 62 min (#535) and 24 min+ (#449), while `masonwells1` posts were acknowledged in
+11 s and 6 s. So a bot-authored command was never heard, and
+**`coderabbit-review-requested` was never evidence that a review was requested** — do not read any
+gate success from before 2026-09-05 as proof a review happened.
+
+The gate now waits for CodeRabbit's own reply, authored by `coderabbitai[bot]` and strictly newer
+than the command (its auto-generated summary comment quotes `@coderabbitai review` in its own tips
+block, and has already caused two sessions to miscount requests). Three outcomes, deliberately
+distinct: acknowledged → credited; **confirmed** unheard → fail, delete the inert command and clear
+the marker so a retry is possible; **unverifiable** → fail but keep both, because the request may be
+live and clearing the marker would invite a relabel that buys a second paid review. An unverifiable
+lookup is never a confirmed absence.
+
+**CodeRabbit's docs do not state which identities may issue commands** — checked 2026-09-05 against
+the commands guide, the configuration reference and the "why reviews might not trigger" KB article.
+`auto_review.ignore_usernames` governs PR *authors*, not comment authors. The bot-filtering is an
+observed behaviour with no documented contract, so it is verified at runtime rather than encoded as
+an assumption; do not add an allowlist of identities that "work".
+
+**2. A PR that provably cannot merge still spent a review slot.** Both merge gates hard-deny
+`reviewDecision == CHANGES_REQUESTED`; the final-review gate did not look at it, so #449 — BLOCKED on
+a standing objection with every check green — passed every other validation and consumed one of ~2-3
+shared hourly slots ahead of a candidate that needed it. Now refused, reading the same field the
+merge gates read (GraphQL, not a `listReviews` re-derivation, so the two cannot diverge), re-checked
+after the quiet period, and failing closed if unreadable.
+
+Both refusals are mutation-proven: removing the reviewDecision check turns 2 tests red, removing the
+acknowledgement poll turns 5 red, and collapsing "unverifiable" into "confirmed absent" turns 1 red.
+No workflow permission changed — `pull-requests: write` already covers the GraphQL read, and the
+permissions block is the bricking class (an invalid key makes the file unloadable and yields a
+zero-job run).
+
+**Still open in this gate, and NOT addressed here:** a failed run poisons its own head permanently
+(a previous completed-failure run of the workflow counts as a blocking check on later attempts at the
+same SHA, so only a new commit clears it). Practical rule unchanged: **never apply
+`ready-for-coderabbit` until every required check has already CONCLUDED green.** Also still missing
+is the invalid-permission-key test from #569.
+
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
 The gate landed on `main` as `f2307fbf9` with these four items knowingly open. They were recorded
