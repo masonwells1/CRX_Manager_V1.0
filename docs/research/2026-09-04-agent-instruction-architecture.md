@@ -51,7 +51,7 @@ Claude supports `.claude/rules/`, including rules scoped to file paths. Codex do
 
 ## External Sources
 
-All four links below were reopened successfully on 2026-09-04 before this review closed.
+All five links below were reopened successfully on 2026-09-04 before this review closed.
 
 - OpenAI documents hierarchical `AGENTS.md` discovery, a default combined size ceiling, and concise repository-level instructions: `https://learn.chatgpt.com/docs/agent-configuration/agents-md`.
 - OpenAI recommends auditing instruction files for conflict, stating autonomy clearly, and calibrating verification to risk: `https://developers.openai.com/api/docs/guides/latest-model`.

@@ -4,6 +4,8 @@ Mason does not need to write technical prompts, name files, choose an implementa
 
 This page is a convenience guide, not another policy file. If an example conflicts with `AGENTS.md`, `AGENTS.md` wins.
 
+For a structured whole-codebase audit, use the current `.claude/workflows/whole-codebase-audit.js` workflow or `docs/audits/foundation-audit-prompt.md`; the retired five-phase template is not maintained here.
+
 ## The Shortest Useful Request
 
 Usually this is enough:

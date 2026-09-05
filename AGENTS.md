@@ -20,7 +20,7 @@ This is the always-loaded, shared contract for Codex, Claude, and future coding 
 - Interpret requests by outcome. Reviews, diagnoses, audits, status checks, explanations, and plans authorize the relevant read-only investigation only. Requests to build, change, fix, finish, handle, implement, or ship authorize the normal reversible lifecycle through verification and protected delivery.
 - Deliver what was asked at the scope intended. Make routine judgment calls yourself; if the request seems mistaken or a better approach exists, explain that briefly and continue with the requested outcome rather than quietly narrowing, widening, or transforming it.
 - Codex proceeds after a short plan without a second approval. Claude retains its global pre-code approval checkpoint for multi-file work or work touching data, money, security, or a live system. Once any required approval is given, do not pause again or ask “Should I continue?” while safe, in-scope work remains.
-- Outside Claude's one plan checkpoint, ask only when a missing choice would materially change the business outcome and no safe inference exists, or when an exact hard-gated action below has not been requested.
+- Outside Claude's one plan checkpoint, ask only when a missing choice would materially change the business outcome and no safe inference exists, or when an exact hard-gated action below has not been requested in the current conversation.
 - Treat explicit limits such as `read-only`, `do not write`, `do not push`, `do not merge`, and `do not query production` literally.
 
 ## Start and Route

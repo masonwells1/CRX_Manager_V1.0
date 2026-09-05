@@ -218,7 +218,7 @@ const DIMENSIONS = [
   {
     key: 'lifecycle-invariants', phase: 2,
     prompt:
-      'Hunt BUSINESS-LIFECYCLE correctness across quote/order/delivery/invoice/job/PO/return/commission/commission_payment (follow the lifecycle documents routed by AGENTS.md, especially QUOTE_TO_DELIVERY.md and INVENTORY_RULES.md). (a) status strings written that are NOT in the live CHECK; (b) transitions no trigger/RPC enforces; (c) the delivery two-step + item-lock being bypassable; (d) quote draw-down / Net-Free invariant holes. Use live pg_constraint.',
+      'Hunt BUSINESS-LIFECYCLE correctness across quote/order/delivery/invoice/job/PO/return/commission/commission_payment. Use QUOTE_TO_DELIVERY.md for quote/order/delivery/invoice and INVENTORY_RULES.md for inventory/receiving effects. For job, PO, return, commission, and commission_payment, inspect current source plus live pg_constraint and pg_proc; do not infer rules from documentation that does not cover those entities. Check: (a) status strings written that are NOT in the live CHECK; (b) transitions no trigger/RPC enforces; (c) the delivery two-step + item-lock being bypassable; (d) quote draw-down / Net-Free invariant holes.',
   },
   {
     key: 'edge-and-pdf', phase: 2,
