@@ -1514,8 +1514,13 @@ export default function QuoteBuilder() {
         return null;
       }
 
-      resetSaveQuoteIdempotencyKey();
+      // F1: the reply is only known-good once assertRpcResult has accepted it. A
+      // save_quote that answers with an EMPTY payload and no error is ambiguous —
+      // the row may already be committed — so retiring the key first would send the
+      // user's retry under a fresh key the server cannot replay, writing the quote
+      // twice. Verify first, retire second.
       const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown }>(data, 'save_quote');
+      resetSaveQuoteIdempotencyKey();
       const savedQuoteId = result.quote_id || quoteId;
       if (!savedQuoteId) {
         toast('error', 'Quote save completed without an ID. Refresh before making further changes.');

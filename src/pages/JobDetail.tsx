@@ -1861,15 +1861,36 @@ export default function JobDetail() {
         setGrowerShareFieldNames([]);
         setLoaderVesselId(ASSIGNED_VEHICLE_VESSEL_VALUE);
         setTankCapacity('');
-        const { data, error } = await supabase.rpc('next_job_number');
-        if (!error && data) setJobNumber(assertRpcResult<string>(data, 'next_job_number'));
+        // The reserved job number is the only thing standing between the operator
+        // and a job they cannot save. `if (!error && data)` discarded BOTH failure
+        // shapes — a raised error and an empty reply — leaving the field blank with
+        // no explanation. Since the F2 number-generator gate applied live
+        // (2026-09-04), a deactivated or out-of-role profile hits exactly that path.
+        // Mirror the CycleCounts shape: throw the failure into one handler and say
+        // what happened.
+        try {
+          const { data, error } = await supabase.rpc('next_job_number');
+          if (error) throw error;
+          setJobNumber(assertRpcResult<string>(data, 'next_job_number'));
+        } catch (err: unknown) {
+          Sentry.captureException(
+            err instanceof Error ? err : new Error(String(err)),
+            { tags: { source: 'rpc', action: 'next_job_number' } },
+          );
+          toast(
+            'error',
+            hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)
+              ? 'Your account is not permitted to start a new job. Ask an administrator to check your role before entering one.'
+              : `Could not reserve a job number — ${sanitizeError(err)}. Reload before entering this job.`,
+          );
+        }
         const recipeParam = searchParams.get('recipe_id');
         if (recipeParam) setRecipeId(recipeParam);
         // New job: loading is already false; the loading-settle effect arms
         // initialLoadDone after the first committed frame.
       }
     })();
-  }, [id, fetchJob, isNew, loadLookups, searchParams]);
+  }, [id, fetchJob, isNew, loadLookups, searchParams, toast]);
 
   // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')
   // job_location_dispatches row on this job? The assignment-unification migration

@@ -41,11 +41,26 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
   return self;
 }
 
-vi.mock('../lib/db', () => ({
+vi.mock('../lib/db', async () => ({
   supabase: { from: mockFrom, rpc: mockRpc, storage: { from: vi.fn() } },
   checkMutationResult: vi.fn(),
-  assertRpcResult: vi.fn((d) => d),
+  // The REAL assertRpcResult. The passthrough stub `vi.fn((d) => d)` never throws, so
+  // an RPC answering with an empty payload and no error — the ambiguous reply this
+  // helper exists to reject — was indistinguishable from success in every test here.
+  assertRpcResult: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).assertRpcResult,
   sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  // Previously absent. JobDetail imports both, so any code path reaching them under
+  // this mock would fail on `undefined` rather than on the behaviour under test.
+  hasRpcCode: (error: { message?: string }, code: string) => (
+    error?.message === code
+    || error?.message?.startsWith(`${code}:`) === true
+    || error?.message?.startsWith(`${code} `) === true
+  ),
+  RpcErrorCodes: {
+    AUTH_REQUIRED: 'AUTH_REQUIRED',
+    ACTOR_MISMATCH: 'ACTOR_MISMATCH',
+    INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE',
+  },
 }));
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1', role: 'admin', full_name: 'Test Admin' }, role: 'admin' }),
@@ -983,5 +998,61 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     });
     await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     expect(screen.queryByText(/This line cannot be saved/i)).toBeNull();
+  }, 30000);
+});
+
+/**
+ * The reserved job number is the only thing standing between the operator and a job
+ * they cannot save, and its failure used to be invisible.
+ *
+ * `if (!error && data) setJobNumber(...)` discarded BOTH failure shapes — a raised
+ * error and an empty reply — so the field simply stayed blank with no toast and no
+ * Sentry event. Harmless while `next_job_number` could not fail; not harmless since
+ * the F2 number-generator gate applied live on 2026-09-04, which raises
+ * INSUFFICIENT_ROLE for a deactivated or out-of-role profile. That user got a blank
+ * box and no way to know why.
+ */
+describe('JobDetail — a failed job-number reservation is explained', () => {
+  beforeEach(() => {
+    mockToast.mockClear();
+    mockRpc.mockClear();
+    mockFrom.mockReturnValue(buildChain({ data: [], error: null }));
+  });
+
+  function mountNewJob() {
+    return render(
+      <MemoryRouter initialEntries={['/jobs/new']}>
+        <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it('names the role gate when next_job_number is refused', async () => {
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'next_job_number'
+        ? { data: null, error: { message: 'INSUFFICIENT_ROLE' } }
+        : { data: null, error: null },
+    ));
+
+    mountNewJob();
+
+    await waitFor(
+      () => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/not permitted to start a new job/i)),
+      { timeout: 15000 },
+    );
+  }, 30000);
+
+  it('still explains an EMPTY reply, which carries no error at all', async () => {
+    // The other half of the discarded pair. `{ data: null, error: null }` is the
+    // permission-denied shape assertRpcResult exists to catch: nothing to inspect, and
+    // the old truthiness test dropped it just as silently as a raised error.
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    mountNewJob();
+
+    await waitFor(
+      () => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/Could not reserve a job number/i)),
+      { timeout: 15000 },
+    );
   }, 30000);
 });

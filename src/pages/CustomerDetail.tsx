@@ -775,11 +775,18 @@ export default function CustomerDetail() {
       // dialog, success toast and the address reload that would pull ITS addresses
       // into whatever is on screen now. None of it may land on a different
       // customer's session. Two things still run, because they describe this
-      // component rather than that customer: the idempotency key is released (the
-      // save did commit, and reusing its key would collide on the next one) and
+      // component rather than that customer: the idempotency key is released and
       // `saving` clears (leaving it set would wedge the Save button for good).
+      //
+      // F1: `!error` alone does NOT prove the save committed — save_customer can
+      // answer with an empty payload and no error, which is exactly the ambiguous
+      // reply assertRpcResult exists to reject. This branch cannot assert (it must
+      // return quietly rather than throw into a customer that is no longer on
+      // screen), so it applies the same emptiness test inline: release the key only
+      // for a reply that is both error-free and non-empty. An ambiguous reply keeps
+      // its key, so a retry can still replay instead of writing the customer twice.
       if (currentIdRef.current !== id) {
-        if (!error) resetSaveCustomerIdempotencyKey();
+        if (!error && data != null) resetSaveCustomerIdempotencyKey();
         setSaving(false);
         return;
       }
@@ -793,8 +800,11 @@ export default function CustomerDetail() {
           toast('error', error.message);
         }
       } else {
-        resetSaveCustomerIdempotencyKey();
+        // F1: verify the reply before retiring the key. An empty payload with no
+        // error is ambiguous — the customer may already be saved — so a key retired
+        // here would send the retry under a fresh key the server cannot replay.
         const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null; row_version?: unknown }>(data, 'save_customer');
+        resetSaveCustomerIdempotencyKey();
         const rowVersionResult = resolveAuthoritativeSaveRowVersion(
           customerRowVersionRef.current,
           result.row_version,

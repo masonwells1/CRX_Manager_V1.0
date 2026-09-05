@@ -63,9 +63,14 @@ function customerQuery(nextCustomer: () => typeof original | typeof newer): Reco
   return chain;
 }
 
-vi.mock('../lib/db', () => ({
+vi.mock('../lib/db', async () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
-  assertRpcResult: vi.fn((value) => value),
+  // The REAL assertRpcResult, not a passthrough stub. `vi.fn((value) => value)` never
+  // throws, which DELETES the ambiguous-reply path — an empty payload with no error —
+  // from every test in this file. That path is exactly what the F1 reset ordering
+  // exists to handle, so under the stub a screen that retires its idempotency key
+  // before checking the reply stays green (aliased-reset sweep, 2026-09-05).
+  assertRpcResult: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).assertRpcResult,
   checkMutationResult: vi.fn(),
   hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
   RpcErrorCodes: { CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
@@ -337,6 +342,45 @@ describe('CustomerDetail stale whole-record save', () => {
         farm_name: 'Second edit after uncertain save',
       }),
     })));
+  });
+
+  /**
+   * F1, ALIASED-RESET CLASS — driven through the real save handler.
+   *
+   * `save_customer` answering `{ data: null, error: null }` is the AMBIGUOUS reply:
+   * nothing failed, but the payload is empty, so this tab cannot tell whether the
+   * customer committed. Retiring the key before assertRpcResult has accepted the reply
+   * — which is what main did, through a destructured rename the literal `resetKey()`
+   * sweep could not see — sends the retry under a BRAND-NEW key that the server has
+   * never seen and therefore cannot replay, writing the customer twice.
+   */
+  it('keeps the save_customer key when the reply is empty, so the retry replays instead of double-writing', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    renderDetail();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited farm' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-0',
+    })));
+    expect(
+      mockResetIdempotencyKey,
+      'an empty save_customer reply is ambiguous — the key must survive it so a retry can replay',
+    ).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_customer');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_customer')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    expect(
+      new Set(saveKeys),
+      'every retry of an unresolved save must carry the SAME key, or the server writes the customer twice',
+    ).toEqual(new Set(['customer-stale-key-0']));
   });
 
   it('reloads the financials tab when the route switches customers without remounting the page', async () => {

@@ -119,6 +119,13 @@ vi.mock('../lib/db', async () => {
   const { sanitizeError } = await vi.importActual<typeof import('../lib/errorSanitizer')>(
     '../lib/errorSanitizer',
   );
+  // Use the REAL assertRpcResult for the same reason. The stub `vi.fn((d) => d)` is a
+  // passthrough that never throws, which DELETES the ambiguous-reply path — an empty
+  // payload with no error — from every test in this file. That path is precisely what
+  // the F1 ordering exists to handle, so under the stub a screen that retires its
+  // idempotency key before checking the reply stays green. Import the real one so the
+  // defect can be expressed here at all (aliased-reset sweep, 2026-09-05).
+  const { assertRpcResult } = await vi.importActual<typeof import('../lib/db')>('../lib/db');
   const hasRpcCode = (error: { message?: string }, code: string) => (
     error.message === code
     || error.message?.startsWith(`${code}:`) === true
@@ -128,7 +135,7 @@ vi.mock('../lib/db', async () => {
     supabase: { from: mockFrom, rpc: mockRpc },
     supabaseUntyped: { from: mockFrom, rpc: mockRpc },
     checkMutationResult: vi.fn(),
-    assertRpcResult: vi.fn((d) => d),
+    assertRpcResult,
     hasRpcCode,
     RpcErrorCodes: {
       AUTH_REQUIRED: 'AUTH_REQUIRED', ACTOR_MISMATCH: 'ACTOR_MISMATCH',
@@ -660,6 +667,67 @@ describe('QuoteBuilder', () => {
       }),
     }));
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.anything());
+  });
+
+  /**
+   * F1, ALIASED-RESET CLASS — driven through the real save handler rather than read
+   * off the source.
+   *
+   * `save_quote` answering `{ data: null, error: null }` is the AMBIGUOUS reply: no
+   * error came back, but the payload is empty, so this tab cannot tell whether the
+   * quote committed. assertRpcResult exists to reject exactly that. Retiring the key
+   * before that check — which is what main did, through the destructured rename the
+   * literal `resetKey()` sweep could not see — sends the operator's retry under a
+   * BRAND-NEW key. The server cannot recognise a key it has never seen, so it writes
+   * the quote a second time.
+   *
+   * The two assertions bind the PAIR: the key is not retired, AND the retry actually
+   * travels under the original key. Asserting only the first would still pass if the
+   * retry minted a fresh key some other way.
+   */
+  it('keeps the save_quote key when the reply is empty, so the retry replays instead of double-writing', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    // An empty success envelope on every attempt: the reply stays ambiguous, so the
+    // key must stay put no matter how many times the operator presses Save.
+    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_idempotency_key: 'test-idem-key-0',
+    })));
+    expect(
+      mockResetIdempotencyKey,
+      'an empty save_quote reply is ambiguous — the key must survive it so a retry can replay',
+    ).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Save Draft'));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_quote');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_quote')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    expect(
+      new Set(saveKeys),
+      'every retry of an unresolved save must carry the SAME key, or the server writes the quote twice',
+    ).toEqual(new Set(['test-idem-key-0']));
   });
 
   it('recovers a legacy cached save after the migration boundary and releases its unusable key', async () => {
