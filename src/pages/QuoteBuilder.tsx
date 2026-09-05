@@ -382,6 +382,15 @@ export default function QuoteBuilder() {
   // operator who navigates A -> B with A's dialog open and then clicks Reload would
   // release B's key and leave A's rejected one in place. Recorded at the moment the
   // conflict opens, checked before anything is released.
+  //
+  // EVERY site that opens this dialog must record the scope. An opener that skips it
+  // leaves the PREVIOUS quote's scope standing, and the comparison below then refuses
+  // to release the CURRENT quote's key after its own authoritative reload — so that
+  // quote's next edited save fails closed and forces a reload that discards the
+  // operator's edits. Recording at only the save-conflict branch was exactly that
+  // defect. Keep Editing clears the record because the dialog it belonged to is gone;
+  // the reload path clears it only when it actually releases, since a reload for a
+  // DIFFERENT quote must leave the originating quote's key retained.
   const staleSaveConflictScopeRef = useRef<string | null>(null);
   const [isPlanned, setIsPlanned] = useState(false);
   const [wasPlanned, setWasPlanned] = useState(false);
@@ -751,9 +760,13 @@ export default function QuoteBuilder() {
     }
     quoteRowVersionRef.current = null;
     quoteVersionRecoveryRequiredRef.current = true;
+    staleSaveConflictScopeRef.current = saveQuoteIntentScope;
     setStaleSaveOpen(true);
     toast('warning', `The quote was ${action}, but its save-protection version could not be confirmed. Refresh before editing, revising, or converting it.`);
-  }, [toast]);
+    // saveQuoteIntentScope is required, not cosmetic: memoized on [toast] alone this
+    // callback would stamp the scope captured at its first render, which is 'new' on
+    // an edit route and defeats the comparison entirely.
+  }, [saveQuoteIntentScope, toast]);
 
   const applyDirectQuoteMutationRowVersion = useCallback((
     previousRowVersion: number | null,
@@ -773,10 +786,13 @@ export default function QuoteBuilder() {
     // belong to another writer. Do not adopt it: preserve local edits and make
     // the next whole-record save fail closed until the operator reloads.
     quoteVersionRecoveryRequiredRef.current = true;
+    staleSaveConflictScopeRef.current = saveQuoteIntentScope;
     setStaleSaveOpen(true);
     toast('warning', `The quote was ${action}, but another edit may have completed at the same time. Your current edits were kept; reload before saving, revising, or converting it.`);
     return false;
-  }, [toast]);
+    // saveQuoteIntentScope is required, not cosmetic — see
+    // clearQuoteRowVersionWithRefreshWarning above.
+  }, [saveQuoteIntentScope, toast]);
 
   // An RPC response without row_version must never be followed by a blind
   // adoption of whatever a second writer committed after us. Only the one
@@ -2098,6 +2114,7 @@ export default function QuoteBuilder() {
   const handleEmailToGrower = async () => {
     if (!quoteId) { toast('warning', 'Save the quote before emailing it.'); return; }
     if (quoteVersionRecoveryRequiredRef.current) {
+      staleSaveConflictScopeRef.current = saveQuoteIntentScope;
       setStaleSaveOpen(true);
       toast('error', 'The email was NOT sent. Reload the quote, then email it again.');
       return;
@@ -2243,6 +2260,7 @@ export default function QuoteBuilder() {
         || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetCreateVersionAfterReloadRef.current = true;
         quoteVersionRecoveryRequiredRef.current = true;
+        staleSaveConflictScopeRef.current = saveQuoteIntentScope;
         setStaleSaveOpen(true);
         toast('error', 'The quote changed and the email was NOT sent. Reload the quote, then review and send it again.');
       } else {
@@ -2311,6 +2329,7 @@ export default function QuoteBuilder() {
         || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetCreateVersionAfterReloadRef.current = true;
         quoteVersionRecoveryRequiredRef.current = true;
+        staleSaveConflictScopeRef.current = saveQuoteIntentScope;
         setStaleSaveOpen(true);
         toast('error', 'The quote changed before it could be marked presented. Reload and review it before trying again.');
       } else {
@@ -2353,6 +2372,7 @@ export default function QuoteBuilder() {
   const handleRestoreVersion = async (versionId: string) => {
     if (!quoteId || !profile) return;
     if (quoteVersionRecoveryRequiredRef.current) {
+      staleSaveConflictScopeRef.current = saveQuoteIntentScope;
       setStaleSaveOpen(true);
       toast('error', 'Reload the quote before restoring a saved version.');
       return;
@@ -2400,6 +2420,7 @@ export default function QuoteBuilder() {
         || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetRestoreVersionAfterReloadRef.current = true;
         quoteVersionRecoveryRequiredRef.current = true;
+        staleSaveConflictScopeRef.current = saveQuoteIntentScope;
         setStaleSaveOpen(true);
         toast('error', 'The quote changed before the version could be restored. Reload and review it before trying again.');
       } else {
@@ -2672,6 +2693,7 @@ export default function QuoteBuilder() {
 
   const handleConvertToOrder = async () => {
     if (quoteVersionRecoveryRequiredRef.current) {
+      staleSaveConflictScopeRef.current = saveQuoteIntentScope;
       setStaleSaveOpen(true);
       toast('error', 'The order was not created. Reload the quote, then try Convert to Order again.');
       return;
@@ -2846,6 +2868,7 @@ export default function QuoteBuilder() {
         || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetConvertAfterReloadRef.current = true;
         quoteVersionRecoveryRequiredRef.current = true;
+        staleSaveConflictScopeRef.current = saveQuoteIntentScope;
         setStaleSaveOpen(true);
         toast('warning', 'The quote changed while conversion was starting. Its order outcome was left untouched; reload and review before retrying.');
         setConverting(false);
@@ -2957,6 +2980,7 @@ export default function QuoteBuilder() {
     setBookingAsOrder(true);
     try {
       if (quoteVersionRecoveryRequiredRef.current) {
+        staleSaveConflictScopeRef.current = saveQuoteIntentScope;
         setStaleSaveOpen(true);
         toast('error', 'The order was not created. Reload the quote, then try Book as Order again.');
         return;
@@ -4604,7 +4628,13 @@ export default function QuoteBuilder() {
       <RecordVersionConflictDialog
         open={staleSaveOpen}
         entityLabel="quote"
-        onKeepEditing={() => setStaleSaveOpen(false)}
+        onKeepEditing={() => {
+          // The dialog is no longer offering to recover anything, so its recorded
+          // origin must not outlive it. Keeping the record here is what let a
+          // dismissed conflict on one quote block the next quote's release.
+          staleSaveConflictScopeRef.current = null;
+          setStaleSaveOpen(false);
+        }}
         onReload={reloadAfterStaleSave}
       />
 

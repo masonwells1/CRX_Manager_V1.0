@@ -988,7 +988,15 @@ export default function CustomerDetail() {
       <RecordVersionConflictDialog
         open={staleSaveOpen}
         entityLabel="customer"
-        onKeepEditing={() => setStaleSaveOpen(false)}
+        onKeepEditing={() => {
+          // The dialog is no longer offering to recover anything, so its recorded
+          // origin must not outlive it. Every opener here already records the scope,
+          // which makes this belt-and-braces — but the two pages must stay identical
+          // in this mechanism, because the drift between them is what produced the
+          // QuoteBuilder defect.
+          staleSaveConflictScopeRef.current = null;
+          setStaleSaveOpen(false);
+        }}
         onReload={reloadAfterStaleSave}
       />
       <div className="flex items-center justify-between">

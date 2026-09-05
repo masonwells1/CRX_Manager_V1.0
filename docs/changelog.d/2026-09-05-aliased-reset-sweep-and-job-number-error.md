@@ -330,9 +330,10 @@ nothing to cause. Self-healing on the next recovery, but only after that unearne
 The dialog now records WHY it opened, not only which record opened it, because the two reasons have
 opposite safe directions once the route has moved on:
 
-- **`IDEMPOTENCY_PAYLOAD_CONFLICT`** — retired, on the reasoning that the server has already proven
-  this key is bound to a different payload, so replaying it can only ever produce the same
-  rejection. **This reasoning was WRONG and the change was reverted in round 7 — see below. Do not
+- **`IDEMPOTENCY_PAYLOAD_CONFLICT`** — round 6 RETIRED it, on the reasoning that the server had
+  already proven this key was bound to a different payload, so replaying it could only ever produce
+  the same rejection. **That reasoning was WRONG and round 7 reverted the change — see below. This
+  bullet is preserved as the record of a retracted decision, not as current behaviour. Do not
   reinstate it.**
 - **`QUOTE_STALE_WRITE` / `CUSTOMER_STALE_WRITE` / `COMMISSION_SPLIT_CONFLICT`** — the opposite
   case. That key may still be the replay handle for an EARLIER save whose response was lost; in
@@ -383,8 +384,8 @@ will be proposed again.
 ### The blocker
 
 Round 6 retired a payload-rejected idempotency key from its ORIGINATING scope when the recovery
-dialog was dismissed after a route change. The stated justification — preserved above, struck
-through — was that such a key "can only ever produce the same rejection, so retiring it costs
+dialog was dismissed after a route change. The stated justification — preserved above with its
+retraction — was that such a key "can only ever produce the same rejection, so retiring it costs
 nothing."
 
 That is false, and it is false in the direction that creates money records:
@@ -419,6 +420,27 @@ then self-heals on that record's own reload. That is the SAFER state. A spurious
 than a duplicated quote or customer, and no client-side rule can tell "the operator edited and
 retried" apart from "the first attempt may already have committed" — which is precisely what the
 idempotency key exists to answer.
+
+**The self-healing claim above holds for an EXISTING record only, and the difference is the
+residual this PR ships with.** On `/quotes/new` and `/customers/new` there is no record to return
+to: if the reply was ambiguous and the operator EDITS before retrying, the server answers
+`IDEMPOTENCY_PAYLOAD_CONFLICT`, and the client holds neither the original payload nor the created
+row's id. Reload cannot resolve it — `quoteId` is still null — so the operator's only exit is to
+leave the page, which discards the key map and lets the next create mint a fresh key and duplicate.
+
+This is a RESIDUAL, not a regression, and it was verified against `origin/main` rather than
+reasoned about: main resets the key BEFORE `assertRpcResult` (`CustomerDetail.tsx:834-835`,
+`QuoteBuilder.tsx:1573-1574`), so today's live behaviour is a SILENT duplicate on the plain retry
+path with no edit at all. This PR makes that plain retry replay safely and narrows the failure to
+one that requires an edit first, fails visibly, and duplicates only if the operator then abandons
+the page. Strictly better, and not closed.
+
+**Its proper close is a server capability, not a fourth client patch:** a receipt lookup by
+`(operation, key)` that returns the original outcome without requiring the caller to reproduce the
+original payload. That one addition also closes the shared `'new'` scope for two consecutive
+creates on one mount, and it is what #535's `fingerprintIntentPayload` was aimed at. Every option
+available to the client alone is a choice between a silent duplicate and a visible dead end.
+Tracked as its own lane.
 
 The two round-6 tests that asserted the retirement are inverted to assert retention, with the
 reasoning inline. The reviewer flagged them separately: they had staged an immediate
