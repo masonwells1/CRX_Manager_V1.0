@@ -25,6 +25,31 @@ Preview flow, asserts the preview-only discount input is rendered, changes the d
 is gone. Removing `setPreviewData(null)` from the handler makes that test **fail**; restoring it
 returns 25/25.
 
+### Also fixed — the in-flight preview race
+
+The Codex GitHub App, reviewing the head commit `755f42a7e` that carried the fix above, found that
+clearing `previewData` was only half the problem: a Preview RPC **already in flight** when the date
+changes still resolves afterwards and unconditionally calls `setPreviewData(result)` at
+`handlePreview`. The stale breakdown reappears on its own, with no further operator action. The
+`gpt-5.6-sol` push-proof reviewer had said the same thing in different words — *"clearing stale
+preview data on date changes does not fix a newly generated preview."*
+
+Fixed with a request-version guard, the same idiom `jobNotifLoadReqRef` already uses on this page.
+A `previewReqRef` counter is bumped by a new `invalidatePreview()` helper, which now replaces the
+bare `setPreviewData(null)` at **all four** pricing inputs — locations, chemicals, the
+application-service selector, and the transaction date. `handlePreview` snapshots the counter
+before the RPC and returns early if it has moved, so an answer computed for a form the operator has
+left can never repaint. Routing all four sites through one helper means a future fifth pricing
+input cannot forget the version bump.
+
+Proven by mutation again: a second new test holds the preview RPC open, changes the date across the
+Oct 1 boundary while it is in flight, then resolves it. Removing the one-line guard makes that test
+**fail** with the stale breakdown rendered; restoring it returns 26/26.
+
+The spinner's `setPreviewing(false)` is deliberately left ungated. The counter means "inputs
+changed", not "a request is running" — gating the spinner on it would hang the spinner forever when
+an operator edits an input without re-previewing.
+
 ### Not changed — a settled owner decision
 
 The review's second HIGH ("a cross-season group edit can produce mixed fiscal seasons and rates

@@ -397,6 +397,19 @@ export default function FieldApplicationInvoice() {
   const [primaryCustomerTier, setPrimaryCustomerTier] = useState<number>(1);
   const [previewData, setPreviewData] = useState<PreviewFieldAppSplitResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  // Bumped by invalidatePreview() on EVERY pricing input change. handlePreview captures this
+  // value before the RPC and drops the response if it no longer matches, so a preview that
+  // was computed for the old form can never repaint the screen after the operator has moved
+  // on. Clearing previewData alone is not enough: the in-flight request still resolves and
+  // would unconditionally setPreviewData(result) (Codex GitHub App review of PR #599 head
+  // 755f42a7e, 2026-09-04). Same request-id idiom as jobNotifLoadReqRef above.
+  const previewReqRef = useRef(0);
+  // The one place a stale preview is discarded. Use this instead of a bare setPreviewData(null)
+  // at every input that can change the price, so a new input site cannot forget the version bump.
+  const invalidatePreview = useCallback(() => {
+    previewReqRef.current += 1;
+    setPreviewData(null);
+  }, []);
   // #26: source job number for the ChemMan "<jobnumber>-<NNN>" split-ref. Set
   // when this field invoice was transferred from / linked to a job (job_id);
   // null for a pure engine-built invoice (then the split-ref falls back to the
@@ -1311,12 +1324,12 @@ export default function FieldApplicationInvoice() {
       const primary = (result.customers || []).find((c) => c.is_primary) || result.customers?.[0];
       setPrimaryCustomerTier(primary?.tier ?? 1);
       // Reset preview whenever shares change — it's stale until user re-clicks Preview
-      setPreviewData(null);
+      invalidatePreview();
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'derive_customer_shares_from_fields' } });
       toast('error', 'Failed to derive customer shares');
     }
-  }, [toast]);
+  }, [toast, invalidatePreview]);
 
   const handleLocationsSelected = useCallback((selectedFields: (Field & { customer_name?: string })[]) => {
     const newLocations: FieldLocation[] = selectedFields.map((f, idx) => {
@@ -1364,7 +1377,7 @@ export default function FieldApplicationInvoice() {
   const handleChemicalsChange = (updated: ChemicalLine[]) => {
     setChemicals(updated);
     setDirty(true);
-    setPreviewData(null);
+    invalidatePreview();
   };
 
   const handlePreview = async () => {
@@ -1373,6 +1386,10 @@ export default function FieldApplicationInvoice() {
       return;
     }
     setPreviewing(true);
+    // Snapshot the input version this request is being computed for. Any pricing change while
+    // the RPC is in flight bumps previewReqRef, and the check at the response below then throws
+    // this answer away instead of repainting a breakdown for a form that no longer exists.
+    const reqVersion = previewReqRef.current;
     try {
       const { data, error } = await supabase.rpc('preview_field_app_invoice_split', {
         p_locations: locations.map((l, idx) => ({
@@ -1404,6 +1421,11 @@ export default function FieldApplicationInvoice() {
       });
       if (error) throw error;
       const result = assertRpcResult<PreviewFieldAppSplitResult>(data, 'preview_field_app_invoice_split');
+      // A pricing input changed while this was in flight, so `result` was priced for a form the
+      // operator has already left. Showing it would put a breakdown on screen that save will not
+      // reproduce — across the Oct 1 season boundary that is a different per-acre rate. Drop it
+      // and leave the preview cleared; the operator re-clicks Preview for the current form.
+      if (previewReqRef.current !== reqVersion) return;
       setPreviewData(result);
       setActiveTab('customers');
     } catch (err) {
@@ -2635,14 +2657,14 @@ export default function FieldApplicationInvoice() {
             <input
               type="date"
               value={transactionDate}
-              // setPreviewData(null): the transaction date decides the SEASON, and the season
+              // invalidatePreview(): the transaction date decides the SEASON, and the season
               // selects the customer_application_rates row, so this input changes the PRICE just
               // as much as locations (:1314), chemicals (:1367) and the service selector (:2665)
               // do -- all three already invalidate the preview. Without this, previewing on
               // 2026-09-30 and then moving the date to 2026-10-01 leaves the season-2026 per-acre
               // rate on screen while save charges the season-2027 rate, so the customer breakdown
               // Mason approves is not the one billed (Codex push-proof review, 2026-09-04).
-              onChange={(e) => { setTransactionDate(e.target.value); setDirty(true); setPreviewData(null); }}
+              onChange={(e) => { setTransactionDate(e.target.value); setDirty(true); invalidatePreview(); }}
               disabled={!canEdit}
               className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
             />
@@ -2669,7 +2691,7 @@ export default function FieldApplicationInvoice() {
             <label className="block text-xs font-medium text-gray-500 mb-1">Application Service</label>
             <ApplicationServicePicker
               value={appServiceId}
-              onChange={(v) => { setAppServiceId(v); setDirty(true); setPreviewData(null); }}
+              onChange={(v) => { setAppServiceId(v); setDirty(true); invalidatePreview(); }}
               disabled={!canEdit}
             />
           </div>

@@ -428,6 +428,56 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
       expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
     });
   });
+
+  it('drops a preview response that arrives after the transaction date changed', async () => {
+    // The race the previous test does NOT cover: clearing previewData on a date change does
+    // nothing about a Preview RPC that is ALREADY in flight. Without a version guard that
+    // request resolves later and unconditionally repaints a breakdown priced for the OLD date
+    // — across the Oct 1 season boundary, a different per-acre rate than save will use.
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    // Hold the preview RPC open; every other RPC keeps the shared routing from beforeEach.
+    const routeRpc = mockRpc.getMockImplementation()!;
+    let resolvePreview!: (value: unknown) => void;
+    mockRpc.mockImplementation((name: string, args: unknown) => {
+      if (name === 'preview_field_app_invoice_split') {
+        return new Promise((resolve) => {
+          resolvePreview = resolve;
+        });
+      }
+      return routeRpc(name, args);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    await waitFor(() => expect(typeof resolvePreview).toBe('function'));
+    expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+
+    // Operator moves the date across the season boundary while the request is still open.
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+
+    // The old-date answer lands now. It must be discarded, not rendered.
+    await act(async () => {
+      resolvePreview({
+        data: {
+          per_customer: [{ customer_id: 'cust-A', customer_name: 'Farm A', is_primary: true, tier: 1, total_cents: 100000, lines: [] }],
+          grand_total_cents: 100000,
+          customer_count: 1,
+          shares_detail: { rows: [], customers: [], total_applied_acres: 40, field_count: 1, fallback_used_field_ids: [] },
+        },
+        error: null,
+      });
+    });
+
+    expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
+  });
 });
 
 describe('FieldApplicationInvoice — existing single invoice (no group)', () => {
