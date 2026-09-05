@@ -430,6 +430,16 @@ REVOKE ALL ON FUNCTION public.unicode_path_probe() FROM PUBLIC, anon;`;
   assert.equal(executableSql('SET U&"standard_conforming_strings" = off;'), null);
 });
 
+test('fails closed for encoded SECURITY DEFINER bodies that can hide a search-path change', () => {
+  const body = (encoded) => `CREATE FUNCTION public.encoded_path_probe() RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp AS ${encoded};
+REVOKE ALL ON FUNCTION public.encoded_path_probe() FROM PUBLIC, anon;`;
+  for (const encoded of [
+    String.raw`E'BEGIN S\x45T search_path = attacker, public; END;'`,
+    String.raw`U&'BEGIN S\0045T search_path = attacker, public; END;'`,
+  ]) assert.deepEqual(securityDefinerMissingAnonRevokes(body(encoded)), ['unparseable-security-definer-sql'], encoded);
+});
+
 test('does not demand an anon revoke for invoker-security functions', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.safe_fn() RETURNS void LANGUAGE sql AS $$ SELECT; $$;'), []);
 });

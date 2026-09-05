@@ -80,6 +80,11 @@ function readSingleQuotedLiteral(text, start) {
   return null;
 }
 
+function isUnicodeEscapeStringStart(text, quote) {
+  return quote >= 2 && (text[quote - 2] === 'u' || text[quote - 2] === 'U') && text[quote - 1] === '&'
+    && !isIdentifierCharacter(text[quote - 3]);
+}
+
 function readDoubleQuotedIdentifier(text, start) {
   if (text[start] !== '"') return null;
   let value = '';
@@ -220,6 +225,10 @@ function hasUnsafeRoutineBodySearchPathChange(body) {
     }
     const escape = (ch === 'e' || ch === 'E') && body[index + 1] === "'" && !/[A-Za-z0-9_$]/.test(body[index - 1] || '');
     if (ch === "'" || escape) {
+      // E'…' and U&'…' decode executable bytes. This source proof deliberately
+      // does not reimplement every PostgreSQL escape and UESCAPE rule, so an
+      // encoded body cannot be certified as harmless.
+      if (escape || isUnicodeEscapeStringStart(body, index)) return true;
       let end = index + (escape ? 2 : 1);
       while (end < body.length) {
         if (escape && body[end] === '\\') { end += 2; continue; }
@@ -286,6 +295,10 @@ export function executableSql(sql) {
       }
       if (end > src.length || src[end - 1] !== "'") return null;
       if (isExecutableRoutineBody(out)) {
+        // A routine body written as E'…' or U&'…' may decode into arbitrary
+        // executable SQL. Until the static checker models PostgreSQL's full
+        // escape grammar, withhold proof rather than scan its encoded spelling.
+        if (escape || isUnicodeEscapeStringStart(src, i)) return null;
         const rawBody = src.slice(i + (escape ? 2 : 1), end - 1);
         if (hasUnsafeRoutineBodySearchPathChange(rawBody)) return null;
         const body = executableSql(rawBody);
