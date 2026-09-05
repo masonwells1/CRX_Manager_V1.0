@@ -66,6 +66,10 @@ could admit an old document writer between them. The pending set now contains **
 `20260905200500` is superseded, never applied, and must not be recreated as a separate step.
 The unified file drains document and commission writers before all six replacements, with a
 disposable PostgreSQL 17 two-session proof and a lock-removal mutation as its acceptance gate.
+The later cached-body correction adds the same-transaction marker/trigger retry boundary; its
+lock-removal mutant is now refused at the late trigger-DDL `lock_timeout`, demonstrating why the
+top-level writer drain must remain the deterministic boundary rather than claiming an early,
+compatibility-free completion.
 
 No migration was applied and no live data changed. Applying the set still requires Mason's
 explicit in-chat approval and the governed apply path.

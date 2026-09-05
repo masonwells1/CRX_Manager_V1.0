@@ -32,7 +32,10 @@ approved and applied, production still carries that narrow stale-batch risk. Unt
 business-date guard is separately approved and applied, a noncanonical writer can still store a
 commission payment date after the current America/Chicago business date. The unified
 `20260905200400` candidate makes commission dates inherit their source documents and moves every
-affected source-document writer off UTC `CURRENT_DATE` under one writer-drain lock boundary;
+affected source-document writer off UTC `CURRENT_DATE` under one writer-drain lock boundary. Its
+same-transaction compatibility triggers reject a cached pre-cutover body at its first affected DML
+with `CHICAGO_DATE_CUTOVER_RETRY`, so a backend that resolved an old PL/pgSQL plan before the lock
+drain cannot commit a stale Chicago date after the unified cutover;
 `20260905200500` was superseded before apply, so the September 30 cutover cannot commit in two
 separate migrations and neither behavior is live.
 The final label-selection candidate replaces alphabetical historical-name selection with the latest

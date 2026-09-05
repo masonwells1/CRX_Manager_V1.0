@@ -420,10 +420,17 @@ $eval$;`, { allowFailure: true });
     `pg_get_expr(proargdefaults, p.oid) was expected to return NULL, got: ${darkReader}`);
   const readerAnchor = 'pg_get_expr(p.proargdefaults, 0) AS arg_defaults';
   const blindedReader = 'pg_get_expr(p.proargdefaults, p.oid) AS arg_defaults';
-  const preflightReaderIndex = candidateSql.indexOf(readerAnchor);
-  const postflightReaderIndex = candidateSql.indexOf(readerAnchor, preflightReaderIndex + readerAnchor.length);
-  assert.ok(preflightReaderIndex >= 0, 'preflight argument-default reader anchor moved');
-  assert.ok(postflightReaderIndex > preflightReaderIndex, 'postflight argument-default reader anchor moved');
+  // The unified candidate now also pins defaults for the two commission helpers.
+  // Scope these mutations to the four document-writer blocks so an earlier helper
+  // reader cannot absorb the edit and leave the intended guard untested.
+  const preflightBlockIndex = candidateSql.indexOf('DO $preflight$');
+  const postflightBlockIndex = candidateSql.indexOf('DO $postflight$');
+  const preflightReaderIndex = candidateSql.indexOf(readerAnchor, preflightBlockIndex);
+  const postflightReaderIndex = candidateSql.indexOf(readerAnchor, postflightBlockIndex);
+  assert.ok(preflightBlockIndex >= 0 && preflightReaderIndex > preflightBlockIndex,
+    'document-writer preflight argument-default reader anchor moved');
+  assert.ok(postflightBlockIndex > preflightReaderIndex && postflightReaderIndex > postflightBlockIndex,
+    'document-writer postflight argument-default reader anchor moved');
 
   const preflightReaderMutated = `${candidateSql.slice(0, preflightReaderIndex)}${blindedReader}${candidateSql.slice(preflightReaderIndex + readerAnchor.length)}`;
   copyText(preflightReaderMutated, 'preflight-reader-mutant.sql', workDir);

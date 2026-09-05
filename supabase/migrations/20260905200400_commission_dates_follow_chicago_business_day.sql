@@ -20,6 +20,64 @@ LOCK TABLE public.orders,
            public.commissions
   IN SHARE ROW EXCLUSIVE MODE;
 
+-- A transaction can retain an already-resolved PL/pgSQL body across the lock
+-- drain. The compatibility trigger below closes that cached-body straggler: an
+-- old body reaches its first target DML without this transaction-local marker
+-- and is told to retry, while normal direct writes remain unaffected.
+DO $chicago_cutover_compat_preflight$
+DECLARE
+  v_function_count int;
+  v_trigger_count int;
+  v_expected_trigger_defs constant jsonb := jsonb_build_object(
+    'orders_chicago_date_cutover_compat',
+      'CREATE TRIGGER orders_chicago_date_cutover_compat BEFORE INSERT OR UPDATE OF order_date, customer_id ON public.orders FOR EACH ROW EXECUTE FUNCTION enforce_chicago_date_cutover_compat()',
+    'invoices_chicago_date_cutover_compat',
+      'CREATE TRIGGER invoices_chicago_date_cutover_compat BEFORE INSERT OR UPDATE OF invoice_date, due_date, season, order_id, customer_id ON public.invoices FOR EACH ROW EXECUTE FUNCTION enforce_chicago_date_cutover_compat()',
+    'commissions_chicago_date_cutover_compat',
+      'CREATE TRIGGER commissions_chicago_date_cutover_compat BEFORE INSERT OR UPDATE OF order_id, invoice_id, order_date ON public.commissions FOR EACH ROW EXECUTE FUNCTION enforce_chicago_date_cutover_compat()'
+  );
+BEGIN
+  SELECT count(*) INTO v_function_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'enforce_chicago_date_cutover_compat';
+  IF v_function_count > 1 THEN
+    RAISE EXCEPTION 'PREFLIGHT_COMPAT_OVERLOAD: expected zero or one compatibility trigger function, found %.', v_function_count;
+  END IF;
+  IF v_function_count = 1 AND NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = 'enforce_chicago_date_cutover_compat'
+       AND p.prorettype = 'trigger'::regtype AND p.proretset IS FALSE AND p.proargtypes = ''::oidvector
+       AND p.prolang = (SELECT oid FROM pg_language WHERE lanname = 'plpgsql')
+       AND p.prosecdef IS FALSE AND p.provolatile = 'v'::"char"
+       AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+       AND p.proowner = 'postgres'::regrole
+       AND p.proacl::text IS NOT DISTINCT FROM '{postgres=X/postgres}'
+       AND md5(p.prosrc) = '88a25e74945c7035daac96a5d5f43aaf'
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_COMPAT_DRIFT: compatibility trigger function is not the exact reviewed replay image.';
+  END IF;
+  SELECT count(*) INTO v_trigger_count
+    FROM pg_trigger t
+   WHERE NOT t.tgisinternal
+     AND t.tgname IN ('orders_chicago_date_cutover_compat', 'invoices_chicago_date_cutover_compat', 'commissions_chicago_date_cutover_compat');
+  IF v_trigger_count NOT IN (0, 3) THEN
+    RAISE EXCEPTION 'PREFLIGHT_COMPAT_TRIGGER_DRIFT: expected zero or three compatibility triggers, found %.', v_trigger_count;
+  END IF;
+  IF v_trigger_count = 3 AND EXISTS (
+    SELECT 1
+      FROM pg_trigger t
+      LEFT JOIN pg_proc p ON p.oid = t.tgfoid
+     WHERE NOT t.tgisinternal
+       AND t.tgname IN ('orders_chicago_date_cutover_compat', 'invoices_chicago_date_cutover_compat', 'commissions_chicago_date_cutover_compat')
+       AND (t.tgenabled <> 'O' OR t.tgtype <> 23
+            OR p.oid IS DISTINCT FROM to_regprocedure('public.enforce_chicago_date_cutover_compat()')
+            OR pg_get_triggerdef(t.oid) IS DISTINCT FROM (v_expected_trigger_defs ->> t.tgname))
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_COMPAT_TRIGGER_DRIFT: compatibility triggers are not the exact reviewed replay image.';
+  END IF;
+END;
+$chicago_cutover_compat_preflight$;
+
 -- ---------------------------------------------------------------------------
 -- Commission helpers: the ledger inherits the source document's Chicago date.
 -- Their preflight accepts only the live pre-image or this migration's own
@@ -29,14 +87,17 @@ DO $commission_helper_preflight$
 DECLARE
   r record;
   v_expected constant jsonb := jsonb_build_object(
-    '_insert_commissions_for_order', jsonb_build_array('9f1a3c7af994b768bb0a76debc186350', 'b14b5b233e782deac1e9f4f9d3c472fe'),
-    '_insert_commissions_for_job', jsonb_build_array('c23fd25cf213da9ee832a1764369ac77', '486a229b2e2cf67244302ec448dbe982')
+    '_insert_commissions_for_order', jsonb_build_array('9f1a3c7af994b768bb0a76debc186350', '3dd9c370d2aa7088db2cb4d20059ea45'),
+    '_insert_commissions_for_job', jsonb_build_array('c23fd25cf213da9ee832a1764369ac77', 'deb664fe8c4b0b557259d153076fec1e')
   );
   v_seen int := 0;
 BEGIN
   FOR r IN
     SELECT p.proname, md5(p.prosrc) AS src_md5, p.prosecdef, p.proconfig,
-           p.proowner::regrole::text AS owner, count(*) OVER (PARTITION BY p.proname) AS overloads
+           p.proowner::regrole::text AS owner, p.prorettype::regtype::text AS rettype, p.proretset,
+           p.proargtypes::text AS argtypes, p.proargnames, p.pronargdefaults,
+           pg_get_expr(p.proargdefaults, 0) AS arg_defaults,
+           count(*) OVER (PARTITION BY p.proname) AS overloads
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public'
        AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job')
@@ -46,8 +107,19 @@ BEGIN
     IF NOT ((v_expected -> r.proname) ? r.src_md5) THEN
       RAISE EXCEPTION 'PREFLIGHT_DRIFT: public.% body md5 % is not an approved helper pre/post image.', r.proname, r.src_md5;
     END IF;
-    IF r.prosecdef OR r.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] OR r.owner <> 'postgres' THEN
+    IF r.prosecdef OR r.rettype <> 'integer' OR r.proretset
+       OR r.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] OR r.owner <> 'postgres' THEN
       RAISE EXCEPTION 'PREFLIGHT_ATTRIBUTES: public.% security/search_path/owner drifted.', r.proname;
+    END IF;
+    IF r.pronargdefaults <> 1
+       OR r.arg_defaults NOT IN ('CURRENT_DATE', '((now() AT TIME ZONE ''America/Chicago''::text))::date')
+       OR (r.src_md5 = (v_expected -> r.proname ->> 0) AND r.arg_defaults IS DISTINCT FROM 'CURRENT_DATE')
+       OR (r.src_md5 = (v_expected -> r.proname ->> 1) AND r.arg_defaults IS DISTINCT FROM '((now() AT TIME ZONE ''America/Chicago''::text))::date')
+       OR (r.proname = '_insert_commissions_for_order' AND r.argtypes <> '2950 2950 1700 3802 1082')
+       OR (r.proname = '_insert_commissions_for_job' AND r.argtypes <> '2950 2950 2950 1700 3802 1082')
+       OR (r.proname = '_insert_commissions_for_order' AND r.proargnames IS DISTINCT FROM ARRAY['p_order_id', 'p_customer_id', 'p_order_profit', 'p_commission_split', 'p_order_date']::text[])
+       OR (r.proname = '_insert_commissions_for_job' AND r.proargnames IS DISTINCT FROM ARRAY['p_job_id', 'p_invoice_id', 'p_customer_id', 'p_profit', 'p_commission_split', 'p_commission_date']::text[]) THEN
+      RAISE EXCEPTION 'PREFLIGHT_DEFAULT_DRIFT: public.% argument names/defaults drifted; refusing a default-only overwrite.', r.proname;
     END IF;
   END LOOP;
   IF v_seen <> 2 THEN RAISE EXCEPTION 'PREFLIGHT_MISSING: expected two commission helpers, found %.', v_seen; END IF;
@@ -66,6 +138,7 @@ DECLARE
   v_count int := 0;
   v_order_date date;
 BEGIN
+  PERFORM set_config('crx.chicago_date_cutover', '20260905200400', true);
   IF p_commission_split IS NULL OR NOT (p_commission_split ? 'splits') THEN
     RETURN 0;
   END IF;
@@ -114,6 +187,7 @@ DECLARE
   v_count int := 0;
   v_commission_date date;
 BEGIN
+  PERFORM set_config('crx.chicago_date_cutover', '20260905200400', true);
   IF p_commission_split IS NULL OR NOT (p_commission_split ? 'splits') THEN
     RETURN 0;
   END IF;
@@ -162,7 +236,8 @@ DECLARE
 BEGIN
   FOR r IN
     SELECT p.proname, p.prosrc, p.prosecdef, p.proconfig, p.prorettype::regtype::text AS rettype,
-           p.proowner::regrole::text AS owner
+           p.proowner::regrole::text AS owner, p.proretset, p.proargtypes::text AS argtypes, p.proargnames, p.pronargdefaults,
+           pg_get_expr(p.proargdefaults, 0) AS arg_defaults
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public'
        AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job')
@@ -181,7 +256,14 @@ BEGIN
         RAISE EXCEPTION 'POSTFLIGHT_RESIDUAL: public._insert_commissions_for_job must derive and insert its invoice date; the caller argument is only a fallback.';
       END IF;
     END IF;
-    IF r.prosecdef OR r.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] OR r.rettype <> 'integer' OR r.owner <> 'postgres' THEN
+    IF r.prosecdef OR r.proretset OR r.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] OR r.rettype <> 'integer' OR r.owner <> 'postgres'
+       OR r.pronargdefaults <> 1
+       OR r.arg_defaults IS DISTINCT FROM '((now() AT TIME ZONE ''America/Chicago''::text))::date'
+       OR position('PERFORM set_config(''crx.chicago_date_cutover'', ''20260905200400'', true);' in r.prosrc) = 0
+       OR (r.proname = '_insert_commissions_for_order' AND r.argtypes <> '2950 2950 1700 3802 1082')
+       OR (r.proname = '_insert_commissions_for_job' AND r.argtypes <> '2950 2950 2950 1700 3802 1082')
+       OR (r.proname = '_insert_commissions_for_order' AND r.proargnames IS DISTINCT FROM ARRAY['p_order_id', 'p_customer_id', 'p_order_profit', 'p_commission_split', 'p_order_date']::text[])
+       OR (r.proname = '_insert_commissions_for_job' AND r.proargnames IS DISTINCT FROM ARRAY['p_job_id', 'p_invoice_id', 'p_customer_id', 'p_profit', 'p_commission_split', 'p_commission_date']::text[]) THEN
       RAISE EXCEPTION 'POSTFLIGHT_ATTRIBUTES: public.% security/search_path/return/owner drifted.', r.proname;
     END IF;
   END LOOP;
@@ -303,13 +385,13 @@ DECLARE
   r record;
   v_expected constant jsonb := jsonb_build_object(
     '_convert_quote_to_order_owner_impl',
-      jsonb_build_array('f81eab0f5ad504e3707d6355d71eff06', 'd6398064c65664b3fd2145cca89c9286'),
+      jsonb_build_array('f81eab0f5ad504e3707d6355d71eff06', 'a23bffb3f20406b045cdf23d4d5a8213'),
     '_draw_down_quote_below_cost_impl_20260810',
-      jsonb_build_array('b921e5349114b04214c616b7b66ac6e1', '90e80d015ce57e882cdc23c0fa6304d2'),
+      jsonb_build_array('b921e5349114b04214c616b7b66ac6e1', 'e92324844af88051c4a20f773b7ac2bb'),
     '_create_quick_delivery_intent_impl_20260802',
-      jsonb_build_array('5ace886f56af66ad8de02194cc97a96c', '25b6bca34a8e70ac9617078c21cfb5ae'),
+      jsonb_build_array('5ace886f56af66ad8de02194cc97a96c', 'f5cc01e983fd1c8aa1e8a7895777a7ab'),
     'transfer_job_to_invoice',
-      jsonb_build_array('78b827f8509a2740ea9879364747c372', '65cec26a71dde8c465a64337e25d8098')
+      jsonb_build_array('78b827f8509a2740ea9879364747c372', '85cd07a0a6b978cb066edab7df369fea')
   );
   v_expected_defaults constant jsonb := jsonb_build_object(
     '_convert_quote_to_order_owner_impl',
@@ -416,6 +498,7 @@ DECLARE
   v_has_draws boolean; v_fully_drawn boolean;
   v_canonical_profit numeric; -- retained from live 20260810150000 DELTA-A
 BEGIN
+  PERFORM set_config('crx.chicago_date_cutover', '20260905200400', true);
   v_actor := auth.uid();
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
   IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
@@ -730,6 +813,7 @@ DECLARE
   v_alloc_left numeric;
   -- >>>TIERSPLIT
 BEGIN
+  PERFORM set_config('crx.chicago_date_cutover', '20260905200400', true);
   v_actor := auth.uid();
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
   IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
@@ -1970,6 +2054,7 @@ DECLARE
   v_stock_warnings text[] := '{}';
   v_short_product_ids uuid[] := '{}';
 BEGIN
+  PERFORM set_config('crx.chicago_date_cutover', '20260905200400', true);
   v_actor := auth.uid();
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
   IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
@@ -2302,6 +2387,7 @@ DECLARE
   v_member_profit_cents bigint := 0;
   v_member_field_names text[];
 BEGIN
+  PERFORM set_config('crx.chicago_date_cutover', '20260905200400', true);
   IF NOT EXISTS (
     SELECT 1 FROM profiles WHERE id = auth.uid() AND is_active = true AND role IN ('admin','sales_rep')
   ) THEN
@@ -3083,6 +3169,10 @@ BEGIN
       RAISE EXCEPTION 'POSTFLIGHT_CHICAGO: public.% carries no America/Chicago conversion.', r.proname;
     END IF;
 
+    IF position('PERFORM set_config(''crx.chicago_date_cutover'', ''20260905200400'', true);' in r.prosrc) = 0 THEN
+      RAISE EXCEPTION 'POSTFLIGHT_CUTOVER_MARKER: public.% does not set the exact transaction-local cached-body marker.', r.proname;
+    END IF;
+
     IF r.owner <> 'postgres' THEN
       RAISE EXCEPTION 'POSTFLIGHT_OWNER: public.% changed owner to %.', r.proname, r.owner;
     END IF;
@@ -3115,6 +3205,104 @@ BEGIN
 END;
 $postflight$;
 
+-- Cached pre-cutover PL/pgSQL bodies can survive a writer-drain lock because a
+-- backend resolved the old body before this transaction committed. They cannot
+-- carry this marker. Limit the guard to this exact six-function stack so ordinary
+-- direct table writes and unrelated writers retain their established behavior.
+CREATE OR REPLACE FUNCTION public.enforce_chicago_date_cutover_compat()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_context text;
+BEGIN
+  GET DIAGNOSTICS v_context = PG_CONTEXT;
+  IF current_setting('crx.chicago_date_cutover', true) IS DISTINCT FROM '20260905200400'
+     AND v_context ~ '(_insert_commissions_for_order|_insert_commissions_for_job|_convert_quote_to_order_owner_impl|_draw_down_quote_below_cost_impl_20260810|_create_quick_delivery_intent_impl_20260802|transfer_job_to_invoice)' THEN
+    RAISE EXCEPTION 'CHICAGO_DATE_CUTOVER_RETRY: cached pre-cutover writer reached %; retry the operation so PostgreSQL resolves the Chicago-date body.', TG_TABLE_NAME;
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+ALTER FUNCTION public.enforce_chicago_date_cutover_compat() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.enforce_chicago_date_cutover_compat()
+  FROM PUBLIC, anon, authenticated, service_role, metabase_ro;
+
+DROP TRIGGER IF EXISTS orders_chicago_date_cutover_compat ON public.orders;
+CREATE TRIGGER orders_chicago_date_cutover_compat
+BEFORE INSERT OR UPDATE OF order_date, customer_id ON public.orders
+FOR EACH ROW EXECUTE FUNCTION public.enforce_chicago_date_cutover_compat();
+
+DROP TRIGGER IF EXISTS invoices_chicago_date_cutover_compat ON public.invoices;
+CREATE TRIGGER invoices_chicago_date_cutover_compat
+BEFORE INSERT OR UPDATE OF invoice_date, due_date, season, order_id, customer_id ON public.invoices
+FOR EACH ROW EXECUTE FUNCTION public.enforce_chicago_date_cutover_compat();
+
+DROP TRIGGER IF EXISTS commissions_chicago_date_cutover_compat ON public.commissions;
+CREATE TRIGGER commissions_chicago_date_cutover_compat
+BEFORE INSERT OR UPDATE OF order_id, invoice_id, order_date ON public.commissions
+FOR EACH ROW EXECUTE FUNCTION public.enforce_chicago_date_cutover_compat();
+
+DO $chicago_cutover_compat_postflight$
+DECLARE
+  v_function_count int;
+  v_trigger_count int;
+  v_expected_trigger_defs constant jsonb := jsonb_build_object(
+    'orders_chicago_date_cutover_compat',
+      'CREATE TRIGGER orders_chicago_date_cutover_compat BEFORE INSERT OR UPDATE OF order_date, customer_id ON public.orders FOR EACH ROW EXECUTE FUNCTION enforce_chicago_date_cutover_compat()',
+    'invoices_chicago_date_cutover_compat',
+      'CREATE TRIGGER invoices_chicago_date_cutover_compat BEFORE INSERT OR UPDATE OF invoice_date, due_date, season, order_id, customer_id ON public.invoices FOR EACH ROW EXECUTE FUNCTION enforce_chicago_date_cutover_compat()',
+    'commissions_chicago_date_cutover_compat',
+      'CREATE TRIGGER commissions_chicago_date_cutover_compat BEFORE INSERT OR UPDATE OF order_id, invoice_id, order_date ON public.commissions FOR EACH ROW EXECUTE FUNCTION enforce_chicago_date_cutover_compat()'
+  );
+BEGIN
+  SELECT count(*) INTO v_function_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'enforce_chicago_date_cutover_compat';
+  IF v_function_count <> 1 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_COMPAT_OVERLOAD: expected exactly one compatibility trigger function, found %.', v_function_count;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = 'enforce_chicago_date_cutover_compat'
+       AND p.prorettype = 'trigger'::regtype AND p.proretset IS FALSE AND p.proargtypes = ''::oidvector
+       AND p.prolang = (SELECT oid FROM pg_language WHERE lanname = 'plpgsql')
+       AND p.prosecdef IS FALSE AND p.provolatile = 'v'::"char"
+       AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+       AND p.proowner = 'postgres'::regrole
+       AND p.proacl::text IS NOT DISTINCT FROM '{postgres=X/postgres}'
+       AND md5(p.prosrc) = '88a25e74945c7035daac96a5d5f43aaf'
+       AND position('PG_CONTEXT' in p.prosrc) > 0
+       AND position('crx.chicago_date_cutover' in p.prosrc) > 0
+  ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_COMPAT_FUNCTION_DRIFT: compatibility trigger function security or body contract differs.';
+  END IF;
+  SELECT count(*) INTO v_trigger_count
+    FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+   WHERE NOT t.tgisinternal AND t.tgenabled = 'O' AND t.tgtype = 23
+     AND p.oid = to_regprocedure('public.enforce_chicago_date_cutover_compat()')
+     AND (t.tgrelid, t.tgname) IN (
+       ('public.orders'::regclass, 'orders_chicago_date_cutover_compat'),
+       ('public.invoices'::regclass, 'invoices_chicago_date_cutover_compat'),
+       ('public.commissions'::regclass, 'commissions_chicago_date_cutover_compat')
+     );
+  IF v_trigger_count <> 3 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_COMPAT_TRIGGER_DRIFT: expected three enabled BEFORE ROW compatibility triggers, found %.', v_trigger_count;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_trigger t
+     WHERE NOT t.tgisinternal
+       AND t.tgname IN ('orders_chicago_date_cutover_compat', 'invoices_chicago_date_cutover_compat', 'commissions_chicago_date_cutover_compat')
+       AND pg_get_triggerdef(t.oid) IS DISTINCT FROM (v_expected_trigger_defs ->> t.tgname)
+  ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_COMPAT_TRIGGER_DRIFT: compatibility trigger definition differs from its pinned event/column image.';
+  END IF;
+END;
+$chicago_cutover_compat_postflight$;
+
 -- This final assertion intentionally runs only after BOTH component postflights. It
 -- binds the coordinated cutover together: no later edit can accidentally remove a
 -- helper or source writer while leaving the other component's postflight green.
@@ -3132,6 +3320,18 @@ BEGIN
      );
   IF v_seen <> 6 THEN
     RAISE EXCEPTION 'POSTFLIGHT_CUTOVER_MISSING: expected all six coordinated document/commission functions, found %.', v_seen;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname IN (
+         '_insert_commissions_for_order', '_insert_commissions_for_job',
+         '_convert_quote_to_order_owner_impl', '_draw_down_quote_below_cost_impl_20260810',
+         '_create_quick_delivery_intent_impl_20260802', 'transfer_job_to_invoice'
+       )
+       AND position('PERFORM set_config(''crx.chicago_date_cutover'', ''20260905200400'', true);' in p.prosrc) = 0
+  ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_CUTOVER_MARKER: every coordinated writer/helper must set the exact transaction-local cached-body marker.';
   END IF;
 END;
 $chicago_date_cutover_combined_postflight$;

@@ -23,7 +23,10 @@ once any commission payment has been posted; running it last means such a refusa
 else, whereas at its old position it would have halted the payout guard and the date fixes behind
 it. The unified date candidate at `20260905200400` closes the September 30 boundary atomically:
 it drains old writers, then replaces both commission helpers and all four source-document writers
-in one migration transaction. `20260905200500` was superseded before apply and is not a file.
+in one migration transaction. A transaction-local marker plus three owner-only compatibility
+triggers rejects any cached pre-cutover body when it reaches its first affected DML, requiring the
+caller to retry on the new body; ordinary direct and unrelated writes remain unchanged.
+`20260905200500` was superseded before apply and is not a file.
 None changes an existing immutable ledger row. Refresh
 `.claude/schema-registry.json` only after a reviewed live apply.
 

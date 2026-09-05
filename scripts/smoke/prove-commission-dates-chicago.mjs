@@ -26,7 +26,9 @@
  *       CURRENT_DATE now stamps the ORDER's / INVOICE's own date;
  *   5. re-applying is safe (identical bodies);
  *   6. orders.order_date's column default no longer mentions CURRENT_DATE;
- *   7. MUTATION: a candidate whose order-path derivation is reverted to the caller's date
+ *   7. MUTATIONS: removing a compatibility trigger, one required marker, or the
+ *      trigger-function ACL revocation must abort atomically;
+ *   8. MUTATION: a candidate whose order-path derivation is reverted to the caller's date
  *       must ABORT in POSTFLIGHT_RESIDUAL with nothing installed — proving the postflight
  *       is load-bearing rather than decorative. Then it is discarded.
  *
@@ -140,6 +142,20 @@ function bodyMd5(fn) {
   return scalar(`SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '${fn}'`);
 }
 function bodyState() { return Object.fromEntries(FUNCS.map((fn) => [fn, bodyMd5(fn)])); }
+function cutoverCatalogState() {
+  return scalar(`
+    SELECT jsonb_build_object(
+      'bodies', (SELECT jsonb_object_agg(p.proname, md5(p.prosrc) ORDER BY p.proname)
+                   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                  WHERE n.nspname = 'public' AND p.proname IN (
+                    '_insert_commissions_for_order', '_insert_commissions_for_job',
+                    '_convert_quote_to_order_owner_impl', '_draw_down_quote_below_cost_impl_20260810',
+                    '_create_quick_delivery_intent_impl_20260802', 'transfer_job_to_invoice',
+                    'enforce_chicago_date_cutover_compat')),
+      'context_trigger', (SELECT pg_get_triggerdef(t.oid)
+                            FROM pg_trigger t WHERE t.tgname = 'commissions_chicago_date_cutover_compat')
+    )::text`);
+}
 function functionDef(fn) {
   return scalar(`SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '${fn}'`);
 }
@@ -324,6 +340,61 @@ try {
 
   restoreHelpers();
 
+  // A CREATE OR REPLACE can change an argument default without changing prosrc.
+  // The default is a date boundary: accepting that drift would silently replace a
+  // reviewed compatibility contract while every old body-md5 check remained green.
+  const orderDefWithDefaultDrift = originalDefs._insert_commissions_for_order.replace(
+    /DEFAULT CURRENT_DATE/,
+    "DEFAULT DATE '2000-01-01'",
+  );
+  assert.notEqual(orderDefWithDefaultDrift, originalDefs._insert_commissions_for_order,
+    'fixture baseline did not expose the expected CURRENT_DATE helper default');
+  psql(orderDefWithDefaultDrift);
+  assert.equal(bodyMd5('_insert_commissions_for_order'), rebuild._insert_commissions_for_order,
+    'default-only fixture drift must preserve the helper body byte-for-byte');
+  const defaultDrifted = psql('\\i /tmp/candidate.sql', { allowFailure: true, wrap: wrapByName.get('candidate.sql') ?? false });
+  assert.match(`${defaultDrifted.stdout}\n${defaultDrifted.stderr}`, /PREFLIGHT_DEFAULT_DRIFT/,
+    'a default-only helper change must abort before any body replacement');
+  assert.equal(bodyMd5('_insert_commissions_for_job'), rebuild._insert_commissions_for_job,
+    'default-only refusal must not replace the other helper body');
+  log('PHASE 3a: MUTATION — a default-only helper drift aborts before any body replacement');
+
+  restoreHelpers();
+
+  // A genuine cached-body straggler, not a synthetic table lock: keep the OLD
+  // helper suspended inside its unchanged `validate_commission_split_json` call.
+  // The fixture-only validator takes an advisory barrier; the helper body itself
+  // remains the exact pre-image whose md5 the migration pins.
+  const STALE_CUSTOMER = '00000000-0000-4000-8000-00000000c101';
+  const STALE_ORDER = '00000000-0000-4000-8000-00000000c102';
+  const BARRIER_KEY = 20260905200400;
+  const originalSplitValidator = functionDef('validate_commission_split_json');
+  psql(`
+    INSERT INTO customers (id, farm_name) VALUES ('${STALE_CUSTOMER}', '[SMOKE] cached-helper customer')
+      ON CONFLICT (id) DO NOTHING;
+    INSERT INTO orders (id, order_number, customer_id, status, order_date)
+      VALUES ('${STALE_ORDER}', '[SMOKE]-CACHED-HELPER', '${STALE_CUSTOMER}', 'confirmed', DATE '2026-09-30')
+      ON CONFLICT (id) DO NOTHING;
+    CREATE OR REPLACE FUNCTION public.validate_commission_split_json(p_split jsonb)
+    RETURNS void LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
+    AS $barrier$ BEGIN PERFORM pg_advisory_xact_lock(${BARRIER_KEY}); END; $barrier$;
+  `);
+  assert.equal(bodyMd5('_insert_commissions_for_order'), rebuild._insert_commissions_for_order,
+    'the fixture barrier must not alter the old helper body');
+  const barrierHolder = psqlProcess();
+  const barrierHolderDone = collect(barrierHolder);
+  barrierHolder.stdin.write(`SELECT pg_advisory_lock(${BARRIER_KEY}); SELECT 'HELPER_BARRIER_HELD';\n`);
+  await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted)") === 't', 'fixture advisory barrier');
+  const staleCaller = psqlProcess();
+  const staleCallerDone = collect(staleCaller);
+  staleCaller.stdin.end(`
+    SELECT public._insert_commissions_for_order(
+      '${STALE_ORDER}'::uuid, '${STALE_CUSTOMER}'::uuid, 100.00,
+      jsonb_build_object('splits', jsonb_build_array(jsonb_build_object('recipient', 'Chicago Admin', 'percentage', 100))),
+      CURRENT_DATE);
+  `);
+  await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)") === 't', 'old helper paused in validate_commission_split_json');
+
   // PHASE 4: a pre-cutover writer holds the same ROW EXCLUSIVE lock normal DML
   // holds. The real candidate must wait before its first preflight/DDL; while it
   // waits, neither helper body may be replaced. Release drains that writer, then
@@ -343,7 +414,28 @@ try {
   assert.equal(applied.status, 0, `the candidate must apply over the pinned bodies:\n${applied.stdout}\n${applied.stderr}`);
   const afterBodies = bodyState();
   for (const fn of FUNCS) assert.notEqual(afterBodies[fn], PINS[fn], `${fn} should have been replaced`);
+  barrierHolder.stdin.end(`SELECT pg_advisory_unlock(${BARRIER_KEY});\n`);
+  assert.equal((await barrierHolderDone).status, 0, 'fixture advisory barrier must release cleanly');
+  const staleResult = await staleCallerDone;
+  const staleOutput = `${staleResult.stdout}\n${staleResult.stderr}`;
+  assert.notEqual(staleResult.status, 0, 'the old cached helper must not be allowed to write after the cutover');
+  assert.match(staleOutput, /CHICAGO_DATE_CUTOVER_RETRY/, 'the old cached helper must receive the stable retry error');
+  assert.match(staleOutput, /PL\/pgSQL function _insert_commissions_for_order/, 'PG17 fixture context must contain the real old helper stack frame');
+  assert.equal(scalar(`SELECT count(*) FROM commissions WHERE order_id = '${STALE_ORDER}'::uuid`), '0',
+    'the rejected old helper must leave no commission row');
+  psql(originalSplitValidator);
+  const staleRetry = psql(`
+    SELECT public._insert_commissions_for_order(
+      '${STALE_ORDER}'::uuid, '${STALE_CUSTOMER}'::uuid, 100.00,
+      jsonb_build_object('splits', jsonb_build_array(jsonb_build_object('recipient', 'Chicago Admin', 'percentage', 100))),
+      CURRENT_DATE);
+  `, { allowFailure: true });
+  assert.equal(staleRetry.status, 0, `retry on the new helper must succeed:\n${staleRetry.stdout}\n${staleRetry.stderr}`);
+  assert.equal(scalar(`SELECT order_date FROM commissions WHERE order_id = '${STALE_ORDER}'::uuid`), '2026-09-30',
+    'retry on the new helper must derive the source-document Chicago date');
   log('PHASE 4: the candidate applied over the pinned bodies');
+  log('PHASE 4 cached body: a real old helper resumed after cutover, received CHICAGO_DATE_CUTOVER_RETRY with its PG17 stack frame, then succeeded on retry with the source date');
+  log(`PHASE 4 catalog: ${cutoverCatalogState()}`);
   log('PHASE 4 lock: old writer blocked all candidate preflight/DDL; after release the unified migration completed');
 
   const after = commissionProbe('after');
@@ -363,15 +455,58 @@ try {
     `re-applying the candidate must succeed, not abort on its own output:\n${replay.stdout}\n${replay.stderr}`);
   log('PHASE 5: re-applying the candidate is safe');
 
+  // Compatibility boundary mutations. Each one starts from the exact replay
+  // post-image, so a failure proves this migration's postflight rejects a
+  // weakening rather than relying on an absent-object setup accident.
+  const replayCatalog = cutoverCatalogState();
+  const compatibilityMutations = [
+    {
+      name: 'missing-compat-trigger',
+      source: candidateSql.replace(
+        'CREATE TRIGGER commissions_chicago_date_cutover_compat\nBEFORE INSERT OR UPDATE OF order_id, invoice_id, order_date ON public.commissions\nFOR EACH ROW EXECUTE FUNCTION public.enforce_chicago_date_cutover_compat();',
+        '-- MUTATION: the commissions compatibility trigger is not recreated.',
+      ),
+      error: /POSTFLIGHT_COMPAT_TRIGGER_DRIFT/,
+    },
+    {
+      name: 'missing-helper-marker',
+      source: candidateSql.replace(
+        "PERFORM set_config('crx.chicago_date_cutover', '20260905200400', true);",
+        '-- MUTATION: cached helper marker removed.',
+      ),
+      error: /POSTFLIGHT_CUTOVER_MARKER|POSTFLIGHT_ATTRIBUTES/,
+    },
+    {
+      name: 'widened-compat-acl',
+      source: candidateSql.replace(
+        '  FROM PUBLIC, anon, authenticated, service_role, metabase_ro;',
+        '  FROM PUBLIC, anon, authenticated, service_role, metabase_ro;\nGRANT EXECUTE ON FUNCTION public.enforce_chicago_date_cutover_compat() TO authenticated;',
+      ),
+      error: /POSTFLIGHT_COMPAT_FUNCTION_DRIFT/,
+    },
+  ];
+  for (const mutation of compatibilityMutations) {
+    assert.notEqual(mutation.source, candidateSql, `${mutation.name} mutation did not alter the candidate`);
+    copyText(mutation.source, `${mutation.name}.sql`, workDir);
+    const run = psql(`\\i /tmp/${mutation.name}.sql`, { allowFailure: true, wrap: true });
+    assert.match(`${run.stdout}\n${run.stderr}`, mutation.error,
+      `${mutation.name} must be refused by the compatibility postflight`);
+    assert.equal(cutoverCatalogState(), replayCatalog,
+      `${mutation.name} must roll back all compatibility/catalog changes`);
+  }
+  log('PHASE 5a: MUTATIONS — missing trigger, missing marker, and widened compatibility ACL all abort atomically');
+
   // PHASE 6: the column default.
   const colDefault = scalar(`SELECT column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name='order_date'`);
   assert.match(colDefault, /America\/Chicago/, `orders.order_date default should be Chicago-based, got ${colDefault}`);
   log(`PHASE 6: orders.order_date default is now ${colDefault}`);
 
-  // PHASE 6a: a lock-removal mutant is a negative control. It is EXPECTED to
-  // finish while the old writer lock is held, which is exactly why the real
-  // candidate's lock is required. The harness rejects that mutant by asserting
-  // the early completion; a weak lock that does not conflict is caught the same way.
+  // PHASE 6a: a lock-removal mutant is a negative control. The real candidate
+  // blocks before its first preflight/DDL on this ordinary writer lock. Without
+  // the writer drain, it reaches the later trigger-attachment DDL and hits its
+  // explicit lock_timeout instead. That is still a rejected weak candidate: it
+  // proves the top-level lock is the deterministic drain boundary, not a cosmetic
+  // statement that happens to be rescued by a later DDL lock.
   restoreHelpers();
   const lockBlock = "SET LOCAL lock_timeout = '10s';\nLOCK TABLE public.orders,\n           public.invoices,\n           public.jobs,\n           public.commissions\n  IN SHARE ROW EXCLUSIVE MODE;\n";
   const lockMutant = candidateSql.replace(lockBlock, "SET LOCAL lock_timeout = '10s';\n-- MUTATION: writer-drain lock removed.\n");
@@ -379,20 +514,22 @@ try {
   copyText(lockMutant, 'lock-mutant.sql', workDir);
   const mutantHolder = psqlProcess();
   const mutantHolderDone = collect(mutantHolder);
-  // Use invoices here: the candidate's ALTER TABLE orders would otherwise create an
-  // accidental late drain even after the intentional four-table lock was removed.
-  // An old invoice/job writer is a real affected path and has no later table DDL to
-  // save the mutant from completing while that writer remains active.
+  // Use invoices: an ordinary affected invoice/job writer takes this lock. The
+  // mutated candidate cannot pass its intended boundary and is refused only when
+  // later compatibility-trigger DDL encounters the holder.
   mutantHolder.stdin.write("BEGIN; LOCK TABLE public.invoices IN ROW EXCLUSIVE MODE; SELECT 'WRITER_LOCK_HELD';\n");
   await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'invoices' AND l.mode = 'RowExclusiveLock' AND l.granted)") === 't', 'mutant writer lock');
   const lockMutantRun = psqlProcess({ wrap: true });
   const lockMutantDone = collect(lockMutantRun);
   lockMutantRun.stdin.end('\\i /tmp/lock-mutant.sql\n');
   const lockMutantResult = await lockMutantDone;
-  assert.equal(lockMutantResult.status, 0, `a removed-lock mutant should expose the race by completing before old-writer release:\n${lockMutantResult.stdout}\n${lockMutantResult.stderr}`);
+  assert.notEqual(lockMutantResult.status, 0,
+    `a removed-lock mutant must be rejected instead of certifying an undrained writer:\n${lockMutantResult.stdout}\n${lockMutantResult.stderr}`);
+  assert.match(`${lockMutantResult.stdout}\n${lockMutantResult.stderr}`, /lock timeout|lock_timeout/i,
+    'the removed-lock mutant must reach a late DDL lock timeout, proving it skipped the deterministic top-level drain');
   mutantHolder.stdin.end('COMMIT;\n');
   assert.equal((await mutantHolderDone).status, 0, 'mutant writer holder must release cleanly');
-  log('PHASE 6a: MUTATION — removing the writer-drain lock completes while an old writer is active; the harness rejects that weakened candidate');
+  log('PHASE 6a: MUTATION — removing the writer-drain lock skips the deterministic boundary and is rejected at late trigger DDL by lock_timeout');
 
   // PHASE 7: mutation — the helper postflight must be load-bearing.
   restoreHelpers();
