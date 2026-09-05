@@ -1,8 +1,9 @@
 ## 2026-09-05 - Exclude subagent instructions from the human-prompt count
 
 Fable 5.1 reviewed PR #613 and found that subagent starting instructions were
-counted as Mason's prompts. The human-message classifier now excludes subagent
-transcripts while retaining their API usage, tool calls, and paired denials.
+counted as Mason's prompts. The global human-prompt total now excludes subagent
+instructions while retaining their session prompt metadata, API usage, tool
+calls, and paired denials.
 
 A synthetic transcript fixture reproduced four human prompts where only two
 were written by the owner. The regression covers string and text-block records,
