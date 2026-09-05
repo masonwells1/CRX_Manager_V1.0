@@ -30,14 +30,18 @@ version `20260904152221`, which sorts *below* its own filename timestamp.
   `commission_earned_state_ledger`, `commission_history_cutover`, `commission_settlement_events`.
 - **+3 parsed CHECK constraints**: `commission_earned_state_ledger.event_kind` / `.source_type`,
   `commission_settlement_events.event_kind`.
-- **+13 skipped constraints** (0 removed), all on the commission surface.
+- **+13 skipped constraints** (0 removed, 0 modified), all on the commission surface.
 - **~2 changed column lists**: `commissions`, `commission_payments`.
 - `generated_columns`, `status_enums` and `sequences` are unchanged.
 
-The raw diff also shows all 208 pre-existing `skipped_constraints` entries replaced. That is an
-**encoding repair, not a data change**: every old entry carried a mojibake em-dash (`â€”`, UTF-8
-bytes read as latin-1) in its `reason`; every new entry carries a proper `—`. Constraint names and
-definitions are byte-identical.
+**Correction (Codex review of `a847cc1a`).** An earlier draft of this entry claimed all 208
+pre-existing `skipped_constraints` were rewritten by an em-dash "encoding repair". That was wrong,
+and the error was mine: the comparison script read `git show` output with
+`subprocess.run(..., text=True)`, which decodes using the Windows locale codec (cp1252) rather than
+UTF-8, so every correctly-encoded em-dash *appeared* as mojibake. Re-checked by decoding both sides
+explicitly as UTF-8 and by scanning the raw bytes: both the old and new files contain proper UTF-8
+em-dash bytes (`e2 80 94`) and neither contains mojibake. The real delta is
+**+13 added / 0 removed / 0 modified**.
 
 ## Proof
 
@@ -55,6 +59,35 @@ commission tables.
 
 `npm run agent-health` is green (the prior `Session staleness` FAIL is gone). Typecheck, lint, 4,976
 tests across 349 files, and the production build all pass.
+
+## Two gaps this refresh exposes but does NOT close (Codex review of `a847cc1a`)
+
+Both are pre-existing and neither is caused by this change. They are recorded here rather than
+fixed, because fixing either inside a registry data refresh would mean editing a deterministic guard
+or another lane's migrations.
+
+1. **Three migrations are recorded as applied live but have no source SQL in this repo.**
+   `20260903150100_ledger_backed_commission_history`, `20260903230000_commission_report_snapshot_contract`
+   and `20260904180000_invoice_season_follows_invoice_date` are all in the live ledger; none has a
+   file under `supabase/migrations/` on `main`. The last one exists only on an unmerged branch
+   (`72fb19b10`). The repository therefore cannot reconstruct the recorded production schema, and no
+   reviewer can check RLS, grants, `SECURITY DEFINER` safety, or idempotency for those changes from
+   source. This is other lanes' unmerged work, not this PR's — but it is the reason the registry and
+   the repo disagree, and it should be closed by merging those migration files.
+
+2. **The migration-immutability guard still treats one applied migration as editable.**
+   `classifyMigrationChanges()` (`scripts/check-migration-hard-rules.mjs:171`) compares a migration's
+   **filename timestamp** against `_meta.migrations_high_water`, which is a **ledger version**. Those
+   two number spaces are not comparable. `20260904160000_invoice_date_fallbacks_chicago` is applied
+   (ledger version `20260904130047`) yet its filename `20260904160000` sorts above the high-water
+   `20260904152221`, so an edit to that already-applied migration lands in `pendingChanges` and the
+   guard does not fail it.
+
+   This refresh **narrows** the hole rather than widening it — measured: 4 applied-but-editable
+   migrations under the old high-water `20260903153402`, 2 under the new one. Closing it properly
+   needs the guard to match on exact applied **names** (the registry already carries
+   `applied_migration_names`), or a separate authored-name high-water. That is a guard change and
+   belongs in its own reviewed PR.
 
 ## Two related items deliberately NOT done here
 
