@@ -1,3 +1,9 @@
+---
+# Read-only report: faster model at low effort (docs/reference/claude-model-tuning.md).
+model: sonnet
+effort: low
+---
+
 Show Mason the status of ALL his parallel work at once — every worktree, every loop, every parked migration — so he doesn't have to ask "where are we at?" in each window separately.
 
 Use this when Mason asks anything like: "where are we", "status", "progress", "catch me up", "what's going on across everything", "how's the other work going".
