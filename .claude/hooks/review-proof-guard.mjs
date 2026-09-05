@@ -143,11 +143,27 @@ function ownStateDirsOf(startDirs) {
 }
 const ownStateDirsReal = ownStateDirsOf([hookCwd, process.cwd(), process.env.CLAUDE_PROJECT_DIR]);
 function classifyReadTarget(candidate) {
-  const lexical = path.resolve(hookCwd || process.cwd(), String(candidate));
+  const raw = String(candidate);
+  const lexical = path.resolve(hookCwd || process.cwd(), raw);
+  // Resolve the path the way the operating system will OPEN it, not the way
+  // `path.resolve` spells it. `path.resolve` collapses `alias/..` lexically, but
+  // a POSIX open() follows the `alias` symlink FIRST and only then applies `..`:
+  // `/tmp/alias/../migration-review-x.json` with `alias -> <state-dir>/subdir`
+  // opens the proof while the normalized string names an unrelated
+  // `/tmp/migration-review-x.json` (Codex GitHub App review of e25605efd, P1 —
+  // reproduced: empty allow while the file tool returned the proof). libc
+  // realpath applies the same symlink-then-`..` order as open(), so on POSIX the
+  // raw string (joined to the cwd, never normalized) is what gets resolved.
+  // Windows collapses `..` textually before any reparse point is consulted, so
+  // there the normalized form IS what the kernel opens. `lexical` is otherwise
+  // used only for the over-inclusive name checks below.
+  const asOpened = process.platform === "win32" || path.isAbsolute(raw)
+    ? (process.platform === "win32" ? lexical : raw)
+    : `${hookCwd || process.cwd()}${path.sep}${raw}`;
   let resolved;
   let stats;
   try {
-    resolved = realpathSync.native(lexical);
+    resolved = realpathSync.native(asOpened);
     stats = statSync(resolved);
   } catch {
     return "unresolvable";

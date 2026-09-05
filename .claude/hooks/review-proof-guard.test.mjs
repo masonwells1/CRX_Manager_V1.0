@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -876,11 +876,22 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
     } catch { /* filesystem without junctions or directory symlinks */ }
     try {
       if (junctioned) {
+        // Hard links are their own capability: a volume may take a junction and
+        // still refuse `linkSync` (CodeRabbit review of e25605efd), so the link
+        // cases are gated on their own flag rather than on `junctioned`.
         const externalHardLink = path.join(externalDir, "harmless-link.txt");
-        linkSync(path.join(externalDir, "migration-review-20260901120000_x.json"), externalHardLink);
-        for (const tool_name of ["Read", "NotebookRead"]) {
-          const tool_input = tool_name === "Read" ? { file_path: externalHardLink } : { notebook_path: externalHardLink };
-          assert.match(run({ tool_name, cwd: junctionRoot, tool_input }).stdout, /"permissionDecision":"deny"/, "hard-linked evidence through the external state-directory location must deny");
+        let externalHardLinked = false;
+        try {
+          linkSync(path.join(externalDir, "migration-review-20260901120000_x.json"), externalHardLink);
+          externalHardLinked = true;
+        } catch { /* filesystem without hard links */ }
+        if (externalHardLinked) {
+          for (const tool_name of ["Read", "NotebookRead"]) {
+            const tool_input = tool_name === "Read" ? { file_path: externalHardLink } : { notebook_path: externalHardLink };
+            assert.match(run({ tool_name, cwd: junctionRoot, tool_input }).stdout, /"permissionDecision":"deny"/, "hard-linked evidence through the external state-directory location must deny");
+          }
+        } else {
+          console.log("review-proof-guard.test: hard-link creation refused on the junction target — external hard-link cases skipped");
         }
         const viaJunction = path.join(junctionRoot, ".claude", "session-state", "migration-review-20260901120000_x.json");
         for (const payload of [
@@ -904,7 +915,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
         mkdirSync(subdirCwd, { recursive: true });
         for (const payload of [
           { tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: path.join(externalDir, "migration-review-20260901120000_x.json") } },
-          { tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: externalHardLink } },
+          ...(externalHardLinked ? [{ tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: externalHardLink } }] : []),
           { tool_name: "NotebookRead", cwd: subdirCwd, tool_input: { notebook_path: path.join(externalDir, "migration-review-20260901120000_x.json") } },
         ]) {
           const result = run(payload);
@@ -912,6 +923,50 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
           assert.match(result.stdout, /"permissionDecision":"deny"/, `evidence read by its external name from a SUBDIRECTORY cwd must deny: ${JSON.stringify(payload.tool_input)}`);
         }
         assert.equal(run({ tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: path.join(externalDir, "OVERNIGHT-INTENT.flag") } }).stdout, "", "a flag read by its external name from a subdirectory cwd stays allowed");
+        // A directory symlink INTO the state dir followed by `..` (Codex GitHub
+        // App review of e25605efd, P1): `path.resolve` collapses `alias/..`
+        // textually, so the guard examined `<tmp>/migration-review-x.json`
+        // (absent, "unresolvable", allowed) while a POSIX open() follows the
+        // symlink first and lands on the proof. The oracle is the operating
+        // system itself: the proof's bytes are read through the raw, unnormalized
+        // string, and the guard must deny exactly when that read returns the
+        // proof (Windows collapses `..` before consulting reparse points, so
+        // there the raw string opens nothing and the guard must stay quiet).
+        // `path.join` would normalize the `..` away, so the string is assembled
+        // by hand.
+        const aliasParent = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-alias-"));
+        try {
+          const stateSubdir = path.join(externalDir, "subdir");
+          mkdirSync(stateSubdir);
+          // One alias outside the checkout (named absolutely) and one inside it
+          // (named relative to the payload cwd, the checkout root).
+          const outsideAlias = path.join(aliasParent, "alias");
+          symlinkSync(stateSubdir, outsideAlias, "junction");
+          mkdirSync(path.join(junctionRoot, "src"), { recursive: true });
+          symlinkSync(stateSubdir, path.join(junctionRoot, "src", "alias"), "junction");
+          const proofBody = readFileSync(path.join(externalDir, "migration-review-20260901120000_x.json"), "utf8");
+          for (const [label, raw, cwd] of [
+            ["absolute", `${outsideAlias}${path.sep}..${path.sep}migration-review-20260901120000_x.json`, junctionRoot],
+            ["relative to the payload cwd", `src${path.sep}alias${path.sep}..${path.sep}migration-review-20260901120000_x.json`, junctionRoot],
+          ]) {
+            // What the OS opens for this exact string (Node hands it over unnormalized).
+            const osPath = path.isAbsolute(raw) ? raw : `${cwd}${path.sep}${raw}`;
+            let opened = null;
+            try { opened = readFileSync(osPath, "utf8"); } catch { opened = null; }
+            for (const tool_name of ["Read", "NotebookRead"]) {
+              const tool_input = tool_name === "Read" ? { file_path: raw } : { notebook_path: raw };
+              const result = run({ tool_name, cwd, tool_input });
+              assert.equal(result.status, 0, `hook should exit 0: ${tool_name} ${label}`);
+              if (opened === proofBody) {
+                assert.match(result.stdout, /"permissionDecision":"deny"/, `a symlink-then-\`..\` path that the OS opens as the proof must deny (${label}): ${raw}`);
+              } else {
+                assert.equal(result.stdout, "", `a symlink-then-\`..\` path the OS does not open as the proof stays allowed (${label}): ${raw}`);
+              }
+            }
+          }
+        } finally {
+          rmSync(aliasParent, { recursive: true, force: true });
+        }
       } else {
         console.log("review-proof-guard.test: junction/directory-symlink creation refused — junctioned state-dir cases skipped");
       }
