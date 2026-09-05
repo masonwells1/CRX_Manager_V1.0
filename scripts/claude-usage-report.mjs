@@ -26,7 +26,9 @@
 //    list is the hooks' own (`isMachineGenerated` in .claude/hooks/prompt-source-lib.mjs) plus the
 //    desktop app's <ci-monitor-event>, so a scheduled-task or heartbeat record is never counted as
 //    a prompt Mason typed, nor shown as a session title under --titles (Codex App review of #613);
-//  - main and subagent transcripts are tracked separately on the session record;
+//  - main and subagent transcripts are tracked separately on the session record, and the global
+//    human-prompt total counts main transcripts only — a subagent's opening task was written by
+//    its parent agent (Codex App review of #613);
 //  - parse failures, missing timestamps, and out-of-window records are reported, not dropped silently;
 //  - hook denials are attributed to the exact tool_use they answered.
 //
@@ -137,7 +139,10 @@ for (const f of files) {
     if (o.type === "user" && o.message) {
       const c = o.message.content;
       const isHuman = !o.isMeta && !o.isCompactSummary && !o.isVisibleInTranscriptOnly;
-      const noteHuman = (text) => { humanPrompts++; s.prompts++; if (!s.title) s.title = text.slice(0, 80).replace(/\s+/g, " "); };
+      // A subagent transcript's first user record is the task its parent agent wrote, not a
+      // prompt Mason typed: it stays on the subagent's own session record (prompts, title) but
+      // never enters the global human-prompt total (Codex App review of #613).
+      const noteHuman = (text) => { if (!f.sub) humanPrompts++; s.prompts++; if (!s.title) s.title = text.slice(0, 80).replace(/\s+/g, " "); };
       if (typeof c === "string") {
         const words = isHuman ? masonWords(c) : "";
         if (words) noteHuman(words);
