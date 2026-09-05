@@ -53,6 +53,7 @@ BEGIN
         WHERE p.oid = 'public.record_commission_settlement_event()'::regprocedure
           AND p.proowner = 'postgres'::regrole
           AND p.prosecdef
+          AND p.prolang = (SELECT l.oid FROM pg_language l WHERE l.lanname = 'plpgsql')
           AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
           AND p.prorettype = 'trigger'::regtype
           AND p.provolatile = 'v'
@@ -79,6 +80,7 @@ BEGIN
         WHERE p.oid = 'public.record_commission_earned_state()'::regprocedure
           AND p.proowner = 'postgres'::regrole
           AND p.prosecdef
+          AND p.prolang = (SELECT l.oid FROM pg_language l WHERE l.lanname = 'plpgsql')
           AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
           AND p.prorettype = 'trigger'::regtype
           AND p.provolatile = 'v'
@@ -115,6 +117,7 @@ BEGIN
         WHERE p.oid = 'public.prevent_commission_history_ledger_mutation()'::regprocedure
           AND p.proowner = 'postgres'::regrole
           AND NOT p.prosecdef
+          AND p.prolang = (SELECT l.oid FROM pg_language l WHERE l.lanname = 'plpgsql')
           AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
           AND p.prorettype = 'trigger'::regtype
           AND p.provolatile = 'v'
@@ -130,6 +133,7 @@ BEGIN
         WHERE p.oid = 'public.prevent_commission_history_ledger_truncate()'::regprocedure
           AND p.proowner = 'postgres'::regrole
           AND NOT p.prosecdef
+          AND p.prolang = (SELECT l.oid FROM pg_language l WHERE l.lanname = 'plpgsql')
           AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
           AND p.prorettype = 'trigger'::regtype
           AND p.provolatile = 'v'
@@ -481,6 +485,7 @@ BEGIN
         WHERE p.oid = 'public.record_commission_settlement_event()'::regprocedure
           AND p.proowner = 'postgres'::regrole
           AND p.prosecdef
+          AND p.prolang = (SELECT l.oid FROM pg_language l WHERE l.lanname = 'plpgsql')
           AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
           AND p.prorettype = 'trigger'::regtype
           AND p.provolatile = 'v'

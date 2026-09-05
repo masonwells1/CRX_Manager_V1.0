@@ -24,9 +24,9 @@ constraints. The trigger independently refuses null,
 non-finite, negative, or sub-cent item amounts before any cents conversion.
 
 The network-isolated PostgreSQL 17 proof observes stale-A refusal, positive sub-cent refusal, a
-valid B post at +1,234 cents, and its void at -1,234 cents. Sixteen mutation guards cover the
+valid B post at +1,234 cents, and its void at -1,234 cents. Twenty mutation guards cover the
 apply-time writer lock, recipient and row-lock checks, both recorder bodies/overloads, payment and
-ledger RLS/policies/ACLs/constraints, immutable-ledger helpers and triggers, and unconditional
+both payment-table RLS/policies/ACLs/constraints, immutable-ledger helpers and triggers, and unconditional
 trigger shape, so a green proof cannot come from an unused guard.
 
 This migration is source-only and not applied live. It requires a fresh migration apply gate and

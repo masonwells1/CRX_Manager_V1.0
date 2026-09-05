@@ -107,6 +107,23 @@ ALTER FUNCTION public.record_commission_earned_state() STABLE;
 \${repairSource}
 COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_recorder_volatility_drift');
 
+  const earnedRecorderLanguageAlias = extractFunctionStatement(
+    candidate,
+    'record_commission_earned_state'
+  ).replace('LANGUAGE plpgsql', 'LANGUAGE commission_plpgsql_alias');
+  assert.notEqual(earnedRecorderLanguageAlias,
+    extractFunctionStatement(candidate, 'record_commission_earned_state'),
+    'earned-recorder language mutation did not change the function');
+  psql(\`CREATE TRUSTED PROCEDURAL LANGUAGE commission_plpgsql_alias
+  HANDLER plpgsql_call_handler
+  INLINE plpgsql_inline_handler
+  VALIDATOR plpgsql_validator;\`, { user: 'supabase_admin' });
+  expectRepairFailure(\`BEGIN;
+\${earnedRecorderLanguageAlias}
+\${repairSource}
+COMMIT;\`, 'COMMISSION_HISTORY_LABEL_REPAIR_DRIFT:', 'earned_recorder_language_drift');
+  psql('DROP LANGUAGE commission_plpgsql_alias;', { user: 'supabase_admin' });
+
   expectRepairFailure(\`BEGIN;
 ALTER TABLE public.commission_earned_state_ledger DISABLE ROW LEVEL SECURITY;
 \${repairSource}
@@ -325,6 +342,11 @@ ALTER TABLE public.commission_payments DISABLE ROW LEVEL SECURITY;
 COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_rls_disabled');
 
   expectRecipientGuardFailure(\`BEGIN;
+ALTER TABLE public.commission_payment_items DISABLE ROW LEVEL SECURITY;
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_item_rls_disabled');
+
+  expectRecipientGuardFailure(\`BEGIN;
 CREATE POLICY commission_payments_unexpected_update
   ON public.commission_payments
   FOR UPDATE TO authenticated
@@ -333,16 +355,37 @@ CREATE POLICY commission_payments_unexpected_update
 \${recipientGuardSource}
 COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_update_policy_added');
 
-  const missingPaymentAclRevoke = recipientGuardSource.replace(
-    'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER\\n' +
-      '  ON TABLE public.commission_payments, public.commission_payment_items\\n' +
-      '  FROM PUBLIC, anon, authenticated;',
-    '-- MUTATION: legacy direct-write table grants were not revoked'
+  expectRecipientGuardFailure(\`BEGIN;
+CREATE POLICY commission_payment_items_unexpected_insert
+  ON public.commission_payment_items
+  FOR INSERT TO authenticated
+  WITH CHECK (public.is_admin());
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_item_insert_policy_added');
+
+  const missingPaymentHeaderAclRevoke = recipientGuardSource.replace(
+    'ON TABLE public.commission_payments, public.commission_payment_items',
+    'ON TABLE public.commission_payment_items'
   );
-  assert.notEqual(missingPaymentAclRevoke, recipientGuardSource,
-    'payment ACL revoke mutation did not change the migration');
-  expectRecipientGuardFailure(missingPaymentAclRevoke,
-    'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_direct_write_acl');
+  assert.notEqual(missingPaymentHeaderAclRevoke, recipientGuardSource,
+    'payment-header ACL revoke mutation did not change the migration');
+  expectRecipientGuardFailure(missingPaymentHeaderAclRevoke,
+    'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_header_direct_write_acl');
+
+  const missingPaymentItemAclRevoke = recipientGuardSource.replace(
+    'ON TABLE public.commission_payments, public.commission_payment_items',
+    'ON TABLE public.commission_payments'
+  );
+  assert.notEqual(missingPaymentItemAclRevoke, recipientGuardSource,
+    'payment-item ACL revoke mutation did not change the migration');
+  expectRecipientGuardFailure(missingPaymentItemAclRevoke,
+    'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_item_direct_write_acl');
+
+  expectRecipientGuardFailure(\`BEGIN;
+ALTER TABLE public.commission_payments
+  DROP CONSTRAINT commission_payments_total_amount_whole_cents_chk;
+\${recipientGuardSource}
+COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_header_whole_cents_constraint_missing');
 
   expectRecipientGuardFailure(\`BEGIN;
 ALTER TABLE public.commission_payment_items
@@ -608,8 +651,8 @@ COMMIT;\`);
     'posted:' + reassignedRecipient + ':1234,voided:' + reassignedRecipient + ':-1234',
     'valid reassigned-recipient post/void did not preserve exact-cent ledger history');
 
-  console.log('COMMISSION_HISTORY_LABEL_REPAIR_PROOF_PASS postgres=17 append_only=true opening_labels=3 future_job_label=true mutation_guards=16');
-  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_PROOF_PASS stale_rejected=true current_posted=true exact_cents=true void_preserved=true mutation_guards=16');
+  console.log('COMMISSION_HISTORY_LABEL_REPAIR_PROOF_PASS postgres=17 append_only=true opening_labels=3 future_job_label=true mutation_guards=17');
+  console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_PROOF_PASS stale_rejected=true current_posted=true exact_cents=true void_preserved=true mutation_guards=20');
 `;
 
 try {
