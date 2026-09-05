@@ -136,7 +136,9 @@ for (const f of files) {
 
     if (o.type === "user" && o.message) {
       const c = o.message.content;
-      const isHuman = !o.isMeta && !o.isCompactSummary && !o.isVisibleInTranscriptOnly;
+      // Subagent user records are instructions supplied by the parent agent.
+      // Still process their tool results and usage, but never count them as Mason's prompts.
+      const isHuman = !f.sub && !o.isMeta && !o.isCompactSummary && !o.isVisibleInTranscriptOnly;
       const noteHuman = (text) => { humanPrompts++; s.prompts++; if (!s.title) s.title = text.slice(0, 80).replace(/\s+/g, " "); };
       if (typeof c === "string") {
         const words = isHuman ? masonWords(c) : "";
