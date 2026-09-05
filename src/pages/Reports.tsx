@@ -98,12 +98,16 @@ function getPresetDates(preset: string): { start: string; end: string } {
   // parseLocalDate() rebuilds the Chicago Y-M-D at LOCAL midnight, so the season
   // helpers (which read getMonth/getFullYear) and formatLocalDate() all round-trip
   // that same business day.
-  const now = parseLocalDate(todayInBusinessTz());
+  const businessToday = todayInBusinessTz();
+  const now = parseLocalDate(businessToday);
   // Day arithmetic goes through setDate rather than subtracting milliseconds:
   // across a local DST spring-forward, `now - 30 * 86400000` lands at 23:00 on
   // the previous day and formatLocalDate() then reports a date one day early.
   const daysBefore = (days: number): string => {
-    const d = parseLocalDate(todayInBusinessTz());
+    // Clone the single captured business-day anchor. Sampling Chicago "today"
+    // again could straddle midnight and combine tomorrow's start with today's
+    // end, silently shortening the requested range by one day.
+    const d = new Date(now);
     d.setDate(d.getDate() - days);
     return formatLocalDate(d);
   };

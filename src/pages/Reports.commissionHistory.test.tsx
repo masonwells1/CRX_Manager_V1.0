@@ -103,6 +103,7 @@ vi.mock('../components/reports/LogbookReport', () => ({ default: () => <div>Logb
 vi.mock('../components/reports/YearEndSummaryDialog', () => ({ default: () => null }));
 
 import Reports from './Reports';
+import * as dateUtils from '../lib/dateUtils';
 import { todayInBusinessTz } from '../lib/dateUtils';
 import { exportToCSV } from '../lib/csvExport';
 
@@ -199,6 +200,25 @@ describe('Reports commission history', () => {
       expect(dates()[1].value).toBe('2026-09-30');
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('samples the Chicago business day once when deriving rolling presets', () => {
+    renderReports();
+    fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+
+    const businessToday = vi.spyOn(dateUtils, 'todayInBusinessTz')
+      .mockReturnValueOnce('2026-09-30')
+      .mockReturnValue('2026-10-01');
+
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Last 30d' }));
+      const dates = document.querySelectorAll<HTMLInputElement>('input[type="date"]');
+      expect(dates[0].value).toBe('2026-08-31');
+      expect(dates[1].value).toBe('2026-09-30');
+    } finally {
+      businessToday.mockRestore();
     }
   });
 
