@@ -324,4 +324,57 @@ describe('JobDetail cross-record stale-load guard', () => {
     });
     expect(screen.queryByRole('heading', { name: 'J-AAAA-STALE' })).toBeNull();
   });
+
+  /**
+   * The case the ticket ALONE cannot catch, and the reason the guard has a second half.
+   *
+   * `handleStart` awaits `rpc('start_job', { p_job_id: id })` and then calls `fetchJob()`
+   * from the closure of the render it started on. That call is issued AFTER the route has
+   * already changed, so it reads the CURRENT ticket and mints it for the OLD job — a
+   * ticket check alone would certify precisely the write it exists to reject. The same
+   * shape sits in the save path and in `handleComplete`.
+   *
+   * Only the route is an independent witness to which job is on screen, which is why the
+   * second half compares the id a fetch was STARTED for against `routeIdRef`.
+   *
+   * Mutation-checked 2026-09-05: dropping the `routeIdRef` clause reddens ONLY this test;
+   * dropping the ticket clause reddens ONLY the A -> B -> A test above. Each half is
+   * load-bearing on its own — neither covers for the other.
+   */
+  it('does not let a post-RPC refetch from a stale handler closure reload the old job', async () => {
+    const startGate = deferred();
+    let jobsCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        jobsCalls += 1;
+        if (jobsCalls === 1) return buildChain({ data: JOB_A, error: null });
+        if (jobsCalls === 2) return buildChain({ data: JOB_B, error: null });
+        return buildChain({ data: JOB_A, error: null }); // the stale handler's refetch
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((fn: string) => (fn === 'start_job'
+      ? startGate.promise.then(() => ({ data: { ok: true }, error: null }))
+      : Promise.resolve({ data: null, error: null })));
+
+    const router = mountAt('/jobs/job-a');
+    await screen.findByRole('heading', { name: 'J-AAAA-1001' });
+    // Start Job is gated on a clean form, so wait for the baseline to be adopted.
+    await waitFor(() => expect(dirtyStates.some((d) => d === false)).toBe(true));
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start Job/ })); });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('start_job', expect.anything()));
+
+    // The operator navigates away while start_job is still in flight.
+    await act(async () => { await router.navigate('/jobs/job-b'); });
+    await screen.findByRole('heading', { name: 'J-BBBB-2002' });
+
+    // The RPC lands; the handler resumes and refetches job A from its stale closure.
+    await act(async () => { startGate.release(); await startGate.promise; });
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'J-BBBB-2002' })).toBeTruthy();
+    });
+    expect(screen.queryByRole('heading', { name: 'J-AAAA-1001' })).toBeNull();
+  });
 });

@@ -317,6 +317,14 @@ export default function JobDetail() {
   // current installs nothing. This gates the CALL, not the record id, so two
   // overlapping loads of the SAME job are still ordered by ticket.
   const loadGenerationRef = useRef(0);
+  // The SECOND, independent operand. The ticket alone orders CALLS but does not bind a
+  // call to a RECORD, and several handlers (`handleStart`, `handleComplete`, the save
+  // path) `await` an RPC and then call `fetchJob()` from the closure of the render they
+  // started on. That call happens NOW, so it mints the CURRENT ticket for the OLD job —
+  // a ticket check would certify exactly the write it exists to reject. Comparing the id
+  // a fetch was STARTED for against the id the route is on NOW gives two operands with
+  // genuinely independent sources, so the pair cannot degenerate into a tautology.
+  const routeIdRef = useRef(id);
   const [baselineSettleTick, setBaselineSettleTick] = useState(0);
   const blocker = useUnsavedChanges(isDirty);
   // Field-app parity #16: allow a deep-link to a tab (e.g. the Jobs-list "Map / Logs"
@@ -1651,7 +1659,12 @@ export default function JobDetail() {
     // share the mounted run's ticket and are therefore never bailed; only a run the
     // operator has navigated away from — or unmounted — stops installing state.
     const generation = loadGenerationRef.current;
-    const isCurrentLoad = () => loadGenerationRef.current === generation;
+    const startedForId = id;
+    // Two halves, each load-bearing on its own. The ticket catches a superseded load of
+    // the SAME record (only call order separates those). The id binding catches a call
+    // issued from a stale closure after a route change, which carries a CURRENT ticket.
+    const isCurrentLoad = () => loadGenerationRef.current === generation
+      && routeIdRef.current === startedForId;
     // Drop the baseline so the freshly-loaded form is re-adopted as clean once it
     // settles (also covers post-save refetches where loading stays false). The
     // settle guard defers adoption until this fetch's state has actually rendered.
@@ -1878,6 +1891,9 @@ export default function JobDetail() {
     // The route has no `key`, so this effect re-running IS the "operator moved to
     // another job" signal; the cleanup below bumps the ticket for unmount too.
     const generation = ++loadGenerationRef.current;
+    // Record which job the route is on now. This effect has `id` in its deps, so it runs
+    // on every route change, and it commits before any pending promise can resume.
+    routeIdRef.current = id;
     const isCurrentLoad = () => loadGenerationRef.current === generation;
     // A superseded fetchJob bails without clearing the settle guard it raised, and
     // the new-job branch below never calls fetchJob at all — so on job -> /jobs/new

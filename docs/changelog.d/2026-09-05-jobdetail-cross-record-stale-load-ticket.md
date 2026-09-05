@@ -30,6 +30,19 @@ This gates the **call**, not the record id, so two overlapping loads of the same
 ordered. The established in-repo pattern is `initialLoadGenerationRef` in
 `src/pages/QuoteBuilder.tsx`.
 
+**The ticket alone is not enough, and a ticket-only guard would have been actively wrong.**
+`handleStart`, `handleComplete` and the save path each `await` an RPC and then call `fetchJob()`
+from the closure of the render they started on. That call is issued **after** any route change,
+so it reads the **current** ticket and mints it for the **old** job — a ticket check would
+certify precisely the write it exists to reject. Only the route is an independent witness to
+which job is on screen, so `fetchJob` also records the id it was **started for** and compares it
+against `routeIdRef`, updated by the mount effect on every id change. Two operands with
+genuinely independent sources, so the pair cannot collapse into a tautology.
+
+Each half is load-bearing on its own, verified by breaking them one at a time: dropping the
+`routeIdRef` clause reddens **only** the stale-handler-closure test; dropping the ticket clause
+reddens **only** the `A -> B -> A` test. Neither covers for the other.
+
 Bailing early also had to take ownership of two pieces of state the abandoned run used to
 settle on its way out, or the guard would have traded a data bug for a dead page:
 
@@ -44,9 +57,11 @@ settle on its way out, or the guard would have traded a data bug for a dead page
 
 **Proof observed.** New `src/pages/JobDetail.staleLoad.test.tsx` mounts the real page under a
 router whose location the test drives, with deferred-promise gates (not timers, so the ordering
-holds on any machine at any speed). Four tests: `A -> B` with A resolving last, `new -> B` with
-the new run's lookups resolving last, the reverse `A -> new`, and `A -> B -> A` where the SAME
-job is reopened so only call ORDER separates the two in-flight loads.
+holds on any machine at any speed). Five tests: `A -> B` with A resolving last, `new -> B` with
+the new run's lookups resolving last, the reverse `A -> new`, `A -> B -> A` where the SAME job is
+reopened so only call ORDER separates the two in-flight loads, and a Start Job click whose
+`start_job` RPC is still in flight across a navigation, so the handler's refetch fires from a
+stale closure.
 
 That last case is what proves the guard gates the **call** and not the record. The other three
 switch between DIFFERENT jobs, so all three stay green against an id-only guard in its strongest
@@ -64,7 +79,7 @@ test 3 with a distinct symptom: removing `setLoading(false)` leaves the stuck sk
 (`expected false to be true`).
 
 Full gates on the final source: `npm run typecheck` clean, `npm run lint` clean, `npm run test`
-exit 0 under `pipefail` with 350 files passed / 4980 passed / 123 skipped and no `Errors` line,
+exit 0 under `pipefail` with 350 files passed / 4981 passed / 123 skipped and no `Errors` line,
 `npm run build` succeeded.
 
 **Not verified.** No live-browser run against production data — the page is auth-gated and the
