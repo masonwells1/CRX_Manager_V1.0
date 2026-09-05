@@ -413,6 +413,111 @@ function stripNoise(line: string): string {
 }
 
 /**
+ * Blank out comments ONLY, keeping string literals intact and byte offsets valid.
+ *
+ * The aliased-reset pins below locate a call by its RPC NAME — `.rpc('save_quote'` — so
+ * they cannot use a stripper that blanks strings; that would erase the very token they
+ * search for. They still must not be satisfiable by prose, which is what this removes.
+ * Quotes are tracked (not blanked) so a `//` inside a string is not mistaken for the
+ * start of a comment.
+ */
+function stripCommentsOnly(code: string): string {
+  let out = '';
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i];
+    const next = code[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < code.length && code[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      const close = code.indexOf('*/', i + 2);
+      const end = close === -1 ? code.length : close + 2;
+      for (; i < end; i += 1) out += code[i] === '\n' ? '\n' : ' ';
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      out += c;
+      i += 1;
+      while (i < code.length && code[i] !== c) {
+        if (code[i] === '\\') {
+          out += code.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
+        out += code[i];
+        i += 1;
+      }
+      if (i < code.length) {
+        out += c;
+        i += 1;
+      }
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Blank out line comments, block comments and string/template literals, replacing their
+ * contents with spaces so byte offsets into the original text stay valid. A lexical guard
+ * check run over the result cannot be satisfied by prose that merely QUOTES the guard.
+ *
+ * Unlike stripNoise this is whole-file rather than line-based, so it also removes BLOCK
+ * comments — including the `*` continuation lines that a line-based filter reads as code.
+ * Hoisted to module scope 2026-09-05 so the aliased-reset pins below can use it too;
+ * they previously scanned raw lines and could be satisfied by a comment (gpt-5.6-sol).
+ */
+function stripCommentsAndStrings(code: string): string {
+  let out = '';
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i];
+    const next = code[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < code.length && code[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      const close = code.indexOf('*/', i + 2);
+      const end = close === -1 ? code.length : close + 2;
+      for (; i < end; i += 1) out += code[i] === '\n' ? '\n' : ' ';
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      out += ' ';
+      i += 1;
+      while (i < code.length && code[i] !== c) {
+        if (code[i] === '\\') {
+          out += '  ';
+          i += 2;
+          continue;
+        }
+        out += code[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      if (i < code.length) {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+/**
  * Reports every reset that follows a mutating call with NO assert in between.
  *
  * STRENGTHENED 2026-09-03 (Codex MEDIUM, F1). The first version only reported a reset
@@ -721,54 +826,6 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
   });
 
   /**
-   * Blank out line comments, block comments and string/template literals, replacing their
-   * contents with spaces so byte offsets into the original text stay valid. A lexical guard
-   * check run over the result cannot be satisfied by prose that merely QUOTES the guard.
-   */
-  const stripCommentsAndStrings = (code: string): string => {
-    let out = '';
-    let i = 0;
-    while (i < code.length) {
-      const c = code[i];
-      const next = code[i + 1];
-      if (c === '/' && next === '/') {
-        while (i < code.length && code[i] !== '\n') {
-          out += ' ';
-          i += 1;
-        }
-        continue;
-      }
-      if (c === '/' && next === '*') {
-        const close = code.indexOf('*/', i + 2);
-        const end = close === -1 ? code.length : close + 2;
-        for (; i < end; i += 1) out += code[i] === '\n' ? '\n' : ' ';
-        continue;
-      }
-      if (c === "'" || c === '"' || c === '`') {
-        out += ' ';
-        i += 1;
-        while (i < code.length && code[i] !== c) {
-          if (code[i] === '\\') {
-            out += '  ';
-            i += 2;
-            continue;
-          }
-          out += code[i] === '\n' ? '\n' : ' ';
-          i += 1;
-        }
-        if (i < code.length) {
-          out += ' ';
-          i += 1;
-        }
-        continue;
-      }
-      out += c;
-      i += 1;
-    }
-    return out;
-  };
-
-  /**
    * A route-id SCOPE is only sound while the request it covers targets that same route id.
    *
    * CodeRabbit round 2 (F1): OrderDetail's id effect refetches but never clears `order`, and
@@ -831,7 +888,11 @@ describe('F1 aliased-reset class — the renamed resets verify before they retir
   ];
 
   it.each(ALIASED_SAVE_SITES)('$rpc verifies its reply before retiring $reset', ({ file, rpc, reset }) => {
-    const lines = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
+    // Comments are blanked first (strings are NOT — the search keys off the RPC name),
+    // so none of the three offsets below can be satisfied by prose. Without this, the
+    // long F1 comment that sits between the call and the assert — and which names both
+    // `assertRpcResult` and the reset — was itself scannable source (gpt-5.6-sol).
+    const lines = stripCommentsOnly(readFileSync(file, 'utf8').replace(/\r\n/g, '\n')).split('\n');
 
     // FAIL CLOSED: every offset must exist, so renaming or deleting any of the three
     // participants breaks the test instead of vacuously passing it.
@@ -863,7 +924,9 @@ describe('F1 aliased-reset class — the renamed resets verify before they retir
   });
 
   it('CustomerDetail releases the key on a route change only for a NON-EMPTY reply', () => {
-    const lines = readFileSync('src/pages/CustomerDetail.tsx', 'utf8').replace(/\r\n/g, '\n').split('\n');
+    const lines = stripCommentsOnly(
+      readFileSync('src/pages/CustomerDetail.tsx', 'utf8').replace(/\r\n/g, '\n'),
+    ).split('\n');
     const resets = lines.filter((l) => l.includes('resetSaveCustomerIdempotencyKey()'));
     expect(resets.length, 'resetSaveCustomerIdempotencyKey() not found — renamed or deleted?').toBeGreaterThan(0);
 
@@ -889,9 +952,12 @@ describe('F1 aliased-reset class — the renamed resets verify before they retir
  * blank with no explanation. Since the F2 number-generator gate applied live
  * (2026-09-04) a deactivated or out-of-role profile takes exactly that path.
  */
-describe('JobDetail — a failed job-number reservation is explained, not swallowed', () => {
+describe('JobDetail — a failed job-number lookup is explained, not swallowed', () => {
   it('reports the failure to the user and to Sentry, and names the role gate', () => {
-    const src = readFileSync('src/pages/JobDetail.tsx', 'utf8').replace(/\r\n/g, '\n');
+    // Comments blanked (strings kept): the region below is preceded by a long comment
+    // that names `toast`, `Sentry.captureException` and `INSUFFICIENT_ROLE`, every one
+    // of which would otherwise satisfy this pin on its own.
+    const src = stripCommentsOnly(readFileSync('src/pages/JobDetail.tsx', 'utf8').replace(/\r\n/g, '\n'));
     const callAt = src.indexOf(".rpc('next_job_number')");
     expect(callAt, 'next_job_number call not found — renamed or removed?').toBeGreaterThan(-1);
     const region = src.slice(callAt, callAt + 1400);

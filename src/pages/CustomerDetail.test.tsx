@@ -10,12 +10,21 @@ const {
   customerIdempotencyState,
   dirtyStates,
 } = vi.hoisted(() => {
-  const customerIdempotencyState = { generation: 0 };
+  // Generations are PER SCOPE, mirroring the real hook's per-scope Map. One shared
+  // counter would let a reset on customer B change the key later handed back for
+  // customer A, which the real hook never does — an A → B → A test written against
+  // that stub would assert a property of the mock, not of the page.
+  const customerIdempotencyState = {
+    generations: new Map<string, number>(),
+    generationFor(scope: string) { return this.generations.get(scope) ?? 0; },
+    bump(scope: string) { this.generations.set(scope, this.generationFor(scope) + 1); },
+    reset() { this.generations.clear(); },
+  };
   return {
     mockFrom: vi.fn(),
     mockRpc: vi.fn(),
     mockToast: vi.fn(),
-    mockResetIdempotencyKey: vi.fn(() => { customerIdempotencyState.generation += 1; }),
+    mockResetIdempotencyKey: vi.fn((scope: string = '') => { customerIdempotencyState.bump(scope); }),
     customerIdempotencyState,
     dirtyStates: [] as boolean[],
   };
@@ -72,7 +81,11 @@ vi.mock('../lib/db', async () => ({
   // before checking the reply stays green (aliased-reset sweep, 2026-09-05).
   assertRpcResult: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).assertRpcResult,
   checkMutationResult: vi.fn(),
-  hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
+  // The REAL hasRpcCode, for the same reason as assertRpcResult above. The old stub
+  // matched a code appearing ANYWHERE in the message, which is more permissive than
+  // production: a message that merely mentions IDEMPOTENCY_PAYLOAD_CONFLICT in prose
+  // would take the conflict-recovery path here and not on a live screen.
+  hasRpcCode: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).hasRpcCode,
   RpcErrorCodes: { CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
 }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ profile: { id: 'admin-1', role: 'admin', full_name: 'Admin' } }) }));
@@ -83,8 +96,8 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
     // customer, so a regression test for "customer B must not inherit A's key" would
     // pass against a completely unscoped hook — it would assert a property of the mock
     // rather than of the page (aliased-reset sweep, 2026-09-05).
-    getKey: () => `customer-stale-key-${intentScope}-${customerIdempotencyState.generation}`,
-    resetKey: mockResetIdempotencyKey,
+    getKey: () => `customer-stale-key-${intentScope}-${customerIdempotencyState.generationFor(intentScope)}`,
+    resetKey: () => mockResetIdempotencyKey(intentScope),
   }),
 }));
 vi.mock('../hooks/useUnsavedChanges', () => ({ useUnsavedChanges: (dirty: boolean) => { dirtyStates.push(dirty); return { state: 'unblocked', reset: vi.fn(), proceed: vi.fn() }; } }));
@@ -162,7 +175,7 @@ function renderDetailWithNewCustomerJump() {
 describe('CustomerDetail stale whole-record save', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    customerIdempotencyState.generation = 0;
+    customerIdempotencyState.reset();
     dirtyStates.length = 0;
     let customerReads = 0;
     mockFrom.mockImplementation((table: string) => {

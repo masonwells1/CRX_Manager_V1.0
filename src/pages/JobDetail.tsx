@@ -1850,6 +1850,11 @@ export default function JobDetail() {
   }, [id, toast, navigate]);
 
   useEffect(() => {
+    // This component is reused across `jobs/:id`, so it does NOT remount when the
+    // route id alone changes. A slow reply for the job that was on screen when the
+    // effect started can therefore land after the operator has opened a different
+    // job. `cancelled` marks that the reply no longer describes what is on screen.
+    let cancelled = false;
     // Await lookups FIRST so every lookup-driven re-render happens before the job
     // rows are populated and dirty-tracking is armed — otherwise a late-landing
     // lookup re-render after arming would mark a freshly-opened job dirty.
@@ -1861,35 +1866,50 @@ export default function JobDetail() {
         setGrowerShareFieldNames([]);
         setLoaderVesselId(ASSIGNED_VEHICLE_VESSEL_VALUE);
         setTankCapacity('');
-        // The reserved job number is the only thing standing between the operator
+        // The previewed job number is the only thing standing between the operator
         // and a job they cannot save. `if (!error && data)` discarded BOTH failure
         // shapes — a raised error and an empty reply — leaving the field blank with
         // no explanation. Since the F2 number-generator gate applied live
         // (2026-09-04), a deactivated or out-of-role profile hits exactly that path.
         // Mirror the CycleCounts shape: throw the failure into one handler and say
         // what happened.
+        //
+        // next_job_number() RESERVES NOTHING — it reads MAX(job_number)+1 under a
+        // transaction-scoped advisory lock and returns text; save_job() assigns the
+        // number that is actually kept. So this is a preview, and the wording below
+        // must not promise the operator that a number is being held for them.
+        //
+        // Both UI effects are gated on `cancelled`: a preview or a failure notice
+        // for /jobs/new must never overwrite the number of, or raise a toast over,
+        // an existing job the operator opened while this was in flight. Sentry is
+        // NOT gated — a real server failure happened and is worth reporting even
+        // though the operator has moved on.
         try {
           const { data, error } = await supabase.rpc('next_job_number');
           if (error) throw error;
-          setJobNumber(assertRpcResult<string>(data, 'next_job_number'));
+          const previewedJobNumber = assertRpcResult<string>(data, 'next_job_number');
+          if (!cancelled) setJobNumber(previewedJobNumber);
         } catch (err: unknown) {
           Sentry.captureException(
             err instanceof Error ? err : new Error(String(err)),
             { tags: { source: 'rpc', action: 'next_job_number' } },
           );
-          toast(
-            'error',
-            hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)
-              ? 'Your account is not permitted to start a new job. Ask an administrator to check your role before entering one.'
-              : `Could not reserve a job number — ${sanitizeError(err)}. Reload before entering this job.`,
-          );
+          if (!cancelled) {
+            toast(
+              'error',
+              hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)
+                ? 'Your account is not permitted to start a new job. Ask an administrator to check your role before entering one.'
+                : `Could not load the next job number — ${sanitizeError(err)}. Reload before entering this job.`,
+            );
+          }
         }
         const recipeParam = searchParams.get('recipe_id');
-        if (recipeParam) setRecipeId(recipeParam);
+        if (recipeParam && !cancelled) setRecipeId(recipeParam);
         // New job: loading is already false; the loading-settle effect arms
         // initialLoadDone after the first committed frame.
       }
     })();
+    return () => { cancelled = true; };
   }, [id, fetchJob, isNew, loadLookups, searchParams, toast]);
 
   // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')

@@ -3,7 +3,7 @@
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
@@ -21,7 +21,16 @@ const {
   mockResetIdempotencyKey,
   quoteIdempotencyState,
 } = vi.hoisted(() => {
-  const quoteIdempotencyState = { generation: 0 };
+  // Generations are PER SCOPE, mirroring the real hook's per-scope Map. A single
+  // shared counter would let a reset on quote B change the key later handed back
+  // for quote A, which the real hook never does — a test written against that
+  // stub would be asserting a property of the mock, not of the page.
+  const quoteIdempotencyState = {
+    generations: new Map<string, number>(),
+    generationFor(scope: string) { return this.generations.get(scope) ?? 0; },
+    bump(scope: string) { this.generations.set(scope, this.generationFor(scope) + 1); },
+    reset() { this.generations.clear(); },
+  };
   return {
     mockFrom: vi.fn(),
     mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
@@ -33,7 +42,7 @@ const {
     mockNotifyLargeOrder: vi.fn(),
     mockTrackBusinessEvent: vi.fn(),
     mockSendOrderConfirmedEmail: vi.fn(),
-    mockResetIdempotencyKey: vi.fn(() => { quoteIdempotencyState.generation += 1; }),
+    mockResetIdempotencyKey: vi.fn((scope: string = '') => { quoteIdempotencyState.bump(scope); }),
     quoteIdempotencyState,
   };
 });
@@ -171,9 +180,14 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({
-    getKey: () => `test-idem-key-${quoteIdempotencyState.generation}`,
-    resetKey: mockResetIdempotencyKey,
+  // The mock MUST honour intentScope. A scope-blind stub returns one key for every
+  // quote, so a regression test for "quote B must not inherit A's unresolved key"
+  // would pass against a completely unscoped hook — it would prove a property of
+  // the mock rather than of the page. The real hook keys a Map by
+  // [operation, userId, intentScope]; this mirrors the scope half of that.
+  useIdempotencyKey: (_operation: string, _userId: string, intentScope = '') => ({
+    getKey: () => `test-idem-key-${intentScope}-${quoteIdempotencyState.generationFor(intentScope)}`,
+    resetKey: () => mockResetIdempotencyKey(intentScope),
   }),
 }));
 
@@ -214,6 +228,22 @@ function renderQuoteBuilder(id?: string) {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/quotes/new" element={<QuoteBuilder />} />
+        <Route path="/quotes/:id/edit" element={<QuoteBuilder />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+/**
+ * Jump from one quote to another WITHOUT unmounting QuoteBuilder — the same reused
+ * instance production gets, because no `<x>/:id` route in src/App.tsx carries a
+ * `key` prop. A `<Link>` is used rather than `useNavigate`, which this file mocks.
+ */
+function renderQuoteBuilderWithQuoteSwitch(fromId: string, toId: string) {
+  return render(
+    <MemoryRouter initialEntries={[`/quotes/${fromId}/edit`]}>
+      <Link to={`/quotes/${toId}/edit`}>Jump to quote B</Link>
+      <Routes>
         <Route path="/quotes/:id/edit" element={<QuoteBuilder />} />
       </Routes>
     </MemoryRouter>,
@@ -349,7 +379,7 @@ describe('QuoteBuilder', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    quoteIdempotencyState.generation = 0;
+    quoteIdempotencyState.reset();
     dirtyStates.length = 0;
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
@@ -709,7 +739,7 @@ describe('QuoteBuilder', () => {
     fireEvent.click(await screen.findByText('Save Draft'));
 
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
-      p_idempotency_key: 'test-idem-key-0',
+      p_idempotency_key: `test-idem-key-${quote.id}-0`,
     })));
     expect(
       mockResetIdempotencyKey,
@@ -727,7 +757,69 @@ describe('QuoteBuilder', () => {
     expect(
       new Set(saveKeys),
       'every retry of an unresolved save must carry the SAME key, or the server writes the quote twice',
-    ).toEqual(new Set(['test-idem-key-0']));
+    ).toEqual(new Set([`test-idem-key-${quote.id}-0`]));
+  });
+
+  /**
+   * The cost of F1 retention, paid for by scoping — raised by the gpt-5.6-sol review
+   * of dff631f1 as the QuoteBuilder mirror of a finding already fixed in
+   * CustomerDetail.
+   *
+   * Retaining the key past an ambiguous reply is the whole point of F1, but a
+   * page-wide key then OUTLIVES the quote it was minted for. QuoteBuilder does not
+   * remount when only `:id` changes, so quote B's save would go out under quote A's
+   * unresolved key. The server fingerprints the payload against the cached key and
+   * answers IDEMPOTENCY_PAYLOAD_CONFLICT — it fails closed, so there is no
+   * cross-quote write — but B gets a conflict dialog it did nothing to earn.
+   *
+   * The fix scopes the key to the quote the RPC actually targets. This test binds
+   * that: it deliberately reads the key OFF THE WIRE for B, so it fails if the scope
+   * argument is dropped (both quotes would then share `test-idem-key--0`).
+   */
+  it('does not hand quote B the unresolved key minted for quote A', async () => {
+    const { quote: quoteA, product, section, item } = makeQuoteFixture('draft', 7);
+    const quoteB = { ...quoteA, id: 'quote-b', quote_number: 'Q-b', header_notes: 'Quote B header' };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (quoteReads++ === 0 ? quoteA : quoteB)
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    // Ambiguous on every attempt, so A's key is still outstanding when B is opened.
+    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+
+    renderQuoteBuilderWithQuoteSwitch(quoteA.id, quoteB.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_idempotency_key: `test-idem-key-${quoteA.id}-0`,
+    })));
+    expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Jump to quote B' }));
+    await screen.findByDisplayValue('Quote B header');
+
+    fireEvent.click(screen.getByText('Save Draft'));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_quote');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_quote')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    const lastSaveKey = saveKeys[saveKeys.length - 1];
+    expect(
+      lastSaveKey,
+      "quote B must mint its OWN key — inheriting A's unresolved key earns B a conflict dialog it did not cause",
+    ).toBe(`test-idem-key-${quoteB.id}-0`);
   });
 
   it('recovers a legacy cached save after the migration boundary and releases its unusable key', async () => {
@@ -760,7 +852,7 @@ describe('QuoteBuilder', () => {
 
     expect(await screen.findByText('Reload Quote')).toBeInTheDocument();
     expect(mockRpc).toHaveBeenLastCalledWith('save_quote', expect.objectContaining({
-      p_idempotency_key: 'test-idem-key-0',
+      p_idempotency_key: `test-idem-key-${quote.id}-0`,
     }));
     expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Reload Quote'));
@@ -768,7 +860,7 @@ describe('QuoteBuilder', () => {
     expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByText('Save Draft'));
     await waitFor(() => expect(mockRpc).toHaveBeenLastCalledWith('save_quote', expect.objectContaining({
-      p_idempotency_key: 'test-idem-key-1',
+      p_idempotency_key: `test-idem-key-${quote.id}-1`,
     })));
   });
 

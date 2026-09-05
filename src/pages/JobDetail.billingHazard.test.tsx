@@ -16,7 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
@@ -99,6 +99,7 @@ vi.mock('../lib/dateUtils', async (orig) => {
   return { ...actual, localToday: () => '2026-08-19' };
 });
 
+import { Sentry } from '../lib/sentry';
 import JobDetail from './JobDetail';
 
 const DRY_PRODUCT = {
@@ -1012,7 +1013,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
 });
 
 /**
- * The reserved job number is the only thing standing between the operator and a job
+ * The previewed job number is the only thing standing between the operator and a job
  * they cannot save, and its failure used to be invisible.
  *
  * `if (!error && data) setJobNumber(...)` discarded BOTH failure shapes — a raised
@@ -1021,11 +1022,16 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
  * the F2 number-generator gate applied live on 2026-09-04, which raises
  * INSUFFICIENT_ROLE for a deactivated or out-of-role profile. That user got a blank
  * box and no way to know why.
+ *
+ * "Preview", not "reservation": next_job_number() reads MAX(job_number)+1 under a
+ * transaction-scoped advisory lock and returns text. It persists nothing — save_job()
+ * assigns the number that is actually kept.
  */
-describe('JobDetail — a failed job-number reservation is explained', () => {
+describe('JobDetail — a failed job-number lookup is explained', () => {
   beforeEach(() => {
     mockToast.mockClear();
     mockRpc.mockClear();
+    vi.mocked(Sentry.captureException).mockClear();
     mockFrom.mockReturnValue(buildChain({ data: [], error: null }));
   });
 
@@ -1050,6 +1056,13 @@ describe('JobDetail — a failed job-number reservation is explained', () => {
       () => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/not permitted to start a new job/i)),
       { timeout: 15000 },
     );
+    // The toast is only half the promise. Asserting the Sentry call as well binds the
+    // OTHER half: a source-order pin that greps for `Sentry.captureException` survives
+    // a wrong argument or an unreachable call, and would not notice either.
+    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(
+      expect.any(Error),
+      { tags: { source: 'rpc', action: 'next_job_number' } },
+    );
   }, 30000);
 
   it('still explains an EMPTY reply, which carries no error at all', async () => {
@@ -1061,8 +1074,56 @@ describe('JobDetail — a failed job-number reservation is explained', () => {
     mountNewJob();
 
     await waitFor(
-      () => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/Could not reserve a job number/i)),
+      () => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/Could not load the next job number/i)),
       { timeout: 15000 },
     );
+    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(
+      expect.any(Error),
+      { tags: { source: 'rpc', action: 'next_job_number' } },
+    );
+  }, 30000);
+
+  /**
+   * Raised by the gpt-5.6-sol review of dff631f1. JobDetail is reused across
+   * `jobs/:id`, so it does NOT remount when the route id alone changes. Making the
+   * failure loud therefore created a new way to be wrong: a slow refusal for
+   * /jobs/new could surface as an error toast over an EXISTING job the operator had
+   * since opened — a message about a screen they already left.
+   */
+  it('does not raise the /jobs/new failure over a job opened while it was in flight', async () => {
+    let releaseNumber: (value: { data: unknown; error: unknown }) => void = () => {};
+    const pendingNumber = new Promise<{ data: unknown; error: unknown }>((resolve) => { releaseNumber = resolve; });
+    mockRpc.mockImplementation((name: string) => (
+      name === 'next_job_number' ? pendingNumber : Promise.resolve({ data: null, error: null })
+    ));
+    // job-1 must be a REAL row: the destination page renders it, and an empty
+    // fixture crashes the header on `status.replace(...)` — which surfaces as an
+    // `Errors` line beside a green pass count, not as a failure.
+    mockFrom.mockImplementation((table: string) => (
+      table === 'jobs'
+        ? buildChain({ data: makeJob(HAZARD_CHEM), error: null })
+        : buildChain({ data: [], error: null })
+    ));
+
+    render(
+      <MemoryRouter initialEntries={['/jobs/new']}>
+        <Link to="/jobs/job-1">Open an existing job</Link>
+        <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('link', { name: 'Open an existing job' }));
+    // Only NOW does the number request come back, and it fails.
+    releaseNumber({ data: null, error: { message: 'INSUFFICIENT_ROLE' } });
+
+    // Sentry still hears about it — the server failure really happened.
+    await waitFor(
+      () => expect(vi.mocked(Sentry.captureException)).toHaveBeenCalled(),
+      { timeout: 15000 },
+    );
+    expect(
+      mockToast,
+      'a /jobs/new failure must not appear over the existing job the operator opened',
+    ).not.toHaveBeenCalledWith('error', expect.stringMatching(/job number|not permitted to start a new job/i));
   }, 30000);
 });

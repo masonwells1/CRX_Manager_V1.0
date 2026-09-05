@@ -224,10 +224,6 @@ export default function QuoteBuilder() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const { runWithBelowCostApproval } = useBelowCostApproval();
-  const {
-    getKey: getSaveQuoteIdempotencyKey,
-    resetKey: resetSaveQuoteIdempotencyKey,
-  } = useIdempotencyKey('save_quote', profile?.id || '');
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   // A committed conversion can be replayed from the idempotency cache with
   // status:'created'. Keep that marker so a lost response can still trigger
@@ -358,6 +354,27 @@ export default function QuoteBuilder() {
   const [quoteNumber, setQuoteNumber] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
   const [quoteId, setQuoteId] = useState<string | null>(id || null);
+  // Scoped by the quote this save actually TARGETS. F1 makes an ambiguous reply
+  // RETAIN this key, and QuoteBuilder does not remount when only `:id` changes (no
+  // `<x>/:id` route in src/App.tsx carries a `key` prop). Page-wide, an unresolved
+  // key minted for quote A would therefore be sent with quote B's payload; the
+  // server fingerprints the mismatch and answers IDEMPOTENCY_PAYLOAD_CONFLICT, so
+  // it fails closed with no cross-quote write — but B gets a conflict dialog it
+  // did nothing to earn. `create_quote_version` below already scopes this way, for
+  // this same reason.
+  //
+  // The scope mirrors `p_quote_id` EXACTLY (see the save_quote call), so it binds
+  // the record the RPC writes rather than the route — which is why route-id
+  // scoping would be wrong here: `/quotes/new` has no route id, and `quoteId` is
+  // state that the create path reassigns after the save.
+  //
+  // RESIDUAL, stated rather than implied: every create scopes to 'new', so an
+  // unresolved create can still be inherited by the next create on this mount.
+  // Binding that needs PR #535's fingerprintIntentPayload.
+  const {
+    getKey: getSaveQuoteIdempotencyKey,
+    resetKey: resetSaveQuoteIdempotencyKey,
+  } = useIdempotencyKey('save_quote', profile?.id || '', (quoteId && isEditing) ? quoteId : 'new');
   const [isPlanned, setIsPlanned] = useState(false);
   const [wasPlanned, setWasPlanned] = useState(false);
 

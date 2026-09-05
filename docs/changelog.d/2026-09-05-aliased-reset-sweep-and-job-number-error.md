@@ -43,8 +43,11 @@ intent-rotation resets in `ProductDetail`, `PurchaseOrderDetail`, `JobDetail`'s 
 
 ## Proof
 
-Every test below was confirmed to FAIL against the unfixed source before it passed — including by
-mounting the real screens, not only by reading the source.
+Every test below was confirmed to FAIL against the unfixed source before it passed. The main save
+handlers and the JobDetail number path were proven by MOUNTING the real screens; the quiet
+route-changed branch in `CustomerDetail` is the exception — it carries a lexical source pin only,
+because its mounted route-switch test exercises a non-empty reply rather than the null reply that
+this change makes important. That limit is stated here rather than left to be inferred.
 
 - `QuoteBuilder.test.tsx` and `CustomerDetail.test.tsx` each drive their real save handler with an
   empty-but-error-free reply and assert the key is not retired AND that a retry carries the SAME
@@ -133,3 +136,75 @@ unnoticed. Four of them (`DeliveryDetail` complete/cancel/void, `OrderDetail` vo
 notes explaining that a reorder alone is insufficient — they send mutable payload fields and need
 PR #535's `fingerprintIntentPayload`. Widening this PR to ~20 files would collide with the parallel
 sessions holding several of them. Flagged for a scoping decision instead.
+
+## Review round 3 — the exact-SHA `gpt-5.6-sol` review of `dff631f1`, at Mason's request
+
+Twelve findings plus a release-state note. Six were fixed here; the rest are recorded below with
+the reason they are not this PR's to close. The review ran against the candidate commit with source
+access, not against the diff alone.
+
+### Fixed
+
+- **`save_quote`'s key was still page-wide** (MEDIUM) — the exact mirror of the CustomerDetail
+  finding fixed in round 1, and one this PR CREATED: retention is what lets a key outlive the quote
+  it was minted for. QuoteBuilder does not remount when only `:id` changes, so quote B's save would
+  have gone out under quote A's unresolved key and earned B an `IDEMPOTENCY_PAYLOAD_CONFLICT` it did
+  nothing to cause. The key is now scoped to `(quoteId && isEditing) ? quoteId : 'new'`, which
+  mirrors `p_quote_id` exactly and therefore binds the record the RPC writes rather than the route.
+  Route-id scoping would have been wrong here — `/quotes/new` has no route id. `create_quote_version`
+  in the same file already scoped this way, for this same reason.
+
+  Round 1 recorded a decision NOT to scope this key. That decision was wrong, and the reasoning
+  behind it — that the route id was the only thing available to scope by — was the error.
+
+- **A `/jobs/new` number failure could surface over a DIFFERENT job** (MEDIUM) — also created here.
+  JobDetail is reused across `jobs/:id`, so making the failure loud introduced a new way to be
+  wrong: a slow refusal for the create route could raise its toast, or overwrite the number, after
+  the operator had opened an existing job. The effect now carries a cancellation flag; the toast and
+  both state writes are gated on it. Sentry is deliberately NOT gated — the server failure really
+  happened.
+
+- **"Reserve" overstated what `next_job_number()` does** (LOW) — it reads `MAX(job_number)+1` under
+  a transaction-scoped advisory lock and returns text. It persists nothing; `save_job()` assigns the
+  number that is kept. The operator-facing message, the comments and the test names now say
+  *look up* / *preview*, so nobody later treats the preview as durable state.
+
+- **The new source-order pins could be satisfied by a comment** (LOW) — they scanned RAW lines, and
+  each pinned region is preceded by a long comment naming the very tokens being searched for. A
+  comment-only stripper (strings kept, since the pins locate a call by its RPC name) is now applied
+  first, and `stripCommentsAndStrings` was hoisted to module scope alongside it.
+
+- **The scope-aware hook mocks used ONE shared generation counter** (LOW) — so resetting customer B
+  would have changed the key later handed back for customer A, which the real per-scope `Map` never
+  does. Both `CustomerDetail.test.tsx` and `QuoteBuilder.test.tsx` now model generations per scope.
+  This is the same class as the two mock defects already recorded above: a mock that misrepresents
+  the contract turns a regression test into an assertion about the mock.
+
+- **`hasRpcCode` was more permissive in tests than in production** (LOW) — the stub matched a code
+  appearing anywhere in the message. `CustomerDetail.test.tsx` now imports the real helper.
+
+### Recorded, not fixed
+
+- **Binding the retained key to the submitted PAYLOAD** (MEDIUM, both screens) — the same cross-lane
+  dependency already recorded above; PR #535's `fingerprintIntentPayload`. The review adds a sharper
+  point: for an unresolved CREATE, minting a new key for a changed payload is not sufficient either,
+  because the first create may already have committed. Closing it properly needs a server-side
+  receipt lookup by original key, which is a schema-touching change and not this PR's.
+- **`/customers/new` and `/quotes/new` share one create scope** (MEDIUM) — already stated as the
+  residual of route/target scoping. Same dependency as above.
+- **A definitive rejection during a route change leaves the old scope's key in place** (MEDIUM) —
+  verified against `main` as PRE-EXISTING: the branch read `if (!error) reset()` before this change
+  and retained the key on a raised error exactly as it does now. Not introduced here, and fixing it
+  means separating ambiguous from definitive failures in a branch that must stay silent.
+- **`assertRpcResult` only rejects null/undefined** (LOW) — a non-null but malformed reply such as
+  `{}` still retires the key. True, and a property of the shared helper rather than of these screens.
+- **`RelatedNotes` ignores its RPC error and can hang on "loading" forever** (MEDIUM) — a REAL
+  pre-existing defect in a different component, surfaced by mocking it out of the JobDetail suite.
+  Filed separately rather than widened into this PR.
+
+### Release state
+
+The branch was two commits behind `origin/main` when the review ran (#601 landed
+`.claude/schema-registry.json` and `scripts/check-migration-hard-rules.mjs`; no file overlap with
+this PR). It is brought up to date after this commit, which is why the reviewed tree and the merged
+tree are recorded here as different SHAs.
