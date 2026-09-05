@@ -1272,7 +1272,7 @@ export default function Reports() {
               {financialTab === 'commission_balance' && (
                 <>
                   <h3 className="mb-4 text-base font-semibold text-nav-dark">Balance by salesperson</h3>
-                  <DataTable data={commBalanceData as unknown as Record<string, unknown>[]} columns={commBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['recipient_name']} emptyTitle="No commission data" loading={loading} />
+                  <DataTable data={commBalanceData as unknown as Record<string, unknown>[]} columns={commBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['recipient_name']} emptyTitle="No commission data" loading={loading || commissionReportLoading} />
                 </>
               )}
             </div>
@@ -1297,7 +1297,7 @@ export default function Reports() {
                   searchKeys={['payment_number', 'recipient_name', 'source_number', 'customer_name']}
                   emptyTitle="No posted commission payments"
                   emptyDescription="Posted payment lines through the selected date will appear here."
-                  loading={loading}
+                  loading={loading || commissionReportLoading}
                 />
               </div>
             </Card>

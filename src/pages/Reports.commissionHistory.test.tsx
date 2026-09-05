@@ -365,7 +365,9 @@ describe('Reports commission history', () => {
     });
 
     // The older fetchFinancial invocation has now cleared the shared `loading`
-    // flag. Export integrity must still follow the latest commission request.
+    // flag. Both commission tables and export integrity must still follow the
+    // latest commission request.
+    expect(document.querySelectorAll('.animate-pulse')).toHaveLength(10);
     expect(screen.getByRole('button', { name: 'Export CSV' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Export Payment Detail' })).toBeDisabled();
     expect(exportToCSV).not.toHaveBeenCalled();
