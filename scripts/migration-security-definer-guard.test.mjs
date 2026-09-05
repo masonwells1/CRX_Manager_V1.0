@@ -57,6 +57,13 @@ test('fails closed for SECURITY DEFINER ALTERs and unmatched quoted identities',
   assert.deepEqual(securityDefinerMissingAnonRevokes(escaped), []);
 });
 
+test('fails closed when quoted identifiers contain semicolons before SECURITY DEFINER', () => {
+  const quotedSchema = `CREATE FUNCTION "public".hidden()
+RETURNS TABLE ("x;y" text) LANGUAGE sql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$ SELECT 'ok'::text $$;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(quotedSchema), ['unparseable-security-definer-sql']);
+});
+
 test('allows only the fixed SECURITY DEFINER search path on routine ALTERs', () => {
   assert.deepEqual(
     securityDefinerMissingAnonRevokes('ALTER FUNCTION public.existing(uuid) RESET search_path;'),

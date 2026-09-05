@@ -441,8 +441,9 @@ export function securityDefinerMissingAnonRevokes(sql) {
   if (declarations.length > 0 && /\bBEGIN\s+ATOMIC\b/i.test(executable)) return ['unparseable-security-definer-sql'];
   const declarationOffsets = new Set(declarations.map(({ match }) => match.index));
   for (const header of executable.matchAll(SECURITY_DEFINER_ROUTINE_HEADER)) {
-    const end = executable.indexOf(';', header.index + header[0].length);
-    const statement = executable.slice(header.index, end === -1 ? executable.length : end);
+    const end = statementEnd(executable, header.index);
+    if (end === null) return ['unparseable-security-definer-sql'];
+    const statement = executable.slice(header.index, end);
     if (/\bSECURITY\s+DEFINER\b/i.test(statement) && !declarationOffsets.has(header.index)) {
       return ['unparseable-security-definer-sql'];
     }
