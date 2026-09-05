@@ -711,10 +711,24 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
   const notebook = write("notes.ipynb", "{}");
   const proof = write("codex-review-0123abcd.json", "{\"verdict\":\"clean\"}");
   const ledger = write("applied-source-ledger.json", "[]");
+  // Round 11 (HIGH): evidence the proof-NAME rule never listed. The migration
+  // reviewer proof is minted by scripts/write-apply-proofs.mjs and consumed by
+  // migration-apply-lib.mjs; the others are the same shape. All are JSON, and
+  // JSON in the state directory is evidence by shape — present and future
+  // producers alike — so each fails closed while a `.txt` reviewer CAPTURE
+  // (the human-readable transcript, not the proof) stays readable.
+  const migrationProof = write("migration-review-20260901120000_x.json", "{\"verdict\":\"clean\"}");
+  const migrationCodexProof = write("codex-review-mig-20260901120000_x.json", "{}");
+  const claudePushProof = write("claude-review-push.json", "{}");
+  const appliedSnapshot = write("applied-migrations.json", "[]");
+  const holdLatch = write("hold.json", "{}");
+  const unlistedJson = write("some-future-gate-proof.json", "{}");
+  const reviewerCapture = write("codex-review-mig-20260901120000_x-rls-security-reviewer-capture.txt", "FINAL_VERDICT: SHIP\n");
   try {
     for (const payload of [
       { tool_name: "Read", tool_input: { file_path: intentFlag } },
       { tool_name: "Read", tool_input: { file_path: capture } },
+      { tool_name: "Read", tool_input: { file_path: reviewerCapture } },
       { tool_name: "Read", tool_input: { file_path: autopilot.replace(/\\/g, "/") } },
       { tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: ".claude/session-state/OVERNIGHT-INTENT.flag" } },
       { tool_name: "NotebookRead", tool_input: { notebook_path: notebook } },
@@ -731,6 +745,14 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
     for (const payload of [
       { tool_name: "Read", tool_input: { file_path: proof } },
       { tool_name: "Read", tool_input: { file_path: ledger } },
+      { tool_name: "Read", tool_input: { file_path: migrationProof } },
+      { tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: ".claude/session-state/migration-review-20260901120000_x.json" } },
+      { tool_name: "Read", tool_input: { file_path: migrationCodexProof } },
+      { tool_name: "Read", tool_input: { file_path: claudePushProof } },
+      { tool_name: "Read", tool_input: { file_path: appliedSnapshot } },
+      { tool_name: "Read", tool_input: { file_path: holdLatch } },
+      { tool_name: "Read", tool_input: { file_path: unlistedJson } },
+      { tool_name: "NotebookRead", tool_input: { notebook_path: migrationProof } },
       { tool_name: "NotebookRead", tool_input: { notebook_path: proof } },
       { tool_name: "NotebookRead", tool_input: { notebook_path: ".claude/session-state/codex-review-abc.json" } },
       { tool_name: "Read", tool_input: { file_path: path.join(stateDir, "does-not-exist.txt") } },

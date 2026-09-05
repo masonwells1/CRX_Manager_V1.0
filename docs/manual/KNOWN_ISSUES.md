@@ -296,8 +296,10 @@ reachable on `main` before and after the 2026-09-05 change.
 
 **What the 2026-09-05 change closes, and what it does not.** The NATIVE single-file readers
 (`Read`, `NotebookRead`) now resolve their target through the OS (`realpathSync.native`, which
-expands short names and follows symlinks) and re-run the proof-file rule on the real name, and a
-state-directory file with more than one hard link is refused as unresolvable. The shell branch is
+expands short names and follows symlinks) and re-run the proof-file rule on the real name; a
+state-directory file with more than one hard link is refused, and so is ANY `.json` there whether
+or not the proof-name rule lists it (round 11 found `migration-review-*.json` was never listed).
+Flags and `.txt` captures are the only things the exemption lets a native reader open. The shell branch is
 NOT changed: it reasons about command text, an 8.3 token can also be hash-styled
 (`CO3F2A~1.JSO` once a prefix has collided four times), and a text rule for it would be one more
 round of the "command-text guard never converges" pattern this repository has already recorded

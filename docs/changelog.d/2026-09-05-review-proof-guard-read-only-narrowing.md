@@ -28,7 +28,15 @@ rule on the result. That alias check runs for every native single-file read, not
 state directory, so an aliased directory component (`.claude/SESSIO~1/…`) or a symlink placed
 elsewhere cannot reach a proof either. Inside the state directory a target that does not resolve
 to a regular file (missing file, the directory itself, an unresolvable alias) fails closed, and so
-does a file with more than one hard link, since a hard link has no real name to resolve to. The
+does a file with more than one hard link, since a hard link has no real name to resolve to. So does
+ANY `.json` file whose real name is in the state directory, listed by the proof-name rule or not:
+the eleventh exact-SHA round found that `migration-review-<name>.json` — the migration reviewer
+proof that `scripts/write-apply-proofs.mjs` mints and `migration-apply-lib.mjs` consumes — was never
+in that rule, so the first cut of this exemption would have let a native Read open it. Every wrapper
+writes its evidence as JSON and the reads the exemption exists for are flags and `.txt` captures
+(25 refused reads adjudicated: 13 `OVERNIGHT-INTENT.flag`, 9 `codex-review-latest.txt`, 2 reviewer
+`.txt` captures, 1 proof JSON that was rightly refused), so JSON there is evidence by shape and
+stays unreadable for present and future producers alike. The
 SHELL branch is unchanged and still reads names from command text, so `cat …/CODEX-~1.JSO` remains
 allowed on `main` as it was before this change; that pre-existing hole and its owner-side fix (turn
 off 8.3 name generation on the volume) are recorded in `docs/manual/KNOWN_ISSUES.md` under

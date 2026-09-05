@@ -69,6 +69,18 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 // hard-linked proof through — the proof-name check must come first):
 //   "proof"        — resolves to a regular file whose REAL name is a proof or
 //                    the ledger: deny wherever the read points;
+//   "evidence"     — resolves into the state directory with a `.json` real
+//                    name that the proof-name rule does not list. Every wrapper
+//                    writes its evidence as JSON — `migration-review-<name>.json`
+//                    (write-apply-proofs.mjs, consumed by migration-apply-lib),
+//                    `codex-review-mig-<name>.json`, `claude-review-push.json`,
+//                    the applied-migrations snapshot, the ledger — and the name
+//                    rule only ever listed some of them (exact-SHA gpt-5.6-sol
+//                    review, round 11, HIGH: a native Read of
+//                    `migration-review-*.json` was allowed). The legitimate reads
+//                    the exemption exists for are all `.flag` and `.txt` files,
+//                    so JSON in the state directory is evidence by shape and
+//                    fails closed here, present and future producers alike;
 //   "aliased"      — resolves into the state directory with more than one hard
 //                    link. A hard link has no "real" name to resolve to (both
 //                    names ARE the file); the wrappers never hard-link what they
@@ -79,6 +91,7 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 //   "clear"        — a regular file that is none of the above.
 const READ_ONLY_SINGLE_FILE_TOOL_RE = /^(?:read|notebookread)$/i;
 const STATE_DIR_REAL_PATH_RE = /[\\/]\.claude[\\/]session-state[\\/]/i;
+const STATE_DIR_EVIDENCE_RE = /\.json$/i;
 function classifyReadTarget(candidate) {
   let resolved;
   let stats;
@@ -90,14 +103,17 @@ function classifyReadTarget(candidate) {
   }
   if (!stats.isFile()) return "unresolvable";
   if (reviewProofPathMentioned(resolved)) return "proof";
-  if (STATE_DIR_REAL_PATH_RE.test(resolved) && stats.nlink > 1) return "aliased";
+  const inStateDir = STATE_DIR_REAL_PATH_RE.test(resolved);
+  if (inStateDir && STATE_DIR_EVIDENCE_RE.test(resolved)) return "evidence";
+  if (inStateDir && stats.nlink > 1) return "aliased";
   return "clear";
 }
 if (READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName)) {
   for (const candidate of pathCandidates) {
     if (candidate == null || String(candidate) === "") continue;
-    if (classifyReadTarget(candidate) === "proof") {
-      deny("REVIEW PROOF GUARD: that path is an alias of a wrapper-owned review proof or the applied-source ledger. Run the real review workflow; proof files are not readable through file tools.");
+    const verdict = classifyReadTarget(candidate);
+    if (verdict === "proof" || verdict === "evidence") {
+      deny("REVIEW PROOF GUARD: that path resolves to wrapper-owned evidence in the review state directory (a review proof, the applied-source ledger, or other JSON the apply and push gates consume). Run the real review workflow; evidence files are not readable through file tools. Flags and .txt captures there remain readable by their real names.");
     }
   }
 }
@@ -155,9 +171,12 @@ const isPureAckWrite = stateDirCandidates.length > 0 &&
 // only open the ONE path it names. So the whole-directory rule below does not
 // apply to `Read`/`NotebookRead` — PROVIDED the path it names resolves, through
 // the operating system, to a regular file whose REAL name the proof-file rule
-// clears (the alias check above). Inside the state directory a target that does
-// not resolve fails closed: there is nothing to read from a missing file, and a
-// directory or an unresolvable alias is not "the one file it names". It was
+// clears (the alias check above) AND that is not JSON: every wrapper writes its
+// evidence as `.json`, and the reads this exemption exists for are flags and
+// `.txt` captures (round 11 closed `migration-review-*.json`, which the name
+// rule never listed). Inside the state directory a target that does not resolve
+// fails closed: there is nothing to read from a missing file, and a directory or
+// an unresolvable alias is not "the one file it names". It was
 // applying to plain reads: reading `OVERNIGHT-INTENT.flag` or
 // `codex-review-latest.txt` back is exactly what the guards' own messages and
 // the codex-review skill tell an agent to do (33 such denials, 2026-09-04 audit).
