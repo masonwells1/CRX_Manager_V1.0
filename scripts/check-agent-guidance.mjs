@@ -147,6 +147,8 @@ record(
 record(
   /enum: \['VERIFIED', 'REFUTED', 'UNVERIFIED'\]/.test(wholeCodebaseAudit)
     && /Uncertainty is UNVERIFIED, never REFUTED or FALSE_POSITIVE/.test(wholeCodebaseAudit)
+    && /review\.executionStatus === 'VERIFIED'/.test(wholeCodebaseAudit)
+    && /isNonEmptyString\(review\.evidenceSummary\)/.test(wholeCodebaseAudit)
     && /unverified: unverified\.length/.test(wholeCodebaseAudit),
   "whole-codebase audit preserves incomplete evidence as UNVERIFIED",
 );

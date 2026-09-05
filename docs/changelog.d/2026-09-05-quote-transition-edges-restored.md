@@ -29,9 +29,8 @@ for a contradiction. The nine allowed values were confirmed against the live CHE
 
 ### Rejected — `scripts/log-session.mjs`, "add the missing closing parenthesis"
 
-False positive. The banner spans two `console.log` lines and the parenthesis opened on the first is
-closed on the second (`...if drifted)`). Applying the suggestion would have emitted two closing
-parentheses for one opening.
+False positive. The banner was subsequently rewritten as two independently complete messages with
+no parentheses, so the suggested closing parenthesis no longer applies to the shipped file.
 
 ### Rejected — `.claude/agents/compliance-reviewer.md`, markdownlint MD022
 

@@ -48,7 +48,7 @@ Three qualifications, all enforced in that same trigger:
 `save_quote()` carries its own transition map that is a deliberate strict *subset* of the trigger's
 (`draft→sent`; `sent→revised/accepted/declined/expired`; `revised→sent/accepted/declined/expired`), so an
 invalid edge fails earlier and with a clearer error. The trigger remains the authority — see migration
-`20260616204400_save_quote_canonical_idempotency_and_transition_map.sql`.
+`20260702131000_a3_save_quote_restore_dropped_fields.sql` for the current subset.
 
 - **draft**: Initial state. Can be edited freely.
 - **sent**: Quote was sent to the customer. A `quote_versions` snapshot is created.
