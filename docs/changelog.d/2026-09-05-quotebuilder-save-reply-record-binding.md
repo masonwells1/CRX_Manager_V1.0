@@ -267,3 +267,81 @@ moved, and the baseline stays at zero.
 
 - `npm run typecheck`, `npm run lint`, `npm run build` clean.
 - `npm run test`: exit code 0, 351 files / 5006 passed / 123 skipped, no failures, no `Errors` line.
+
+### Fifth review round — two P2s from the Codex GitHub App, both accepted
+
+The `gpt-5.6-sol` CLI proof and the Codex GitHub App are **two different reviewers**. The CLI
+returned CLEAN at `e403d00a3` while the App had posted findings on that same commit. A clean CLI
+proof is not a clean PR, and `pr-merge-guard.mjs` denies on `codexVerdict.status ===
+"findings-at-head"` regardless of what GitHub's own merge state says (it said `CLEAN`, and every CI
+check passed).
+
+**P2 at `e403d00a3` — "Compare against the committed route in the save guard." Accepted.** This one
+is this branch's own shadow, and the changelog above had already recorded the fact and graded it
+wrong: `routeQuoteIdRef` was written **during render**, and the note above argued that a discarded
+render "can only cause a legitimate install to be refused, never a stale one to be accepted, so it
+is not a defect here." Refusing a legitimate install **is** the defect. React can begin rendering a
+transition to another quote and throw that render away while the first quote is still committed;
+the ref has already moved, so the guard drops a **valid** reply after the database committed —
+stale token, dirty form, and the operator's retry lands in stale-write recovery on a document that
+drives cost and price. That is the same failure direction as round 2, which was accepted as real.
+
+Fixed with a `useLayoutEffect`, following `CustomerDetail.tsx`'s `currentIdRef` and the reasoning
+already documented there. A layout effect runs on commit, and before the passive effects that start
+the loads, so every reader still sees the committed route — and a discarded render runs no effects
+at all.
+
+**P2 at `d6b12058b` — "Route payload conflicts through recovery after navigation." Accepted.** A
+moved-session reply carrying `IDEMPOTENCY_PAYLOAD_CONFLICT` returned before the conflict handler,
+so the reload dialog never opened — and that dialog is the only thing that rotates the key. Since
+the key is scoped by operation and user rather than by record, every later save of **any** quote
+then repeated the same conflict for the life of the component.
+
+Fixed **without** retiring the key on the conflict, which is what the reviewer's second suggested
+remedy amounts to and what #603 shipped and reverted the same day: the key is a receipt as well as
+a retry token, and it may stand for a save that committed and lost its reply. The quote awaiting
+resolution is remembered instead, and the key rotates where `useIdempotencyKey`'s own contract
+sanctions it — after an authoritative reload of that existing record — reached through the ordinary
+reopen rather than through a dialog that cannot be shown. Scoped to the conflicted quote, because
+reloading a different one resolves nothing about this one.
+
+**Residual, stated rather than implied:** until the operator reopens the conflicted quote, the
+shared key still blocks saves of other quotes. That is CRX-2, the operation-scoped key, whose real
+fix is server-side payload-level intent and is tracked in `docs/manual/KNOWN_ISSUES.md`. This change
+is strictly better than the previous behaviour in every case and worse in none: before it, nothing
+rotated the key at all.
+
+### The whole mutation table, re-run — including one operand that is NOT pinned
+
+Every guard on this branch was re-tested, not just the two new rows, because a new guard on this
+branch has already made an earlier one unprovable more than once.
+
+| Mutation | Tests that fail |
+|---|---|
+| success-path session guard disabled | 2 |
+| error-path session guard disabled | 2 |
+| load-serial operand dropped | 1 |
+| **route operand dropped** | **0 — see below** |
+| `fetchQuote` door refusal removed | 1 |
+| below-cost retry refusal disabled | 1 |
+| payload-conflict latch removed | 1 |
+| rotation-on-reopen removed | 1 |
+| rotation-on-reopen left unscoped | 1 |
+| route ref written during render again | 1 |
+| rollback-claiming wording restored | 1 |
+| post-verify key rotation removed | 1 |
+
+**The route operand of `editingSessionChanged` is no longer falsifiable by this suite, and that is
+reported rather than papered over.** Round 2's door refusal is why: a doomed load now turns round
+before taking a serial, which removed the very mechanism the route operand was introduced to catch.
+Every *committed* navigation runs the load effect, which mints a serial, so the serial operand
+subsumes the route operand in every sequence this harness can express.
+
+It is kept, and it is not dead. Passive effects are scheduled, not synchronous, so a reply can land
+in the window between the route commit and the load effect that bumps the serial — route moved,
+serial not yet. `act()` flushes effects before the assertions, which collapses exactly that window,
+so the harness cannot open it. A guard operand that cannot be falsified is worth a reviewer's
+suspicion; this note exists so the next one does not have to rediscover why it stays.
+
+- `npm run typecheck`, `npm run lint`, `npm run build` clean.
+- `npm run test`: exit code 0, 351 files / 5008 passed / 123 skipped, no failures, no `Errors` line.
