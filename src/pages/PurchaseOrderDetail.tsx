@@ -232,6 +232,15 @@ export default function PurchaseOrderDetail() {
   const canReceive = canManagePO;
 
   const fetchPO = useCallback(async () => {
+    // Refuse a call minted by a stale render closure before it can TAKE THE
+    // TICKET. Rejecting it later is not enough: the route effect has already
+    // raised `loading` for the PO being navigated to, and a stale call that
+    // takes the newest ticket disqualifies that live fetch -- so its answer is
+    // refused as superseded, this one's is refused as route-stale, and neither
+    // survivor is left to lower the flag. The destination PO then sits on its
+    // skeleton until a reload. Found by the `gpt-5.6-sol` push-proof review.
+    if (routeIdRef.current !== id) return;
+
     const token = ++poFetchTokenRef.current;
     const startedForId = id;
     // A superseded fetch owns nothing: it must not write data and must not

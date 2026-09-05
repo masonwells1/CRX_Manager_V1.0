@@ -44,8 +44,18 @@ Three guards in `src/pages/PurchaseOrderDetail.tsx`:
    ticket and raises the skeleton, and the guard then rejects it *after* the await — with
    no later fetch coming to lower the flag, because PO B has already settled. PO B's
    receiving card sat on its pulse placeholder until a reload. It now refuses a
-   route-stale call **at the door**, before raising the flag; `fetchPO` needs no such
-   screen because it never raises `loading` itself.
+   route-stale call **at the door**, before raising the flag.
+
+   **`fetchPO` needed the same door, for a worse reason, and the first draft of this fix
+   said it did not.** The claim was that `fetchPO` cannot wedge because it never raises
+   `loading` itself. That is true and irrelevant: the route-change `useLayoutEffect`
+   raises `loading` for the PO being navigated TO, and a stale call does not merely lose
+   the race — **taking the ticket is what disqualifies the live fetch.** Route B starts
+   ticket N; PO A's finished action starts ticket N+1 from its stale closure; B's answer
+   is refused as superseded and A's as route-stale; neither survivor reaches
+   `setLoading(false)`, so **the whole page** sits on its skeleton until a reload. Found
+   by the `gpt-5.6-sol` push-proof review after CodeRabbit's fix was already in. Both
+   fetches now screen at the door.
 
    **Both halves are load-bearing; neither is sufficient alone.** The ticket orders
    *calls*, which is the only thing that separates two fetches for the same PO — reopen
@@ -92,7 +102,7 @@ The unfixed run books goods against the wrong PO and reports success. Reverted t
 `src/pages/PurchaseOrderDetail.routeRace.test.tsx` renders the real page, drives an
 A-then-B navigation with each query released under test control, and asserts the page
 never presents B's header with A's lines — and that a receive submitted from that state
-cannot carry A's item ids. 10 tests.
+cannot carry A's item ids. 11 tests.
 
 Each guard was then removed **on its own** and the suite re-run, because a guard whose
 failure is carried by a neighbour is not actually tested:
@@ -105,24 +115,29 @@ failure is carried by a neighbour is not actually tested:
 | `fetchReceivingHistory` after the receiver-name await | drops PO A's receiver-name lookup |
 | `useLayoutEffect` route-change clear | never renders B's header above A's items |
 | `handleReceive` foreign-line refusal | refuses a receive from another PO |
-| `fetchPO` **route** check (ticket kept) | drops a finished action's refetch |
 | `fetchPO` **ticket** check (route kept) | drops a superseded fetch for the SAME PO |
 | `fetchReceivingHistory` **ticket** check (route kept) | drops a superseded fetch for the SAME PO |
-| `fetchReceivingHistory` route screen **at the door** | leaves PO B's receiving history settled |
+| `fetchReceivingHistory` **route** check (ticket kept) | keeps PO B loadable mid-flight |
+| `fetchReceivingHistory` route screen **at the door** | drops a finished action's refetch **+** leaves PO B's receiving history settled |
+| `fetchPO` route screen **at the door** | drops a finished action's refetch **+** keeps PO B loadable mid-flight |
 
-Every mutation in the table was caught, each by exactly one distinct test, confirmed by
-exit code.
+Every mutation in the table was caught, confirmed by exit code.
 
-**One guard is deliberately kept without a test, and it must not be quietly deleted.**
-Adding the door screen made `fetchReceivingHistory`'s *post-await* route check unprovable
-here: with the door closed, no test path reaches that check while the ticket still points
-at the same call, so removing it now leaves all 10 tests green. It is kept anyway because
-it defends a window this harness cannot reproduce — the route-change `useLayoutEffect`
-updates the route ref, and React does not run the passive load effect that mints the next
-history ticket until afterwards, so a PO A response landing in between is the newest
-ticket at a changed route. `act()` flushes both effects together, so the gap cannot be
-opened under test. This is the same expiry described below, in the opposite direction:
-a newly added guard silently carried an existing one. Recorded rather than removed.
+**One guard is deliberately kept without a test, and it must not be quietly deleted:**
+`fetchPO`'s *post-await* route check. With its door closed, no test path reaches that
+check while the ticket still points at the same call, so removing it leaves all 11 tests
+green. It is kept because it defends a window this harness cannot reproduce — the
+route-change `useLayoutEffect` updates the route ref, and React does not run the passive
+load effect that mints the next ticket until afterwards, so a PO A response landing in
+between is the newest ticket at a changed route. `act()` flushes both effects together,
+so the gap cannot be opened under test.
+
+Note this is the *third* time on this PR that adding a guard expired a neighbour's proof,
+and the gap **moved** each time: it was the `fetchReceivingHistory` route check after
+CodeRabbit's fix, and the new PO-B-loadable test then made that one provable again while
+opening this one. The rule is not "check the guard you just wrote" — it is **re-run every
+mutation in the table after every guard change**, because which one is being carried is
+not stable.
 
 The A→B→A rows exist because of a trap this review surfaced. When the route check was
 first added, deleting the **ticket** check entirely left all tests green: every existing

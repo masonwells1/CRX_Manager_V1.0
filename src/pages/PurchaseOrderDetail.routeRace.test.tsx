@@ -709,11 +709,11 @@ describe('PurchaseOrderDetail route-currency race', () => {
       completeReceive!();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    // Let that stale refetch's own query answer, so the guard is exercised on
-    // a real response rather than passing because nothing ever resolved. Only
-    // the header query parks: the stale history refetch is refused at the door
-    // (see the settled-history test below), so there is nothing to release.
-    await release('header:po-a');
+    // Neither stale refetch may even reach the network: both are refused at the
+    // door, because a call that gets that far has already taken the ticket the
+    // live PO B fetch needs (see the two wedge tests below).
+    expect(await isWaiting('header:po-a')).toBe(false);
+    expect(await isWaiting('history:po-a')).toBe(false);
 
     expectShowingNow('PO-B-2002');
     expectAbsent('PO-A-1001');
@@ -761,11 +761,66 @@ describe('PurchaseOrderDetail route-currency race', () => {
       completeReceive!();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    await release('header:po-a');
 
-    // A refused call must not have started a history query either -- parking
-    // one would mean it got past the door with the flag already raised.
+    // A refused call must not have started a history query -- parking one would
+    // mean it got past the door with the flag already raised.
     expect(await isWaiting('history:po-a')).toBe(false);
     expectShowingNow('No items have been received yet.');
+  });
+
+  it('keeps PO B loadable when an action finishes while PO B is still in flight', async () => {
+    // The wedge above, one level worse: on the WHOLE PAGE rather than one card,
+    // and reached without either fetch writing a thing.
+    //
+    //   1. Route B raises `loading` and starts ticket N.
+    //   2. PO A's action finishes and its stale closure starts ticket N+1.
+    //   3. B's answer is refused -- superseded ticket.
+    //   4. A's answer is refused -- stale route.
+    //
+    // Neither survivor reaches `setLoading(false)`, because each is rejected by
+    // the half the other passes, so PO B sits on its skeleton until a reload.
+    // The stale closure does not merely lose the race here: taking the ticket is
+    // what DISQUALIFIES the live fetch. Refusing it at the door is what keeps
+    // PO B's ticket B's.
+    renderAtPoA();
+    await loadPo('po-a');
+    await expectShowsPo('PO-A-1001');
+
+    let completeReceive: (() => void) | undefined;
+    mocks.rpc.mockImplementation((name: string) => {
+      if (name === 'get_notes_for_entity') return Promise.resolve({ data: [], error: null });
+      if (name === 'receive_po_items') {
+        return new Promise((resolve) => {
+          completeReceive = () =>
+            resolve({ data: { receiving_record_ids: ['rec-new'] }, error: null });
+        });
+      }
+      return Promise.resolve({ data: { receiving_record_ids: ['rec-new'] }, error: null });
+    });
+
+    expect(await submitReceive('3')).toBeDefined();
+    expect(completeReceive).toBeDefined();
+
+    // Navigate but leave PO B's header PARKED -- unlike every other test here,
+    // PO B must still be in flight when PO A's action lands, or the collision
+    // this guards against cannot happen.
+    await navigateToPoB();
+    expect(await isWaiting('header:po-b')).toBe(true);
+
+    await act(async () => {
+      completeReceive!();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // PO B's header answers now. If its ticket survived, the fetch continues to
+    // the line items; if the stale closure stole it, this response is dropped
+    // and no second query is ever issued.
+    await release('header:po-b');
+    expect(await isWaiting('items:po-b')).toBe(true);
+
+    await release('items:po-b');
+    await release('history:po-b');
+    await expectShowsPo('PO-B-2002');
+    expectAbsent('PO-A-1001');
   });
 });
