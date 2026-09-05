@@ -63,7 +63,7 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 // (exact-SHA gpt-5.6-sol review, round 4, HIGH: a native Read through the alias
 // was allowed) — and a symlink can carry any name at all. For the native
 // single-file readers, resolve the target through the OS and run the proof-file
-// rule again on the real path. The verdict is one of four explicit words, never
+// rule again on the real path. The verdict is one of five explicit words, never
 // an ambiguous null (exact-SHA gpt-5.6-sol review, round 6: an earlier draft
 // folded "multi-link" into "unresolvable" and so let an OUTSIDE symlink to a
 // hard-linked proof through — the proof-name check must come first):
@@ -137,7 +137,7 @@ if (READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName)) {
   for (const candidate of pathCandidates) {
     if (candidate == null || String(candidate) === "") continue;
     const verdict = classifyReadTarget(candidate);
-    if (verdict === "proof" || verdict === "evidence") {
+    if (verdict === "proof" || verdict === "evidence" || verdict === "aliased") {
       deny("REVIEW PROOF GUARD: that path resolves to wrapper-owned evidence in the review state directory (a review proof, the applied-source ledger, or other JSON the apply and push gates consume). Run the real review workflow; evidence files are not readable through file tools. Flags and .txt captures there remain readable by their real names.");
     }
   }
@@ -201,8 +201,8 @@ const isPureAckWrite = stateDirCandidates.length > 0 &&
 // `.txt` captures (round 11 closed `migration-review-*.json`, which the name
 // rule never listed). Inside the state directory a target that does not resolve
 // fails closed: there is nothing to read from a missing file, and a directory or
-// an unresolvable alias is not "the one file it names". It was
-// applying to plain reads: reading `OVERNIGHT-INTENT.flag` or
+// an unresolvable alias is not "the one file it names". The directory rule was
+// also refusing legitimate reads: reading `OVERNIGHT-INTENT.flag` or
 // `codex-review-latest.txt` back is exactly what the guards' own messages and
 // the codex-review skill tell an agent to do (33 such denials, 2026-09-04 audit).
 // `Grep` and `Glob` are deliberately NOT exempt (exact-SHA gpt-5.6-sol review of

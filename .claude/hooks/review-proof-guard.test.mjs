@@ -821,6 +821,13 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
     let hardLinked = false;
     try { linkSync(linkedProof, hardLink); hardLinked = true; } catch { /* filesystem without hard links */ }
     if (hardLinked) {
+      if (stateDirAlias) {
+        for (const tool_name of ["Read", "NotebookRead"]) {
+          const aliasPath = path.join(stateDirAlias, path.basename(hardLink));
+          const tool_input = tool_name === "Read" ? { file_path: aliasPath } : { notebook_path: aliasPath };
+          assert.match(run({ tool_name, tool_input }).stdout, /"permissionDecision":"deny"/, "hard-linked evidence through a short directory alias must deny");
+        }
+      }
       assert.match(run({ tool_name: "Read", tool_input: { file_path: hardLink } }).stdout, /"permissionDecision":"deny"/, "proof read through a hard link inside the state dir must deny");
       assert.match(run({ tool_name: "Read", tool_input: { file_path: linkedProof } }).stdout, /"permissionDecision":"deny"/, "the hard-linked proof itself still denies by name");
     } else {
@@ -869,6 +876,12 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
     } catch { /* filesystem without junctions or directory symlinks */ }
     try {
       if (junctioned) {
+        const externalHardLink = path.join(externalDir, "harmless-link.txt");
+        linkSync(path.join(externalDir, "migration-review-20260901120000_x.json"), externalHardLink);
+        for (const tool_name of ["Read", "NotebookRead"]) {
+          const tool_input = tool_name === "Read" ? { file_path: externalHardLink } : { notebook_path: externalHardLink };
+          assert.match(run({ tool_name, cwd: junctionRoot, tool_input }).stdout, /"permissionDecision":"deny"/, "hard-linked evidence through the external state-directory location must deny");
+        }
         const viaJunction = path.join(junctionRoot, ".claude", "session-state", "migration-review-20260901120000_x.json");
         for (const payload of [
           { tool_name: "Read", tool_input: { file_path: viaJunction } },
