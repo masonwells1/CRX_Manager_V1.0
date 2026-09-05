@@ -29,17 +29,26 @@ There is also a **Quick Delivery** shortcut that creates an order + delivery + d
 ### Status transitions
 Allowed values: `draft`, `sent`, `revised`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short`.
 
-The database trigger `_enforce_quote_status_transition()` is authoritative. Without an explicit admin-override workflow, it permits:
+The database trigger `_enforce_quote_status_transition()` is authoritative. Without an explicit admin override, anything not listed raises `Invalid quote status transition`:
 
-| From | Allowed next status |
-|------|---------------------|
+| From | To |
+| --- | --- |
 | `draft` | `sent`, `cancelled` |
 | `sent` | `revised`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` |
 | `revised` | `sent`, `accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` |
-| `accepted` | `sent` through the guarded revert workflow |
-| `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` | Terminal; no ordinary outgoing transition |
+| `accepted` | `sent` |
+| `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short` | terminal — no outgoing edge |
 
-`closed_short` has an additional safety condition: the quote cannot have a non-deleted application job in `scheduled` or `in_progress`; the trigger refuses that transition with `BOOKING_HAS_ACTIVE_JOBS`.
+Three qualifications, all enforced in that same trigger:
+
+- A no-op update (`OLD.status = NEW.status`) is always allowed.
+- `_is_admin_override()` bypasses the edge table entirely.
+- `closed_short` has an additional safety condition: it is refused with `BOOKING_HAS_ACTIVE_JOBS` while any non-deleted job on the quote is `scheduled` or `in_progress`.
+
+`save_quote()` carries its own transition map that is a deliberate strict *subset* of the trigger's
+(`draft→sent`; `sent→revised/accepted/declined/expired`; `revised→sent/accepted/declined/expired`), so an
+invalid edge fails earlier and with a clearer error. The trigger remains the authority — see migration
+`20260616204400_save_quote_canonical_idempotency_and_transition_map.sql`.
 
 - **draft**: Initial state. Can be edited freely.
 - **sent**: Quote was sent to the customer. A `quote_versions` snapshot is created.
@@ -49,7 +58,7 @@ The database trigger `_enforce_quote_status_transition()` is authoritative. With
 - **accepted**: Customer accepted. The `is_planned` flag can reserve inventory via holds.
 - **declined**: Customer said no.
 - **expired**: Past the `expires_at` date.
-- **cancelled**: Quote was cancelled before fulfillment.
+- **cancelled**: Quote was cancelled before fulfillment. It is terminal and reachable from `draft`, `sent`, and `revised`.
 
 ### Key RPC
 - `save_quote()` — atomic save of header + sections + items in one transaction
