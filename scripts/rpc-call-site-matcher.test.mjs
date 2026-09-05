@@ -19,3 +19,14 @@ test('matches literal RPC routine names containing regular-expression characters
     assert.match(sites[0], /frontend RPC: src\/lib\/call\.ts:1/);
   }
 });
+
+test('matches valid literal RPC call syntax beyond a direct dot call', () => {
+  const snapshot = snapshotFor('src/lib/call.ts', `
+client.rpc ('dangerous_rpc');
+client.rpc /* explanatory comment */ ('dangerous_rpc');
+client.rpc?.(\`dangerous_rpc\`);
+client['rpc']('dangerous_rpc');
+client["rpc"]?.( "dangerous_rpc" );`);
+  const sites = applicationRpcCallSites('dangerous_rpc', snapshot);
+  assert.equal(sites.length, 5);
+});

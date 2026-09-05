@@ -67,6 +67,7 @@ function collectPaths(root, stateDir) {
     'scripts/write-codex-push-proof.mjs',
     'scripts/migration-security-definer-guard.mjs',
     'scripts/migration-routine-references.mjs',
+    'scripts/rpc-call-site-matcher.mjs',
     'scripts/migration-proof-evidence-hash.mjs',
     'scripts/migration-proof-reviewer-launch.mjs',
     normal(path.join(relativeStateDir, 'applied-migrations.json')),

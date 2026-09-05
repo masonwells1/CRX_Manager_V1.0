@@ -658,6 +658,14 @@ export function securityDefinerMissingAnonRevokes(sql) {
       // ACL revokes are not enough: an owner-privileged routine without the
       // fixed path can resolve attacker-controlled objects before RLS applies.
       if (!hasFixedSecurityDefinerCreateSearchPath(definition)) return ['unparseable-security-definer-sql'];
+      // SQL-standard routines can use `RETURN expression` as an inline body.
+      // executableSql() only recursively inspects quoted/dollar-quoted bodies,
+      // so source-only proof cannot distinguish executable path changes in
+      // this unbounded form from harmless declaration text. Withhold the proof
+      // until this body grammar has a complete parser rather than trusting a
+      // safe-looking header.
+      const keywordDefinition = maskQuotedIdentifierContents(definition);
+      if (keywordDefinition === null || /\bRETURN\b/i.test(keywordDefinition)) return ['unparseable-security-definer-sql'];
       lifecycle.push({
         index: declaration.index,
         action: 'declare',

@@ -407,6 +407,13 @@ END;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(atomicBody), ['unparseable-security-definer-sql']);
 });
 
+test('fails closed for SQL-standard RETURN bodies that can change the search path', () => {
+  const returnBody = `CREATE FUNCTION public.return_body_path_probe() RETURNS text LANGUAGE sql SECURITY DEFINER
+SET search_path = public, pg_temp RETURN set_config('search_path', 'attacker, public', true);
+REVOKE ALL ON FUNCTION public.return_body_path_probe() FROM PUBLIC, anon;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(returnBody), ['unparseable-security-definer-sql']);
+});
+
 test('does not demand an anon revoke for invoker-security functions', () => {
   assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.safe_fn() RETURNS void LANGUAGE sql AS $$ SELECT; $$;'), []);
 });
