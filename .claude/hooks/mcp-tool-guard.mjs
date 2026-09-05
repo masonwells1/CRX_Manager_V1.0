@@ -82,7 +82,34 @@ const SUPABASE_READ_ONLY_TOOLS = new Set([
 ]);
 // Owned by another gate; this guard stays silent so THAT gate decides.
 const SUPABASE_GATED_ELSEWHERE = new Set(["execute_sql", "apply_migration", "deploy_edge_function"]);
+// Sensitive Supabase leaves by SUFFIX, independent of server prefix. The
+// connector UUID is per-install and changes on reinstall
+// (.claude/skills/deploy-edge-function/SKILL.md), so a reinstalled connector
+// arrives under a UUID that neither settings.json nor SUPABASE_TOOL_RE knows,
+// and under Auto mode its lifecycle mutations and deploy/migration/SQL leaves
+// would reach the classifier (GitHub Codex P1 2026-09-05, PR #605). Any
+// UUID-shaped server offering one of these leaves is denied until its UUID is
+// registered here and in settings.json. Read-only and unknown leaves on an
+// unregistered UUID pass through: the guard cannot tell one connector's UUID
+// from another's, and denying every unknown leaf on every UUID server would
+// break unrelated connectors. Stated residual, mirrored from the Codex guard's
+// LIVE_TOOL_ACTIONS suffix rule.
+const UUID_SERVER_TOOL_RE = /^mcp__[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}__([a-z0-9_]+)$/i;
+const SUPABASE_SENSITIVE_LEAVES = new Set([
+  "apply_migration", "deploy_edge_function", "execute_sql",
+  "delete_branch", "merge_branch", "reset_branch", "rebase_branch", "create_branch",
+  "create_project", "pause_project", "restore_project", "confirm_cost",
+]);
 const supabaseLeaf = SUPABASE_TOOL_RE.exec(toolName);
+if (!supabaseLeaf) {
+  const uuidLeaf = UUID_SERVER_TOOL_RE.exec(toolName);
+  if (uuidLeaf && SUPABASE_SENSITIVE_LEAVES.has(uuidLeaf[1].toLowerCase())) {
+    out("block",
+      `MCP TOOL GUARD (${toolName}): "${uuidLeaf[1]}" is a Supabase live-action leaf on a connector UUID this repo does not recognise. ` +
+      "The connector UUID changes on reinstall; register the new UUID in .claude/settings.json (ask/deny entries) and in " +
+      ".claude/hooks/mcp-tool-guard.mjs SUPABASE_TOOL_RE before any live Supabase action can run through it (fail closed).");
+  }
+}
 if (supabaseLeaf) {
   const leaf = supabaseLeaf[1].toLowerCase();
   if (SUPABASE_READ_ONLY_TOOLS.has(leaf) || SUPABASE_GATED_ELSEWHERE.has(leaf)) nothing();

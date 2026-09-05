@@ -187,4 +187,23 @@ eq(r.stdout.trim(), "", "deploy_edge_function is left to the ask tier (silent he
 r = runHook({ tool_name: "mcp__github__future_write_tool", tool_input: {} });
 eq(r.stdout.trim(), "", "non-Supabase server with an unknown leaf is not matched by the Supabase rule");
 
+// ── 2026-09-05 (GitHub Codex P1, PR #605 head f9bd7e4a0): unregistered UUID ──
+// The Supabase connector UUID changes on reinstall. Sensitive leaves on ANY
+// UUID-shaped server are denied until that UUID is registered.
+const ALT_UUID = "mcp__0f1e2d3c-4b5a-4c6d-8e7f-a0b1c2d3e4f5__";
+r = runHook({ tool_name: ALT_UUID + "pause_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "pause_project on an unregistered connector UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "deploy_edge_function", tool_input: { name: "send-email" } });
+ok(isDeny(r), "deploy_edge_function on an unregistered connector UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "apply_migration", tool_input: {} });
+ok(isDeny(r), "apply_migration on an unregistered connector UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "Execute_SQL", tool_input: { query: "select 1" } });
+ok(isDeny(r), "execute_sql on an unregistered connector UUID is denied (case-insensitive)");
+r = runHook({ tool_name: ALT_UUID + "list_projects", tool_input: {} });
+eq(r.stdout.trim(), "", "read-only leaf on an unregistered UUID passes through (could be any connector)");
+r = runHook({ tool_name: ALT_UUID + "get_event", tool_input: { id: "1" } });
+eq(r.stdout.trim(), "", "unrelated leaf on an unregistered UUID passes through (stated residual)");
+r = runHook({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function", tool_input: {} });
+eq(r.stdout.trim(), "", "deploy_edge_function on the REGISTERED UUID is still left to the ask tier");
+
 console.log(`mcp-tool-guard: ${pass} assertions passed`);
