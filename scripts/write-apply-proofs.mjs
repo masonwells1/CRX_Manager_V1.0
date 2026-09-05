@@ -43,7 +43,7 @@ import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.m
 import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
 import { routineReferencesIn } from './migration-routine-references.mjs';
-import { applicationRpcCallSites } from './rpc-call-site-matcher.mjs';
+import { applicationRpcCallSites, unresolvedApplicationRpcCallSites } from './rpc-call-site-matcher.mjs';
 import { invalidateMigrationProofs } from './migration-proof-file-state.mjs';
 
 const rawArgs = process.argv.slice(2);
@@ -313,8 +313,17 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
       lines.push(`CALL SITES of ${name} across migrations:`);
       lines.push('  (intentionally unavailable — raw SQL text cannot prove executable caller bodies; treat exposure as unverified)');
       const applicationSites = applicationRpcCallSites(name, snapshot);
+      const unresolvedApplicationSites = unresolvedApplicationRpcCallSites(snapshot);
       lines.push(`APPLICATION RPC CALL SITES of ${name} in src/ and supabase/functions/:`);
-      lines.push(applicationSites.length ? applicationSites.join('\n') : '  (no application RPC call found)');
+      lines.push(applicationSites.length ? applicationSites.join('\n') : '  (no literal application RPC call found)');
+      if (unresolvedApplicationSites.length) {
+        lines.push(
+          '  UNVERIFIED: dynamic application .rpc() routine-name calls exist, so a missing literal',
+          '  match cannot prove this routine is private. If application exposure affects a required',
+          '  charter check, report BLOCKERS rather than approving from an absence claim.',
+          unresolvedApplicationSites.join('\n'),
+        );
+      }
       sections.push(lines.join('\n'));
     }
     parts.push(
@@ -536,6 +545,16 @@ for (const name of names) {
     evidence = buildEmbeddedEvidence(migRelPath, snapshot);
   } catch (error) {
     console.error(`ERROR: could not capture safe review evidence for ${name}: ${error.message || error}. NO proofs minted.`);
+    exitCode = 1;
+    continue;
+  }
+  const unresolvedApplicationSites = unresolvedApplicationRpcCallSites(snapshot);
+  if (unresolvedApplicationSites.length) {
+    console.error(
+      `ERROR: ${name} cannot be reviewed while application RPC exposure is unverified: dynamic .rpc() routine-name call(s) exist. ` +
+      'No proof minted; make the routine names literal or extend the trusted matcher before requesting a migration review.\n' +
+      unresolvedApplicationSites.join('\n'),
+    );
     exitCode = 1;
     continue;
   }

@@ -2,6 +2,7 @@
 // can see. The capture is the immutable in-memory source of the prompt; the
 // hash is calculated from that same capture, never from a later working-tree read.
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
@@ -39,18 +40,41 @@ function safeWalk(rootReal, root, predicate) {
   if (!start.isDirectory()) throw new Error(`migration-proof evidence path is not a directory: ${root}`);
   const files = [];
   const visit = (dir) => {
-    const stat = safeStat(rootReal, dir);
-    if (!stat.isDirectory()) throw new Error(`migration-proof evidence path is not a directory: ${dir}`);
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       const child = safeStat(rootReal, full);
       if (child.isDirectory()) visit(full);
-      else if (child.isFile() && predicate(entry.name)) files.push(full);
+      else if (child.isFile() && predicate(normal(path.relative(root, full)))) files.push(full);
       else if (!child.isFile()) throw new Error(`migration-proof evidence contains an unsupported filesystem entry: ${full}`);
     }
   };
   visit(root);
   return files;
+}
+
+function trackedPaths(rootReal, root, prefixes, predicate) {
+  let output;
+  try {
+    output = execFileSync('git', ['-C', root, 'ls-files', '-z', '--', ...prefixes], {
+      encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    // The migration-apply guard's isolated filesystem fixtures are deliberately
+    // not Git repositories. They cannot mint production proof because the real
+    // wrapper separately requires a protected origin/main policy; retain their
+    // hermetic safe-walk behavior without weakening a real checkout's allowlist.
+    if (/not a git repository/i.test(String(error.message || error))) {
+      return prefixes.flatMap((prefix) => safeWalk(rootReal, path.join(root, prefix), predicate)
+        .map((file) => normal(path.relative(root, file))));
+    }
+    throw new Error(`could not enumerate trusted Git-tracked migration-proof evidence: ${error.message || error}`);
+  }
+  return output.toString('utf8').split('\0').filter(Boolean).map(normal).filter((relative) => {
+    if (!prefixes.some((prefix) => relative.startsWith(prefix))) {
+      throw new Error(`Git returned an evidence path outside the trusted roots: ${relative}`);
+    }
+    return predicate(relative);
+  });
 }
 
 function collectPaths(root, stateDir) {
@@ -72,15 +96,9 @@ function collectPaths(root, stateDir) {
     'scripts/migration-proof-reviewer-launch.mjs',
     normal(path.join(relativeStateDir, 'applied-migrations.json')),
   ]);
-  for (const file of safeWalk(rootReal, path.join(root, 'supabase', 'migrations'), (name) => name.endsWith('.sql'))) {
-    inputs.add(normal(path.relative(root, file)));
-  }
-  for (const file of safeWalk(rootReal, path.join(root, 'src'), (name) => /\.(?:ts|tsx)$/.test(name) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(name))) {
-    inputs.add(normal(path.relative(root, file)));
-  }
-  for (const file of safeWalk(rootReal, path.join(root, 'supabase', 'functions'), (name) => /\.(?:ts|tsx)$/.test(name) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(name))) {
-    inputs.add(normal(path.relative(root, file)));
-  }
+  for (const file of trackedPaths(rootReal, root, ['supabase/migrations/'], (relative) => relative.endsWith('.sql'))) inputs.add(file);
+  for (const file of trackedPaths(rootReal, root, ['src/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
+  for (const file of trackedPaths(rootReal, root, ['supabase/functions/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
   return { rootReal, paths: [...inputs].sort() };
 }
 

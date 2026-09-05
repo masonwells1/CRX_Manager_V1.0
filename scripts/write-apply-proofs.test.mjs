@@ -11,11 +11,15 @@ import './migration-security-definer-guard.test.mjs';
 test('proof revocation occurs before the wrapper resolves a reviewer executable', () => {
   const source = readFileSync(fileURLToPath(new URL('./write-apply-proofs.mjs', import.meta.url)), 'utf8');
   const revocation = source.indexOf('invalidateMigrationProofs(stateDir, safe)');
+  const unresolvedExposureGate = source.indexOf('cannot be reviewed while application RPC exposure is unverified');
   const executableLookup = source.indexOf('codexBin = codexExecutable()');
 
   assert.ok(revocation >= 0, 'the wrapper revokes stale proof files');
   assert.ok(executableLookup >= 0, 'the wrapper still resolves the trusted reviewer executable');
   assert.ok(revocation < executableLookup, 'stale proofs are revoked before a fallible review setup step');
+  const reviewerCall = source.indexOf('const { verdict, error } = runCodexCharter');
+  assert.ok(unresolvedExposureGate >= 0 && unresolvedExposureGate < reviewerCall,
+    'unresolved application RPC exposure blocks proof production before a reviewer process starts');
 });
 
 function printedEvidence(migration) {

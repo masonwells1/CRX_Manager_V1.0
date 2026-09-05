@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applicationRpcCallSites } from './rpc-call-site-matcher.mjs';
+import { applicationRpcCallSites, unresolvedApplicationRpcCallSites } from './rpc-call-site-matcher.mjs';
 
 function snapshotFor(file, text) {
   return {
@@ -29,4 +29,17 @@ client['rpc']('dangerous_rpc');
 client["rpc"]?.( "dangerous_rpc" );`);
   const sites = applicationRpcCallSites('dangerous_rpc', snapshot);
   assert.equal(sites.length, 5);
+  assert.equal(unresolvedApplicationRpcCallSites(snapshotFor('src/lib/call.ts', `client.rpc('dangerous_rpc')`)).length, 0);
+});
+
+test('reports variable and interpolated RPC routine names as unresolved exposure', () => {
+  const snapshot = snapshotFor('src/lib/call.ts', `
+const routine = 'dangerous_rpc';
+client.rpc(routine, {});
+// client.rpc(commentOnly, {});
+client.rpc(\`dangerous_\${suffix}\`, {});`);
+  const sites = unresolvedApplicationRpcCallSites(snapshot);
+  assert.equal(sites.length, 2);
+  assert.match(sites[0], /src\/lib\/call\.ts:3/);
+  assert.match(sites[1], /src\/lib\/call\.ts:5/);
 });
