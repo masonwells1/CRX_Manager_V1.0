@@ -164,9 +164,15 @@ const DIMENSIONS = [
 
 // Optional focus: pass args = { only: ['db-security', ...] } to re-run a subset
 // of dimensions (e.g. to recover dimensions whose verifiers flaked on a prior run).
-const SELECTED =
-  args && Array.isArray(args.only) && args.only.length
-    ? DIMENSIONS.filter((d) => args.only.includes(d.key))
+const A = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+const HAS_ONLY = Object.prototype.hasOwnProperty.call(A, 'only')
+const INVALID_ONLY = HAS_ONLY && !Array.isArray(A.only)
+const REQUESTED_ONLY = Array.isArray(A.only) && A.only.length ? [...new Set(A.only)] : []
+const UNKNOWN_ONLY = REQUESTED_ONLY.filter((key) => !DIMENSIONS.some((d) => d.key === key))
+const SELECTED = INVALID_ONLY
+  ? []
+  : REQUESTED_ONLY.length
+    ? DIMENSIONS.filter((d) => REQUESTED_ONLY.includes(d.key))
     : DIMENSIONS
 
 function verifyPrompt(d, f) {
@@ -232,6 +238,17 @@ const all = results.flat().filter(Boolean)
 const confirmed = all.filter((f) => f.verdict.status === 'VERIFIED')
 const refuted = all.filter((f) => f.verdict.status === 'REFUTED')
 const unverified = all.filter((f) => f.verdict.status === 'UNVERIFIED')
+const blocked = UNKNOWN_ONLY.map((key) => ({
+  dimension: key,
+  status: 'BLOCKED',
+  reason: `Unknown requested audit dimension: ${String(key)}`,
+}))
+if (INVALID_ONLY) blocked.push({
+  dimension: 'only',
+  status: 'BLOCKED',
+  reason: 'Invalid audit selection: args.only must be an array.',
+})
+const overallStatus = blocked.length || unverified.length ? 'BLOCKED' : 'VERIFIED'
 
 const order = { BLOCKER: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
 confirmed.sort((a, b) => (order[a.finalSeverity] ?? 9) - (order[b.finalSeverity] ?? 9))
@@ -258,15 +275,21 @@ log(
     refuted.length +
     ' refuted, ' +
     unverified.length +
-    ' unverified, across ' +
+    ' unverified, ' +
+    blocked.length +
+    ' blocked, across ' +
     SELECTED.length +
     ' dimensions.'
 )
 
 return {
   dimensionsRun: SELECTED.map((d) => d.key),
-  counts: { confirmed: confirmed.length, refuted: refuted.length, unverified: unverified.length, bySeverity },
+  overallStatus,
+  complete: overallStatus === 'VERIFIED',
+  clean: overallStatus === 'VERIFIED' && confirmed.length === 0,
+  counts: { confirmed: confirmed.length, refuted: refuted.length, unverified: unverified.length, blocked: blocked.length, bySeverity },
   confirmed,
   refuted,
   unverified,
+  blocked,
 }
