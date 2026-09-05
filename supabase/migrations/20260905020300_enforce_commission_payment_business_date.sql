@@ -1,3 +1,4 @@
+-- NOT APPLIED — DO NOT APPLY without Mason's explicit in-chat approval.
 -- Keep commission payout dates on the same America/Chicago business calendar
 -- used by the historical report cutoff. A browser in another timezone can be
 -- on tomorrow while Chicago is still on today; accepting that generated date
