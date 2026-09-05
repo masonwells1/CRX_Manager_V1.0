@@ -8,6 +8,12 @@ const migration = readFileSync(
 const reports = readFileSync('src/pages/Reports.tsx', 'utf8').replace(/\r\n/g, '\n');
 const payments = readFileSync('src/pages/CommissionPayments.tsx', 'utf8').replace(/\r\n/g, '\n');
 const attributes = readFileSync('.gitattributes', 'utf8').replace(/\r\n/g, '\n');
+const historyProver = readFileSync('scripts/smoke/prove-commission-history-as-of.mjs', 'utf8');
+const labelRepairProver = readFileSync('scripts/smoke/prove-commission-history-label-repair.mjs', 'utf8');
+const snapshotProver = readFileSync('scripts/smoke/prove-commission-report-snapshot-contract.mjs', 'utf8');
+const smokeSpecs = JSON.parse(readFileSync('scripts/smoke/smoke-specs.json', 'utf8')) as {
+  specs: Record<string, { container_only?: boolean; container_prover?: string }>;
+};
 
 describe('commission payment Chicago business-date guard', () => {
   it('remains compatible with the guarded migration wrapper', () => {
@@ -75,5 +81,30 @@ describe('commission payment Chicago business-date guard', () => {
     expect(migration).toContain('AND t.tgqual IS NULL');
     expect(migration).toContain('AND t.tgnargs = 0');
     expect(migration).toContain('AND octet_length(t.tgargs) = 0');
+  });
+
+  it('keeps the commission-history chain container-only and its lock probes stable', () => {
+    expect(smokeSpecs.specs.commission_history_as_of).toMatchObject({
+      container_only: true,
+      container_prover: 'prove-commission-history-as-of.mjs',
+    });
+    expect(historyProver).toContain('SELECT pg_sleep(5);');
+    expect(historyProver).toContain('const attempts = expectedToBlock ? 30 : 1;');
+    expect(historyProver).toContain("'--label', `${PROOF_LABEL_KEY}=${NAME}`");
+  });
+
+  it('isolates timeout cleanup for both generated commission proof wrappers', () => {
+    for (const prover of [labelRepairProver, snapshotProver]) {
+      expect(prover).toContain('CRX_COMMISSION_PROOF_NAME: NAME');
+      expect(prover).toContain("['ps', '-aq', '--filter', `label=${PROOF_LABEL_KEY}=${NAME}`]");
+      expect(prover).toContain("spawnSync('docker', ['rm', '-f', ...containerIds]");
+      expect(prover).toContain("result?.error?.code === 'ETIMEDOUT'");
+      expect(prover).not.toMatch(/docker[^\n]*(prune|rm', '-f', NAME)/);
+    }
+  });
+
+  it('emits a real newline regex in the generated snapshot proof', () => {
+    expect(snapshotProver).toContain('split(/\\\\r?\\\\n/).pop()');
+    expect(snapshotProver).not.toContain('split(/\\\\\\\\r?\\\\\\\\n/).pop()');
   });
 });

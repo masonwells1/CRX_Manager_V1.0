@@ -21,6 +21,25 @@ const REPAIR = path.join(ROOT, 'supabase', 'migrations', '20260905020100_repair_
 const RECIPIENT_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020200_refuse_stale_commission_payment_recipient.sql');
 const BUSINESS_DATE_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020300_enforce_commission_payment_business_date.sql');
 const GENERATED = path.join(HERE, `.commission-history-label-repair-${process.pid}.mjs`);
+const NAME = `crx-commission-label-repair-${process.pid}-${Date.now().toString(36)}`.toLowerCase();
+const PROOF_LABEL_KEY = 'com.croprx.commission-proof';
+
+function cleanupTimedOutProof() {
+  const listed = spawnSync(
+    'docker',
+    ['ps', '-aq', '--filter', `label=${PROOF_LABEL_KEY}=${NAME}`],
+    { cwd: ROOT, encoding: 'utf8', timeout: 30_000 },
+  );
+  if (listed.error || listed.status !== 0) return;
+  const containerIds = (listed.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+  if (containerIds.length > 0) {
+    spawnSync('docker', ['rm', '-f', ...containerIds], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+  }
+}
 
 for (const required of [SNAPSHOT, REPLAY_GUARD, REPAIR, RECIPIENT_GUARD, BUSINESS_DATE_GUARD]) {
   assert.ok(readFileSync(required, 'utf8'), `missing migration: ${required}`);
@@ -714,22 +733,25 @@ COMMIT;\`);
   console.log('COMMISSION_PAYMENT_BUSINESS_DATE_GUARD_PROOF_PASS chicago_today=true future_rejected=true catalog_pinned=true mutation_guards=3');
 `;
 
+let result;
 try {
   let source = readFileSync(BASE_PROVER, 'utf8');
   const anchor = '  console.log(\n    `COMMISSION_HISTORY_PROOF_PASS postgres=17 baseline=${BASELINE_MANIFEST.migrations_high_water} replayed=${migrations.length}`,\n  );';
   assert.equal(source.split(anchor).length - 1, 1, 'base prover injection anchor is ambiguous');
   source = source.replace(anchor, `${continuation}\n${anchor}`);
   writeFileSync(GENERATED, source, 'utf8');
-  const result = spawnSync(process.execPath, [GENERATED], {
+  result = spawnSync(process.execPath, [GENERATED], {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 100 * 1024 * 1024,
     timeout: 900_000,
+    env: { ...process.env, CRX_COMMISSION_PROOF_NAME: NAME },
   });
   process.stdout.write(result.stdout || '');
   process.stderr.write(result.stderr || '');
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } finally {
+  if (result?.error?.code === 'ETIMEDOUT') cleanupTimedOutProof();
   try { unlinkSync(GENERATED); } catch { /* already removed */ }
 }

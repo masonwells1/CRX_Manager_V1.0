@@ -68,6 +68,7 @@ import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { preferredQuoteNotes } from '../lib/quoteNotes';
+import { adaptQuoteVersionRows } from '../lib/quoteVersionAdapter';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import HelpTip from '../components/ui/HelpTip';
 import TransactionThread from '../components/ui/TransactionThread';
@@ -941,7 +942,16 @@ export default function QuoteBuilder() {
       Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
       toast('warning', 'Quote loaded, but version history could not be refreshed.');
     } else {
-      setQuoteVersions((versionsData || []) as unknown as QuoteVersion[]);
+      const versions = adaptQuoteVersionRows(versionsData);
+      if (versions.length !== (versionsData?.length ?? 0)) {
+        Sentry.captureMessage('Quote version history contained invalid snapshot data', {
+          level: 'warning',
+          tags: { source: 'read', action: 'load_quote_versions' },
+          extra: { quoteId, rejectedCount: (versionsData?.length ?? 0) - versions.length },
+        });
+        toast('warning', 'Quote loaded, but some saved versions could not be displayed.');
+      }
+      setQuoteVersions(versions);
     }
 
     setLoading(false);
@@ -2228,8 +2238,17 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
-    setQuoteVersions((data || []) as unknown as QuoteVersion[]);
-  }, [quoteId]);
+    const versions = adaptQuoteVersionRows(data);
+    if (versions.length !== (data?.length ?? 0)) {
+      Sentry.captureMessage('Quote version refresh contained invalid snapshot data', {
+        level: 'warning',
+        tags: { source: 'read', action: 'refresh_quote_versions' },
+        extra: { quoteId, rejectedCount: (data?.length ?? 0) - versions.length },
+      });
+      toast('warning', 'Some saved versions could not be displayed.');
+    }
+    setQuoteVersions(versions);
+  }, [quoteId, toast]);
 
   const handleRestoreVersion = async (versionId: string) => {
     if (!quoteId || !profile) return;

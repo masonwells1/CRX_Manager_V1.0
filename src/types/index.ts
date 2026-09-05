@@ -771,7 +771,7 @@ export interface QuoteVersion {
   version_number: number;
   sent_by: string;
   sent_at: string;
-  sent_method: string;
+  sent_method: string | null;
   snapshot_data: {
     quote: {
       quote_number: string;

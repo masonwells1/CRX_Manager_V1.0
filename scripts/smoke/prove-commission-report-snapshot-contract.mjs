@@ -24,6 +24,25 @@ const MIGRATION = path.join(
   '20260903230000_commission_report_snapshot_contract.sql',
 );
 const GENERATED = path.join(HERE, `.commission-report-snapshot-${process.pid}.mjs`);
+const NAME = `crx-commission-snapshot-${process.pid}-${Date.now().toString(36)}`.toLowerCase();
+const PROOF_LABEL_KEY = 'com.croprx.commission-proof';
+
+function cleanupTimedOutProof() {
+  const listed = spawnSync(
+    'docker',
+    ['ps', '-aq', '--filter', `label=${PROOF_LABEL_KEY}=${NAME}`],
+    { cwd: ROOT, encoding: 'utf8', timeout: 30_000 },
+  );
+  if (listed.error || listed.status !== 0) return;
+  const containerIds = (listed.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+  if (containerIds.length > 0) {
+    spawnSync('docker', ['rm', '-f', ...containerIds], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+  }
+}
 
 assert.ok(readFileSync(MIGRATION, 'utf8'), `missing migration: ${MIGRATION}`);
 
@@ -79,7 +98,7 @@ $shift_check$;
   const adminScalar = (query) => psql(\`\\\\pset format unaligned
 \\\\pset tuples_only on
 SELECT set_config('request.jwt.claim.sub', '\${cutoverPreimage.admin}', false);
-\${query}\`).stdout.trim().split(/\\\\r?\\\\n/).pop();
+\${query}\`).stdout.trim().split(/\\r?\\n/).pop();
   const beforeReplay = adminScalar(\`SELECT public.get_commission_history_report(DATE '\${asOfDate}')::text;\`);
   applySql(snapshotSource);
   applySql(replayGuardSource);
@@ -164,22 +183,25 @@ SET session_replication_role = origin;
   assert.equal(scalar("SELECT jsonb_build_object('cutover_at', cutover_at, 'first_supported_date', first_supported_date, 'created_at', created_at)::text FROM public.commission_history_cutover WHERE singleton;"), originalCutover, 'fixture cutover restore drifted');
 `;
 
+let result;
 try {
   let source = readFileSync(BASE_PROVER, 'utf8');
   const anchor = '      proveCutoverOpening(cutoverPreimage);';
   assert.equal(source.split(anchor).length - 1, 1, 'base prover injection anchor is ambiguous');
   source = source.replace(anchor, `${anchor}\n${continuation}`);
   writeFileSync(GENERATED, source, 'utf8');
-  const result = spawnSync(process.execPath, [GENERATED], {
+  result = spawnSync(process.execPath, [GENERATED], {
     cwd: ROOT,
     encoding: 'utf8',
     maxBuffer: 100 * 1024 * 1024,
     timeout: 900_000,
+    env: { ...process.env, CRX_COMMISSION_PROOF_NAME: NAME },
   });
   process.stdout.write(result.stdout || '');
   process.stderr.write(result.stderr || '');
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } finally {
+  if (result?.error?.code === 'ETIMEDOUT') cleanupTimedOutProof();
   try { unlinkSync(GENERATED); } catch { /* already removed */ }
 }

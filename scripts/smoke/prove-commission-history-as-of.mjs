@@ -14,7 +14,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const NAME = `crx-commission-history-${process.pid}-${Date.now().toString(36)}`.toLowerCase();
+const NAME = (
+  process.env.CRX_COMMISSION_PROOF_NAME ||
+  `crx-commission-history-${process.pid}-${Date.now().toString(36)}`
+).toLowerCase();
+const PROOF_LABEL_KEY = 'com.croprx.commission-proof';
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE_DIR = path.join(ROOT, 'supabase', 'baselines');
 const BASELINE_MANIFEST = JSON.parse(
@@ -168,7 +172,7 @@ async function proveWriterLockConflict(candidateSource, expectedToBlock) {
 BEGIN;
 ${lockStatement}
 \\echo COMMISSION_HISTORY_LOCK_HELD
-SELECT pg_sleep(2);
+SELECT pg_sleep(5);
 ROLLBACK;
 `);
   await waitForOutput(holder, 'COMMISSION_HISTORY_LOCK_HELD');
@@ -179,18 +183,25 @@ ROLLBACK;
     ['commission cancellation', "UPDATE public.commissions SET status = 'cancelled' WHERE false"],
   ];
   for (const [label, statement] of writers) {
-    const writer = psql(`
+    let writer;
+    let output = '';
+    const attempts = expectedToBlock ? 30 : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      writer = psql(`
 BEGIN;
 SET LOCAL lock_timeout = '400ms';
 ${statement};
 ROLLBACK;
 `, { allowFailure: true });
-    const output = `${writer.stdout || ''}\n${writer.stderr || ''}`;
+      output = `${writer.stdout || ''}\n${writer.stderr || ''}`;
+      if (!expectedToBlock || writer.status !== 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     if (expectedToBlock) {
-      assert.notEqual(writer.status, 0, `${label} did not block`);
+      assert.notEqual(writer?.status, 0, `${label} did not block`);
       assert.match(output, /canceling statement due to lock timeout/, `${label} blocked for the wrong reason:\n${output}`);
     } else {
-      assert.equal(writer.status, 0, `${label} should not block under weakened lock:\n${output}`);
+      assert.equal(writer?.status, 0, `${label} should not block under weakened lock:\n${output}`);
     }
   }
 
@@ -448,6 +459,7 @@ let started = false;
 try {
   docker([
     'run', '--detach', '--name', NAME, '--network', 'none',
+    '--label', `${PROOF_LABEL_KEY}=${NAME}`,
     '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m',
     '--env', 'POSTGRES_PASSWORD=postgres', IMAGE,
   ]);

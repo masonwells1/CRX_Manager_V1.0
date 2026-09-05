@@ -902,6 +902,8 @@
     },
     "commission_history_as_of": {
       "chain": "smoke-commission-history-as-of.sql",
+      "container_only": true,
+      "container_prover": "prove-commission-history-as-of.mjs",
       "description": "Ledger-backed historical commission reporting real-path proof after 20260903150100: creates only [E2E]-tagged fixtures; proves earned-state snapshots, real create/post RPC stamps, positive settlement events, immutable reconciliation labels, paid-only negative balances after soft deletion, RESTRICT hard-delete protection, signed void reversals, amount/recipient history stability across a controlled prior-day baseline, cancellation snapshots, immutable-ledger update/truncate refusal, and supported-date boundaries. Terminal rollback.",
       "covers": [
         "get_commission_balance_report",
