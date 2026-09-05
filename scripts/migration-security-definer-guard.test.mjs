@@ -140,6 +140,11 @@ test('requires the fixed search path for every SECURITY DEFINER creation form', 
     assert.deepEqual(securityDefinerMissingAnonRevokes(`${safe}\n${routine.revoke}`), []);
     assert.deepEqual(securityDefinerMissingAnonRevokes(`${widened}\n${routine.revoke}`), ['unparseable-security-definer-sql']);
   }
+  const quotedOutputColumn = `CREATE FUNCTION public.quoted_output_path_decoy()
+RETURNS TABLE ("SET search_path = public, pg_temp AS" integer)
+LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1; $$;
+REVOKE ALL ON FUNCTION public.quoted_output_path_decoy() FROM PUBLIC, anon;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(quotedOutputColumn), ['unparseable-security-definer-sql']);
 });
 
 test('fails closed for search-path-sensitive targets and quoted role lookalikes', () => {

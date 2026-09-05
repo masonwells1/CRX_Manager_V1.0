@@ -289,7 +289,12 @@ function hasFixedSecurityDefinerCreateSearchPath(definition) {
   // `AS` begins the blanked routine body in executableSql(). Any other routine
   // option can occur before or after SET, so stop only at the next option word
   // rather than accepting a path prefix that an additional schema can extend.
-  const settings = [...definition.matchAll(
+  // Quoted identifiers can legally contain the complete apparent directive
+  // (for example an output column in RETURNS TABLE). They are names, never
+  // routine configuration, so mask their contents before looking for SET.
+  const keywordDefinition = maskQuotedIdentifierContents(definition);
+  if (keywordDefinition === null) return false;
+  const settings = [...keywordDefinition.matchAll(
     /\bSET\s+search_path\s*(?:TO|=)\s*([\s\S]*?)(?=\s+\b(?:AS|LANGUAGE|TRANSFORM|WINDOW|SUPPORT|COST|ROWS|SET|SECURITY|IMMUTABLE|STABLE|VOLATILE|LEAKPROOF|CALLED|RETURNS|STRICT)\b|\s*$)/gi,
   )];
   if (settings.length !== 1) return false;
