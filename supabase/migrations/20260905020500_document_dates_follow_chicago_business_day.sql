@@ -59,7 +59,9 @@
 --
 -- FAIL-CLOSED: each body is pinned by md5 (the pre-image this converts AND the post-image
 -- it produces, so a re-run is safe rather than aborting on its own output). If any has
--- drifted at apply time this migration aborts and changes nothing.
+-- drifted at apply time this migration aborts and changes nothing. SECURITY DEFINER,
+-- search_path, and the exact app-role EXECUTE surface are pinned too: CREATE OR REPLACE
+-- preserves ACLs, so leaving that boundary implicit could preserve a wrapper-bypass grant.
 
 BEGIN;
 
@@ -79,9 +81,20 @@ DECLARE
   v_seen int := 0;
 BEGIN
   FOR r IN
-    SELECT p.proname, md5(p.prosrc) AS src_md5, p.prosecdef, p.proconfig, p.proowner::regrole::text AS owner,
-           count(*) OVER (PARTITION BY p.proname) AS overloads
+    SELECT p.oid, p.proname, md5(p.prosrc) AS src_md5, p.prosecdef, p.proconfig,
+           p.proowner::regrole::text AS owner,
+           count(*) OVER (PARTITION BY p.proname) AS overloads,
+           acl.execute_grantees, acl.has_grant_option, acl.owner_is_grantor
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      CROSS JOIN LATERAL (
+        SELECT array_agg(
+                 CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END
+                 ORDER BY CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END
+               ) FILTER (WHERE x.privilege_type = 'EXECUTE') AS execute_grantees,
+               bool_or(x.is_grantable) FILTER (WHERE x.privilege_type = 'EXECUTE') AS has_grant_option,
+               bool_and(x.grantor = p.proowner) FILTER (WHERE x.privilege_type = 'EXECUTE') AS owner_is_grantor
+          FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) x
+      ) acl
      WHERE n.nspname = 'public' AND p.proname IN ('_convert_quote_to_order_owner_impl', '_draw_down_quote_below_cost_impl_20260810', '_create_quick_delivery_intent_impl_20260802', 'transfer_job_to_invoice')
   LOOP
     v_seen := v_seen + 1;
@@ -95,6 +108,29 @@ BEGIN
     END IF;
     IF r.owner <> 'postgres' THEN
       RAISE EXCEPTION 'PREFLIGHT_OWNER: public.% is owned by %, expected postgres.', r.proname, r.owner;
+    END IF;
+    IF r.prosecdef IS NOT TRUE THEN
+      RAISE EXCEPTION 'PREFLIGHT_SECDEF: public.% is not SECURITY DEFINER.', r.proname;
+    END IF;
+    IF r.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] THEN
+      RAISE EXCEPTION 'PREFLIGHT_SEARCH_PATH: public.% has search_path %, expected {search_path=public, pg_temp}.',
+        r.proname, COALESCE(r.proconfig::text, '(null)');
+    END IF;
+    IF r.has_grant_option IS DISTINCT FROM false OR r.owner_is_grantor IS DISTINCT FROM true THEN
+      RAISE EXCEPTION 'PREFLIGHT_ACL: public.% has an EXECUTE grant option or non-owner grantor.', r.proname;
+    END IF;
+    IF r.proname = '_convert_quote_to_order_owner_impl'
+       AND r.execute_grantees IS DISTINCT FROM ARRAY['postgres', 'service_role']::text[] THEN
+      RAISE EXCEPTION 'PREFLIGHT_ACL: public.% EXECUTE grantees are %, expected {postgres,service_role}.',
+        r.proname, r.execute_grantees;
+    ELSIF r.proname IN ('_draw_down_quote_below_cost_impl_20260810', '_create_quick_delivery_intent_impl_20260802')
+       AND r.execute_grantees IS DISTINCT FROM ARRAY['postgres']::text[] THEN
+      RAISE EXCEPTION 'PREFLIGHT_ACL: public.% EXECUTE grantees are %, expected owner-only {postgres}.',
+        r.proname, r.execute_grantees;
+    ELSIF r.proname = 'transfer_job_to_invoice'
+       AND r.execute_grantees IS DISTINCT FROM ARRAY['authenticated', 'postgres', 'service_role']::text[] THEN
+      RAISE EXCEPTION 'PREFLIGHT_ACL: public.% EXECUTE grantees are %, expected {authenticated,postgres,service_role}.',
+        r.proname, r.execute_grantees;
     END IF;
   END LOOP;
   IF v_seen <> 4 THEN
@@ -2661,6 +2697,26 @@ BEGIN
 END;
 $function$;
 
+-- CREATE OR REPLACE preserves ACLs. Reassert the reviewed wrapper boundary exactly:
+-- two implementations are owner-only, the quote owner implementation retains its
+-- service-role maintenance path, and transfer_job_to_invoice remains available to its
+-- authenticated UI and service-role callers. None is reachable through PUBLIC or anon.
+REVOKE ALL ON FUNCTION public._convert_quote_to_order_owner_impl(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._convert_quote_to_order_owner_impl(uuid, uuid, text)
+  TO service_role;
+
+REVOKE ALL ON FUNCTION public._draw_down_quote_below_cost_impl_20260810(uuid, jsonb, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+REVOKE ALL ON FUNCTION public._create_quick_delivery_intent_impl_20260802(uuid, jsonb, uuid, date, text, uuid, text, boolean)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+REVOKE ALL ON FUNCTION public.transfer_job_to_invoice(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.transfer_job_to_invoice(uuid, uuid, text)
+  TO authenticated, service_role;
+
 DO $postflight$
 DECLARE
   r record;
@@ -2668,8 +2724,19 @@ DECLARE
   v_code text;
 BEGIN
   FOR r IN
-    SELECT p.proname, p.prosrc, p.prosecdef, p.proconfig, p.proowner::regrole::text AS owner
+    SELECT p.oid, p.proname, p.prosrc, p.prosecdef, p.proconfig,
+           p.proowner::regrole::text AS owner,
+           acl.execute_grantees, acl.has_grant_option, acl.owner_is_grantor
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      CROSS JOIN LATERAL (
+        SELECT array_agg(
+                 CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END
+                 ORDER BY CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END
+               ) FILTER (WHERE x.privilege_type = 'EXECUTE') AS execute_grantees,
+               bool_or(x.is_grantable) FILTER (WHERE x.privilege_type = 'EXECUTE') AS has_grant_option,
+               bool_and(x.grantor = p.proowner) FILTER (WHERE x.privilege_type = 'EXECUTE') AS owner_is_grantor
+          FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) x
+      ) acl
      WHERE n.nspname = 'public' AND p.proname IN ('_convert_quote_to_order_owner_impl', '_draw_down_quote_below_cost_impl_20260810', '_create_quick_delivery_intent_impl_20260802', 'transfer_job_to_invoice')
   LOOP
     v_seen := v_seen + 1;
@@ -2694,6 +2761,28 @@ BEGIN
 
     IF r.owner <> 'postgres' THEN
       RAISE EXCEPTION 'POSTFLIGHT_OWNER: public.% changed owner to %.', r.proname, r.owner;
+    END IF;
+    IF r.prosecdef IS NOT TRUE THEN
+      RAISE EXCEPTION 'POSTFLIGHT_SECDEF: public.% is not SECURITY DEFINER after replacement.', r.proname;
+    END IF;
+    IF r.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] THEN
+      RAISE EXCEPTION 'POSTFLIGHT_SEARCH_PATH: public.% lost its pinned search_path.', r.proname;
+    END IF;
+    IF r.has_grant_option IS DISTINCT FROM false OR r.owner_is_grantor IS DISTINCT FROM true THEN
+      RAISE EXCEPTION 'POSTFLIGHT_ACL: public.% has an EXECUTE grant option or non-owner grantor.', r.proname;
+    END IF;
+    IF r.proname = '_convert_quote_to_order_owner_impl'
+       AND r.execute_grantees IS DISTINCT FROM ARRAY['postgres', 'service_role']::text[] THEN
+      RAISE EXCEPTION 'POSTFLIGHT_ACL: public.% EXECUTE grantees are %, expected {postgres,service_role}.',
+        r.proname, r.execute_grantees;
+    ELSIF r.proname IN ('_draw_down_quote_below_cost_impl_20260810', '_create_quick_delivery_intent_impl_20260802')
+       AND r.execute_grantees IS DISTINCT FROM ARRAY['postgres']::text[] THEN
+      RAISE EXCEPTION 'POSTFLIGHT_ACL: public.% EXECUTE grantees are %, expected owner-only {postgres}.',
+        r.proname, r.execute_grantees;
+    ELSIF r.proname = 'transfer_job_to_invoice'
+       AND r.execute_grantees IS DISTINCT FROM ARRAY['authenticated', 'postgres', 'service_role']::text[] THEN
+      RAISE EXCEPTION 'POSTFLIGHT_ACL: public.% EXECUTE grantees are %, expected {authenticated,postgres,service_role}.',
+        r.proname, r.execute_grantees;
     END IF;
   END LOOP;
   IF v_seen <> 4 THEN

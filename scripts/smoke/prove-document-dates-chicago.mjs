@@ -19,8 +19,9 @@
  *       disaster-recovery rebuild is not refused;
  *   2.  BEFORE the candidate, every writer evaluates CURRENT_DATE in code — the defect,
  *       and the discriminator for phase 4;
- *   3.  against a DRIFTED body the candidate ABORTS with PREFLIGHT_DRIFT and changes
- *       nothing;
+ *   3.  against an unexpected anon EXECUTE grant the candidate ABORTS with
+ *       PREFLIGHT_ACL and changes nothing; against a DRIFTED body it separately
+ *       ABORTS with PREFLIGHT_DRIFT;
  *   4.  it applies over the pinned bodies, and AFTER it NO writer evaluates CURRENT_DATE
  *       in code any more, while each carries exactly the number of America/Chicago
  *       conversions the file claims;
@@ -28,6 +29,8 @@
  *   6.  MUTATION: a candidate with one conversion reverted must ABORT in
  *       POSTFLIGHT_UTC_RESIDUAL with nothing installed — proving the postflight is
  *       load-bearing. Then it is discarded.
+ *   7.  MUTATION: an extra anon grant inserted immediately before postflight must
+ *       ABORT in POSTFLIGHT_ACL and roll the entire candidate back.
  *
  * SCOPE — read this before quoting the result. This proves the CONVERSION: which bodies
  * are replaced, that the replacement is byte-faithful apart from the date expression, and
@@ -119,6 +122,9 @@ function selectedMigrations() {
 function bodyMd5(fn) { return scalar(`SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '${fn}'`); }
 function functionDef(fn) { return scalar(`SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = '${fn}'`); }
 function bodyState() { return Object.fromEntries(WRITERS.map((fn) => [fn, bodyMd5(fn)])); }
+function roleCanExecute(role, signature) {
+  return scalar(`SELECT has_function_privilege('${role}', '${signature}'::regprocedure, 'EXECUTE')`) === 't';
+}
 // CURRENT_DATE occurrences in CODE only — a comment mentioning it must not count, in
 // either direction.
 function codeCurrentDateCount(fn) {
@@ -211,22 +217,35 @@ try {
   }
   log(`PHASE 2: the defect reproduces — code CURRENT_DATE per writer ${JSON.stringify(before)}, matching the candidate's own claims`);
 
-  // PHASE 3: drift refusal.
+  // PHASE 3: ACL and body-drift refusal.
   const originalDefs = Object.fromEntries(WRITERS.map((fn) => [fn, functionDef(fn)]));
   const restoreWriters = () => {
     psql(Object.values(originalDefs).join('\n;\n'));
     assert.deepEqual(bodyState(), rebuild, 'writers not restored');
   };
+  copyLf(CANDIDATE, 'candidate.sql', workDir);
+  const quickSignature = 'public._create_quick_delivery_intent_impl_20260802(uuid,jsonb,uuid,date,text,uuid,text,boolean)';
+  psql(`GRANT EXECUTE ON FUNCTION ${quickSignature} TO anon;`);
+  assert.equal(roleCanExecute('anon', quickSignature), true, 'ACL drift setup did not grant anon EXECUTE');
+  const aclDrifted = psql('\\i /tmp/candidate.sql', { allowFailure: true, wrap: wrapByName.get('candidate.sql') ?? false });
+  assert.match(`${aclDrifted.stdout}\n${aclDrifted.stderr}`, /PREFLIGHT_ACL/,
+    'the candidate must ABORT on an unexpected anon EXECUTE grant');
+  assert.deepEqual(bodyState(), rebuild, 'ACL-drift refusal must not replace any writer body');
+  assert.equal(roleCanExecute('anon', quickSignature), true,
+    'the refused candidate must not hide the pre-existing ACL drift by partially applying');
+  psql(`REVOKE EXECUTE ON FUNCTION ${quickSignature} FROM anon;`);
+  assert.equal(roleCanExecute('anon', quickSignature), false, 'ACL drift cleanup failed');
+  log('PHASE 3: the candidate ABORTS with PREFLIGHT_ACL on an unexpected anon grant and changes nothing');
+
   psql(`
     CREATE OR REPLACE FUNCTION public.transfer_job_to_invoice(p_job_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text)
     RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
     AS $drift$ BEGIN RETURN '{}'::jsonb; END; $drift$;
   `);
-  copyLf(CANDIDATE, 'candidate.sql', workDir);
   const drifted = psql('\\i /tmp/candidate.sql', { allowFailure: true, wrap: wrapByName.get('candidate.sql') ?? false });
   assert.match(`${drifted.stdout}\n${drifted.stderr}`, /PREFLIGHT_DRIFT/, 'the candidate must ABORT on a drifted writer body');
   assert.equal(bodyMd5('_convert_quote_to_order_owner_impl'), rebuild._convert_quote_to_order_owner_impl, 'other writers must be untouched after the refused apply');
-  log('PHASE 3: the candidate ABORTS with PREFLIGHT_DRIFT on a drifted body and changes nothing');
+  log('PHASE 3b: the candidate ABORTS with PREFLIGHT_DRIFT on a drifted body and changes nothing');
   restoreWriters();
 
   // PHASE 4: the real apply.
@@ -287,6 +306,21 @@ $eval$;`, { allowFailure: true });
     'a candidate leaving one UTC date in code MUST abort in POSTFLIGHT_UTC_RESIDUAL — the postflight is not load-bearing');
   assert.deepEqual(bodyState(), rebuild, 'the mutant must install nothing (its transaction rolled back)');
   log('PHASE 6: MUTATION — reverting ONE conversion aborts in POSTFLIGHT_UTC_RESIDUAL and installs nothing');
+
+  // PHASE 7: prove the exact-ACL postflight is load-bearing, not documentation.
+  const aclMutated = candidateSql.replace(
+    'DO $postflight$',
+    `GRANT EXECUTE ON FUNCTION ${quickSignature} TO anon;\n\nDO $postflight$`,
+  );
+  assert.notEqual(aclMutated, candidateSql, 'ACL mutation did not alter the candidate — the postflight anchor moved');
+  copyText(aclMutated, 'acl-mutant.sql', workDir);
+  const aclMutantRun = psql('\\i /tmp/acl-mutant.sql', { allowFailure: true, wrap: wrapByName.get('acl-mutant.sql') ?? false });
+  assert.match(`${aclMutantRun.stdout}\n${aclMutantRun.stderr}`, /POSTFLIGHT_ACL/,
+    'an extra anon grant immediately before postflight MUST abort in POSTFLIGHT_ACL');
+  assert.deepEqual(bodyState(), rebuild, 'the ACL mutant must install nothing (its transaction rolled back)');
+  assert.equal(roleCanExecute('anon', quickSignature), false,
+    'the ACL mutant grant must roll back with the candidate transaction');
+  log('PHASE 7: MUTATION — an extra anon grant before postflight aborts in POSTFLIGHT_ACL and installs nothing');
 
   log('\nALL PHASES PASSED');
 } finally {
