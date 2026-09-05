@@ -24,12 +24,25 @@ test('does not accept a commented, quoted, wrong-overload, or later-regranted re
   assert.deepEqual(securityDefinerMissingAnonRevokes(wrongOverload), ['unparseable-security-definer-sql']);
 });
 
-test('fails closed when SECURITY DEFINER SQL changes role membership', () => {
+test('fails closed for role definitions and canonical role membership changes', () => {
   const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
-  assert.deepEqual(
-    securityDefinerMissingAnonRevokes(`${safe}\nALTER GROUP authenticated ADD USER anon;`),
-    ['unparseable-security-definer-sql'],
-  );
+  for (const membershipChange of [
+    'ALTER GROUP authenticated ADD USER anon;',
+    'GRANT authenticated TO anon;',
+    'GRANT authenticated, service_role TO anon WITH ADMIN OPTION;',
+    'GRANT "authenticated" TO "anon";',
+    'REVOKE ADMIN OPTION FOR authenticated FROM anon;',
+    'REVOKE authenticated FROM anon;',
+  ]) {
+    assert.deepEqual(
+      securityDefinerMissingAnonRevokes(membershipChange),
+      ['unparseable-security-definer-sql'],
+    );
+    assert.deepEqual(
+      securityDefinerMissingAnonRevokes(`${safe}\n${membershipChange}`),
+      ['unparseable-security-definer-sql'],
+    );
+  }
 });
 
 test('fails closed for quoted names and unsupported ACL forms that can restore execution', () => {

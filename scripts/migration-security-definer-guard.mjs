@@ -369,6 +369,20 @@ function aclEvents(sql) {
   return events;
 }
 
+function hasRoleMembershipMutation(sql) {
+  const keywordSql = maskQuotedIdentifierContents(sql);
+  if (keywordSql === null) return true;
+  let start = 0;
+  while (start < keywordSql.length) {
+    const end = statementEnd(keywordSql, start);
+    if (end === null) return true;
+    const statement = keywordSql.slice(start, end);
+    if (/^\s*(?:GRANT|REVOKE)\b/i.test(statement) && !/\bON\b/i.test(statement)) return true;
+    start = end + 1;
+  }
+  return false;
+}
+
 function dropRoutineEvents(sql) {
   const events = [];
   const re = /\bDROP\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:IF\s+EXISTS\s+)?(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
@@ -422,11 +436,13 @@ export function securityDefinerMissingAnonRevokes(sql) {
     ...executable.matchAll(SECURITY_DEFINER_CREATE).map((match) => ({ match, kind: 'create' })),
     ...executable.matchAll(SECURITY_DEFINER_ALTER).map((match) => ({ match, kind: 'alter' })),
   ].sort((a, b) => a.match.index - b.match.index);
-  // A literal revoke cannot establish effective anonymous access after a role
-  // membership mutation. This source-only guard has no catalog graph for role
-  // inheritance, so fail closed whenever such a migration also changes a
-  // SECURITY DEFINER routine.
-  if (declarations.length > 0 && /\b(?:ALTER|CREATE|DROP)\s+(?:ROLE|GROUP|USER)\b/i.test(executable)) {
+  // A source-only proof has no role-inheritance graph. Any role definition or
+  // membership mutation can alter effective anonymous access, so reject it
+  // regardless of whether this migration also declares a routine.
+  if (
+    /\b(?:ALTER|CREATE|DROP)\s+(?:ROLE|GROUP|USER)\b/i.test(executable)
+    || hasRoleMembershipMutation(executable)
+  ) {
     return ['unparseable-security-definer-sql'];
   }
   // Keep all routines declared in this migration, not only SECURITY DEFINER
