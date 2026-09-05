@@ -400,6 +400,21 @@ describe('Reports commission history', () => {
       expect.anything(),
       `commission_payment_detail_as_of_${businessToday}`,
     );
+
+    const balanceExport = vi.mocked(exportToCSV).mock.calls.find((call) => (
+      call[2] === `commission_balance_as_of_${businessToday}`
+    ));
+    const paymentExport = vi.mocked(exportToCSV).mock.calls.find((call) => (
+      call[2] === `commission_payment_detail_as_of_${businessToday}`
+    ));
+    const earnedFormatter = balanceExport?.[1].find((column) => column.key === 'total_earned')?.format;
+    const settledFormatter = paymentExport?.[1].find((column) => column.key === 'settled_amount')?.format;
+
+    expect(earnedFormatter?.(1.01, {})).toBe('$1.01');
+    expect(settledFormatter?.(2.05, {})).toBe('$2.05');
+    expect(settledFormatter?.(-12.34, {})).toBe('-$12.34');
+    expect(settledFormatter?.(1.005, {})).toBe('Invalid amount');
+    expect(settledFormatter?.(JSON.parse('90071992547409.93'), {})).toBe('Invalid amount');
   });
 
   it('refuses to export the previous cutoff after a failed refresh', async () => {

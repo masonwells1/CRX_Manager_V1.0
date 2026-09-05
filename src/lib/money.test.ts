@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatCents, formatUSD, centsToDollarInput, centsTimesQuantity, isExactDecimalText, quantitySurvivesSave, sameExactDecimal } from './money';
+import { formatCents, formatExactUSD, formatUSD, centsToDollarInput, centsTimesQuantity, isExactDecimalText, quantitySurvivesSave, sameExactDecimal } from './money';
 
 /**
  * money.ts is the canonical formatter for a codebase where money is stored as
@@ -66,6 +66,38 @@ describe('money', () => {
       expect(formatUSD(1.005)).toBe('$1.01');
       expect(formatUSD(1.004)).toBe('$1.00');
     });
+  });
+
+  describe('formatExactUSD — lossless whole-cent report values', () => {
+    it.each([
+      ['1.01', '$1.01'],
+      [2.05, '$2.05'],
+      ['1234567.8', '$1,234,567.80'],
+      ['-50.25', '-$50.25'],
+      ['-0.00', '$0.00'],
+    ])('formats %s exactly as %s', (dollars, expected) => {
+      expect(formatExactUSD(dollars)).toBe(expected);
+    });
+
+    it('accepts constrained whole-cent JSON numbers below the cent-resolution limit', () => {
+      expect(formatExactUSD(JSON.parse('35184372088831.99'))).toBe('$35,184,372,088,831.99');
+    });
+
+    it('rejects JSON numeric amounts once adjacent cents can collide', () => {
+      expect(formatExactUSD(JSON.parse('70368744177664.01'))).toBe('Invalid amount');
+      expect(formatExactUSD(JSON.parse('90071992547409.93'))).toBe('Invalid amount');
+    });
+
+    it('preserves lossless decimal text beyond JSON-number precision', () => {
+      expect(formatExactUSD('90071992547409.93')).toBe('$90,071,992,547,409.93');
+    });
+
+    it.each(['1.005', '1e3', 'NaN', 'Infinity', '-Infinity', Number.NaN, Number.POSITIVE_INFINITY, null, undefined])(
+      'fails visibly for invalid amount %s',
+      (dollars) => {
+        expect(formatExactUSD(dollars)).toBe('Invalid amount');
+      },
+    );
   });
 
   describe('centsToDollarInput — exact editable decimal text', () => {

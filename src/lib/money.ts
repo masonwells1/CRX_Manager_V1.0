@@ -34,6 +34,43 @@ export function formatUSD(dollars: number): string {
   return usdFormatter.format(dollars);
 }
 
+// Below 2^46 dollars, adjacent IEEE-754 values are still less than one cent
+// apart. Given the report RPC's whole-cent PostgreSQL numeric invariant, the
+// JSON-decoded number therefore identifies one unique cent value. At and above
+// this boundary, distinct cent values can collapse to the same JS number.
+const MAX_LOSSLESS_WHOLE_CENT_JSON_DOLLARS = 2 ** 46;
+
+/**
+ * Format exact decimal dollar text, or a whole-cent JSON number only while its
+ * cent value is still lossless. Invalid/fractional-cent inputs fail visibly.
+ */
+export function formatExactUSD(value: unknown): string {
+  let text: string;
+
+  if (typeof value === 'string') {
+    text = value.trim();
+  } else if (
+    typeof value === 'number'
+    && Number.isFinite(value)
+    && Math.abs(value) < MAX_LOSSLESS_WHOLE_CENT_JSON_DOLLARS
+  ) {
+    text = String(value);
+  } else {
+    return 'Invalid amount';
+  }
+
+  const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(text);
+  if (!match) return 'Invalid amount';
+
+  const whole = BigInt(match[2]).toString();
+  const fraction = (match[3] || '').padEnd(2, '0');
+  const groupedWhole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const isZero = whole === '0' && fraction === '00';
+  const sign = match[1] === '-' && !isZero ? '-' : '';
+
+  return `${sign}$${groupedWhole}.${fraction}`;
+}
+
 /** Format integer CENTS for a decimal money input without floating-point math. */
 export function centsToDollarInput(cents: number): string {
   if (!Number.isSafeInteger(cents)) return '0.00';

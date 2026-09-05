@@ -13,7 +13,7 @@ import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV, fmtDateOnlyCSV } from '../lib/csvExport';
-import { formatUSD } from '../lib/money';
+import { formatExactUSD } from '../lib/money';
 import LogbookReport from '../components/reports/LogbookReport';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
@@ -858,9 +858,9 @@ export default function Reports() {
       }
       exportToCSV(commBalanceData as unknown as Record<string, unknown>[], [
         { key: 'recipient_name', header: 'Salesperson' },
-        { key: 'total_earned', header: 'Earned', format: fmtCSV },
-        { key: 'total_paid', header: 'Paid', format: fmtCSV },
-        { key: 'outstanding_balance', header: 'Outstanding', format: fmtCSV },
+        { key: 'total_earned', header: 'Earned', format: formatExactUSD },
+        { key: 'total_paid', header: 'Paid', format: formatExactUSD },
+        { key: 'outstanding_balance', header: 'Outstanding', format: formatExactUSD },
         { key: 'pending_count', header: 'Pending' },
         { key: 'paid_count', header: 'Paid Count' },
       ], `commission_balance_as_of_${commissionAsOfDate}`);
@@ -918,7 +918,7 @@ export default function Reports() {
       { key: 'source_number', header: 'Source Number' },
       { key: 'customer_name', header: 'Customer' },
       { key: 'commission_order_date', header: 'Commission Date', format: fmtDateOnlyCSV },
-      { key: 'settled_amount', header: 'Settled Amount', format: fmtCSV },
+      { key: 'settled_amount', header: 'Settled Amount', format: formatExactUSD },
     ], `commission_payment_detail_as_of_${commissionAsOfDate}`);
     toast('success', 'Payment detail exported');
   };
@@ -993,9 +993,9 @@ export default function Reports() {
 
   const commBalanceCols: Column<CommissionBalanceRow>[] = [
     { key: 'recipient_name', header: 'Salesperson', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.recipient_name}</span> },
-    { key: 'total_earned', header: 'Total Earned', sortable: true, render: (r) => <span className="font-mono">{formatUSD(r.total_earned)}</span> },
-    { key: 'total_paid', header: 'Total Paid', sortable: true, render: (r) => <span className="font-mono">{formatUSD(r.total_paid)}</span> },
-    { key: 'outstanding_balance', header: 'Outstanding', sortable: true, render: (r) => <span className={`font-mono font-bold ${r.outstanding_balance > 0 ? 'text-amber-600' : 'text-crx-green'}`}>{formatUSD(r.outstanding_balance)}</span> },
+    { key: 'total_earned', header: 'Total Earned', sortable: true, render: (r) => <span className="font-mono">{formatExactUSD(r.total_earned)}</span> },
+    { key: 'total_paid', header: 'Total Paid', sortable: true, render: (r) => <span className="font-mono">{formatExactUSD(r.total_paid)}</span> },
+    { key: 'outstanding_balance', header: 'Outstanding', sortable: true, render: (r) => <span className={`font-mono font-bold ${r.outstanding_balance > 0 ? 'text-amber-600' : 'text-crx-green'}`}>{formatExactUSD(r.outstanding_balance)}</span> },
     { key: 'pending_count', header: 'Pending', sortable: true },
     { key: 'paid_count', header: 'Paid', sortable: true },
   ];
@@ -1007,7 +1007,7 @@ export default function Reports() {
     { key: 'source_number', header: 'Order / Job', sortable: true, render: (r) => `${r.source_type}: ${r.source_number}` },
     { key: 'customer_name', header: 'Customer', sortable: true },
     { key: 'commission_order_date', header: 'Commission Date', sortable: true, render: (r) => parseLocalDate(r.commission_order_date).toLocaleDateString() },
-    { key: 'settled_amount', header: 'Settled', sortable: true, render: (r) => <span className="font-mono font-medium">{formatUSD(r.settled_amount)}</span> },
+    { key: 'settled_amount', header: 'Settled', sortable: true, render: (r) => <span className="font-mono font-medium">{formatExactUSD(r.settled_amount)}</span> },
   ];
 
   const chemHistoryCols: Column<ChemicalHistoryRow>[] = [
