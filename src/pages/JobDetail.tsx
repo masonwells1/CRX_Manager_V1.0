@@ -1280,6 +1280,13 @@ export default function JobDetail() {
   // separate license-override confirmation round-trip, so an over-label job that ALSO needs
   // a license override still records its label-rate audit on the eventual save. Null when
   // there's no pending label override.
+  //
+  // Deliberately NOT paired with the job id it was raised for. Binding the reason to a job
+  // and re-checking that at confirm time was written and then removed: the route effect
+  // clears this ref and closes the prompt on every route commit, and the catch below refuses
+  // to raise one for a job the operator has left, so a confirm can only ever be reached on
+  // the job the prompt belongs to. A third check at the click would be unreachable — dead
+  // code that reads like a guarantee and can never be shown to hold. (Codex CRX-SEC-002.)
   const pendingOverrideReasonRef = useRef<string | null>(null);
   // §5: label max per product for the lines ON THIS JOB — fetched by product_id WITHOUT an
   // is_active filter (Codex P2), so a now-INACTIVE product on a saved job still gets its
@@ -1753,6 +1760,93 @@ export default function JobDetail() {
     }
 
     const j = data as unknown as JobDbRow;
+
+    // ---- Phase 1: finish every remaining round trip BEFORE installing anything. ----
+    //
+    // This function used to install the job onto the form here and THEN await two more
+    // reads. That left a window in which the form already showed this job's customer,
+    // date, notes and fields while a route change was still possible: navigating to
+    // /jobs/new inside it correctly abandoned the rest of the load, but the new-job branch
+    // only resets four pieces of state, so the customer, date, notes and field list stayed
+    // on the blank form — and saving it INSERTED a brand-new job carrying another
+    // customer's data, which then drove the field_billing_defaults split. A job billed to
+    // a customer who never ordered it.
+    //
+    // Gathering first and installing last removes the window instead of widening the reset
+    // list. A reset list has to be kept in step with ~30 setters by hand forever; this
+    // ordering cannot drift, because the invariant is simply "no await below this point".
+    // The last isCurrentLoad() check is therefore the real commit point. (Codex PR thread
+    // at JobDetail.tsx:1813, original_commit_id 9cee23cc7.)
+    //
+    // U16b: best-effort advisory before transfer. The transfer RPC remains the
+    // pricing authority; a failed read simply leaves the banner hidden.
+    const jobFields = j.job_fields || [];
+    const jobFieldIds = Array.from(new Set(jobFields.map((field) => field.field_id).filter(Boolean)));
+    let growerShareNames: string[] = [];
+    if (jobFieldIds.length > 0) {
+      const { data: growerShareRows, error: growerShareError } = await supabase
+        .from('field_billing_defaults')
+        .select('field_id')
+        .in('field_id', jobFieldIds)
+        .not('price_override_cents', 'is', null);
+      if (!isCurrentLoad()) return;
+      if (growerShareError) {
+        Sentry.captureException(growerShareError, { tags: { source: 'fetch', page: 'job-detail', context: 'grower_share_banner' } });
+      } else {
+        const overrideIds = new Set(
+          ((growerShareRows || []) as Array<{ field_id: string }>).map((row) => row.field_id),
+        );
+        growerShareNames = Array.from(new Set(
+          jobFields
+            .filter((field) => overrideIds.has(field.field_id))
+            .map((field) => field.field?.field_name || '')
+            .filter(Boolean),
+        ));
+      }
+    }
+
+    // Load saved shares; then SEED defaults for any field that has no saved
+    // shares (existing jobs created before this migration, or a field never
+    // touched), so the list/#26 split don't collapse to the primary customer
+    // (Codex). Defaults come from field_billing_defaults, else field owner 100%.
+    const savedShares: ShareRow[] = (j.job_field_shares || []).map((s) => ({
+      field_id: s.field_id,
+      customer_id: s.customer_id,
+      split_pct: s.split_pct?.toString() || '',
+      is_primary: s.is_primary,
+    }));
+    const fieldsWithShares = new Set(savedShares.map((s) => s.field_id));
+    const fieldsNeedingSeed = (j.job_fields || [])
+      .map((f) => f.field_id)
+      .filter((fid) => fid && !fieldsWithShares.has(fid));
+    if (fieldsNeedingSeed.length > 0) {
+      const { data: fbd } = await supabase
+        .from('field_billing_defaults')
+        .select('field_id, customer_id, split_pct, is_primary')
+        .in('field_id', fieldsNeedingSeed);
+      if (!isCurrentLoad()) return;
+      const fbdByField = new Map<string, { customer_id: string; split_pct: number; is_primary: boolean }[]>();
+      ((fbd || []) as { field_id: string; customer_id: string; split_pct: number; is_primary: boolean }[])
+        .forEach((d) => {
+          const list = fbdByField.get(d.field_id) ?? [];
+          list.push(d);
+          fbdByField.set(d.field_id, list);
+        });
+      for (const fid of fieldsNeedingSeed) {
+        const defs = fbdByField.get(fid);
+        if (defs && defs.length > 0) {
+          defs.forEach((d) => savedShares.push({ field_id: fid, customer_id: d.customer_id, split_pct: d.split_pct.toString(), is_primary: d.is_primary }));
+        } else if (j.customer_id) {
+          // No billing default on file — fall back to the job's customer at 100%
+          // (matches the server's derive_customer_shares_from_fields fallback).
+          savedShares.push({ field_id: fid, customer_id: j.customer_id, split_pct: '100', is_primary: true });
+        }
+      }
+    }
+
+    // ---- Phase 2: install. NOTHING below this line may await. ----
+    // Adding an await here re-opens the partial-install window described above; put any
+    // new round trip in phase 1, above the last isCurrentLoad() check.
     setJobNumber(j.job_number);
     setStatus(j.status);
     setCustomerId(j.customer_id);
@@ -1808,74 +1902,7 @@ export default function JobDetail() {
           sort_order: f.sort_order,
         }))
     );
-
-    // U16b: best-effort advisory before transfer. The transfer RPC remains the
-    // pricing authority; a failed read simply leaves the banner hidden.
-    const jobFields = j.job_fields || [];
-    const jobFieldIds = Array.from(new Set(jobFields.map((field) => field.field_id).filter(Boolean)));
-    if (jobFieldIds.length > 0) {
-      const { data: growerShareRows, error: growerShareError } = await supabase
-        .from('field_billing_defaults')
-        .select('field_id')
-        .in('field_id', jobFieldIds)
-        .not('price_override_cents', 'is', null);
-      if (!isCurrentLoad()) return;
-      if (growerShareError) {
-        Sentry.captureException(growerShareError, { tags: { source: 'fetch', page: 'job-detail', context: 'grower_share_banner' } });
-        setGrowerShareFieldNames([]);
-      } else {
-        const overrideIds = new Set(
-          ((growerShareRows || []) as Array<{ field_id: string }>).map((row) => row.field_id),
-        );
-        setGrowerShareFieldNames(Array.from(new Set(
-          jobFields
-            .filter((field) => overrideIds.has(field.field_id))
-            .map((field) => field.field?.field_name || '')
-            .filter(Boolean),
-        )));
-      }
-    } else {
-      setGrowerShareFieldNames([]);
-    }
-
-    // Load saved shares; then SEED defaults for any field that has no saved
-    // shares (existing jobs created before this migration, or a field never
-    // touched), so the list/#26 split don't collapse to the primary customer
-    // (Codex). Defaults come from field_billing_defaults, else field owner 100%.
-    const savedShares: ShareRow[] = (j.job_field_shares || []).map((s) => ({
-      field_id: s.field_id,
-      customer_id: s.customer_id,
-      split_pct: s.split_pct?.toString() || '',
-      is_primary: s.is_primary,
-    }));
-    const fieldsWithShares = new Set(savedShares.map((s) => s.field_id));
-    const fieldsNeedingSeed = (j.job_fields || [])
-      .map((f) => f.field_id)
-      .filter((fid) => fid && !fieldsWithShares.has(fid));
-    if (fieldsNeedingSeed.length > 0) {
-      const { data: fbd } = await supabase
-        .from('field_billing_defaults')
-        .select('field_id, customer_id, split_pct, is_primary')
-        .in('field_id', fieldsNeedingSeed);
-      if (!isCurrentLoad()) return;
-      const fbdByField = new Map<string, { customer_id: string; split_pct: number; is_primary: boolean }[]>();
-      ((fbd || []) as { field_id: string; customer_id: string; split_pct: number; is_primary: boolean }[])
-        .forEach((d) => {
-          const list = fbdByField.get(d.field_id) ?? [];
-          list.push(d);
-          fbdByField.set(d.field_id, list);
-        });
-      for (const fid of fieldsNeedingSeed) {
-        const defs = fbdByField.get(fid);
-        if (defs && defs.length > 0) {
-          defs.forEach((d) => savedShares.push({ field_id: fid, customer_id: d.customer_id, split_pct: d.split_pct.toString(), is_primary: d.is_primary }));
-        } else if (j.customer_id) {
-          // No billing default on file — fall back to the job's customer at 100%
-          // (matches the server's derive_customer_shares_from_fields fallback).
-          savedShares.push({ field_id: fid, customer_id: j.customer_id, split_pct: '100', is_primary: true });
-        }
-      }
-    }
+    setGrowerShareFieldNames(growerShareNames);
     setShareRows(savedShares);
 
     // F06 (2026-09-03): the stored `driver` comes back with the row, so a reloaded line
@@ -1954,6 +1981,25 @@ export default function JobDetail() {
     routeEpochRef.current += 1;
     routeIdRef.current = id;
     if (!isNew && id) setLoading(true);
+    // An open license-override prompt must not survive a route change. It is a modal whose
+    // confirm SAVES a job, so leaving it standing over the next record invites an admin to
+    // authorize an administrative override against a job nobody asked to override. Closing
+    // it here removes the window for a prompt already on screen; the gate in performSave's
+    // catch is what stops a LATE rejection raising one over the next job. (Codex
+    // CRX-SEC-002.)
+    pendingOverrideReasonRef.current = null;
+    setShowLicenseOverrideConfirm(false);
+    // Invalidate the route epoch on UNMOUNT as well as on the next route commit. Only the
+    // body above bumped it, and the body does not run when the page is left entirely, so
+    // after navigating AWAY from JobDetail a save or transfer still in flight saw
+    // stillOnThisJob() === true: it could toast, clear the dirty flag, or navigate() the
+    // operator off whatever page they had moved to, all from the closure of a page that is
+    // gone. The passive effect below already does exactly this for its own ticket, which is
+    // why the ticket was covered and the epoch was not. Re-running this effect fires the
+    // cleanup too, so a job -> job navigation bumps twice; the counter is only ever compared
+    // for equality, so an extra bump invalidates nothing that a single bump would not.
+    // (Codex CRX-SEC-001.)
+    return () => { routeEpochRef.current += 1; };
   }, [id, isNew]);
 
   useEffect(() => {
@@ -2381,7 +2427,11 @@ export default function JobDetail() {
       if (st.status === 'expired') {
         if (profile?.role === 'admin') {
           // §5: stash the label-override reason so confirming the license modal still
-          // records the audit (the modal's performSave(true) reads this ref).
+          // records the audit (the modal's performSave(true) reads this ref). This site
+          // needs no staleness gate: nothing above it in runJobSave awaits, and handleSave
+          // reaches runJobSave without awaiting either, so it runs in the click's own tick
+          // and the route cannot have moved underneath it. The post-await twin in
+          // performSave's catch is the one that can go stale, and it is gated there.
           pendingOverrideReasonRef.current = overrideReasonForAudit ?? null;
           setShowLicenseOverrideConfirm(true);
         } else {
@@ -2794,13 +2844,23 @@ export default function JobDetail() {
     } catch (err: unknown) {
       // Race: licenses changed since page load and the DB trigger fired.
       if (hasRpcCode(err, RpcErrorCodes.LICENSE_EXPIRED)) {
-        if (profile?.role === 'admin') {
-          // §5: the save was rejected (LICENSE_EXPIRED) — NOTHING committed — so carry the
-          // label-override reason into the license-override retry to record the audit then.
-          pendingOverrideReasonRef.current = overrideReasonForAudit ?? null;
-          setShowLicenseOverrideConfirm(true);
-        } else {
-          toast('error', "This applicator's license has expired — an admin can override if needed.");
+        // Same gate as the success path above, and for a sharper reason. This rejection can
+        // land AFTER the operator has moved to another job, and the prompt it raises is not
+        // cosmetic: confirming it calls performSave(true) from the CURRENT render, which
+        // saves whatever job is on screen NOW through the administrative license-override
+        // path — writing an override audit that reads as a deliberate override of a job
+        // nobody overrode. The six sibling sites in this handler were gated in an earlier
+        // round and this one was missed; a partly-gated handler is the same defect.
+        // (Codex CRX-SEC-002.)
+        if (stillOnThisJob()) {
+          if (profile?.role === 'admin') {
+            // §5: the save was rejected (LICENSE_EXPIRED) — NOTHING committed — so carry the
+            // label-override reason into the license-override retry to record the audit then.
+            pendingOverrideReasonRef.current = overrideReasonForAudit ?? null;
+            setShowLicenseOverrideConfirm(true);
+          } else {
+            toast('error', "This applicator's license has expired — an admin can override if needed.");
+          }
         }
       // `err instanceof Error && err.message.includes('SHARE_NOT_100')` was dead
       // on arrival here: save_job's refusal arrives as a plain PostgREST object,
