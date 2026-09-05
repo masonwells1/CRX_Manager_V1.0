@@ -107,17 +107,20 @@ BEGIN
           -- above already does with its own two-value IN list.
           --
           -- Pinning ONLY the repaired body coupled this money-safety migration to
-          -- 20260905020100, which is a COSMETIC label repair that refuses to run once
+          -- the label repair (then 20260905020100; renumbered 20260905190000 on
+          -- 2026-09-05 so it now sorts AFTER this file), a COSMETIC repair that refuses to run once
           -- any settlement activity exists. One real settlement before rollout and
-          -- 020100 aborts; the name-ordered runner then never reaches THIS file, so
-          -- the stale-recipient guard silently never installs — a payout could still
-          -- be recorded against the wrong person because a label-formatting migration
-          -- declined to run. Skipping 020100 was no escape either, since this pin
-          -- demanded the body only 020100 produces.
+          -- the repair would have aborted; the name-ordered runner would then never
+          -- have reached THIS file, so the stale-recipient guard would silently never
+          -- have installed — a payout could still have been recorded against the wrong
+          -- person because a label-formatting migration declined to run. Skipping the
+          -- repair was no escape either, since this pin demanded the body only the
+          -- repair produces. (The repair now sorts after this file, so that hazard is
+          -- gone; the two-value pin keeps this file independent of it either way.)
           --
           --   dc0577e8... the body live in production on 2026-09-05 (pre-repair),
           --               read read-only from pg_proc that day
-          --   5623b0d3... the body 20260905020100 produces (post-repair)
+          --   5623b0d3... the body the label repair (now 20260905190000) produces (post-repair)
           --
           -- Both are fully-hardened recorders by every attribute asserted above; they
           -- differ only in the label snapshot text 020100 rewrites, which this guard

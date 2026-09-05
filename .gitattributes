@@ -194,7 +194,7 @@ scripts/smoke/prove-number-generator-gates.mjs text eol=lf
 # Keep the SQL and proof inputs byte-identical across Windows and Linux.
 supabase/migrations/20260903230000_commission_report_snapshot_contract.sql text eol=lf
 supabase/migrations/20260905020000_commission_history_report_replay_guard.sql text eol=lf
-supabase/migrations/20260905020100_repair_commission_history_label_snapshots.sql text eol=lf
+supabase/migrations/20260905190000_repair_commission_history_label_snapshots.sql text eol=lf
 supabase/migrations/20260905020200_refuse_stale_commission_payment_recipient.sql text eol=lf
 supabase/migrations/20260905020300_enforce_commission_payment_business_date.sql text eol=lf
 # 20260905020400 installs two md5-PINNED function bodies (pre- and post-image, measured

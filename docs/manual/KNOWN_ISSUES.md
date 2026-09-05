@@ -20,10 +20,11 @@ header was re-read on 2026-09-05. The F2 item below was last re-verified against
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
 
-Seven local commission candidates (`20260905020000` through `20260905185619`) remain unapplied.
-The label repair addresses 34 un-settled opening snapshots that hold an order UUID and unknown
-customer label despite available canonical labels, and is intentionally blocked if settlement
-history exists. The settlement-recipient guard closes the live case where a batch prepared for A
+Seven local commission candidates (`20260905020000` through `20260905190000`) remain unapplied.
+The label repair (`20260905190000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
+addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
+available canonical labels, and is intentionally blocked if settlement history exists. Because it
+now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes. The settlement-recipient guard closes the live case where a batch prepared for A
 could still credit A after its commission was reassigned to B; until that candidate is separately
 approved and applied, production still carries that narrow stale-batch risk. Until the parked
 business-date guard is separately approved and applied, a noncanonical writer can still store a
