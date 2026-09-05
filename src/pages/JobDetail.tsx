@@ -309,6 +309,14 @@ export default function JobDetail() {
   // While the guard is up, adoption waits; the settle tick forces one adoption
   // pass on the render that contains the fully-refetched state.
   const baselineSettleGuardRef = useRef(false);
+  // Cross-record stale-load guard. The `jobs/:id` route carries NO `key` prop, so
+  // changing only the id does NOT remount this page: the previous job's in-flight
+  // loads keep running and would install THEIR record's values into the form that
+  // now shows a different job — and the next save writes them to the CURRENT route
+  // id. Every load run takes a generation ticket; a run whose ticket is no longer
+  // current installs nothing. This gates the CALL, not the record id, so two
+  // overlapping loads of the SAME job are still ordered by ticket.
+  const loadGenerationRef = useRef(0);
   const [baselineSettleTick, setBaselineSettleTick] = useState(0);
   const blocker = useUnsavedChanges(isDirty);
   // Field-app parity #16: allow a deep-link to a tab (e.g. the Jobs-list "Map / Logs"
@@ -1639,6 +1647,11 @@ export default function JobDetail() {
   }, [toast]);
 
   const fetchJob = useCallback(async () => {
+    // Ticket for THIS run (see loadGenerationRef). Post-save / post-start refetches
+    // share the mounted run's ticket and are therefore never bailed; only a run the
+    // operator has navigated away from — or unmounted — stops installing state.
+    const generation = loadGenerationRef.current;
+    const isCurrentLoad = () => loadGenerationRef.current === generation;
     // Drop the baseline so the freshly-loaded form is re-adopted as clean once it
     // settles (also covers post-save refetches where loading stays false). The
     // settle guard defers adoption until this fetch's state has actually rendered.
@@ -1661,6 +1674,12 @@ export default function JobDetail() {
       `)
       .eq('id', id!)
       .single();
+
+    // Superseded — the operator is on a different job now. Install nothing. In
+    // particular do NOT fall into the not-found branch below: its toast and its
+    // redirect would fire against the job currently on screen. The newest run owns
+    // the baseline refs, so this run leaves them untouched.
+    if (!isCurrentLoad()) return;
 
     if (error || !data) {
       baselineSettleGuardRef.current = false;
@@ -1736,6 +1755,7 @@ export default function JobDetail() {
         .select('field_id')
         .in('field_id', jobFieldIds)
         .not('price_override_cents', 'is', null);
+      if (!isCurrentLoad()) return;
       if (growerShareError) {
         Sentry.captureException(growerShareError, { tags: { source: 'fetch', page: 'job-detail', context: 'grower_share_banner' } });
         setGrowerShareFieldNames([]);
@@ -1773,6 +1793,7 @@ export default function JobDetail() {
         .from('field_billing_defaults')
         .select('field_id, customer_id, split_pct, is_primary')
         .in('field_id', fieldsNeedingSeed);
+      if (!isCurrentLoad()) return;
       const fbdByField = new Map<string, { customer_id: string; split_pct: number; is_primary: boolean }[]>();
       ((fbd || []) as { field_id: string; customer_id: string; split_pct: number; is_primary: boolean }[])
         .forEach((d) => {
@@ -1853,15 +1874,40 @@ export default function JobDetail() {
     // Await lookups FIRST so every lookup-driven re-render happens before the job
     // rows are populated and dirty-tracking is armed — otherwise a late-landing
     // lookup re-render after arming would mark a freshly-opened job dirty.
+    // Take this run's ticket BEFORE any await, and before fetchJob captures it.
+    // The route has no `key`, so this effect re-running IS the "operator moved to
+    // another job" signal; the cleanup below bumps the ticket for unmount too.
+    const generation = ++loadGenerationRef.current;
+    const isCurrentLoad = () => loadGenerationRef.current === generation;
+    // A superseded fetchJob bails without clearing the settle guard it raised, and
+    // the new-job branch below never calls fetchJob at all — so on job -> /jobs/new
+    // the guard would stick true, the dirty engine would never adopt a baseline,
+    // and the unsaved-changes prompt would silently stop protecting that form.
+    // The run starting HERE owns the guard: reset it before anyone awaits. Only
+    // fetchJob raises it, and it does so synchronously at entry, so no superseded
+    // run can raise it again after this point.
+    baselineSettleGuardRef.current = false;
     (async () => {
       await loadLookups();
+      // Lookups are record-independent, so landing them late is harmless — but
+      // everything past this point is specific to ONE job, so a superseded run
+      // must stop here. Without this, the cancelled /jobs/new run would go on to
+      // clear the grower-share names, vessel and tank capacity of the job that is
+      // now on screen.
+      if (!isCurrentLoad()) return;
       if (!isNew && id) {
         await fetchJob();
       } else {
+        // `loading` is seeded once, at mount (useState(!isNew)), so arriving here
+        // from a saved job leaves it true — and the superseded fetchJob that would
+        // have cleared it now bails. A new job is never loading; say so explicitly
+        // or the page sits on its skeleton forever. No-op on a direct /jobs/new.
+        setLoading(false);
         setGrowerShareFieldNames([]);
         setLoaderVesselId(ASSIGNED_VEHICLE_VESSEL_VALUE);
         setTankCapacity('');
         const { data, error } = await supabase.rpc('next_job_number');
+        if (!isCurrentLoad()) return;
         if (!error && data) setJobNumber(assertRpcResult<string>(data, 'next_job_number'));
         const recipeParam = searchParams.get('recipe_id');
         if (recipeParam) setRecipeId(recipeParam);
@@ -1869,6 +1915,9 @@ export default function JobDetail() {
         // initialLoadDone after the first committed frame.
       }
     })();
+    // Supersede this run on unmount as well as on re-run. The next run takes a
+    // fresh ticket with ++, so the counter stays monotonic either way.
+    return () => { loadGenerationRef.current += 1; };
   }, [id, fetchJob, isNew, loadLookups, searchParams]);
 
   // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')
