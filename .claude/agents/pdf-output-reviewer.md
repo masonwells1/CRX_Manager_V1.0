@@ -51,7 +51,7 @@ Flag:
 
 ### CHECK 4 — autoTable safety
 For `jspdf-autotable` usage:
-- `columnStyles` typing exception is noted in CLAUDE.md (the one allowed `any` cast). OK.
+- The existing `src/lib/reportPdf.ts` `columnStyles` cast is the one documented `any` compatibility exception. Do not generalize it.
 - `head` and `body` arrays must have matching column counts. Mismatch silently truncates.
 - `didDrawPage` / `didDrawCell` callbacks that throw will crash the entire generation. Wrap in try/catch.
 - `startY` should be set explicitly after the previous page content, not assumed.

@@ -3,7 +3,7 @@
 // Mason (zero coding experience) should never have to type a slash command. When he
 // expresses intent to BUILD / FIX / SHIP / PUSH / "go live" / "do it", this hook
 // deterministically reminds Claude to drive the work through the /ship pipeline —
-// the "hard scaffolding" version of the CLAUDE.md auto-trigger, so it fires reliably.
+// the "hard scaffolding" version of the shipped-work reminder, so it fires reliably.
 //
 // SAFETY: this NEVER authorizes a prod action beyond the recorded push policy —
 // it injects the single canonical PUSH_POLICY (auto-push once green; hard gates =

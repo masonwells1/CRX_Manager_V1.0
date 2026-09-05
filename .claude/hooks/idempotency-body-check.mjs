@@ -7,7 +7,7 @@
 //   1. Direct table access:
 //        FROM idempotency_keys WHERE idempotency_key = p_idempotency_key   (check)
 //        INSERT INTO idempotency_keys ...                                  (record)
-//   2. Canonical helper calls (preferred — see CLAUDE.md "Idempotency" and
+//   2. Canonical helper calls (preferred — see docs/reference/sql-canonical-patterns.md and
 //      20260210000000_tier3_idempotency_and_triggers.sql):
 //        check_idempotency(p_idempotency_key, '<op>')    (check, at top)
 //        save_idempotency(p_idempotency_key, '<op>', v)  (record, at end)

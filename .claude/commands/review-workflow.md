@@ -117,4 +117,4 @@ only reduce false positives and do not satisfy this hard gate). Wait for his go-
 - **Cite or cut.** Any finding without a `file:line`, migration name, or constraint name gets dropped.
 - **Parallel + verified dispatch** is handled by the `review-workflow` Workflow — don't hand-roll the fan-out.
 - **Recommend, don't just list.** Every real finding carries a recommended fix.
-- **Trust nothing pre-written.** Map, CLAUDE.md, and prior audits are leads, not facts — confirm against live code + DB.
+- **Trust nothing pre-written.** The map, AGENTS.md-routed workflow/reference documents, and prior audits are leads, not facts — confirm against live code + DB.

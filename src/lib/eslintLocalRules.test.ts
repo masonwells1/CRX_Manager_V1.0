@@ -289,7 +289,7 @@ ruleTester.run('handle-supabase-error', handleSupabaseErrorRule, {
 });
 
 // -------------------------------------------------------------------------
-// require-check-mutation-result — CLAUDE.md Architecture Rule #3
+// require-check-mutation-result — AGENTS.md CRX Hard Rule
 // (fire-and-forget supabase .update()/.delete() whose result is discarded;
 //  the gap handle-supabase-error leaves open — no destructure, no check).
 // -------------------------------------------------------------------------
