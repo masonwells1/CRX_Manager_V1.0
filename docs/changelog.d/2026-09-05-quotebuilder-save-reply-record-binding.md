@@ -124,5 +124,39 @@ rediscover why.
   legitimate install to be refused, never a stale one to be accepted), so it is not a defect
   here — but the two pages disagree and one of them should change.
 - Not exercised against the live app in a browser: the failure needs two real quotes and a
-  slow connection. Both sequences are proven at the page level with the real component and
-  the real router.
+  slow connection. All three sequences are proven at the page level with the real component
+  and the real router.
+
+### The rest of this page is NOT covered, and the inventory says so
+
+Prompted by a peer lane's warning that #611 widened from three named sites to six and still
+missed a seventh, the whole file was enumerated rather than trusting the sites the reviewer
+named. **A reviewer names the sites it looked at, never all of them.**
+
+`src/pages/QuoteBuilder.tsx` declares 29 async functions. Exactly two carry a record guard:
+`fetchQuote` and, as of this change, `saveQuote`. The other 27 await and then write screen
+state with no binding to the record they started on.
+
+The sharpest instance is navigation. Seven `navigate()` calls fire **after** an await inside
+unguarded handlers — `handleSelectTemplate`, `handleRollover`, `handleScheduleJob`,
+`handleDrawDown` (two), and `executeConvertToOrder` (two). Each can pull an operator who has
+moved on to another screen back to a record they left. Several of them also create orders and
+jobs, so their reply handling is worth more scrutiny than a quote save's.
+
+Two more found while checking this change, both pre-existing and both left alone:
+
+- **A save that settles after the page is gone.** `handleSaveDraft` ends with
+  `if (!isEditing) navigate('/quotes/' + result)`. `quotes/new` and `quotes/:id` are separate
+  routes in App.tsx, so leaving `/quotes/new` unmounts this component — and unmounting runs no
+  route effect here, so **both** of this change's operands still match and the guard permits the
+  navigate. Create path only, no data loss: the quote really was created. Not fixed here because
+  proving it needs a create-path harness this file does not have, and shipping an unproven guard
+  on a money page is worse than a recorded gap. The fix is a mounted flag folded into the same
+  predicate.
+- **The continuation after the save.** Once `saveQuote` returns, `handleSaveDraft` awaits again —
+  `create_planned_holds`, then `loadActivePlannedHolds` — and toasts on the result without
+  re-checking. The guard covers the save's own reply, not what the handler does afterwards.
+
+None of this is a regression from this change; it is the same bug class, unowned, on the rest of
+the page. It is recorded here so the next lane starts from the list instead of rediscovering it
+one review round at a time.
