@@ -96,10 +96,15 @@ function copyLf(local, name, dir) {
   wrapByName.set(name, isWrappable(lf));
   copy(tmp, name);
 }
+// Every copyText caller is a MUTANT of the candidate, so it inherits the candidate's
+// precondition: it must take the real single-transaction delivery path. Assert rather than
+// branch — a mutant that silently fell back to an unwrapped apply would prove nothing about
+// how the migration actually reaches production.
 function copyText(text, name, dir) {
+  assertWrappable(text, name);
   const tmp = path.join(dir, name);
   writeFileSync(tmp, text, 'utf8');
-  wrapByName.set(name, isWrappable(text));
+  wrapByName.set(name, true);
   copy(tmp, name);
 }
 function apply(name, user) { return psql(`\\i /tmp/${name}`, { user, wrap: wrapByName.get(name) ?? false }); }
@@ -156,6 +161,15 @@ const QUICK_IMPL = '_create_quick_delivery_intent_impl_20260802';
 
 const candidateSql = readFileSync(CANDIDATE, 'utf8');
 assert.equal(candidateSql.includes('\r'), false, 'candidate must be LF');
+
+// WRAPPABILITY IS A PRECONDITION, NOT AN INPUT. scripts/apply-migration-file.mjs runs this
+// exact check and REFUSES to transmit a file that fails it, so a non-wrappable candidate has
+// no sanctioned route to production at all. This harness used to call isWrappable() and then
+// BRANCH on the answer to decide whether to pass psql -1 — which meant a candidate carrying a
+// top-level BEGIN;/COMMIT; was applied by the one route the real system will not use, and the
+// run passed. That is a harness accommodating the defect instead of catching it. Assert here,
+// unconditionally, before any phase reports anything.
+assertWrappable(candidateSql.replace(/\r\n/g, '\n'), path.basename(CANDIDATE));
 
 // Read the pins and the claimed conversion counts out of the candidate itself, so this
 // prover cannot silently disagree with the file it is proving.

@@ -108,8 +108,14 @@
 -- 2026-09-05. If either has drifted at apply time this migration aborts and changes
 -- nothing, rather than replacing a body it never inspected. Re-pin deliberately after
 -- reading the new body; never widen the check to make it pass.
-
-BEGIN;
+--
+-- ATOMICITY IS THE APPLY PATH'S, NOT THIS FILE'S. Do NOT add a top-level BEGIN;/COMMIT;
+-- here. scripts/apply-migration-file.mjs wraps the migration AND its schema_migrations
+-- ledger row in ONE transaction so they commit together; a file that opens its own
+-- transaction breaks that pairing and is hard-refused by assertWrappable() in
+-- .claude/hooks/migration-wrappability-lib.mjs, leaving the file with no delivery route
+-- at all. Every RAISE EXCEPTION below still aborts the whole apply — the wrapper's
+-- transaction rolls it back, and no ledger row is written.
 
 -- ---------------------------------------------------------------------------
 -- Preflight. Refuse on drift, on a missing function, or on an unexpected overload.
@@ -482,5 +488,3 @@ BEGIN
   END IF;
 END;
 $postflight$;
-
-COMMIT;
