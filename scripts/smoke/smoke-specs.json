@@ -467,6 +467,18 @@
         "lifecycle"
       ]
     },
+    "save_job_field_acres_candidate": {
+      "chain": "fixtures/save-job-field-acres-tests.sql",
+      "container_only": true,
+      "container_prover": "prove-save-job-field-acres-real-schema.mjs",
+      "description": "CONTAINER-ONLY candidate proof for 20260904185900. Run npm run proof:save-job-field-acres; never run this write-seeding fixture against live. The full-chain prover first requires the permanent save_job parity chain to pass against F06, then proves F06 accepts a missing acreage key, applies the exact candidate, reruns permanent parity, and requires focused A1-A4 coverage. A1/A2 refuse missing-key and JSON-null acreage with distinct JOB_ACRES_NOT_FINITE messages, A3 proves NEW direct-RPC blank-to-zero compatibility, and A4 refuses PostgreSQL numeric Infinity. Static postflight, eleven apply-abort mutants (including deletion of either acreage guard), and four runtime canaries prove placement and non-vacuity. The permanent save_job registry entry remains live-runnable and still points to the separate 66-behaviour-test prove-save-job-chem-unit-invariant.mjs manual proof.",
+      "covers": [
+        "save_job"
+      ],
+      "area": [
+        "lifecycle"
+      ]
+    },
     "save_quote": {
       "chain": "smoke-save-quote-drawn-guard.sql",
       "description": "Drawn-product edit guard (A4): reducing a booking below its drawn quantity and removing a drawn product both raise BOOKING_OVERDRAWN; a legal reduce keeps booked/drawn/status consistent and the booking still closes at the new total; a no-draws control quote edits freely.",

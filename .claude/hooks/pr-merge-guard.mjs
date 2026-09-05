@@ -182,6 +182,9 @@ function listWorktreesFromProjectDir() {
 // self-contained also keeps the shared resolve line conflict-free for the other
 // in-flight guard work.
 //
+// @speed-bump — advisory by design; it raises the cost of merging over an unread
+// Codex finding, it is not a boundary. The hard gates are CI's required checks
+// and the exact-SHA proof below, and neither depends on this lookup.
 // Fail-OPEN by design: any failure here leaves codexVerdict null, which prints a
 // notice and merges. See the header of codex-bot-review-lib.mjs for why this one
 // predicate does not fail closed like its neighbours.
@@ -190,6 +193,7 @@ function listWorktreesFromProjectDir() {
 // (.claude/settings.json). Each gh call is capped at 10s, and this lookup makes
 // up to four of them, so it can alone outlive the hook. A PreToolUse hook killed
 // mid-call emits nothing, and a hook that emits nothing does NOT deny — so
+// @speed-bump — the ORDERING protects the hard gates; this lookup is not one.
 // running an advisory, fail-open lookup BEFORE the green-pipeline, risky-diff and
 // exact-SHA-proof denials could let a merge through that those gates would have
 // refused. Every caller therefore invokes this only after its hard denials have
@@ -243,6 +247,7 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
   }
   if (!codexVerdict) {
     process.stderr.write(
+      // @speed-bump — this notice is the fail-open path itself; it never denies.
       "CODEX REVIEW NOTICE: could not read the Codex GitHub App's review threads for this PR, so its " +
       "findings were NOT checked. Merging anyway (this gate fails open by design). Read them by hand: " +
       `gh pr view ${request.selector || "<number>"} --comments\n`,
@@ -264,6 +269,7 @@ function codexAdvisory(request, deadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_
       `CODEX REVIEW NOTICE: the Codex GitHub App's review threads could only be PARTLY read (${codexVerdict.codexThreads} ` +
       "seen; a later page failed, the cursor was unusable, or the page cap was reached). Nothing standing was seen " +
       "in what was read, but an unread page could still hold one, so this is NOT a clean reading. Merging anyway " +
+      // @speed-bump — a partial read prints this notice and allows; it never denies.
       `(this gate fails open by design). Read them by hand: gh pr view ${request.selector || "<number>"} --comments\n`,
     );
   }
@@ -318,6 +324,7 @@ function gateRequest(request) {
   }
 
   // The Codex GitHub App's review is read at the ALLOW points below, not here.
+  // @speed-bump — advisory; deferring it protects the hard gates, it is not one.
   // It is advisory and fail-open, and it costs up to four gh calls against a
   // 30-second hook budget — running it ahead of the hard denials would let a
   // slow GitHub kill this hook before they ran, which does not deny. See

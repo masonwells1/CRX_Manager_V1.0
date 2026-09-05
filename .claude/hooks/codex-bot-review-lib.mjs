@@ -62,7 +62,11 @@
 // clear exit — fix it, or resolve the thread with a reason.
 //
 // DELIBERATE FAIL-OPEN — READ BEFORE "HARDENING" THIS
+// @speed-bump — this layer raises the cost of merging over an unread Codex
+// finding. It is NOT a boundary, and nothing here should be described as one.
 // ---------------------------------------------------
+// @speed-bump — the surrounding hard gates (CI's required checks, the exact-SHA
+// gpt-5.6-sol proof) are the boundary; this predicate never carries that weight.
 // Almost every other predicate in this repo fails closed. This one does not,
 // and that is deliberate (Mason chose the narrow-block option on 2026-09-02).
 // This layer is an honest-mistake net for an ADVISORY reviewer; the hard gates
@@ -79,6 +83,7 @@
 //
 // Thread reads page up to CODEX_THREAD_MAX_PAGES (see collectCodexThreads).
 // Beyond that a PR could hide an unresolved thread, which loses a DENY rather
+// @speed-bump — losing a DENY is the failure mode; this is not a boundary.
 // than inventing one — the safe direction for a fail-open gate.
 
 // Both API spellings, lowercased. `[bot]` is a suffix GitHub's REST API adds
@@ -142,6 +147,9 @@ query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
 // `deadlineMs` is an ABSOLUTE epoch-millisecond cap on the whole walk, checked
 // before every request including the first. Exceeding it THROWS rather than
 // returning what has been read so far: a partial read is indistinguishable from
+// @proven-by codex-bot-review-lib.test.mjs — "an exceeded deadline THROWS
+// (callers turn that into their fail-open notice) rather than returning a
+// partial read as clean"
 // a clean one, and this predicate's callers turn a throw into their fail-open
 // notice. Returning early with `nodes` would instead report "nothing standing"
 // while a finding sat on an unfetched page — the exact defect CRX-REV-002 fixed.
@@ -149,6 +157,8 @@ query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
 // It exists because this lookup runs inside a PreToolUse hook with a hard outer
 // timeout (15s for the Codex guard, 30s for Claude's). A hook killed mid-call
 // emits nothing, and a PreToolUse hook that emits nothing does NOT deny — so an
+// @speed-bump — the deadline keeps this advisory from starving the hard gates;
+// the budget is a cost control, not a boundary of its own.
 // unbounded advisory lookup is a fail-open on every HARD gate that would have
 // run after it (PR #502 established this class; Codex round 6 found this
 // instance). The callers additionally run this only after their hard denials,
@@ -244,6 +254,8 @@ export function isStandingAtHead(thread, head) {
 //
 // Returns { status, unresolvedAtHead, codexThreads, headOid }, where status is
 // "findings-at-head" | "clean-at-head" | "stale" | "none" | "incomplete". Only
+// @speed-bump — only one of five statuses blocks, and every uncertain status
+// allows; see the fail-open note above.
 // "findings-at-head" blocks a merge; see the fail-open note above.
 //
 // "incomplete" (Codex round 11): the thread walk ended without reaching every
