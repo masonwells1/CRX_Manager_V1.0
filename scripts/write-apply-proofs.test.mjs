@@ -61,7 +61,7 @@ test('evidence fails closed rather than treating raw SQL text as executable call
 
 test('proof production fails closed when SECURITY DEFINER lacks an anon revoke', () => {
   const sql = `CREATE OR REPLACE FUNCTION public.post_return_credit(p_id uuid)
-RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN; END; $$;`;
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN RETURN; END; $$;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(sql), ['post_return_credit']);
   assert.deepEqual(
     securityDefinerMissingAnonRevokes(`${sql}\nREVOKE EXECUTE ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;`),

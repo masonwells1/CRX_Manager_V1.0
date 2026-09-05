@@ -285,6 +285,20 @@ function unsafeRoutineAlterConfiguration(sql) {
   return false;
 }
 
+function hasFixedSecurityDefinerCreateSearchPath(definition) {
+  // `AS` begins the blanked routine body in executableSql(). Any other routine
+  // option can occur before or after SET, so stop only at the next option word
+  // rather than accepting a path prefix that an additional schema can extend.
+  const settings = [...definition.matchAll(
+    /\bSET\s+search_path\s*(?:TO|=)\s*([\s\S]*?)(?=\s+\b(?:AS|LANGUAGE|TRANSFORM|WINDOW|SUPPORT|COST|ROWS|SET|SECURITY|IMMUTABLE|STABLE|VOLATILE|LEAKPROOF|CALLED|RETURNS|STRICT)\b|\s*$)/gi,
+  )];
+  if (settings.length !== 1) return false;
+  const entries = settings[0][1]
+    .split(',')
+    .map((entry) => entry.trim().replace(/^'|'$/g, '').toLowerCase());
+  return entries.length === 2 && entries[0] === 'public' && entries[1] === 'pg_temp';
+}
+
 function splitArgs(args) {
   const parts = []; let start = 0, depth = 0;
   for (let i = 0; i <= args.length; i++) {
@@ -481,12 +495,18 @@ export function securityDefinerMissingAnonRevokes(sql) {
     const definition = executable.slice(declaration.index, end);
     const signature = canonicalSignature(name, args.text, kind === 'create', Boolean(declaration[1]));
     if (!signature) return ['unparseable-security-definer-sql'];
-    if (/\bSECURITY\s+DEFINER\b/i.test(definition)) lifecycle.push({
-      index: declaration.index,
-      action: 'declare',
-      signature,
-      name: name.replaceAll('""', '"'),
-    });
+    if (/\bSECURITY\s+DEFINER\b/i.test(definition)) {
+      // A creation statement sets the routine's effective configuration. Its
+      // ACL revokes are not enough: an owner-privileged routine without the
+      // fixed path can resolve attacker-controlled objects before RLS applies.
+      if (!hasFixedSecurityDefinerCreateSearchPath(definition)) return ['unparseable-security-definer-sql'];
+      lifecycle.push({
+        index: declaration.index,
+        action: 'declare',
+        signature,
+        name: name.replaceAll('""', '"'),
+      });
+    }
   }
   const acl = aclEvents(executable);
   const drops = dropRoutineEvents(executable);

@@ -46,7 +46,7 @@ test('fails closed for role definitions and canonical role membership changes', 
 });
 
 test('fails closed for quoted names and unsupported ACL forms that can restore execution', () => {
-  const quoted = `CREATE FUNCTION public."danger-fn"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;`;
+  const quoted = `CREATE FUNCTION public."danger-fn"() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT; $$;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['danger-fn']);
   const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
   assert.deepEqual(
@@ -71,9 +71,9 @@ test('fails closed for SECURITY DEFINER ALTERs and unmatched quoted identities',
   assert.deepEqual(securityDefinerMissingAnonRevokes(altered), ['unparseable-security-definer-sql']);
   const routine = 'ALTER ROUTINE public.routine_escalate(uuid) SECURITY DEFINER;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(routine), ['unparseable-security-definer-sql']);
-  const quoted = 'CREATE FUNCTION public."Case"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."case"() FROM PUBLIC, anon;';
+  const quoted = 'CREATE FUNCTION public."Case"() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."case"() FROM PUBLIC, anon;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(quoted), ['unparseable-security-definer-sql']);
-  const escaped = 'CREATE FUNCTION public."danger""name"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."danger""name"() FROM PUBLIC, anon;';
+  const escaped = 'CREATE FUNCTION public."danger""name"() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT; $$;\nREVOKE ALL ON FUNCTION public."danger""name"() FROM PUBLIC, anon;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(escaped), []);
 });
 
@@ -111,6 +111,37 @@ test('allows only the fixed SECURITY DEFINER search path on routine ALTERs', () 
   );
 });
 
+test('requires the fixed search path for every SECURITY DEFINER creation form', () => {
+  const routines = [
+    {
+      kind: 'FUNCTION',
+      name: 'created_function',
+      declaration: 'RETURNS void LANGUAGE sql',
+      revoke: 'REVOKE ALL ON FUNCTION public.created_function() FROM PUBLIC, anon;',
+    },
+    {
+      kind: 'PROCEDURE',
+      name: 'created_procedure',
+      declaration: 'LANGUAGE plpgsql',
+      revoke: 'REVOKE ALL ON PROCEDURE public.created_procedure() FROM PUBLIC, anon;',
+    },
+    {
+      kind: 'OR REPLACE PROCEDURE',
+      name: 'replaced_procedure',
+      declaration: 'LANGUAGE sql',
+      revoke: 'REVOKE ALL ON PROCEDURE public.replaced_procedure() FROM PUBLIC, anon;',
+    },
+  ];
+  for (const routine of routines) {
+    const unsafe = `CREATE ${routine.kind} public.${routine.name}() ${routine.declaration} SECURITY DEFINER AS $$ SELECT 1; $$;`;
+    const safe = `CREATE ${routine.kind} public.${routine.name}() ${routine.declaration} SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT 1; $$;`;
+    const widened = `CREATE ${routine.kind} public.${routine.name}() ${routine.declaration} SECURITY DEFINER SET search_path = public, pg_temp, attacker AS $$ SELECT 1; $$;`;
+    assert.deepEqual(securityDefinerMissingAnonRevokes(`${unsafe}\n${routine.revoke}`), ['unparseable-security-definer-sql']);
+    assert.deepEqual(securityDefinerMissingAnonRevokes(`${safe}\n${routine.revoke}`), []);
+    assert.deepEqual(securityDefinerMissingAnonRevokes(`${widened}\n${routine.revoke}`), ['unparseable-security-definer-sql']);
+  }
+});
+
 test('fails closed for search-path-sensitive targets and quoted role lookalikes', () => {
   const unqualifiedRoutine = 'ALTER ROUTINE routine_escalate(uuid) SECURITY DEFINER;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(unqualifiedRoutine), ['unparseable-security-definer-sql']);
@@ -126,7 +157,7 @@ test('does not treat quoted SQL identifiers as executable ACL commands', () => {
 });
 
 test('keeps quoted control-character routine identities distinct during ACL tracking', () => {
-  const securityDefiner = 'CREATE FUNCTION public."GRANT"() RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;';
+  const securityDefiner = 'CREATE FUNCTION public."GRANT"() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT; $$;';
   const invokerDecoy = 'CREATE FUNCTION public."\u0001RANT"() RETURNS void LANGUAGE sql AS $$ SELECT; $$;';
   const decoyRevoke = 'REVOKE ALL ON FUNCTION public."\u0001RANT"() FROM PUBLIC, anon;';
   assert.deepEqual(
@@ -164,7 +195,7 @@ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp;`;
 test('resets ACL state after DROP and tracks SECURITY DEFINER procedures', () => {
   const recreated = `${definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;')}\nDROP FUNCTION public.post_return_credit(uuid);\n${definition()}`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(recreated), ['post_return_credit']);
-  const procedure = 'CREATE PROCEDURE public.escalate_proc(p_id uuid) LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN NULL; END; $$;';
+  const procedure = 'CREATE PROCEDURE public.escalate_proc(p_id uuid) LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN NULL; END; $$;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(procedure), ['escalate_proc']);
   assert.deepEqual(securityDefinerMissingAnonRevokes(`${procedure}\nREVOKE ALL ON PROCEDURE public.escalate_proc(uuid) FROM PUBLIC, anon;`), []);
 });
@@ -184,7 +215,7 @@ test('fails closed for quoted grant recipients and dynamic DO-block ACL changes'
 });
 
 test('normalizes PostgreSQL routine type aliases and rejects unmatched public ACL events', () => {
-  const integerDefinition = `CREATE FUNCTION public.alias_target(p_id int) RETURNS void LANGUAGE sql SECURITY DEFINER AS $$ SELECT; $$;`;
+  const integerDefinition = `CREATE FUNCTION public.alias_target(p_id int) RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT; $$;`;
   const revoked = `${integerDefinition}\nREVOKE ALL ON FUNCTION public.alias_target(integer) FROM PUBLIC, anon;`;
   assert.deepEqual(securityDefinerMissingAnonRevokes(revoked), []);
   assert.deepEqual(
@@ -198,7 +229,7 @@ test('normalizes PostgreSQL routine type aliases and rejects unmatched public AC
 });
 
 test('excludes OUT-only parameters from PostgreSQL function identities', () => {
-  const withOutput = 'CREATE FUNCTION public.output_target(p_id uuid, OUT p_result text) RETURNS text LANGUAGE sql SECURITY DEFINER AS $$ SELECT NULL; $$;';
+  const withOutput = 'CREATE FUNCTION public.output_target(p_id uuid, OUT p_result text) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT NULL; $$;';
   assert.deepEqual(
     securityDefinerMissingAnonRevokes(`${withOutput}\nREVOKE ALL ON FUNCTION public.output_target(uuid) FROM PUBLIC, anon;`),
     [],
@@ -277,7 +308,7 @@ test('fails closed for quoted schema and argument-type identities', () => {
 test('fails closed for ACL suffixes, quoted semicolons, and routine ownership changes', () => {
   const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
   assert.deepEqual(securityDefinerMissingAnonRevokes(`${safe}\nGRANT EXECUTE ON FUNCTION public.post_return_credit(uuid) TO anon GRANTED BY CURRENT_USER;`), ['unparseable-security-definer-sql']);
-  assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.quoted_return() RETURNS public."text;shadow" LANGUAGE sql SECURITY DEFINER AS $$ SELECT NULL; $$;'), ['quoted_return']);
+  assert.deepEqual(securityDefinerMissingAnonRevokes('CREATE FUNCTION public.quoted_return() RETURNS public."text;shadow" LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT NULL; $$;'), ['quoted_return']);
   assert.deepEqual(securityDefinerMissingAnonRevokes(`${safe}\nALTER FUNCTION public.post_return_credit(uuid) OWNER TO anon;`), ['unparseable-security-definer-sql']);
   assert.deepEqual(
     securityDefinerMissingAnonRevokes(`${safe}\nALTER FUNCTION public.post_return_credit(uuid) RENAME TO exposed;\nGRANT EXECUTE ON FUNCTION public.exposed(uuid) TO PUBLIC, anon;`),
