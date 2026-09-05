@@ -1,3 +1,4 @@
+-- NOT APPLIED — DO NOT APPLY without Mason's explicit in-chat approval.
 -- Document dates follow the America/Chicago business day, never the UTC clock.
 --
 -- WHY THIS EXISTS

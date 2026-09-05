@@ -1,3 +1,4 @@
+-- NOT APPLIED — DO NOT APPLY without Mason's explicit in-chat approval.
 -- Commission dates follow the source document's business date, never the UTC clock.
 -- idempotency-body-check: exempt
 -- The two re-emitted INSERT helpers are owner-only SECURITY INVOKER internals.
