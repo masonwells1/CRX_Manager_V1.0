@@ -444,6 +444,13 @@ export default function QuoteBuilder() {
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const initialLoadGenerationRef = useRef(0);
   const [installedLoadGeneration, setInstalledLoadGeneration] = useState(0);
+  // Serial number for quote loads. App.tsx routes every /quotes/:id to this one
+  // element with no `key`, so navigating between two saved quotes re-runs the id
+  // effect WITHOUT remounting. A load whose serial is no longer current has been
+  // superseded — by a route change, or by a newer reload of the same quote — and
+  // describes a record this page is no longer showing, so it must install
+  // nothing: not the form, not quoteId, not the row-version token.
+  const quoteLoadSerialRef = useRef(0);
   const blocker = useUnsavedChanges(isDirty);
 
   // Status-based guards
@@ -791,11 +798,18 @@ export default function QuoteBuilder() {
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
   const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
+    const loadSerial = ++quoteLoadSerialRef.current;
+    // Re-checked after every await. A superseded load returns false without
+    // touching form state, toasts, navigation or `loading`: the load that
+    // superseded it owns all of those now.
+    const superseded = () => quoteLoadSerialRef.current !== loadSerial;
+
     const quoteRes = await supabase
       .from('quotes')
       .select('*, customer:customers(*)')
       .eq('id', quoteId)
       .maybeSingle();
+    if (superseded()) return false;
 
     if (quoteRes.error || !quoteRes.data) {
       if (quoteRes.error) {
@@ -820,6 +834,7 @@ export default function QuoteBuilder() {
         .eq('quote_id', quoteId)
         .order('sort_order'),
     ]);
+    if (superseded()) return false;
 
     // Build and validate the complete editable snapshot before changing any
     // form state. A failed Reload must never replace an operator's local work
@@ -837,6 +852,8 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('id', quoteId)
       .maybeSingle();
+    if (superseded()) return false;
+
     const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
     const stableVersion = initialRowVersion === finalRowVersion
       && (initialRowVersion !== null || !requireStableRowVersion);
@@ -921,6 +938,8 @@ export default function QuoteBuilder() {
       .eq('quote_id', quoteId)
       .is('deleted_at', null)
       .not('quote_section_id', 'is', null);
+    if (superseded()) return false;
+
     if (sectionJobsError) {
       Sentry.captureException(sectionJobsError, { tags: { source: 'read', action: 'load_quote_section_jobs' } });
       toast('warning', 'Quote loaded, but scheduled-job badges could not be refreshed.');
@@ -937,6 +956,8 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
+    if (superseded()) return false;
+
     if (versionsError) {
       Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
       toast('warning', 'Quote loaded, but version history could not be refreshed.');
@@ -1020,6 +1041,11 @@ export default function QuoteBuilder() {
         .then(({ data }) => { if (data) setQuoteTemplates(data as QuoteTemplate[]); });
     }
     if (isEditing && id) {
+      // This effect also runs on a route change between two saved quotes, where
+      // the previous quote's form is still mounted and filled in. Present the
+      // skeleton until THIS id's snapshot installs, so the operator is never
+      // shown quote A's numbers under quote B's address.
+      setLoading(true);
       fetchQuote(id);
     } else {
       generateQuoteNumber().then(() => {
@@ -1360,6 +1386,17 @@ export default function QuoteBuilder() {
   }, [sections]);
 
   const saveQuote = async (newStatus?: QuoteStatus): Promise<string | null> => {
+    // Fail closed when the loaded quote is not the quote the URL names. The
+    // skeleton normally hides the form for the whole transition, but a load that
+    // ERRORS clears `loading` while deliberately keeping the previous quote's
+    // edits on screen — leaving a live Save button over the record the operator
+    // navigated away from. `p_quote_id` below is this same `quoteId`, so
+    // refusing before any RPC also means no idempotency key is ever minted
+    // against the wrong quote.
+    if (isEditing && quoteId !== id) {
+      toast('error', 'This quote has not finished loading. Refresh the page before saving so your changes go to the right quote.');
+      return null;
+    }
     if (!customerId) {
       toast('error', 'Please select a customer');
       return null;

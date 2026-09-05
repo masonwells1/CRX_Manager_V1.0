@@ -2,8 +2,8 @@
  * QuoteBuilder.test.tsx — Tests for the quote builder page
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter } from 'react-router-dom';
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
@@ -1455,5 +1455,179 @@ describe('QuoteBuilder', () => {
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('quote was frozen'));
     expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything());
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.stringContaining('marked as presented'));
+  });
+
+  // ── Route changes must never save the quote the operator left ─────────────
+  //
+  // App.tsx routes both `quotes/new` and `quotes/:id` to one <QuoteBuilder />
+  // with no `key`, so moving between two saved quotes re-runs the id effect on
+  // the SAME mounted component: quoteId, the form contents and the save target
+  // all survive the navigation. These tests drive a real data router the same
+  // way, with deliberately delayed loads, and mount the real page.
+
+  function openableGate() {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => { open = resolve; });
+    return { opened, open };
+  }
+
+  /**
+   * A Supabase-like chain that decides its result LAZILY, when the query is
+   * finally awaited. Every `.eq()` has landed by then, so the resolver can see
+   * which quote is being requested and hold that quote's load open.
+   */
+  function buildLazyChain(
+    resolveResult: (filters: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>,
+  ): Record<string, unknown> {
+    const filters: Record<string, unknown> = {};
+    const self: Record<string, unknown> = {};
+    const passthrough = (..._args: unknown[]) => self;
+    const methods = ['select', 'insert', 'update', 'upsert', 'delete', 'neq',
+      'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains',
+      'containedBy', 'range', 'filter', 'not', 'or', 'and', 'match',
+      'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
+      'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal'];
+    for (const m of methods) self[m] = passthrough;
+    self.eq = (column: unknown, value: unknown) => {
+      filters[String(column)] = value;
+      return self;
+    };
+    let started: Promise<{ data: unknown; error: unknown }> | null = null;
+    const run = () => {
+      if (!started) started = resolveResult(filters);
+      return started;
+    };
+    self.then = (...args: Parameters<Promise<unknown>['then']>) => run().then(...args);
+    self.catch = (...args: Parameters<Promise<unknown>['catch']>) => run().catch(...args);
+    self.finally = (...args: Parameters<Promise<unknown>['finally']>) => run().finally(...args);
+    return self;
+  }
+
+  function makeSwitchFixture(id: string, quoteNumber: string) {
+    const base = makeQuoteFixture('draft');
+    const quote = { ...base.quote, id, quote_number: quoteNumber };
+    const section = { ...base.section, id: `section-${id}`, quote_id: id };
+    const item = { ...base.item, id: `item-${id}`, quote_id: id, section_id: section.id };
+    return { quote, section, item, product: base.product };
+  }
+
+  function renderQuoteSwitch(
+    fixtures: ReturnType<typeof makeSwitchFixture>[],
+    gates: Record<string, Promise<void>>,
+    options: { failSectionsFor?: string } = {},
+  ) {
+    const byId = new Map(fixtures.map((f) => [f.quote.id, f]));
+    mockFrom.mockImplementation((table: string) => buildLazyChain(async (filters) => {
+      const requestedId = String(filters.quote_id ?? filters.id ?? '');
+      const fixture = byId.get(requestedId);
+      const gate = gates[requestedId];
+      if (fixture && gate) await gate;
+      switch (table) {
+        case 'quotes':
+          return { data: fixture ? fixture.quote : null, error: null };
+        case 'quote_sections':
+          return options.failSectionsFor === requestedId
+            ? { data: null, error: { message: 'sections unavailable' } }
+            : { data: fixture ? [fixture.section] : [], error: null };
+        case 'quote_items':
+          return { data: fixture ? [fixture.item] : [], error: null };
+        case 'customers':
+          return {
+            data: [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }],
+            error: null,
+          };
+        case 'products':
+          return { data: [fixtures[0].product], error: null };
+        default:
+          return { data: [], error: null };
+      }
+    }));
+    const router = createMemoryRouter(
+      [{ path: '/quotes/:id/edit', element: <QuoteBuilder /> }],
+      { initialEntries: [`/quotes/${fixtures[0].quote.id}/edit`] },
+    );
+    render(<RouterProvider router={router} />);
+    return router;
+  }
+
+  async function goToQuote(router: ReturnType<typeof createMemoryRouter>, id: string) {
+    await act(async () => { await router.navigate(`/quotes/${id}/edit`); });
+  }
+
+  async function flushPendingWork() {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  }
+
+  it('stops presenting quote A once the route points at a quote B that has not loaded', async () => {
+    const quoteA = makeSwitchFixture('quote-a', 'Q-AAA-1');
+    const quoteB = makeSwitchFixture('quote-b', 'Q-BBB-2');
+    const gateB = openableGate();
+    const router = renderQuoteSwitch([quoteA, quoteB], { 'quote-b': gateB.opened });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    await screen.findByRole('button', { name: /Save Draft/ });
+
+    await goToQuote(router, 'quote-b');
+
+    // The URL says quote B. Quote A's form must not still be sitting there
+    // looking current, and its Save button must not still be live: the save
+    // target is quoteId, which is still A until B installs.
+    await waitFor(() => expect(screen.queryAllByText('Q-AAA-1')).toHaveLength(0));
+    expect(screen.queryAllByText('Q-BBB-2')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: /Save Draft/ })).not.toBeInTheDocument();
+    expect(mockRpc).not.toHaveBeenCalledWith('save_quote', expect.anything());
+
+    gateB.open();
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+  });
+
+  it('drops quote B late response after the operator has already moved on to quote C', async () => {
+    const quoteA = makeSwitchFixture('quote-a', 'Q-AAA-1');
+    const quoteB = makeSwitchFixture('quote-b', 'Q-BBB-2');
+    const quoteC = makeSwitchFixture('quote-c', 'Q-CCC-3');
+    const gateB = openableGate();
+    const router = renderQuoteSwitch([quoteA, quoteB, quoteC], { 'quote-b': gateB.opened });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+
+    // A -> B (slow) -> C (fast). C wins the race and installs first.
+    await goToQuote(router, 'quote-b');
+    await goToQuote(router, 'quote-c');
+    expect(await screen.findAllByText('Q-CCC-3')).not.toHaveLength(0);
+
+    // B's reply finally arrives. It describes a quote the page left two
+    // navigations ago, so it must install nothing.
+    gateB.open();
+    await flushPendingWork();
+
+    expect(screen.getAllByText('Q-CCC-3')).not.toHaveLength(0);
+    expect(screen.queryAllByText('Q-BBB-2')).toHaveLength(0);
+  });
+
+  it('refuses the save when a failed switch leaves quote A on screen under quote B address', async () => {
+    const quoteA = makeSwitchFixture('quote-a', 'Q-AAA-1');
+    const quoteB = makeSwitchFixture('quote-b', 'Q-BBB-2');
+    const router = renderQuoteSwitch([quoteA, quoteB], {}, { failSectionsFor: 'quote-b' });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+
+    // A load that fails part-way deliberately KEEPS the operator's current
+    // edits rather than blanking them — which puts quote A's form, and a live
+    // Save button, under quote B's URL.
+    await goToQuote(router, 'quote-b');
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('Could not load the complete quote'),
+    ));
+
+    const saveDraft = await screen.findByRole('button', { name: /Save Draft/ });
+    fireEvent.click(saveDraft);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('has not finished loading'),
+    ));
+    expect(mockRpc).not.toHaveBeenCalledWith('save_quote', expect.anything());
   });
 });
