@@ -233,9 +233,20 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   codexGuard: "a1ba52df7b4e84989276632aea37fa8a1d567bcc",
   pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
 };
+// Both re-pinned 2026-09-05 (guard-claim annotation pass). The guard-claim
+// ratchet required @proven-by/@speed-bump/@unproven notes next to 23 absolute
+// safety claims; 11 of those sit in the codex guard and 1 in the push lib.
+// Both changes are COMMENT-ONLY — verified with
+// `git diff -U0 <file>` filtered to non-`//` lines, which returned nothing:
+// codexGuard 15 insertions / 0 deletions, pushLib likewise all comment lines.
+// No executable line, no protection anchor, and no transform output changed, so
+// re-pinning records the same protected state under its new blob rather than
+// asserting anything new about it. The producer-protection assertions in
+// .codex/hooks/production-action-guard.test.mjs and the full
+// `npm run test:correction-guards` suite pass unchanged.
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "d96b63533e81e00887c4361795c043f2c062f794",
-  pushLib: "05914254597278275f39ff7eeefd7dc96359860e",
+  codexGuard: "1abd32b4eb6985ffc61bf7ed1ff8ff96f27149c6",
+  pushLib: "80800b4134225ad14549f612c6759c2786cfba7c",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

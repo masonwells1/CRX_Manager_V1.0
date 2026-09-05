@@ -639,12 +639,14 @@ export function unrecognizedProtectedHarnessAccess(command, workdir = "") {
   }
   return null;
 }
+// @proven-by production-action-guard.test.mjs — "round 13: read-only git grammar, computed text fails closed, basenames"
 // Codex round 13 (HIGH): the computed-text refusal above is scoped to segments
 // whose VERB the mutation list knows, and the fail-closed rule to segments that
 // NAME a protected file. A destination split across variables and written by a
 // writer the list does not know satisfies neither — `$d=".codex/hooks/
 // production-action-"; $f="guard.mjs"; Write-Output "" | Tee-Object -FilePath
 // $d$f` blanked the startup guard and returned blocked:false. So computed text
+// @proven-by production-action-guard.test.mjs — "round 13: read-only git grammar, computed text fails closed, basenames"
 // fails closed the same way protected names do: a segment that carries
 // computed text may contain only recognised read-only command words. Readers
 // with computed arguments (`cat $f`, `Get-Content (Join-Path $a $b)`, `git -C
@@ -695,6 +697,7 @@ const SHELL_MUTATION_RE = /(?:>|\b(?:set-content|add-content|out-file|new-item|s
 // writing segment reveals. A lone backtick stays a PowerShell escape, and
 // `body=@file` (gh's file-argument form) is preceded by `=`, not whitespace.
 const COMPUTED_TEXT_RE = /\(|\$|`[^`]*`|(?<=\s)@[A-Za-z_$]|\bjoin-path\b|\s-f\s|\s-join\b|%[^%\s]+%|![^!\s]+!/i;
+// @proven-by production-action-guard.test.mjs — "round 13: read-only git grammar, computed text fails closed, basenames"
 // The same set WITHOUT the bare `-f` arm, for the fail-closed gate over
 // unrecognised command words: there `-f` is overwhelmingly a flag (`gh api -f
 // key=value`, `grep -f patterns`), and PowerShell's format operator cannot
@@ -1289,6 +1292,7 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     );
   }
   // The Codex GitHub App's review is read at the ALLOW point below, not here.
+  // @speed-bump — advisory; deferring it protects the hard gates, it is not one.
   // It is advisory, fail-open, and costs up to four gh calls against a
   // 15-SECOND hook budget (.codex/hooks.json) — four capped-at-10s calls can
   // outlive the hook on their own. A PreToolUse hook killed mid-call emits
@@ -1342,6 +1346,8 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
 // merge driven from Claude gets, which is exactly the asymmetry AGENTS.md forbids
 // leaving undeclared.
 //
+// @speed-bump — advisory by design; it raises the cost of merging over an
+// unread Codex finding, it is not a boundary. The hard gates are elsewhere.
 // Returns a denial verdict, or null when nothing blocks. Fails OPEN on any
 // error: see the header of codex-bot-review-lib.mjs for why this one predicate
 // does not fail closed like its neighbours here. The 5s budget is deliberately a
@@ -1389,6 +1395,7 @@ function codexAppAdvisory({ request, repoDir, runGh, deadlineMs = Date.now() + C
   // one-sided silence is exactly the drift AGENTS.md forbids.
   if (!codexVerdict) {
     process.stderr.write(
+      // @speed-bump — this notice is the fail-open path itself; it never denies.
       "CODEX REVIEW NOTICE: could not read the Codex GitHub App's review threads for this PR, so its " +
       "findings were NOT checked. Merging anyway (this gate fails open by design). Read them by hand: " +
       `gh pr view ${request.selector || "<number>"} --comments\n`,
@@ -1407,9 +1414,11 @@ function codexAppAdvisory({ request, repoDir, runGh, deadlineMs = Date.now() + C
     );
   } else if (codexVerdict.status === "incomplete") {
     process.stderr.write(
+      // @speed-bump — this notice is the fail-open path itself; it never denies.
       `CODEX REVIEW NOTICE: the Codex GitHub App's review threads could only be PARTLY read (${codexVerdict.codexThreads} ` +
       "seen; a later page failed, the cursor was unusable, or the page cap was reached). Nothing standing was seen " +
       "in what was read, but an unread page could still hold one, so this is NOT a clean reading. Merging anyway " +
+      // @speed-bump — a partial read prints this notice and allows; it never denies.
       `(this gate fails open by design). Read them by hand: gh pr view ${request.selector || "<number>"} --comments\n`,
     );
   }
@@ -1608,6 +1617,7 @@ export function evaluateProductionAction({
       "destination path literally and run the command again."
     );
   }
+  // @proven-by production-action-guard.test.mjs — "round 12: fail closed on protected files"
   // Fail closed on protected files (Codex round 12): the verb-recognising rules
   // above catch the writers they know; this one refuses every head they do not.
   // Round 13 walks every command word of the segment (not only its head), holds
@@ -1617,6 +1627,7 @@ export function evaluateProductionAction({
   const unrecognizedAccess = unrecognizedProtectedHarnessAccess(command, actionRepoDir);
   if (unrecognizedAccess) {
     return denied(
+      // @proven-by production-action-guard.test.mjs — "round 12: fail closed on protected files"
       "CODEX PRODUCTION GATE: this command names a protected harness file and its command word " +
       `\`${unrecognizedAccess.head || "(none)"}\` is not a recognised read-only operation, in: ${unrecognizedAccess.segment}. ` +
       "The guard fails closed here: only known readers (cat/type/head/tail/grep/rg/Get-Content/Select-String/" +
@@ -1625,6 +1636,9 @@ export function evaluateProductionAction({
       "writer. Change one deliberately through the file tools, which are gated separately."
     );
   }
+  // @proven-by production-action-guard.test.mjs — "round 12: fail closed on
+  // protected files" and "round 13: read-only git grammar, computed text fails
+  // closed, basenames" exercise both refusals above and below this line.
   // Fail closed on computed text (Codex round 13): a segment that builds text at
   // run time may contain only recognised read-only command words, because the
   // guard cannot read what a writer it does not know will do with a value it
@@ -1773,6 +1787,7 @@ export function evaluateProductionAction({
   }
 
   // ALLOW point for the whole command. Every merge and push segment above has
+  // @speed-bump — the Codex App lookup is advisory by design and never denies.
   // cleared its hard gates, so the advisory, fail-open Codex App lookups can
   // spend what is left of the hook budget here without being able to starve
   // any of them — including a LATER merge's gates, which is what running the
