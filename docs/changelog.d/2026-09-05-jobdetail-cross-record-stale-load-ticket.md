@@ -131,8 +131,36 @@ Each of the first two was mutation-tested individually and reddens exactly one t
 the loading gate reddens only the new "hides the previous job's editable form" case; reverting
 the ticket to a plain read reddens only the new "newest same-route refetch wins" case.
 
+**A fourth defect: the guard was in the wrong layer for half the problem (High, pre-existing).**
+Everything above polices which **response** may be installed. But the mutation handlers write
+UI and form state **before** `fetchJob` is ever called — `setIsDirty(false)`, success toasts,
+and `navigate()`. A handler resuming after the operator moved on marks the job **now on
+screen** clean; `fetchJob` then correctly rejects the stale reload, but nothing restores the
+flag, because the dirty effect only recomputes on `[formSnapshot, loading, baselineSettleTick]`
+and none of those changed. The operator's unsaved edits on that job then go silently when they
+navigate away, and the save-before-Start/Complete gates are down. Reported against `cb6911285`.
+
+Fixed with a route epoch: a ref that counts **route commits only**, captured at the start of
+each mutation and re-checked before any UI/form write. Deliberately not `loadGenerationRef` —
+that one is also bumped by `fetchJob`'s per-call ticket, so a legitimate concurrent refetch
+would falsely mark a live handler stale. A route-commit count also distinguishes `A -> B -> A`,
+which an id comparison cannot: it bumps twice while the id compares equal to itself.
+
+The review named three sites; there were **six**, and the two it did not name are worse than
+the ones it did. `performSave`'s two error-recovery paths and `handleTransferToInvoice` each
+call `navigate()` after their await, so a stale completion would not merely clear a flag — it
+would move the operator off the job they were editing. All are now gated. The database write
+and its activity-log entry are deliberately left ungated in every case: those record something
+that really happened, and only the on-screen consequences belong to the current route.
+
+Mutation-checked: neutering the epoch predicate to a constant `true` reddens **only** the new
+"keeps job B dirty-protected when job A's cancel completes after the move" test. That test
+edits job B and then lets A's cancel land, which is the sequence the review prescribed; the
+earlier stale-handler test could not catch it because it drives Start Job, the one lifecycle
+handler that does not clear `isDirty`.
+
 Full gates on the final source: `npm run typecheck` clean, `npm run lint` clean, `npm run test`
-exit 0 under `pipefail` with 351 files passed / 4993 passed / 123 skipped and no `Errors` line,
+exit 0 under `pipefail` with 351 files passed / 4994 passed / 123 skipped and no `Errors` line,
 `npm run build` succeeded.
 
 **Not verified — the layout-effect change is reasoned, not proven.** Downgrading

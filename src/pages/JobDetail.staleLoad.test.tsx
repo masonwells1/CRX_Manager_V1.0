@@ -481,6 +481,64 @@ describe('JobDetail cross-record stale-load guard', () => {
     expect(screen.getByRole('heading', { name: 'J-AAAA-FRESH' })).toBeTruthy();
   });
 
+  /**
+   * The handler-level half of the bug, which every test above misses.
+   *
+   * Those tests all police which RESPONSE may be installed. But the mutation handlers
+   * write UI/form state BEFORE fetchJob is ever called — `setIsDirty(false)` at the save,
+   * complete, cancel and transfer sites. A stale handler resuming after the operator moved
+   * on marks the job now on screen clean; fetchJob then correctly rejects the reload, but
+   * nothing restores the dirty flag, because the dirty effect only recomputes on
+   * [formSnapshot, loading, baselineSettleTick] and none of those changed.
+   *
+   * The consequence is silent data loss: B's unsaved edits stop being protected, so
+   * navigating away discards them with no prompt. The earlier stale-handler test could not
+   * catch it because it uses Start Job, which is the one lifecycle handler that does NOT
+   * clear isDirty. (Codex round 4.)
+   */
+  it('keeps job B dirty-protected when job A\'s cancel completes after the move', async () => {
+    const cancelGate = deferred();
+    let jobsCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        jobsCalls += 1;
+        if (jobsCalls === 1) return buildChain({ data: JOB_A, error: null });
+        // #2 is A's cancel `.update()` — held open across the navigation.
+        if (jobsCalls === 2) return buildGatedChain({ data: [JOB_A], error: null }, cancelGate.promise);
+        return buildChain({ data: JOB_B, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    const router = mountAt('/jobs/job-a');
+    await screen.findByRole('heading', { name: 'J-AAAA-1001' });
+    await waitFor(() => expect(dirtyStates.some((d) => d === false)).toBe(true));
+
+    // Begin cancelling job A; its update is still in flight.
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Cancel Job/ })); });
+    const confirmButtons = screen.getAllByRole('button', { name: /Cancel Job/ });
+    await act(async () => { fireEvent.click(confirmButtons[confirmButtons.length - 1]); });
+    await waitFor(() => expect(jobsCalls).toBe(2));
+
+    // The operator moves to job B and starts editing it.
+    await act(async () => { await router.navigate('/jobs/job-b'); });
+    await screen.findByRole('heading', { name: 'J-BBBB-2002' });
+    const jobDate = screen.getByLabelText(/Job Date/) as HTMLInputElement;
+    await act(async () => { fireEvent.change(jobDate, { target: { value: '2026-12-24' } }); });
+    await waitFor(() => expect(dirtyStates[dirtyStates.length - 1]).toBe(true));
+
+    // NOW A's cancel lands. B must still be protected: B's edit is unsaved, and the only
+    // thing standing between it and a silent discard is this flag.
+    const resumedAt = dirtyStates.length;
+    await act(async () => { cancelGate.release(); await cancelGate.promise; });
+
+    expect(dirtyStates.slice(resumedAt).every((d) => d === true)).toBe(true);
+    expect(dirtyStates[dirtyStates.length - 1]).toBe(true);
+    // And B's own form is untouched — A's cancel must not have reloaded anything.
+    expect(screen.getByRole('heading', { name: 'J-BBBB-2002' })).toBeTruthy();
+    expect(jobDate.value).toBe('2026-12-24');
+  });
+
   /*
    * DELIBERATELY NOT TESTED HERE: the pre-passive-effect window.
    *

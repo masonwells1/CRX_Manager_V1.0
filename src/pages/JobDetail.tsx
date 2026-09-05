@@ -325,6 +325,26 @@ export default function JobDetail() {
   // a fetch was STARTED for against the id the route is on NOW gives two operands with
   // genuinely independent sources, so the pair cannot degenerate into a tautology.
   const routeIdRef = useRef(id);
+  // Counts ROUTE COMMITS and nothing else. The mutation handlers below await network work
+  // and then write UI/form state — toasts, navigate(), and setIsDirty(false). Those writes
+  // are NOT covered by fetchJob's guard, because they happen before fetchJob is ever
+  // called: a stale handler resuming after the operator moved to another job marks THAT
+  // job clean, and the dirty effect only recomputes on [formSnapshot, loading,
+  // baselineSettleTick], so nothing restores it. The operator's unsaved edits then go
+  // silently when they navigate away, and the save-before-Start/Complete gates are down.
+  // (Codex round 4.)
+  //
+  // Deliberately NOT loadGenerationRef: that one is also bumped by fetchJob's per-call
+  // ticket, so a legitimate concurrent refetch would falsely mark a live handler stale.
+  // A route-commit count also distinguishes A -> B -> A, which an id comparison cannot:
+  // it bumps twice while the id compares equal to itself.
+  const routeEpochRef = useRef(0);
+  // Call at the START of a mutation handler, before its first await. The returned
+  // predicate reports whether the route is still the one the mutation began on.
+  const captureRouteEpoch = useCallback(() => {
+    const epoch = routeEpochRef.current;
+    return () => routeEpochRef.current === epoch;
+  }, []);
   const [baselineSettleTick, setBaselineSettleTick] = useState(0);
   const blocker = useUnsavedChanges(isDirty);
   // Field-app parity #16: allow a deep-link to a tab (e.g. the Jobs-list "Map / Logs"
@@ -1922,6 +1942,7 @@ export default function JobDetail() {
   // Gating on `loading` swaps the form for the skeleton until the new job's data lands.
   useLayoutEffect(() => {
     loadGenerationRef.current += 1;
+    routeEpochRef.current += 1;
     routeIdRef.current = id;
     if (!isNew && id) setLoading(true);
   }, [id, isNew]);
@@ -2468,6 +2489,11 @@ export default function JobDetail() {
   };
 
   const performSave = async (licenseOverride: boolean, overrideReasonForAudit?: string) => {
+    // Bound to the route this save STARTED on — see captureRouteEpoch. Captured here
+    // rather than in handleSave because the expired-license override path calls
+    // performSave directly, and this is where the save actually begins. The job row is
+    // written for `id` either way; what this gates is the UI/form state afterwards.
+    const stillOnThisJob = captureRouteEpoch();
     // This belongs inside performSave, before any state change or payload/RPC work: the
     // expired-license override calls this function directly and must not bypass the same
     // finite, non-negative acreage boundary. Intentional blanks retain the established
@@ -2639,11 +2665,13 @@ export default function JobDetail() {
           if (overrideReasonForAudit) {
             await writeOverrideAudit(overrideReasonForAudit, isNew ? result.job_id : (id || null));
           }
-          setIsDirty(false);
-          if (isNew) {
-            navigate(`/jobs/${result.job_id}`);
-          } else {
-            await fetchJob();
+          if (stillOnThisJob()) {
+            setIsDirty(false);
+            if (isNew) {
+              navigate(`/jobs/${result.job_id}`);
+            } else {
+              await fetchJob();
+            }
           }
           setSaving(false);
           return;
@@ -2667,11 +2695,13 @@ export default function JobDetail() {
           if (overrideReasonForAudit) {
             await writeOverrideAudit(overrideReasonForAudit, isNew ? result.job_id : (id || null));
           }
-          setIsDirty(false);
-          if (isNew) {
-            navigate(`/jobs/${result.job_id}`);
-          } else {
-            await fetchJob();
+          if (stillOnThisJob()) {
+            setIsDirty(false);
+            if (isNew) {
+              navigate(`/jobs/${result.job_id}`);
+            } else {
+              await fetchJob();
+            }
           }
           setSaving(false);
           return;
@@ -2736,16 +2766,21 @@ export default function JobDetail() {
         })();
       }
 
-      toast('success', isNew ? 'Job created' : 'Job saved');
-      setIsDirty(false);
-      setSavedApplicatorId(applicatorId || null);
-      setSavedJobDate(jobDate);
+      // The job row is saved regardless; only the on-screen consequences are gated. A
+      // stale success here would clear the CURRENT job's dirty flag, or navigate the
+      // operator off the job they are now editing and onto the one they left.
+      if (stillOnThisJob()) {
+        toast('success', isNew ? 'Job created' : 'Job saved');
+        setIsDirty(false);
+        setSavedApplicatorId(applicatorId || null);
+        setSavedJobDate(jobDate);
 
-      if (isNew) {
-        navigate(`/jobs/${result.job_id}`);
-        void warnIfOverCreditLimit(customerId, toast);
-      } else {
-        await fetchJob();
+        if (isNew) {
+          navigate(`/jobs/${result.job_id}`);
+          void warnIfOverCreditLimit(customerId, toast);
+        } else {
+          await fetchJob();
+        }
       }
     } catch (err: unknown) {
       // Race: licenses changed since page load and the DB trigger fired.
@@ -2796,6 +2831,7 @@ export default function JobDetail() {
   };
 
   const handleComplete = async () => {
+    const stillOnThisJob = captureRouteEpoch();
     setCompleting(true);
     try {
       // #68: after-the-fact completion — the office is recording a job that was
@@ -2825,10 +2861,15 @@ export default function JobDetail() {
       completeJobIdem.resetKey();
       const result = assertRpcResult<CompleteJobResult>(data, 'complete_job');
       if (profile) logActivity({ event: 'job_completed', description: `Job ${jobNumber} completed → App Record ${result.record_number}`, performedBy: profile.id });
-      toast('success', `Job completed! Application record ${result.record_number} created.`);
-      setShowCompleteModal(false);
-      setIsDirty(false);
-      await fetchJob();
+      // Completion committed; the activity log above records it either way. Everything
+      // below writes to whatever job is on screen NOW, so it is gated on that still
+      // being the job this completion started on.
+      if (stillOnThisJob()) {
+        toast('success', `Job completed! Application record ${result.record_number} created.`);
+        setShowCompleteModal(false);
+        setIsDirty(false);
+        await fetchJob();
+      }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'complete_job' } });
       // U12 Codex R5 #2: same translation as FieldView — a dispatch-only
@@ -2843,6 +2884,7 @@ export default function JobDetail() {
   };
 
   const handleCancelJob = async () => {
+    const stillOnThisJob = captureRouteEpoch();
     if (status !== 'scheduled' && status !== 'in_progress') {
       toast('error', `Cannot cancel a job in '${status}' status — only scheduled or in-progress jobs can be cancelled`);
       return;
@@ -2856,9 +2898,14 @@ export default function JobDetail() {
         .select();
       checkMutationResult(result, 'Cancel job');
       if (profile) logActivity({ event: 'job_cancelled', description: `Job ${jobNumber} cancelled`, performedBy: profile.id });
-      toast('success', 'Job cancelled');
-      setIsDirty(false);
-      await fetchJob();
+      // The cancel committed and is logged. Gate the on-screen half: a stale success
+      // toast would claim the job the operator is NOW looking at was cancelled, and the
+      // setIsDirty(false) would silently strip that job's unsaved-changes protection.
+      if (stillOnThisJob()) {
+        toast('success', 'Job cancelled');
+        setIsDirty(false);
+        await fetchJob();
+      }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'cancel_job' } });
       toast('error', sanitizeError(err));
@@ -2867,6 +2914,7 @@ export default function JobDetail() {
   };
 
   const handleTransferToInvoice = async () => {
+    const stillOnThisJob = captureRouteEpoch();
     setTransferring(true);
     try {
       const idemKey = transferJobIdem.getKey();
@@ -2878,15 +2926,19 @@ export default function JobDetail() {
       if (error) throw error;
       transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
-      setIsDirty(false);
-      if (result.split && (result.invoice_count ?? 0) > 1) {
-        // U7 multi-owner split: one payable invoice was created per field owner. Navigate to
-        // the anchor (primary owner) member; the invoice view links to the sibling invoices.
-        toast('success', `Created ${result.invoice_count} split invoices — one per field owner`);
-      } else {
-        toast('success', `Invoice ${result.invoice_number} created`);
+      // The invoice exists either way. Without this gate a stale transfer would clear the
+      // dirty flag of whatever job is on screen and then navigate the operator off it.
+      if (stillOnThisJob()) {
+        setIsDirty(false);
+        if (result.split && (result.invoice_count ?? 0) > 1) {
+          // U7 multi-owner split: one payable invoice was created per field owner. Navigate to
+          // the anchor (primary owner) member; the invoice view links to the sibling invoices.
+          toast('success', `Created ${result.invoice_count} split invoices — one per field owner`);
+        } else {
+          toast('success', `Invoice ${result.invoice_number} created`);
+        }
+        navigate(`/field-invoices/${result.invoice_id}`);
       }
-      navigate(`/field-invoices/${result.invoice_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
       if (hasRpcCode(err, RpcErrorCodes.BLEND_TICKET_ALREADY_BILLED)) {
