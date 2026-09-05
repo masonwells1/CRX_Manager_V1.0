@@ -299,7 +299,12 @@ reachable on `main` before and after the 2026-09-05 change.
 expands short names and follows symlinks) and re-run the proof-file rule on the real name; a
 state-directory file with more than one hard link is refused, and so is ANY `.json` there whether
 or not the proof-name rule lists it (round 11 found `migration-review-*.json` was never listed).
-Flags and `.txt` captures are the only things the exemption lets a native reader open. The shell branch is
+Flags and `.txt` captures are the only things the exemption lets a native reader open. Membership
+in the directory is decided by the resolved path, by the lexical path the tool was given, and by
+the real location of this checkout's own state directory (a junctioned `session-state` strips the
+protected components from resolved paths — Codex App P1 on the round-11 head). Residual: a
+junctioned state directory belonging to a DIFFERENT checkout, read by its external name, is not
+this checkout's to know; the wrappers never junction what they write. The shell branch is
 NOT changed: it reasons about command text, an 8.3 token can also be hash-styled
 (`CO3F2A~1.JSO` once a prefix has collided four times), and a text rule for it would be one more
 round of the "command-text guard never converges" pattern this repository has already recorded

@@ -851,6 +851,43 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
     } else {
       console.log("review-proof-guard.test: symlink creation refused by the OS — symlink alias cases skipped");
     }
+    // The state DIRECTORY itself as a junction (Codex GitHub App review of the
+    // round-11 head, P1): realpath then strips `.claude/session-state` from every
+    // file under it, so a resolved-path test alone says "outside". A junction
+    // needs no privilege on Windows (`symlinkSync(..., "junction")`); on Linux it
+    // is a directory symlink. Membership is decided lexically, by the resolved
+    // path, and by the real location of the checkout's own state directory.
+    const junctionRoot = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-junction-"));
+    const externalDir = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-external-"));
+    let junctioned = false;
+    try {
+      mkdirSync(path.join(junctionRoot, ".claude"), { recursive: true });
+      writeFileSync(path.join(externalDir, "migration-review-20260901120000_x.json"), "{\"verdict\":\"clean\"}");
+      writeFileSync(path.join(externalDir, "OVERNIGHT-INTENT.flag"), "x");
+      symlinkSync(externalDir, path.join(junctionRoot, ".claude", "session-state"), "junction");
+      junctioned = true;
+    } catch { /* filesystem without junctions or directory symlinks */ }
+    try {
+      if (junctioned) {
+        const viaJunction = path.join(junctionRoot, ".claude", "session-state", "migration-review-20260901120000_x.json");
+        for (const payload of [
+          { tool_name: "Read", tool_input: { file_path: viaJunction } },
+          { tool_name: "Read", cwd: junctionRoot, tool_input: { file_path: ".claude/session-state/migration-review-20260901120000_x.json" } },
+          { tool_name: "Read", cwd: junctionRoot, tool_input: { file_path: path.join(externalDir, "migration-review-20260901120000_x.json") } },
+          { tool_name: "NotebookRead", tool_input: { notebook_path: viaJunction } },
+        ]) {
+          const result = run(payload);
+          assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+          assert.match(result.stdout, /"permissionDecision":"deny"/, `evidence under a JUNCTIONED state dir must deny: ${JSON.stringify(payload.tool_input)}`);
+        }
+        assert.equal(run({ tool_name: "Read", tool_input: { file_path: path.join(junctionRoot, ".claude", "session-state", "OVERNIGHT-INTENT.flag") } }).stdout, "", "a flag read through the junctioned state dir stays allowed");
+      } else {
+        console.log("review-proof-guard.test: junction/directory-symlink creation refused — junctioned state-dir cases skipped");
+      }
+    } finally {
+      rmSync(junctionRoot, { recursive: true, force: true });
+      rmSync(externalDir, { recursive: true, force: true });
+    }
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true });
   }

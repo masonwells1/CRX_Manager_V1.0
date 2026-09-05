@@ -92,19 +92,44 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 const READ_ONLY_SINGLE_FILE_TOOL_RE = /^(?:read|notebookread)$/i;
 const STATE_DIR_REAL_PATH_RE = /[\\/]\.claude[\\/]session-state[\\/]/i;
 const STATE_DIR_EVIDENCE_RE = /\.json$/i;
+// Membership in the state directory is decided three ways, because when
+// `.claude/session-state` is ITSELF a junction or symlink to somewhere else,
+// realpath strips the protected components from every file under it and a
+// resolved-path test alone says "outside" (Codex GitHub App review of
+// eb887fd47, P1 — reproduced with a symlinked state directory):
+//   1. the RESOLVED path spells `.claude/session-state/` (the normal case, and
+//      the 8.3-aliased-component case, since realpath expands the alias);
+//   2. the LEXICAL path the tool was given spells it (a junctioned directory
+//      read through its protected name);
+//   3. the resolved file's directory IS the real location of this checkout's
+//      own state directory (the junction target read by its external name).
+// Residual, documented in KNOWN_ISSUES: a junctioned state directory of a
+// DIFFERENT checkout read by its external name is not this checkout's to know.
+const samePath = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+function realStateDirOf(baseDir) {
+  try {
+    return realpathSync.native(path.join(baseDir, ".claude", "session-state"));
+  } catch {
+    return null;
+  }
+}
+const cwdStateDirReal = realStateDirOf(hookCwd || process.cwd());
 function classifyReadTarget(candidate) {
+  const lexical = path.resolve(hookCwd || process.cwd(), String(candidate));
   let resolved;
   let stats;
   try {
-    resolved = realpathSync.native(path.resolve(hookCwd || process.cwd(), String(candidate)));
+    resolved = realpathSync.native(lexical);
     stats = statSync(resolved);
   } catch {
     return "unresolvable";
   }
   if (!stats.isFile()) return "unresolvable";
-  if (reviewProofPathMentioned(resolved)) return "proof";
-  const inStateDir = STATE_DIR_REAL_PATH_RE.test(resolved);
-  if (inStateDir && STATE_DIR_EVIDENCE_RE.test(resolved)) return "evidence";
+  if (reviewProofPathMentioned(resolved) || reviewProofPathMentioned(lexical)) return "proof";
+  const inStateDir = STATE_DIR_REAL_PATH_RE.test(resolved) ||
+    STATE_DIR_REAL_PATH_RE.test(lexical) ||
+    (cwdStateDirReal != null && samePath(path.dirname(resolved), cwdStateDirReal));
+  if (inStateDir && (STATE_DIR_EVIDENCE_RE.test(resolved) || STATE_DIR_EVIDENCE_RE.test(lexical))) return "evidence";
   if (inStateDir && stats.nlink > 1) return "aliased";
   return "clear";
 }

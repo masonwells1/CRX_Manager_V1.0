@@ -16,6 +16,15 @@ audit window, 13 were `OVERNIGHT-INTENT.flag`, 9 `codex-review-latest.txt`, 2 re
 captures, and 1 a proof JSON that was rightly refused. Pinned: the migration proof by absolute and
 relative path, `codex-review-mig-*.json`, `claude-review-push.json`, `applied-migrations.json`,
 `hold.json`, an unlisted future `*.json`, and a NotebookRead of the migration proof all deny; a
-reviewer `.txt` capture still allows. The round record is
+reviewer `.txt` capture still allows.
+
+**Follow-up in the same PR (Codex GitHub App, P1).** When `.claude/session-state` is itself a
+junction or symlink to an external directory, `realpathSync.native` strips the protected components
+from every file under it, so a resolved-path test alone says "outside". Membership is now decided
+three ways — the resolved path spells the state directory, the lexical path the tool was given
+spells it, or the resolved file's directory is the real location of this checkout's own state
+directory — and the proof-name and `.json` rules run on both paths. Pinned with a real junction
+fixture. Residual: a junctioned state directory of a DIFFERENT checkout read by its external name
+is not this checkout's to know (recorded in KNOWN_ISSUES). The round record is
 `2026-09-05-review-proof-guard-codex-round.md`; `docs/manual/KNOWN_ISSUES.md` (OPEN 2026-09-05)
 states the rule alongside the shell-side alias hole it does not close.
