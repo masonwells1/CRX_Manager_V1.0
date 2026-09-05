@@ -1,10 +1,14 @@
 // A migration that creates SECURITY DEFINER code must visibly remove both
 // inherited PUBLIC and CRX's explicit anon EXECUTE grants. Unknown syntax and
 // unterminated SQL fail closed rather than becoming an ACL bypass.
+// PostgreSQL accepts a quoted identifier immediately after a routine keyword:
+// `CREATE FUNCTION"public"."danger"()`. The identity parser remains deliberately
+// strict, but this broad header detector must see the form and fail closed rather
+// than silently treating an unparsed owner-privileged routine as absent.
 export const CREATE_FN_ANY = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?(\w+)"?\s*\(/gi;
 const SECURITY_DEFINER_CREATE = /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
 const SECURITY_DEFINER_ALTER = /ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/gi;
-const SECURITY_DEFINER_ROUTINE_HEADER = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)|ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE))\s+/gi;
+const SECURITY_DEFINER_ROUTINE_HEADER = /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)|ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE))(?:\s+|(?="))/gi;
 
 function blank(out, count) { return out + ' '.repeat(count); }
 

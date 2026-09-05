@@ -46,6 +46,13 @@ test('fails closed for quoted names and unsupported ACL forms that can restore e
   );
 });
 
+test('fails closed when a quoted routine identifier immediately follows FUNCTION', () => {
+  const adjacent = `CREATE FUNCTION"public"."danger"()
+RETURNS void LANGUAGE sql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$ DELETE FROM public.customers $$;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(adjacent), ['unparseable-security-definer-sql']);
+});
+
 test('fails closed for SECURITY DEFINER ALTERs and unmatched quoted identities', () => {
   const altered = 'ALTER FUNCTION public.escalate(uuid) SECURITY DEFINER;';
   assert.deepEqual(securityDefinerMissingAnonRevokes(altered), ['unparseable-security-definer-sql']);
