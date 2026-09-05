@@ -19,7 +19,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
-import { localToday } from '../lib/dateUtils';
+import { todayInBusinessTz } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD as fmt } from '../lib/money';
@@ -112,7 +112,7 @@ export default function CommissionPayments() {
   const [selectedCommissions, setSelectedCommissions] = useState<Set<string>>(new Set());
   const [payMethod, setPayMethod] = useState('check');
   const [payRef, setPayRef] = useState('');
-  const [payDate, setPayDate] = useState(localToday());
+  const [payDate, setPayDate] = useState(todayInBusinessTz());
   const [payNotes, setPayNotes] = useState('');
   const [creating, setCreating] = useState(false);
 
@@ -331,7 +331,7 @@ export default function CommissionPayments() {
     setSelectedCommissions(new Set());
     setPayMethod('check');
     setPayRef('');
-    setPayDate(localToday());
+    setPayDate(todayInBusinessTz());
     setPayNotes('');
     setShowCreate(true);
   };

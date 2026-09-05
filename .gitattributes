@@ -186,6 +186,7 @@ supabase/migrations/20260903230000_commission_report_snapshot_contract.sql text 
 supabase/migrations/20260905020000_commission_history_report_replay_guard.sql text eol=lf
 supabase/migrations/20260905020100_repair_commission_history_label_snapshots.sql text eol=lf
 supabase/migrations/20260905020200_refuse_stale_commission_payment_recipient.sql text eol=lf
+supabase/migrations/20260905020300_enforce_commission_payment_business_date.sql text eol=lf
 scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf
 scripts/smoke/smoke-commission-report-snapshot-contract.sql text eol=lf
 scripts/smoke/prove-commission-history-label-repair.mjs text eol=lf

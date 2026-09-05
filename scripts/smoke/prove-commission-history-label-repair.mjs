@@ -19,9 +19,10 @@ const SNAPSHOT = path.join(ROOT, 'supabase', 'migrations', '20260903230000_commi
 const REPLAY_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020000_commission_history_report_replay_guard.sql');
 const REPAIR = path.join(ROOT, 'supabase', 'migrations', '20260905020100_repair_commission_history_label_snapshots.sql');
 const RECIPIENT_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020200_refuse_stale_commission_payment_recipient.sql');
+const BUSINESS_DATE_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260905020300_enforce_commission_payment_business_date.sql');
 const GENERATED = path.join(HERE, `.commission-history-label-repair-${process.pid}.mjs`);
 
-for (const required of [SNAPSHOT, REPLAY_GUARD, REPAIR, RECIPIENT_GUARD]) {
+for (const required of [SNAPSHOT, REPLAY_GUARD, REPAIR, RECIPIENT_GUARD, BUSINESS_DATE_GUARD]) {
   assert.ok(readFileSync(required, 'utf8'), `missing migration: ${required}`);
 }
 
@@ -32,6 +33,7 @@ const continuation = `
   const replayGuardSource = readFileSync(${JSON.stringify(REPLAY_GUARD)}, 'utf8');
   const repairSource = readFileSync(${JSON.stringify(REPAIR)}, 'utf8');
   const recipientGuardSource = readFileSync(${JSON.stringify(RECIPIENT_GUARD)}, 'utf8');
+  const businessDateGuardSource = readFileSync(${JSON.stringify(BUSINESS_DATE_GUARD)}, 'utf8');
   applySql(snapshotSource);
   applySql(replayGuardSource);
   // The base prover intentionally leaves a post/void scenario committed to
@@ -395,6 +397,62 @@ COMMIT;\`, 'COMMISSION_SETTLEMENT_RECIPIENT_GUARD_DRIFT:', 'payment_item_whole_c
 
   applySql(recipientGuardSource);
 
+  psql(\`INSERT INTO public.commission_payments (
+  payment_number, recipient_id, total_amount, status, payment_date
+) VALUES (
+  'BUSINESS-DATE-PREFLIGHT-FUTURE', '\${cutoverPreimage.admin}', 0, 'unposted',
+  timezone('America/Chicago', statement_timestamp())::date + 1
+);\`);
+  expectRecipientGuardFailure(businessDateGuardSource,
+    'COMMISSION_PAYMENT_DATE_AFTER_BUSINESS_TODAY:', 'business_date_existing_future_row');
+  psql("DELETE FROM public.commission_payments WHERE payment_number = 'BUSINESS-DATE-PREFLIGHT-FUTURE';");
+
+  psql(\`CREATE FUNCTION public.enforce_commission_payment_business_date()
+RETURNS trigger
+LANGUAGE plpgsql
+AS 'BEGIN RETURN NEW; END';
+CREATE TRIGGER trg_commission_payment_business_date_guard
+  BEFORE INSERT ON public.commission_payments
+  FOR EACH ROW
+  EXECUTE FUNCTION public.enforce_commission_payment_business_date();\`);
+  expectRecipientGuardFailure(businessDateGuardSource,
+    'COMMISSION_PAYMENT_BUSINESS_DATE_PREFLIGHT: existing function or trigger drift',
+    'business_date_existing_object_drift');
+  psql(\`DROP TRIGGER trg_commission_payment_business_date_guard ON public.commission_payments;
+DROP FUNCTION public.enforce_commission_payment_business_date();\`);
+
+  applySql(businessDateGuardSource);
+  const futurePaymentDate = applySql(\`BEGIN;
+UPDATE public.commission_payments
+   SET payment_date = timezone('America/Chicago', statement_timestamp())::date + 1
+ WHERE id = (SELECT id FROM public.commission_payments ORDER BY created_at, id LIMIT 1);
+ROLLBACK;\`, { allowFailure: true });
+  const futurePaymentOutput = (futurePaymentDate.stdout || '') + (futurePaymentDate.stderr || '');
+  assert.notEqual(futurePaymentDate.status, 0, 'future Chicago payment date unexpectedly succeeded');
+  assert.match(futurePaymentOutput, /COMMISSION_PAYMENT_DATE_AFTER_BUSINESS_TODAY/,
+    'future Chicago payment date failed for the wrong reason:\\n' + futurePaymentOutput);
+
+  psql(\`BEGIN;
+UPDATE public.commission_payments
+   SET payment_date = timezone('America/Chicago', statement_timestamp())::date
+ WHERE id = (SELECT id FROM public.commission_payments ORDER BY created_at, id LIMIT 1);
+ROLLBACK;\`);
+
+  const driftedBusinessDateGuard = businessDateGuardSource.replace(
+    "timezone('America/Chicago', statement_timestamp())::date;",
+    "timezone('UTC', statement_timestamp())::date;"
+  );
+  assert.notEqual(driftedBusinessDateGuard, businessDateGuardSource,
+    'business-date timezone mutation did not change the migration');
+  expectRecipientGuardFailure(driftedBusinessDateGuard,
+    'COMMISSION_PAYMENT_BUSINESS_DATE_POSTFLIGHT:', 'business_date_timezone_drift');
+  assert.equal(scalar(\`
+    SELECT has_function_privilege('anon', 'public.enforce_commission_payment_business_date()', 'EXECUTE')::text
+  \`), 'false', 'anon can execute the business-date trigger function');
+  assert.equal(scalar(\`
+    SELECT has_function_privilege('authenticated', 'public.enforce_commission_payment_business_date()', 'EXECUTE')::text
+  \`), 'false', 'authenticated can execute the business-date trigger function');
+
   const reassignedRecipient = 'c011ec70-0000-4000-8000-000000000140';
   const reassignedCommission = 'c011ec70-0000-4000-8000-000000000141';
   psql(\`BEGIN;
@@ -653,6 +711,7 @@ COMMIT;\`);
 
   console.log('COMMISSION_HISTORY_LABEL_REPAIR_PROOF_PASS postgres=17 append_only=true opening_labels=3 future_job_label=true mutation_guards=17');
   console.log('COMMISSION_SETTLEMENT_RECIPIENT_GUARD_PROOF_PASS stale_rejected=true current_posted=true exact_cents=true void_preserved=true mutation_guards=20');
+  console.log('COMMISSION_PAYMENT_BUSINESS_DATE_GUARD_PROOF_PASS chicago_today=true future_rejected=true catalog_pinned=true mutation_guards=3');
 `;
 
 try {

@@ -577,7 +577,7 @@ export default function Reports() {
       return;
     }
     setMarkingPaid(true);
-    const today = localToday();
+    const today = todayInBusinessTz();
     // Hoisted out of the try: one click makes one call PER RECIPIENT, so a
     // refusal on the third recipient leaves the first two genuinely paid. The
     // catch below has to be able to say so instead of claiming nothing happened.
