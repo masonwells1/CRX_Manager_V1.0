@@ -277,6 +277,38 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-09-05 — the one-use live-SQL-guard maintenance producer has waited 24 days unapplied; retire it or run its activation lane (Mason's decision)
+
+**What it is.** `scripts/apply-live-testdata-maintenance-20260812.mjs` is the reviewed, blob-pinned
+tool built on 2026-08-12 to regenerate the live SQL classifier in `.claude/hooks/live-testdata-lib.mjs`
+from three reviewed snippets under `docs/maintenance/`, without reopening a generic write path to a
+guard file. It runs only as one of four exact commands. Its write mode has never run: the target
+still matches the producer's pinned input blob (`419f4e8f…`, checked 2026-09-05), so the apply is
+still valid, and the 2026-08-12 handoff (`docs/handoffs/2026-08-12-live-sql-guard-maintenance-build-to-review.md`)
+recorded activation as BLOCKED until the `DO`-based rollback smoke chains had a safe execution
+route, because the repaired classifier correctly rejects raw `DO` and the smoke workflow sends those
+chains through the classified `execute_sql` path.
+
+**What has changed since.** The producer's outer shell guard on the Claude side — the
+opaque-invocation classifier that refused 849 ordinary commands in a fortnight — was replaced on
+2026-09-05 by a by-name rule (`docs/changelog.d/2026-09-05-maintenance-producer-guard-by-name.md`),
+so retiring the producer no longer buys any token relief; it is cleanup. Separately, the classifier
+defects catalogued on 2026-09-02 in `docs/reference/agent-guardrails.md` (the five read-only
+spellings refused as `identifier(`) are NOT addressed by the 2026-08-12 snippets — they contain no
+handling for `AS a(argname)`, a `WITH RECURSIVE` column list, or `AS MATERIALIZED (` — so applying
+the maintenance would not fix the false positives currently being hit.
+
+**The decision, with one recommendation.** Retire it unapplied: run `node
+scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12
+--retire-producer` on a branch (it needs a clean worktree and a fresh exact-head Sol proof, which the
+ordinary landing flow mints), commit the deletion, and land it through the normal PR pipeline. A
+classifier repair that covers the 2026-09-02 family is then a new, ordinary reviewed change against
+the guard file, not a revival of this producer. The alternative — running the activation lane
+(apply, keep the red-to-green regressions, then retire, after building the safe `DO` smoke route the
+handoff requires) — spends a review cycle on a repair that no longer targets the live defect.
+Either way the `.codex/hooks/production-action-guard.mjs` matcher and `codex-push-lib.mjs` anchors
+the producer pins stay as they are; retirement only deletes the producer file.
+
 ## OPEN 2026-09-04 — the migration drift reviewer's overload check can only see AUTHORED history, and its sanctioned runner can never show it the live catalog
 
 **Deferred deliberately by Mason on 2026-09-04**, split out of PR #594 so the uncontested

@@ -16,7 +16,8 @@ import {
   checkCommandDeep,
   checkMigrationModify,
   extractNpmRunNames,
-  maintenanceProducerCommandMentioned,
+  maintenanceProducerNamed,
+  computedJavaScriptScriptArgument,
   resolveNpmScriptChain,
   readPackageScripts,
 } from "./bash-safety-lib.mjs";
@@ -55,8 +56,14 @@ ok(!checkDangerousCommand("git push origin feature/x"), "ordinary feature push a
 ok(!checkDangerousCommand(""), "empty command allowed");
 ok(!checkDangerousCommand(null), "null command allowed (no throw)");
 
-// ── maintenance producer: current outer shell guard closes the pre-bootstrap
-//    TOCTOU gap before the generated production-action guard is installed. ──
+// ── maintenance producer: denied BY NAME, and by a computed JavaScript script
+//    argument (2026-09-05). The opaque-invocation classifier that used to sit here
+//    fired 849 times in the 2026-08-21..09-04 fortnight, 59 of them on the
+//    producer; the 2026-08-31 decision (DECISION_LOG) recorded it as ineffective
+//    and named its removal the next harness task. The corpus below is the SAME
+//    corpus the classifier was tested against, re-sorted by what the by-name rule
+//    does with each entry, so every flip from deny to allow is explicit and
+//    pinned. ──
 const decodedPowerShellProcessLaunch = "Set-Item Env:NODE_OPTIONS ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1yZXF1aXJlPS4vcHJlbG9hZC5janM='))); Set-Variable E ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('bm9kZQ=='))); Set-Variable A @(([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('c2NyaXB0cy9hcHBseS1saXZlLXRlc3RkYXRhLW1haW50ZW5hbmNlLTIwMjYwODEyLm1qcw=='))),([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1hcHByb3ZlZC1ieS1tYXNvbj0yMDI2LTA4LTEy')))); Start-Process (Get-Variable E -ValueOnly) -ArgumentList (Get-Variable A -ValueOnly) -Wait -NoNewWindow";
 for (const command of [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
@@ -64,10 +71,14 @@ for (const command of [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
 ]) {
-  eq(checkMaintenanceProducerInvocation(command), null, `exact producer invocation allowed by shell guard: ${command}`);
+  ok(maintenanceProducerNamed(command), `the exact command names the producer: ${command}`);
+  eq(checkMaintenanceProducerInvocation(command), null, `…and is exempt as one of the four reviewed invocations: ${command}`);
 }
+// (a) The producer or its approval token in any spelling that survives
+//     quote/slash/whitespace/escape stripping — chained, wrapped, re-spelled,
+//     reordered, with an unknown argument, behind cmd/env, or with the name
+//     assembled by cmd `set` — stays denied.
 for (const command of [
-  decodedPowerShellProcessLaunch,
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify; Write-Output chained",
   "[IO.File]::WriteAllText('scripts/apply-live-testdata-maintenance-20260812.mjs','owned'); node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify --unknown",
@@ -82,13 +93,90 @@ for (const command of [
   "node scripts/apply-l[i]ve-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
   "node scripts/appl?-live-testdata-maintenance-2026081?.mjs --approved-by-mason=2026-08-12",
   "node scripts/appl?-live-testdata-maintenance-2026081?.mjs --approved-by-mason=2026-08-$(printf 12)",
-  "node scripts/appl?-live-testdata-maintenance-2026081?.mjs --approved-by-$(printf mason)=2026-08-12",
   "node scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-mason=2026-08-12",
   "node --no-warnings scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
   "node --require fs scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
+  'cmd /v:on /c "set a=--requ&set b=ire&set c=scripts/apply-live-testdata-maintenance-20260812.mjs&node !a!!b! ./preload.cjs !c! --approved-by-mason=2026-08-12"',
+]) {
+  ok(maintenanceProducerNamed(command), `producer named: ${command}`);
+  ok(checkDangerousCommand(command), `named producer invocation denied by shell guard: ${command}`);
+}
+// (b) A JavaScript runtime (node/nodejs/bun/deno) whose SCRIPT argument is
+//     computed — a variable, a substitution, a glob, a brace expansion, a cmd
+//     `!var!`, a PowerShell sub-expression — stays denied whatever launcher,
+//     shell, quote, or word-splitting escape sits around the runtime's name, as
+//     long as the segment's head word is something that executes it.
+for (const command of [
+  "node scripts/appl?-live-testdata-maintenance-2026081?.mjs --approved-by-$(printf mason)=2026-08-12",
   "node </dev/null --no-warnings scripts/$(printf YXBwbHktbGl2ZS10ZXN0ZGF0YS1tYWludGVuYW5jZS0yMDI2MDgxMi5tanM= | base64 -d) --approved-by-$(printf bWFzb24= | base64 -d)=2026-08-12",
   "node --no-warnings \\\nscripts/$(printf YXBwbHktbGl2ZS10ZXN0ZGF0YS1tYWludGVuYW5jZS0yMDI2MDgxMi5tanM= | base64 -d) --approved-by-$(printf bWFzb24= | base64 -d)=2026-08-12",
   "node --require ./preload.cjs scripts/apply-l{i..i}ve-testdata-maintenance-20260{8..8}12.mjs --approved-by-ma{s..s}on=2026-08-12",
+  'F=$(decode); nodejs --require ./preload.cjs "$F" "$P" "$S" "$T"',
+  'F=$(decode); bun --preload ./preload.mjs "$F" "$P" "$S" "$T"',
+  'F=$(decode); deno run "$F" "$P" "$S" "$T"',
+  "node (\"--req\"+\"uire\") ./preload.cjs (\"scripts/apply-\"+\"live-testdata-maintenance-20260812.mjs\") (\"--approved-by-\"+\"mason=2026-08-12\")",
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command -p node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec -c node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); env -i node --no-warnings "$F" "$P" "$S" "$T"',
+  'set F=encoded& set P=encoded& set S=encoded& set T=encoded& cmd /v:on /c "node --no-warnings !F! !P! !S! !T!"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec -ca reviewed-name node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); env --default-signal node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command -p -- node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec -a "reviewed name" node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); env -C "C:\\temp dir" node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nohup node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nice node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); timeout 5 node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); setsid node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); stdbuf -o0 node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); (node --no-warnings "$F" "$P" "$S" "$T")',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); "node" --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nohup "node" --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); Select-String -Pattern\n"node" --no-warnings "$F" "$P" "$S" "$T"',
+  'set F=encoded& set P=encoded& set S=encoded& set T=encoded& cmd /v:on /c"node --no-warnings !F! !P! !S! !T!"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); Select-String -Pattern ^\n"node" --no-warnings "$F" "$P" "$S" "$T"',
+  'set F=encoded& set P=encoded& set S=encoded& set T=encoded& cmd /v:on /d/s/c"node --no-warnings !F! !P! !S! !T!"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); $\'node\' --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); n^ode --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); "n`ode" --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); bash -c \'"node" --no-warnings "$F" "$P" "$S" "$T"\'',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); pwsh -Command \'"node" --no-warnings "$F" "$P" "$S" "$T"\'',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); bash -c \'bash -c "node --no-warnings $F $P $S $T"\'',
+  'F=$(decode); bash -c \'echo safe\'; bash -c \'bash -c "node $F"\'',
+  'F=$(decode); pwsh -Com \'"node" $F\'',
+  'F=$(decode); pwsh -CommandWithArgs \'"node" $F\'',
+  'F=$(decode); pwsh -cwa \'"node" $F\'',
+  'F=$(decode); pwsh /Com \'"node" $F\'',
+  'F=$(decode); pwsh /CommandWithArgs \'"node" $F\'',
+  'F=$(decode); pwsh /cwa \'"node" $F\'',
+  'F=$(decode); pwsh /Com:\'"node" $F\'',
+  'F=$(decode); "pwsh" /Com \'"node" $F\'',
+  'F=$(decode); cmd /d /c \'@node "$F"\'',
+  'F=$(decode); pwsh --Command \'"node" $F\'',
+  'F=$(decode); pwsh --CommandWithArgs \'"node" $F\'',
+]) {
+  ok(computedJavaScriptScriptArgument(command), `computed script argument: ${command}`);
+  ok(checkDangerousCommand(command), `computed-script launch denied by shell guard: ${command}`);
+}
+// (c) NODE_OPTIONS mutation through PowerShell is its own ordered check now (it
+//     used to ride inside the classifier); the 2026-08-12 decoded launch still
+//     denies, for that reason and no other.
+ok(/NODE_OPTIONS/.test(checkDangerousCommand(decodedPowerShellProcessLaunch) || ""), "decoded PowerShell launch is denied by the NODE_OPTIONS rule");
+ok(!maintenanceProducerNamed(decodedPowerShellProcessLaunch) && !computedJavaScriptScriptArgument(decodedPowerShellProcessLaunch), "…and by nothing else: its producer name and arguments are base64, invisible to a by-name rule");
+// (d) NOW ALLOWED — every corpus entry the classifier refused only because its
+//     executable or its code could not be read from the text. None names the
+//     producer and none launches a JavaScript runtime on a computed script. Two of
+//     them ARE producer invocations with the name split or held in variables
+//     (`& ('no','de' -join '') …`, `& $EXE $OPTION $MODULE $SCRIPT $APPROVAL`):
+//     allowed on purpose. The producer refuses any argv but its exact reviewed one,
+//     a body that differs from its committed HEAD blob, and any write without a
+//     fresh exact-head Sol proof; and the same run was always reachable through
+//     `node runner.mjs`, which the classifier never saw. The generated Codex
+//     production guard keeps the full classifier for the session that holds
+//     production credentials.
+for (const command of [
   'python -c "import base64; exec(base64.b64decode(PAYLOAD))"',
   "printf %s ENCODED | base64 -d | sh",
   "printf %s ENCODED | base64 -d | xargs",
@@ -102,59 +190,16 @@ for (const command of [
   "Start-ThreadJob -ScriptBlock ([ScriptBlock]::Create('encoded'))",
   "Start-RSJob -ScriptBlock ([ScriptBlock]::Create('encoded'))",
   "[ScriptBlock]::Create('encoded').Invoke()",
-  'F=$(decode); nodejs --require ./preload.cjs "$F" "$P" "$S" "$T"',
-  'F=$(decode); bun --preload ./preload.mjs "$F" "$P" "$S" "$T"',
-  'F=$(decode); deno run "$F" "$P" "$S" "$T"',
   'F=$(decode); ./reviewed-runtime --require ./preload.cjs "$F" "$P" "$S" "$T"',
-  "node (\"--req\"+\"uire\") ./preload.cjs (\"scripts/apply-\"+\"live-testdata-maintenance-20260812.mjs\") (\"--approved-by-\"+\"mason=2026-08-12\")",
-  'cmd /v:on /c "set a=--requ&set b=ire&set c=scripts/apply-live-testdata-maintenance-20260812.mjs&node !a!!b! ./preload.cjs !c! --approved-by-mason=2026-08-12"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command -p node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec -c node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); env -i node --no-warnings "$F" "$P" "$S" "$T"',
-  'set F=encoded& set P=encoded& set S=encoded& set T=encoded& cmd /v:on /c "node --no-warnings !F! !P! !S! !T!"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec -ca reviewed-name node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); env --default-signal node --no-warnings "$F" "$P" "$S" "$T"',
   'PACKED=$(decode); env -S "$PACKED"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command -p -- node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec -a "reviewed name" node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); env -C "C:\\temp dir" node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nohup node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nice node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); timeout 5 node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); setsid node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); stdbuf -o0 node --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); (node --no-warnings "$F" "$P" "$S" "$T")',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); "node" --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nohup "node" --no-warnings "$F" "$P" "$S" "$T"',
   'PACKED=$(decode); env -S"$PACKED"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); Select-String -Pattern\n"node" --no-warnings "$F" "$P" "$S" "$T"',
-  'set F=encoded& set P=encoded& set S=encoded& set T=encoded& cmd /v:on /c"node --no-warnings !F! !P! !S! !T!"',
   'PACKED=$(decode); env -a reviewed-name -S"$PACKED"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); Select-String -Pattern ^\n"node" --no-warnings "$F" "$P" "$S" "$T"',
-  'set F=encoded& set P=encoded& set S=encoded& set T=encoded& cmd /v:on /d/s/c"node --no-warnings !F! !P! !S! !T!"',
   'PACKED=$(decode); env -vS"$PACKED"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); $\'node\' --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); n^ode --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); "n`ode" --no-warnings "$F" "$P" "$S" "$T"',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); bash -c \'"node" --no-warnings "$F" "$P" "$S" "$T"\'',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); pwsh -Command \'"node" --no-warnings "$F" "$P" "$S" "$T"\'',
-  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); bash -c \'bash -c "node --no-warnings $F $P $S $T"\'',
-  'F=$(decode); bash -c \'echo safe\'; bash -c \'bash -c "node $F"\'',
-  'F=$(decode); pwsh -Com \'"node" $F\'',
-  'F=$(decode); pwsh -CommandWithArgs \'"node" $F\'',
-  'F=$(decode); pwsh -cwa \'"node" $F\'',
   'pwsh -EncodedCommand ZW5jb2RlZA==',
   'ENC=$(decode); pwsh -ec "$ENC"',
-  'F=$(decode); pwsh /Com \'"node" $F\'',
-  'F=$(decode); pwsh /CommandWithArgs \'"node" $F\'',
-  'F=$(decode); pwsh /cwa \'"node" $F\'',
-  'F=$(decode); pwsh /Com:\'"node" $F\'',
   'pwsh /EncodedCommand ZW5jb2RlZA==',
   'pwsh /EncodedCommand:ZW5jb2RlZA==',
   'ENC=$(decode); pwsh /ec "$ENC"',
-  'F=$(decode); "pwsh" /Com \'"node" $F\'',
   '"pwsh" /EncodedCommand ZW5jb2RlZA==',
   'pwsh "$env:OPT" "$env:PAYLOAD"',
   'pwsh @args',
@@ -170,7 +215,6 @@ for (const command of [
   "cmd /d /c '@pwsh --" + "Encoded" + "Command ZW5jb2RlZA=='",
   "cmd /d /c 'call pwsh --" + "Encoded" + "Command ZW5jb2RlZA=='",
   "cmd /d /c 'if 1==1 pwsh --" + "Encoded" + "Command ZW5jb2RlZA=='",
-  'F=$(decode); cmd /d /c \'@node "$F"\'',
   "command command command command command command command command command pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
   "env -vu FOO pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
   "timeout -vk 1s 5s pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
@@ -183,8 +227,6 @@ for (const command of [
   'pwsh -En\\codedCommand ZW5jb2RlZA==',
   'cmd /c pwsh -En^codedCommand ZW5jb2RlZA==',
   'pwsh --EncodedCommand ZW5jb2RlZA==',
-  'F=$(decode); pwsh --Command \'"node" $F\'',
-  'F=$(decode); pwsh --CommandWithArgs \'"node" $F\'',
   'bash -c \'pwsh --EncodedCommand ZW5jb2RlZA==\'',
   'pwsh \\/EncodedCommand ZW5jb2RlZA==',
   'MID=w env -S \'p${MID}sh /EncodedCommand ZW5jb2RlZA==\'',
@@ -200,73 +242,84 @@ for (const command of [
   'cmd /d /k pwsh --EncodedCommand ZW5jb2RlZA==',
   'cmd /d/k"pwsh --EncodedCommand ZW5jb2RlZA=="',
 ]) {
-  ok(maintenanceProducerCommandMentioned(command), `producer spelling recognized by shell guard: ${command}`);
-  ok(checkDangerousCommand(command), `non-literal producer invocation denied by shell guard: ${command}`);
+  eq(checkDangerousCommand(command), null, `nameless command with no computed JavaScript script is no longer the producer guard's business: ${command}`);
+}
+// (e) The ordinary shapes that made up most of the 849 refusals, pinned as allowed…
+for (const command of [
+  'node -e "console.log(process.versions.node)"',
+  "node -v",
+  'node -e "console.log(`x ${process.env.HOME}`)"',
+  "node -pe 'process.arch'",
+  "node - < script.mjs",
+  "node --enable-source-maps scripts/x.mjs",
+  "node scripts/claude-usage-report.mjs --days $(printf 14)",
+  'node scripts/x.mjs "$SINCE"',
+  "node scripts/x.mjs; node -e 'x'",
+  "bash -c 'ls -la'",
+  "printf '%s\\n' a b | xargs -n1 echo",
+  "[ -f package.json ] && echo present",
+  "python3 -c 'print(1)'",
+  "cat <<'EOF'\nhello\nEOF",
+  "$HOME/.local/bin/tool --version",
+  "Get-ChildItem @('a','b')",
+  "& git status",
+  "pwsh -File script.ps1 /EncodedCommand",
+]) {
+  eq(checkDangerousCommand(command), null, `ordinary command stays allowed: ${command}`);
+}
+// (f) …and the computed-script shapes one token away from them, pinned as denied.
+for (const command of [
+  'node "$F"',
+  "node scripts/$(printf x).mjs",
+  "node scripts/appl?.mjs",
+  "node --no-warnings \\\n\"$F\"",
+  'F=x; n^ode "$F"',
+  'F=x; cmd /d /c \'@node "$F"\'',
+  'deno run --allow-read "$F"',
+  "bun run $SCRIPT",
+  'node -r "$P" scripts/x.mjs',
+  "node scripts/%SCRIPT%.mjs",
+  "node (Get-Item scripts/x.mjs).FullName",
+]) {
+  ok(computedJavaScriptScriptArgument(command), `computed script argument recognised: ${command}`);
+  ok(checkDangerousCommand(command), `computed-script launch denied: ${command}`);
 }
 const focusedProducerHarness = "node scripts/apply-live-testdata-maintenance-20260812.test.mjs";
-ok(!maintenanceProducerCommandMentioned(focusedProducerHarness), "focused producer test harness is not classified as the protected producer");
+ok(!maintenanceProducerNamed(focusedProducerHarness), "focused producer test harness is not the producer's name");
 eq(checkMaintenanceProducerInvocation(focusedProducerHarness), null, "focused producer test harness stays allowed by the shell guard");
 ok(!checkDangerousCommand(focusedProducerHarness), "focused producer test harness stays runnable");
-const nodeMentionAsData = "Select-String -Pattern 'node' | ForEach-Object { $_ }";
-ok(!maintenanceProducerCommandMentioned(nodeMentionAsData), "Node mentioned as text is not classified as an invocation");
-eq(checkMaintenanceProducerInvocation(nodeMentionAsData), null, "Node text search stays outside the producer gate");
-ok(!checkDangerousCommand(nodeMentionAsData), "ordinary PowerShell Node text search stays allowed");
-ok(!checkDangerousCommand("echo $PATH"), "ordinary environment-variable display stays allowed");
-ok(!checkDangerousCommand("Get-ChildItem *.mjs"), "ordinary non-Node file glob stays allowed");
-const wrappedNodeMentionAsData = 'Write-Output \'command node "$F"\'';
-ok(!maintenanceProducerCommandMentioned(wrappedNodeMentionAsData), "wrapped Node spelling used as quoted data is not classified as an invocation");
-eq(checkMaintenanceProducerInvocation(wrappedNodeMentionAsData), null, "wrapped Node quoted data stays outside the producer gate");
-ok(!checkDangerousCommand(wrappedNodeMentionAsData), "ordinary wrapped Node quoted data stays allowed");
-const envSplitStringAsData = "env MODE=-S powershell -Command 'Write-Output $env:MODE'";
-ok(!maintenanceProducerCommandMentioned(envSplitStringAsData), "env assignment value named -S is not parsed as a split-string option");
-eq(checkMaintenanceProducerInvocation(envSplitStringAsData), null, "env assignment value stays outside the producer gate");
-ok(!checkDangerousCommand(envSplitStringAsData), "ordinary env assignment value stays allowed");
-const envPostCommandSplitStringData = "env -- powershell -Command 'Write-Output -S $env:MODE'";
-ok(!maintenanceProducerCommandMentioned(envPostCommandSplitStringData), "env scanner stops before child-command -S data");
-eq(checkMaintenanceProducerInvocation(envPostCommandSplitStringData), null, "child-command -S data stays outside the producer gate");
-ok(!checkDangerousCommand(envPostCommandSplitStringData), "ordinary child-command -S data stays allowed");
-const powershellOptionData = "pwsh -ExecutionPolicy Bypass 'Write-Output node $value'";
-ok(!maintenanceProducerCommandMentioned(powershellOptionData), "PowerShell non-command options do not reinterpret later quoted data");
-eq(checkMaintenanceProducerInvocation(powershellOptionData), null, "PowerShell option data stays outside the producer gate");
-ok(!checkDangerousCommand(powershellOptionData), "ordinary PowerShell option data stays allowed");
-const encodedPowerShellAsData = "rg -n 'pwsh /EncodedCommand' docs";
-ok(!maintenanceProducerCommandMentioned(encodedPowerShellAsData), "PowerShell encoded-command spelling used as quoted search data is not classified as an invocation");
-eq(checkMaintenanceProducerInvocation(encodedPowerShellAsData), null, "encoded-command quoted data stays outside the producer gate");
-ok(!checkDangerousCommand(encodedPowerShellAsData), "ordinary encoded-command text search stays allowed");
-const encodedPowerShellAsPlainData = "Write-Output pwsh /EncodedCommand";
-ok(!maintenanceProducerCommandMentioned(encodedPowerShellAsPlainData), "PowerShell encoded-command spelling after a non-wrapper command is not classified as an invocation");
-eq(checkMaintenanceProducerInvocation(encodedPowerShellAsPlainData), null, "encoded-command plain data stays outside the producer gate");
-ok(!checkDangerousCommand(encodedPowerShellAsPlainData), "ordinary encoded-command plain output stays allowed");
-const encodedPowerShellAsScriptArgument = "pwsh -File script.ps1 /EncodedCommand";
-ok(maintenanceProducerCommandMentioned(encodedPowerShellAsScriptArgument), "PowerShell script-file launch is classified as opaque");
-ok(checkMaintenanceProducerInvocation(encodedPowerShellAsScriptArgument), "PowerShell script-file launch enters the producer gate");
-ok(checkDangerousCommand(encodedPowerShellAsScriptArgument), "PowerShell script-file launch is denied while the producer exists");
-for (const lookupCommand of ["command -v pwsh /EncodedCommand", "command -V pwsh /EncodedCommand"]) {
-  ok(!maintenanceProducerCommandMentioned(lookupCommand), `PowerShell name lookup is not classified as an invocation: ${lookupCommand}`);
-  eq(checkMaintenanceProducerInvocation(lookupCommand), null, `PowerShell lookup stays outside the producer gate: ${lookupCommand}`);
-  ok(!checkDangerousCommand(lookupCommand), `ordinary PowerShell lookup stays allowed: ${lookupCommand}`);
+// Quoted data that merely MENTIONS a runtime, a shell, or an encoded-command
+// spelling was never an invocation; it stays outside the producer gate.
+for (const dataCommand of [
+  "Select-String -Pattern 'node' | ForEach-Object { $_ }",
+  "echo $PATH",
+  "Get-ChildItem *.mjs",
+  'Write-Output \'command node "$F"\'',
+  "env MODE=-S powershell -Command 'Write-Output $env:MODE'",
+  "env -- powershell -Command 'Write-Output -S $env:MODE'",
+  "rg -n 'pwsh /EncodedCommand' docs",
+  'rg -n \'node "$F"\' docs',
+  'git commit -m "run node $SCRIPT later"',
+  'echo node "$F"',
+  "Write-Output pwsh /EncodedCommand",
+  "command -v pwsh /EncodedCommand",
+  "command -V pwsh /EncodedCommand",
+  "Write-Output bash -c 'pwsh /EncodedCommand text'",
+  "rg -n 'python -c' docs",
+  "rg -n 'base64 -d | sh' docs",
+  "env --help pwsh /EncodedCommand",
+  "timeout --help pwsh /EncodedCommand",
+  "timeout -s TERM --help pwsh /" + "Encoded" + "Command",
+]) {
+  eq(checkMaintenanceProducerInvocation(dataCommand), null, `quoted data stays outside the producer gate: ${dataCommand}`);
+  ok(!checkDangerousCommand(dataCommand), `quoted data stays allowed: ${dataCommand}`);
 }
-const nestedShellAsData = "Write-Output bash -c 'pwsh /EncodedCommand text'";
-ok(!maintenanceProducerCommandMentioned(nestedShellAsData), "nested shell spelling after a non-wrapper command is not classified as an invocation");
-eq(checkMaintenanceProducerInvocation(nestedShellAsData), null, "nested shell data stays outside the producer gate");
-ok(!checkDangerousCommand(nestedShellAsData), "ordinary nested shell text output stays allowed");
-const inlineInterpreterAsData = "rg -n 'python -c' docs";
-ok(!maintenanceProducerCommandMentioned(inlineInterpreterAsData), "inline interpreter spelling used as quoted search data is not classified as an invocation");
-eq(checkMaintenanceProducerInvocation(inlineInterpreterAsData), null, "inline interpreter search data stays outside the producer gate");
-ok(!checkDangerousCommand(inlineInterpreterAsData), "ordinary inline interpreter text search stays allowed");
-const decoderToShellAsData = "rg -n 'base64 -d | sh' docs";
-ok(!maintenanceProducerCommandMentioned(decoderToShellAsData), "decoder-to-shell spelling used as quoted search data is not classified as an invocation");
-eq(checkMaintenanceProducerInvocation(decoderToShellAsData), null, "decoder-to-shell search data stays outside the producer gate");
-ok(!checkDangerousCommand(decoderToShellAsData), "ordinary decoder-to-shell text search stays allowed");
-for (const terminalWrapperCommand of ["env --help pwsh /EncodedCommand", "timeout --help pwsh /EncodedCommand"]) {
-  ok(!maintenanceProducerCommandMentioned(terminalWrapperCommand), `terminal wrapper mode is not classified as execution: ${terminalWrapperCommand}`);
-  eq(checkMaintenanceProducerInvocation(terminalWrapperCommand), null, `terminal wrapper mode stays outside the producer gate: ${terminalWrapperCommand}`);
-  ok(!checkDangerousCommand(terminalWrapperCommand), `terminal wrapper mode stays allowed: ${terminalWrapperCommand}`);
-}
-const terminalWrapperAfterOption = "timeout -s TERM --help pwsh /" + "Encoded" + "Command";
-ok(!maintenanceProducerCommandMentioned(terminalWrapperAfterOption), "terminal wrapper mode after an option is not classified as execution");
-eq(checkMaintenanceProducerInvocation(terminalWrapperAfterOption), null, "terminal wrapper mode after an option stays outside the producer gate");
-ok(!checkDangerousCommand(terminalWrapperAfterOption), "terminal wrapper mode after an option stays allowed");
+// KNOWN OVER-BLOCK, pinned deliberately. A SHELL head makes the whole segment a
+// command line to this rule, so a computed `node …` inside a quoted argument of
+// `pwsh`/`bash` is refused even when that argument is not a -Command string. The
+// old classifier parsed each shell's option grammar to tell the two apart; that
+// grammar is what never converged under review. The refusal names the fix.
+ok(checkDangerousCommand("pwsh -ExecutionPolicy Bypass 'Write-Output node $value'"), "computed node text inside a shell's quoted argument is refused (recorded over-block)");
 ok(checkDangerousCommand("node --require ./preload.cjs scripts/ordinary-check.mjs"), "Node require preload is denied");
 ok(checkDangerousCommand("NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("FOO=1 NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "prefixed NODE_OPTIONS preload is denied");
@@ -275,6 +328,7 @@ ok(checkDangerousCommand("$env:NODE_OPTIONS = $PRELOAD"), "PowerShell env assign
 ok(checkDangerousCommand("[Environment]::SetEnvironmentVariable('NODE_OPTIONS', $PRELOAD)"), ".NET NODE_OPTIONS mutation is denied");
 ok(!checkDangerousCommand("rg -n 'NODE_OPTIONS=' docs"), "NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'Set-Item Env:NODE_OPTIONS' docs"), "PowerShell NODE_OPTIONS mutation spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand("Write-Output '$env:NODE_OPTIONS = x'"), "NODE_OPTIONS assignment spelling inside quoted output stays allowed");
 
 // ── net-new: shell-redirect .env write (2026-07-13, shared with mcp-tool-guard) ──
 ok(checkDangerousCommand("echo SECRET=x > .env"), "shell-redirect write to .env blocked");
@@ -313,6 +367,7 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
         safe: "vite build",
         dangerous: "git push --force origin main",
         producer: "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+        "producer:computed": 'node "$PRODUCER" --verify',
         "chain:a": "npm run chain:b",
         "chain:b": "npm run chain:c",
         "chain:c": "rm -rf src",
@@ -339,6 +394,7 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     ok(!checkCommandDeep("npm run safe", tmp), "npm run safe stays allowed");
     ok(checkCommandDeep("npm run dangerous", tmp), "npm run dangerous is caught via its resolved script body");
     ok(checkCommandDeep("npm run producer", tmp), "producer invocation hidden in an npm script is denied");
+    ok(checkCommandDeep("npm run producer:computed", tmp), "computed-script launch hidden in an npm script is denied");
     ok(
       checkCommandDeep("npm run chain:a", tmp),
       "a dangerous command hidden 2 levels deep behind chained npm scripts is caught (FIX 2)"
@@ -387,6 +443,19 @@ r = runHook({
 });
 eq(r.status, 0, "bash-safety.mjs exits 0 after denying a chained producer rewrite");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "current shell guard denies the exact producer TOCTOU reproduction");
+
+// The shapes that used to be refused with a misleading "maintenance producer"
+// message pass the LIVE hook too, not only the library predicate.
+for (const command of [
+  'node -e "console.log(1)"',
+  "bash -c 'ls'",
+  "[ -f package.json ] && echo present",
+  "printf a | xargs echo",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety exits 0 on: ${command}`);
+  ok(!r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs allows the ordinary shape: ${command}`);
+}
 
 for (const command of [
   "git push origin feature/test --force",
