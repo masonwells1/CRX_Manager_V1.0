@@ -1,8 +1,9 @@
 /**
  * PurchaseOrderDetail — route-currency race.
  *
- * READY TO LAND at src/pages/PurchaseOrderDetail.routeRace.test.tsx
- * (blocked only by the hold latch; unverified — has never been run).
+ * Every guard this file covers has been mutation-tested: broken one at a time,
+ * watched failing, restored. The one guard that no longer reddens anything is
+ * named in the changelog entry rather than left looking covered.
  *
  * React Router reuses this component when only the :id param changes, so a
  * query started for PO A can resolve after the operator has already navigated
