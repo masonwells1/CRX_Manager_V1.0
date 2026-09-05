@@ -70,7 +70,15 @@ both positions rather than to a fifth round. The second finding of round 1 — a
 regression — was the stale-base artefact (the candidate predated PR #609) and disappears with the
 rebase.
 
-**Proof.** `node .claude/hooks/bash-safety.test.mjs` (390 assertions, including the live hook on
-the four shapes that used to be refused) and `node .claude/hooks/mcp-tool-guard.test.mjs`. The
+**Round 2 happened as predicted, and the disagreement went to Mason.** The rebased candidate drew
+the same BLOCKER on a nameless launch. Mason accepted the by-name design on 2026-09-05 and pushed
+the branch himself as PR #619; the Claude-side push and merge guards refuse without a CLEAN Sol
+proof, so the owner's terminal is the only path for this change.
+
+The Codex App's three P2 findings on the PR's first commit are fixed in the same PR; see
+`docs/changelog.d/2026-09-05-pr619-shell-guard-redirection-quote-option-fixes.md`.
+
+**Proof.** `node .claude/hooks/bash-safety.test.mjs` (458 assertions, including the live hook on
+the four shapes that used to be refused) and `node .claude/hooks/mcp-tool-guard.test.mjs` (30). The
 producer's own harness and the Codex guard's suite are unchanged and untouched. Exact-SHA Codex
 proof via `scripts/write-codex-push-proof.mjs` recorded in the PR.

@@ -84,22 +84,87 @@ const SEGMENT_HEADS_THAT_EXECUTE = new Set([
   "command", "exec", "env", "nohup", "nice", "ionice", "timeout", "setsid", "stdbuf", "sudo", "doas", "xargs", "parallel", "time",
   "bash", "sh", "dash", "zsh", "ksh", "fish", "pwsh", "powershell", "cmd",
 ]);
-const JS_RUNTIME_TOKEN_RE = /(?:^|[\s;&|(){}"'`@])(?:node|nodejs|bun|deno)(?:\.exe)?["']?(?=\s|$)/i;
+// A redirection glued to the runtime's name (`node</dev/null "$F"`) is still a
+// launch of Node, so `<` and `>` end the name exactly as whitespace does
+// (Codex App P2, PR #619).
+const JS_RUNTIME_TOKEN_RE = /(?:^|[\s;&|(){}"'`@])(?:node|nodejs|bun|deno)(?:\.exe)?["']?(?=[\s<>]|$)/i;
 // Shell expansion, substitution, glob, brace, and PowerShell sub-expression
 // starts — a token carrying one names a file only at run time.
 const COMPUTED_TOKEN_RE = /[$%!`*?\[\]{}(]/;
 const INLINE_CODE_OPTION_RE = /^-(?:-eval|-print|-interactive|[A-Za-z]*[epi][A-Za-z]*)(?:=|$)/;
+// Options whose VALUE is a file Node loads before the script runs. A computed
+// value here is a computed script.
 const VALUE_OPTION_RE = /^(?:-r|--require|--import|--preload|--loader|--experimental-loader|--conditions|-C)$/;
+// A redirection word: `<x`, `>x`, `2>x`, `>&2`, or a bare operator whose target
+// is the next word (`> out`).
+const REDIRECTION_WORD_RE = /^\d*[<>]+/;
+const BARE_REDIRECTION_OPERATOR_RE = /^\d*[<>]+$/;
+function quotedWord(text) {
+  return /^"[^"]*"$|^'[^']*'$/.test(text);
+}
+// Split a command line into the segments a shell would run, honouring quotes:
+// a `;`, `&`, `|`, or newline inside quotes is data, so
+// `rg -n 'foo | node "$F"' docs` is one segment headed by `rg`, and
+// `bash -c 'echo a; node "$F"'` is one segment headed by `bash` (Codex App P2,
+// PR #619). A backslash escapes the next character outside single quotes. An
+// unterminated quote swallows the rest of the line, which is what the shell
+// would refuse to run at all.
+export function splitShellSegments(text) {
+  const segments = [];
+  let current = "";
+  let quote = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      if (char === "\\" && quote === '"' && index + 1 < text.length) {
+        current += char + text[index + 1];
+        index += 1;
+        continue;
+      }
+      if (char === quote) quote = null;
+      current += char;
+      continue;
+    }
+    if (char === "\\" && index + 1 < text.length) {
+      current += char + text[index + 1];
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    // `>&2`, `2>&1`, `<&0`, and `&>file` are redirections; every other `&`
+    // (including both halves of `&&`) ends a segment.
+    const redirectionAmpersand = char === "&"
+      && (text[index - 1] === ">" || text[index - 1] === "<" || text[index + 1] === ">");
+    if ((char === "&" && !redirectionAmpersand) || char === ";" || char === "|" || char === "\r" || char === "\n") {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  segments.push(current);
+  return segments;
+}
 function segmentHead(segment) {
   let rest = segment.replace(/^[\s({@&]+/, "");
-  let assignment;
-  while ((assignment = /^[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S)*\s+/.exec(rest)) !== null) rest = rest.slice(assignment[0].length);
-  const token = (/^\S+/.exec(rest) || [""])[0];
+  let prefix;
+  // Leading assignments (`F=x node …`) and redirections (`</dev/null node …`)
+  // precede the head word without changing it.
+  while ((prefix = /^(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S)*|\d*[<>]+\S*)\s*/.exec(rest)) !== null && prefix[0].length > 0) {
+    const word = prefix[0].trim();
+    rest = rest.slice(prefix[0].length);
+    if (BARE_REDIRECTION_OPERATOR_RE.test(word)) rest = rest.replace(/^\S+\s*/, "");
+  }
+  const token = (/^[^\s<>]+/.exec(rest) || [""])[0];
   return token.replace(/^\$?["']+|["']+$/g, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
 }
 export function computedJavaScriptScriptArgument(command) {
   const view = wordEscapeView(command);
-  for (const segment of view.split(/[;&|\r\n]/)) {
+  for (const segment of splitShellSegments(view)) {
     const head = segmentHead(segment);
     if (!JS_RUNTIME_NAMES.has(head) && !SEGMENT_HEADS_THAT_EXECUTE.has(head)) continue;
     const match = JS_RUNTIME_TOKEN_RE.exec(segment);
@@ -107,16 +172,34 @@ export function computedJavaScriptScriptArgument(command) {
     const bunOrDeno = /bun|deno/i.test(match[0]);
     const tokens = segment.slice(match.index + match[0].length).trim().split(/\s+/).filter(Boolean);
     for (let index = 0; index < tokens.length; index += 1) {
-      const token = tokens[index].replace(/^["']+|["']+$/g, "");
-      if (!token || /^\d*[<>]/.test(token) || token === "--") continue;
+      const raw = tokens[index];
+      const token = raw.replace(/^["']+|["']+$/g, "");
+      if (!token || token === "--") continue;
+      if (BARE_REDIRECTION_OPERATOR_RE.test(token)) {
+        // `node > out "$F"`: the next word is the redirection's target, not the script.
+        index += 1;
+        continue;
+      }
+      if (REDIRECTION_WORD_RE.test(token)) continue;
       if (token === "-" || INLINE_CODE_OPTION_RE.test(token)) break;
       if (token.startsWith("-")) {
-        if (COMPUTED_TOKEN_RE.test(token)) return true;
-        if (VALUE_OPTION_RE.test(token)) {
-          const value = (tokens[index + 1] || "").replace(/^["']+|["']+$/g, "");
-          if (COMPUTED_TOKEN_RE.test(value)) return true;
-          index += 1;
+        const separator = token.indexOf("=");
+        const name = separator === -1 ? token : token.slice(0, separator);
+        const inlineValue = separator === -1 ? "" : raw.replace(/^["']+/, "").slice(separator + 1);
+        // A computed option NAME (`--$OPT`) may be anything at run time.
+        if (COMPUTED_TOKEN_RE.test(name)) return true;
+        if (VALUE_OPTION_RE.test(name)) {
+          const value = separator === -1 ? (tokens[index + 1] || "") : inlineValue;
+          if (COMPUTED_TOKEN_RE.test(value.replace(/^["']+|["']+$/g, ""))) return true;
+          if (separator === -1) index += 1;
+          continue;
         }
+        // Any other option keeps the parser moving toward the script argument
+        // (`node --title="$TITLE" scripts/safe.mjs`; Codex App P2, PR #619) —
+        // but only while its computed value is QUOTED. An unquoted expansion
+        // (`--title=$X`, `--title=%X%`) can word-split into a script argument
+        // the rule never read, so it is still a computed script.
+        if (COMPUTED_TOKEN_RE.test(inlineValue) && !quotedWord(inlineValue) && !quotedWord(raw)) return true;
         continue;
       }
       if (bunOrDeno && /^(?:run|serve|task|x)$/i.test(token)) continue;

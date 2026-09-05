@@ -18,6 +18,7 @@ import {
   extractNpmRunNames,
   maintenanceProducerNamed,
   computedJavaScriptScriptArgument,
+  splitShellSegments,
   resolveNpmScriptChain,
   readPackageScripts,
 } from "./bash-safety-lib.mjs";
@@ -284,6 +285,76 @@ for (const command of [
   ok(computedJavaScriptScriptArgument(command), `computed script argument recognised: ${command}`);
   ok(checkDangerousCommand(command), `computed-script launch denied: ${command}`);
 }
+// (g) Codex App review of PR #619 (three P2 findings on 0d5823915), each pinned
+//     in both directions.
+//     1. A redirection glued to the runtime's name is still a launch: `<`/`>`
+//        end the name like whitespace, a leading redirection does not hide the
+//        head word, and a bare operator's target is not the script.
+for (const command of [
+  'F=x; node</dev/null "$F"',
+  'node</dev/null "$F"',
+  'node>out "$F"',
+  'node > out "$F"',
+  '</dev/null node "$F"',
+  '2>&1 node "$F"',
+  '> out node "$F"',
+  'F=x </dev/null node "$F"',
+]) {
+  ok(computedJavaScriptScriptArgument(command), `redirection does not hide a computed script: ${command}`);
+  ok(checkDangerousCommand(command), `computed-script launch behind a redirection denied: ${command}`);
+}
+//     2. A separator inside quotes is data, not a new segment: a search or a
+//        commit message that quotes `; node "$F"` is not a launch, while a shell
+//        head whose quoted argument contains one still is.
+for (const command of [
+  "rg -n 'foo | node \"$F\"' docs",
+  "rg -n 'foo; node \"$F\"' docs",
+  'git commit -m "later: run node $SCRIPT; then node $F"',
+  "echo 'a & node $F'",
+  'Write-Output "it\'s; node $F"',
+]) {
+  eq(checkMaintenanceProducerInvocation(command), null, `quoted separator does not open a launch segment: ${command}`);
+  ok(!checkDangerousCommand(command), `quoted separator stays allowed: ${command}`);
+}
+for (const command of [
+  "bash -c 'echo a; node \"$F\"'",
+  "bash -c 'echo a | node \"$F\"'",
+  "pwsh -Command 'Write-Output a; node $F'",
+  "echo 'a'; node \"$F\"",
+  "echo \"it's\"; node \"$F\"",
+]) {
+  ok(computedJavaScriptScriptArgument(command), `real separator or shell head still reaches the launch: ${command}`);
+  ok(checkDangerousCommand(command), `computed-script launch after a quoted word denied: ${command}`);
+}
+eq(splitShellSegments("rg -n 'a; b | c' docs; node x").length, 2, "quoted separators do not split; a real one does");
+eq(splitShellSegments('echo "a; \\" b"; node x').length, 2, "an escaped quote inside double quotes does not end the quote");
+eq(splitShellSegments("echo a\\; node x").length, 1, "a backslash-escaped separator does not split");
+eq(splitShellSegments("echo 'unterminated; node x").length, 1, "an unterminated quote swallows the rest of the line");
+//     3. A literal, non-loader option whose computed value is QUOTED keeps the
+//        parser moving toward the (literal) script; an unquoted expansion can
+//        word-split into a script argument, and a computed option NAME or a
+//        loader option keeps its denial.
+for (const command of [
+  'TITLE=worker node --title="$TITLE" scripts/safe.mjs',
+  "node --title='$TITLE' scripts/safe.mjs",
+  'node "--title=$TITLE" scripts/safe.mjs',
+  'node --max-old-space-size="$(nproc)" scripts/safe.mjs',
+]) {
+  ok(!computedJavaScriptScriptArgument(command), `quoted computed value of an ordinary option is not a computed script: ${command}`);
+  eq(checkDangerousCommand(command), null, `ordinary option with a quoted computed value stays allowed: ${command}`);
+}
+for (const command of [
+  "node --title=$TITLE scripts/safe.mjs",
+  "node --title=%TITLE% scripts/safe.mjs",
+  "node --$OPT scripts/safe.mjs",
+  "node -$OPT scripts/safe.mjs",
+  'node --require="$P" scripts/safe.mjs',
+  'node --import="$P" scripts/safe.mjs',
+  "node --loader=$P scripts/safe.mjs",
+]) {
+  ok(computedJavaScriptScriptArgument(command), `computed option name, unquoted value, or loader value is still a computed script: ${command}`);
+  ok(checkDangerousCommand(command), `computed option launch denied: ${command}`);
+}
 const focusedProducerHarness = "node scripts/apply-live-testdata-maintenance-20260812.test.mjs";
 ok(!maintenanceProducerNamed(focusedProducerHarness), "focused producer test harness is not the producer's name");
 eq(checkMaintenanceProducerInvocation(focusedProducerHarness), null, "focused producer test harness stays allowed by the shell guard");
@@ -451,11 +522,17 @@ for (const command of [
   "bash -c 'ls'",
   "[ -f package.json ] && echo present",
   "printf a | xargs echo",
+  "rg -n 'foo | node \"$F\"' docs",
+  'TITLE=worker node --title="$TITLE" scripts/safe.mjs',
 ]) {
   r = runHook({ tool_name: "Bash", tool_input: { command } });
   eq(r.status, 0, `bash-safety exits 0 on: ${command}`);
   ok(!r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs allows the ordinary shape: ${command}`);
 }
+// …and the redirection-glued launch from the same review is refused by the LIVE hook.
+r = runHook({ tool_name: "Bash", tool_input: { command: 'F=x; node</dev/null "$F"' } });
+eq(r.status, 0, "bash-safety exits 0 after denying a redirection-glued computed launch");
+ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies node</dev/null \"$F\"");
 
 for (const command of [
   "git push origin feature/test --force",
