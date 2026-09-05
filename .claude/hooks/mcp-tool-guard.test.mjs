@@ -209,7 +209,7 @@ eq(r.stdout.trim(), "", "read-shaped leaf (search_) on an unregistered UUID pass
 // reinstalled connector must NOT fall through to the classifier.
 r = runHook({ tool_name: ALT_UUID + "delete_project", tool_input: { project_id: "x" } });
 ok(isDeny(r), "unknown mutation (delete_project) on an unregistered UUID is denied");
-ok(r.stdout.includes("has no exact entry for connector UUID"), "denial names the missing exact settings entry");
+ok(r.stdout.includes("exact entry for connector UUID"), "denial names the missing exact settings entry");
 r = runHook({ tool_name: ALT_UUID + "future_write_tool", tool_input: {} });
 ok(isDeny(r), "never-seen leaf (future_write_tool) on an unregistered UUID is denied");
 r = runHook({ tool_name: ALT_UUID + "Create_Event", tool_input: {} });
@@ -282,6 +282,30 @@ r = runHook({ tool_name: "mcp__claude_ai_Supabase__deploy_edge_function", tool_i
 eq(r.stdout.trim(), "", "deploy_edge_function on mcp__claude_ai_Supabase__ (exact ask entry exists) is left to the ask tier");
 r = runHook({ tool_name: "mcp__other_supabase__deploy_edge_function", tool_input: { name: "x" } });
 ok(isDeny(r), "deploy_edge_function on a Supabase-named server with no ask entry is denied");
+// Codex P1 on 6de456ac5: an `allow` entry for a live-action leaf is the bypass itself and
+// must not count as registration; only `ask` or `deny` settles it.
+const ALLOW_UUID = "mcp__9c9c9c9c-1111-4222-8333-444444444444__";
+withProjectSettings({ allow: [ALLOW_UUID + "pause_project", ALLOW_UUID + "create_project", ALLOW_UUID + "restore_project"] }, (dir) => {
+  for (const leaf of ["pause_project", "create_project", "restore_project"]) {
+    r = runHook({ tool_name: ALLOW_UUID + leaf, tool_input: { project_id: "x" } }, dir);
+    ok(isDeny(r), `${leaf} registered only in allow on an unidentified UUID is still denied`);
+  }
+  ok(r.stdout.includes("an `allow` line does not count"), "denial says an allow line does not count");
+  r = runHook({ tool_name: ALLOW_UUID + "sync_env", tool_input: {} }, dir);
+  ok(isDeny(r), "unrelated non-read leaf with no entry is denied");
+});
+withProjectSettings({ ask: [ALLOW_UUID + "pause_project"], deny: [ALLOW_UUID + "create_project"], allow: [ALLOW_UUID + "sync_env"] }, (dir) => {
+  r = runHook({ tool_name: ALLOW_UUID + "pause_project", tool_input: { project_id: "x" } }, dir);
+  eq(r.stdout.trim(), "", "pause_project with an exact ask entry is left to the ask tier");
+  r = runHook({ tool_name: ALLOW_UUID + "create_project", tool_input: {} }, dir);
+  eq(r.stdout.trim(), "", "create_project with an exact deny entry is left to the deny tier");
+  r = runHook({ tool_name: ALLOW_UUID + "sync_env", tool_input: {} }, dir);
+  eq(r.stdout.trim(), "", "an ordinary (non-live-action) tool is settled by an allow entry");
+});
+withProjectSettings({ allow: [SB_UUID + "list_tables", SB_UUID + "deploy_edge_function"] }, (dir) => {
+  r = runHook({ tool_name: SB_UUID + "deploy_edge_function", tool_input: { name: "x" } }, dir);
+  ok(isDeny(r), "identified Supabase UUID with deploy_edge_function only in allow: still denied");
+});
 // Kebab-case leaves on the NAMED Supabase servers hit the same fail-closed branch
 // (Codex P1 on 68c1c32f0).
 r = runHook({ tool_name: "mcp__supabase__future-write-tool", tool_input: {} });

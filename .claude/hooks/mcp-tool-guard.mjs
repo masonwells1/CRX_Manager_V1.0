@@ -109,8 +109,9 @@ const SUPABASE_GATED_ELSEWHERE = new Set(["execute_sql", "apply_migration", "dep
 //      Supabase policy applies: exact read-only allowlist passes, the three
 //      leaves other gates own pass to those gates, everything else is denied.
 //   2. OTHERWISE, PER-TOOL: a leaf passes only if the exact
-//      `mcp__<uuid>__<leaf>` entry exists in a settings file (its
-//      classification is settled there, whatever the tier), or it is on the
+//      `mcp__<uuid>__<leaf>` entry exists in a settings file (any tier for an
+//      ordinary tool; `ask` or `deny` for a Supabase live-action leaf, since an
+//      `allow` line is itself the bypass - Codex P1 on 6de456ac5), or it is on the
 //      Supabase read-only allowlist, or it is read-shaped by verb (get_/list_/
 //      search_/read_/find_/query_/...). EVERYTHING ELSE is denied: a single
 //      registered leaf never settles the other tools on that server, so a
@@ -144,6 +145,7 @@ let settingsCache = null;
 function settingsMcpEntries() {
   if (settingsCache) return settingsCache;
   const exact = new Set();
+  const tiers = new Map(); // lower-cased entry -> Set of tiers it appears in
   const found = new Map();
   const hookDir = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(hookDir, "..", "..");
@@ -163,7 +165,12 @@ function settingsMcpEntries() {
       for (const tier of ["allow", "ask", "deny"]) {
         for (const entry of Array.isArray(perms[tier]) ? perms[tier] : []) {
           const text = String(entry).trim();
-          if (/^mcp__[\w-]+__[\w-]+$/i.test(text)) exact.add(text.toLowerCase());
+          if (/^mcp__[\w-]+__[\w-]+$/i.test(text)) {
+            const lower = text.toLowerCase();
+            exact.add(lower);
+            if (!tiers.has(lower)) tiers.set(lower, new Set());
+            tiers.get(lower).add(tier);
+          }
           const m = SETTINGS_UUID_LEAF_RE.exec(text);
           if (!m) continue;
           const uuid = m[1].toLowerCase();
@@ -175,7 +182,7 @@ function settingsMcpEntries() {
       process.stderr.write(`[mcp-tool-guard] could not read ${file}: ${err?.message || err}\n`);
     }
   }
-  settingsCache = { exact, byUuid: found };
+  settingsCache = { exact, tiers, byUuid: found };
   return settingsCache;
 }
 
@@ -185,12 +192,21 @@ function settingsMcpEntries() {
 // Supabase-looking server the leaf would reach the classifier instead of Mason's
 // deploy prompt (GitHub Codex P1 on PR #605 head af30d4c17). Pass it only when
 // THIS exact tool name has a settings entry; otherwise deny and say how.
+// A live action (deploy, lifecycle mutation) counts as registered only when its
+// exact entry sits in `ask` or `deny`. An `allow` line would let the tool run
+// with no prompt at all - the very bypass the tier exists to prevent (GitHub
+// Codex P1 on PR #605 head 6de456ac5) - so it does NOT count.
+function gatedTierRegistered(name) {
+  const tiers = settingsMcpEntries().tiers.get(name.toLowerCase());
+  return Boolean(tiers && (tiers.has("ask") || tiers.has("deny")));
+}
+
 function denyUnlessDeployRegistered(server) {
-  if (settingsMcpEntries().exact.has(toolName.toLowerCase())) nothing();
+  if (gatedTierRegistered(toolName)) nothing();
   out("block",
-    `MCP TOOL GUARD (${toolName}): deploy_edge_function on Supabase server "${server}" has no exact entry in any Claude settings file, ` +
-    "so it would skip Mason's deploy prompt and reach the permission classifier. Edge Function deploys need his approval in the current " +
-    "conversation: add `" + toolName + "` to the `ask` list in .claude/settings.json (fail closed).");
+    `MCP TOOL GUARD (${toolName}): deploy_edge_function on Supabase server "${server}" has no exact ask/deny entry in any Claude settings file ` +
+    "(an `allow` line does not count), so it would skip Mason's deploy prompt and reach the permission classifier. Edge Function deploys " +
+    "need his approval in the current conversation: add `" + toolName + "` to the `ask` list in .claude/settings.json (fail closed).");
 }
 
 const supabaseLeaf = SUPABASE_TOOL_RE.exec(toolName);
@@ -211,10 +227,12 @@ if (!supabaseLeaf) {
         ".claude/hooks/mcp-tool-guard.mjs SUPABASE_TOOL_RE and to the Supabase ask/deny entries in .claude/settings.json; " +
         "live schema, data, branch and project changes travel only through the reviewed migration path or a Mason-approved gate.");
     }
-    if (!registered.has(leafLower) && !SUPABASE_READ_ONLY_TOOLS.has(leafLower) && !READ_SHAPED_LEAF_RE.test(leaf)) {
-      const kind = SUPABASE_SENSITIVE_LEAVES.has(leafLower) ? "a Supabase live-action leaf" : "not a read-shaped tool";
+    const liveAction = SUPABASE_SENSITIVE_LEAVES.has(leafLower);
+    const settled = liveAction ? gatedTierRegistered(toolName) : registered.has(leafLower);
+    if (!settled && !SUPABASE_READ_ONLY_TOOLS.has(leafLower) && !READ_SHAPED_LEAF_RE.test(leaf)) {
+      const kind = liveAction ? "a Supabase live-action leaf (only an `ask` or `deny` entry settles it; an `allow` line does not count)" : "not a read-shaped tool";
       out("block",
-        `MCP TOOL GUARD (${toolName}): "${leaf}" is ${kind} and has no exact entry for connector UUID ${uuid} in any Claude settings file ` +
+        `MCP TOOL GUARD (${toolName}): "${leaf}" is ${kind} and has no qualifying exact entry for connector UUID ${uuid} in any Claude settings file ` +
         "(repo .claude/settings.json, .claude/settings.local.json, ~/.claude/settings.json), so it is denied rather than left to the " +
         "permission classifier. The connector UUID changes on reinstall. Register the exact tool (an allow/ask/deny entry) to settle it; " +
         "if this is the reinstalled Supabase connector, add the UUID to .claude/hooks/mcp-tool-guard.mjs SUPABASE_TOOL_RE instead so the " +
