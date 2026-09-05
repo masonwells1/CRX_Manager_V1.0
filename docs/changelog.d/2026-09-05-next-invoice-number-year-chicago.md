@@ -14,15 +14,26 @@ to the new year while the business day has not.
 Verified read-only against live 2026-09-05: `2027-01-01 02:00 UTC` is `2026-12-31 20:00` Chicago —
 UTC year **2027**, Chicago year **2026**.
 
-It is not a cosmetic mislabel. The same `v_year` is used three times in one function:
+The same `v_year` is used three times in one function:
 
 - the advisory lock key `'invoice_number:CS:<year>'`
 - the `MAX()` scan that finds the highest number already issued for that year
 - the number returned and stored
 
-So an invoice created that evening is numbered from a **different counter** than the rest of the
-evening's work, in a year whose sequence has not started, and it will collide with the real first
-invoices of 2027.
+**What the defect actually is** — stated precisely, because an earlier version of this entry
+overstated it and the exact-SHA review was right to call that out. An invoice created that evening
+carries the **wrong business year in its number**: work done on 31 December 2026 is issued as
+`CS-2027-0007`. Anything that reads the year out of an invoice number — year-end statements, per-year
+filters, an operator scanning a list — files it under the wrong year, and that evening's year-scoped
+`MAX()` scan and advisory lock key are wrong too.
+
+**What it is not: a duplicate or colliding number.** The counter is one persistent sequence *per
+prefix* (`invoice_number_seq`, `cs_`/`mc_`/`cm_invoice_number_seq` — verified read-only on live
+2026-09-05), not a per-year counter that restarts. `nextval()` is atomic and monotonic, and the
+reconciliation beneath it only ever *advances* the sequence when it lags that year's `MAX()`; it
+never rewinds. So no number is issued twice. The earlier claim that these invoices come from "a
+different counter" and "will collide with the real first invoices of 2027" was wrong on both halves,
+and is withdrawn.
 
 Same class as `20260904160000` (invoice_date fallbacks) and `20260904180000` (season follows
 invoice_date), both applied live 2026-09-04, and the settled ~2026-07-10 rule: a bare

@@ -295,10 +295,15 @@ so **midnight UTC on 1 January is 6 pm Chicago on 31 December** — for those si
 rolled over and the business day has not. Verified read-only on live 2026-09-05: `2027-01-01 02:00
 UTC` is `2026-12-31 20:00` Chicago, UTC year 2027, Chicago year 2026.
 
-Not a cosmetic mislabel. The same `v_year` feeds the advisory lock key, the `MAX()` scan for the
-highest number issued that year, and the number returned — so an invoice written that evening is
-numbered off a **different counter** than the rest of the evening's work, in a year whose sequence
-has not started, and it collides with the real first invoices of 2027. Same class as `20260904160000`
+The same `v_year` feeds the advisory lock key, the `MAX()` scan for the highest number issued that
+year, and the number returned. **The defect is the wrong business-year LABEL**: work done on
+31 December 2026 is issued as `CS-2027-nnnn`, so anything reading the year out of an invoice number
+(year-end statements, per-year filters, an operator scanning a list) files it under the wrong year.
+**It is not a duplicate number** — the counter is one persistent sequence per prefix, not a per-year
+counter that restarts, `nextval()` is atomic and monotonic, and the reconciliation only ever advances
+it. An earlier revision of this entry claimed a "different counter" and a collision with the real
+first invoices of 2027; both halves were wrong and are withdrawn (caught by the exact-SHA review,
+confirmed read-only against live 2026-09-05). Same class as `20260904160000`
 and `20260904180000` (both applied live 2026-09-04) and the settled ~2026-07-10 rule: a bare
 `now()`/`CURRENT_DATE` on live is a bug wherever a business date is meant.
 

@@ -15,13 +15,25 @@
 -- (Verified read-only against live on 2026-09-05: 2027-01-01 02:00 UTC is
 -- 2026-12-31 20:00 Chicago — UTC year 2027, Chicago year 2026.)
 --
--- That is not cosmetic. The same v_year is used three times in one function:
+-- The same v_year is used three times in one function:
 --   * the advisory lock key             'invoice_number:CS:<year>'
---   * the MAX() scan that finds the highest number already issued for the year
+--   * the MAX() scan that finds the highest number already issued for that year
 --   * the number that is actually returned and stored
--- So the affected invoices are not merely mislabelled — they are numbered from a
--- DIFFERENT counter than the rest of that evening's work, in a year whose sequence
--- has not started yet, and they will collide with the real first invoices of 2027.
+--
+-- WHAT THE DEFECT ACTUALLY IS — stated precisely, because an earlier revision of this
+-- header overstated it and the overstatement was caught in review. The affected
+-- invoices carry the WRONG BUSINESS YEAR in their number: work done on the evening of
+-- 31 December 2026 is issued as CS-2027-nnnn. Anything that reads the year out of an
+-- invoice number — year-end statements, per-year filters, an operator scanning a list
+-- — files that invoice under the wrong year, and the year-scoped MAX() scan and
+-- advisory lock key are wrong for that evening too.
+--
+-- What it is NOT: a duplicate or colliding number. The counter is ONE PERSISTENT
+-- SEQUENCE PER PREFIX (invoice_number_seq, cs_/mc_/cm_invoice_number_seq — verified
+-- read-only on live 2026-09-05), not a per-year counter that restarts. nextval() is
+-- atomic and monotonic, and the reconciliation below it only ever ADVANCES the
+-- sequence (setval when the sequence lags the year's MAX), never rewinds it. So no
+-- number is issued twice. The bug is the label and everything that keys off it.
 --
 -- Same defect class as 20260904160000 (invoice_date fallbacks) and 20260904180000
 -- (season follows invoice_date), both applied live 2026-09-04. This is the settled
