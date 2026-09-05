@@ -163,4 +163,28 @@ ok(isDeny(r), "moving the supabase DIRECTORY (parent of migrations) is denied");
 r = runHook({ tool_name: "mcp__Desktop_Commander__move_file", tool_input: { source: "docs", destination: "docs-old" } });
 eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
 
+// ── 2026-09-05 (GitHub Codex P1 on PR #605): Supabase leaves fail CLOSED ──────
+// Under Auto mode an unlisted tool reaches the classifier, so an unknown or
+// renamed Supabase mutation must be denied by the guard, not left to chance.
+r = runHook({ tool_name: "mcp__supabase__future_write_tool", tool_input: {} });
+ok(isDeny(r), "unknown Supabase leaf (supabase server) is denied");
+r = runHook({ tool_name: "mcp__claude_ai_Supabase__delete_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "unknown Supabase leaf (claude_ai_Supabase server) is denied");
+r = runHook({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__future_write_tool", tool_input: {} });
+ok(isDeny(r), "unknown Supabase leaf (UUID connector) is denied");
+r = runHook({ tool_name: "mcp__Supabase__pause_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "known lifecycle mutation (pause_project) is denied by the guard too");
+r = runHook({ tool_name: "mcp__Supabase__list_tables", tool_input: { project_id: "x" } });
+eq(r.stdout.trim(), "", "read-only Supabase leaf (list_tables) is silent (allowed)");
+r = runHook({ tool_name: "mcp__supabase__Search_Docs", tool_input: { graphql_query: "{}" } });
+eq(r.stdout.trim(), "", "read-only leaf matches case-insensitively");
+r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "select 1" } });
+eq(r.stdout.trim(), "", "execute_sql is left to the live-data guards (silent here)");
+r = runHook({ tool_name: "mcp__supabase__apply_migration", tool_input: {} });
+eq(r.stdout.trim(), "", "apply_migration is left to migration-apply-guard (silent here)");
+r = runHook({ tool_name: "mcp__claude_ai_Supabase__deploy_edge_function", tool_input: {} });
+eq(r.stdout.trim(), "", "deploy_edge_function is left to the ask tier (silent here)");
+r = runHook({ tool_name: "mcp__github__future_write_tool", tool_input: {} });
+eq(r.stdout.trim(), "", "non-Supabase server with an unknown leaf is not matched by the Supabase rule");
+
 console.log(`mcp-tool-guard: ${pass} assertions passed`);

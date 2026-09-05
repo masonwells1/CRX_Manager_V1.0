@@ -21,6 +21,16 @@
 //     check against these patterns; set_config_value was "ask"-gated in
 //     settings.json until 2026-09-05 and now sits in `deny` there, alongside
 //     the other Desktop Commander mutators - PR #605).
+//   - Supabase MCP leaves (any server name containing `supabase`, or the UUID
+//     connector): FAIL CLOSED on anything that is not on the exact read-only
+//     allowlist and is not one of the three leaves another gate already owns
+//     (execute_sql -> live-testdata/live-db guards; apply_migration ->
+//     migration-apply-guard; deploy_edge_function -> the `ask` tier, Mason's
+//     deploy gate). Added 2026-09-05 (GitHub Codex P1 on PR #605): once the repo
+//     inherits Auto mode an UNLISTED tool goes to the classifier instead of
+//     being refused, so a new or renamed Supabase mutation absent from the finite
+//     settings.json deny list could be accepted. Mirrors the fail-closed rule in
+//     .codex/hooks/production-action-guard.mjs (SUPABASE_READ_ONLY_TOOLS).
 //
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
 // broken guard must never brick a session.
@@ -58,6 +68,29 @@ const toolName = String(payload?.tool_name || "");
 const DC_TOOL_RE = /^mcp__[\w-]+__(start_process|interact_with_process|write_file|edit_file|edit_block|move_file|create_file|create_directory|delete_file|kill_process|set_config_value)$/;
 const DC_RUN_RE = /^mcp__[\w-]+__(start_process|interact_with_process)$/;
 const DC_WRITE_RE = /^mcp__[\w-]+__(write_file|edit_file|edit_block|move_file|create_file|create_directory|delete_file)$/;
+
+// ── Supabase: exact read-only allowlist, fail closed on everything else ──────
+// Server names seen on the Claude side: supabase, Supabase, claude_ai_Supabase,
+// and the UUID connector. Leaves are matched case-insensitively.
+const SUPABASE_TOOL_RE = /^mcp__(?:[\w-]*supabase|50e15046-cf2c-49da-b8df-ceef27768f63)__([a-z0-9_]+)$/i;
+const SUPABASE_READ_ONLY_TOOLS = new Set([
+  "generate_typescript_types", "get_advisors", "get_cost", "get_edge_function",
+  "get_logs", "get_organization", "get_project", "get_project_url",
+  "get_publishable_keys", "list_branches", "list_edge_functions",
+  "list_extensions", "list_migrations", "list_organizations", "list_projects",
+  "list_tables", "query_logs", "search_docs",
+]);
+// Owned by another gate; this guard stays silent so THAT gate decides.
+const SUPABASE_GATED_ELSEWHERE = new Set(["execute_sql", "apply_migration", "deploy_edge_function"]);
+const supabaseLeaf = SUPABASE_TOOL_RE.exec(toolName);
+if (supabaseLeaf) {
+  const leaf = supabaseLeaf[1].toLowerCase();
+  if (SUPABASE_READ_ONLY_TOOLS.has(leaf) || SUPABASE_GATED_ELSEWHERE.has(leaf)) nothing();
+  out("block",
+    `MCP TOOL GUARD (${toolName}): Supabase tool "${leaf}" is not on the exact read-only allowlist and is denied (fail closed). ` +
+    "Live schema, data, branch and project changes travel only through the reviewed migration path or an explicit Mason-approved gate; " +
+    "an unrecognized Supabase leaf is never left to the permission classifier.");
+}
 
 if (!DC_TOOL_RE.test(toolName)) nothing();
 
