@@ -89,3 +89,16 @@ REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;`;
     ['unparseable-security-definer-sql'],
   );
 });
+
+test('proof production rejects equivalent routine ACL spellings and body-level search-path changes', () => {
+  const equivalentAcl = `CREATE FUNCTION public.f() RETURNS void LANGUAGE sql AS $$ SELECT; $$;
+CREATE OR REPLACE FUNCTION public."f"() RETURNS void LANGUAGE sql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$ SELECT; $$;
+REVOKE ALL ON FUNCTION public."f"() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.f() TO anon;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(equivalentAcl), ['f']);
+  const bodyChange = `CREATE FUNCTION public.body_path_probe() RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$ BEGIN PERFORM set_config('search_path', p_schema, true); END; $$;
+REVOKE ALL ON FUNCTION public.body_path_probe() FROM PUBLIC, anon;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(bodyChange), ['unparseable-security-definer-sql']);
+});

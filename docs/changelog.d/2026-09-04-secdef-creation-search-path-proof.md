@@ -5,3 +5,5 @@
 - Treat quoted identifiers as data rather than configuration while detecting that path, so a routine signature or output-column name cannot impersonate the required directive.
 - Reject duplicate, quoted, and `FROM CURRENT` path settings, so a safe-looking initial path cannot be overridden later in the routine declaration.
 - Refuse proof generation on ownership transfers, `REASSIGN OWNED`, or direct PostgreSQL system-catalog writes because source-level ACL evidence cannot safely model their effective privileges.
+- Normalize PostgreSQL-equivalent lower-case quoted routine names and `pg_catalog` built-in argument-type spellings during ACL tracking, so an alternate spelling cannot grant anonymous execution to a tracked owner-privileged routine.
+- Refuse proof generation when an executable SECURITY DEFINER body changes `search_path`, resets settings, or calls `set_config` with a search-path or dynamically computed setting name.

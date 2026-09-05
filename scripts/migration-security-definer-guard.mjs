@@ -97,6 +97,12 @@ function isStandardConformingStringsParameter(text, start) {
   return identifier === null ? false : identifier.value.toLowerCase() === 'standard_conforming_strings';
 }
 
+function isSearchPathParameter(text, start) {
+  if (startsKeyword(text, start, 'search_path')) return true;
+  const identifier = readDoubleQuotedIdentifier(text, start);
+  return identifier === null ? false : identifier.value.toLowerCase() === 'search_path';
+}
+
 function setConfigNameEnd(text, start) {
   if (startsKeyword(text, start, 'set_config')) return start + 'set_config'.length;
   const identifier = readDoubleQuotedIdentifier(text, start);
@@ -125,6 +131,86 @@ function unsafeStandardConformingStringsChange(text, start) {
   const afterSetting = skipWhitespaceAndComments(text, setting.end);
   if (afterSetting === null || text[afterSetting] !== ',') return true;
   return setting.value.toLowerCase() === 'standard_conforming_strings';
+}
+
+// A fixed routine-level search_path is insufficient if a SECURITY DEFINER body
+// can replace it while running with owner privileges. This scanner is used only
+// on an actual routine body (before that body is blanked), so ordinary
+// migration-level SET statements retain their established semantics.
+function unsafeRoutineBodySearchPathChange(text, start) {
+  if (startsKeyword(text, start, 'set')) {
+    let index = skipWhitespaceAndComments(text, start + 3);
+    if (index === null) return true;
+    if (startsKeyword(text, index, 'local') || startsKeyword(text, index, 'session')) {
+      index = skipWhitespaceAndComments(text, index + (startsKeyword(text, index, 'local') ? 5 : 7));
+      if (index === null) return true;
+    }
+    return isSearchPathParameter(text, index);
+  }
+  if (startsKeyword(text, start, 'reset')) {
+    const index = skipWhitespaceAndComments(text, start + 5);
+    return index === null || isSearchPathParameter(text, index) || startsKeyword(text, index, 'all');
+  }
+  const setConfigEnd = setConfigNameEnd(text, start);
+  if (setConfigEnd === null) return false;
+  let index = skipWhitespaceAndComments(text, setConfigEnd);
+  if (index === null || text[index] !== '(') return true;
+  index = skipWhitespaceAndComments(text, index + 1);
+  if (index === null) return true;
+  const setting = readSingleQuotedLiteral(text, index);
+  // A computed GUC name cannot be proved not to target search_path.
+  if (setting === null || setting.escapeString) return true;
+  const afterSetting = skipWhitespaceAndComments(text, setting.end);
+  if (afterSetting === null || text[afterSetting] !== ',') return true;
+  return setting.value.toLowerCase() === 'search_path';
+}
+
+function hasUnsafeRoutineBodySearchPathChange(body) {
+  for (let index = 0; index < body.length;) {
+    const ch = body[index];
+    if (ch === '-' && body[index + 1] === '-') {
+      index += 2; while (index < body.length && body[index] !== '\n' && body[index] !== '\r') index++;
+      continue;
+    }
+    if (ch === '/' && body[index + 1] === '*') {
+      let depth = 1; index += 2;
+      while (index < body.length && depth) {
+        if (body[index] === '/' && body[index + 1] === '*') { depth++; index += 2; }
+        else if (body[index] === '*' && body[index + 1] === '/') { depth--; index += 2; }
+        else index++;
+      }
+      if (depth) return true;
+      continue;
+    }
+    const escape = (ch === 'e' || ch === 'E') && body[index + 1] === "'" && !/[A-Za-z0-9_$]/.test(body[index - 1] || '');
+    if (ch === "'" || escape) {
+      let end = index + (escape ? 2 : 1);
+      while (end < body.length) {
+        if (escape && body[end] === '\\') { end += 2; continue; }
+        if (body[end] === "'" && body[end + 1] === "'") { end += 2; continue; }
+        if (body[end] === "'") { end++; break; }
+        end++;
+      }
+      if (end > body.length || body[end - 1] !== "'") return true;
+      index = end; continue;
+    }
+    if (ch === '$' && !isIdentifierCharacter(body[index - 1])) {
+      const tag = dollarQuoteDelimiter(body, index);
+      if (tag) {
+        const close = body.indexOf(tag, index + tag.length);
+        if (close === -1) return true;
+        index = close + tag.length; continue;
+      }
+    }
+    if ((ch === 's' || ch === 'S' || ch === 'r' || ch === 'R' || ch === '"') && unsafeRoutineBodySearchPathChange(body, index)) return true;
+    if (ch === '"') {
+      const identifier = readDoubleQuotedIdentifier(body, index);
+      if (identifier === null) return true;
+      index = identifier.end; continue;
+    }
+    index++;
+  }
+  return false;
 }
 
 // Preserve executable tokens and quoted identifiers, but blank comments and all
@@ -164,7 +250,9 @@ export function executableSql(sql) {
       }
       if (end > src.length || src[end - 1] !== "'") return null;
       if (isExecutableRoutineBody(out)) {
-        const body = executableSql(src.slice(i + (escape ? 2 : 1), end - 1));
+        const rawBody = src.slice(i + (escape ? 2 : 1), end - 1);
+        if (hasUnsafeRoutineBodySearchPathChange(rawBody)) return null;
+        const body = executableSql(rawBody);
         if (body === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(body)) return null;
       }
       out = blank(out, end - i); i = end; continue;
@@ -184,7 +272,9 @@ export function executableSql(sql) {
         // dynamic SQL or ACL commands fail this static proof closed; quoted
         // diagnostic text inside the body remains inert.
         if (isExecutableRoutineBody(out)) {
-          const body = executableSql(src.slice(i + tag.length, close));
+          const rawBody = src.slice(i + tag.length, close);
+          if (hasUnsafeRoutineBodySearchPathChange(rawBody)) return null;
+          const body = executableSql(rawBody);
           if (body === null || /\b(?:EXECUTE|GRANT|REVOKE)\b/i.test(body)) return null;
         }
         out = blank(out, end - i); i = end; continue;
@@ -332,14 +422,24 @@ function canonicalSignature(name, args, declaration = false, quoted = false) {
     }
     return [canonicalType(value)];
   });
-  const canonicalName = quoted ? `quoted:${name.replaceAll('""', '"')}` : `bare:${name.toLowerCase()}`;
+  const unescapedName = name.replaceAll('""', '"');
+  // PostgreSQL folds bare identifiers to lower case. A quoted identifier that
+  // already has that exact bare spelling (for example "f") resolves to the
+  // same catalog identity as f; keeping separate keys would let an ACL target
+  // the same routine through the alternate spelling.
+  const canonicalName = !quoted || /^[a-z_][a-z0-9_$]*$/.test(unescapedName)
+    ? `bare:${unescapedName.toLowerCase()}`
+    : `quoted:${unescapedName}`;
   return `${canonicalName}(${types.join(',')})`;
 }
 
 function canonicalType(value) {
   const normalized = value.replace(/\s+/g, ' ').replaceAll('"', '').trim().toLowerCase();
   const array = /^(.*?)(?:\s*(\[\s*\]))+$/.exec(normalized);
-  const base = (array ? array[1] : normalized).trim();
+  // Built-in types may be written with their pg_catalog qualification. It is
+  // the same type identity as the unqualified built-in spelling in a routine
+  // signature, so normalize it before applying aliases.
+  const base = (array ? array[1] : normalized).trim().replace(/^pg_catalog\s*\.\s*/, '');
   // PostgreSQL treats these spellings as identical routine argument types.
   // Retaining their source spelling would let an ACL target a SECURITY
   // DEFINER overload without updating its tracked state.

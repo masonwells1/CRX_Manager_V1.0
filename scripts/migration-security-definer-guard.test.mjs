@@ -251,6 +251,34 @@ test('normalizes PostgreSQL routine type aliases and rejects unmatched public AC
   );
 });
 
+test('tracks PostgreSQL-equivalent quoted routine names and pg_catalog argument types', () => {
+  const quotedName = `CREATE FUNCTION public.f() RETURNS void LANGUAGE sql AS $$ SELECT; $$;
+CREATE OR REPLACE FUNCTION public."f"() RETURNS void LANGUAGE sql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$ SELECT; $$;
+REVOKE ALL ON FUNCTION public."f"() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.f() TO anon;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(quotedName), ['f']);
+
+  const qualifiedType = `CREATE FUNCTION public.type_identity(p_id pg_catalog.uuid) RETURNS void LANGUAGE sql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$ SELECT; $$;
+REVOKE ALL ON FUNCTION public.type_identity(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.type_identity(pg_catalog.uuid) TO anon;`;
+  assert.deepEqual(securityDefinerMissingAnonRevokes(qualifiedType), ['type_identity']);
+});
+
+test('fails closed when a SECURITY DEFINER body changes or dynamically selects search_path', () => {
+  const header = `CREATE FUNCTION public.body_path_probe() RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp AS $$`;
+  const revoke = 'REVOKE ALL ON FUNCTION public.body_path_probe() FROM PUBLIC, anon;';
+  for (const body of [
+    'BEGIN SET LOCAL search_path = attacker, public; END;',
+    "BEGIN PERFORM set_config('search_path', p_schema, true); END;",
+  ]) assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${header}\n${body}\n$$;\n${revoke}`),
+    ['unparseable-security-definer-sql'],
+  );
+});
+
 test('excludes OUT-only parameters from PostgreSQL function identities', () => {
   const withOutput = 'CREATE FUNCTION public.output_target(p_id uuid, OUT p_result text) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT NULL; $$;';
   assert.deepEqual(
