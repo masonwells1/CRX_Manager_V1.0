@@ -2,14 +2,12 @@
 
 **Last verified: 2026-09-05 for the migration-ledger facts; 2026-09-04 for the F2 entry.** The
 ordering boundary is the newest applied authored NAME:
-**`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`; live
-read-only ledger read on 2026-09-05: 998 rows, `max(version)` `20260904152221`). This SUPERSEDES the
-earlier boundary recorded here, `20260903230000_commission_report_snapshot_contract` (version
-`20260904040643`) — that row is still applied and still correct as history, it is simply no longer
-the newest name. Note how little the counters tell you: `max(version)` and the boundary row's version
-are the same string here, purely by coincidence of apply order. F2
-(`20260903160000_gate_number_generators_active_profile_role`) applied earlier the same day as ledger
-version `20260904023121` and was the boundary until the commission snapshot landed after it. Read
+**`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`;
+re-verified by a read-only ledger read on 2026-09-05: 998 rows, `max(version)` `20260904152221`).
+Note how little the counters tell you here: `max(version)` and the boundary row's own version are the
+same string, purely by coincidence of apply order, and both sat unchanged from 2026-09-04 to
+2026-09-05. F2 (`20260903160000_gate_number_generators_active_profile_role`) applied as ledger
+version `20260904023121` and was the boundary earlier in that sequence. Read
 ordering from the NAME — it is what
 the ordering guard compares and it moves far less often than the counters. Two further reading
 traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
@@ -21,12 +19,12 @@ re-read live rather than trusting them, and do not re-pin them here on every app
 F2 item below was re-verified against live on this date (post-apply function bodies, grants, and a
 three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
+nine-file disk-vs-live migration drift confirmed the same day and its open owning PRs.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
-`20260903153402`.** It was the ordering boundary when this paragraph was written; F2 and then the
-commission snapshot have since applied above it, so read the boundary from the header, not here.
-Verified independently
+`20260903153402`.** It was the ordering boundary when this paragraph was written; later migrations
+have since applied above it. It remains the installed `save_job` source body for the local row-916
+follow-up. Verified independently
 against production on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job`
 is at md5 `18d08d5f40aea91fe13ac3e5a686c549` with exactly one overload, so no duplicate function was
 created. This **supersedes every earlier statement in this file that F06 was merged but not
@@ -1421,16 +1419,23 @@ Keep this separate from the equal-unit exact-decimal fix, and replace the conver
 exact rational/decimal conversion in a focused follow-up.
 
 
-## OPEN 2026-09-04 — Invalid job acreage still needs a server-side refusal
+## OPEN 2026-09-04 — Server acreage refusal is written and proven, not yet applied
 
 An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
 `null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every
 nonblank non-finite or negative acreage at the top of `performSave`, including the
 expired-license override path, before saving state, payload work, or `save_job`. Intentional
 blank acreage retains its established payload meaning of zero. The live `save_job` function
-already refuses non-finite and negative field acreage before any write. The issue stays open
-because a missing acreage key or JSON-null acreage is still coalesced to zero; a separate forward
-migration must refuse those two cases authoritatively. The unrelated different-unit chemical
+already refuses non-finite and negative field acreage before any write. The issue stays open in
+production because a missing acreage key or JSON-null acreage can still store SQL NULL in the
+nullable `job_fields.acres_to_treat` column even though the header sum treats it as zero. Local
+forward migration `20260904185900_refuse_null_job_field_acres.sql` refuses those two cases
+authoritatively before any write, with distinct diagnostics. Its current-main disposable proof
+passes exact source/candidate pins, A1-A4 behavior, eleven apply-abort mutations, and four runtime
+break-it canaries after the required restamp above the live migration high-water. No live apply is
+authorized. Other present but nonnumeric scalar values still fail closed at PostgreSQL's numeric
+cast with its native error; friendlier diagnostics for that separate malformed-input class are not
+part of this candidate. Do not author a competing migration. The unrelated different-unit chemical
 conversion issue above also remains open.
 
 

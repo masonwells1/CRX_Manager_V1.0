@@ -131,6 +131,16 @@ supabase/migrations/20260903150000_job_chemicals_persist_driver.sql text eol=lf
 scripts/smoke/prove-save-job-persist-driver.mjs text eol=lf
 scripts/smoke/fixtures/save-job-persist-driver-tests.sql text eol=lf
 
+# save_job missing/null acreage candidate. Its body md5 is both an apply-time
+# replay pin and a postflight assertion; both disposable provers, the focused
+# fixture, and the permanent parity chain therefore execute the same evidence
+# bytes on Windows and Linux.
+supabase/migrations/20260904185900_refuse_null_job_field_acres.sql text eol=lf
+scripts/smoke/prove-save-job-field-acres.mjs text eol=lf
+scripts/smoke/prove-save-job-field-acres-real-schema.mjs text eol=lf
+scripts/smoke/fixtures/save-job-field-acres-tests.sql text eol=lf
+scripts/smoke/smoke-save-job-parity.sql text eol=lf
+
 # PR 361 return-credit COGS rebuild. The migrations install and pin function
 # bodies, while the rollback smoke and real-schema prover are exact release
 # evidence. Keep every artifact byte-stable across Windows and Linux.
