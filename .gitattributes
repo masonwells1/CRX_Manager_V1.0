@@ -187,6 +187,18 @@ supabase/migrations/20260905020000_commission_history_report_replay_guard.sql te
 supabase/migrations/20260905020100_repair_commission_history_label_snapshots.sql text eol=lf
 supabase/migrations/20260905020200_refuse_stale_commission_payment_recipient.sql text eol=lf
 supabase/migrations/20260905020300_enforce_commission_payment_business_date.sql text eol=lf
+# 20260905020400 installs two md5-PINNED function bodies (pre- and post-image, measured
+# by scripts/smoke/prove-commission-dates-chicago.mjs). A CRLF checkout would install
+# bodies whose md5 can never match an LF-computed pin, so the migration would refuse
+# itself and any later migration pinning the same functions.
+supabase/migrations/20260905020400_commission_dates_follow_chicago_business_day.sql text eol=lf
+scripts/smoke/prove-commission-dates-chicago.mjs text eol=lf
+# 20260905020500 re-emits four ~12-71KB function bodies copied byte-for-byte from the
+# migrations that installed them, each pinned by md5 pre- and post-image. A CRLF checkout
+# would install bodies whose md5 can never match an LF-computed pin, so the migration
+# would refuse itself.
+supabase/migrations/20260905020500_document_dates_follow_chicago_business_day.sql text eol=lf
+scripts/smoke/prove-document-dates-chicago.mjs text eol=lf
 scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf
 scripts/smoke/smoke-commission-report-snapshot-contract.sql text eol=lf
 scripts/smoke/prove-commission-history-label-repair.mjs text eol=lf

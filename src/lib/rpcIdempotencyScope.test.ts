@@ -225,6 +225,21 @@ const ALIAS_SCOPED: Record<string, string> = {
  */
 const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   _guard_idempotency_key_insert: ['allocate_payment'],
+  // Direct EXECUTE is revoked (live 2026-09-05: proacl `postgres=X/postgres`;
+  // anon and authenticated both false, while the public create_quick_delivery
+  // wrapper carries authenticated + service_role). Migration 20260803010917
+  // created this implementation with ALTER FUNCTION ... RENAME TO, changing the
+  // NAME and not the body, so the body kept the public wrapper's operation
+  // literal — and both layers deliberately share that one cache namespace so a
+  // retry through either finds the same receipt. Same shape as
+  // _cancel_return_intent_impl_20260812 below.
+  //
+  // This became visible on disk only with 20260905020500, which re-emits the
+  // body under the live name to convert its UTC dates. The literal is faithful
+  // to what is installed live; changing it would repoint an in-flight money
+  // path's idempotency cache and orphan existing receipts, so it is registered
+  // here rather than rewritten.
+  _create_quick_delivery_intent_impl_20260802: ['create_quick_delivery'],
   // Direct EXECUTE is revoked. Migration 20260812130145 renamed the original
   // cancel_return implementation behind the public cancel_return wrapper, and
   // migration 20260827041500 re-emits that private implementation to preserve

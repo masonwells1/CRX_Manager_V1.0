@@ -10,6 +10,20 @@
 -- commission, reads its latest earned-state event without recipient filtering,
 -- and refuses the post unless every latest recipient matches the batch header.
 -- Voids and already-correct posts retain their existing behavior.
+--
+-- sql-safety: exempt-registry
+--   The registry-backed sequence rule reports commission_earned_state_ledger_id_seq
+--   and commission_settlement_events_id_seq as "does not exist live". Verified
+--   read-only against production on 2026-09-05: BOTH EXIST (pg_class.relkind = 'S',
+--   alongside their tables commission_earned_state_ledger and
+--   commission_settlement_events, relkind = 'r'). They were created by
+--   20260903150100_ledger_backed_commission_history, which IS applied.
+--   .claude/schema-registry.json simply carries no entry for either — its sequence
+--   list predates that migration, so the rule is a false positive, not a missing
+--   object. This exemption asserts the objects are present; it does not weaken the
+--   ownership/ACL assertions below, which still run against the live catalog.
+--   The stale registry is a separate defect and is tracked as such — do not treat
+--   this comment as closing it.
 -- ============================================================================
 
 SET LOCAL lock_timeout = '10s';
@@ -89,7 +103,30 @@ BEGIN
           AND NOT p.proleakproof
           AND NOT p.proretset
           AND p.procost = 100
-          AND md5(p.prosrc) = '5623b0d31181d357b303a36e563a77aa'
+          -- BOTH legitimate bodies are accepted, exactly as the settlement recorder
+          -- above already does with its own two-value IN list.
+          --
+          -- Pinning ONLY the repaired body coupled this money-safety migration to
+          -- 20260905020100, which is a COSMETIC label repair that refuses to run once
+          -- any settlement activity exists. One real settlement before rollout and
+          -- 020100 aborts; the name-ordered runner then never reaches THIS file, so
+          -- the stale-recipient guard silently never installs — a payout could still
+          -- be recorded against the wrong person because a label-formatting migration
+          -- declined to run. Skipping 020100 was no escape either, since this pin
+          -- demanded the body only 020100 produces.
+          --
+          --   dc0577e8... the body live in production on 2026-09-05 (pre-repair),
+          --               read read-only from pg_proc that day
+          --   5623b0d3... the body 20260905020100 produces (post-repair)
+          --
+          -- Both are fully-hardened recorders by every attribute asserted above; they
+          -- differ only in the label snapshot text 020100 rewrites, which this guard
+          -- does not depend on. Accepting either makes this file independently
+          -- appliable in whichever order the two land.
+          AND md5(p.prosrc) IN (
+            'dc0577e8e694773e75a1c8099819ba6c',
+            '5623b0d31181d357b303a36e563a77aa'
+          )
      )
      OR EXISTS (
        SELECT 1
