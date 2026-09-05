@@ -1655,9 +1655,10 @@ export default function JobDetail() {
   }, [toast]);
 
   const fetchJob = useCallback(async () => {
-    // Ticket for THIS run (see loadGenerationRef). Post-save / post-start refetches
-    // share the mounted run's ticket and are therefore never bailed; only a run the
-    // operator has navigated away from — or unmounted — stops installing state.
+    // Ticket for THIS run (see loadGenerationRef). A post-save / post-start refetch
+    // issued while still on its own job shares the mounted run's ticket and proceeds
+    // normally; one issued after the operator has moved on is caught by the id binding
+    // below, since it carries the CURRENT ticket but the OLD job's id.
     const generation = loadGenerationRef.current;
     const startedForId = id;
     // Two halves, each load-bearing on its own. The ticket catches a superseded load of
