@@ -73,9 +73,11 @@
 --     next_po_number                  v_year := extract(year FROM current_date)
 --     next_return_number              v_year := extract(year FROM current_date)
 -- Only next_delivery_number (DEL-nnnnn) genuinely embeds no year.
--- Each of those six uses v_year in its lock key, its MAX() scan and its returned
--- number, exactly as this one does. They are NOT fixed by this file and they carry
--- the same 31 December 2026 deadline; they are recorded as a follow-up in
+-- Each of those six uses v_year in its year-scoped MAX() scan and in the number it
+-- returns (their advisory-lock keys vary — next_job_number, for instance, locks a
+-- constant rather than the year). The consequence is the same one as here, and no
+-- worse: a wrong-year LABEL, not a duplicate. They are NOT fixed by this file and
+-- they carry the same 31 December 2026 deadline; they are recorded as a follow-up in
 -- docs/manual/KNOWN_ISSUES.md. Do not read this migration as closing the family.
 --
 -- PREFLIGHT PIN. Refuses to run unless the installed body is byte-for-byte either the

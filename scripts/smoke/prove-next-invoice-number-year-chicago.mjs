@@ -11,8 +11,12 @@
 //   3. SECURITY DEFINER, search_path and the EXECUTE ACL survive the re-emit
 //   4. a REPLAY is idempotent (the file accepts its own output)
 //   5. a DRIFTED body is REFUSED with nothing changed
-//   6. the behaviour actually changes: at 2026-12-31 23:30 UTC the old
-//      expression yields 2027 and the new one yields 2026
+//   6. the behaviour actually changes: at 2027-01-01 02:00 UTC (= 2026-12-31
+//      20:00 Chicago) the old expression yields 2027 and the new one yields 2026,
+//      while at 2026-12-31 23:30 UTC — OUTSIDE the window — both still yield 2026,
+//      so the fix is narrow. That second instant is what an earlier version of this
+//      header wrongly named as the divergence point; it is still 2026 in UTC.
+//   7. the EXECUTE-privilege assertions actually fire (mutation tests)
 //
 // Read-only with respect to production: this never touches Supabase.
 // Usage: node scripts/smoke/prove-next-invoice-number-year-chicago.mjs

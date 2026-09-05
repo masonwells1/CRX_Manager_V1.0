@@ -78,8 +78,11 @@ this server *is* the UTC calendar date — the same rollover, the same six-hour 
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses its `v_year`
 in the advisory lock key, the `MAX()` scan and the returned number, exactly as `next_invoice_number`
-does — so a job created at 7 pm Chicago on 31 December 2026 is numbered `JOB-2027-0001` off a counter
-that has not started, and collides with the real first job of 2027.
+does — so a job created at 7 pm Chicago on 31 December 2026 is numbered `JOB-2027-0001`. As with
+`next_invoice_number`, that is a **wrong-year label, not a duplicate**: `next_job_number` takes
+`MAX(...) + 1` over rows already matching that year under an advisory lock (verified against live
+2026-09-05), so the real first job of 2027 simply becomes `JOB-2027-0002`. Nothing is overwritten;
+the December work is filed under the wrong year and consumes that year's first number.
 
 **They are not fixed by this change** and they carry the same 31 December 2026 deadline. Recorded as a
 follow-up in `docs/manual/KNOWN_ISSUES.md`. Do not read this migration as closing the family.

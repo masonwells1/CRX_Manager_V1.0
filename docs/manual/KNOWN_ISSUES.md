@@ -339,8 +339,12 @@ calendar date — identical rollover, identical six-hour window (re-verified rea
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its advisory lock key, its `MAX()` scan **and** its returned number, exactly as `next_invoice_number`
-does — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001` off a counter that
-has not started, and collides with the real first job of 2027. **Same 31 December 2026 deadline.**
+does — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001`. As with
+`next_invoice_number`, that is a **wrong-year label, not a duplicate**: `next_job_number` takes
+`MAX(...) + 1` over rows already matching that year under an advisory lock (verified against live
+2026-09-05), so the real first job of 2027 simply becomes `JOB-2027-0002`. Nothing is overwritten;
+the December work is filed under the wrong year and consumes that year's first number.
+**Same 31 December 2026 deadline.**
 The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
 they were deliberately not bundled into the parked migration because that file is pinned to one
 function's body md5. **Do not close this family when `20260905090000` is applied.**
