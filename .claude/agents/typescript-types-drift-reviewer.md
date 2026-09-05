@@ -129,7 +129,7 @@ LOW:  <count>
 
 <"No drift — types and DB are in sync" /
  "Apply HIGH fixes before next deploy; MED + LOW can batch" /
- "Run `node scripts/regenerate-schema-registry.mjs` first — registry may itself be stale">
+ "Run the `regen-schema-registry` live-introspection workflow first — registry may itself be stale">
 ```
 
 ## Rules

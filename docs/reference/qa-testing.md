@@ -114,7 +114,7 @@ Cross-entity data integrity tests via `src/lib/reconciliation.ts`:
 ## E2E Testing Guidelines (added Mar 2026 audit)
 
 ### Current State
-- **94 E2E spec files** (per CLAUDE.md current state; up from earlier audit baselines)
+- The current E2E suite is the set of Playwright `*.spec.ts` files under `tests/e2e/`; derive the count from the checkout instead of copying a volatile number from an agent instruction file.
 - Framework: Playwright with serial test suites for workflow specs
 - Auth: shared admin account by default; role tests need dedicated accounts (see below)
 
