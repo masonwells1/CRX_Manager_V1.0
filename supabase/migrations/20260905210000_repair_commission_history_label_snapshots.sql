@@ -13,16 +13,16 @@
 -- from their canonical order/job/invoice/customer rows. It never updates an
 -- existing ledger or settlement row, and it does not alter commissions.
 --
--- ORDERING (renumbered 20260905020100 -> 20260905190000 on 2026-09-05): this
+-- ORDERING (renumbered 20260905020100 -> 20260905190000 -> 20260905210000 on 2026-09-05): this
 -- file runs LAST of the parked commission set on purpose. Its settled-data
 -- refusal below is correct, but the filename-ordered runner halts at the first
 -- failing file, so at its old position one posted payment before rollout would
--- have stopped 20260905020200 (the stale-recipient payout guard) and the
+-- have stopped 20260905200200 (the stale-recipient payout guard) and the
 -- September 30 date fixes from ever installing. At the tail, a refusal here
 -- stops nothing else: the money-safety migrations are already in, and only
 -- this cosmetic repair waits for the separately reviewed correction its own
--- error message names. Because 020200 now runs first, the settlement-recorder
--- pin accepts both its pre- and post-020200 bodies.
+-- error message names. Because 20260905200200 now runs first, the settlement-recorder
+-- pin accepts both its pre- and post-200200 bodies.
 --
 -- sql-safety: exempt-registry
 --   The registry-backed sequence rule reports commission_earned_state_ledger_id_seq
@@ -31,7 +31,7 @@
 --   relkind = 'S', alongside their tables (relkind = 'r'). They were created by
 --   the applied 20260903150100_ledger_backed_commission_history migration;
 --   .claude/schema-registry.json simply predates it. Same false positive, same
---   evidence and same scoped exemption as 20260905020200. The ownership/ACL
+--   evidence and same scoped exemption as 20260905200200. The ownership/ACL
 --   assertions below still run against the live catalog; nothing is weakened.
 -- ============================================================================
 
@@ -107,10 +107,10 @@ BEGIN
           AND NOT p.proretset
           AND p.procost = 100
           -- Both legitimate settlement-recorder bodies are accepted, mirroring the
-          -- two-value pin 20260905020200 already uses for the earned recorder:
-          --   feb0f260... the body live in production on 2026-09-05 (pre-020200)
-          --   9054ce6c... the body 20260905020200 installs (post-020200)
-          -- This file now runs after 020200 in the ordered plan, so the second
+          -- two-value pin 20260905200200 already uses for the earned recorder:
+          --   feb0f260... the body live in production on 2026-09-05 (pre-200200)
+          --   9054ce6c... the body 20260905200200 installs (post-200200)
+          -- This file now runs after 20260905200200 in the ordered plan, so the second
           -- value is the one a normal rollout meets; the first keeps the file
           -- independently appliable if the two ever land in the other order.
           AND md5(p.prosrc) IN (

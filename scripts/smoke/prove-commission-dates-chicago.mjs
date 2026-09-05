@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Disposable PostgreSQL 17 proof for
- *   supabase/migrations/20260905020400_commission_dates_follow_chicago_business_day.sql
+ *   supabase/migrations/20260905200400_commission_dates_follow_chicago_business_day.sql
  *
  * The commission-creating helpers stop trusting the caller's date and derive it from the
  * record the commission belongs to (orders.order_date / invoices.invoice_date). Five live
@@ -49,7 +49,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-commission-dates-chicago-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
-const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260905020400_commission_dates_follow_chicago_business_day.sql');
+const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260905200400_commission_dates_follow_chicago_business_day.sql');
 const REPLAY_STOP_BEFORE = '20260817120000_carry_allocated_line_cents_through_lifecycle.sql';
 const FUNCS = ['_insert_commissions_for_order', '_insert_commissions_for_job'];
 const ADMIN = '00000000-0000-4000-8000-00000000c001';
@@ -321,7 +321,7 @@ try {
 
   // PHASE 5: replay safety. A migration that aborts on its OWN output is fail-closed but
   // hostile to a re-run, so the candidate accepts the post-image md5 as well as the
-  // pre-image — the same two-value shape 20260905020200 uses for its recorder pins.
+  // pre-image — the same two-value shape 20260905200200 uses for its recorder pins.
   log(`PHASE 5 post-image md5s: ${JSON.stringify(afterBodies)}`);
   const replay = psql('\\i /tmp/candidate.sql', { allowFailure: true, wrap: wrapByName.get('candidate.sql') ?? false });
   assert.deepEqual(bodyState(), afterBodies, 're-applying must leave the converted bodies in place');

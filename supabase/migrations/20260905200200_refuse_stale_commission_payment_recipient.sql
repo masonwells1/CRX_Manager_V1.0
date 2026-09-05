@@ -107,7 +107,7 @@ BEGIN
           -- above already does with its own two-value IN list.
           --
           -- Pinning ONLY the repaired body coupled this money-safety migration to
-          -- the label repair (then 20260905020100; renumbered 20260905190000 on
+          -- the label repair (then 20260905020100; renumbered 20260905210000 on
           -- 2026-09-05 so it now sorts AFTER this file), a COSMETIC repair that refuses to run once
           -- any settlement activity exists. One real settlement before rollout and
           -- the repair would have aborted; the name-ordered runner would then never
@@ -120,10 +120,10 @@ BEGIN
           --
           --   dc0577e8... the body live in production on 2026-09-05 (pre-repair),
           --               read read-only from pg_proc that day
-          --   5623b0d3... the body the label repair (now 20260905190000) produces (post-repair)
+          --   5623b0d3... the body the label repair (now 20260905210000) produces (post-repair)
           --
           -- Both are fully-hardened recorders by every attribute asserted above; they
-          -- differ only in the label snapshot text 020100 rewrites, which this guard
+          -- differ only in the label snapshot text the repair (now 20260905210000) rewrites, which this guard
           -- does not depend on. Accepting either makes this file independently
           -- appliable in whichever order the two land.
           AND md5(p.prosrc) IN (

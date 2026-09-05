@@ -3,12 +3,20 @@
  * Network-isolated PostgreSQL 17 proof that the parked commission migration set
  * survives SETTLED data in its REAL filename order.
  *
- * The defect this guards against: 20260905190000_repair_commission_history_label_snapshots
- * (formerly 20260905020100) correctly refuses to run once any commission payment
- * has been posted, and the filename-ordered runner (scripts/list-post-baseline-migrations.mjs)
- * halts at the first failing file. At its old position that refusal would have
- * stopped 20260905020200_refuse_stale_commission_payment_recipient — the payout
- * money-safety guard — and every later file from ever installing.
+ * The defect this guards against: 20260905210000_repair_commission_history_label_snapshots
+ * (formerly 20260905020100, then 20260905190000) correctly refuses to run once any
+ * commission payment has been posted, and the filename-ordered runner
+ * (scripts/list-post-baseline-migrations.mjs) halts at the first failing file. At its
+ * old position that refusal would have stopped
+ * 20260905200200_refuse_stale_commission_payment_recipient — the payout money-safety
+ * guard — and every later file from ever installing.
+ *
+ * A second ordering hazard, found 2026-09-05 evening: the ordering guard the apply path
+ * runs (checkMigrationOrdering) refuses any file stamped older than the newest APPLIED
+ * ledger row. #606 landed live that day as version 20260905185938 under a bare name, so
+ * the six files then stamped 20260905020000..185619 would each have been refused. The
+ * whole set was restamped 20260905200000..210000; the LEDGER phase below proves the
+ * renumbered names clear the guard and that the old names did not.
  *
  * What this proves, in one disposable container seeded by the commission-history
  * base prover (which leaves REAL posted/voided settlement history behind):
@@ -17,41 +25,60 @@
  *   CONTROL   the OLD order (repair right after the replay guard) halts at the repair
  *             and the recipient guard never installs — the harness sees the defect
  *   ROLLOUT   the REAL order, applied file by file with per-file commits exactly as
- *             the runner does, installs every file through 20260905185619, leaves the
+ *             the runner does, installs every file through 20260905200600, leaves the
  *             recipient guard's recorder body + trigger in place, and refuses ONLY the
  *             repair, as the final file, with COMMISSION_HISTORY_LABEL_REPAIR_SETTLED
  *   PIN       narrowing the repair's settlement-recorder pin back to the single
- *             pre-020200 body makes it fail with ..._DRIFT after the guard — the
+ *             pre-200200 body makes it fail with ..._DRIFT after the guard — the
  *             widened pin is load-bearing, not decorative
  *   TAIL      once the settled data is gone the repair still applies AFTER the guard
- *             (post-020200 recorder body) and installs its own recorder body
+ *             (post-200200 recorder body) and installs its own recorder body
+ *   LEDGER    every parked file clears checkMigrationOrdering against the live applied
+ *             high-water, and the pre-renumber names did not (negative control)
  *
  * Every parked 20260905* file is asserted wrappable (the real single-transaction
  * delivery path) before it is applied — asserted, never branched on.
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const BASE_PROVER = path.join(HERE, 'prove-commission-history-as-of.mjs');
 const LEDGER_MIGRATION = '20260903150100_ledger_backed_commission_history.sql';
-const REPLAY_GUARD = '20260905020000_commission_history_report_replay_guard.sql';
-const RECIPIENT_GUARD = '20260905020200_refuse_stale_commission_payment_recipient.sql';
-const REPAIR = '20260905190000_repair_commission_history_label_snapshots.sql';
-const LABEL_FIX = '20260905185619_latest_commission_recipient_label.sql';
+const REPLAY_GUARD = '20260905200000_commission_history_report_replay_guard.sql';
+const RECIPIENT_GUARD = '20260905200200_refuse_stale_commission_payment_recipient.sql';
+const REPAIR = '20260905210000_repair_commission_history_label_snapshots.sql';
+const LABEL_FIX = '20260905200600_latest_commission_recipient_label.sql';
 const PARKED_PREFIX = '20260905';
 
+// The newest APPLIED ledger row as read live on 2026-09-05 (#606, version 20260905185938,
+// recorded under a bare name; refresh-applied-migrations synthesizes <version>_<name>).
+// Pinned so the LEDGER phase never abstains when the gitignored snapshot is absent (CI); when
+// the snapshot is present it is unioned in, so the bar can only rise, never fall.
+const LIVE_HIGH_WATER_ROW = '20260905185938_refuse_null_job_field_acres';
+// The names the parked set carried before the 2026-09-05 evening renumber — the
+// negative control for the LEDGER phase. Six of these sort below the row above.
+const PRE_RENUMBER_NAMES = [
+  '20260905020000_commission_history_report_replay_guard.sql',
+  '20260905020200_refuse_stale_commission_payment_recipient.sql',
+  '20260905020300_enforce_commission_payment_business_date.sql',
+  '20260905020400_commission_dates_follow_chicago_business_day.sql',
+  '20260905020500_document_dates_follow_chicago_business_day.sql',
+  '20260905185619_latest_commission_recipient_label.sql',
+  '20260905190000_repair_commission_history_label_snapshots.sql',
+];
+
 // md5(prosrc) pins, named after the file that installs each body.
-const SETTLEMENT_RECORDER_LIVE = 'feb0f260fd2ad9e2945f761e93e9a3dc';   // pre-020200
-const SETTLEMENT_RECORDER_GUARD = '9054ce6c57f3e985e2b044385e07a6cd';  // installed by 020200
+const SETTLEMENT_RECORDER_LIVE = 'feb0f260fd2ad9e2945f761e93e9a3dc';   // pre-200200
+const SETTLEMENT_RECORDER_GUARD = '9054ce6c57f3e985e2b044385e07a6cd';  // installed by 200200
 const EARNED_RECORDER_LIVE = 'dc0577e8e694773e75a1c8099819ba6c';       // pre-repair
 const EARNED_RECORDER_REPAIRED = '5623b0d31181d357b303a36e563a77aa';   // installed by the repair
-const BALANCE_REPORT_LATEST_LABEL = 'a302d0f87ca84794ceb9c815a073f77f'; // installed by 185619
+const BALANCE_REPORT_LATEST_LABEL = 'a302d0f87ca84794ceb9c815a073f77f'; // installed by 200600
 
 const GENERATED = path.join(HERE, `.commission-migration-plan-order-${process.pid}.mjs`);
 const NAME = `crx-commission-plan-order-${process.pid}-${Date.now().toString(36)}`.toLowerCase();
@@ -111,6 +138,43 @@ assert.equal(repairIndex, trailingNames.length - 1,
   `${REPAIR} must be the LAST file in the plan so its settled-data refusal halts nothing else; plan tail: ${trailingNames.slice(-3).join(', ')}`);
 assert.ok(trailingNames.indexOf(LABEL_FIX) < repairIndex, `${LABEL_FIX} must precede ${REPAIR}`);
 console.log(`COMMISSION_PLAN_ORDER_STATIC_PASS trailing=${trailingNames.length} guard_index=${guardIndex} repair_index=${repairIndex} order=${trailingNames.join(',')}`);
+
+// ── LEDGER: every parked file must clear the ordering guard the apply path runs ──
+// migration-apply-lib.mjs calls checkMigrationOrdering with the applied ledger names
+// and refuses any file whose 14-digit stamp is older than the newest applied stamp.
+// The pinned live row is always in the applied set; the gitignored local snapshot is
+// unioned in when present, so the check can only ever get stricter, never looser.
+const { checkMigrationOrdering } = await import(
+  pathToFileURL(path.join(ROOT, '.claude', 'hooks', 'migration-ordering-lib.mjs')).href
+);
+let appliedNames = [LIVE_HIGH_WATER_ROW];
+const appliedSnapshot = path.join(ROOT, '.claude', 'session-state', 'applied-migrations.json');
+if (existsSync(appliedSnapshot)) {
+  const snapshot = JSON.parse(readFileSync(appliedSnapshot, 'utf8'));
+  if (Array.isArray(snapshot.applied)) appliedNames = appliedNames.concat(snapshot.applied);
+}
+const parkedNames = trailingNames.filter((name) => name.startsWith(PARKED_PREFIX));
+assert.equal(parkedNames.length, PRE_RENUMBER_NAMES.length,
+  `parked set is ${parkedNames.length} files but the negative control lists ${PRE_RENUMBER_NAMES.length}; update PRE_RENUMBER_NAMES`);
+// Negative control first: the SAME guard against the SAME ledger refuses the old names.
+const refusedBefore = PRE_RENUMBER_NAMES.filter((name) => checkMigrationOrdering({ name, sql: '', appliedNames }).ok === false);
+assert.equal(refusedBefore.length, 6,
+  `negative control: expected the ordering guard to refuse six pre-renumber names, it refused ${refusedBefore.length}: ${refusedBefore.join(', ')}`);
+// The renumbered names must clear it on their own stamps — never via the escape hatch.
+for (const name of parkedNames) {
+  const sql = readFileSync(trailing[trailingNames.indexOf(name)], 'utf8');
+  assert.ok(!/ordering-guard:\s*intentional-replay/i.test(sql), `${name} must not lean on the intentional-replay marker`);
+  const verdict = checkMigrationOrdering({ name, sql, appliedNames });
+  assert.ok(verdict.ok && !verdict.abstained, `${name} is refused by the ordering guard: ${verdict.reason || 'abstained'}`);
+}
+const ledgerHighWater = checkMigrationOrdering({ name: parkedNames[0], sql: '', appliedNames }).newestApplied;
+// Pin WHICH six were refused and WHAT the bar was, so a moved ledger or a wrong snapshot fails
+// loudly instead of coincidentally still counting to six.
+assert.deepEqual(refusedBefore, PRE_RENUMBER_NAMES.slice(0, 6),
+  'negative control refused a different set of pre-renumber names than expected');
+assert.equal(ledgerHighWater, LIVE_HIGH_WATER_ROW.slice(0, 14),
+  `ledger high-water moved: expected ${LIVE_HIGH_WATER_ROW.slice(0, 14)}, guard reports ${ledgerHighWater}; re-read live and re-stamp if needed`);
+console.log(`COMMISSION_PLAN_ORDER_LEDGER_PASS high_water=${ledgerHighWater} refused_before=${refusedBefore.length} clear_after=${parkedNames.length} applied_rows=${appliedNames.length}`);
 
 // The old order the defect lived in: the repair immediately after the replay guard.
 const oldOrderNames = [REPLAY_GUARD, REPAIR];
@@ -259,7 +323,7 @@ SET LOCAL session_replication_role = origin;
 COMMIT;\`);
   const narrowedResult = applySql(narrowedPin, { allowFailure: true });
   const narrowedOutput = (narrowedResult.stdout || '') + (narrowedResult.stderr || '');
-  assert.notEqual(narrowedResult.status, 0, 'PIN: the single pre-020200 pin unexpectedly applied after the guard');
+  assert.notEqual(narrowedResult.status, 0, 'PIN: the single pre-200200 pin unexpectedly applied after the guard');
   assert.match(narrowedOutput, /COMMISSION_HISTORY_LABEL_REPAIR_DRIFT/,
     'PIN: the narrowed pin failed for the wrong reason:\\n' + narrowedOutput);
   assert.equal(earnedRecorderMd5(), ${JSON.stringify(EARNED_RECORDER_LIVE)}, 'PIN: refused repair must change nothing');
