@@ -117,7 +117,36 @@ record(/docs\/workflows\/AGENT_COLLABORATION\.md/.test(agents), "AGENTS.md route
 record(/Delegation, agent collaboration, or agent-surface changes/i.test(agents), "AGENTS.md routes delegation guidance on demand");
 record(/docs\/reference\/claude-model-tuning\.md/.test(claude), "CLAUDE.md routes model tuning on demand");
 const missingGuidance = routedGuidance.filter((relative) => !existsSync(path.join(ROOT, relative)));
-record(routedGuidance.length >= 15, "AGENTS.md retains the complete task-routing table", `${routedGuidance.length} paths`);
+// A minimum COUNT cannot prove this table is complete. With 18 links present,
+// `routedGuidance.length >= 15` still passed after an entire row was deleted
+// (CodeRabbit P2, PR #600, confirmed against the exact commit snapshot): three
+// rows could vanish while CI stayed green, silently un-routing agents from
+// required guidance. Pin each task -> destination PAIRING instead, and assert
+// BOTH halves — a row whose label survives while its path is dropped, or whose
+// path survives under a rewritten label, is exactly the drift this must catch.
+// Pinning one half would be satisfied by the very defect this replaces.
+const REQUIRED_ROUTES = [
+  { label: /First session or unfamiliar area/i, paths: ["docs/manual/AGENT_ONBOARDING.md", "docs/manual/ARCHITECTURE.md"] },
+  { label: /Any code change/i, paths: ["docs/reference/coding-guidelines.md", "docs/reference/gotchas.md", "docs/workflows/SAFE_DEVELOPMENT_RULES.md"] },
+  { label: /Database, migration, or RLS/i, paths: ["docs/workflows/DATABASE_CHANGE_CHECKLIST.md", "docs/workflows/RLS_SECURITY_GUIDE.md", ".claude/schema-registry.json"] },
+  { label: /Quote-to-cash or inventory/i, paths: ["docs/workflows/QUOTE_TO_DELIVERY.md", "docs/workflows/INVENTORY_RULES.md"] },
+  { label: /Frontend\/UI/i, paths: ["docs/workflows/UI_PATTERNS.md"] },
+  { label: /Delegation, agent collaboration, or agent-surface changes/i, paths: ["docs/workflows/AGENT_COLLABORATION.md", "docs/reference/agent-guardrails.md"] },
+  { label: /Push, PR finalization, merge, or release/i, paths: [".claude/commands/ship.md"] },
+  { label: /Settled decisions, known problems, or current status/i, paths: ["docs/manual/DECISION_LOG.md", "docs/manual/KNOWN_ISSUES.md", "docs/manual/CURRENT_STATE.md"] },
+  { label: /Mason asks how the system or agent process works/i, paths: ["docs/manual/OWNER_PLAYBOOK.md"] },
+];
+for (const route of REQUIRED_ROUTES) {
+  const missingPaths = route.paths.filter((relative) => !routedGuidance.includes(relative));
+  const labelPresent = route.label.test(routingTable);
+  record(
+    labelPresent && missingPaths.length === 0,
+    `AGENTS.md routing table keeps the row for ${route.paths[0]}`,
+    [labelPresent ? "" : "task label missing", missingPaths.length ? `unrouted: ${missingPaths.join(", ")}` : ""]
+      .filter(Boolean)
+      .join("; "),
+  );
+}
 record(missingGuidance.length === 0, "every path in the AGENTS.md routing table resolves", missingGuidance.join(", "));
 record(
   existsSync(path.join(ROOT, ".claude/skills/graphify/SKILL.md")) &&
@@ -127,7 +156,25 @@ record(
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(agents), "AGENTS.md has no volatile project counts");
 record(!/\b\d{2,5}\s+(?:migrations|pages|edge functions?)\b/i.test(claude), "CLAUDE.md has no volatile project counts");
 record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAUDE.md declares AGENTS.md canonical");
+// The phrase alone proved nothing about WHICH actions are gated. In an
+// exact-snapshot probe the entire Edge Function / data-deletion / secrets /
+// authentication / permissions / billing / domains / ownership clause was
+// deleted and this check still passed (CodeRabbit P2, PR #600) — a check whose
+// NAME claims it "defines the approval gates" while testing only that one
+// sentence fragment survives. Every protected action is now asserted by name,
+// matched against whitespace-flattened text so a rewrap cannot break the pin.
 record(/explicit approval in the current conversation/i.test(agents), "AGENTS.md defines current-conversation approval gates");
+const agentsFlat = agents.replace(/\s+/g, " ");
+const GATED_ACTIONS = [
+  [/force-pushing/i, "force-pushing"],
+  [/applying a live migration or changing live data/i, "live migrations and live-data changes"],
+  [/deploying an Edge Function or out-of-band production change/i, "Edge Function and out-of-band production deploys"],
+  [/deleting data/i, "deleting data"],
+  [/changing secrets, authentication, permissions, billing, domains, or ownership/i, "secrets, authentication, permissions, billing, domains, ownership"],
+];
+for (const [pattern, action] of GATED_ACTIONS) {
+  record(pattern.test(agentsFlat), `AGENTS.md gates ${action} on Mason's current-conversation approval`);
+}
 const alwaysLoadedGuidance = `${agents}\n${claude}\n${cursorRules}`;
 record(!/\b(?:CODEX_PROOF_VERDICT|FINAL_VERDICT|OPUS5_VERDICT|VERDICT)\s*:/i.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
 record(/Reviewer prompts must request every correctness, safety, and scope finding/i.test(claudeModelTuning), "Claude reviewer prompts retain the uncapped-finding default");
