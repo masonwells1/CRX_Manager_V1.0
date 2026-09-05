@@ -1550,6 +1550,14 @@ export default function QuoteBuilder() {
 
     try {
       const idemKey = getSaveQuoteIdempotencyKey();
+      // Which record this request belongs to, captured BEFORE it is sent. The
+      // entry check at the top of this function cannot stand in for it: that ran
+      // before the request existed, and everything installed below is written
+      // AFTER the reply lands. `runWithBelowCostApproval` can also park this
+      // await on an operator decision, which widens the window from a round trip
+      // to however long that dialog stays open.
+      const routeAtSend = routeQuoteIdRef.current;
+      const quoteNumberAtSend = quoteNumber;
       const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_quote', withBelowCostReason('save_quote', {
         p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
         p_quote_payload: quotePayload as Json,
@@ -1557,6 +1565,20 @@ export default function QuoteBuilder() {
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       }, reason)));
+
+      // The route moved while this save was in flight. Quote A's failure is not
+      // quote B's, so neither the stale-write recovery dialog nor a bare error
+      // toast may land here. It is not swallowed either: the operator left
+      // believing this saved. Name the quote, because the page they are looking
+      // at is a different one and an unqualified failure would read as its own.
+      //
+      // Deliberately does NOT touch the idempotency key. This request failed, so
+      // the key must survive for the retry (F1) exactly as it does on the
+      // in-route error paths below.
+      if (error && routeQuoteIdRef.current !== routeAtSend) {
+        toast('error', `Quote ${quoteNumberAtSend || 'you were editing'} could not be saved. Reopen it and try again — your changes were not stored.`);
+        return null;
+      }
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
@@ -1577,6 +1599,19 @@ export default function QuoteBuilder() {
         toast('error', 'Quote save completed without an ID. Refresh before making further changes.');
         return null;
       }
+      // The route moved while this save was in flight, so nothing below belongs
+      // to the quote now on screen: the authoritative row-version token, the
+      // commission baseline, `setQuoteId`, and — through the `null` return — the
+      // callers' dirty-clear, success toast and navigation. Every caller gates
+      // its post-save work on a non-null id, so returning `null` suppresses them.
+      //
+      // Placed AFTER the reply is verified and the key rotated, not before. This
+      // save committed; retiring its key is correct and must happen wherever the
+      // reply lands, or a later unrelated save would replay this committed
+      // result. Rotating it in a second, earlier place would also re-introduce
+      // the reset-before-verify ordering that `idempotency-reset-order.test.ts`
+      // pins this file against.
+      if (routeQuoteIdRef.current !== routeAtSend) return null;
       // The save committed, but conversion and other chained actions must not
       // continue unless this tab can install the exact authoritative token.
       if (!installAuthoritativeQuoteRowVersion(result.row_version, 'saved')) {

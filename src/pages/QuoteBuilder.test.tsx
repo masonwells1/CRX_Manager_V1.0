@@ -1745,4 +1745,90 @@ describe('QuoteBuilder', () => {
     ));
     expect(mockRpc).not.toHaveBeenCalledWith('save_quote', expect.anything());
   });
+
+  // ── ...and neither may a save's REPLY ──────────────────────────────────────
+  //
+  // The refusal above runs before the request is sent, so it cannot cover state
+  // written after the reply lands. `save_quote` installs the authoritative
+  // row-version token, the commission baseline and (for a create) `quoteId`, and
+  // its callers then clear dirty, toast and navigate. A route change during the
+  // round trip puts all of that on the wrong quote.
+
+  function withRowVersion(fixture: ReturnType<typeof makeSwitchFixture>, rowVersion: number) {
+    return { ...fixture, quote: { ...fixture.quote, row_version: rowVersion } };
+  }
+
+  it('drops a late save_quote reply for quote A rather than installing its token on quote B', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveReply = openableGate();
+    let saveCalls = 0;
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveCalls += 1;
+      if (saveCalls === 1) {
+        await saveReply.opened;
+        // Quote A's own authoritative token, one past the 3 it loaded with.
+        return { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+      }
+      return { data: { quote_id: 'quote-b', row_version: 12 }, error: null };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {});
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(saveCalls).toBe(1));
+
+    // Leave for quote B while quote A's save is still in flight.
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+
+    saveReply.open();
+    await flushPendingWork();
+
+    // Quote A's success is not quote B's.
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Quote saved as draft');
+
+    // The decisive check. Quote B's own token must still be the one it saves
+    // against — proving quote A's reply neither replaced it nor cleared it.
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_id: 'quote-b',
+      p_quote_payload: expect.objectContaining({ row_version_expected: 11 }),
+      // Quote A's save COMMITTED, so its key had to rotate even though its reply
+      // was dropped. Reusing it here would let quote B's save replay quote A's
+      // committed result instead of writing quote B.
+      p_idempotency_key: 'test-idem-key-1',
+    })));
+  });
+
+  it('keeps quote A failed save off quote B, and says which quote failed', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveReply = openableGate();
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      await saveReply.opened;
+      return { data: null, error: { message: 'QUOTE_STALE_WRITE' } };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {});
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.anything()));
+
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+
+    saveReply.open();
+    await flushPendingWork();
+
+    // Quote A's stale-write recovery dialog must not appear over quote B, whose
+    // own record is untouched and has nothing to recover.
+    expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
+    // But the failure is not swallowed either: the operator left believing quote
+    // A saved, and it did not. The toast names it, because the page they are
+    // looking at is a different quote.
+    expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Q-AAA-1'));
+  });
 });
