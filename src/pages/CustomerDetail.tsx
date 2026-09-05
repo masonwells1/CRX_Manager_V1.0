@@ -23,7 +23,7 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType, ActivityFeedItem } from '../types';
 import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
@@ -1026,7 +1026,13 @@ export default function CustomerDetail() {
                 min={0}
                 step={100}
                 value={customer.credit_limit_cents != null ? (customer.credit_limit_cents as number) / 100 : ''}
-                onChange={(e) => update('credit_limit_cents', e.target.value ? parseDollarsToCents(e.target.value) : 0)}
+                onChange={(e) => {
+                  const cents = e.target.value ? parseDollarsToCents(e.target.value) : 0;
+                  // null = more than two decimals typed. Refuse the keystroke rather than
+                  // store 0: a $0 credit limit disables the credit check on quick deliveries.
+                  if (cents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
+                  update('credit_limit_cents', cents);
+                }}
               />
               <Input
                 label="Finance Charge Rate (%)"

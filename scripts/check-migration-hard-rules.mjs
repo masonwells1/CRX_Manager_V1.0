@@ -20,20 +20,40 @@
 //   cannot be read or parsed, every base migration is treated as applied
 //   (fail closed).
 //
-//   The registry's applied_migration_names list is NOT used: measured on
-//   2026-09-03 it matched only 252 of 900 files on disk by name, so membership
-//   proves nothing either way.
+//   The boundary must be read in FILENAME space, because that is what this
+//   check compares. `_meta.migrations_high_water` is the max ledger APPLY-TIME
+//   `version`, which Supabase assigns at apply and which bears no relation to
+//   the authored filename stamp: on 2026-09-05 the applied
+//   20260904180000_invoice_season_follows_invoice_date carried version
+//   20260904152221, so a high-water of 20260904152221 left that very file — and
+//   20260904160000_invoice_date_fallbacks_chicago — reading as "newer than
+//   applied", still revisable, still editable (Codex P1, PR #601). Using the
+//   apply-time number here silently under-protects every migration authored
+//   after the newest apply's server timestamp.
+//
+//   So the boundary is the MAX AUTHORED STAMP among applied ledger names — the
+//   14-digit prefix of each `applied_migration_names` entry — and the
+//   apply-time high-water is only the fallback for a registry whose names carry
+//   no stamps at all. This is the same rule .claude/hooks/migration-ordering-lib.mjs
+//   and session-staleness.mjs already apply, for the same reason.
+//
+//   MEMBERSHIP in applied_migration_names is still NOT used: measured on
+//   2026-09-03 it matched only 252 of 900 files on disk by name, so asking
+//   "is this file in the list" proves nothing either way. Taking a MAXIMUM over
+//   the stamps needs no per-file match and is unaffected by that mismatch.
 //
 // WHAT COUNTS AS A NEW TABLE
-//   Every CREATE TABLE in an ADDED migration file, except TEMP/TEMPORARY
-//   tables. Comments are stripped before matching. The table must appear in an
-//   `ALTER TABLE <name> ... ENABLE ROW LEVEL SECURITY` and in at least one
-//   `CREATE POLICY ... ON <name>` in the SAME file. Names are compared
-//   lowercase, unquoted, schema-qualified (unqualified names mean `public`).
-//   The one documented exemption is the same marker the local
-//   .claude/hooks/rls-on-new-tables.mjs hook honors: a `-- rls-check: exempt`
-//   comment in the file (used once in 900 migrations, for a SECURITY DEFINER
-//   only counter table). An exempt file is reported loudly, never silently.
+//   Every CREATE TABLE in an ADDED migration file or a revised pending
+//   migration that still exists at HEAD, except TEMP/TEMPORARY tables. Pending
+//   deletions have no HEAD source to inspect and remain a loud warning. Comments
+//   are stripped before matching. The table must appear in an `ALTER TABLE
+//   <name> ... ENABLE ROW LEVEL SECURITY` and in at least one `CREATE POLICY ...
+//   ON <name>` in the SAME file. Names are compared lowercase, unquoted,
+//   schema-qualified (unqualified names mean `public`). The one documented
+//   exemption is the same marker the local .claude/hooks/rls-on-new-tables.mjs
+//   hook honors: a `-- rls-check: exempt` comment in the file (used once in 900
+//   migrations, for a SECURITY DEFINER only counter table). An exempt file is
+//   reported loudly, never silently.
 //
 // USAGE
 //   node scripts/check-migration-hard-rules.mjs --base <sha> --head <sha> [--repo-root <dir>]
@@ -175,9 +195,26 @@ export function classifyMigrationChanges(entries, highWater) {
   return { protectedChanges, pendingChanges, added, ignored };
 }
 
+/**
+ * The applied boundary IN FILENAME SPACE.
+ *
+ * Prefers the max 14-digit authored stamp across `_meta.applied_migration_names`,
+ * because this check compares migration FILENAMES. `_meta.migrations_high_water`
+ * is the ledger's apply-time `version` and is only the fallback — see WHAT COUNTS
+ * AS APPLIED above for the case where trusting it under-protects applied files.
+ */
 export function readHighWater(registryJsonText) {
   try {
     const parsed = JSON.parse(registryJsonText);
+    const names = parsed?._meta?.applied_migration_names;
+    if (Array.isArray(names)) {
+      const authored = names
+        .map((name) => /^(\d{14})_/.exec(String(name))?.[1])
+        .filter(Boolean)
+        .sort();
+      const newest = authored.at(-1);
+      if (newest) return newest;
+    }
     const value = parsed?._meta?.migrations_high_water;
     return typeof value === 'string' && /^\d{14}$/.test(value) ? value : null;
   } catch {
@@ -263,11 +300,15 @@ export function runDiffCheck({ repoRoot, base, head, log = console.log }) {
   for (const change of pendingChanges) {
     log(`  ⚠ revises a pending migration (version ${change.version} is newer than applied high-water ${change.highWater}): ${change.path}`);
   }
-  for (const relPath of added) {
+  const rlsAnalysisPaths = [
+    ...added,
+    ...pendingChanges.filter((change) => change.status !== 'D').map((change) => change.path),
+  ];
+  for (const relPath of rlsAnalysisPaths) {
     const sql = showFile(repoRoot, head, relPath);
     if (sql === null) {
       ok = false;
-      log(`  ✗ could not read added migration at head: ${relPath}`);
+      log(`  ✗ could not read migration at head: ${relPath}`);
       continue;
     }
     const { tables, violations, exemptViolations, exempt } = analyzeMigrationSql(sql);

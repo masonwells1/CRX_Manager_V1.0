@@ -2812,6 +2812,21 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // becomes public — live grants on 2026-08-25 show no EXECUTE for anon,
   // authenticated or service_role, and 20260826220000 re-asserts that shape.
   '_restore_quote_version_below_cost_impl_20260810',
+
+  // Private implementations behind the public price_order and save_invoice
+  // RPCs, absent from the generated types by design (direct EXECUTE revoked
+  // to PUBLIC/anon/authenticated/service_role by 20260812115237 and
+  // 20260827041500 respectively; CREATE OR REPLACE keeps those ACLs). Both
+  // declare p_idempotency_key text and deliberately share their public
+  // wrapper's cache namespace ('price_order' / 'save_invoice'). Pre-apply-window
+  // entries, exactly like the draw-down impl above: migration 20260904160000
+  // (invoice_date fallbacks -> America/Chicago business day) is the FIRST
+  // on-disk CREATE of each under its post-rename name, because both were
+  // originally renamed with ALTER FUNCTION ... RENAME TO and had no on-disk
+  // body the transitive-mutation walker could see. Move either to
+  // MUTATING_RPCS_WITH_IDEMPOTENCY only if it ever becomes public.
+  '_price_order_below_cost_impl_20260810',
+  '_save_invoice_lineage_unaware_impl_20260827',
 ]);
 
 /**

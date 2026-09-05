@@ -53,9 +53,10 @@ if (violations.length > 0) {
     "but it is not an approved exception until exact numeric math, clean finite whole-cent values, " +
     "and an active finite whole-cent CHECK are verified; dirty or unconstrained columns remain findings. " +
     "For authoritative TypeScript input, first reject more than two fractional digits or apply one " +
-    "explicit approved exact rounding rule; only then convert to integer cents. The legacy " +
-    "parseDollarsToCents() helper currently truncates excess precision, so it is not sufficient " +
-    "without that input validation.");
+    "explicit approved exact rounding rule; only then convert to integer cents. The shared " +
+    "parseDollarsToCents() helper REFUSES more than two decimals by returning null (since " +
+    "2026-09-03); callers must check for null and show MONEY_PRECISION_MESSAGE, never coerce " +
+    "null to 0.");
 }
 
 out("allow");

@@ -1,0 +1,8 @@
+## 2026-09-04 - Prove the retained follow-up key is spendable by driving the real screen
+
+- Added `src/pages/DeliveryDetail.followupRetry.test.tsx`, which renders the REAL `DeliveryDetail` with the REAL `useIdempotencyKey` hook, clicks the actual Create Follow-up Delivery button, and asserts on what the operator can do rather than on source text.
+- Case 1 — ambiguous reply (`{ data: null, error: null }`, the case where the server may already have committed): the button must come back enabled, and the second click must send the SAME `p_idempotency_key`, so the server can recognise the replay instead of double-applying.
+- Case 2 — confirmed success: the key must be RETIRED, so a genuine second follow-up is a new intent rather than a replay of the first.
+- Mutation-tested rather than assumed. Moving `setCreatingFollowup(false)` out of `finally` and onto the success path only — the shape the fix replaced — turns case 1 red while case 2 stays green, which is exactly right: the success path still clears the flag, only the throw path strands the operator. Restoring `finally` returns both to green.
+- This supersedes the VERIFICATION LIMIT recorded in `2026-09-04-followup-delivery-retry-reachable.md`, which said the re-enable was reasoned from control flow rather than observed. It is now observed against the real component.
+- REMAINING LIMIT, stated precisely: this renders the component in jsdom with the Supabase client mocked. It exercises the real handler, real hook and real button state, but it is not a live browser against a live server, so it does not prove network, auth or server replay behaviour.

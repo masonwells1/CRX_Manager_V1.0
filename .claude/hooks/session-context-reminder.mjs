@@ -52,18 +52,27 @@ const COMPACT_REANCHOR =
   "numeric-dollar columns keep exact numeric math and whole-cent constraints once clean, and " +
   "authoritative TypeScript rejects amounts with more than two fractional digits or applies one " +
   "approved exact decimal rounding rule before converting to integer cents; parseDollarsToCents() " +
-  "currently truncates excess precision and is insufficient without that validation; " +
+  "REFUSES more than two decimals by returning null (since 2026-09-03) — callers must check for " +
+  "null and show MONEY_PRECISION_MESSAGE, never coerce null to 0 on a saved or authoritative " +
+  "path (persisted, sent to an RPC, or gating/computing a saved amount); a display-only preview " +
+  "may coerce with ?? 0 ONLY when the value never reaches a save AND the same field's save path " +
+  "already refuses null by name — both halves, or it is a BLOCKER; " +
   "binary-floating-point rounding is prohibited for money; .update()/.delete() need " +
   "checkMutationResult; RPC usage needs assertRpcResult; SECURITY DEFINER functions need " +
   "SET search_path = public, pg_temp. Treat files changed before the compact as UNVERIFIED " +
-  "unless the summary says they were run and observed. Mason has zero coding experience — " +
+  "unless the summary says they were run and observed. Mason cannot read code or safely review a diff — " +
   "explain in plain English.";
 
 const SESSION_ONBOARDING =
   "You are starting a new session on the CRX Manager project. Silently read AGENTS.md (the " +
-  "shared contract), CLAUDE.md (Claude-only routing), and docs/workflows/SAFE_DEVELOPMENT_RULES.md, " +
-  "then briefly confirm context is loaded. CRITICAL CONTEXT: Mason has ZERO coding experience — " +
-  "always explain in plain English; show a plan and wait for approval before multi-file or risky " +
-  "edits; never assume he knows code terminology.";
+  "shared contract) and CLAUDE.md (Claude-only routing), then load only the workflow and reference " +
+  "documents that AGENTS.md routes for the current task. Briefly confirm context is loaded. " +
+  "CRITICAL CONTEXT: Mason cannot read code or safely review a diff. Own routine technical choices, " +
+  "and explain outcomes and risk in plain English. Before multi-file work or work touching data, money, " +
+  "security, or a live system, get his approval after a short plan; then continue routine implementation " +
+  "without repeated pauses. Every hard-gated live action listed in AGENTS.md—including each live migration, " +
+  "Edge Function deployment, and data deletion—requires Mason's current approval immediately beforehand. " +
+  "Only the armed hands-free migration path waives per-migration approval, never for a destructive migration. " +
+  "Clearly identify the rare action or business decision only Mason can make.";
 
 emit(source === "compact" ? COMPACT_REANCHOR : SESSION_ONBOARDING);

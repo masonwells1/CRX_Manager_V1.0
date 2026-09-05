@@ -87,7 +87,7 @@ for file in $TS_FILES; do
   if echo "$CONTENT" | grep -qE '(price|cost|amount|total|balance|margin).*\.toFixed\s*\(\s*2\s*\)'; then
     echo "WARNING: $file"
     echo "  Uses .toFixed(2) on a money variable — verify this is display-only."
-    echo "  Money must be stored as bigint cents. See CLAUDE.md."
+    echo "  Money must be stored as bigint cents. See AGENTS.md and docs/workflows/SAFE_DEVELOPMENT_RULES.md."
     WARNINGS=$((WARNINGS + 1))
   fi
 

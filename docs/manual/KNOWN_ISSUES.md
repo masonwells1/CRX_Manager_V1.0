@@ -1,19 +1,28 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-03 for the F2 entry and migration-ledger facts.** The ordering boundary is
-the newest applied authored NAME:
-**`20260903150000_job_chemicals_persist_driver`**. Read ordering from the NAME — it is what
-the ordering guard compares and it moves far less often than the counters. For provenance, the same
-read observed 993 ledger rows (986 distinct names) and `max(version)` `20260903153402`; **treat both
-of those as a point-in-time observation, not a fact** — any lane applying a migration moves them, so
+**Last verified: 2026-09-04 for both the migration-ledger facts and the F2 entry.** The
+ordering boundary is the newest applied authored NAME:
+**`20260903230000_commission_report_snapshot_contract`** (ledger version `20260904040643`, read-only
+`list_migrations` on 2026-09-04). F2
+(`20260903160000_gate_number_generators_active_profile_role`) applied earlier the same day as ledger
+version `20260904023121` and was the boundary until the commission snapshot landed after it. Read
+ordering from the NAME — it is what
+the ordering guard compares and it moves far less often than the counters. Two further reading
+traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
+reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
+because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …) sort above digits
+— use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` here as a point-in-time
+observation, not a fact** — any lane applying a migration moves them, so
 re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
-F2 item below was re-verified against live on this date (function bodies, grants, the
-`invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
+F2 item below was re-verified against live on this date (post-apply function bodies, grants, and a
+three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
-`20260903153402`.** It is also the current ordering boundary named above. Verified independently
+`20260903153402`.** It was the ordering boundary when this paragraph was written; F2 and then the
+commission snapshot have since applied above it, so read the boundary from the header, not here.
+Verified independently
 against production on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job`
 is at md5 `18d08d5f40aea91fe13ac3e5a686c549` with exactly one overload, so no duplicate function was
 created. This **supersedes every earlier statement in this file that F06 was merged but not
@@ -270,6 +279,100 @@ The remaining fractional historical rows described below are still tracked data 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## OPEN 2026-09-04 — the migration drift reviewer's overload check can only see AUTHORED history, and its sanctioned runner can never show it the live catalog
+
+**Deferred deliberately by Mason on 2026-09-04**, split out of PR #594 so the uncontested
+search-method fix could land alone. This is a **pre-existing hole on `main`**, not one that PR
+introduced: `git diff origin/main` on that branch removed no rule and lowered no severity.
+
+**What CHECK 2 in `.claude/agents/migration-drift-reviewer.md` actually does.** It greps
+`supabase/migrations/` for an earlier `CREATE OR REPLACE FUNCTION` of the same name with different
+argument types, and calls it a BLOCKER when the new migration does not first `DROP FUNCTION` the
+old one. That is a search of the *authored files in this repository* — nothing else.
+
+**Hole 1 — live-only drift is invisible.** An overload that exists in the live database but was
+never authored into a migration file (applied by hand, applied from a branch whose file never
+landed, or created by a since-reverted migration) leaves no trace for the grep to find. CHECK 2
+reports clean, the new function is created beside the unseen one, and callers can resolve to the
+wrong overload. The 2026-03 incident class this check exists to catch is exactly that outcome.
+
+**Hole 2 — the sanctioned proof runner cannot close hole 1.**
+`scripts/write-apply-proofs.mjs` (`buildReviewerCharterPrompt`, ~line 75) executes this charter as a
+sandboxed read-only Codex run whose prompt carries **only the charter text and the migration path**.
+It injects no catalog query result, and the charter itself tells the reviewer it cannot call Supabase
+MCP. So a rule of the form "require live `pg_proc` evidence before clearing this check" would emit a
+finding on **every** migration containing a `CREATE OR REPLACE FUNCTION`, forever — the run would
+return BLOCKERS, no function migration could be applied through the sanctioned path, and the gate
+would be routed around. A gate that always fails is a gate that gets bypassed. This was found by an
+exact-SHA `gpt-5.6-sol` proof on PR #594 and is why the rule was withdrawn rather than shipped.
+
+**What a real fix has to solve, so the next attempt does not rediscover it:**
+
+1. **Get live evidence into the runner.** Either `write-apply-proofs.mjs` runs the catalog query
+   itself and injects the rows into the charter prompt, or the orchestrator records them as task
+   evidence the charter is told to look for. Without one of those, no evidence rule is satisfiable.
+2. **Compare argument types canonically, not as rendered text.** `oid::regprocedure::text` renders
+   BOTH the schema and the argument types **search_path-dependently**. Two identically named types
+   in different schemas can render as an exact string match while Postgres resolves different type
+   OIDs and creates a second overload. Evidence must carry `proargtypes` (the canonical input-type
+   OID vector), or types rendered under an explicitly stated search_path.
+3. **Never let a COUNT acquit.** A count cannot tell `f(integer)` from `f(text)`: live holds
+   `f(integer)`, the migration adds `f(text)` with no `DROP FUNCTION`, the pre-apply count reads
+   **1**, and applying leaves **2** overloads. `pronargs` is a count and has the same defect.
+   Candidate-authored prose asserting "exactly one overload" is not evidence either.
+4. **Keep detection and acquittal separate.** Local history must decide the default verdict with no
+   database access, so the check always reaches a verdict. Live evidence's only job is to *acquit* a
+   history-detected BLOCKER in the stale case where a later `DROP` removed an overload the files
+   still show. Absence of live evidence must leave the BLOCKER standing — never a HIGH demanding
+   evidence the run cannot fetch, and never clean.
+
+**Blast radius, so this is not read as urgent.** Nothing regressed: the reviewer behaves exactly as
+it did before PR #594, and the live-only-drift gap has been there as long as the check has. What
+changed on 2026-09-04 is that it is now written down instead of only being known.
+
+---
+
+## SETTLED 2026-09-03 (basis) / FIXED IN CODE, MIGRATION PENDING LIVE APPLY (UTC fallbacks) — "invoice due dates derive from the invoice date, not the Chicago posting date"
+
+**Report (`codex-transaction-review`, 2026-09-03):** due dates derive from `invoice_date` rather
+than the America/Chicago posting date, so a late-evening invoice lands on the wrong day. Verified
+at HEAD and against the LIVE posting body: `_post_invoice_impl_20260714` stamps
+`due_date = COALESCE(due_date, invoice_date + terms days)` (`20260702160000_a8_terms_to_due_date.sql:133`).
+**Two separate issues in one report.** (1) *Basis:* Mason decided 2026-09-03 the terms run from
+the **invoice date** the customer reads (`DECISION_LOG.md`, 2026-09-03), so the posting RPC is
+correct as shipped and deliberately unchanged; the 2026-07-16 spec's "posting date" wording is
+amended. Exactly one live invoice differs between the bases (backdated about four months; not named
+here — this repo is public) and it keeps its invoice-date-based due date / stays overdue by that
+decision. (2) *Timezone:* affects **zero** live
+invoices — 0 of 3 posted invoices crossed the UTC/Chicago day boundary (both sides tested) and both
+invoice screens send the browser-local date. The only real hole is four server-side
+`invoice_date = CURRENT_DATE` fallbacks; migration `20260904160000_invoice_date_fallbacks_chicago.sql`
+moves them to the Chicago business day (container proof
+`scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs`). **APPLIED LIVE 2026-09-04 13:00 UTC**
+(ledger version `20260904130047`) under Mason's in-chat OK, verified post-apply: all four bodies at
+their candidate pins, one overload each, SECDEF + `search_path` intact. That hole is CLOSED.
+
+**Two residuals remain open, both raised by the pre-apply gate and accepted rather than blocked.**
+(a) **OPEN, DEADLINE 2026-09-30 — `season` is still UTC in two of those four bodies.**
+`_save_invoice_lineage_unaware_impl_20260827` and `_save_field_app_invoice_impl_20260714` stamp
+`season` from `current_season()` = `compute_season(CURRENT_DATE)`, which the migration did not
+change. `compute_season` rolls at month >= 10, so on **2026-09-30 after 7 pm Chicago** a row would be
+dated 2026-09-30 (season 2026) while stamped `season = 2027`. Before the apply both were UTC and
+therefore agreed with each other; making the date correct exposed the coupling. `season` drives
+`customer_application_rates` lookups and year-end statements. The correct pattern already exists in
+`_save_field_app_split_invoice_impl`, which derives the season from the same COALESCEd Chicago date.
+Needs a follow-up migration before 2026-09-30. Same class, later window: `next_invoice_number`
+derives its year from `extract(year FROM now())` (UTC), so a 2026-12-31 evening invoice is dated
+2026 and numbered 2027.
+(b) **OPEN OWNER DECISION** — the split-invoice body's commission-record `CURRENT_DATE` is
+deliberately retained (pinned at exactly 1 by the postflight so it cannot drift silently). It now
+*disagrees* with the Chicago-dated invoice written in the same transaction on a Chicago evening,
+where before the apply the two always agreed. Whether commissions should follow the invoice date is
+Mason's call, not a defect to fix unilaterally.
+
+Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md` and
+`docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md`.
 
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
@@ -815,7 +918,199 @@ re-confirming findings F1–F3 of `docs/audits/2026-09-01-no-pr-branch-dispositi
 the three was tracked here before; each lived only on a branch 150–690 commits behind `main`. The
 branches are references, not merge candidates — every fix must be re-derived on current `main`.
 
-**F1 — idempotency key discarded before the RPC result is checked (money paths).** On `main`,
+**F1 — PARTIALLY FIXED 2026-09-03; MOST of the defect class is still OPEN** (branch
+`claude/money-screens-idempotency-key-582a41`, PR #584). Read the "still open" list below before
+assuming any screen is covered.
+
+**Fixed: 14 changes across 7 files** — 11 reset reorders, 1 assert repair, 2 click-level repairs, in
+`OrderDetail`, `DeliveryDetail`, `InvoiceDetail`, `FieldApplicationInvoice`, `Returns`,
+`PrepaymentManagerPanel`, `MonthEndClose`. Nine keys are also given a record scope via the hook's
+`intentScope` / `getKeyFor`, because detail pages do NOT remount on a route-id change (every
+`<x>/:id` route in `src/App.tsx` is rendered without a `key` prop) and a retained unscoped key
+would otherwise replay record A's receipt against record B.
+
+**The bar a site had to clear, tightened twice by review.** It is not enough that the key names the
+right record: the scope must bind **everything a retry can vary**. `check_idempotency` matches on
+key plus operation only and returns the cached result *without looking at the new payload*, so a
+retained key on an RPC that also carries free text or quantities replays the FIRST payload while the
+screen reports the edited one. That is why `complete_delivery` (signature, per-item quantities,
+issue notes) and the free-text `cancel_delivery` / `void_delivery` / `void_order` are NOT fixed
+here, and why `apply_remaining_prepayments` is scoped by customer rather than left page-wide.
+
+**STILL OPEN — do not assume these are fixed.** Twelve pages were REVERTED to `main` after the
+round-2 `gpt-5.6-sol` review, because reordering the reset makes the client RETAIN the key and on
+these pages the key is bound to the URL rather than to what the RPC targets (an in-page selection,
+a staged payload, component state, or a `/new` route with no id). Retaining it there trades
+duplicate-on-retry for **cross-record replay** — demonstrated worst case on `PrepayWorkspacePanel`,
+where batch B receives batch A's receipt, reports success, and clears B's staged allocations
+without applying them. Open: `QuoteBuilder`, `BlendTicketDetail`, `PrepayWorkspacePanel`,
+`Deliveries` (batch cancel), `Invoices` (batch void/delete), `PaymentAllocation`,
+`FinanceChargePreviewModal`, `Quotes`, `DeliveryRemainders`, `NewOrder`, `QuickDeliveryModal`,
+`FieldSetup`, plus `JobDetail` (owned by a concurrent session; see the count caveat below), plus
+`FieldStop` and
+three of the four `DeliveryDetail` actions (see round 3 / round 4 below). **Fix shape:** bind the
+key to the REQUEST PAYLOAD — the `fingerprintIntentPayload` approach from PR #535 — not to the
+route. Enumerated in `src/__tests__/idempotency-reset-order.test.ts` (`KNOWN_UNFIXED_SITES`), which
+fails if a site is added, removed, or substituted.
+
+**ALSO OPEN — `PrepaymentManagerPanel`'s split-check modal (`create_prepay_check_splits`), a MONEY
+path, recorded 2026-09-04 from the Codex GitHub App's P1 on PR #584.** Not in either list above and
+not pinned by the guard, because it fails on a different axis: its reset is correctly placed AFTER
+the assert, but its key is UNSCOPED while its request carries `p_customer_id`,
+`p_reference_number`, `p_splits` and `p_expected_total_cents` — all editable in the modal. **It is
+NOT a regression from PR #584**: the code is byte-identical to `main` (verified line by line;
+that PR's only edits to this file are `applyPrepayIdem` and `batchApplyIdem`). The partial
+mitigation from PR #59 (2026-05-16) resets the key on every modal OPEN, which covers close-then-
+reopen but NOT the live path: an ambiguous reply leaves the modal open, and editing the customer,
+reference or amounts and resubmitting in place reuses the key, so the server replays the FIRST
+check and reports the edited check as created while its credits were never added. **Fix shape:**
+payload binding (`fingerprintIntentPayload`), not a scope — a route scope binds nothing here, as
+there is no route. Deliberately left out of PR #584, which six adversarial rounds had already
+narrowed to exclude exactly this class.
+
+**ALSO OPEN — the original sweep missed an entire class, now enumerated.** It matched
+`resetKey()` / `resetKeyFor(` literally and never saw **aliased** resets from destructured hooks
+(`const { resetKey: resetXKey } = useIdempotencyKey(...)`). The guard now resolves aliases per file
+and the class is counted, which surfaced sites no sweep or review had listed. **Real defects:**
+`QuoteBuilder` (`resetSaveQuoteIdempotencyKey` before the assert — live F1 on `save_quote`) and
+`CustomerDetail` ×2 (`save_customer` — one plain reset-before-assert, and one that releases the key
+on `!error` alone, which does not rule out the null reply this whole class is about). Neither is a
+money path. **Scanner FALSE POSITIVES, corrected by the round-4 review:**
+`BulkTicketUpload` (`resetUploadKey` lives in `finishCommittedUpload()`, reached only once the
+ticket is committed — the scanner pairs it with an unrelated non-blocking `functions.invoke()`
+above it) and `ManualTicketCreate` (`resetCreateKey` runs inside `if (!lookup.data)`, i.e. after a
+lookup PROVED the row does not exist — the same definitive-rejection shape already allowed for
+`Returns`). Both stay pinned so the scan stays honest, but they are **correct code, not defects**.
+Any re-sweep must match the destructured alias, not the method name — and must not assume a
+scanner hit is a bug.
+
+**Reverted after round 3, in addition to the twelve above.** `FieldStop` — it does NOT remount
+stop-to-stop (`App.tsx:285` has no `key`, and `fetchStop` carries an explicit stale-route guard for
+exactly that reason), so retaining an unscoped `complete_delivery` key could replay stop A's receipt
+against stop B. And ONE site inside the otherwise-fixed `OrderDetail`: `void_order` sends
+`order.id` plus a free-text `voidReason` rather than the route id, and the void modal can survive an
+order-to-order navigation so its opening-click reset is bypassed — it stays in main's order until it
+can be payload-bound.
+
+**Reverted after round 4 — three of the four `DeliveryDetail` actions.** The round-4 HIGH:
+`complete_delivery` sends `p_signed_by`, `p_quantities`, `p_issue_type` and `p_issue_notes`, all
+live UI state a driver can edit before retrying, so a route-scoped retained key would apply the
+first payload's quantities and signature while the screen reported the edited ones — wrong stock and
+a wrong signer on a delivery record. `cancel_delivery` and `void_delivery` carry the same problem
+through their free-text reasons, and the assert throws *before* the modal is closed and the reason
+cleared, so the field really is editable on retry. Only `create_followup_delivery` survives: its
+payload is exactly `(p_original_delivery_id, p_performed_by, p_idempotency_key)`, so the route id
+binds it completely. `apply_remaining_prepayments` was the mirror-image finding and was **fixed
+rather than reverted** — it is now scoped by customer id via `getKeyFor`, because the panel lists
+every customer and an unscoped retained key would hand customer A's receipt to customer B.
+
+**Guard strength (corrected twice — read this before trusting the guard).** `KNOWN_UNFIXED_SITES`
+is now **identity-pinned per file**: each listed file is pinned to the sorted list of reset
+identifiers the scanner finds in it, and `src/__tests__/idempotency-reset-order.test.ts` fails if a
+site is added, removed, **or substituted**. Round 3 replaced whole-file exemptions with a per-file
+count; round 4 showed the count alone still let a defect be swapped in as another was removed, with
+the total unmoved — so the earlier claim here that "a new defect cannot be absorbed" was false as
+written. Mutation-tested both ways: adding a site moves the list, and renaming one site's key to
+another's fails while the count stays at 2. Round 4 also found the pin was excusing any hit the
+classifier labelled at all, even a reason the file never declared; it now excuses only reasons
+declared in `ALLOWED_REASONS`, which is how the sixth `JobDetail` site appeared.
+
+**JobDetail's count is NOT the scanner's number — do not quote the pin as a defect count.**
+It read 5, then 6, then 3 across rounds 3–5, and every move was the guard being wrong rather than
+the file changing. Round 5 established: two of the six were never defects (`Save as Recipe` and
+`Complete Job` are modal-opening buttons that deliberately rotate intent), and a third existed only
+because a COMMENT containing `.update(` convinced the scanner a call had preceded it. Round 6
+sharpened that: only `Complete Job`'s classification actually changed — its handler opens eight
+lines above its reset and the window was four — while `Save as Recipe` already classified correctly
+(handler and reset share a line) and dropped out only when `JobDetail` was added to
+`ALLOWED_REASONS`.
+**Meanwhile the scanner UNDERCOUNTS the same file**: `runJobSave` and `assignWithOverride` each
+retire the key on their FIRST line, before the call that uses it, so an exact retry gets a brand-new
+key. That is a real defect of a DIFFERENT SHAPE — reset-before-**call**, not reset-before-assert —
+and this guard does not look for it. Three pinned, two invisible, both kinds real.
+
+**Residuals, stated rather than assumed away.** (a) The scanner matches LINE ORDER; `exitsBranch` is
+a textual heuristic that reads only lines starting with `throw`/`return`, so it can still launder
+across sibling branches and can wrongly flag a safe reset after an early-exit error branch. (b)
+Alias resolution handles only a DIRECT `{ resetKey: name }` destructure in the same file — a second
+rename, a wrapper function, a cross-file alias, an optional call or computed member access stays
+invisible. (c) The identity pin uses the key's own name, so two sites calling the SAME key's reset
+are not told apart. (d) The record-scoping check proves a declaration contains a route-id scope, not
+that the RPC sends that id or that the payload carries nothing else. (e) The scanner detects only
+reset-before-**assert**; a reset placed before the CALL that uses the key is a real defect of the
+same consequence and is not looked for at all — two live instances in `JobDetail`. (f) Line
+comments and string literals are stripped before matching (round 5: a comment mentioning
+`assertRpcResult` between a call and an early reset used to hide the reset entirely, and a comment
+mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is still not handled.
+(g) The same stripping removes whole TEMPLATE LITERALS including their `${…}` interpolations, so a
+reset executed inside an interpolation is invisible, and because stripping is line-based a multi-line
+template body still reads as code. (h) Only the hit scan is stripped: `classify()` and `aliasNames()`
+still read RAW lines, so a comment or string containing `onClick=`, `.throwOnError()` or a recovery
+marker can excuse a real hit, and one containing `resetKey:` can invent an alias. (i) The
+"no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/
+`functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
+intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes
+`foo.bar.resetKey()` to `bar.resetKey`, can double-count when an alias is itself named `resetKey`,
+and does not order multiple tokens sharing one line. Closing (a), (b), (f), (g) and (h) needs a real
+tokenizer, not a line scan.
+
+(k) **A route-id scope binds the record the ROUTE names, not the record the REQUEST sends** — added
+2026-09-04 from CodeRabbit's round-2 finding on PR #584, after the route-scope fix itself had landed.
+`OrderDetail`'s id effect sets `activeOrderIdRef` and refetches but never clears `order`, and
+`loading` is initialised `true` and thereafter only ever set `false` — never back to `true`. So on
+A → B navigation the page keeps rendering A's data with its buttons live while the route id is
+already B. `consolidate_draft_invoices` was the one order action whose request sent the LOADED
+`order.id` rather than the route `id`, so a click in that window sent A under a key scoped to B and
+let B's own retry replay A's receipt; it now refuses unless the loaded order IS the route order.
+**The staleness itself is NOT fixed** — every other action on that page is still live over the
+previous order's data in that window. Those actions all send the route `id`, so they are not a
+replay risk today, but the pairing is what matters: any detail page that scopes a key by the route
+id while sending a separately-loaded record id has this defect, and (d) above cannot see it, because
+it reads the declaration and never the request.
+
+**These residuals are the reason this guard is a tripwire, not a proof.** Six adversarial rounds
+drove the product findings to zero and then kept finding more in the scanner itself; that is the
+signal the review had stopped describing the change and started describing the instrument. The
+scanner is deliberately frozen here rather than chased further — a complete sweep is the OWED
+aliased-reset work, which needs an AST.
+
+**Historical note on the original attempt:** 39 call sites
+across 20 files were reordered, plus two click-level repairs in
+`OrderDetail.tsx` (`onCreateInvoiceClick` and the Cancel Order button — both RPCs take a payload
+that cannot vary between attempts, so a per-click reset only removed duplicate protection).
+**The Cancel Order defect was found by driving the real screen; the unit tests and the static guard
+both passed over it.** Proof: `src/__tests__/idempotency-reset-order.test.ts` (13 tests — 5
+behavioral plus 8 repo-wide guards, mutation-tested), and a real-browser run where the retry reused
+the key while the pre-fix behavior sent two different keys. Three sites are verified-correct and
+were NOT changed — a `resetKey()` inside an `if (error)` recovery branch in
+`QuickDeliveryModal.tsx`, `InvoiceDetail.tsx` and `Returns.tsx` is intended, and "fixing" them
+breaks duplicate recovery. (Line numbers are deliberately omitted: earlier revisions of this entry
+pinned line numbers that went stale within the same PR.) **Two follow-ups remain open:**
+(a) `JobDetail.tsx` carries several sites of the same class (see the count caveat above),
+excluded because a concurrent session owned the file; (b) the `voidOrderIdem` / `updateOrderIdem`
+click resets need a scoped key rather than deletion, because `void_order` takes a free-text
+`p_reason` and `update_order_items` takes `p_items` — real intent rotation, same shape as
+`VendorBillDetail`'s existing `getKeyFor(voidBillScope)`.
+
+**Codex `gpt-5.6-sol` (high) round 1 on that branch returned BLOCKED — 2 HIGH, 3 MEDIUM, 3 LOW —
+and both HIGHs were real.** (a) **Removing the per-click reset opened cross-order replay**:
+`OrderDetail` does not remount when the route id changes (`App.tsx` renders it without a `key`,
+effects are keyed on `[id]`, and `activeOrderIdRef` exists precisely to guard the stale in-flight
+fetch), so the hook's key map survives an order-to-order navigation. The per-click reset had been
+incidentally rotating it. Fixed by scoping `cancelOrderIdem`, `createInvoiceIdem` and
+`splitInvoiceIdem` to the route id via the hook's `intentScope`, which keeps retry-under-the-same-key
+for the same order while minting a fresh key per order. (b) **`save_invoice` returns the invoice id
+for EDITS as well as creates**, and the reply was validated only in the `isNew` arm, so every edit
+retired its key on an empty reply and reported "saved" — the original F1 mode, preserved. The assert
+is now unconditional. The MEDIUMs were: `assertRpcResult` rejects only null/undefined and does not
+validate shape (so `MonthEndClose`'s `Array.isArray` check now runs BEFORE the reset, and the
+ambiguous branch deliberately keeps the key); the repo-wide guard ignored a reset with no assert at
+all; and both click guards were fail-open. **Lesson worth keeping: the repo-wide guard matches line
+order and cannot bind a call, its reset and its assert to the same control-flow branch — a reset in
+an `else` arm whose sibling arm asserts still passes, which is exactly how HIGH (b) survived it.
+That limit is now written into the test file rather than assumed away.**
+
+**F1 (original report) — idempotency key discarded before the RPC result is checked (money paths).** On `main`,
 `src/pages/OrderDetail.tsx` calls `resetKey()` at lines 596, 698, 891 and 906 **before**
 `assertRpcResult(...)`; the 2026-08-02 branch `codex/idempotency-reset-order-hardening-20260802`
 found the same shape across ~22 files (cancel/void order, split invoicing, invoice creation,
@@ -829,7 +1124,24 @@ these call sites. **Fix shape:** reorder every post-RPC reset after `assertRpcRe
 click-level reset, tests for transport failure / failure envelope / lost-response replay / success /
 changed intent. Money path → exact-SHA `gpt-5.6-sol` proof, then CodeRabbit.
 
-**F2 — `next_*_number` generators callable by any authenticated session with no active-profile or
+## RESOLVED 2026-09-04 (migration `20260903160000` APPLIED LIVE as ledger version `20260904023121`; code merged in PR #583, squash `3a6d52fc7`) — F2
+
+**Closed and proven live, not assumed.** All eight generators now raise `AUTH_REQUIRED` with no
+`auth.uid()` and `INSUFFICIENT_ROLE` unless the caller is an `is_active = true` profile in the
+allowed role set, gated **before** the advisory lock. Direct `authenticated` EXECUTE was revoked
+from the six the browser never calls; `next_cycle_count_number` and `next_job_number` keep it
+because `CycleCounts.tsx` and `JobDetail.tsx` call them directly. `anon` holds EXECUTE on none.
+**Observed on live 2026-09-04:** deactivated `sales_rep` → `INSUFFICIENT_ROLE`; unauthenticated →
+`AUTH_REQUIRED`; active `admin` → a cycle-count number issued normally. Account identifiers and the
+issued number are deliberately not recorded — this repository is public and the *outcome* is the
+proof. Full apply and proof provenance is row 910 of
+`docs/reference/migration-history.md`. **Residual, filed to the F06 lane, NOT fixed here:**
+`src/pages/JobDetail.tsx:1861-1862` discards the RPC error, so a refused user sees a silently blank
+job-number field instead of a toast; `CycleCounts.tsx` handles the same refusal correctly. The
+original diagnosis is kept below.
+
+**F2 (ORIGINAL DIAGNOSIS — the hole described here is now closed) — `next_*_number` generators
+callable by any authenticated session with no active-profile or
 role gate.** Eight `SECURITY DEFINER` generators (`next_application_record_number`,
 `next_commission_payment_number`, `next_cycle_count_number`, `next_delivery_number`,
 `next_invoice_number`, `next_job_number`, `next_po_number`, `next_return_number`) grant `EXECUTE` to
@@ -851,7 +1163,13 @@ directly and would break. A TARGETED revoke of the other six is right, and is wh
 **Fix shape:** new migration, all eight, in-body active-profile + role gates, plus direct
 `authenticated` EXECUTE revoked from the six with no browser caller, through `migration-review`.
 
-**Status 2026-09-03 — FIX WRITTEN AND PROVEN, NOT YET APPLIED.**
+**HISTORICAL PRE-APPLY NOTE, 2026-09-03 — superseded by the applied-live status at the top of this
+entry. Kept for the derivation, NOT as a status.** Everything from here to the end of this entry
+describes the state before the 2026-09-04 apply; where it says "not applied", read "not applied
+*yet, as of 2026-09-03*". The current status is the heading above: APPLIED LIVE as ledger version
+`20260904023121`, verified against production.
+
+**Status as it stood 2026-09-03 — fix written and proven, apply still pending.**
 `supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql` on branch
 `claude/f2-number-generator-gates-e12d02` covers all **eight**, gates in-body before each advisory
 lock, **and narrows the grants**: direct `authenticated` EXECUTE is REVOKED from the six generators
@@ -875,9 +1193,12 @@ showing a guard actually fires. `typecheck`/`lint` clean.
 above:** that the branch "re-emits no `GRANT`/`REVOKE`" (it now revokes from six), and that
 `_complete_delivery_authorized_impl` "checks authentication but not role" (it checks role; verified
 against live `prosrc`). Both were true when written.
-**Not applied live and not merged** — the live apply needs Mason's in-chat approval, a same-session
-apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict. This item stays OPEN until that lands;
-`codex/section1-security-hardening-20260725` stays until then per the branch-retention note below.
+**The 2026-09-03 precondition, now SATISFIED — kept for provenance.** As of that date this read
+"not applied live and not merged: the live apply needs Mason's in-chat approval, a same-session
+apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict, and this item stays OPEN until that
+lands." All three were obtained on 2026-09-04 and the migration applied; the item is RESOLVED per
+the heading above. **The branch-retention note still stands on its own terms:**
+`codex/section1-security-hardening-20260725` is retained per the note below and must not be deleted.
 
 **F3 — nine enforcement-file patterns missing from the `.claude/settings.json` `ask` list.**
 `scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, `scripts/normalize-eol.mjs`,
@@ -935,31 +1256,34 @@ straight into `financial_audit_log` with no binding check (Gauntlet Section 1 HI
 `20260617171500`).
 
 `.claude/hooks/actor-binding-check.mjs` is the **write-time** half of that defence — it inspects a migration
-before it is written, so a forgery is refused rather than detected after it ships. **Scope that claim
-precisely: it inspects `Write` and `Edit` tool calls only.** Both manifests register it under the matcher
-`"Write|Edit"` (`.claude/settings.json`, `.codex/hooks.json`), so a migration authored any other way is
-never presented to it (row 6). The sweep predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are
-the **post-apply** half, run against the live catalog, and are indifferent to how the file was written.
+before a supported file-editing tool call is allowed, so a forgery can be refused rather than detected only
+after it ships. **Scope that claim precisely: it is routed for `Write`, `Edit`, and `MultiEdit` tool calls
+only.** Both manifests register it under the matcher `"Write|Edit|MultiEdit"` (`.claude/settings.json`,
+`.codex/hooks.json`), so a migration authored any other way is never presented to it (row 6). The sweep
+predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are the **post-apply** half, run against the
+live catalog, and are indifferent to how the file was written.
 
 **Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. The
-**active** hook is the unchanged 213-line guard: it catches ordinary spellings *of a whole-function write*
-and nothing more. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels closed over
-two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of that is in the
-running hook**, and this PR does not change it. Do not credit the active guard with #449's fixes. It is
-**not** a boundary, and no document should describe it as preventing actor forgery. Note in particular that
-the ordinary *incremental* edit path is not covered at all (row 3 below), so "catches every ordinary
-spelling" would overstate even the active guard.
+**active** hook remains the capped guard: its actor-pattern analysis catches ordinary spellings in full-file
+content, while the narrow 2026-09-03 maintenance reconstructs supported Edit/MultiEdit calls before running
+that unchanged analysis. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels
+closed over two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of
+that is in the running hook**, and this maintenance does not import it. Do not credit the active guard with
+the fixes in PR #449. It is
+**not** a boundary, and no document should describe it as preventing actor forgery. The ordinary
+*incremental* edit path was not covered when this issue was recorded; the narrow 2026-09-03 maintenance
+change now reconstructs full post-edit files without changing the capped actor-analysis patterns.
 
-**What it does NOT catch, stated so nobody re-derives it:**
+**What it does NOT catch, plus the one closed plumbing gap, stated so nobody re-derives it:**
 
 | Gap | Why it is open |
 |---|---|
 | Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
-| Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** (213 lines, no such logic) — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
-| An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function | The hook analyses `tool_input.content \|\| tool_input.new_string` — the fragment alone. It does **not** reconstruct the full post-edit file the way `sql-safety.mjs`, `idempotency-body-check.mjs` and `status-enum-check.mjs` do via `edit-splice-lib.mjs`. With no function header, parameter list or `SECURITY DEFINER` attribute in the analysed text, the guard finds no candidate and allows. This is the *normal* editing path; the hook's own Edit-coverage test passes a whole function as `new_string`, so it does not exercise it. The sweeps do still see the applied routine. |
+| Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
+| ~~An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function~~ **Closed 2026-09-03 for supported Edit/MultiEdit paths.** | The hook now reconstructs the full post-edit migration with the shared CRLF-safe `edit-splice-lib.mjs` before running its unchanged analysis. Regression tests cover single Edit, MultiEdit, a benign edit, and an existing file-level exemption. This closes only the fragment-plumbing gap; every lexical, rebinding, naming, delegation, and unsupported-tool limit in this table remains. |
 | Cross-routine / cross-migration helpers | **Not covered — and there is no "fail-closed callable rule" in the running hook.** The analysis is intra-routine and single-file, and the active guard only considers a routine whose own body contains a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM`. A `SECURITY DEFINER` wrapper that accepts `p_performed_by` and delegates the write to a helper therefore has no literal DML in its body and is allowed — confirmed by running the real hook, which returned `allow`. Neither sweep predicate follows the helper call either. Any fail-closed callable handling belongs to **parked PR #449**; do not rely on it. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
-| **A migration written by any tool other than `Write`/`Edit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
+| **A migration written by any tool other than hooked `Write`/`Edit`/`MultiEdit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit\|MultiEdit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
 
 **The finding that settled the cap.** PostgreSQL needs no whitespace before a quoted identifier, so
 `CREATE OR REPLACE FUNCTION"public"."f"(` is valid SQL that the guard **never matched** — the security check
@@ -968,7 +1292,7 @@ three careful passes.
 
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
-- **For the incremental-Edit, novel-lexical and non-`Write`/`Edit` tool-path gaps** (rows 3, 5 and 6
+- **For the novel-lexical and non-hooked tool-path gaps** (rows 5 and 6
   above): the exact-SHA `gpt-5.6-sol` proof on migration diffs and the CodeRabbit final review are the
   controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
   not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
@@ -978,10 +1302,10 @@ three careful passes.
   clears both predicates without trying.** Do not describe any row here as requiring an attacker to clear
   all three controls.
 
-  Two of these three rows need no cleverness at all, which is the point of the cap: an ordinary incremental
-  `Edit` (row 3) and an ordinary shell-written migration (row 6) each bypass the *hook* with completely
-  unremarkable SQL. "Deliberately obfuscated SQL" describes the novel-lexical row only, and even there it
-  describes what defeats the hook, not what defeats the sweeps.
+  An ordinary shell-written migration (row 6) needs no cleverness at all. The ordinary incremental Edit
+  path (row 3) was comparably unremarkable before its narrow 2026-09-03 reconstruction fix. "Deliberately
+  obfuscated SQL" describes the novel-lexical row only, and even there it describes what defeats the hook,
+  not what defeats the sweeps.
 - **For cross-routine / cross-migration helpers** (row 4): **only the Codex proof and the CodeRabbit
   review.** Neither predicate can see this path. `actor-forgery.sql` needs actor/`auth.uid`/role proximity
   inside the *wrapper's own* `prosrc`, and `-fin-audit.sql` needs both the parameter and the
@@ -1005,6 +1329,30 @@ but still does not solve the naming-scope limit.
 landing after one clean review round, as an improvement to a capped control rather than a resumed programme.
 A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-recut-20260831` (no PR) and
 duplicates one of #449's fixes — delete it rather than continuing it.
+
+
+## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
+
+`chemLineBillingHazard` checks chemical rows whose rate and stock units differ by converting with
+JavaScript `Number` arithmetic before comparing the quantity and tolerance. PostgreSQL `save_job`
+uses exact `numeric` arithmetic, so a value extremely close to a converted-unit boundary can still be
+classified differently in the browser. The server remains the authoritative fail-closed check; the
+remaining risk is a misleading client refusal or a save that reaches the server and is then refused.
+Keep this separate from the equal-unit exact-decimal fix, and replace the converted-unit math with an
+exact rational/decimal conversion in a focused follow-up.
+
+
+## OPEN 2026-09-04 — Invalid job acreage still needs a server-side refusal
+
+An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
+`null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every
+nonblank non-finite or negative acreage at the top of `performSave`, including the
+expired-license override path, before saving state, payload work, or `save_job`. Intentional
+blank acreage retains its established payload meaning of zero. The live `save_job` function
+already refuses non-finite and negative field acreage before any write. The issue stays open
+because a missing acreage key or JSON-null acreage is still coalesced to zero; a separate forward
+migration must refuse those two cases authoritatively. The unrelated different-unit chemical
+conversion issue above also remains open.
 
 
 ## RESOLVED 2026-09-03 (code merged in PR #582, migration applied live 15:34 UTC as ledger version `20260903153402`) — F06: a reloaded chemical line loses which field the operator typed, so an acreage change blocks the save
@@ -2315,17 +2663,25 @@ raises, and only the smoke chain catches it.
 
 ---
 
-## OPEN — `parseCents.ts` truncates excess fractional precision
+## RESOLVED 2026-09-03 — `parseCents.ts` truncated excess fractional precision; it now REFUSES it
 
-`parseDollarsToCents` and `parseDollarsToCentsSigned` currently accept inputs with
-more than two fractional digits and truncate them (`1.999` becomes 199 cents); the
-focused test explicitly preserves that legacy behavior. This predates the
+**Owner decision (Mason, 2026-09-03): refuse, never round.** `parseDollarsToCents` and
+`parseDollarsToCentsSigned` return `null` for more than two fractional digits (`1.999`,
+`$12.345`) and the return type is `number | null`, so every caller must handle it. The caller
+audit the original entry asked for was done first and found that 13 of 26 sites would have
+saved a refused value as a real `$0` (credit limit → credit check disabled; prepay balance
+wiped; price override cleared), which is why the refusal is `null` and not the malformed-input
+`0`. Submit-time sites show the shared `MONEY_PRECISION_MESSAGE` and stop before any RPC;
+live-typing price boxes refuse the keystroke and keep their last accepted value. Full record:
+`docs/changelog.d/2026-09-03-money-inputs-refuse-excess-precision.md`. Original entry kept below.
+
+`parseDollarsToCents` and `parseDollarsToCentsSigned` previously accepted inputs with
+more than two fractional digits and truncated them (`1.999` became 199 cents); the
+focused test explicitly preserved that legacy behavior. This predated the
 2026-08-10 exact-whole-cent policy. New or changed authoritative money paths must
 parse decimal operands exactly and must not copy this truncation. Changing the
-shared form-input helper needs a separate caller audit and UI decision: reject
-excess precision or apply one explicit approved rounding rule. The documentation
-prerequisite records the debt but deliberately does not change production input
-semantics.
+shared form-input helper needed a separate caller audit and UI decision: reject
+excess precision or apply one explicit approved rounding rule.
 
 ---
 
@@ -3680,7 +4036,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 - **Proof-file self-attestation** — the migration-apply and Codex-push proof JSONs can be written by the same agent that should be gated by them; nothing binds the proof to an actual reviewer run. Partial raise-the-bar option: have the reviewer subagents write the proof themselves. Full closure impractical (accepted residual for a malicious agent; the fix targets honest confusion). The 2026-07-13 hands-free additions (content-bound `codex-review-mig-<name>.json` Codex proof, exact `queryHash` binding on both proofs, required `reviewers` array naming both reviewer subagents, and timestamp freshness bounded to [0, 30 min] so future-dated stamps fail) raise the honest-mistake bar further but remain self-attestable by a deliberately dishonest agent — same accepted residual. Likewise the destructive-SQL classifier is a lexical scanner, not a SQL parser: it is quote-aware and default-keep (five adversarial Codex rounds closed the comment/literal/dollar-quote hiding tricks), but a genuinely novel obfuscation could still slip it — the classifier's job is stopping honest mistakes, and its false positives merely park a migration for the morning.
 - **Migration source provenance closes the quiet path, not the loud one** (added 2026-08-31, from CodeRabbit's Major on PR #525). The apply gate now refuses SQL that is not the exact content of `<checkout>/supabase/migrations/<name>.sql` — an allowlist naming the one permitted directory, so parked drafts, `.REJECTED` files in any spelling, scratch copies and text that was never a file all fail by construction rather than by enumeration. What it does **not** stop: an agent that copies a parked file **into** `supabase/migrations/` and applies it from there. Provenance then passes, and the reviewer + Codex proofs are still required. That is the deliberate boundary — the rule forces a tracked, diffable, reviewable file move instead of a pasted body that leaves no trace on disk, which is the same honest-mistake threat model as the proof self-attestation residual above. Scope is session-local (this checkout and the primary one, never a sibling worktree), matching the reviewer-proof lookup. Do **not** "fix" the residual by adding a blocklist of rejected suffixes or parked directories: the allowlist already covers every location, and a suffix list reopens each round — see the 2026-08-31 `bash-safety-lib` entry above (eight holes across five rounds) and the 2026-08-25/26 `DECISION_LOG` entries on closed allowlists.
 - **New live-sweep predicates worth writing** (scripts/db-invariant-sweeps/): a `concurrency-hotspot` predicate asserting the named race-prone functions (inventory reservations, prebook, number sequences, balances) contain `FOR UPDATE`/advisory locks; ~~an `audit-log-completeness` predicate asserting each allowlisted money-mutator RPC writes `financial_audit_log`~~ (**BUILT 2026-08-07** — `predicates/audit-log-completeness.sql`, 0 rows live, non-vacuous over 39 money-mutating SECDEF functions); more `fin-*` arithmetic identities per derived-value family — **PARTIALLY BUILT 2026-08-07**: `fin-vendor-bill-balance-identity.sql` (0 rows live) and `fin-po-receipt-identity.sql` (22 March-2026 import-era violations **accepted-and-baselined by Mason 2026-08-07** — each allowlisted per-key with live figures recorded; sweep nets to 0 and any NEW violation still fails); order/quote `total_profit`, `net_margin_pct`, per-line commissions still unwritten.
-- ~~**Write-time forgeable-actor hook**~~ — **BUILT 2026-08-07** as `.claude/hooks/actor-binding-check.mjs` (+ test, wired in `.claude/settings.json` and `.codex/hooks.json`): PreToolUse Write|Edit hook flagging SECDEF migration functions with `p_performed_by`/`p_actor%`/`p_user%` params lacking `ACTOR_MISMATCH` binding, at write time instead of post-write sweeps.
+- ~~**Write-time forgeable-actor hook**~~ — **BUILT 2026-08-07** as `.claude/hooks/actor-binding-check.mjs` (+ test, wired in `.claude/settings.json` and `.codex/hooks.json`): PreToolUse Write|Edit hook flagging SECDEF migration functions with `p_performed_by`/`p_actor%`/`p_user%` params lacking `ACTOR_MISMATCH` binding, at write time instead of post-write sweeps. **2026-09-03 maintenance:** routing now also includes MultiEdit and reconstructs full post-edit content before running the same capped analysis.
 - **Edge Functions are exempt from the assert/check ESLint rules** (Deno) and the coverage ratchet's scope leaves ~130 legacy Supabase reads unchecked — known accepted gaps.
 - **Invoice-type leaks and direct-URL edit-lock bypasses** (lifecycle class) have no static guard — stays reviewer-checklist territory (`compliance-reviewer`).
 - **Shell string-reconstruction bypasses** of the Bash regex guards (quote-splitting, variable substitution) — accepted residual under the honest-mistake threat model; keep widening regexes as concrete shapes appear.

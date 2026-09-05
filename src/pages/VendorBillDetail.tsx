@@ -31,7 +31,7 @@ import {
 } from '../hooks/useUncertainMutationIntent';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
+import { MONEY_PRECISION_MESSAGE, parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import { centsToDollarInput, formatCents as fmt } from '../lib/money';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import { Sentry } from '../lib/sentry';
@@ -228,6 +228,7 @@ export default function VendorBillDetail() {
       return;
     }
     const amountCents = parseDollarsToCents(payAmount);
+    if (amountCents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
     if (amountCents <= 0) { toast('error', 'Enter a valid payment amount'); return; }
 
     let request: NonNullable<typeof paymentIntent.unresolvedIntent>;
@@ -350,12 +351,14 @@ export default function VendorBillDetail() {
       return;
     }
     const subtotalCents = parseDollarsToCents(editSubtotal);
+    if (subtotalCents === null) { toast('error', `Subtotal: ${MONEY_PRECISION_MESSAGE}`); return; }
     if (subtotalCents <= 0) {
       toast('error', 'Subtotal must be positive');
       return;
     }
     // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
     const adjustmentCents = parseDollarsToCentsSigned(editAdjustment);
+    if (adjustmentCents === null) { toast('error', `Adjustment: ${MONEY_PRECISION_MESSAGE}`); return; }
     if (!editBillDate || !editDueDate) {
       toast('error', 'Bill date and due date are required');
       return;

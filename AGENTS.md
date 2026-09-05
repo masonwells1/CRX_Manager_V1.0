@@ -1,138 +1,80 @@
-# CRX Manager Agent Guide
+# CRX Manager Agent Contract
 
-This is the shared, project-level contract for every coding agent in this repository. Keep it stable and concise. Tool-specific guidance belongs in that tool's file; volatile counts and sprint status belong in `docs/`.
+This is the always-loaded, shared contract for Codex, Claude, and future coding agents. Keep it short: durable rules stay here; procedures, examples, volatile facts, and long explanations belong in the linked documents.
 
 ## Project and Owner
 
-- CRX Manager V1.0 is the production operations app for Crop RX Solutions, an agricultural chemical distributor.
-- Stack: React 18, TypeScript, Vite, Tailwind CSS, Supabase, and Vercel.
-- Repo: `https://github.com/masonwells1/CRX_Manager_V1.0`
-- Production: `https://croprxsolutions.app`
-- Supabase project: `rhyzpcqhnizqbxphqdkr`
-- Owner: Mason Wells. Mason has no formal coding background. Lead the process, define jargon once, explain risk in plain English, and give one clear recommended next step.
+- CRX Manager is the production operations app for Crop RX Solutions, an agricultural chemical distributor. Stack: React 18, TypeScript, Vite, Tailwind CSS, Supabase, and Vercel.
+- Repository: `https://github.com/masonwells1/CRX_Manager_V1.0`; production: `https://croprxsolutions.app`; Supabase project: `rhyzpcqhnizqbxphqdkr`.
+- Mason Wells owns the product. He has no formal coding background and cannot safely review code or diffs. Own the technical process and explain outcomes, risk, proof, and decisions in plain English.
 
-## Start Here
+## Owner Communication
 
-1. Inspect `git status --short --branch` before doing anything that writes.
-2. If this is your first session in this repo, read `docs/manual/AGENT_ONBOARDING.md`; the rest of `docs/manual/` (architecture, decision log, known issues, current state) is the synthesis layer — check `docs/manual/DECISION_LOG.md` before re-opening a settled design question and `docs/manual/KNOWN_ISSUES.md` before claiming a bug is new.
-3. Read `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for any multi-file, data, money, security, production, migration, permission, or customer-facing task.
-4. Read `docs/reference/gotchas.md` and the relevant file under `docs/workflows/` for the area being changed.
-5. Treat executable code, migrations, live read-only evidence, and current grants as stronger evidence than prose or old handoffs.
-6. For architecture, multi-file planning, workflow/migration tracing, difficult debugging, structural audits, or PR impact analysis, automatically follow the Graph-First Navigation policy below before broad source reading.
-7. Claude workflow logic lives under `.claude/`; Codex-facing skills under `.agents/` are generated adapters. Do not maintain two independent workflow implementations.
+- Mason should never have to nudge an agent to continue or ask whether it silently stopped. Keep moving through authorized work and post concise updates at meaningful milestones or failures.
+- Lead with the answer or current outcome. Define jargon once when it matters and end with one recommended next step, not a vague offer or a menu of technical choices.
+- Make routine technical choices yourself. When Mason must decide a business or risk trade-off, recommend one option first, explain at most two alternatives, and give the exact short reply or app action needed.
+- When something fails, promptly state what failed, what it means, and what you are trying next. Exhaust safe alternatives before stopping. A genuine stop begins with `NEEDS MASON - ACTION REQUIRED` or `NEEDS MASON - DECISION REQUIRED`.
 
-## Graph-First Navigation
+## Operating Contract
 
-For architecture, multi-file planning, workflow or migration tracing, difficult debugging, structural audits, and PR-impact analysis, Graphify is the default first-pass navigator. Load the `graphify` skill automatically and follow its freshness, focused-query, reporting, and result-persistence procedures before broad file exploration; do not require Mason to remember to request it. A simple documentation lookup, obvious single-file edit, or already-known exact file does not need a graph query. If Graphify is unavailable or its supported refresh path skips, continue with focused source inspection and report that limitation instead of blocking the task.
+- Interpret requests by outcome. Reviews, diagnoses, audits, status checks, explanations, and plans authorize the relevant read-only investigation only. Requests to build, change, fix, finish, handle, implement, or ship authorize the normal reversible lifecycle through verification and protected delivery.
+- Deliver what was asked at the scope intended. Make routine judgment calls yourself; if the request seems mistaken or a better approach exists, explain that briefly and continue with the requested outcome rather than quietly narrowing, widening, or transforming it.
+- Codex proceeds after a short plan without a second approval. Claude retains its global pre-code approval checkpoint for multi-file work or work touching data, money, security, or a live system. Once any required approval is given, do not pause again or ask “Should I continue?” while safe, in-scope work remains.
+- Outside Claude's one plan checkpoint, ask only when a missing choice would materially change the business outcome and no safe inference exists, or when an exact hard-gated action below has not been requested in the current conversation.
+- Treat explicit limits such as `read-only`, `do not write`, `do not push`, `do not merge`, and `do not query production` literally.
 
-Use the graph to choose the smallest source surface that can answer or implement the task. Raw source reads do not require Mason's explicit request: they are required whenever needed to edit safely, verify a material connection, review behavior, or conduct an audit. Current source, executable tests, migrations, and live read-only database evidence remain authoritative; Graphify identifies where to look and never proves current behavior or the live schema.
+## Start and Route
 
-## Plan and Approval Gates
+1. Before presenting findings as current, confirm the checkout is not behind `origin/main`. Before writing, inspect `git status --short --branch`; preserve unrelated work and use a clean current-main worktree when the checkout is dirty, stale, or occupied.
+2. Prefer current code, migrations, tests, grants, and live read-only evidence over memory, old handoffs, or prose.
+3. Load only the guidance relevant to the task:
 
-For multi-file or risky work, present a short plain-English goal, definition of done, and plan, and name the files or systems expected to change. **Codex standing execution authorization (Mason, 2026-07-22):** unless Mason asked only for a plan, review, diagnosis, or status report, Codex begins ordinary reversible in-scope work immediately after stating the plan; Mason's request to Codex to build, fix, finish, audit, or handle the task is approval for the normal local edits, investigation, tests, worktrees, and other reversible work needed to complete that scope. Codex does not stop after planning or ask "Should I continue?" while another safe, in-scope step is available. This Codex-specific authorization does not change Claude's plan-approval workflow. Tiny, obvious, reversible fixes may proceed directly.
+| Task | Read or invoke |
+|---|---|
+| First session or unfamiliar area | `docs/manual/AGENT_ONBOARDING.md`, then `docs/manual/ARCHITECTURE.md` |
+| Any code change | `docs/reference/coding-guidelines.md` and the relevant section of `docs/reference/gotchas.md`; add `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for multi-file, data, money, security, permission, production, migration, or customer-facing work |
+| Architecture, difficult debugging, workflow/migration tracing, structural audit, or PR impact | `graphify` skill first; use focused source inspection if docs are outside its code-only corpus |
+| Database, migration, or RLS | `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`, `docs/workflows/RLS_SECURITY_GUIDE.md`, and `.claude/schema-registry.json` |
+| Quote-to-cash or inventory | `docs/workflows/QUOTE_TO_DELIVERY.md` or `docs/workflows/INVENTORY_RULES.md` |
+| Frontend/UI | `docs/workflows/UI_PATTERNS.md` |
+| Delegation, agent collaboration, or agent-surface changes | `docs/workflows/AGENT_COLLABORATION.md` and `docs/reference/agent-guardrails.md` |
+| Push, PR finalization, merge, or release | `.claude/commands/ship.md` |
+| Settled decisions, known problems, or current status | `docs/manual/DECISION_LOG.md`, `docs/manual/KNOWN_ISSUES.md`, or `docs/manual/CURRENT_STATE.md` |
+| Mason asks how the system or agent process works | `docs/manual/OWNER_PLAYBOOK.md` |
 
-Deliver what was asked, at the scope intended. Make routine judgment calls yourself, and check in only when different readings of the request would lead to materially different work. If the request seems mistaken or a better approach exists, say so in a sentence and continue with the task as asked rather than quietly narrowing, widening, or transforming it. Stop short of actions clearly beyond what the request implies.
+## Engineering Principles
 
-For substantial tasks, maintain a visible progress plan with completed, current, and remaining steps. If one lane is blocked, investigate safe alternatives and continue other unblocked work. Stop only when the task is genuinely complete, one of the explicit gates below is reached, Mason must make a material product or business choice, or no meaningful progress remains after safe alternatives are exhausted. Before stopping at a gate, finish all safe preparation and combine the needed decisions into one question.
-
-Close substantial work with one categorical verdict: `COMPLETE`, `READY FOR APPROVAL`, `BLOCKED`, or `PARTIAL`. State what was done, what remains, the proof observed, and the single recommended next step. Never call the task complete while required work remains.
-
-Standing push policy (Mason, 2026-06-16; mechanics updated 2026-09-02): regular, reversible code may land on `main` without a fresh **in-chat** approval once the full pipeline is green — every required check must pass, any review actually delivered must be clean, and the pre-push hook's typecheck/build must succeed. An approving GitHub review is NOT required: Mason removed it on 2026-09-02 (see the CodeRabbit paragraph below). CI, not a review, is the merge gate. Since 2026-07-14, `main` is protected by the GitHub `protect-main` ruleset: direct pushes are impossible for everyone, so landing work means **push a branch → open a PR → finish implementation and checks → freeze the candidate commit → apply `ready-for-coderabbit` → resolve one CodeRabbit review → merge**. This applies to Claude, Codex, and Mason alike. Risky diffs additionally require a fresh, separate, exact-SHA adversarial proof pinned to `gpt-5.6-sol` at high reasoning effort. A merge to `main` deploys production via Vercel; the one-click rollback there is the accepted safety net. This authorization covers ordinary code only and never extends to the gated actions below.
-
-Standing CodeRabbit review policy (Mason, 2026-07-17; automation updated 2026-09-02): automatic reviews are disabled in `.coderabbit.yaml` for both public repos, `CRX_Manager_V1.0` and `FarmRx`. Do not trigger CodeRabbit when a PR opens or while Codex/Claude is still implementing, reviewing, updating the branch, or pushing fixes. First bring the PR up to date and green with auto-merge OFF. After the candidate commit is frozen and the separate Codex review is clean, record the head SHA and apply the `ready-for-coderabbit` label. The default-branch workflow rechecks the live head, draft/conflict/auto-merge state, actor permission, required checks, and every reported non-CodeRabbit check. It then records `coderabbit-review-requested`, removes the ready label, and posts exactly `@coderabbitai review` once. The hidden SHA is a dedupe and operator-verification marker; the generic GitHub Actions identity is not a separate security principal and its comment/status must never be treated as merge authorization. A new commit, reopened PR, draft conversion, base or auto-merge change clears both labels, **deletes the already-posted command whether or not the head moved**, and requires a fresh green candidate; a reset means the candidate is invalid, and a base edit, draft conversion, reopen or auto-merge change invalidates it with the head UNCHANGED, so head is the wrong thing to scope deletion by. Only Actions-authored comments whose body exactly equals the canonical command are removed — human comments and a human-typed `@coderabbitai review` are left alone. Duplicate label events do not post duplicate reviews. Removing `coderabbit-review-requested` while a request is in flight cancels it: both final validations require the marker, so the command is not posted. If the gate fails, it removes the ready label and posts nothing — correct the named blocker and relabel. A failed comment post has **three** outcomes, not two: the command demonstrably landed, so dedupe state is kept; the command demonstrably did not land, so both labels clear for a deliberate retry; or **the follow-up lookup ALSO failed, so the marker is preserved** — an unverifiable post is never treated as an absent one, because clearing the marker there would let a relabel buy a second review for the same head. Read the resulting review and fix every real issue; genuine nitpicks may be dismissed with a one-line reason. Before merging, verify live `main` protection still requires the branch current and every required check green. **Required approval was REMOVED on 2026-09-02 (see below): an approving review is no longer required to merge**, but a `CHANGES_REQUESTED` verdict still blocks it and both agent merge gates refuse to merge over one; `enforce_admins` stays off and no agent may act on that exemption. Confirm CodeRabbit actually reviewed the frozen candidate — a green CodeRabbit status row alone is insufficient — and, when CodeRabbit has approved, require the SHAs to be identical: the gate marker, the authenticated `APPROVED` CodeRabbit review `commit_id`, and the PR's final `headRefOid`. Recheck every reported check and auto-merge OFF immediately before `--match-head-commit <that-exact-sha>`; ordinary green CodeRabbit or generic Actions rows are insufficient. If a finding or base update creates a new commit, restart required checks, rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy, freeze and record the new SHA, and apply the ready label again for one follow-up incremental review. Never use `@coderabbitai resume`, because it re-enables automatic reviews, and reserve `@coderabbitai full review` for a deliberately justified complete reread.
-
-Configuration lives in each repo's `.coderabbit.yaml`. **CodeRabbit config sources do not merge**: the repo file outranks the repository and organization dashboard settings, and any key it omits falls through to CodeRabbit's own defaults rather than to the dashboard, unless per-level "Inheritance" is enabled. Both dashboards are currently empty and inert — change review behavior in `.coderabbit.yaml`, never in the web UI.
-
-Since 2026-08-24 the review profile is `assertive` (report everything, filter afterwards) and `request_changes_workflow` is on, so CodeRabbit withholds approval until its comments are resolved **and the latest commit has been reviewed**. Five `mode: error` pre-merge checks encode the CRX Hard Rules — RLS on new tables, `SECURITY DEFINER` search_path, mutating-RPC idempotency, exact whole-cent money, and no edits to applied migrations. **Required approval REMOVED (Mason, 2026-09-02).** Classic protection on `main` no longer requires an approving review — `required_pull_request_reviews` is gone, verified live the same day. A green, up-to-date PR merges with no approval at all. This supersedes the 2026-09-01 manual override, which existed only to escape a stuck review; `enforce_admins` stays off, but both merge gates still hard-deny `gh pr merge --admin`, because an admin merge is an override path no agent should take whatever it currently buys.
-
-**Removing the review did not remove the tests.** Everything else still binds everyone: a PR is required, the branch must be up to date with `main`, force-pushes and deletion are blocked, and the `Vercel`, `Lint, Type Check, Test, Build`, and `SQL Migration Validation` checks must pass. The `protect-main` ruleset's bypass list is still empty. CI, not a review, is now what gates a landing.
-
-CodeRabbit still runs on every frozen candidate and its real findings still get fixed — unchanged policy, now held by convention rather than by GitHub. The half that stayed hard is encoded in both merge gates: they deny any merge whose `reviewDecision` is `CHANGES_REQUESTED` (never merge over an unresolved objection) and print a notice, not a denial, when merging without an approval. **These rules come from classic branch protection on `main`, not from the `protect-main` ruleset** — the ruleset requires zero approvals and never dismissed stale reviews, so the two are not interchangeable and neither can be read off the other. Both mechanisms are live; read the real state with `gh api repos/masonwells1/CRX_Manager_V1.0/branches/main/protection` and `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets` before changing either. **Do not read the review requirement off the protection API — it lies (verified 2026-09-02, after it misled two sessions in a row).** `DELETE .../branches/main/protection/required_pull_request_reviews` returns `204 No Content`, the top-level `/protection` response correctly drops the block, and yet an immediate GET of the `.../protection/required_pull_request_reviews` **sub-resource still returns `required_approving_review_count: 1`** — a phantom that does not reflect what GitHub enforces. Reading that sub-resource and concluding "an approval is still required" is the exact wrong turn taken twice. **Verify enforcement behaviourally instead:** `gh pr view <n> --json mergeStateStatus,reviewDecision` on a PR with NO review. `CLEAN`/`MERGEABLE` means no approval is required; `BLOCKED` on an otherwise-green PR means one is. GitHub's merge-state machine is the only endpoint that reports what actually happens. **Residual worth knowing:** the ruleset still sets `require_extra_approval_for_unattributed_changes: true`, so a PR containing commits GitHub cannot attribute to a known account can still demand an approval; that is a narrow path, not the general rule, and it is Mason's to clear by hand. The PR author can override a custom check via "Ignore failed checks" in the Walkthrough comment.
-
-CodeRabbit is the broad final-candidate pass; a separate exact-SHA `gpt-5.6-sol` high-effort proof remains the hard gate for risky money/RLS/migration diffs. Both run — neither replaces the other. Active adversarial gates do not require Claude/Fable unless Mason explicitly asks for it. Canonical text: `docs/manual/DECISION_LOG.md` (2026-07-30, 2026-08-24, and 2026-08-28 entries).
-
-Standing hands-free migration policy (Mason, 2026-07-13): in a **pre-authorized hands-free run** — Mason explicitly asked for the run AND autopilot is armed (`node .claude/hooks/autopilot-arm.mjs --hours N`; the unexpired flag is the durable record) — a live migration may apply without a per-migration in-chat OK, provided the hard proof gate passes: fresh same-session migration-apply-guard proof plus a real Codex verdict this session for SQL/RLS/money changes. Migrations that DELETE/TRUNCATE business rows or DROP data-bearing tables/columns are **never** autonomous, armed or not. In an ordinary interactive session, a live apply still gets Mason's in-chat OK. Canonical text: `docs/manual/DECISION_LOG.md` (2026-07-13 entry).
-
-Always get Mason's explicit approval in the current conversation before:
-
-- force-pushing any branch, or pushing work that has not passed the full green pipeline;
-- applying a live database migration or changing live data (subject to the 2026-07-13 hands-free-run exception above);
-- deploying an edge function, or any production deploy outside the normal push-to-`main` path;
-- deleting data;
-- changing secrets, authentication, permissions, billing, or customer-visible production state beyond what a reviewed regular-code push inherently changes.
-
-Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use destructive recovery such as `git reset --hard`, broad discard-all commands, or recursive force-delete unless Mason explicitly requests that exact action after the risk is explained.
-
-## Workspace Hygiene
-
-- Preserve user work. Do not revert unrelated changes.
-- Before trusting a long-running or isolated checkout, run `git fetch origin` and `git rev-list --left-right --count origin/main...HEAD`.
-- If the active checkout is dirty or stale and the task is multi-file/risky, use a clean worktree based on current `origin/main`.
-- Do not claim a finding is current when the checkout is behind `origin/main`.
-- Do not push, deploy, migrate, or mutate live data as part of a review, audit, health check, or setup check.
-
-## Multi-Agent Coordination
-
-- Mason describes the business outcome; the coordinating agent owns risk classification, task breakdown, worker selection, file/worktree isolation, integration, and one consolidated owner-facing status. Do not make Mason coordinate agents or Git.
-- Use each tool's canonical native orchestration, project instructions, skills, and linked worktrees. Do not add a custom agent server, queue, container layer, or permanent role files until a repeated workflow and a verified native limitation justify them.
-- Delegate only significant, independent, bounded work whose saved time or reduced context noise exceeds the coordination cost. Keep tiny fixes and tightly sequential work with the coordinator. Ad-hoc delegation defaults to at most three active workers unless tool-specific guidance or a canonical workflow defines a different tested fan-out.
-- Before delegation, give each worker a contract naming the objective, minimum relevant context, allowed and prohibited files or systems, observable acceptance criteria, required checks, and the evidence and unresolved risks it must return. Workers return distilled results, not raw logs or a bare `Done`.
-- Follow the active tool's model-routing rules instead of duplicating them here. Architecture and final review of money, inventory, units, auth, RLS, migrations, and other business-critical behavior stay with the strongest reviewer required by the current workflow.
-- Designate exactly one writer per checkout. Concurrent writers require separate clean worktrees and disjoint file ownership; dependent database, API, UI, and test work stays sequential until the coordinator has fixed the shared interface. No worker merges, deploys, applies a live migration, mutates live data, or widens scope independently.
-- Worker-written tests and successful builds are supporting evidence, not final proof. The coordinator reviews every accepted diff, runs the real-path verification required below, and preserves the existing exact-SHA adversarial-review and delivery gates.
+- Choose the simplest complete implementation that preserves the business rules. Prefer existing patterns, direct code, and small focused functions over new layers, wrappers, dependencies, or speculative flexibility.
+- Optimize for clarity, not cleverness. Use precise names, straightforward control flow, and comments that explain why. Do not compress readable code into dense one-liners.
+- Keep the diff narrowly tied to the requested outcome. Avoid opportunistic refactors; remove only dead code or duplication introduced or directly exposed by the change.
+- Reuse shared helpers and types. Add an abstraction only when it removes demonstrated duplication or makes a real boundary easier to verify.
 
 ## CRX Hard Rules
 
-- Add database changes only as new files under `supabase/migrations/`; never edit an applied migration.
-- New tables must enable Row Level Security (RLS) and include policies in the same migration.
-- Mutating RPCs must accept and actually enforce `p_idempotency_key text DEFAULT NULL`.
-- `SECURITY DEFINER` functions normally must use `SET search_path = public, pg_temp` and deliberate grants. Per Mason's 2026-07-30 approval recorded in `docs/manual/DECISION_LOG.md`, an empty search path is allowed only as a narrow exception for a deliberately fully schema-qualified body with current source and migration-review proof.
-- Money must be exact whole cents. New money storage uses bigint cents. Existing PostgreSQL
-  numeric-dollar storage may remain temporarily to avoid a risky unit rewrite, but it is an approved
-  compatibility exception only after authoritative database math is verified as exact `numeric`, all
-  existing values are finite whole cents, and an active finite whole-cent CHECK is present. Dirty or
-  unconstrained columns remain tracked findings and are never widened or rewritten without approval.
-  New or changed authoritative TypeScript
-  money math must parse decimal operands into integer cents before arithmetic; never introduce
-  binary floating-point rounding for money. See the 2026-08-10 decision in
-  `docs/manual/DECISION_LOG.md`. Per Mason's 2026-08-19 decision recorded there, the two
-  purchase-order "mirror" constraints satisfy this gate as a closed two-column exception; every
-  new or changed money column uses the rounding form, named `<table>_<column>_whole_cents_chk`.
-- Inventory and financial invariants belong in PostgreSQL RPCs/triggers, not only in React.
-- Use `src/lib/db.ts` as the only Supabase client.
-- Call `assertRpcResult()` after RPCs and `checkMutationResult()` after `.update()` or `.delete()`.
-- Never update generated columns such as `invoices.balance_cents`.
-- Status values must match current database constraints in `.claude/schema-registry.json`.
-- Use `ConfirmModal`, not `confirm()`/`window.confirm()`. Use toasts, not `alert()`.
-- Import Sentry only through `src/lib/sentry`.
-- Use shared types from `src/types/index.ts`, Lucide icons, and Tailwind CSS.
+- Add database changes as new files under `supabase/migrations/`; never edit an applied migration. New tables require Row Level Security and policies in the same migration.
+- Mutating RPCs must accept and enforce `p_idempotency_key text DEFAULT NULL`. `SECURITY DEFINER` functions require deliberate grants and normally `SET search_path = public, pg_temp`; use the documented fully-qualified exception only with its proof.
+- Money must resolve to exact whole cents. New storage uses bigint cents; authoritative TypeScript parses decimals into integer cents before arithmetic. Follow the documented legacy exceptions in `docs/workflows/SAFE_DEVELOPMENT_RULES.md`.
+- Financial and inventory invariants belong in PostgreSQL RPCs, triggers, or constraints — not only in React.
+- Use `src/lib/db.ts` as the only Supabase client. Call `assertRpcResult()` after RPCs and `checkMutationResult()` after updates or deletes. Never write generated columns.
+- Match status values to `.claude/schema-registry.json`. Use shared types from `src/types/index.ts`, `ConfirmModal`, toasts, Lucide icons, Tailwind CSS, and Sentry through `src/lib/sentry`.
 
-## Verification Standard
+## Safety and Protected Delivery
 
-Done means the changed behavior ran and was observed, not merely that a new test passed.
+- Never expose secrets or `.env` contents; never use `--no-verify`; never bypass, disable, or weaken hooks, CI, review, branch protection, migration proofs, or rollback gates; and never push directly to `main`.
+- Get Mason’s explicit approval in the current conversation before force-pushing, applying a live migration or changing live data, deploying an Edge Function or out-of-band production change, deleting data, or changing secrets, authentication, permissions, billing, domains, or ownership. The only migration exception is a hands-free run Mason explicitly pre-authorized with an unexpired autopilot arm flag, a fresh migration-apply-guard proof, and a fresh Codex verdict; it never permits destructive migrations. See the 2026-07-13 entry in `docs/manual/DECISION_LOG.md`.
+- Armed, unattended, or automated work never loosens any other hard gate.
+- Regular reversible code follows the protected path in `.claude/commands/ship.md`: branch → PR → required checks → applicable exact-SHA review → resolved agent findings → exact-head merge → proportionate production verification.
+- Risky money, inventory, auth, RLS, migration, permission, or other business-critical changes require a fresh independent `gpt-5.6-sol` high-effort review of the exact candidate SHA. A green status row is not proof that a review occurred.
 
-- Frontend/UI: open or render the affected flow and verify behavior and console state.
-- Backend/API/RPC: execute the path or a focused safe check and inspect the result.
-- Database/business logic: verify migration shape and relevant read-only live state when appropriate; never mutate live state without approval.
-- Match breadth to risk: narrow checks for a low-risk one-file change; typecheck, tests, build, and real-path proof for shared logic, money, data, auth, or multi-file behavior.
-- If real-path verification is blocked, state exactly what was not verified and the remaining risk.
+## Verification and Closeout
 
-Common commands:
+- Done means the changed behavior ran and was observed. Match proof to risk: focused checks for small reversible work; broader tests and real-path proof for shared logic, money, data, auth, migrations, or production behavior.
+- If real verification cannot run, say exactly what remains unverified and the risk. Tests written alongside a change are supporting evidence, not sole proof.
+- Close substantial work with `COMPLETE`, `READY FOR APPROVAL`, `BLOCKED`, or `PARTIAL`; state what changed, the proof, who owns anything remaining, and one recommended next step.
 
-```bash
-npm run typecheck
-npm run lint
-npm run test
-npm run build
-npm run test:agent-workflows
-npm run agent-health
-```
+## Guidance Ownership
 
-## Documentation and Generated Files
-
-- Record a shipped change as a NEW file in `docs/changelog.d/` (`<YYYY-MM-DD>-<slug>.md`), not by appending to `docs/CHANGELOG.md`. That file is over 15,000 lines and every parallel session lands in it, so concurrent work collides there; a per-change file cannot conflict. It satisfies the pre-commit ledger guard. `docs/CHANGELOG.md` remains valid and is still the history for everything written before this convention; `docs/changelog.d/README.md` has the details.
-- `AGENTS.md` is the canonical shared contract and is edited intentionally by hand.
-- `CLAUDE.md` imports this file and contains Claude-only routing; it must not restate or contradict shared policy.
-- After changing `.claude/commands/` or `.claude/skills/`, run `node scripts/sync-agent-workflows.mjs --write`, then `npm run test:agent-workflows`.
-- After schema changes, refresh the schema registry from the correct database source and update the relevant `docs/reference/` files.
-- Do not put migration/page/function counts in always-loaded agent files; `npm run check:docs` verifies those claims in reference docs.
+- `AGENTS.md` is the hand-maintained shared contract. `CLAUDE.md` imports it and contains Claude-only routing; it must not duplicate or weaken shared policy.
+- `.claude/commands/`, `.claude/skills/`, and `.claude/hooks/` are workflow sources. `.agents/` contains generated Codex adapters; run `node scripts/sync-agent-workflows.mjs --write` after changing a source workflow.
+- Whoever changes a command or policy, or ships or parks work, updates the affected manual or reference record in the same change.
+- Put changing counts and status in `docs/reference/` or `docs/manual/`, and record shipped work in a new `docs/changelog.d/<YYYY-MM-DD>-<slug>.md`. Follow `docs/changelog.d/README.md`.
