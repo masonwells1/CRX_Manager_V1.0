@@ -25,23 +25,37 @@ import path from "node:path";
 // branch/project lifecycle, and destructive file/db ops STAY blocked here.
 const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|merge_pull_request|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
 
+// `git` and `gh` accept GLOBAL OPTIONS BETWEEN the binary and the subcommand
+// (`git -C <dir> push`, `gh -R <owner>/<repo> pr merge`). A bare `git\s+push`
+// cannot span them, so those shapes were AUTO-APPROVED while armed — armed mode
+// did not actually prevent pushing or merging (found 2026-09-05, by running the
+// guard against a corpus rather than by reading it).
+//
+// The option tokens are ENUMERATED, deliberately not `.*`: a wildcard between a
+// binary and its subcommand would deny `git commit -m "fix the push bug"`, which
+// must stay approved. Both directions are covered in autopilot-lib.test.mjs.
+const GIT_OPTS = String.raw`(?:\s+(?:-[cC]\s+\S+|--\S+))*`;
+const GH_OPTS = String.raw`(?:\s+(?:-[RFf]\s+\S+|--repo\s+\S+|--\S+))*`;
+const git = (rest) => new RegExp(String.raw`\bgit\b${GIT_OPTS}\s+${rest}`);
+const gh = (rest) => new RegExp(String.raw`\bgh\b${GH_OPTS}\s+${rest}`);
+
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
-  /git\s+push\b/,                                  // no unattended push — Mason reviews in the morning
-  /git\s+(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)/,
-  /git\s+reset\s+--hard\b/,
-  /git\s+clean\s+-[A-Za-z]*[fdx]/,
+  git(String.raw`push\b`),                         // no unattended push — Mason reviews in the morning
+  git(String.raw`(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)`),
+  git(String.raw`reset\s+--hard\b`),
+  git(String.raw`clean\s+-[A-Za-z]*[fdx]`),
   /--no-verify\b/,
   /\brm\s+-[A-Za-z]*r[A-Za-z]*f|\brm\s+-[A-Za-z]*f[A-Za-z]*r/, // rm -rf / -fr
   /\brmdir\b|\bdel\s+\/[sq]/i,
-  /git\s+worktree\s+remove\b/,
-  /git\s+branch\s+(?:-D|--delete\s+--force)\b/,
-  /git\s+filter-(?:branch|repo)\b/,
+  git(String.raw`worktree\s+remove\b`),
+  git(String.raw`branch\s+(?:-D|--delete\s+--force)\b`),
+  git(String.raw`filter-(?:branch|repo)\b`),
   /(?:npx\s+)?supabase\s+db\s+(?:push|reset)\b/,
   /(?:npx\s+)?supabase\s+migration\s+repair\b/,
   /(?:npx\s+)?supabase\s+functions\s+deploy\b/,    // CLI edge deploy = same gate as the MCP tool
-  /\bgh\s+pr\s+merge\b/,                           // lands on main around the push guard
+  gh(String.raw`pr\s+merge\b`),                    // lands on main around the push guard
   /\b(?:dropdb|createdb)\b/,
   /\bvercel\s+(?:deploy|--prod|promote)\b/,
   /(?:^|[\s;&|>])\.env\b/,                         // touching .env

@@ -46,6 +46,39 @@ eq(autopilotDecision("mcp__github__create_or_update_file", {}), "deny", "GitHub 
 eq(autopilotDecision("mcp__Desktop_Commander__start_process", {}), "deny", "Desktop Commander exec denied");
 eq(autopilotDecision("mcp__Desktop_Commander__write_file", {}), "deny", "Desktop Commander write denied");
 
+// ── global options between binary and subcommand (2026-09-05) ────────────
+// `git`/`gh` accept global options BEFORE the subcommand, and the original
+// `git\s+push` could not span them: `git -C <dir> push` and `gh -R <repo> pr
+// merge` were AUTO-APPROVED while armed. Two real pushes went through this hole
+// before it was found — by RUNNING the guard, not by reading the regex.
+eq(autopilotDecision("Bash", { command: "git -C C:/CRX_Manager/wt push origin HEAD" }), "deny", "git -C push denied");
+eq(autopilotDecision("Bash", { command: "git -c core.hooksPath=.husky push origin HEAD" }), "deny", "git -c push denied");
+eq(autopilotDecision("Bash", { command: "git --git-dir=/repo/.git push origin HEAD" }), "deny", "git --git-dir push denied");
+eq(autopilotDecision("Bash", { command: "git --no-pager -C /x push origin HEAD" }), "deny", "git with two globals push denied");
+eq(autopilotDecision("Bash", { command: "git -C /repo push --force origin HEAD" }), "deny", "git -C force push denied");
+eq(autopilotDecision("Bash", { command: "git -C /repo push --force-with-lease" }), "deny", "git -C force-with-lease denied");
+eq(autopilotDecision("Bash", { command: "git -C /repo reset --hard HEAD~1" }), "deny", "git -C hard reset denied");
+eq(autopilotDecision("Bash", { command: "git -C /repo clean -fd" }), "deny", "git -C clean -fd denied");
+eq(autopilotDecision("Bash", { command: "git -C /repo worktree remove ../x" }), "deny", "git -C worktree remove denied");
+eq(autopilotDecision("Bash", { command: "git -C /repo branch -D feature" }), "deny", "git -C branch -D denied");
+eq(autopilotDecision("Bash", { command: "git -C /repo filter-branch --all" }), "deny", "git -C filter-branch denied");
+eq(autopilotDecision("Bash", { command: "gh -R masonwells1/CRX_Manager_V1.0 pr merge 535 --squash" }), "deny", "gh -R pr merge denied");
+eq(autopilotDecision("Bash", { command: "gh --repo masonwells1/CRX_Manager_V1.0 pr merge 535" }), "deny", "gh --repo pr merge denied");
+
+// The other direction, which is why the option tokens are ENUMERATED and not
+// `.*`: a wildcard between binary and subcommand blocks ordinary work. Every
+// line below MUST stay allowed — `git commit -m "fix the push bug"` above all.
+eq(autopilotDecision("Bash", { command: 'git commit -m "fix the push bug"' }), "allow", "commit message naming push still allowed");
+eq(autopilotDecision("Bash", { command: 'git commit -m "do not push this yet"' }), "allow", "commit message about pushing still allowed");
+eq(autopilotDecision("Bash", { command: "git -C /repo status --short" }), "allow", "git -C status allowed");
+eq(autopilotDecision("Bash", { command: "git -C /repo log -3 --format=%H" }), "allow", "git -C log allowed");
+eq(autopilotDecision("Bash", { command: "git -c core.pager=cat log --oneline" }), "allow", "git -c log allowed");
+eq(autopilotDecision("Bash", { command: "git fetch origin" }), "allow", "fetch allowed");
+eq(autopilotDecision("Bash", { command: "git --version" }), "allow", "git --version allowed");
+eq(autopilotDecision("Bash", { command: "gh pr view 535 --json headRefOid" }), "allow", "gh pr view allowed");
+eq(autopilotDecision("Bash", { command: "gh pr checks 603" }), "allow", "gh pr checks allowed");
+eq(autopilotDecision("Bash", { command: "gh -R masonwells1/CRX_Manager_V1.0 pr list" }), "allow", "gh -R pr list allowed");
+
 // ── overnight-arm handshake ──────────────────────────────────────────────
 ok(intentFresh(JSON.stringify({ created: new Date().toISOString() })), "fresh intent recognized");
 ok(!intentFresh(JSON.stringify({ created: new Date(Date.now() - 2 * 3600e3).toISOString() })), "stale intent ignored");
