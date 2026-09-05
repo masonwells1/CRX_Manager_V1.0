@@ -924,7 +924,10 @@ describe('CustomerDetail tab loads bind to a customer, not only to call order', 
 
   beforeEach(() => {
     vi.clearAllMocks();
-    customerIdempotencyState.generation = 0;
+    // #616 wrote `generation = 0` against the single-counter stub this branch
+    // replaced with a per-scope Map. Same intent, current shape: clear every
+    // scope's counter. Git merged both sides cleanly and TypeScript caught it.
+    customerIdempotencyState.reset();
     dirtyStates.length = 0;
   });
 
