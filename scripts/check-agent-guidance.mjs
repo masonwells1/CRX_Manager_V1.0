@@ -158,6 +158,44 @@ record(/If the normalized live `name` already matches the authored disk basename
 record(/a differing apply-time `version` alone does \*\*not\*\* require a rename/i.test(migrationStampCheck), "migration drift reviewer does not manufacture drift from version-name divergence");
 record(/Rename to the MCP-assigned version only when the live `name` does not preserve the authored basename/i.test(migrationStampCheck), "migration drift reviewer retains the conditional B7 rename fallback");
 
+// Added 2026-09-04. CHECK 2's METHOD paragraph is the whole of this branch's
+// charter change: the local search is mandatory, and remote per-file history
+// enumeration is forbidden because two real runs died after 598 and 751
+// fetch_blob calls with no verdict at all.
+//
+// REVISED 2026-09-04 after CodeRabbit on PR #594. The method was first written
+// as a SINGLE name-level pass ("ideally ONE grep -rnoiE"), which cannot answer
+// the rule it is attached to: -o prints only the matched name, discarding the
+// argument list and any preceding DROP FUNCTION, and steps 2-3 consume exactly
+// those. It also said "do NOT read migration files one at a time", which
+// outlawed the follow-up read that recovers them. The method is now two-phase —
+// A discovers candidates, B reads their full declarations — so pin BOTH phases
+// AND the sentence that denies phase A the verdict. Pinning phase A alone would
+// be satisfied by the very defect this revision fixes.
+//
+// DEFERRED (Mason, 2026-09-04): the overload-EVIDENCE question — what live
+// catalog proof may acquit a history-detected collision, and how the sandboxed
+// proof runner could ever supply it — is a separate task with its own plan.
+// See docs/manual/KNOWN_ISSUES.md.
+// The charter hard-wraps its prose, so match against whitespace-flattened text.
+const overloadCollisionCheck = migrationDriftReviewer.match(
+  /### CHECK 2 — Function overload collision([\s\S]*?)(?=\n### CHECK 3)/
+)?.[1] || "";
+const overloadCollisionFlat = overloadCollisionCheck.replace(/\s+/g, " ");
+record(overloadCollisionFlat.trim().length > 0, "migration drift reviewer CHECK 2 block is extractable");
+record(/Answer this check in TWO bounded local phases/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 keeps the two-phase bounded local method");
+record(/PHASE A — discovery\.\* ONE local `grep -rniE` over `supabase\/migrations\/` covering every function name in this migration at once/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 keeps the one-pass discovery phase");
+record(/\*\*A name-level match does NOT decide this check\*\*/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 denies the discovery pass the verdict");
+record(/`-o` in particular prints only the matched text, discarding both the argument list and any preceding `DROP FUNCTION`/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 names why a name-only grep is insufficient");
+record(/Clearing CHECK 2 on phase A alone is a false clean/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 labels a phase-A-only clear a false clean");
+record(/PHASE B — read the candidates\.\* For every file phase A named, read the full `CREATE OR REPLACE FUNCTION` declaration: its complete argument list, and whether a `DROP FUNCTION` for that name precedes it in the same migration/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 requires reading each candidate's full declaration");
+record(/Phase B is bounded by the NUMBER OF MATCHES/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 keeps phase B bounded by match count");
+record(/forbids walking the corpus, never reading the specific files phase A identified/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 scopes the prohibition to corpus walking, not candidate reads");
+record(/do NOT use any remote\/GitHub file-reading tool \(`fetch_blob` or similar\) to enumerate history/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 forbids remote per-file history enumeration");
+record(/the local one-pass grep answered PHASE A in 0\.17 s, where the per-file remote walk died twice — after 598 and 751 fetches — with no verdict at all/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 keeps the measurement that justifies the method");
+record(/If a previous definition with DIFFERENT argument types exists AND the new migration does NOT first `DROP FUNCTION` the old one, severity = \*\*BLOCKER\*\*/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 retains the differing-argument BLOCKER");
+record(/Postgres allows multiple overloads; the bug is when the caller expects to resolve to one but hits the other/.test(overloadCollisionFlat), "migration drift reviewer CHECK 2 retains the caller-resolution rationale");
+
 const allow = new Set(settings.permissions?.allow || []);
 const ask = new Set(settings.permissions?.ask || []);
 // Mason's decision 2026-07-11 (re-affirming 2026-07-05): no permission popups for
