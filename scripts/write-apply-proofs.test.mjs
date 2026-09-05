@@ -1,10 +1,22 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
 import { CODEX_REVIEW_PERMISSION_CONFIG, CODEX_REVIEW_PERMISSION_PROFILE } from './write-codex-push-proof.mjs';
 import './migration-security-definer-guard.test.mjs';
+
+test('proof revocation occurs before the wrapper resolves a reviewer executable', () => {
+  const source = readFileSync(fileURLToPath(new URL('./write-apply-proofs.mjs', import.meta.url)), 'utf8');
+  const revocation = source.indexOf('invalidateMigrationProofs(stateDir, safe)');
+  const executableLookup = source.indexOf('codexBin = codexExecutable()');
+
+  assert.ok(revocation >= 0, 'the wrapper revokes stale proof files');
+  assert.ok(executableLookup >= 0, 'the wrapper still resolves the trusted reviewer executable');
+  assert.ok(revocation < executableLookup, 'stale proofs are revoked before a fallible review setup step');
+});
 
 function printedEvidence(migration) {
   return execFileSync(

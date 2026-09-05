@@ -44,6 +44,7 @@ import { securityDefinerMissingAnonRevokes } from './migration-security-definer-
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
 import { routineReferencesIn } from './migration-routine-references.mjs';
 import { applicationRpcCallSites } from './rpc-call-site-matcher.mjs';
+import { invalidateMigrationProofs } from './migration-proof-file-state.mjs';
 
 const rawArgs = process.argv.slice(2);
 
@@ -501,6 +502,10 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, cha
 
 for (const name of names) {
   const safe = name.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80);
+  // Revoke an earlier authorization before any setup or reviewer operation can
+  // fail. A blocked re-review must fail closed instead of leaving old clean
+  // proofs available to the apply guard.
+  const { reviewerFile, codexFile } = invalidateMigrationProofs(stateDir, safe);
   let codexBin;
   try {
     codexBin = codexExecutable();
@@ -588,7 +593,6 @@ for (const name of names) {
   const ts = new Date().toISOString();
   // Reviewer half — every name listed corresponds to a charter run that actually
   // executed above and returned CLEAN (captures alongside in session-state).
-  const reviewerFile = path.join(stateDir, `migration-review-${safe}.json`);
   writeFileSync(reviewerFile, JSON.stringify({
     migration: name,
     timestamp: ts,
@@ -603,7 +607,6 @@ for (const name of names) {
     evidenceHash,
   }, null, 2), { encoding: 'utf8' });
   console.log(`wrote ${reviewerFile}`);
-  const codexFile = path.join(stateDir, `codex-review-mig-${safe}.json`);
   writeFileSync(
     codexFile,
     JSON.stringify({
