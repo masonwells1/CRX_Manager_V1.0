@@ -9,6 +9,13 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-09-05 — Agents may natively edit the enforcement surfaces without a prompt; Mason overrode the Codex objection and merges PR #605 himself
 
+**Implementation follow-up:** a fresh Claude session proved that removing ask rules alone still
+leaves built-in `.claude/` writes denied under `dontAsk`. PR #605 now removes that repository mode
+override and inherits Mason's existing user-level Auto mode. Protected-path writes are evaluated
+by Claude's classifier; explicit ask/deny rules remain. The shared risky-path list also now covers
+every newly editable configuration and check/validate/verify script. Earlier descriptions below
+explain the original policy decision, not a guarantee that every native edit is auto-approved.
+
 **Source:** Mason's 2026-09-05 direction ("give full permission to Claude and Codex ... everything else is free game"), reaffirmed twice after the concern was raised, and his reply "open it all I'll merge" after the exact-SHA Codex review of PR #605 returned a HIGH objection to exactly this point.
 
 **Decision:** `.claude/settings.json` no longer lists native `Edit`/`Write` of `.claude/settings.json`, `.claude/hooks/**`, `.codex/hooks/**`, `.codex/hooks.json`, `.codex/config.toml`, `.husky/**`, `.github/workflows/**`, `package.json`, `.coderabbit.yaml`, the `scripts/check-*`/`validate-*`/`verify-*` families, or the proof/ledger/review scripts in `ask`. Under this repo's `dontAsk` mode those entries were silent refusals, not prompts. Merge, deploy, and live-database entries stay in `ask`; the `deny` list grew (Supabase lifecycle, filesystem and Desktop Commander mutators); MCP grants are explicit and read-only; the browser grant is read-only tools.

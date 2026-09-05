@@ -1,5 +1,10 @@
 # Agent guardrails — hooks & review subagents (CRX Manager)
 
+PR #605 permission-mode verification: removing path-specific ask rules does not override Claude's
+built-in protected-path check. The repo now inherits the user's mode (Mason uses Auto), so those
+writes go to Claude's classifier rather than being silently denied by a repo `dontAsk` override.
+Explicit ask/deny rules and independent exact-commit review requirements remain in force.
+
 > Extracted from `CLAUDE.md` on 2026-06-15 to keep the always-loaded file lean. This is the full reference for the
 > automated safety net; `CLAUDE.md` keeps only a short summary + a pointer here. Regenerate the schema registry the
 > hooks read after schema changes: run the `regen-schema-registry` live-introspection workflow.
@@ -216,4 +221,3 @@ message names, or fix the guard deliberately.
 **Refresh architecture map:** `npm run generate-map` (or `node scripts/generate-workflow-map.mjs`). Run and stage the generated `docs/app-workflow-map.html` explicitly when workflow-bearing source changes; CI verifies freshness.
 
 **Migration version responsibility (2026-07-18):** `migration-drift-reviewer` checks disk timestamp ordering and reminds the orchestrator to run the mandatory live `list_migrations` check. Because that isolated reviewer cannot call Supabase MCP itself, unavailable or missing live high-water evidence is emitted as a **HIGH** finding; the orchestrator must supply/complete the live `list_migrations` check and clear that finding before `apply_migration`. Migration-history coverage accepts either the full filename or its unique timestamp prefix.
-
