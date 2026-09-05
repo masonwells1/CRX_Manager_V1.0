@@ -1,5 +1,23 @@
 # Agent guardrails — hooks & review subagents (CRX Manager)
 
+### Review-proof guard: native reads (PR #612)
+
+Native `Read` and `NotebookRead` may open a non-JSON, single-link regular file
+inside the review state directory after `realpathSync.native` and `statSync`
+resolve and classify the target. Flags and text captures remain readable;
+named proofs, JSON evidence, and multi-link files in the state directory deny,
+including reads through Windows short directory names or the external location
+of this checkout's junctioned state directory. A legitimate non-proof alias is
+not refused solely for being an alias. Missing targets fail closed inside the
+state directory. `Grep`, `Glob`, MCP readers, and writers keep their existing
+restrictions. The capture text can itself be gate-consumed evidence; permitting
+a read does not authorize changing it.
+
+The proposed shell exceptions for home transcript walks and quoted `function`
+searches were withdrawn after bypasses were found. Their over-blocks remain;
+this native-reader change does not close the documented shell-side alias and
+outside-hard-link limitations in `docs/manual/KNOWN_ISSUES.md`.
+
 > Extracted from `CLAUDE.md` on 2026-06-15 to keep the always-loaded file lean. This is the full reference for the
 > automated safety net; `CLAUDE.md` keeps only a short summary + a pointer here. Regenerate the schema registry the
 > hooks read after schema changes: run the `regen-schema-registry` live-introspection workflow.
