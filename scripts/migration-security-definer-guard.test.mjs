@@ -218,6 +218,18 @@ SELECT 'counterfeit \' REVOKE ALL ON FUNCTION public.string_decoy() FROM PUBLIC,
   assert.deepEqual(securityDefinerMissingAnonRevokes(nonstandardStrings), ['unparseable-security-definer-sql']);
 });
 
+test('allows unrelated table and schema grants while rejecting malformed routine grants', () => {
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\nGRANT SELECT ON TABLE public.customers TO authenticated;\nGRANT USAGE ON SCHEMA public TO authenticated;`),
+    [],
+  );
+  assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\nGRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon;`),
+    ['unparseable-security-definer-sql'],
+  );
+});
+
 test('fails closed for comment-separated string-mode changes', () => {
   const commentSeparated = String.raw`SET/**/standard_conforming_strings=off;
 CREATE OR REPLACE FUNCTION public.post_return_credit(p_id uuid)

@@ -75,6 +75,28 @@ function consumeQuoted(text, start) {
   return null;
 }
 
+function consumeSingleQuoted(text, start) {
+  const escapeString = (text[start] === 'e' || text[start] === 'E')
+    && text[start + 1] === "'"
+    && !isIdentifierCharacter(text[start - 1] || '');
+  const quote = escapeString ? start + 1 : start;
+  if (text[quote] !== "'") return null;
+  let cursor = quote + 1;
+  while (cursor < text.length) {
+    if (escapeString && text[cursor] === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === "'" && text[cursor + 1] === "'") {
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === "'") return { next: cursor + 1 };
+    cursor += 1;
+  }
+  return null;
+}
+
 function consumeIdentifier(text, start) {
   if (text[start] === '"') return consumeQuoted(text, start);
   if (!isIdentifierStart(text[start] || '')) return null;
@@ -94,14 +116,10 @@ function consumeParenthesized(text, start) {
       const next = skipBlockComment(text, cursor);
       if (next === null) return null;
       cursor = next - 1;
-    } else if (text[cursor] === "'") {
-      cursor += 1;
-      while (cursor < text.length) {
-        if (text[cursor] === "'" && text[cursor + 1] === "'") { cursor += 2; continue; }
-        if (text[cursor] === "'") break;
-        cursor += 1;
-      }
-      if (cursor >= text.length) return null;
+    } else if (text[cursor] === "'" || ((text[cursor] === 'e' || text[cursor] === 'E') && text[cursor + 1] === "'")) {
+      const literal = consumeSingleQuoted(text, cursor);
+      if (!literal) return null;
+      cursor = literal.next - 1;
     } else if (text[cursor] === '"') {
       const quoted = consumeQuoted(text, cursor);
       if (!quoted) return null;
@@ -126,14 +144,10 @@ function consumeParenthesized(text, start) {
 function maskComments(text) {
   const chars = [...text];
   for (let cursor = 0; cursor < text.length; cursor += 1) {
-    if (text[cursor] === "'") {
-      cursor += 1;
-      while (cursor < text.length) {
-        if (text[cursor] === "'" && text[cursor + 1] === "'") { cursor += 2; continue; }
-        if (text[cursor] === "'") break;
-        cursor += 1;
-      }
-      if (cursor >= text.length) return null;
+    if (text[cursor] === "'" || ((text[cursor] === 'e' || text[cursor] === 'E') && text[cursor + 1] === "'")) {
+      const literal = consumeSingleQuoted(text, cursor);
+      if (!literal) return null;
+      cursor = literal.next - 1;
     } else if (text[cursor] === '"') {
       const quoted = consumeQuoted(text, cursor);
       if (!quoted) return null;
@@ -162,14 +176,10 @@ export function statementEnd(text, start) {
       const next = skipBlockComment(text, cursor);
       if (next === null) return null;
       cursor = next - 1;
-    } else if (text[cursor] === "'") {
-      cursor += 1;
-      while (cursor < text.length) {
-        if (text[cursor] === "'" && text[cursor + 1] === "'") { cursor += 2; continue; }
-        if (text[cursor] === "'") break;
-        cursor += 1;
-      }
-      if (cursor >= text.length) return null;
+    } else if (text[cursor] === "'" || ((text[cursor] === 'e' || text[cursor] === 'E') && text[cursor + 1] === "'")) {
+      const literal = consumeSingleQuoted(text, cursor);
+      if (!literal) return null;
+      cursor = literal.next - 1;
     } else if (text[cursor] === '"') {
       const quoted = consumeQuoted(text, cursor);
       if (!quoted) return null;

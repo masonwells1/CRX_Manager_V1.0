@@ -342,8 +342,10 @@ function aclEvents(sql) {
   const keywordSql = maskQuotedIdentifierContents(sql);
   if (keywordSql === null) return null;
   const actionRe = /\b(REVOKE|GRANT)\b/gi;
+  const routineAclPrelude = /^\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+(?:(?:ALL\s+)?(?:FUNCTIONS?|PROCEDURES?|ROUTINES?))\b/i;
   const eventRe = /^(REVOKE|GRANT)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)(?:"((?:""|[^"])*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\(/i;
   for (const action of keywordSql.matchAll(actionRe)) {
+    if (!routineAclPrelude.test(keywordSql.slice(action.index + action[0].length))) continue;
     const match = eventRe.exec(sql.slice(action.index));
     if (!match) return null;
     const open = action.index + match[0].length - 1;

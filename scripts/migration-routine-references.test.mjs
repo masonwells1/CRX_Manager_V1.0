@@ -45,3 +45,32 @@ test('captures routine declarations and ACLs separated by nested PostgreSQL comm
     ['nested_comment', 'nested_comment'],
   );
 });
+
+test('keeps escaped quotes and semicolons inside PostgreSQL escape strings', () => {
+  const result = routineReferencesIn(String.raw`
+    SELECT E'escaped quote: \' ; not a statement boundary';
+    CREATE FUNCTION public.escape_string() RETURNS void LANGUAGE sql AS $$ SELECT; $$;
+    REVOKE EXECUTE ON FUNCTION public.escape_string() FROM anon;
+  `);
+
+  assert.equal(result.error, null);
+  assert.deepEqual(
+    result.entries.flatMap(({ routines }) => routines.map(({ key }) => key)),
+    ['escape_string', 'escape_string'],
+  );
+});
+
+test('does not end an escape string at a backslash-escaped quote', () => {
+  const escapedQuote = '\\';
+  const result = routineReferencesIn(`
+    SELECT E'escaped quote: ${escapedQuote}' ; not a statement boundary';
+    CREATE FUNCTION public.escape_string_quote() RETURNS void LANGUAGE sql AS $$ SELECT; $$;
+    REVOKE EXECUTE ON FUNCTION public.escape_string_quote() FROM anon;
+  `);
+
+  assert.equal(result.error, null);
+  assert.deepEqual(
+    result.entries.flatMap(({ routines }) => routines.map(({ key }) => key)),
+    ['escape_string_quote', 'escape_string_quote'],
+  );
+});
