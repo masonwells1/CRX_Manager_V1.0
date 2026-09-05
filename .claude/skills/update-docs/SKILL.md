@@ -57,10 +57,10 @@ that the migration was written. To state whether it is live, check the live data
 observed. If you did not check, write the row with the status left explicitly unknown rather
 than guessing — a fabricated "applied" row is worse than a blank one.
 
-The title count tracks **migration-history entries**, not SQL files on disk; the two legitimately
-differ (a rolled-back or superseded migration can have an entry without a live counterpart, and
-vice versa). Recount whichever metric the title actually claims and update it to the real number
-— do not copy the `ls | wc -l` figure into the title without checking which metric it is.
+The title tracks the **latest/high-water documentation sequence** as `(latest entry N)`, not a row
+count and not the number of SQL files on disk. Update N to the maximum sequence in the table. The
+metrics legitimately differ because sequences can be skipped or reused and because a written,
+rolled-back, or superseded migration need not have a live counterpart.
 
 ## Step 4: Check pages-routes.md
 
