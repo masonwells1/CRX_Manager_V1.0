@@ -764,6 +764,99 @@ describe('QuoteBuilder', () => {
   });
 
   /**
+   * The half of the ambiguous-reply space the test above does NOT cover.
+   *
+   * `{ data: null }` is rejected by assertRpcResult, which throws before the key is
+   * ever retired — so that test passes even against code that retires first and
+   * checks later. `{ data: {} }` is the reply that actually gets through:
+   * assertRpcResult rejects only a MISSING reply, so an empty object reaches the
+   * caller looking like a success that simply has no id in it.
+   *
+   * On an edit route the old code then read `result.quote_id || quoteId` and took the
+   * id straight off the URL, so the unverified save reported itself as confirmed AND
+   * its key was gone. On a create there is no URL id to borrow, so the retry minted a
+   * fresh key the server could not recognise and wrote the quote a second time.
+   */
+  it('keeps the save_quote key when the reply is an empty OBJECT, not just when it is missing', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation(() => Promise.resolve({ data: {}, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_idempotency_key: `test-idem-key-${quote.id}-0`,
+    })));
+    expect(
+      mockResetIdempotencyKey,
+      'an empty save_quote OBJECT is ambiguous — retiring the key here is what writes the quote twice',
+    ).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('came back without an ID'));
+
+    fireEvent.click(screen.getByText('Save Draft'));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_quote');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_quote')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    expect(new Set(saveKeys)).toEqual(new Set([`test-idem-key-${quote.id}-0`]));
+  });
+
+  /**
+   * Only ONE of this page's eleven dialog openers is a save_quote conflict.
+   *
+   * The other ten are lifecycle actions — decline, email, version restore, convert,
+   * book-as-order — that own no save_quote key at all. Recording the save scope at
+   * those sites made the dialog claim an origin it did not have, so the reload it
+   * offered retired a save_quote receipt whose own reply had never been validated.
+   */
+  it('does not let a decline-originated recovery reload release the save_quote key', async () => {
+    const quote = { id: 'quote-decline-key', quote_number: 'Q-decline-key', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Local note', footer_notes: '', status: 'sent', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
+    const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
+    const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'quotes') {
+        return buildUpdateChain(
+          { data: quote, error: null },
+          { data: [{ ...quote, status: 'declined', row_version: 9 }], error: null },
+        );
+      }
+      const data = table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [];
+      return buildChain({ data, error: null });
+    });
+
+    renderQuoteBuilder(quote.id);
+    await screen.findByDisplayValue('Local note');
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Decline Quote' }));
+
+    fireEvent.click(await screen.findByText('Reload Quote'));
+    await waitFor(() => expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument());
+
+    expect(
+      mockResetIdempotencyKey,
+      'a decline owns no save_quote key, so the recovery reload it opens must retire none',
+    ).not.toHaveBeenCalled();
+  });
+
+  /**
    * The cost of F1 retention, paid for by scoping — raised by the gpt-5.6-sol review
    * of dff631f1 as the QuoteBuilder mirror of a finding already fixed in
    * CustomerDetail.
@@ -1549,7 +1642,13 @@ describe('QuoteBuilder', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reload Quote' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Quote' })).not.toBeInTheDocument());
-    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(2);
+    // ONE release, not two. The version-action key is retired, because this reload is
+    // that action's own recovery. The save_quote key is NOT, because no save_quote
+    // conflict happened here — an email/version failure opened this dialog. The
+    // second release this once expected was the coupling CodeRabbit flagged at
+    // CustomerDetail:964: a lifecycle recovery retiring a whole-record save receipt
+    // whose own reply was never validated.
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
     await waitFor(() => expect(mockSendEmail).toHaveBeenCalledTimes(1));

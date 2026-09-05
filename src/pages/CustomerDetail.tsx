@@ -31,6 +31,9 @@ import {
   readRowVersion,
   resolveAuthoritativeSaveRowVersion,
   resolveDirectMutationRowVersion,
+  hasReceiptId,
+  NON_SAVE_RECOVERY,
+  type StaleSaveConflictOrigin,
 } from '../lib/recordVersionConcurrency';
 import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 import { logActivity } from '../lib/activityLogger';
@@ -125,7 +128,7 @@ export default function CustomerDetail() {
   // release B's key and strand A's rejected one — returning to A would replay it and
   // re-open the same conflict. Recorded when the conflict opens, checked before
   // anything is released. Same defect and same fix as QuoteBuilder's.
-  const staleSaveConflictScopeRef = useRef<string | null>(null);
+  const staleSaveConflictScopeRef = useRef<StaleSaveConflictOrigin>(null);
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>(() => makeBlankCustomer(profile?.id));
@@ -359,10 +362,12 @@ export default function CustomerDetail() {
         // So the cost of retaining is one unearned conflict dialog when the operator
         // returns to that customer, which then self-heals on its own reload. The cost
         // of retiring is a possible duplicate customer. Retaining is the safe direction.
-        if (
-          staleSaveConflictScopeRef.current === null
-          || staleSaveConflictScopeRef.current === saveCustomerIntentScope
-        ) {
+        // Release ONLY for a reload of the same customer whose save_customer call
+        // produced this dialog. A different customer's scope must keep its key, and
+        // so must NON_SAVE_RECOVERY — a crop toggle or a lifecycle mutation opens
+        // this same dialog with no rejected save key of its own, and releasing on
+        // its reload would retire a save_customer receipt that is still in flight.
+        if (staleSaveConflictScopeRef.current === saveCustomerIntentScope) {
           resetSaveCustomerIdempotencyKey();
           staleSaveConflictScopeRef.current = null;
         }
@@ -873,7 +878,7 @@ export default function CustomerDetail() {
       // for a reply that is both error-free and non-empty. An ambiguous reply keeps
       // its key, so a retry can still replay instead of writing the customer twice.
       if (currentIdRef.current !== id) {
-        if (!error && data != null) resetSaveCustomerIdempotencyKey();
+        if (!error && hasReceiptId(data, 'customer_id')) resetSaveCustomerIdempotencyKey();
         setSaving(false);
         return;
       }
@@ -894,6 +899,15 @@ export default function CustomerDetail() {
         // error is ambiguous — the customer may already be saved — so a key retired
         // here would send the retry under a fresh key the server cannot replay.
         const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null; row_version?: unknown }>(data, 'save_customer');
+        // assertRpcResult only rejects a MISSING reply: `{}` passes it untouched.
+        // An empty object is the ambiguous answer this branch must not treat as a
+        // receipt — the customer may already be committed. Throwing here leaves the
+        // key in place (the retry can still replay it) and lands in the catch below,
+        // which reports and clears `saving`. Retiring first and discovering the
+        // emptiness afterwards is what would insert the customer a second time.
+        if (!hasReceiptId(result, 'customer_id')) {
+          throw new Error('save_customer returned no customer ID — the save outcome is unknown. Reload before making further changes.');
+        }
         resetSaveCustomerIdempotencyKey();
         const rowVersionResult = resolveAuthoritativeSaveRowVersion(
           customerRowVersionRef.current,
@@ -902,8 +916,10 @@ export default function CustomerDetail() {
         customerRowVersionRef.current = rowVersionResult.rowVersion;
         if (rowVersionResult.kind === 'recovery') {
           // The save succeeded and its key was retired on the line above, so there is
-          // no rejected key here to retire a second time.
-          staleSaveConflictScopeRef.current = saveCustomerIntentScope;
+          // no rejected key here to retire a second time — which is precisely what
+          // NON_SAVE_RECOVERY records. This is a confirmed save whose version token
+          // could not be trusted, not a rejected save awaiting replay.
+          staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
           setStaleSaveOpen(true);
           toast('warning', 'Customer saved, but its save-protection version could not be confirmed. Reload before editing or saving it again.');
         }
@@ -919,7 +935,7 @@ export default function CustomerDetail() {
         setIsDirty(false);
         if (isNew) {
           if (rowVersionResult.kind !== 'recovery') toast('success', 'Customer created');
-          navigate(`/customers/${result.customer_id ?? data}`, { replace: true });
+          navigate(`/customers/${result.customer_id}`, { replace: true });
         } else {
           if (rowVersionResult.kind !== 'recovery') toast('success', 'Customer updated');
           fetchAddresses();
@@ -961,7 +977,10 @@ export default function CustomerDetail() {
         // a later whole-record save must reload instead of overwriting unseen work.
         // A direct crop mutation, not a save_customer call — no idempotency key of
         // that operation is outstanding, so there is nothing to retire on recovery.
-        staleSaveConflictScopeRef.current = saveCustomerIntentScope;
+        // Recording the save scope here said the opposite: crop buttons stay enabled
+        // while a save_customer is in flight, so a crop-originated reload could
+        // release that save's receipt before its own reply was ever validated.
+        staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
         setStaleSaveOpen(true);
         toast('warning', 'Crops were updated, but another customer edit may have completed at the same time. Your current edits were kept; reload before saving other customer changes.');
       }

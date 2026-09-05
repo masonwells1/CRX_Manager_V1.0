@@ -403,6 +403,79 @@ describe('CustomerDetail stale whole-record save', () => {
     ).toEqual(new Set(['customer-stale-key-customer-1-0']));
   });
 
+  it('keeps the save_customer key when the reply is an empty OBJECT, not just when it is missing', async () => {
+    // The test above proves `data: null`, which assertRpcResult REJECTS by throwing —
+    // so it never reached the line that retires the key. `{}` is the reply that
+    // actually gets through: assertRpcResult only rejects a MISSING reply, so an
+    // empty object arrives at the caller looking like a success with no id in it.
+    // That is the ambiguous answer — the customer may already be committed — and the
+    // retained key is the only thing that can still redeem the server's copy of it.
+    mockRpc.mockResolvedValue({ data: {}, error: null });
+
+    renderDetail();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited farm' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
+    })));
+    expect(
+      mockResetIdempotencyKey,
+      'an empty save_customer object is ambiguous — retiring the key here sends the retry under a key the server cannot replay, creating a second customer',
+    ).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_customer');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_customer')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    expect(new Set(saveKeys)).toEqual(new Set(['customer-stale-key-customer-1-0']));
+  });
+
+  it('does not let a crop-originated recovery reload release the save_customer key', async () => {
+    // Crop buttons stay enabled while a save_customer is in flight, and a crop toggle
+    // opens the SAME recovery dialog a save conflict does. Recording the save scope
+    // there made the dialog lie about where it came from, so its reload retired a
+    // save_customer key whose own reply had never been validated. A crop write is a
+    // direct table update with no idempotency key of its own — there is nothing for
+    // its reload to retire.
+    let customerReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return customerQuery(() => {
+          customerReads += 1;
+          return customerReads <= 2
+            ? original
+            : ({ ...original, crops: ['corn'], row_version: 6 } as unknown as typeof original);
+        });
+      }
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'CUSTOMER_STALE_WRITE' } });
+
+    renderDetail();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'Corn' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload Customer' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Customer' })).not.toBeInTheDocument());
+    expect(
+      mockResetIdempotencyKey,
+      'the crop write owns no save_customer key, so its recovery reload must retire none',
+    ).not.toHaveBeenCalled();
+
+    // Prove the key genuinely survived rather than merely not being reset in a
+    // no-op: the next save must still carry generation 0 for this customer.
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited after crop reload' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
+    })));
+  });
+
   it('reloads the financials tab when the route switches customers without remounting the page', async () => {
     // The financials tab caches its fetch in a ref. CustomerDetail is not
     // remounted when only :id changes, so before this guard existed the tab

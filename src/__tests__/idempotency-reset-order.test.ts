@@ -924,14 +924,18 @@ describe('F1 aliased-reset class — the renamed resets verify before they retir
 
     // THE DEFECT ITSELF: a reset between the call and the assert that verifies it.
     //
-    // The one exception is a reset that carries its own emptiness test on the same
+    // The one exception is a reset that carries its own receipt test on the same
     // line — CustomerDetail's route-changed branch must return quietly rather than
-    // throw into a record that is no longer on screen, so it applies assertRpcResult's
-    // `!= null` check inline instead. That exception is not a hole: the test below
-    // pins the inline check, so deleting it fails there rather than being excused here.
+    // throw into a record that is no longer on screen, so it tests the reply inline
+    // instead. That exception is not a hole: the test below pins the inline check, so
+    // deleting it fails there rather than being excused here.
+    //
+    // `hasReceiptId(data, ...)` is the current form and is STRICTLY stronger than the
+    // `data != null` this once accepted: assertRpcResult rejects only a MISSING reply,
+    // so `{}` passed the old test while carrying no id at all (CodeRabbit, #603).
     const offending = lines
       .slice(callIdx, assertIdx)
-      .filter((l) => l.includes(`${reset}()`) && !/data\s*!=\s*null/.test(l));
+      .filter((l) => l.includes(`${reset}()`) && !/hasReceiptId\(\s*data\s*,/.test(l));
     expect(
       offending,
       `${reset}() retires the key before the ${rpc} reply is verified — an empty reply ` +
@@ -954,10 +958,10 @@ describe('F1 aliased-reset class — the renamed resets verify before they retir
     ).toBe(1);
     expect(
       conditional[0],
-      'the route-changed branch must prove the reply is NON-EMPTY before releasing the key. ' +
-        '`!error` alone does not: save_customer can answer with an empty payload and no ' +
-        'error, which is exactly the ambiguous reply assertRpcResult rejects.',
-    ).toMatch(/!error\s*&&\s*data\s*!=\s*null/);
+      'the route-changed branch must prove the reply is a RECEIPT before releasing the key. ' +
+        'Neither `!error` nor `data != null` does: save_customer can answer `{}` with no ' +
+        'error, which passes assertRpcResult untouched while naming no customer at all.',
+    ).toMatch(/!error\s*&&\s*hasReceiptId\(\s*data\s*,\s*'customer_id'\s*\)/);
   });
 });
 

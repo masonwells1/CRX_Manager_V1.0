@@ -467,3 +467,55 @@ evidence about the wrong thing, which is worse, because it ends the search.
 - Lower-severity findings on float money math in the quote totals, `searchParams` over-triggering
   the JobDetail load effect, and the lexical ordering pin's false-pass shapes are recorded in the
   proof artifact and left to their owners.
+
+## Round 8 — CodeRabbit, and two defects in the fix itself
+
+CodeRabbit reviewed the merge candidate and requested changes. Two of its Major findings were real,
+and both were in this branch's own work.
+
+**The receipt check was never actually checking the receipt.** The save handlers were reordered in
+an earlier round to "verify first, retire second", and the verification was `assertRpcResult`. But
+`assertRpcResult` rejects only a MISSING reply — `null` or `undefined`. An empty object passes
+through it untouched. So `save_quote` or `save_customer` answering `{}` with no error reached the
+caller looking like a success, and the key that was the only way to learn what that save had done
+was retired anyway. On a create there is no committed id to fall back on, so the operator's retry
+minted a fresh key the server could not recognise and wrote the record a second time — the exact
+duplicate this branch exists to prevent, reintroduced by the fix for it.
+
+QuoteBuilder made it worse than a missed check: `result.quote_id || quoteId` fell back to the id in
+the URL, so on an edit route an unverified save reported itself as confirmed. Both pages now test
+the reply with a shared `hasReceiptId` before retiring anything, and the URL fallback is gone.
+
+The round-7 tests did not catch this because they staged `data: null` — the half of the ambiguous
+space `assertRpcResult` already rejects, so they passed against code that retires first and checks
+later. The `{}` half, which is the half that reaches the caller, was untested on both pages. Two
+repo-wide source pins had the same blind spot and were tightened rather than relaxed: they now
+require the receipt test, not the weaker `data != null`.
+
+**A recovery dialog claimed an origin it did not have.** Only ONE of QuoteBuilder's eleven dialog
+openers is a `save_quote` conflict; the other ten are lifecycle actions — decline, email, version
+restore, convert, book-as-order — that own no `save_quote` key at all. CustomerDetail's crop toggle
+is the same shape, and crop buttons stay enabled while a save is in flight. Round 7 recorded the
+save scope at every opener, which fixed the previous-record leak but told the reload that a
+lifecycle recovery was a save recovery, so it retired a save receipt whose own reply had never been
+validated. Openers that are not save conflicts now record `NON_SAVE_RECOVERY`, and the release
+requires an exact scope match instead of also releasing on `null`.
+
+That change also removed a hazard round 7 had to work around: the two memoized openers needed
+`saveQuoteIntentScope` in their dependency lists or they would stamp the scope captured at first
+render. A module constant cannot go stale in a closure, so the dependency — and the trap — are gone.
+
+One existing test asserted two key releases on a version-action recovery. The second of those was
+the coupling itself; it now asserts one, with the reason inline.
+
+All four new tests were mutation-proven: each was run against the code with its fix removed and
+each failed, and only it.
+
+### Findings answered but not fixed here
+
+- **CodeRabbit, JobDetail `fetchJob` stale route responses** — the repo-wide async-load class, owned
+  by #611. This branch never touched that file.
+- **Codex P2 ×2, retire the rejected key for the originating saved record** — declined, consistent
+  with the round-7 retraction. Retiring on a payload conflict is what risks the duplicate; the cost
+  of retaining is one unearned conflict dialog that the next reload clears. The residual is named
+  above and its proper close is the server-side receipt lookup, not a fourth client patch.
