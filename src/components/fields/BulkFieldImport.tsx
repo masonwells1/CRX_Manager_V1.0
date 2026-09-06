@@ -12,6 +12,7 @@ import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult, rpcAuthErrorMessage } from '../../lib/db';
+import { sanitizeError } from '../../lib/errorSanitizer';
 import {
   parseShapefileBundle,
   parseShapefileZip,
@@ -99,7 +100,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
 
   // Step 7: Results
-  const [results, setResults] = useState<{ success: number; failed: number; errors: string[]; warnings: string[] } | null>(null);
+  // `created` counts every row that reached the database, INCLUDING rows counted as failed
+  // because only their boundary failed. Re-importing one of those creates a duplicate, so the
+  // results screen needs it to tell the operator which rows are safe to retry.
+  const [results, setResults] = useState<{ success: number; failed: number; created: number; errors: string[]; warnings: string[] } | null>(null);
 
   // Fetch customers for step 4
   useEffect(() => {
@@ -402,6 +406,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
     let success = 0;
     let failed = 0;
+    // Every row whose save_field call committed, whether or not the rest of the row landed.
+    let created = 0;
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -447,6 +453,9 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           failed++;
           errors.push(`"${pf.field_name}": ${rpcAuthErrorMessage(saveError) ?? saveError.message}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
+          // save_field has COMMITTED. Count the row as created before anything else can fail, so
+          // a later boundary or override failure still reports the field as existing.
+          created++;
           // Persist the boundary via the server-authoritative acreage RPC — it measures the
           // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
           // legacy boundary/centroid in sync, and sets measured_acres (the billable default).
@@ -467,7 +476,9 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             // client total_acres; count it as failed (an admin can remove it — a sales_rep
             // delete is RLS-blocked). A fully-atomic create_field_with_boundary RPC is the
             // documented follow-up that would also avoid this residual.
-            const msg = geoError instanceof Error ? geoError.message : String(geoError);
+            // Supabase rejections are PLAIN OBJECTS with .message, not Error instances, so
+            // String() rendered them as "[object Object]" — the operator saw no reason at all.
+            const msg = sanitizeError(geoError);
             failed++;
             errors.push(`"${pf.field_name}": Field created but boundary measurement failed — ${msg}`);
           }
@@ -493,7 +504,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                   if (ovErr) throw ovErr;
                   assertRpcResult(ovData, 'set_field_override_acres');
                 } catch (ovError: unknown) {
-                  const msg = ovError instanceof Error ? ovError.message : String(ovError);
+                  const msg = sanitizeError(ovError);
                   warnings.push(`"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
                 }
               }
@@ -503,13 +514,13 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         }
       } catch (err: unknown) {
         failed++;
-        errors.push(`"${pf.field_name}": ${err instanceof Error ? err.message : String(err)}`);
+        errors.push(`"${pf.field_name}": ${sanitizeError(err)}`);
       }
 
       setUploadProgress((prev) => ({ ...prev, current: prev.current + 1 }));
     }
 
-    setResults({ success, failed, errors, warnings });
+    setResults({ success, failed, created, errors, warnings });
     setStep(7);
     setUploading(false);
 
@@ -906,6 +917,32 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                 {results.failed > 0 && `, ${results.failed} failed`}
               </p>
             </div>
+
+            {/* Re-importing the whole file duplicates every row that already reached the database.
+                A row counted as failed can still have created a field (save_field commits before
+                the boundary call), so `created` — not `success` — is what the operator must not
+                send again. Until an atomic create-field-with-boundary RPC exists, the server
+                cannot recognise the repeat, so this has to be said out loud. */}
+            {results.created > 0 && results.failed > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <p className="text-xs font-medium text-amber-700">
+                    Do not re-import this whole file
+                  </p>
+                </div>
+                <p className="text-xs text-amber-700">
+                  {results.created} field{results.created > 1 ? 's' : ''} from this file already
+                  exist{results.created > 1 ? '' : 's'} here. Importing the file again would create
+                  a second copy of each one.
+                </p>
+                <p className="text-xs text-amber-700 mt-1">
+                  That includes any row below saying &ldquo;Field created but boundary measurement
+                  failed&rdquo; — that field exists, it just has no map boundary yet. Re-import only
+                  the rows that never got created, and ask an admin to remove any incomplete field.
+                </p>
+              </div>
+            )}
 
             {results.errors.length > 0 && (
               <div className="p-3 bg-red-50 border border-red-100 rounded-lg max-h-32 overflow-y-auto">
