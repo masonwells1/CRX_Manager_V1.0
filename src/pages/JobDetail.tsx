@@ -2878,6 +2878,7 @@ export default function JobDetail() {
 
   const handleStart = async () => {
     if (!profile || !id) return;
+    const stillOnThisJob = captureRouteEpoch();
     setStarting(true);
     try {
       const idemKey = startJobIdem.getKey();
@@ -2890,8 +2891,21 @@ export default function JobDetail() {
       assertRpcResult(data, 'start_job');
       startJobIdem.resetKey();
       logActivity({ event: 'job_started', description: `Job ${jobNumber} started`, performedBy: profile.id });
-      toast('success', 'Job started');
-      await fetchJob();
+      // The start committed and the activity log above records it either way. Everything
+      // below writes to whatever job is on screen NOW: a success toast, and a refetch that
+      // reinstalls this job's server state over the form — discarding the operator's
+      // unsaved edits on the job they actually moved to. Its three neighbours
+      // (handleComplete, handleCancelJob, handleTransferToInvoice) were gated in round 4
+      // and this one was missed, even though the routeIdRef comment at the top of this
+      // file names handleStart as an example of the very shape it guards against.
+      // A -> B -> A defeats the other two operands here: routeIdRef is back to A so
+      // fetchJob's entry check passes, and fetchJob mints its own CURRENT ticket with
+      // ++ so the ticket check certifies it too. Only a route-COMMIT count rejects it.
+      // (Codex CRX-SEC-003.)
+      if (stillOnThisJob()) {
+        toast('success', 'Job started');
+        await fetchJob();
+      }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'start_job' } });
       toast('error', sanitizeError(err));

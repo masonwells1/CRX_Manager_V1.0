@@ -1,7 +1,7 @@
 /**
  * JobDetail — cross-record binding regressions.
  *
- * These three cover defects that the ticket/route-id guard in JobDetail.staleLoad.test.tsx
+ * These cover defects that the ticket/route-id guard in JobDetail.staleLoad.test.tsx
  * does NOT reach, because each one lives outside the load path that guard protects:
  *
  *   1. fetchJob installed the record onto the form and only THEN awaited two more reads, so
@@ -13,6 +13,9 @@
  *   3. routeEpochRef was bumped only when the route COMMITTED to another job, never on
  *      unmount, so work still in flight after leaving the page entirely believed it was
  *      still on its job and could navigate the operator back.
+ *   4. handleStart alone among the four job-action handlers carried no staleness gate, so
+ *      starting a job and moving on announced the start over another job and refetched the
+ *      started job's server state over that job's form.
  *
  * The mock keeps the REAL hasRpcCode/RpcErrorCodes from ../lib/db. Stubbing those would
  * delete the very error path test 2 exists to exercise.
@@ -318,5 +321,48 @@ describe('JobDetail cross-record binding', () => {
     // the table is touched again on the success path either way.
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
     expect(screen.getByText('Somewhere else entirely')).toBeTruthy();
+  });
+
+  it('does not announce a job start over the job the operator moved to', async () => {
+    // handleStart was the one job-action handler with no staleness gate at all, while its
+    // three neighbours (Complete, Cancel, Transfer) each opened with captureRouteEpoch().
+    // start_job commits against job A correctly; what must not follow the operator is the
+    // "Job started" confirmation over job B, and the refetch behind it that reinstalls job
+    // A's server state over the form — discarding whatever the operator had typed on B.
+    const startGate = deferred();
+    let jobsCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        jobsCalls += 1;
+        return jobsCalls === 1
+          ? buildChain({ data: JOB_A, error: null })
+          : buildChain({ data: JOB_B, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((fn: string) => (fn === 'start_job'
+      ? startGate.promise.then(() => ({ data: { ok: true }, error: null }))
+      : Promise.resolve({ data: null, error: null })));
+
+    const router = mountAt('/jobs/job-a');
+    await screen.findByRole('heading', { name: 'J-AAAA-1001' });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start Job/ })); });
+    // Positive control: if the click were swallowed (e.g. by the unsaved-changes guard on
+    // the button) the assertions below would pass without the gate ever being exercised.
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('start_job', expect.anything()));
+
+    // The operator opens job B while job A's start is still in flight.
+    await act(async () => { await router.navigate('/jobs/job-b'); });
+    await screen.findByRole('heading', { name: 'J-BBBB-2002' });
+
+    // Job A's start commits now.
+    await act(async () => { startGate.release(); await startGate.promise; });
+
+    // toast('success', 'Job started') is the first statement inside `if (stillOnThisJob())`,
+    // so it witnesses the whole block. A jobs-read count cannot be used: navigating to job B
+    // issues its own jobs read either way.
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'J-BBBB-2002' })).toBeTruthy());
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Job started');
   });
 });
