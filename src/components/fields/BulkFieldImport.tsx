@@ -67,6 +67,46 @@ const STEP_LABELS = [
 const ACCEPTED_EXTENSIONS = ['.zip', '.shp', '.dbf', '.shx', '.prj', '.geojson', '.json', '.kml'];
 const MAX_SIZE = 25 * 1024 * 1024; // 25MB
 
+/**
+ * Whether a failed save_field call PROVES PostgreSQL answered and rolled back, so no field
+ * was created and the row is genuinely safe to re-import.
+ *
+ * Two things must both hold, because a save_field that reaches the database COMMITS before
+ * anything else in the row runs:
+ *
+ * - The status is a 4xx. A non-zero status alone proves nothing: postgrest-js reports 0 when
+ *   fetch itself failed and no response arrived, and a gateway or proxy can answer 502 / 503 /
+ *   504 (or a 408 / 429 timeout) AFTER the RPC reached PostgreSQL and committed.
+ * - The body carried an error code. PostgREST answers a rejection with JSON carrying `code` —
+ *   a SQLSTATE like `42501`, or a `PGRST###`. A gateway answers with HTML or plain text,
+ *   which postgrest-js surfaces as { message: <body> } with an empty code.
+ *
+ * Everything else is an unknown outcome. The operator is told to look that row up rather than
+ * being told it is safe to retry, because a retry mints a fresh idempotency key and would
+ * create a second copy of a field that may already exist.
+ */
+function saveFieldDefinitelyRolledBack(
+  status: number | undefined,
+  error: { code?: string | null },
+): boolean {
+  return typeof status === 'number' && status >= 400 && status < 500 && Boolean(error.code);
+}
+
+/**
+ * A short, printable reason for a row whose outcome we never learned.
+ *
+ * A lost fetch gives a useful one-liner ("TypeError: Failed to fetch"), but a gateway answers
+ * with a whole HTML error page. Dumping that into the results list would bury the OUTCOME
+ * UNKNOWN instruction the operator actually has to act on, so tags are stripped and the text
+ * is clamped. The status is kept, because that is what tells support where it died.
+ */
+function shortServerReason(status: number | undefined, message: string): string {
+  const text = message.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const clamped = text.length > 120 ? `${text.slice(0, 120)}…` : text;
+  const where = typeof status === 'number' && status > 0 ? `HTTP ${status}` : 'no response';
+  return clamped ? `${where}: ${clamped}` : where;
+}
+
 export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
@@ -458,18 +498,16 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         });
 
         if (saveError) {
-          // A real HTTP status means PostgreSQL answered, so the transaction rolled back and
-          // nothing was created. postgrest-js reports status 0 ONLY when fetch itself failed
-          // and no response ever arrived — the request may still have reached the database
-          // and committed. Those two cases must not be reported to the operator the same way.
-          saveOutcome = saveStatus === 0 ? 'unknown' : 'rejected';
+          // Only a response that proves PostgreSQL answered and rolled back makes this row safe
+          // to re-import; anything ambiguous is an unknown outcome. See the helper above.
+          saveOutcome = saveFieldDefinitelyRolledBack(saveStatus, saveError) ? 'rejected' : 'unknown';
           failed++;
           const reason = rpcAuthErrorMessage(saveError) ?? saveError.message;
           // The row has to be identifiable in the list, not just in the counter above it:
           // "re-import the rejected rows" is unusable advice if a lost response reads exactly
           // like a rejection.
           errors.push(saveOutcome === 'unknown'
-            ? `"${pf.field_name}": OUTCOME UNKNOWN — no answer from the server (${reason}). It may have been created; check the field list before re-importing this row.`
+            ? `"${pf.field_name}": OUTCOME UNKNOWN — the server did not give a clear answer (${shortServerReason(saveStatus, reason)}). It may have been created; check the field list before re-importing this row.`
             : `"${pf.field_name}": ${reason}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
           saveOutcome = 'committed';
@@ -993,7 +1031,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               <div className="p-3 bg-red-50 border border-red-100 rounded-lg max-h-32 overflow-y-auto">
                 <p className="text-xs font-medium text-secondary mb-1">Errors:</p>
                 {results.errors.map((err, i) => (
-                  <p key={i} className="text-xs text-secondary">{err}</p>
+                  <p key={i} className="text-xs text-secondary break-words">{err}</p>
                 ))}
               </div>
             )}
@@ -1002,7 +1040,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               <div className="p-3 bg-amber-50 border border-amber-100 rounded-lg max-h-32 overflow-y-auto">
                 <p className="text-xs font-medium text-amber-700 mb-1">Imported, with notes:</p>
                 {results.warnings.map((w, i) => (
-                  <p key={i} className="text-xs text-amber-600">{w}</p>
+                  <p key={i} className="text-xs text-amber-600 break-words">{w}</p>
                 ))}
               </div>
             )}

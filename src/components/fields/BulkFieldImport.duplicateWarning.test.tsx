@@ -249,6 +249,100 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
     expect(screen.getByText(/North 1.*OUTCOME UNKNOWN/)).toBeInTheDocument();
   });
 
+  it('WARNS on a gateway 5xx, because a proxy can answer AFTER PostgreSQL committed', async () => {
+    // The status is non-zero, so the first version of this fix called it a definite rejection
+    // and told the operator the row was safe to re-import. But a gateway/proxy can return 502,
+    // 503 or 504 after the RPC already reached PostgreSQL and COMMITTED. Its body is HTML, not
+    // a PostgREST error, so postgrest-js surfaces it with an empty code.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') {
+        return Promise.resolve({
+          data: null,
+          error: { message: '<html><title>502 Bad Gateway</title></html>', code: '' },
+          status: 502,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+    expect(screen.getByText(/never came back with a clear answer/i, { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText(/North 1.*OUTCOME UNKNOWN/)).toBeInTheDocument();
+  });
+
+  it('keeps a gateway error page from burying the instruction in the error list', async () => {
+    // A real Cloudflare/proxy 502 body is a whole HTML document, not a sentence. Printed raw it
+    // pushes the "check the field list before re-importing" instruction off the operator's
+    // screen — which is the one thing this row exists to tell them.
+    const page = `<html><head><title>502 Bad Gateway</title></head><body>${'x'.repeat(3000)}</body></html>`;
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') {
+        return Promise.resolve({ data: null, error: { message: page, code: '' }, status: 502 });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    const line = screen.getByText(/North 1.*OUTCOME UNKNOWN/).textContent ?? '';
+    // The status survives (support needs it) and the instruction is still readable.
+    expect(line).toContain('HTTP 502');
+    expect(line).toContain('check the field list before re-importing');
+    // The document itself does not.
+    expect(line).not.toContain('<html>');
+    expect(line.length).toBeLessThan(300);
+  });
+
+  it('WARNS on a 5xx even when it carries an error code, because a 5xx never proves rollback', async () => {
+    // Deliberately conservative, and the bound is pinned here on purpose. A PostgREST 500 does
+    // usually mean PostgreSQL raised and rolled back — but Supabase's edge can also synthesise a
+    // JSON error with a code, and nothing on the client can tell those apart. Being wrong in the
+    // safe direction costs the operator one lookup; being wrong the other way creates a duplicate
+    // field a sales_rep cannot delete.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'internal server error', code: 'XX000' },
+          status: 500,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+    expect(screen.getByText(/North 1.*OUTCOME UNKNOWN/)).toBeInTheDocument();
+  });
+
+  it('WARNS on a 4xx that carries no PostgREST code, because that did not come from the database', async () => {
+    // Being a 4xx is not enough on its own. A proxy can refuse a request with its own 400 or
+    // 429 and an HTML body; only a PostgREST rejection carries a code (a SQLSTATE, or PGRST###),
+    // and only that proves PostgreSQL is what answered and rolled the transaction back.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'Too Many Requests', code: '' },
+          status: 429,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+    expect(screen.getByText(/North 1.*OUTCOME UNKNOWN/)).toBeInTheDocument();
+  });
+
   it('WARNS when save_field answered with no id, because that outcome is ambiguous too', async () => {
     // A 200 carrying null data makes assertRpcResult throw. The server answered, but not
     // with an id, so whether anything committed is unknowable from here — the row must be
