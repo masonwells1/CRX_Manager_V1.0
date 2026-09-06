@@ -80,11 +80,20 @@ const JS_RUNTIME_NAMES = new Set(["node", "nodejs", "bun", "deno"]);
 const SEGMENT_HEADS_THAT_EXECUTE = new Set([
   "command", "exec", "env", "nohup", "nice", "ionice", "timeout", "setsid", "stdbuf", "sudo", "doas", "xargs", "parallel", "time",
   "bash", "sh", "dash", "zsh", "ksh", "fish", "pwsh", "powershell", "cmd",
+  // Transparent launchers: each runs its trailing argv, so `start /b node "$F"`,
+  // `wsl --exec node "$F"`, `winpty node "$F"`, `runuser -u u -- node "$F"`,
+  // `su -c 'node "$F"' u`, and `flock lock node "$F"` are launches, not data
+  // (CodeRabbit, PR #619).
+  "start", "wsl", "winpty", "runuser", "su", "flock",
 ]);
 // A redirection glued to the runtime's name (`node</dev/null "$F"`) is still a
 // launch of Node, so `<` and `>` end the name exactly as whitespace does
-// (Codex App P2, PR #619).
-const JS_RUNTIME_TOKEN_RE = /(?:^|[\s;&|(){}"'`@])(?:node|nodejs|bun|deno)(?:\.exe)?["']?(?=[\s<>]|$)/i;
+// (Codex App P2, PR #619). A PATH-QUALIFIED name is the same launch:
+// `/usr/bin/node "$F"`, `./node "$F"`, `C:\tools\node.exe "$F"`. `segmentHead`
+// already strips the directory, so without the optional prefix here the head
+// check passed and this scan then found no runtime and skipped the segment —
+// the launch was allowed (CodeRabbit, PR #619; first raised by Sol in round 1).
+const JS_RUNTIME_TOKEN_RE = /(?:^|[\s;&|(){}"'`@])(?:[^\s;&|(){}"'`@<>]*[\\/])?(?:node|nodejs|bun|deno)(?:\.exe)?["']?(?=[\s<>]|$)/i;
 // Shell expansion, substitution, glob, brace, and PowerShell sub-expression
 // starts — a token carrying one names a file only at run time.
 const COMPUTED_TOKEN_RE = /[$%!`*?\[\]{}(]/;
@@ -201,8 +210,17 @@ function segmentHead(segment) {
   const token = (/^[^<>]+/.exec(words[index] || "") || [""])[0];
   return token.replace(/^\$?["']+|["']+$/g, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
 }
+// `wordEscapeView` strips a backslash between two letters so `n\o\d\e` cannot
+// hide the name — but that same strip turns `C:\tools\node.exe` into
+// `C:toolsnode.exe`, which has no path separator left for either the head scan
+// or the runtime regex to cut on, so a Windows path-qualified launch was
+// allowed. Scanning the RAW command as well can only ADD denials, never remove
+// one, so each view catches what the other's normalisation destroys
+// (CodeRabbit, PR #619).
 export function computedJavaScriptScriptArgument(command) {
-  const view = wordEscapeView(command);
+  return scanForComputedScript(wordEscapeView(command)) || scanForComputedScript(String(command || ""));
+}
+function scanForComputedScript(view) {
   for (const segment of splitShellSegments(view)) {
     const head = segmentHead(segment);
     if (!JS_RUNTIME_NAMES.has(head) && !SEGMENT_HEADS_THAT_EXECUTE.has(head)) continue;
@@ -271,7 +289,9 @@ export const DANGEROUS_CMD_CHECKS = [
   // same text quoted as search data (`rg -n 'Set-Item Env:NODE_OPTIONS' docs`)
   // stays a read.
   [/(?:^|[;&|(){}\r\n])\s*(?:set-item|si|new-item|ni|set-content|sc|add-content|ac|clear-item|cli|remove-item|ri)\s+[^\r\n;&|]*\benv:\\?node_options\b/i, "Blocked NODE_OPTIONS mutation through a PowerShell item cmdlet. NODE_OPTIONS can run code before a reviewed script's own safety checks."],
-  [/(?:^|[;&|(){}\r\n])\s*\$env:node_options\s*\+?=/i, "Blocked assignment to $env:NODE_OPTIONS. NODE_OPTIONS can run code before a reviewed script's own safety checks."],
+  // `${env:NODE_OPTIONS} = …` is the braced spelling of the same assignment and
+  // is valid PowerShell (CodeRabbit, PR #619).
+  [/(?:^|[;&|(){}\r\n])\s*\$(?:env:node_options|\{\s*env:node_options\s*\})\s*\+?=/i, "Blocked assignment to $env:NODE_OPTIONS. NODE_OPTIONS can run code before a reviewed script's own safety checks."],
   [/(?:^|[;&|(){}\r\n])\s*\[(?:System\.)?Environment\]::SetEnvironmentVariable\s*\(\s*['"]node_options['"]/i, "Blocked .NET mutation of NODE_OPTIONS. NODE_OPTIONS can run code before a reviewed script's own safety checks."],
   [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/, "Blocked force push. Force pushing any branch requires Mason's explicit approval."],
   // Tolerate intervening git options (`git -C <path> reset --hard`, `git -c x=y clean -fd`)

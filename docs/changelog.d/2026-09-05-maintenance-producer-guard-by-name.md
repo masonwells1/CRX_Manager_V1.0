@@ -46,9 +46,11 @@ refuses any argv but its exact reviewed one, a dirty worktree, `main` or a detac
 that differs from its committed HEAD blob, and any write mode without a fresh exact-head Sol proof;
 its only outputs are three pinned blobs in a branch worktree that still have to pass the PR
 pipeline; and the same run was always reachable through `node runner.mjs`, which the classifier
-never saw. The generated Codex production guard (`.codex/hooks/production-action-guard.mjs`) keeps
-the full classifier, blob-pinned, for the Codex session that holds production credentials; it is
-not touched here.
+never saw. The generated Codex production guard (`.codex/hooks/production-action-guard.mjs`) is not
+touched here; it gates the producer BY NAME through `maintenanceProducerCommandMentioned()` behind
+an exact-HEAD proof gate, and it does not carry the opaque-invocation classifier. An earlier draft
+of this entry claimed it "keeps the full classifier"; that was wrong, and the claim mattered,
+because it was read as "the Codex side still holds the broad net" (CodeRabbit, PR #619).
 
 **Recorded over-block.** A computed `node …` inside a quoted argument of `pwsh`/`bash` is refused
 even when that argument is not a command string, because a shell head makes the whole segment a

@@ -364,6 +364,42 @@ for (const command of [
 eq(splitShellWords('node > "out file" "$F"').length, 4, "a quoted word with whitespace is one word");
 eq(splitShellWords("echo a\\ b c").length, 3, "a backslash-escaped space keeps its word together");
 eq(splitShellWords("echo 'unterminated word").length, 2, "an unterminated quote swallows the rest of the line");
+//     5. Round 3 (CodeRabbit on db355b11d): a PATH-QUALIFIED runtime name is the
+//        same launch as a bare one, and a transparent launcher head runs its
+//        trailing argv. `segmentHead` already strips the directory, so the head
+//        check passed while the runtime regex found nothing and skipped the
+//        segment. The Windows spelling needs the RAW command too, because
+//        `wordEscapeView` strips the backslashes out of `C:\tools\node.exe`.
+//        `/usr/bin/node "$F"` was first raised by Sol in round 1 and had not
+//        actually been closed.
+for (const command of [
+  '/usr/bin/node "$F"',
+  './node "$F"',
+  '$HOME/bin/node "$F"',
+  'C:\\tools\\node.exe "$F"',
+  '/usr/local/bin/bun "$F"',
+  'start /b node "$F"',
+  'wsl --exec node "$F"',
+  'winpty node "$F"',
+  'runuser -u user -- node "$F"',
+  "su -c 'node \"$F\"' user",
+  'flock lockfile node "$F"',
+]) {
+  ok(computedJavaScriptScriptArgument(command), `path-qualified or launcher-fronted computed script is seen: ${command}`);
+  ok(checkDangerousCommand(command), `path-qualified or launcher-fronted computed launch denied: ${command}`);
+}
+for (const command of [
+  "/usr/bin/node scripts/safe.mjs",
+  "start /b node scripts/safe.mjs",
+  "sudo apt install nodejs",
+  'echo /usr/bin/node "$F"',
+]) {
+  ok(!computedJavaScriptScriptArgument(command), `a literal script or non-executing head stays uncomputed: ${command}`);
+  eq(checkDangerousCommand(command), null, `path-qualified literal script and data mentions stay allowed: ${command}`);
+}
+// The braced PowerShell spelling of the same environment assignment.
+ok(checkDangerousCommand("${env:NODE_" + 'OPTIONS} = "--require ./x.js"'), "braced $env:NODE_OPTIONS assignment denied");
+ok(checkDangerousCommand("$env:NODE_" + 'OPTIONS = "--require ./x.js"'), "unbraced $env:NODE_OPTIONS assignment stays denied");
 //     3. A literal, non-loader option whose computed value is QUOTED keeps the
 //        parser moving toward the (literal) script; an unquoted expansion can
 //        word-split into a script argument, and a computed option NAME or a
