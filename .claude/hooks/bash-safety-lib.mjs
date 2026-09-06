@@ -224,45 +224,60 @@ function scanForComputedScript(view) {
   for (const segment of splitShellSegments(view)) {
     const head = segmentHead(segment);
     if (!JS_RUNTIME_NAMES.has(head) && !SEGMENT_HEADS_THAT_EXECUTE.has(head)) continue;
-    const match = JS_RUNTIME_TOKEN_RE.exec(segment);
-    if (!match) continue;
-    const bunOrDeno = /bun|deno/i.test(match[0]);
-    const tokens = splitShellWords(segment.slice(match.index + match[0].length));
-    for (let index = 0; index < tokens.length; index += 1) {
-      const raw = tokens[index];
-      const token = raw.replace(/^["']+|["']+$/g, "");
-      if (!token || token === "--") continue;
-      if (BARE_REDIRECTION_OPERATOR_RE.test(token)) {
-        // `node > out "$F"`: the next word is the redirection's target, not the script.
-        index += 1;
-        continue;
-      }
-      if (REDIRECTION_WORD_RE.test(token)) continue;
-      if (token === "-" || INLINE_CODE_OPTION_RE.test(token)) break;
-      if (token.startsWith("-")) {
-        const separator = token.indexOf("=");
-        const name = separator === -1 ? token : token.slice(0, separator);
-        const inlineValue = separator === -1 ? "" : raw.replace(/^["']+/, "").slice(separator + 1);
-        // A computed option NAME (`--$OPT`) may be anything at run time.
-        if (COMPUTED_TOKEN_RE.test(name)) return true;
-        if (VALUE_OPTION_RE.test(name)) {
-          const value = separator === -1 ? (tokens[index + 1] || "") : inlineValue;
-          if (COMPUTED_TOKEN_RE.test(value.replace(/^["']+|["']+$/g, ""))) return true;
-          if (separator === -1) index += 1;
-          continue;
-        }
-        // Any other option keeps the parser moving toward the script argument
-        // (`node --title="$TITLE" scripts/safe.mjs`; Codex App P2, PR #619) —
-        // but only while its computed value is QUOTED. An unquoted expansion
-        // (`--title=$X`, `--title=%X%`) can word-split into a script argument
-        // the rule never read, so it is still a computed script.
-        if (COMPUTED_TOKEN_RE.test(inlineValue) && !quotedWord(inlineValue) && !quotedWord(raw)) return true;
-        continue;
-      }
-      if (bunOrDeno && /^(?:run|serve|task|x)$/i.test(token)) continue;
-      if (COMPUTED_TOKEN_RE.test(token)) return true;
-      break;
+    // EVERY occurrence of a runtime name, not just the first. An earlier
+    // occurrence can be an option's VALUE rather than the launch: in
+    // `env -u node node "$F"` the first `node` is the variable being unset, and
+    // stopping there read the real launch as a literal script and allowed it
+    // (gpt-5.6-sol round 1, PR #619 — reported, recorded as addressed, and still
+    // open two rounds later).
+    const matcher = new RegExp(JS_RUNTIME_TOKEN_RE.source, "gi");
+    let match;
+    while ((match = matcher.exec(segment)) !== null) {
+      if (computedScriptAfterRuntime(segment, match)) return true;
+      if (matcher.lastIndex <= match.index) matcher.lastIndex = match.index + 1;
     }
+  }
+  return false;
+}
+// Walk the words after ONE occurrence of a runtime name and report whether the
+// script argument they lead to is computed.
+function computedScriptAfterRuntime(segment, match) {
+  const bunOrDeno = /bun|deno/i.test(match[0]);
+  const tokens = splitShellWords(segment.slice(match.index + match[0].length));
+  for (let index = 0; index < tokens.length; index += 1) {
+    const raw = tokens[index];
+    const token = raw.replace(/^["']+|["']+$/g, "");
+    if (!token || token === "--") continue;
+    if (BARE_REDIRECTION_OPERATOR_RE.test(token)) {
+      // `node > out "$F"`: the next word is the redirection's target, not the script.
+      index += 1;
+      continue;
+    }
+    if (REDIRECTION_WORD_RE.test(token)) continue;
+    if (token === "-" || INLINE_CODE_OPTION_RE.test(token)) break;
+    if (token.startsWith("-")) {
+      const separator = token.indexOf("=");
+      const name = separator === -1 ? token : token.slice(0, separator);
+      const inlineValue = separator === -1 ? "" : raw.replace(/^["']+/, "").slice(separator + 1);
+      // A computed option NAME (`--$OPT`) may be anything at run time.
+      if (COMPUTED_TOKEN_RE.test(name)) return true;
+      if (VALUE_OPTION_RE.test(name)) {
+        const value = separator === -1 ? (tokens[index + 1] || "") : inlineValue;
+        if (COMPUTED_TOKEN_RE.test(value.replace(/^["']+|["']+$/g, ""))) return true;
+        if (separator === -1) index += 1;
+        continue;
+      }
+      // Any other option keeps the parser moving toward the script argument
+      // (`node --title="$TITLE" scripts/safe.mjs`; Codex App P2, PR #619) —
+      // but only while its computed value is QUOTED. An unquoted expansion
+      // (`--title=$X`, `--title=%X%`) can word-split into a script argument
+      // the rule never read, so it is still a computed script.
+      if (COMPUTED_TOKEN_RE.test(inlineValue) && !quotedWord(inlineValue) && !quotedWord(raw)) return true;
+      continue;
+    }
+    if (bunOrDeno && /^(?:run|serve|task|x)$/i.test(token)) continue;
+    if (COMPUTED_TOKEN_RE.test(token)) return true;
+    break;
   }
   return false;
 }

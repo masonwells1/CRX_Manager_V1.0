@@ -400,6 +400,32 @@ for (const command of [
 // The braced PowerShell spelling of the same environment assignment.
 ok(checkDangerousCommand("${env:NODE_" + 'OPTIONS} = "--require ./x.js"'), "braced $env:NODE_OPTIONS assignment denied");
 ok(checkDangerousCommand("$env:NODE_" + 'OPTIONS = "--require ./x.js"'), "unbraced $env:NODE_OPTIONS assignment stays denied");
+//     6. EVERY occurrence of a runtime name is examined, not just the first. An
+//        earlier occurrence can be an option's VALUE: `env -u node node "$F"`
+//        unsets a variable named `node`, and stopping at that first hit read the
+//        real launch as a literal script. Raised by gpt-5.6-sol in ROUND 1 of
+//        this PR, recorded in the PR body as addressed, and still open two
+//        rounds later — these cases exist so "the round was addressed" is a
+//        measurement rather than a claim.
+for (const command of [
+  'env -u node node "$F"',
+  'env -i node "$F"',
+  'env -u PATH /usr/bin/node "$F"',
+  'env FOO=bar node "$F"',
+  'command -p node "$F"',
+  'nice -n 10 node "$F"',
+  "xargs -I{} node \"$F\"",
+]) {
+  ok(computedJavaScriptScriptArgument(command), `a runtime name used as an option value does not shadow the launch: ${command}`);
+  ok(checkDangerousCommand(command), `launch behind an earlier runtime-name token denied: ${command}`);
+}
+for (const command of [
+  "env -u node node scripts/safe.mjs",
+  "env -u node printenv node",
+]) {
+  ok(!computedJavaScriptScriptArgument(command), `scanning every occurrence does not invent a computed script: ${command}`);
+  eq(checkDangerousCommand(command), null, `a literal script after an unset of the same name stays allowed: ${command}`);
+}
 //     3. A literal, non-loader option whose computed value is QUOTED keeps the
 //        parser moving toward the (literal) script; an unquoted expansion can
 //        word-split into a script argument, and a computed option NAME or a

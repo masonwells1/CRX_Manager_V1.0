@@ -45,6 +45,10 @@ scripts/safe.mjs` and `start /b node scripts/safe.mjs` (literal scripts) stay al
 `sudo apt install nodejs` stays allowed, and `echo /usr/bin/node "$F"` stays allowed because `echo`
 is not an executing head.
 
-**Proof observed.** `node .claude/hooks/bash-safety.test.mjs`: 518 assertions pass.
+Finding 1 being a repeat prompted a re-verification of every earlier round against the current
+head, which turned up a second never-closed round-1 finding. That is recorded separately in
+`docs/changelog.d/2026-09-06-pr619-every-runtime-name-occurrence.md`.
+
+**Proof observed.** `node .claude/hooks/bash-safety.test.mjs`: 536 assertions pass.
 `node .claude/hooks/mcp-tool-guard.test.mjs`: 30 assertions pass. The generated Codex production
 guard is untouched.
