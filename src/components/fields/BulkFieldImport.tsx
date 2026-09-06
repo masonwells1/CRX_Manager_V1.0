@@ -464,7 +464,13 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           // and committed. Those two cases must not be reported to the operator the same way.
           saveOutcome = saveStatus === 0 ? 'unknown' : 'rejected';
           failed++;
-          errors.push(`"${pf.field_name}": ${rpcAuthErrorMessage(saveError) ?? saveError.message}`);
+          const reason = rpcAuthErrorMessage(saveError) ?? saveError.message;
+          // The row has to be identifiable in the list, not just in the counter above it:
+          // "re-import the rejected rows" is unusable advice if a lost response reads exactly
+          // like a rejection.
+          errors.push(saveOutcome === 'unknown'
+            ? `"${pf.field_name}": OUTCOME UNKNOWN — no answer from the server (${reason}). It may have been created; check the field list before re-importing this row.`
+            : `"${pf.field_name}": ${reason}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
           saveOutcome = 'committed';
           // save_field has COMMITTED. Count the row as created before anything else can fail, so
@@ -528,7 +534,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         }
       } catch (err: unknown) {
         failed++;
-        errors.push(`"${pf.field_name}": ${sanitizeError(err)}`);
+        const reason = sanitizeError(err);
+        // Still 'unknown' here means save_field was sent and threw before returning an id —
+        // same ambiguity as a lost response, so it gets the same label.
+        errors.push(saveOutcome === 'unknown'
+          ? `"${pf.field_name}": OUTCOME UNKNOWN — ${reason}. It may have been created; check the field list before re-importing this row.`
+          : `"${pf.field_name}": ${reason}`);
       }
 
       // Still 'unknown' means save_field was sent and never told us what happened — either the
@@ -963,14 +974,17 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                   <p className="text-xs text-amber-700 mt-1">
                     {results.unknownOutcome} row{results.unknownOutcome > 1 ? 's' : ''} never came
                     back with a clear answer, so we cannot tell whether
-                    {results.unknownOutcome > 1 ? ' they were' : ' it was'} created. Look
+                    {results.unknownOutcome > 1 ? ' they were' : ' it was'} created.
+                    {results.unknownOutcome > 1 ? ' They are' : ' It is'} marked &ldquo;OUTCOME
+                    UNKNOWN&rdquo; below — look
                     {results.unknownOutcome > 1 ? ' those rows' : ' that row'} up in the field list
                     before importing {results.unknownOutcome > 1 ? 'them' : 'it'} again.
                   </p>
                 )}
                 <p className="text-xs text-amber-700 mt-1">
-                  Re-import only the rows the list below shows the server rejecting, and ask an
-                  admin to remove any incomplete field.
+                  Re-import only the rows below that are neither marked &ldquo;OUTCOME
+                  UNKNOWN&rdquo; nor say a field was created, and ask an admin to remove any
+                  incomplete field.
                 </p>
               </div>
             )}

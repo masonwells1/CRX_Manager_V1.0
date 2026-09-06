@@ -63,8 +63,13 @@ the moment the request goes out and narrowed only when the server actually says 
 fate is equally unknowable.
 
 The screen now shows two separate sentences: confirmed-existing fields, and rows whose
-outcome is unknown and must be looked up before retrying. Only rows the server explicitly
-rejected are described as safe to re-import.
+outcome is unknown and must be looked up before retrying.
+
+**The counter alone was not enough.** "Re-import only the rows the server rejected" is
+unusable advice if a lost response reads exactly like a rejection in the error list — the
+operator has no way to sort one from the other. Unknown-outcome rows are therefore labelled
+`OUTCOME UNKNOWN` in the list itself, and the warning points at that label. A genuine
+rejection is never labelled, or the label would mean nothing.
 
 ### Verification
 
@@ -76,18 +81,19 @@ rejected are described as safe to re-import.
   row is counted; a clean row and a boundary-failed row are counted together; no
   warning on a fully clean import; no warning when `save_field` itself failed and
   nothing reached the database; a lost response still warns; a 200 carrying no id still warns.
-- **Seven mutations, each verified to be a real edit and not a silent no-op, source
-  restored byte-identical after every run — all seven caught:** the warning driven by
+- **Eight mutations, each verified to be a real edit and not a silent no-op, source
+  restored byte-identical after every run — all eight caught:** the warning driven by
   `success` instead of `created`; the count displayed from `success`; `created`
   incremented only after the boundary lands; the boundary error `String()`-ed back to
   `[object Object]`; a lost response treated as a definite rejection; the warning
-  suppressed for an unknown-outcome row; and the outcome assumed known until the server
-  answers. **That last one ESCAPED on the first run** — nothing covered a 200 carrying
+  suppressed for an unknown-outcome row; unknown-outcome rows left unlabelled in the error
+  list; and the outcome assumed known until the server answers. **That last one ESCAPED on the first run** — nothing covered a 200 carrying
   a null id, so the pessimistic default could be deleted with every test still green. The
   sixth test exists because of it; reading the suite did not reveal the gap.
-- **Rendered and looked at.** The real component's results panel was captured from the
-  test DOM and viewed in the browser, before and after the error-message fix. The
-  before shot is what exposed `[object Object]`.
+- **Rendered and looked at**, four times: before and after the `[object Object]` fix, and
+  again for the unknown-outcome panel, whose first render read "They are marked" for a
+  single row. The real component's results panel was captured from the test DOM and viewed
+  in the browser each time. The first shot is what exposed `[object Object]`.
 - Not verified: no live-database round trip. The suite drives the real React tree but
   mocks the Supabase boundary; it does not exercise the live RPCs.
 

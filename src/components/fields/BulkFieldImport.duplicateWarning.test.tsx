@@ -214,6 +214,8 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
 
     expect(screen.getByText(/permission denied/i)).toBeInTheDocument();
     expect(screen.queryByText(/do not re-import this whole file/i)).not.toBeInTheDocument();
+    // A genuine rejection must NOT be labelled ambiguous, or the marker means nothing.
+    expect(screen.queryByText(/OUTCOME UNKNOWN/)).not.toBeInTheDocument();
   });
 
   it('WARNS when the response was lost, because the row may have committed anyway', async () => {
@@ -242,6 +244,9 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
     );
     // It must not claim the field exists — only that we cannot tell.
     expect(screen.queryByText(/already exist/i, { selector: 'p' })).not.toBeInTheDocument();
+    // And the row must be identifiable IN THE LIST. Without the marker, "re-import the
+    // rejected rows" is unusable advice: a lost response reads exactly like a rejection.
+    expect(screen.getByText(/North 1.*OUTCOME UNKNOWN/)).toBeInTheDocument();
   });
 
   it('WARNS when save_field answered with no id, because that outcome is ambiguous too', async () => {
@@ -258,5 +263,6 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
 
     expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
     expect(screen.getByText(/never came back with a clear answer/i, { selector: "p" })).toBeInTheDocument();
+    expect(screen.getByText(/North 1.*OUTCOME UNKNOWN/)).toBeInTheDocument();
   });
 });
