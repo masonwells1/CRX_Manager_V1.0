@@ -55,6 +55,16 @@ so any migration whose safety argument rests on "the live body equals the last c
 post-apply `pg_proc.prosrc` body and rechecks that exact pre-image at apply time rather than inferring
 it from migration filenames alone.
 
+A second local candidate, `20260905210000_bind_create_inventory_hold_receipt_to_intent` (branch
+`claude/inventory-idempotency-key-reset-888161`, history row 917), is written and container-proven but
+**NOT applied and NOT merged**, and it made **no live read** — its stamp is authored above PR #592's two
+pending `20260905*` files, and its safety argument pins the `create_inventory_hold` body by `prosrc`
+sha256 (`3c86421e…`, the body the checked-in 2026-07-27 production dump carries) and fails closed at
+apply time if the installed body differs. The "Last verified" stamp at the top of this file was
+deliberately left at 2026-09-04 by that lane: nothing live was re-read on 2026-09-05, so the doc-drift
+freshness row for this file stays red on that branch until a read-only live check is approved and
+performed before the apply. See `docs/manual/KNOWN_ISSUES.md` (OPEN 2026-09-05, manual-hold same-key race).
+
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
 `20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
 file, the `save_job` re-emission (marker `chem_unit_invariant_v3`) and its client changes on `main`;

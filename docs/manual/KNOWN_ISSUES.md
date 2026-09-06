@@ -1432,6 +1432,39 @@ A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-rec
 duplicates one of #449's fixes — delete it rather than continuing it.
 
 
+## OPEN 2026-09-05 — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold (fix written and proven, not applied)
+
+The live `create_inventory_hold` body (the `20260630173022` parked_010 body — the 2026-07-27 production
+dump proves it IS installed; earlier notes calling it "parked, never applied" were wrong) reads its
+idempotency receipt with a plain SELECT before the stock lock and writes it after the hold with
+`ON CONFLICT DO NOTHING`. Two overlapping calls with the same key both pass the receipt read. The live
+BEFORE INSERT guard on `idempotency_keys` (`_guard_idempotency_key_insert`, 20260714230000 /
+20260716160000) then rolls the loser back with `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY`, so the table
+ends with ONE hold — but the losing caller is told its hold failed although the winner created exactly
+that hold. The browser classifies that SQLSTATE P0001 as a definitive refusal, releases the key, and the
+operator's next click mints a NEW key and creates a second hold. Measured on 2026-09-05 in a
+network-disabled container built from the 2026-07-27 baseline plus all 75 later migrations
+(`scripts/smoke/prove-create-inventory-hold-intent-binding-real-schema.mjs`): pre-fix race = 1 hold,
+session 2 exits with that error. The same body also gates role with `v_role NOT IN (...)`, which lets a
+caller with no `profiles` row through (NULL is not IN anything), and accepts a NULL key.
+
+Local forward migration `20260905210000_bind_create_inventory_hold_receipt_to_intent.sql` renames the
+live body to `_create_inventory_hold_intent_impl_20260905` (postgres-only EXECUTE) and installs a
+same-signature wrapper: AUTH_REQUIRED, ACTOR_MISMATCH on a forged `p_performed_by`, a NULL-safe ACTIVE
+admin/sales_rep gate, key required, request fingerprint, then `check_idempotency_intent` (per-key
+advisory lock, actor + fingerprint binding) BEFORE any mutation, then the renamed body, then receipt
+binding. Post-fix race in the same container = 1 hold, both sessions succeed with the same `hold_id`;
+the rolled-back chain `smoke-create-inventory-hold-intent-binding.sql` passes; re-apply is clean.
+**No live apply is authorized and no live query was made**; the preflight fails closed if the
+installed body hash or argument list differs from the pins, and REFUSES (`PREFLIGHT_LEGACY_RECEIPTS`) while
+any unexpired receipt written by the old body exists — such a receipt would otherwise lock its operator out
+of creating any hold for up to 24 hours after the swap, so the apply belongs in a quiet window and may need
+a second attempt. Frontend fix for the per-open `resetKey()` on the same page
+is committed on the same branch (`50acce02a`), unpushed, and must merge only after the apply. A retained
+key whose request CHANGES now raises `IDEMPOTENCY_INTENT_MISMATCH`, which the page treats as
+"uncertain" and locks the dialog — acceptable, deliberate. Do not author a competing migration.
+
+
 ## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
 
 `chemLineBillingHazard` checks chemical rows whose rate and stock units differ by converting with

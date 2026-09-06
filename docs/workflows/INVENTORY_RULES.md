@@ -144,7 +144,11 @@ Holds reserve inventory for planned quotes without actually deducting stock.
 5. Expired holds (past `expires_at`) are no longer counted
 
 ### Manual holds — server-side validated (P4-3, 2026-05-07)
-The `/inventory` page's "Create Hold" flow goes through the `create_inventory_hold()` RPC, NOT a bare table insert. The RPC takes a `FOR UPDATE` lock on the Main Warehouse inventory row and recomputes today's free inside the transaction:
+The `/inventory` page's "Create Hold" flow goes through the `create_inventory_hold()` RPC, NOT a bare table insert. The RPC takes a `FOR UPDATE` lock on the Main Warehouse inventory row and recomputes today's free inside the transaction.
+
+Local candidate `20260905210000` (NOT applied live yet) adds a per-key serialization layer in front of that body: the idempotency key is required, the caller must be an ACTIVE admin/sales_rep, and `check_idempotency_intent` locks the key and compares actor + request BEFORE the stock check, so a double-click or a retry racing the original replays the first hold instead of erroring. Today (pre-apply) the second racing call fails with `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` even though the hold exists.
+
+Free-stock formula:
 
 ```
 Today's free = quantity_available − quantity_prebooked − SUM(active hold quantities)
