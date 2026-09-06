@@ -227,7 +227,7 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
     expect(warningText()).toContain('1 field from this file already exists here.');
   });
 
-  it('says so when the field list could not be refreshed', async () => {
+  it('says so when the refresh THREW', async () => {
     // The advice is "look this row up in the field list". If the refresh failed and we said
     // nothing, the operator would check a stale list, not find the field, and re-import it —
     // which is the exact failure this screen exists to prevent.
@@ -252,6 +252,53 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
     expect(line).toContain('Reload the page before checking any row in this list');
     // The import result itself is still reported.
     expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+  });
+
+  it('says so when the refresh RESOLVED FALSE, which is what the real page does', async () => {
+    // The parent's fetchFields catches its own Supabase error and returns — it does NOT reject.
+    // Watching only for a throw would treat a failed refresh as a success and send the operator
+    // to a stale list, which is the exact failure this refresh exists to prevent.
+    // src/pages/Fields.refreshContract.test.tsx pins the other half of this contract.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') return Promise.resolve({ data: 'field-A', error: null, status: 200 });
+      if (fn === 'set_field_boundary') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'degenerate geometry', code: '22023' },
+          status: 400,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    const onSuccess = vi.fn().mockResolvedValue(false);
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={onSuccess} />);
+    await runImport();
+
+    expect(onSuccess).toHaveBeenCalled();
+    expect(screen.getByText(/could not be refreshed/i)).toBeInTheDocument();
+  });
+
+  it('stays quiet when the refresh reported success', async () => {
+    // A caller that returns nothing, or true, must not produce a scary line about a stale list.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') return Promise.resolve({ data: 'field-A', error: null, status: 200 });
+      if (fn === 'set_field_boundary') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'degenerate geometry', code: '22023' },
+          status: 400,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    const onSuccess = vi.fn().mockResolvedValue(undefined);
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={onSuccess} />);
+    await runImport();
+
+    expect(onSuccess).toHaveBeenCalled();
+    expect(screen.queryByText(/could not be refreshed/i)).not.toBeInTheDocument();
   });
 
   it('does NOT warn when every row imported cleanly', async () => {

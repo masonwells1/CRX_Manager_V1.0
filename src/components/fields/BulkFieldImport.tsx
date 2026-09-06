@@ -49,8 +49,13 @@ import type { Customer, ParsedImportField } from '../../types';
 interface BulkFieldImportProps {
   open: boolean;
   onClose: () => void;
-  /** Refreshes the field list behind this modal. May be async, and may reject. */
-  onSuccess: () => void | Promise<void>;
+  /**
+   * Refreshes the field list behind this modal. Resolving to FALSE means the refresh failed
+   * and the list on screen is stale; the results screen says so, because its advice is to look
+   * rows up in that list. Returning nothing is treated as success, so a caller that does not
+   * report either way keeps working.
+   */
+  onSuccess: () => boolean | void | Promise<boolean | void>;
 }
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -618,11 +623,19 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     // cases the warning is about: the operator would check a pre-import list, not find the
     // field, and re-import it — creating the duplicate this screen exists to prevent.
     if (success > 0 || created > 0 || unknownOutcome > 0) {
+      // Two different failure shapes, and the common one does NOT throw: the parent's refresh
+      // handles its own RPC error and resolves false. Relying on a rejection alone would have
+      // left the operator reading a stale list while being told to trust it — which is the
+      // whole reason this refresh exists.
+      let refreshed: boolean | void = false;
+      let refreshReason = '';
       try {
-        await onSuccess();
+        refreshed = await onSuccess();
       } catch (refreshError: unknown) {
-        // Failing silently here is worse than giving no advice at all, for the same reason.
-        errors.push(`The field list behind this window could not be refreshed (${clampReason(sanitizeError(refreshError))}). Reload the page before checking any row in this list.`);
+        refreshReason = ` (${clampReason(sanitizeError(refreshError))})`;
+      }
+      if (refreshed === false) {
+        errors.push(`The field list behind this window could not be refreshed${refreshReason}. Reload the page before checking any row in this list.`);
       }
     }
 
