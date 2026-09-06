@@ -19,6 +19,13 @@ review coverage. Ordinary source edits remain permitted. Explicit merge/deploy a
 and the existing protected delivery process are unchanged. This supersedes the earlier
 same-day unrestricted native-edit decision below. No review rejection may be waived.
 
+**Extension (same day, Codex P1 on `753165db4`):** the restored entries named only `Edit` and
+`Write`; `MultiEdit` and `NotebookEdit` — the other native editors the review-proof guard exempts —
+were auto-approved on the same paths under `acceptEdits`. Matching `MultiEdit(...)` and
+`NotebookEdit(...)` entries were added for all 16 patterns (64 `ask` entries) and for the three
+`.env` `deny` pairs. The rule is that every exempted native editor is named, not just the two the
+original list happened to spell.
+
 **Mode correction after review:** inheriting Auto left new named connector mutations
 eligible for classifier approval. `acceptEdits` keeps ordinary local edits automatic
 but requires permission for unlisted connector tools. This is a tool-permission mode,
