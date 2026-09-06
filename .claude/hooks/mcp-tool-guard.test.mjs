@@ -284,6 +284,26 @@ r = runHook({ tool_name: "mcp__other_supabase__deploy_edge_function", tool_input
 ok(isDeny(r), "deploy_edge_function on a Supabase-named server with no ask entry is denied");
 // Codex P1 on 6de456ac5: an `allow` entry for a live-action leaf is the bypass itself and
 // must not count as registration; only `ask` or `deny` settles it.
+// GitHub Codex P2 on 3612eb3a1: list_branches / create_branch exist on the GitHub connector
+// too, so they must not fingerprint a UUID as Supabase. A GitHub-shaped UUID registered for
+// them keeps its ordinary read tools and its own ask-tier tools.
+const GH_UUID = "mcp__6d6d6d6d-1111-4222-8333-444444444444__";
+withProjectSettings({ allow: [GH_UUID + "list_branches", GH_UUID + "create_branch"], ask: [GH_UUID + "create_pull_request"] }, (dir) => {
+  for (const leaf of ["get_file_contents", "pull_request_read", "list_branches", "search_code"]) {
+    r = runHook({ tool_name: GH_UUID + leaf, tool_input: {} }, dir);
+    eq(r.stdout.trim(), "", `${leaf}: GitHub-shaped UUID registered for shared branch leaves is NOT treated as Supabase`);
+  }
+  r = runHook({ tool_name: GH_UUID + "create_pull_request", tool_input: {} }, dir);
+  eq(r.stdout.trim(), "", "create_pull_request with an exact ask entry is left to the ask tier, not denied as a Supabase mutation");
+  r = runHook({ tool_name: GH_UUID + "create_branch", tool_input: {} }, dir);
+  ok(isDeny(r), "create_branch registered only in allow on an unidentified UUID is still denied (allow line does not settle a mutation)");
+  r = runHook({ tool_name: GH_UUID + "delete_file", tool_input: {} }, dir);
+  ok(isDeny(r), "unlisted mutation on the GitHub-shaped UUID is still denied");
+});
+withProjectSettings({ allow: [GH_UUID + "list_branches", GH_UUID + "list_tables"] }, (dir) => {
+  r = runHook({ tool_name: GH_UUID + "get_file_contents", tool_input: {} }, dir);
+  ok(isDeny(r), "a genuinely Supabase-distinctive leaf (list_tables) still identifies the UUID: off-allowlist read denied");
+});
 const ALLOW_UUID = "mcp__9c9c9c9c-1111-4222-8333-444444444444__";
 withProjectSettings({ allow: [ALLOW_UUID + "pause_project", ALLOW_UUID + "create_project", ALLOW_UUID + "restore_project"] }, (dir) => {
   for (const leaf of ["pause_project", "create_project", "restore_project"]) {

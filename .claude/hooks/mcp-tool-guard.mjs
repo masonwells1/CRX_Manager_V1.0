@@ -127,14 +127,24 @@ const SUPABASE_SENSITIVE_LEAVES = new Set([
   "delete_branch", "merge_branch", "reset_branch", "rebase_branch", "create_branch",
   "create_project", "pause_project", "restore_project", "confirm_cost",
 ]);
-// Leaves shared with other connectors (Vercel has list_projects/get_project/
-// pause_project) prove nothing about identity and are excluded here.
-const SUPABASE_SHARED_LEAVES = new Set(["list_projects", "get_project", "create_project", "pause_project", "restore_project"]);
+// Leaves shared with other connectors prove nothing about identity and are
+// excluded here: Vercel has list_projects/get_project/pause_project, and the
+// GitHub connector has list_branches/create_branch (GitHub Codex P2 on PR #605
+// head 3612eb3a1: a UUID-installed GitHub connector registered for those was
+// misidentified as Supabase and had its ordinary tools denied).
+const SUPABASE_SHARED_LEAVES = new Set([
+  "list_projects", "get_project", "create_project", "pause_project", "restore_project",
+  "list_branches", "create_branch",
+]);
 const SUPABASE_DISTINCTIVE_LEAVES = new Set(
   [...SUPABASE_READ_ONLY_TOOLS, ...SUPABASE_GATED_ELSEWHERE, ...SUPABASE_SENSITIVE_LEAVES]
     .filter((leaf) => !SUPABASE_SHARED_LEAVES.has(leaf)),
 );
 const READ_SHAPED_LEAF_RE = /^(?:get|list|search|read|find|query|describe|fetch|show|view|check|inspect|compare|validate|render|extract|convert|download|suggest|analy[sz]e|display|lookup|count|preview)(?:_|$)/i;
+// GitHub spells some reads with the verb LAST (pull_request_read, issue_read,
+// actions_get, actions_list); accept that shape too (GitHub Codex P2 on 3612eb3a1).
+const READ_SHAPED_SUFFIX_RE = /_(?:read|get|list)$/i;
+const isReadShaped = (leaf) => READ_SHAPED_LEAF_RE.test(leaf) || READ_SHAPED_SUFFIX_RE.test(leaf);
 const SETTINGS_UUID_LEAF_RE = /^mcp__([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})__([\w-]+)$/i;
 
 // { exact: Set<lower-cased entry>, byUuid: Map<uuid, Set<leaf>> } of every exact
@@ -237,7 +247,7 @@ if (!supabaseLeaf) {
     }
     const liveAction = SUPABASE_SENSITIVE_LEAVES.has(leafLower);
     const settled = gatedTierRegistered(toolName);
-    if (!settled && !SUPABASE_READ_ONLY_TOOLS.has(leafLower) && !READ_SHAPED_LEAF_RE.test(leaf)) {
+    if (!settled && !SUPABASE_READ_ONLY_TOOLS.has(leafLower) && !isReadShaped(leaf)) {
       const kind = liveAction ? "a Supabase live-action leaf (only an `ask` or `deny` entry settles it; an `allow` line does not count)" : "not a read-shaped tool";
       out("block",
         `MCP TOOL GUARD (${toolName}): "${leaf}" is ${kind} and has no qualifying exact entry for connector UUID ${uuid} in any Claude settings file ` +
