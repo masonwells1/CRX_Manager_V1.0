@@ -77,7 +77,22 @@ try {
     const wouldBe = path.isAbsolute(destination) ? destination : path.join(fakeCheckout, destination);
     assert.equal(existsSync(wouldBe), false, `--denials into ${label} must not create the file`);
   }
-  if (!aliased) console.log("claude-usage-report: directory symlink creation refused by the OS — symlinked-parent case skipped");
+  if (aliased) {
+    // `..` placed AFTER the alias escapes any lexical resolve: `path.resolve` collapses
+    // `export-alias/..` into the temp root before a link is followed, so the checkout walk sees a
+    // clean scratch path, while the OS applies `..` to the LINK'S TARGET and the file lands at the
+    // checkout root (Codex GitHub App P2, PR #613 at 1e529b3ca). The old code exits 0 here and
+    // creates `landsAt`. Built by concatenation, not path.join, because path.join would normalise
+    // the `..` away and the case would test nothing.
+    const viaDotDot = `${symlinkedParent}${path.sep}..${path.sep}out-dotdot.json`;
+    const landsAt = path.join(fakeCheckout, "out-dotdot.json");
+    const refused = spawnSync(process.execPath, [script, ...windowArgs, "--denials", viaDotDot], { encoding: "utf8", timeout: 60_000 });
+    assert.equal(refused.status, 2, `--denials through an alias followed by ".." must exit 2: ${refused.stdout}${refused.stderr}`);
+    assert.match(refused.stderr, /refuses to write inside a git checkout/, "the alias-plus-.. refusal must say why");
+    assert.equal(existsSync(landsAt), false, "the refused export must not appear where the OS would have resolved the path");
+  } else {
+    console.log("claude-usage-report: directory symlink creation refused by the OS — symlinked-parent cases skipped");
+  }
   const scratchOut = path.join(root, "scratch", "out.json");
   mkdirSync(path.dirname(scratchOut), { recursive: true });
   const allowed = spawnSync(process.execPath, [script, ...windowArgs, "--denials", scratchOut], { encoding: "utf8" });

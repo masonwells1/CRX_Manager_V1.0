@@ -259,12 +259,33 @@ if (denialsOut) {
   // `git add` would commit it, so any destination with a `.git` entry somewhere above it is
   // refused — decided by that shape, not by this checkout's name, so a sibling worktree or an
   // unrelated repository is refused the same way (Codex App review of #613 at 1097d85e6).
-  // The walk runs over the REAL location as well as the spelled one: a parent that is a
-  // symlink or junction into a checkout (`/tmp/export -> <repo>/docs`) keeps the spelled chain
-  // clear of `.git` while the file lands inside the repository (Codex App review of #613 at
-  // 18c2faf17). The nearest existing ancestor is canonicalised with realpath, the missing tail
-  // re-attached, and BOTH chains are walked; either one reaching `.git` refuses.
-  const destination = path.resolve(denialsOut);
+  // The destination is canonicalised ONE SEGMENT AT A TIME, resolving each existing segment with
+  // realpath before descending into the next. Two evasions make that necessary, both found by the
+  // Codex GitHub App on this PR:
+  //   - a parent that is a symlink or junction into a checkout (`/tmp/export -> <repo>/docs`)
+  //     keeps the spelled chain clear of `.git` while the file lands in the repository (18c2faf17);
+  //   - `..` after such a link (`/tmp/export/../out.json`) escapes any purely lexical resolve:
+  //     `path.resolve` collapses the pair before a link is followed, so the walk sees a clean
+  //     scratch path, while the OS applies `..` to the LINK'S TARGET and the file lands in the
+  //     checkout anyway (1e529b3ca).
+  // Resolving as we descend means `..` applies to the TRUE parent, so neither trick survives. The
+  // canonical path is then also the path written to: checking one chain and writing another is
+  // what made the second evasion possible.
+  const canonical = (input) => {
+    const absolute = path.isAbsolute(input) ? input : path.join(process.cwd(), input);
+    const root = path.parse(absolute).root;
+    let current = root;
+    try { current = fs.realpathSync.native(root); } catch { /* an unreadable root stays as spelled */ }
+    for (const segment of absolute.slice(root.length).split(/[\\/]+/)) {
+      if (!segment || segment === ".") continue;
+      if (segment === "..") { current = path.dirname(current); continue; }
+      const next = path.join(current, segment);
+      // A segment that does not exist cannot be a link, so the lexical join is already canonical.
+      try { current = fs.realpathSync.native(next); } catch { current = next; }
+    }
+    return current;
+  };
+  const destination = canonical(denialsOut);
   const checkoutRootAbove = (file) => {
     let probe = path.dirname(file);
     for (;;) {
@@ -274,26 +295,15 @@ if (denialsOut) {
       probe = parent;
     }
   };
-  const realDestination = (() => {
-    let existing = path.dirname(destination);
-    const missing = [path.basename(destination)];
-    while (!fs.existsSync(existing)) {
-      const parent = path.dirname(existing);
-      if (parent === existing) return destination;
-      missing.unshift(path.basename(existing));
-      existing = parent;
-    }
-    try { return path.join(fs.realpathSync.native(existing), ...missing); } catch { return destination; }
-  })();
-  const checkoutRoot = checkoutRootAbove(realDestination) ?? checkoutRootAbove(destination);
+  const checkoutRoot = checkoutRootAbove(destination);
   if (checkoutRoot != null) {
     console.error(`\n--denials refuses to write inside a git checkout (${checkoutRoot}): the export quotes refused command text verbatim and must not be committable. Write it under a scratch directory instead.`);
     process.exit(2);
   }
-  if (fs.existsSync(denialsOut)) {
-    console.error(`\n--denials refuses to overwrite an existing file: ${denialsOut} (pick a new path)`);
+  if (fs.existsSync(destination)) {
+    console.error(`\n--denials refuses to overwrite an existing file: ${destination} (pick a new path)`);
     process.exit(1);
   }
-  fs.writeFileSync(denialsOut, JSON.stringify(denied, null, 1), { flag: "wx" });
-  console.log(`\nwrote ${denied.length} denied tool calls to ${denialsOut}`);
+  fs.writeFileSync(destination, JSON.stringify(denied, null, 1), { flag: "wx" });
+  console.log(`\nwrote ${denied.length} denied tool calls to ${destination}`);
 }
