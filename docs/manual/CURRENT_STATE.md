@@ -9,9 +9,9 @@ migration list includes both routine-only migrations from that refresh:
 ordering high-water is the newest applied row's effective stamp:
 **`20260905185938_refuse_null_job_field_acres`** (#606, applied live 2026-09-05 under a bare ledger
 name, so the stamp is synthesized from its version; verified live 2026-09-05 evening, 999 rows).
-Six local commission follow-ups (`20260905200000` through `20260905210000`, with no `20260905200500` file) are not applied. They
-were restamped above that row on 2026-09-05 evening because six of them had sorted below it and
-the ordering guard would have refused each one.
+Six local commission follow-ups (`20260905200000` through `20260905210000`, with no `20260905200500` file) are not applied. The
+six-file set was restamped together above that row on 2026-09-05 evening, preserving its order;
+five had sorted below the new high-water and the ordering guard would have refused them.
 They harden snapshot replay, refuse a payment batch if its recipient became stale before posting,
 park an America/Chicago payout business-date guard, pair commission source-date inheritance with
 Chicago-based source document dates, make balance-report recipient labels follow the latest
