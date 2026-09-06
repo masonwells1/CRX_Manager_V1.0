@@ -218,7 +218,24 @@ allowed({ tool_name: "Read", tool_input: { file_path: ".claude/launch.json" } })
 allowed({ tool_name: "Bash", tool_input: { command: "cat package.json" } });
 allowed({ tool_name: "Bash", tool_input: { command: "jq .scripts package.json" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm run typecheck" } });
-allowed({ tool_name: "Bash", tool_input: { command: "npm install left-pad" } });
+// CodeRabbit on 18d1bee17 (review 5126628334, Major): `npm install left-pad` used to be
+// pinned here as ALLOW. It rewrites package.json without naming it, so it now DENIES —
+// see the package-manager block below. Installing FROM the manifest stays silent.
+allowed({ tool_name: "Bash", tool_input: { command: "npm install" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm ci" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm install --no-save left-pad" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm install -g corepack" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm uninstall --no-save left-pad" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm pkg get scripts" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm version" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm --version" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm test" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npx vitest run src/lib/rpcContracts.test.ts" } });
+allowed({ tool_name: "Bash", tool_input: { command: "pnpm install --frozen-lockfile" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn install --immutable" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun install" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd /c/repo && npm ci && npm run build" } });
 allowed({ tool_name: "Bash", tool_input: { command: "node scripts/regenerate-schema-registry.mjs --from-introspection /tmp/introspection.json" } });
 allowed({ tool_name: "Bash", tool_input: { command: "node scripts/generate-caller-graph.mjs --live-json /tmp/live.json" } });
 allowed({ tool_name: "Bash", tool_input: { command: "cat .claude/schema-registry.json" } });
@@ -662,6 +679,60 @@ for (const command of [
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
   assert.equal(result.stdout, "", `must allow: ${command}`);
+}
+
+// PR #605, CodeRabbit on 18d1bee17 (review 5126628334, Major): package-manager
+// commands that rewrite package.json WITHOUT naming it. Every line here was
+// probe-confirmed exit 0 / silent before the fix — that is the backwards proof.
+// Matched by shape (manager head + manifest-writing subcommand family), so aliases,
+// path-qualified heads, `corepack`, a VAR=value prefix and a preceding `cd &&` all deny.
+for (const command of [
+  "npm install left-pad",
+  "npm i left-pad@1.3.0",
+  "npm install --save-dev left-pad",
+  "npm add left-pad",
+  "npm link left-pad",
+  "npm uninstall left-pad",
+  "npm rm left-pad",
+  "npm un left-pad",
+  "npm update",
+  "npm up left-pad",
+  "npm pkg set scripts.test=true",
+  "npm pkg delete scripts.lint",
+  "npm pkg fix",
+  "npm version patch",
+  "npm version 9.9.9 --no-git-tag-version",
+  "npm init -y",
+  "npm set-script lint true",
+  "pnpm add left-pad",
+  "pnpm remove left-pad",
+  "pnpm up",
+  "yarn add left-pad",
+  "yarn remove left-pad",
+  "yarn upgrade",
+  "yarn version",
+  "yarn version --new-version 1.0.0",
+  "bun add left-pad",
+  "bun remove left-pad",
+  "bun install left-pad",
+  "FOO=1 npm install left-pad",
+  "cd /c/repo && npm install left-pad",
+  "rm -rf node_modules && npm install left-pad",
+  "/usr/bin/npm install left-pad",
+  "npm.cmd install left-pad",
+  "corepack pnpm add left-pad",
+  'npm install "left-pad"',
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);
+  assert.match(result.stdout, /package-manager commands that rewrite package\.json/, `must deny for the package-manager reason: ${command}`);
+}
+// The same shape through PowerShell.
+{
+  const ps = run({ tool_name: "PowerShell", tool_input: { command: "Set-Location C:\\repo; npm install left-pad" } });
+  assert.equal(ps.status, 0);
+  assert.match(ps.stdout, /package-manager commands that rewrite package\.json/);
 }
 
 // Near-misses must NOT be swept up: the path components are whole words.

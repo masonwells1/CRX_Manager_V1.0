@@ -764,6 +764,66 @@ if (shellTool) {
       namesEnforcementSurface(seg) && !enforcementSegmentIsReadOnly(seg)))) {
     deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .claude/agents, .claude/commands, .claude/skills, .claude/workflows, .claude/launch.json, .claude/schema-registry.json, .claude/caller-graph.json, .codex, .coderabbit.yaml, package.json, or the check/validate/proof/parity scripts are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write; the permission tiers in .claude/settings.json decide whether that native edit proceeds, prompts, or is refused, and every one of these paths is a risky path that cannot merge without the exact-SHA Codex proof.");
   }
+
+  // PACKAGE-MANAGER WRITES TO package.json THAT NEVER NAME IT. CodeRabbit on
+  // 18d1bee17 (review 5126628334, Major, PR #605): the path rule above protects
+  // package.json, but `npm install left-pad`, `npm uninstall`, `npm pkg set` and
+  // `npm version patch` rewrite it without the file name ever appearing in the
+  // command — the comment at the top of ENFORCEMENT_SURFACE_RE documented exactly
+  // that gap, and the test pinned `npm install left-pad` as ALLOW. All four were
+  // probe-confirmed silent before this fix.
+  //
+  // Matched by SHAPE, not by listing four npm spellings: any package-manager head
+  // (npm/pnpm/yarn/bun, path-qualified or .cmd, optionally behind `corepack` or a
+  // leading VAR=value), then a subcommand FAMILY that writes the manifest. A name
+  // list inherits its own omissions — the failure mode this file has already paid
+  // for twice — so families, aliases and the other three managers are covered
+  // together. @proven-by review-proof-guard.test.mjs (both forms: the deny block
+  // and the allow block below it).
+  //   deny : <pm> install|i|add|link <positional>   adds a dependency
+  //          <pm> uninstall|remove|rm|un|unlink     always rewrites the manifest
+  //          <pm> update|up|upgrade                 npm >= 7 saves the new ranges
+  //          <pm> pkg set|delete|fix, <pm> init, <pm> set-script
+  //          <pm> version <bump> (and bare `yarn version`, which prompts and writes)
+  //   allow: installing FROM the manifest (`npm install`, `npm ci`, `pnpm install`,
+  //          `yarn`, `bun install`), `--no-save`, `-g`/`--global`, `npm run`,
+  //          `npm test`, `npm pkg get`, bare `npm version` (prints), `npx`.
+  // Known over-blocks, accepted on this file's standing rule that a false refusal is
+  // the cheaper failure: a value-taking flag before the package name (`--registry
+  // <url>`) reads as a positional; bare `pnpm update` / `yarn upgrade` are refused
+  // even where the lockfile alone would change. Use `--no-save` or edit package.json.
+  const PACKAGE_MANAGER_RE = /^(?:.*[/\\])?(?:npm|pnpm|yarn|bun)(?:\.cmd|\.exe|\.ps1)?$/i;
+  const PM_ADD_FAMILY = new Set(["install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add", "a", "link", "ln"]);
+  const PM_REMOVE_FAMILY = new Set(["uninstall", "unlink", "remove", "rm", "r", "un"]);
+  const PM_UPDATE_FAMILY = new Set(["update", "up", "upgrade", "udpate", "upgrade-interactive"]);
+  const PM_MANIFEST_EDITORS = new Set(["init", "innit", "set-script"]);
+  const PM_NO_MANIFEST_RE = /(?:^|\s)(?:--no-save|-g|--global|--location(?:=|\s+)global)(?=\s|$)/i;
+  const packageManagerWritesManifest = (segment) => {
+    const text = String(segment ?? "");
+    const tokens = (text.match(/(?:"[^"]*"|'[^']*'|\S)+/g) || []).map((t) => t.replace(/["']/g, ""));
+    let i = 0;
+    while (i < tokens.length && /^[A-Za-z_]\w*=/.test(tokens[i])) i += 1;        // VAR=value prefixes
+    if (i < tokens.length && /^(?:.*[/\\])?corepack(?:\.cmd|\.exe)?$/i.test(tokens[i])) i += 1;
+    if (i >= tokens.length || !PACKAGE_MANAGER_RE.test(tokens[i])) return false;
+    const manager = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
+    const rest = tokens.slice(i + 1);
+    const subIndex = rest.findIndex((t) => !t.startsWith("-"));
+    if (subIndex < 0) return false;                                                   // bare `yarn`, `npm --version`
+    const sub = rest[subIndex].toLowerCase();
+    const after = rest.slice(subIndex + 1);
+    const positionals = after.filter((t) => !t.startsWith("-"));
+    const noManifest = PM_NO_MANIFEST_RE.test(text);
+    if (PM_MANIFEST_EDITORS.has(sub)) return true;
+    if (sub === "pkg") return (positionals[0] || "").toLowerCase() !== "get";
+    if (sub === "version") return manager === "yarn" || after.length > 0;
+    if (PM_REMOVE_FAMILY.has(sub)) return !noManifest;
+    if (PM_UPDATE_FAMILY.has(sub)) return !noManifest;
+    if (PM_ADD_FAMILY.has(sub)) return positionals.length > 0 && !noManifest;
+    return false;
+  };
+  if (destructiveViews.some((v) => enforcementSegments(v).some(packageManagerWritesManifest))) {
+    deny("REVIEW PROOF GUARD: package-manager commands that rewrite package.json are blocked — `npm install <pkg>`, `npm uninstall`, `npm update`, `npm pkg set`, `npm version <bump>`, `npm init` and the pnpm/yarn/bun equivalents edit the scripts and dependency list that CI and husky run from without ever naming the file. Installing FROM the manifest stays allowed (`npm install`, `npm ci`, `pnpm install`, `yarn`), as do `--no-save`, `-g`, `npm run`, `npm test` and `npm pkg get`. Add or remove a dependency deliberately through Edit/Write on package.json, where the permission tiers in .claude/settings.json decide; package.json is a risky path that cannot merge without the exact-SHA Codex proof.");
+  }
 }
 
 // Mutating tools that carry their target in a PATH FIELD rather than a shell
