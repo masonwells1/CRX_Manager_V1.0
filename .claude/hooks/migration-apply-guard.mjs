@@ -82,5 +82,9 @@ if (verdict?.decision !== "allow") {
     `(${JSON.stringify(verdict?.decision ?? null)}). An unknown verdict is not a pass. Refusing the apply.`);
 }
 // Technical proof is necessary, but does not grant owner permission. Leave a
-// successful evaluation silent so the tool's ask/deny tier still applies.
+// successful evaluation silent so the tool's own settings tier decides instead
+// of a hook `allow` overriding it: the registered Supabase `apply_migration`
+// entries sit in `allow` (unchanged), so a proven apply still runs without a
+// prompt, while a replacement connector's entry — `ask` or `deny`, enforced by
+// `mcp-tool-guard.mjs` — keeps its prompt or refusal.
 process.exit(0);
