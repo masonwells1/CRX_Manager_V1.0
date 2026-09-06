@@ -316,6 +316,15 @@ assert.deepEqual(riskyFiles([".claude/caller-graph.json"]), [".claude/caller-gra
 assert.deepEqual(riskyFiles(["scripts/agent-manifest-parity.mjs"]), ["scripts/agent-manifest-parity.mjs"]);
 assert.deepEqual(riskyFiles(["scripts/sync-agent-workflows.mjs"]), ["scripts/sync-agent-workflows.mjs"]);
 assert.deepEqual(riskyFiles(["scripts/overnight-codex-gate.mjs"]), ["scripts/overnight-codex-gate.mjs"]);
+// PR #605 CodeRabbit F3, resolved by WIDENING (2026-09-06): the settings globs and the shell regex
+// both cross "/", so a nested check/validate/verify script must be risky here too. This case
+// FAILED against the old `[^/]+$` form — that is the backwards proof.
+assert.deepEqual(riskyFiles(["scripts/check-x/y.txt"]), ["scripts/check-x/y.txt"]);
+assert.deepEqual(riskyFiles(["scripts/verify-deps/helpers/index.mjs"]), ["scripts/verify-deps/helpers/index.mjs"]);
+assert.deepEqual(riskyFiles(["scripts/validate-schema/run.mjs"]), ["scripts/validate-schema/run.mjs"]);
+// Near-miss controls: no hyphen, or a different prefix, stay non-risky by path.
+assert.deepEqual(riskyFiles(["scripts/checkfoo/nested.txt"]), []);
+assert.deepEqual(riskyFiles(["scripts/zzz-probe/nested.txt"]), []);
 assert.deepEqual(
   riskyFiles(["package.json"]),
   ["package.json"],

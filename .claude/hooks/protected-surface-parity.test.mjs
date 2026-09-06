@@ -174,6 +174,9 @@ for (const sample of samples) {
   const field = runGuard({ tool_name: "mcp__filesystem__write_file", tool_input: { path: sample } });
   if (!/"permissionDecision":"deny"/.test(field.stdout)) fail(`real hook: mcp__filesystem__write_file path=${sample} was NOT denied`);
   const read = runGuard({ tool_name: "Bash", tool_input: { command: `cat ${sample}` } });
+  // PR #605 F5 (found by hand, same species as CodeRabbit F4): silent must also mean exit 0,
+  // otherwise a crashed guard (empty stdout, non-zero status) reads as a clean allow here.
+  if (read.status !== 0) fail(`real hook: reading ${sample} with cat exited ${read.status} (stderr: ${(read.stderr || "").slice(0, 120)})`);
   if (read.stdout !== "") fail(`real hook: reading ${sample} with cat was NOT silent (stdout: ${read.stdout.slice(0, 120)})`);
 }
 

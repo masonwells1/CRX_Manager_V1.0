@@ -431,7 +431,12 @@ const RISKY_PATH_RES = [
   // review, even when their diff contains no security-related keywords.
   /(^|\/)\.claude\/settings\.local\.json$/i,
   /(^|\/)\.coderabbit\.yaml$/i,
-  /(^|\/)scripts\/(?:check|validate|verify)-[^/]+$/i,
+  // Crosses "/" on purpose (PR #605, CodeRabbit F3, decided "widen" 2026-09-06): the
+  // settings globs `Write(scripts/check-*)` were MEASURED to match nested paths, and the
+  // shell regex in review-proof-guard.mjs already did, so a nested
+  // `scripts/check-x/y.mjs` was ask-gated for the editors yet invisible to this list.
+  // Proven backwards by codex-push-lib.test.mjs (the nested case failed on `[^/]+$`).
+  /(^|\/)scripts\/(?:check|validate|verify)-[^/]+(?:\/[^/]+)*$/i,
 ];
 export function riskyFiles(files) {
   return (files || []).filter((f) => RISKY_PATH_RES.some((re) => re.test(String(f || ""))));

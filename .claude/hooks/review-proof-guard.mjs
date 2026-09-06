@@ -816,9 +816,14 @@ if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todow
     if (drive) return `${drive[1]}/${joined}`;
     return isAbsolute ? `/${joined}` : joined;
   };
+  // The `scripts/(check|validate|verify)-` arm crosses "/" explicitly (PR #605, CodeRabbit F3,
+  // decided "widen" 2026-09-06) so it reads the same as the shell regex above and the measured
+  // settings-glob behaviour. The earlier `[^/]*` form already caught nested paths as a prefix
+  // match (the trailing lookahead permits "/"), so this is an alignment of stated intent, not a
+  // behaviour change here; the behaviour change lives in codex-push-lib.mjs RISKY_PATH_RES.
   const enforcementPathHit = pathCandidates.some((candidate) => {
     if (candidate == null) return false;
-    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex|\.claude\/(?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts\/(?:(?:check|validate|verify)-[^/]*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i
+    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex|\.claude\/(?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts\/(?:(?:check|validate|verify)-[^/]*(?:\/[^/]*)*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i
       .test(`/${resolvePathCandidate(candidate)}`);
   });
   if (enforcementPathHit) {

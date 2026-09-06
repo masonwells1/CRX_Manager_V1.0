@@ -261,9 +261,13 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 2. Valid proof, unarmed, benign → allow.
     writeProof(stateDir, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
+    // PR #605 CodeRabbit F2 (2026-09-06): a silent pass must also be a clean exit — a crashed
+    // hook prints nothing too, and without the status check it would satisfy this line.
+    eq(r.status, 0, `valid proof + benign migration: hook must exit 0 (${r.stderr || ""})`);
     eq(r.stdout, "", "valid proof + benign migration must preserve the normal permission check");
     for (const server of ["other_supabase", "8b8b8b8b-1111-4222-8333-444444444444"]) {
       r = runHook({ ...call(BENIGN_SQL), tool_name: `mcp__${server}__apply_migration` }, tmp);
+      eq(r.status, 0, `replacement migration on ${server}: hook must exit 0 (${r.stderr || ""})`);
       eq(r.stdout, "", "replacement migration with valid proof cannot override its permission tier");
     }
 
@@ -432,8 +436,10 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     // 8. Unrelated tools must receive NO decision, not an overriding allow.
     r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "DROP TABLE customers;" } }, tmp);
+    eq(r.status, 0, `unrelated tool: hook must exit 0 (${r.stderr || ""})`);
     eq(r.stdout, "", "other tools defer to their own permission checks");
     r = runHook({ tool_name: "mcp__permission_probe__write_marker", tool_input: {} }, tmp);
+    eq(r.status, 0, `unlisted connector: hook must exit 0 (${r.stderr || ""})`);
     eq(r.stdout, "", "an unlisted named connector mutation is not approved by the migration guard");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
