@@ -52,6 +52,65 @@ function srcFiles() {
   return files;
 }
 
+// -----------------------------------------------
+// 0b. Resolve a routing wrapper to the page it renders
+//
+// A route element may be a thin routing wrapper rather than the page itself - for example
+// src/components/JobDetailRoute.tsx, which exists only to render <JobDetail key={id} /> so
+// that switching records REMOUNTS the page instead of reusing it.
+//
+// The map must attribute such a route to the PAGE, not to the wrapper. Page NODES are
+// derived from the route component name, while edge SOURCES are derived from the source
+// file (fileToApproxNodeId keys off src/pages/<Name>.tsx). Name the wrapper and the two
+// stop agreeing: the page node disappears, and every nav and RPC edge that page owns is
+// silently dropped - the map then asserts the job detail page makes no RPC calls at all.
+//
+// Resolved by SHAPE, not by a list of wrapper names: a route component that lives under
+// src/components/ and imports and renders exactly one component from src/pages/ is treated
+// as a wrapper for that page. A name list would inherit its own omissions here, and the
+// omission would be invisible - CI's freshness check compares generated output against
+// generated output, so an unlisted future wrapper would drop its page's edges and pass.
+// -----------------------------------------------
+const wrapperPageCache = new Map();
+
+function resolveRouteWrapperToPage(name, appSrc) {
+  if (!name) return name;
+  if (wrapperPageCache.has(name)) return wrapperPageCache.get(name);
+
+  const resolve = () => {
+    // The line in App.tsx that pulls this component in - a lazy() import or a plain one.
+    const nameRe = new RegExp('\\b' + name + '\\b');
+    const declLine = appSrc.split('\n').find(l => nameRe.test(l) && /\bimport\b/.test(l));
+    if (!declLine) return name;
+    const specM = /['"]([^'"]+)['"]/.exec(declLine);
+    if (!specM) return name;
+
+    // Only a components/ file is a candidate; a pages/ file IS the page.
+    const spec = specM[1].replace(/^\.\//, '');
+    if (!/^components\//.test(spec)) return name;
+
+    let body = '';
+    for (const ext of ['.tsx', '.ts', '.jsx', '.js']) {
+      body = read('src/' + spec + ext);
+      if (body) break;
+    }
+    if (!body) return name;
+
+    // Exactly one page import, or this is not a simple wrapper.
+    const pageImports = [...body.matchAll(/import\s+([A-Z]\w+)\s+from\s+['"][^'"]*\/pages\/[^'"]+['"]/g)]
+      .map(pm => pm[1]);
+    if (pageImports.length !== 1) return name;
+
+    // ...and it must actually render that page.
+    if (!new RegExp('<' + pageImports[0] + '\\b').test(body)) return name;
+    return pageImports[0];
+  };
+
+  const resolved = resolve();
+  wrapperPageCache.set(name, resolved);
+  return resolved;
+}
+
 // ─────────────────────────────────────────────
 // 1.  Parse App.tsx → routes
 //
@@ -92,8 +151,9 @@ function parseRoutes() {
       const re = /<([A-Z]\w+)/g;
       let cm;
       while ((cm = re.exec(l)) !== null) allComponents.push(cm[1]);
-      // Return first non-wrapper component
-      return allComponents.find(c => !WRAPPERS.has(c)) || '';
+      // Return first non-wrapper component, resolved through any routing wrapper
+      const picked = allComponents.find(c => !WRAPPERS.has(c)) || '';
+      return resolveRouteWrapperToPage(picked, src);
     }
 
     // ── Object-router format: { path: 'foo', element: <Comp ...> }  ──
@@ -160,6 +220,11 @@ function parseNavigateCalls() {
   const results = [];
   const re = /\bnavigate\s*\(\s*['"`](\/[^'"`?#]+)['"`]/g;
   for (const file of srcFiles()) {
+    // Test files drive their own memory routers over fixture paths that deliberately do
+    // not exist in App.tsx (a "somewhere else entirely" destination, proving the page was
+    // left). That is not application navigation, and counting it reports a working test
+    // as a broken link in the Problems tab.
+    if (/[.](test|spec)[.][jt]sx?$/.test(file)) continue;
     const src = read(relative(ROOT, file));
     re.lastIndex = 0;
     let m;
