@@ -176,10 +176,9 @@ scripts/schema-baseline-acl.sql text eol=lf
 # hash-object. Both checks are byte-sensitive: under core.autocrlf=true a fresh
 # Windows checkout smudges these files to CRLF, the anchor can never match, and
 # production-action-guard.test.mjs fails every pre-commit in that worktree.
-# Pin the producer, its test, and the two guard files it reads to LF so a
-# checkout is byte-identical to the reviewed blobs on every platform.
-scripts/apply-live-testdata-maintenance-20260812.mjs text eol=lf
-scripts/apply-live-testdata-maintenance-20260812.test.mjs text eol=lf
+# The producer and its test were retired unapplied on 2026-09-05; the two guard
+# files it read stay pinned to LF so a checkout is byte-identical to the
+# reviewed blobs on every platform.
 .codex/hooks/production-action-guard.mjs text eol=lf
 .claude/hooks/codex-push-lib.mjs text eol=lf
 
