@@ -31,6 +31,9 @@ import {
   readRowVersion,
   resolveAuthoritativeSaveRowVersion,
   resolveDirectMutationRowVersion,
+  hasReceiptId,
+  NON_SAVE_RECOVERY,
+  type StaleSaveConflictOrigin,
 } from '../lib/recordVersionConcurrency';
 import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 import { logActivity } from '../lib/activityLogger';
@@ -102,10 +105,30 @@ export default function CustomerDetail() {
   const { profile } = useAuth();
   const { runWithBelowCostApproval } = useBelowCostApproval();
   const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
+  // Scoped by the ROUTE ID because F1 makes this key OUTLIVE an ambiguous reply, and
+  // this page does not remount when only `:id` changes (no `<x>/:id` route in
+  // src/App.tsx carries a `key` prop). Unscoped, customer B would inherit customer A's
+  // unresolved key and its save would come back IDEMPOTENCY_PAYLOAD_CONFLICT — the
+  // server fails closed, so no cross-customer write, but B gets a conflict dialog it
+  // did nothing to earn. Route-id scoping is sound HERE specifically because the RPC
+  // targets the route record: it sends `p_customer_id: (isNew ? null : id)`.
+  //
+  // RESIDUAL, stated rather than implied: two consecutive CREATES both scope to 'new',
+  // so an unresolved create can still be inherited by the next one. Binding that needs
+  // the request payload (PR #535's fingerprintIntentPayload), not the URL.
+  const saveCustomerIntentScope = id ?? '';
   const {
     getKey: getSaveCustomerIdempotencyKey,
     resetKey: resetSaveCustomerIdempotencyKey,
-  } = useIdempotencyKey('save_customer', profile?.id || '');
+  } = useIdempotencyKey('save_customer', profile?.id || '', saveCustomerIntentScope);
+  // Which scope produced the conflict the stale-save dialog is currently offering to
+  // recover. Scoping the key made this necessary: the dialog stays open across a route
+  // change, and `reloadAfterStaleSave` releases the CURRENT render's scope, so an
+  // operator who navigates A -> B with A's dialog open and then clicks Reload would
+  // release B's key and strand A's rejected one — returning to A would replay it and
+  // re-open the same conflict. Recorded when the conflict opens, checked before
+  // anything is released. Same defect and same fix as QuoteBuilder's.
+  const staleSaveConflictScopeRef = useRef<StaleSaveConflictOrigin>(null);
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>(() => makeBlankCustomer(profile?.id));
@@ -318,8 +341,36 @@ export default function CustomerDetail() {
       installedSnapshot = await fetchCustomerSnapshot(customerRowVersionRef.current !== null);
       if (installedSnapshot) {
         // The rejected key may represent a committed save whose response was
-        // lost. Rotate it only after a complete authoritative reload succeeds.
-        resetSaveCustomerIdempotencyKey();
+        // lost. Rotate it only after a complete authoritative reload succeeds —
+        // and only when that reload is for the SAME customer that produced the
+        // conflict. Releasing here after a route change would retire the wrong
+        // scope's key and strand the rejected one; leaving it retained is the
+        // safe direction, because a retained key can still replay.
+        // Release ONLY when the reload that just succeeded is for the same customer
+        // that produced the conflict. If the route moved on, the originating
+        // customer's key stays retained — deliberately, and even though its dialog is
+        // closing here.
+        //
+        // An earlier revision retired it in that case, reasoning that a
+        // payload-rejected key can only ever be rejected again. That is wrong, and it
+        // was a duplicate-write hazard: the key rejects the CHANGED payload, but
+        // replaying the ORIGINAL one returns the server's cached receipt. On a create
+        // that receipt carries the id of a row that may already have committed, and it
+        // is the only deterministic way to learn the create's outcome. Deleting it
+        // lets a later retry mint a fresh key and insert the record a second time.
+        //
+        // So the cost of retaining is one unearned conflict dialog when the operator
+        // returns to that customer, which then self-heals on its own reload. The cost
+        // of retiring is a possible duplicate customer. Retaining is the safe direction.
+        // Release ONLY for a reload of the same customer whose save_customer call
+        // produced this dialog. A different customer's scope must keep its key, and
+        // so must NON_SAVE_RECOVERY — a crop toggle or a lifecycle mutation opens
+        // this same dialog with no rejected save key of its own, and releasing on
+        // its reload would retire a save_customer receipt that is still in flight.
+        if (staleSaveConflictScopeRef.current === saveCustomerIntentScope) {
+          resetSaveCustomerIdempotencyKey();
+          staleSaveConflictScopeRef.current = null;
+        }
         setIsDirty(false);
         setStaleSaveOpen(false);
       }
@@ -338,7 +389,10 @@ export default function CustomerDetail() {
       }));
     }
     return installedSnapshot;
-  }, [fetchCustomerSnapshot, resetSaveCustomerIdempotencyKey]);
+    // saveCustomerIntentScope is required, not cosmetic: without it this callback
+    // compares the conflict's recorded scope against a STALE one, which is the exact
+    // confusion the check exists to prevent.
+  }, [fetchCustomerSnapshot, resetSaveCustomerIdempotencyKey, saveCustomerIntentScope]);
 
   useEffect(() => {
     // Fetch all customers for parent selector
@@ -813,11 +867,18 @@ export default function CustomerDetail() {
       // dialog, success toast and the address reload that would pull ITS addresses
       // into whatever is on screen now. None of it may land on a different
       // customer's session. Two things still run, because they describe this
-      // component rather than that customer: the idempotency key is released (the
-      // save did commit, and reusing its key would collide on the next one) and
+      // component rather than that customer: the idempotency key is released and
       // `saving` clears (leaving it set would wedge the Save button for good).
+      //
+      // F1: `!error` alone does NOT prove the save committed — save_customer can
+      // answer with an empty payload and no error, which is exactly the ambiguous
+      // reply assertRpcResult exists to reject. This branch cannot assert (it must
+      // return quietly rather than throw into a customer that is no longer on
+      // screen), so it applies the same emptiness test inline: release the key only
+      // for a reply that is both error-free and non-empty. An ambiguous reply keeps
+      // its key, so a retry can still replay instead of writing the customer twice.
       if (currentIdRef.current !== id) {
-        if (!error) resetSaveCustomerIdempotencyKey();
+        if (!error && hasReceiptId(data, 'customer_id')) resetSaveCustomerIdempotencyKey();
         setSaving(false);
         return;
       }
@@ -826,19 +887,49 @@ export default function CustomerDetail() {
         if (hasRpcCode(error, RpcErrorCodes.CUSTOMER_STALE_WRITE)
           || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)
           || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
+          // Bind the dialog to the customer that produced it, so the recovery cannot
+          // release a different customer's key if the route changes while it is open.
+          staleSaveConflictScopeRef.current = saveCustomerIntentScope;
           setStaleSaveOpen(true);
         } else {
           toast('error', error.message);
         }
       } else {
-        resetSaveCustomerIdempotencyKey();
+        // F1: verify the reply before retiring the key. An empty payload with no
+        // error is ambiguous — the customer may already be saved — so a key retired
+        // here would send the retry under a fresh key the server cannot replay.
         const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null; row_version?: unknown }>(data, 'save_customer');
+        // assertRpcResult only rejects a MISSING reply: `{}` passes it untouched.
+        // An empty object is the ambiguous answer this branch must not treat as a
+        // receipt — the customer may already be committed. Throwing here leaves the
+        // key in place (the retry can still replay it) and lands in the catch below,
+        // which reports and clears `saving`. Retiring first and discovering the
+        // emptiness afterwards is what would insert the customer a second time.
+        if (!hasReceiptId(result, 'customer_id')) {
+          // Do NOT tell a create to reload. The retained key lives in a `useRef` in
+          // this mounted component, so a reload discards the very receipt this branch
+          // just preserved — the retry then mints a fresh key the server cannot
+          // replay and inserts a second customer, which is the outcome the retention
+          // exists to prevent. Retention only pays off if the operator stays on the
+          // form and saves again, replaying the original payload against the server's
+          // cached result. An EXISTING customer is different: reloading it IS the
+          // authoritative resolution, and the reload path releases the key on purpose.
+          throw new Error(isNew
+            ? 'The save came back without an ID, so it is unknown whether this customer was created. Press Save again WITHOUT reloading — the retry replays the same request, so the server returns the original result instead of creating a second customer.'
+            : 'save_customer returned no customer ID — the save outcome is unknown. Reload before making further changes.');
+        }
+        resetSaveCustomerIdempotencyKey();
         const rowVersionResult = resolveAuthoritativeSaveRowVersion(
           customerRowVersionRef.current,
           result.row_version,
         );
         customerRowVersionRef.current = rowVersionResult.rowVersion;
         if (rowVersionResult.kind === 'recovery') {
+          // The save succeeded and its key was retired on the line above, so there is
+          // no rejected key here to retire a second time — which is precisely what
+          // NON_SAVE_RECOVERY records. This is a confirmed save whose version token
+          // could not be trusted, not a rejected save awaiting replay.
+          staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
           setStaleSaveOpen(true);
           toast('warning', 'Customer saved, but its save-protection version could not be confirmed. Reload before editing or saving it again.');
         }
@@ -854,7 +945,7 @@ export default function CustomerDetail() {
         setIsDirty(false);
         if (isNew) {
           if (rowVersionResult.kind !== 'recovery') toast('success', 'Customer created');
-          navigate(`/customers/${result.customer_id ?? data}`, { replace: true });
+          navigate(`/customers/${result.customer_id}`, { replace: true });
         } else {
           if (rowVersionResult.kind !== 'recovery') toast('success', 'Customer updated');
           fetchAddresses();
@@ -894,6 +985,12 @@ export default function CustomerDetail() {
         // The crop change committed, but this tab cannot prove the returned token
         // belongs to this write. Keep the visible crop state and any form edits;
         // a later whole-record save must reload instead of overwriting unseen work.
+        // A direct crop mutation, not a save_customer call — no idempotency key of
+        // that operation is outstanding, so there is nothing to retire on recovery.
+        // Recording the save scope here said the opposite: crop buttons stay enabled
+        // while a save_customer is in flight, so a crop-originated reload could
+        // release that save's receipt before its own reply was ever validated.
+        staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
         setStaleSaveOpen(true);
         toast('warning', 'Crops were updated, but another customer edit may have completed at the same time. Your current edits were kept; reload before saving other customer changes.');
       }
@@ -958,7 +1055,15 @@ export default function CustomerDetail() {
       <RecordVersionConflictDialog
         open={staleSaveOpen}
         entityLabel="customer"
-        onKeepEditing={() => setStaleSaveOpen(false)}
+        onKeepEditing={() => {
+          // The dialog is no longer offering to recover anything, so its recorded
+          // origin must not outlive it. Every opener here already records the scope,
+          // which makes this belt-and-braces — but the two pages must stay identical
+          // in this mechanism, because the drift between them is what produced the
+          // QuoteBuilder defect.
+          staleSaveConflictScopeRef.current = null;
+          setStaleSaveOpen(false);
+        }}
         onReload={reloadAfterStaleSave}
       />
       <div className="flex items-center justify-between">

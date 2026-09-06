@@ -239,7 +239,6 @@ const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
     'closeShortIdem.resetKey',
     'drawDownIdem.resetKey',
     'fromTemplateIdem.resetKey',
-    'resetSaveQuoteIdempotencyKey',
     'rolloverIdem.resetKey',
   ],
   'src/pages/BlendTicketDetail.tsx': [
@@ -280,13 +279,18 @@ const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
     'voidIdem.resetKey',
   ],
   // ALIASED-RESET CLASS, invisible until this guard learned to resolve destructured
-  // names. Both CustomerDetail sites are real: :782 releases the key on `!error`
-  // alone, which does not rule out a null reply, and :796 is a plain
-  // reset-before-assert on save_customer. Not a money path.
-  'src/pages/CustomerDetail.tsx': [
-    'resetSaveCustomerIdempotencyKey',
-    'resetSaveCustomerIdempotencyKey',
-  ],
+  // names. Both sites were real; BOTH are now fixed, and ONE still appears here.
+  //
+  // The plain reset-before-assert on save_customer was reordered and left this list.
+  // The remaining entry is the route-changed-mid-flight branch, which returns quietly
+  // rather than asserting (throwing into a customer that is no longer on screen would
+  // be worse than the bug). It now applies assertRpcResult's own emptiness test inline
+  // — `!error && data != null` — so an ambiguous reply keeps its key. This scanner
+  // reports LINE ORDER only, so an inline test it cannot read still reads as a hit.
+  // The site is pinned so the scan stays honest, and its fix is separately bound by
+  // 'the route-changed branch releases the key only for a non-empty reply' below:
+  // deleting the emptiness test fails that test, not this pin.
+  'src/pages/CustomerDetail.tsx': ['resetSaveCustomerIdempotencyKey'],
   // SCANNER FALSE POSITIVES, pinned so the scan stays honest rather than being
   // silently filtered (Codex round-4 MEDIUM). Both are correct code:
   // BulkTicketUpload's reset lives in finishCommittedUpload(), reached only once the
@@ -406,6 +410,128 @@ function stripNoise(line: string): string {
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .replace(/`(?:[^`\\]|\\.)*`/g, '``')
     .replace(/\/\/.*$/, '');
+}
+
+/**
+ * Blank out comments ONLY, keeping string literals intact and byte offsets valid.
+ *
+ * The aliased-reset pins below locate a call by its RPC NAME — `.rpc('save_quote'` — so
+ * they cannot use a stripper that blanks strings; that would erase the very token they
+ * search for. They still must not be satisfiable by prose, which is what this removes.
+ * Quotes are tracked (not blanked) so a `//` inside a string is not mistaken for the
+ * start of a comment.
+ *
+ * NOT HANDLED, stated rather than fixed (gpt-5.6-sol round 4, which exercised these
+ * directly). This is a scanner, not a TypeScript lexer:
+ *  - a REGEX LITERAL containing a quote — `const p = /['"]/;` — opens a false string
+ *    state, so a comment on the following line survives;
+ *  - a `//` inside a template literal's `${...}` interpolation survives, because the
+ *    whole template is copied without parsing the interpolation;
+ *  - strings are deliberately KEPT (the pins locate a call by its RPC name), so three
+ *    ordinary string constants naming the call, the assert and the reset would still
+ *    satisfy all three offsets.
+ *
+ * So this raises the bar from "any comment satisfies the pin" to "only a contrived
+ * regex/template construct or a deliberate set of string constants does". It is not
+ * proof of executable order — that needs the TypeScript AST, which belongs to its own
+ * change rather than to this one. The behavioural tests in QuoteBuilder.test.tsx and
+ * CustomerDetail.test.tsx are what actually prove the ordering; these pins exist to
+ * make a silent revert loud.
+ */
+function stripCommentsOnly(code: string): string {
+  let out = '';
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i];
+    const next = code[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < code.length && code[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      const close = code.indexOf('*/', i + 2);
+      const end = close === -1 ? code.length : close + 2;
+      for (; i < end; i += 1) out += code[i] === '\n' ? '\n' : ' ';
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      out += c;
+      i += 1;
+      while (i < code.length && code[i] !== c) {
+        if (code[i] === '\\') {
+          out += code.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
+        out += code[i];
+        i += 1;
+      }
+      if (i < code.length) {
+        out += c;
+        i += 1;
+      }
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Blank out line comments, block comments and string/template literals, replacing their
+ * contents with spaces so byte offsets into the original text stay valid. A lexical guard
+ * check run over the result cannot be satisfied by prose that merely QUOTES the guard.
+ *
+ * Unlike stripNoise this is whole-file rather than line-based, so it also removes BLOCK
+ * comments — including the `*` continuation lines that a line-based filter reads as code.
+ * Hoisted to module scope 2026-09-05 so the aliased-reset pins below can use it too;
+ * they previously scanned raw lines and could be satisfied by a comment (gpt-5.6-sol).
+ */
+function stripCommentsAndStrings(code: string): string {
+  let out = '';
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i];
+    const next = code[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < code.length && code[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      const close = code.indexOf('*/', i + 2);
+      const end = close === -1 ? code.length : close + 2;
+      for (; i < end; i += 1) out += code[i] === '\n' ? '\n' : ' ';
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      out += ' ';
+      i += 1;
+      while (i < code.length && code[i] !== c) {
+        if (code[i] === '\\') {
+          out += '  ';
+          i += 2;
+          continue;
+        }
+        out += code[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      if (i < code.length) {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
 }
 
 /**
@@ -717,54 +843,6 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
   });
 
   /**
-   * Blank out line comments, block comments and string/template literals, replacing their
-   * contents with spaces so byte offsets into the original text stay valid. A lexical guard
-   * check run over the result cannot be satisfied by prose that merely QUOTES the guard.
-   */
-  const stripCommentsAndStrings = (code: string): string => {
-    let out = '';
-    let i = 0;
-    while (i < code.length) {
-      const c = code[i];
-      const next = code[i + 1];
-      if (c === '/' && next === '/') {
-        while (i < code.length && code[i] !== '\n') {
-          out += ' ';
-          i += 1;
-        }
-        continue;
-      }
-      if (c === '/' && next === '*') {
-        const close = code.indexOf('*/', i + 2);
-        const end = close === -1 ? code.length : close + 2;
-        for (; i < end; i += 1) out += code[i] === '\n' ? '\n' : ' ';
-        continue;
-      }
-      if (c === "'" || c === '"' || c === '`') {
-        out += ' ';
-        i += 1;
-        while (i < code.length && code[i] !== c) {
-          if (code[i] === '\\') {
-            out += '  ';
-            i += 2;
-            continue;
-          }
-          out += code[i] === '\n' ? '\n' : ' ';
-          i += 1;
-        }
-        if (i < code.length) {
-          out += ' ';
-          i += 1;
-        }
-        continue;
-      }
-      out += c;
-      i += 1;
-    }
-    return out;
-  };
-
-  /**
    * A route-id SCOPE is only sound while the request it covers targets that same route id.
    *
    * CodeRabbit round 2 (F1): OrderDetail's id effect refetches but never clears `order`, and
@@ -800,5 +878,120 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
         'its key is scoped by the route id while its request sends order.id, so a stale ' +
         "order during navigation would send A's id under B's key and let B replay A's receipt.",
     ).toBe(true);
+  });
+});
+
+/**
+ * F1, ALIASED-RESET CLASS — the sites that name the hook's method through a
+ * destructured rename (`const { resetKey: resetSaveQuoteIdempotencyKey } = ...`).
+ * The original F1 sweep matched the literal spelling `resetKey()` and therefore could
+ * not see any of them; both defects below were live on main after #584 shipped.
+ *
+ * Each test pins the PAIR rather than one half of it. That distinction is the whole
+ * point here: "an assertRpcResult appears near this reset" is satisfied BY THE BUG,
+ * because the buggy order still has the assert — one line below instead of above. The
+ * property that separates fixed from broken is ORDER, so order is what is asserted.
+ *
+ * CLAIM LIMITED: these are lexical source checks over a located region. They do not
+ * execute the handlers, so they cannot prove branch reachability or React state
+ * timing. What they buy is that reverting either reset to its old position, deleting
+ * the emptiness test that replaces an assert in the early-return branch, or renaming a
+ * key out from under the pin, fails immediately rather than silently.
+ */
+describe('F1 aliased-reset class — the renamed resets verify before they retire', () => {
+  const ALIASED_SAVE_SITES = [
+    { file: 'src/pages/QuoteBuilder.tsx', rpc: 'save_quote', reset: 'resetSaveQuoteIdempotencyKey' },
+    { file: 'src/pages/CustomerDetail.tsx', rpc: 'save_customer', reset: 'resetSaveCustomerIdempotencyKey' },
+  ];
+
+  it.each(ALIASED_SAVE_SITES)('$rpc verifies its reply before retiring $reset', ({ file, rpc, reset }) => {
+    // Comments are blanked first (strings are NOT — the search keys off the RPC name),
+    // so none of the three offsets below can be satisfied by prose. Without this, the
+    // long F1 comment that sits between the call and the assert — and which names both
+    // `assertRpcResult` and the reset — was itself scannable source (gpt-5.6-sol).
+    const lines = stripCommentsOnly(readFileSync(file, 'utf8').replace(/\r\n/g, '\n')).split('\n');
+
+    // FAIL CLOSED: every offset must exist, so renaming or deleting any of the three
+    // participants breaks the test instead of vacuously passing it.
+    const callIdx = lines.findIndex((l) => l.includes(`.rpc('${rpc}'`));
+    expect(callIdx, `${rpc} call not found in ${file} — renamed?`).toBeGreaterThan(-1);
+    const assertIdx = lines.findIndex(
+      (l, i) => i > callIdx && l.includes('assertRpcResult') && l.includes(`'${rpc}'`),
+    );
+    expect(assertIdx, `no assertRpcResult for ${rpc} after its call`).toBeGreaterThan(-1);
+    const resetIdx = lines.findIndex((l, i) => i > assertIdx && l.includes(`${reset}()`));
+    expect(resetIdx, `${reset}() does not follow the verified ${rpc} reply`).toBeGreaterThan(-1);
+
+    // THE DEFECT ITSELF: a reset between the call and the assert that verifies it.
+    //
+    // The one exception is a reset that carries its own receipt test on the same
+    // line — CustomerDetail's route-changed branch must return quietly rather than
+    // throw into a record that is no longer on screen, so it tests the reply inline
+    // instead. That exception is not a hole: the test below pins the inline check, so
+    // deleting it fails there rather than being excused here.
+    //
+    // `hasReceiptId(data, ...)` is the current form and is STRICTLY stronger than the
+    // `data != null` this once accepted: assertRpcResult rejects only a MISSING reply,
+    // so `{}` passed the old test while carrying no id at all (CodeRabbit, #603).
+    const offending = lines
+      .slice(callIdx, assertIdx)
+      .filter((l) => l.includes(`${reset}()`) && !/hasReceiptId\(\s*data\s*,/.test(l));
+    expect(
+      offending,
+      `${reset}() retires the key before the ${rpc} reply is verified — an empty reply ` +
+        'with no error is ambiguous, so the retry would travel under a fresh key the ' +
+        'server cannot replay and the record would be written twice',
+    ).toEqual([]);
+  });
+
+  it('CustomerDetail releases the key on a route change only for a NON-EMPTY reply', () => {
+    const lines = stripCommentsOnly(
+      readFileSync('src/pages/CustomerDetail.tsx', 'utf8').replace(/\r\n/g, '\n'),
+    ).split('\n');
+    const resets = lines.filter((l) => l.includes('resetSaveCustomerIdempotencyKey()'));
+    expect(resets.length, 'resetSaveCustomerIdempotencyKey() not found — renamed or deleted?').toBeGreaterThan(0);
+
+    const conditional = resets.filter((l) => /\bif\s*\(/.test(l));
+    expect(
+      conditional.length,
+      'the route-changed conditional release disappeared — this pin exists to bind it',
+    ).toBe(1);
+    expect(
+      conditional[0],
+      'the route-changed branch must prove the reply is a RECEIPT before releasing the key. ' +
+        'Neither `!error` nor `data != null` does: save_customer can answer `{}` with no ' +
+        'error, which passes assertRpcResult untouched while naming no customer at all.',
+    ).toMatch(/!error\s*&&\s*hasReceiptId\(\s*data\s*,\s*'customer_id'\s*\)/);
+  });
+});
+
+/**
+ * A number the operator cannot see is a job they cannot save.
+ *
+ * `next_job_number` was called as `if (!error && data) setJobNumber(...)`, which threw
+ * away BOTH failure shapes — a raised error and an empty reply — and left the field
+ * blank with no explanation. Since the F2 number-generator gate applied live
+ * (2026-09-04) a deactivated or out-of-role profile takes exactly that path.
+ */
+describe('JobDetail — a failed job-number lookup is explained, not swallowed', () => {
+  it('reports the failure to the user and to Sentry, and names the role gate', () => {
+    // Comments blanked (strings kept): the region below is preceded by a long comment
+    // that names `toast`, `Sentry.captureException` and `INSUFFICIENT_ROLE`, every one
+    // of which would otherwise satisfy this pin on its own.
+    const src = stripCommentsOnly(readFileSync('src/pages/JobDetail.tsx', 'utf8').replace(/\r\n/g, '\n'));
+    const callAt = src.indexOf(".rpc('next_job_number')");
+    expect(callAt, 'next_job_number call not found — renamed or removed?').toBeGreaterThan(-1);
+    const region = src.slice(callAt, callAt + 1400);
+
+    expect(
+      region,
+      'next_job_number binds its error and then discards it — the operator sees a blank field',
+    ).not.toMatch(/if\s*\(\s*!\s*error\s*&&\s*data\s*\)/);
+    expect(region, 'a next_job_number failure must reach the user').toMatch(/toast\(/);
+    expect(region, 'a next_job_number failure must be recorded').toMatch(/Sentry\.captureException/);
+    expect(
+      region,
+      "the role gate must be named for the user — 'INSUFFICIENT_ROLE' is not an error message",
+    ).toMatch(/INSUFFICIENT_ROLE/);
   });
 });
