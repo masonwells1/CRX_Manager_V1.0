@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { adaptQuoteVersionRow, adaptQuoteVersionRows, type QuoteVersionRow } from './quoteVersionAdapter';
+import { adaptQuoteVersionList, adaptQuoteVersionRow, adaptQuoteVersionRows, type QuoteVersionRow } from './quoteVersionAdapter';
 
 function validRow(): QuoteVersionRow {
   return {
@@ -120,7 +120,72 @@ describe('quote version row adapter', () => {
   it('guards both QuoteBuilder load sites with the shared adapter', () => {
     const page = readFileSync('src/pages/QuoteBuilder.tsx', 'utf8');
 
-    expect(page.match(/adaptQuoteVersionRows\(/g)).toHaveLength(2);
+    expect(page.match(/adaptQuoteVersionList\(/g)).toHaveLength(2);
     expect(page).not.toContain('as unknown as QuoteVersion[]');
+  });
+});
+
+describe('quote version list split', () => {
+  function legacyFlatRow(): QuoteVersionRow {
+    // The shape the original frontend writer saved: no `quote` key, totals at the top level.
+    // Two rows in this shape exist in production.
+    const row = validRow();
+    row.id = 'version-legacy';
+    row.version_number = 1;
+    row.snapshot_data = {
+      quote_number: 'Q-legacy',
+      customer_id: 'customer-1',
+      customer_name: 'Customer',
+      tier: 1,
+      valid_days: 30,
+      header_notes: null,
+      footer_notes: null,
+      commission_split: null,
+      totals: { total_price: 100 },
+      sections: [],
+    };
+    return row;
+  }
+
+  it('keeps an unreadable snapshot in the list instead of dropping the row', () => {
+    const readable = validRow();
+    const { versions, unreadable } = adaptQuoteVersionList([readable, legacyFlatRow()]);
+
+    expect(versions.map((v) => v.id)).toEqual(['version-1']);
+    expect(unreadable.map((v) => v.id)).toEqual(['version-legacy']);
+  });
+
+  it('does not lose a quote whose only saved versions are unreadable', () => {
+    const { versions, unreadable } = adaptQuoteVersionList([legacyFlatRow()]);
+
+    // The regression this guards: an all-legacy quote used to come back empty, which hid its
+    // version history button entirely.
+    expect(versions).toHaveLength(0);
+    expect(unreadable).toHaveLength(1);
+  });
+
+  it('carries only row columns for an unreadable version, never snapshot values', () => {
+    const { unreadable } = adaptQuoteVersionList([legacyFlatRow()]);
+
+    expect(unreadable[0]).toEqual({
+      id: 'version-legacy',
+      version_number: 1,
+      sent_at: '2026-09-05T00:00:00Z',
+    });
+  });
+
+  it('returns empty lists for no rows', () => {
+    expect(adaptQuoteVersionList(null)).toEqual({ versions: [], unreadable: [] });
+    expect(adaptQuoteVersionList([])).toEqual({ versions: [], unreadable: [] });
+  });
+
+  it('lists unreadable versions in the page without an item count or total', () => {
+    const page = readFileSync('src/pages/QuoteBuilder.tsx', 'utf8');
+
+    expect(page).toContain('unreadableQuoteVersions.map');
+    expect(page).toContain('Saved in an older format');
+    // The version-count button and the history card must both count them, or an all-legacy
+    // quote still shows nothing.
+    expect(page.match(/savedVersionCount/g)?.length).toBeGreaterThanOrEqual(3);
   });
 });

@@ -68,7 +68,7 @@ import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { preferredQuoteNotes } from '../lib/quoteNotes';
-import { adaptQuoteVersionRows } from '../lib/quoteVersionAdapter';
+import { adaptQuoteVersionList, type UnreadableQuoteVersion } from '../lib/quoteVersionAdapter';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import HelpTip from '../components/ui/HelpTip';
 import TransactionThread from '../components/ui/TransactionThread';
@@ -391,6 +391,8 @@ export default function QuoteBuilder() {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
   const [quoteVersions, setQuoteVersions] = useState<QuoteVersion[]>([]);
+  const [unreadableQuoteVersions, setUnreadableQuoteVersions] = useState<UnreadableQuoteVersion[]>([]);
+  const savedVersionCount = quoteVersions.length + unreadableQuoteVersions.length;
   const [selectedVersion, setSelectedVersion] = useState<QuoteVersion | null>(null);
   const [compareMode, setCompareMode] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
@@ -1031,16 +1033,12 @@ export default function QuoteBuilder() {
       Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
       toast('warning', 'Quote loaded, but version history could not be refreshed.');
     } else {
-      const versions = adaptQuoteVersionRows(versionsData);
-      if (versions.length !== (versionsData?.length ?? 0)) {
-        Sentry.captureMessage('Quote version history contained invalid snapshot data', {
-          level: 'warning',
-          tags: { source: 'read', action: 'load_quote_versions' },
-          extra: { quoteId, rejectedCount: (versionsData?.length ?? 0) - versions.length },
-        });
-        toast('warning', 'Quote loaded, but some saved versions could not be displayed.');
-      }
+      // Snapshots older than the current shape are listed, not hidden: see
+      // adaptQuoteVersionList. They are an expected part of the historical data, so they
+      // raise neither a toast nor a Sentry report on every load.
+      const { versions, unreadable } = adaptQuoteVersionList(versionsData);
       setQuoteVersions(versions);
+      setUnreadableQuoteVersions(unreadable);
     }
 
     setLoading(false);
@@ -2442,17 +2440,10 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
-    const versions = adaptQuoteVersionRows(data);
-    if (versions.length !== (data?.length ?? 0)) {
-      Sentry.captureMessage('Quote version refresh contained invalid snapshot data', {
-        level: 'warning',
-        tags: { source: 'read', action: 'refresh_quote_versions' },
-        extra: { quoteId, rejectedCount: (data?.length ?? 0) - versions.length },
-      });
-      toast('warning', 'Some saved versions could not be displayed.');
-    }
+    const { versions, unreadable } = adaptQuoteVersionList(data);
     setQuoteVersions(versions);
-  }, [quoteId, toast]);
+    setUnreadableQuoteVersions(unreadable);
+  }, [quoteId]);
 
   const handleRestoreVersion = async (versionId: string) => {
     if (!quoteId || !profile) return;
@@ -3404,7 +3395,7 @@ export default function QuoteBuilder() {
               <HelpTip text="Reopens this quote to “sent” so it can be edited, re-sent, or converted again. Admin only. Blocked if an order was already created from an accepted quote." className="ml-1" />
             </>
           )}
-          {isEditing && quoteVersions.length > 0 && (
+          {isEditing && savedVersionCount > 0 && (
             <>
               <Button
                 variant="ghost"
@@ -3412,7 +3403,7 @@ export default function QuoteBuilder() {
                 showChevron={false}
                 onClick={() => setShowVersionHistory(!showVersionHistory)}
               >
-                Versions ({quoteVersions.length})
+                Versions ({savedVersionCount})
               </Button>
               <HelpTip text="Every time you send or revise, a snapshot is saved. You can compare versions side-by-side or restore an older version if needed." className="ml-1" />
             </>
@@ -3509,7 +3500,7 @@ export default function QuoteBuilder() {
         </Card>
       )}
 
-      {showVersionHistory && quoteVersions.length > 0 && (
+      {showVersionHistory && savedVersionCount > 0 && (
         <Card>
           <CardHeader title="Version" accent="History" />
           {/* Version list */}
@@ -3546,6 +3537,26 @@ export default function QuoteBuilder() {
                 </div>
               );
             })}
+            {/*
+              Snapshots saved before the current shape existed. Listed last because they are the
+              oldest, and listed at all so a quote whose only versions are legacy still shows its
+              history. Shown without an item count or total: both would have to be read out of a
+              snapshot this build cannot trust. Not selectable, so they reach neither the compare
+              view nor restore — which the server already refuses for them.
+            */}
+            {unreadableQuoteVersions.map((v) => (
+              <div key={v.id} className="py-3 px-3 flex items-center justify-between">
+                <div>
+                  <span className="font-medium text-secondary">v{v.version_number}</span>
+                  <span className="text-secondary text-sm ml-3">
+                    {new Date(v.sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  </span>
+                </div>
+                <div className="text-sm text-secondary italic">
+                  Saved in an older format &middot; details unavailable
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Selected version details */}

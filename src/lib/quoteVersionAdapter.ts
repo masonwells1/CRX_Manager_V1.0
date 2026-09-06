@@ -141,3 +141,48 @@ export function adaptQuoteVersionRows(rows: QuoteVersionRow[] | null | undefined
     return adapted ? [adapted] : [];
   });
 }
+
+/**
+ * A saved version whose snapshot predates the current shape, or is otherwise unreadable.
+ * Carries only the row's own trustworthy columns — never a value read out of the snapshot.
+ */
+export interface UnreadableQuoteVersion {
+  id: string;
+  version_number: number;
+  sent_at: string;
+}
+
+export interface QuoteVersionList {
+  versions: QuoteVersion[];
+  unreadable: UnreadableQuoteVersion[];
+}
+
+/**
+ * Split saved versions into the ones whose snapshot can be trusted and the ones that cannot.
+ *
+ * The history and compare views read `quote.total_price` and `sections[].items` as trusted
+ * values, so a snapshot written before the current shape existed must not reach them. But
+ * discarding the row hides the fact that the version exists at all: quotes whose only saved
+ * versions are legacy would lose their version history entirely. Keep those rows here, with
+ * only the columns the row itself guarantees, so the caller can list them without inventing
+ * an item count or a total for them.
+ */
+export function adaptQuoteVersionList(rows: QuoteVersionRow[] | null | undefined): QuoteVersionList {
+  const versions: QuoteVersion[] = [];
+  const unreadable: UnreadableQuoteVersion[] = [];
+
+  for (const row of rows || []) {
+    const adapted = adaptQuoteVersionRow(row);
+    if (adapted) {
+      versions.push(adapted);
+    } else {
+      unreadable.push({
+        id: row.id,
+        version_number: row.version_number,
+        sent_at: row.sent_at,
+      });
+    }
+  }
+
+  return { versions, unreadable };
+}

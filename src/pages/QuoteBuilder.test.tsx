@@ -484,6 +484,71 @@ describe('QuoteBuilder', () => {
     });
   });
 
+  it('lists legacy-format saved versions instead of hiding the quote history', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('sent', 7);
+    // The exact shape of the rows that exist in production: written by the original frontend
+    // writer, with the quote fields at the top level and no `quote` key. The strict snapshot
+    // validator cannot read these, and dropping them used to remove the Versions button
+    // entirely from any quote whose saved versions were all in this shape.
+    const legacySnapshot = {
+      quote_number: 'Q-version-test',
+      customer_id: 'customer-1',
+      customer_name: 'Farm',
+      tier: 1,
+      valid_days: 30,
+      header_notes: null,
+      footer_notes: null,
+      commission_split: null,
+      totals: { total_price: 1234 },
+      sections: [],
+    };
+    const legacyRow = (id: string, versionNumber: number, sentAt: string) => ({
+      id,
+      quote_id: quote.id,
+      version_number: versionNumber,
+      sent_by: 'profile-1',
+      sent_at: sentAt,
+      sent_method: null,
+      snapshot_data: legacySnapshot,
+      pdf_url: null,
+      notes: null,
+      restore_trusted_at: null,
+    });
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', email: 'grower@example.com', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : table === 'quote_versions'
+                  ? [
+                      legacyRow('version-2', 2, '2026-03-16T15:43:15.915Z'),
+                      legacyRow('version-1', 1, '2026-03-16T15:42:47.023Z'),
+                    ]
+                  : [],
+      error: null,
+    }));
+
+    renderQuoteBuilder(quote.id);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Versions \(2\)/ }));
+
+    // Both rows are listed, and neither claims an item count or a total — those could only
+    // come from a snapshot this build has already refused to read.
+    expect(await screen.findAllByText(/Saved in an older format/)).toHaveLength(2);
+    expect(screen.getByText('v1')).toBeInTheDocument();
+    expect(screen.getByText('v2')).toBeInTheDocument();
+
+    // The old behaviour warned the operator on every single load and reported to Sentry.
+    // A legacy snapshot is expected historical data, not an incident.
+    expect(mockToast).not.toHaveBeenCalledWith('warning', expect.stringContaining('could not be displayed'));
+  });
+
   it('handles quote not found gracefully when editing invalid ID', async () => {
     mockFrom.mockImplementation(() => buildChain({ data: null, error: null }));
     renderQuoteBuilder('nonexistent-id');
