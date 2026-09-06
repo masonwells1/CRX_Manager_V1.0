@@ -404,6 +404,18 @@ function makeHarness({
   review = undefined,
   removeLabelFailures = [],
   runId = 909090,
+  // GraphQL reviewDecision. `null` is the real shape for a pull request with no
+  // review verdict, which is why the default is null rather than undefined.
+  reviewDecision = null,
+  reviewDecisionFailure = false,
+  // Whether CodeRabbit answers the posted command, and how. 'ack' models the
+  // measured 6-11s reply; 'silent' models the measured bot-authored silence.
+  coderabbitAcknowledgement = 'ack',
+  // Comment-list calls that throw, counted across the WHOLE run. The
+  // acknowledgement poll shares github.paginate(listComments) with the
+  // pre-attempt snapshot and the ambiguous-post recovery, so these indices are
+  // global, not poll-relative.
+  deleteCommentFailure = false,
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -435,7 +447,29 @@ function makeHarness({
     };
   }
 
+  // CodeRabbit's reply to a posted command. Modelled as a real comment by
+  // `coderabbitai[bot]` with an id ABOVE the command's, which is the only thing
+  // the gate treats as an acknowledgement — an earlier coderabbitai[bot] comment
+  // (its auto-generated summary, which quotes the command in its own tips block)
+  // must not count, and one test pre-seeds exactly that.
+  function maybeAcknowledge() {
+    if (coderabbitAcknowledgement !== 'ack') return;
+    comments.push({
+      id: comments.length + 1,
+      body: '> [!TIP]\n> Review triggered.',
+      created_at: new Date().toISOString(),
+      user: { login: 'coderabbitai[bot]' },
+    });
+  }
+
   const github = {
+    // The gate reads reviewDecision through GraphQL because that is the same
+    // field both merge gates read; a REST re-derivation would be a second,
+    // divergeable source of truth.
+    graphql: async () => {
+      if (reviewDecisionFailure) throw new Error('graphql review decision failed');
+      return { repository: { pullRequest: { reviewDecision } } };
+    },
     rest: {
       actions: {
         getWorkflowRun: async ({ run_id: runId }) => {
@@ -488,6 +522,7 @@ function makeHarness({
               created_at: new Date().toISOString(),
               user: { login: 'github-actions[bot]' },
             });
+            maybeAcknowledge();
             throw new Error('connection closed after write');
           }
           if (commentFailure === 'ambiguous-untrusted') {
@@ -507,9 +542,11 @@ function makeHarness({
             user: { login: 'github-actions[bot]' },
           };
           comments.push(comment);
+          maybeAcknowledge();
           return { data: comment };
         },
         deleteComment: async ({ comment_id: commentId }) => {
+          if (deleteCommentFailure) throw new Error('comment delete rejected');
           const index = comments.findIndex((comment) => comment.id === commentId);
           if (index >= 0) comments.splice(index, 1);
         },
@@ -602,6 +639,14 @@ function makeHarness({
 
   return {
     comments,
+    // Comments the GATE is responsible for. CodeRabbit's acknowledgement is a real
+    // comment on the pull request and stays there even when the gate deletes its
+    // own command, so a test about what the gate posted or removed must filter by
+    // AUTHOR — asserting over the raw list would silently start asserting things
+    // about CodeRabbit's behaviour instead.
+    get actionsComments() {
+      return comments.filter((comment) => comment.user?.login === 'github-actions[bot]');
+    },
     context,
     core,
     errors,
@@ -612,7 +657,7 @@ function makeHarness({
   };
 }
 
-async function execute(harness) {
+async function execute(harness, configOverrides = {}) {
   return run({
     github: harness.github,
     context: harness.context,
@@ -622,6 +667,8 @@ async function execute(harness) {
       ignoredChecks: IGNORED_CHECKS,
       quietPeriodMs: 0,
       mergeabilityPollMs: 0,
+      ackPollMs: 0,
+      ...configOverrides,
     },
   });
 }
@@ -642,7 +689,15 @@ test('omitting the quiet-period option invokes the production 30-second confirma
   });
 
   assert.equal(result.status, 'requested');
-  assert.deepEqual(waits, [30_000]);
+  // The quiet period first, then the acknowledgement window. The wait comes BEFORE
+  // each acknowledgement lookup including the first, so the documented 30s window
+  // really is attempts x interval — an earlier revision polled first and waited
+  // between attempts, giving 25s and an immediate read that could not have seen a
+  // reply.
+  assert.equal(waits[0], 30_000, 'the production quiet period');
+  // One acknowledgement wait, because CodeRabbit answered on the first look. The
+  // poll stops as soon as it has an answer rather than always burning the window.
+  assert.deepEqual(waits.slice(1), [5_000]);
 });
 
 // ── the gate must not block on its OWN still-running check ───────────────────
@@ -709,8 +764,9 @@ test('green frozen candidate posts exactly one review command and records the re
   const result = await execute(harness);
 
   assert.equal(result.status, 'requested');
-  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
-  assert.equal(harness.comments[0].body.split('\n')[0], REVIEW_COMMAND);
+  assert.equal(result.acknowledged, true, 'a request is only credited once CodeRabbit answers it');
+  assert.deepEqual(harness.actionsComments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.equal(harness.actionsComments[0].body.split('\n')[0], REVIEW_COMMAND);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.deepEqual(harness.failures, []);
@@ -810,7 +866,7 @@ test('duplicate ready events never post a second review command', async () => {
   const duplicate = await execute(harness);
 
   assert.equal(duplicate.status, 'duplicate');
-  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.deepEqual(harness.actionsComments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
 });
@@ -822,7 +878,7 @@ test('a stranded requested marker without a matching Actions comment self-heals 
   const result = await execute(harness);
 
   assert.equal(result.status, 'requested');
-  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.deepEqual(harness.actionsComments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.match(harness.notices.join('\n'), /any superseded review command/);
@@ -849,10 +905,14 @@ test('an unverifiable requested marker stays attached and cannot cause a duplica
 
   await harness.github.rest.issues.addLabels({ labels: [READY_LABEL] });
   const retry = await execute(harness);
-  assert.equal(retry.status, 'duplicate');
+  // The retry must not post a SECOND paid command — that is what this test is
+  // about, and it still holds. It is no longer a green `duplicate`, because
+  // nothing here shows CodeRabbit acknowledged the standing command: marker plus
+  // command is dedupe state, not proof that a review was requested.
+  assert.equal(retry.status, 'blocked');
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
-  assert.equal(harness.comments.length, 1);
+  assert.equal(harness.actionsComments.length, 1, 'no second command may be posted');
 });
 
 test('a new commit resets both workflow labels', async () => {
@@ -946,18 +1006,26 @@ test('a metadata edit clears stale requested state after replacing a queued sync
   assert.equal(harness.comments.length, 0);
 });
 
-test('a metadata edit preserves a confirmed current-head request and removes stray ready state', async () => {
+test('a metadata edit preserves an acknowledged current-head request and removes stray ready state', async () => {
   const harness = makeHarness({
     action: 'edited',
     changes: { body: { from: 'Old body' } },
     eventLabel: null,
     pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] })],
-    existingComments: [{
-      id: 99,
-      body: reviewCommandBody(HEAD),
-      created_at: new Date().toISOString(),
-      user: { login: 'github-actions[bot]' },
-    }],
+    existingComments: [
+      {
+        id: 99,
+        body: reviewCommandBody(HEAD),
+        created_at: new Date().toISOString(),
+        user: { login: 'github-actions[bot]' },
+      },
+      {
+        id: 100,
+        body: 'Review triggered.',
+        created_at: new Date().toISOString(),
+        user: { login: 'coderabbitai[bot]' },
+      },
+    ],
   });
   const result = await execute(harness);
 
@@ -965,7 +1033,7 @@ test('a metadata edit preserves a confirmed current-head request and removes str
   assert.equal(result.headSha, HEAD);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
-  assert.equal(harness.comments.length, 1);
+  assert.equal(harness.actionsComments.length, 1);
 });
 
 test('a metadata edit with no workflow state is ignored', async () => {
@@ -1003,7 +1071,33 @@ test('an unrelated label event that displaces a queued synchronize reset clears 
   assert.match(result.reason, /labeled\.unrelated-label\.stale_state/);
 });
 
-test('an unrelated label event preserves a confirmed current-head request', async () => {
+test('an unrelated label event preserves an ACKNOWLEDGED current-head request', async () => {
+  const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    action: 'labeled',
+    eventLabel: 'unrelated-label',
+    pulls: [current, current],
+    eventPullRequest: current,
+    existingComments: [
+      { id: 99, body: reviewCommandBody(HEAD), user: { login: 'github-actions[bot]' } },
+      // Without this reply the request is not confirmed — see the laundering
+      // tests below. Marker + command alone is dedupe state, not proof.
+      { id: 100, body: 'Review triggered.', user: { login: 'coderabbitai[bot]' } },
+    ],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(result.acknowledged, true);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.actionsComments.length, 1);
+});
+
+// The laundering path. Adding REQUESTED_LABEL is itself a `labeled` event, so the
+// gate raises the very event that used to convert an unheard or unverifiable
+// request into a reported success — without ever checking for an acknowledgement.
+test('a label event does NOT launder an unacknowledged request into a confirmed one', async () => {
   const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
   const harness = makeHarness({
     action: 'labeled',
@@ -1018,10 +1112,143 @@ test('an unrelated label event preserves a confirmed current-head request', asyn
   });
   const result = await execute(harness);
 
-  assert.equal(result.status, 'duplicate');
-  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(result.status, 'blocked', 'marker + command is dedupe state, not proof of a review');
+  assert.equal(result.acknowledged, false);
+  assert.equal(harness.actionsComments.length, 0, 'the unheard command is cleared for a deliberate retry');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /never acknowledged the review command/);
+});
+
+test('a label event on a REFUSED request keeps the spent attempt visible', async () => {
+  const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    action: 'labeled',
+    eventLabel: 'unrelated-label',
+    pulls: [current, current],
+    eventPullRequest: current,
+    existingComments: [
+      { id: 99, body: reviewCommandBody(HEAD), user: { login: 'github-actions[bot]' } },
+      { id: 100, body: '> [!WARNING]\n> Action not completed.', user: { login: 'coderabbitai[bot]' } },
+    ],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.refused, true);
+  // A refusal still costs the attempt, so the command and marker must NOT be
+  // cleared — presenting a spent attempt as untried invites another one.
+  assert.equal(harness.actionsComments.length, 1);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
-  assert.equal(harness.comments.length, 1);
+  assert.match(harness.failures[0], /refused the review command/);
+});
+
+// The polarity test. An earlier revision recognised only the summary and the
+// refusal and treated EVERYTHING else as an acknowledgement, which fails OPEN: any
+// unrelated or delayed bot comment would have greened the gate for a command
+// CodeRabbit never accepted. Acceptance is matched positively; anything
+// unrecognised is not an acknowledgement.
+test('an unrelated CodeRabbit comment cannot forge an acknowledgement', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  const listComments = harness.github.rest.issues.listComments;
+  harness.github.rest.issues.listComments = async (params) => {
+    const response = await listComments(params);
+    response.data.push({
+      id: 9001,
+      body: 'Note: this repository is configured with `auto_review` disabled.',
+      created_at: new Date().toISOString(),
+      user: { login: 'coderabbitai[bot]' },
+    });
+    return response;
+  };
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures[0], /did not acknowledge the review command/);
+});
+
+// Only the FIRST CodeRabbit comment after the command is treated as a reply to it.
+// Scanning the whole tail for a matching phrase would let an unrelated later
+// action answer a command CodeRabbit ignored.
+test('an unrelated "Action performed" behind another reply does not acknowledge the command', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  const listComments = harness.github.rest.issues.listComments;
+  harness.github.rest.issues.listComments = async (params) => {
+    const response = await listComments(params);
+    // CodeRabbit says something unrelated first...
+    response.data.push({
+      id: 9001,
+      body: 'Note: automatic reviews are disabled for this repository.',
+      created_at: new Date().toISOString(),
+      user: { login: 'coderabbitai[bot]' },
+    });
+    // ...then performs an action for something else entirely.
+    response.data.push({
+      id: 9002,
+      body: '> [!TIP]\n> Action performed. Comments resolved.',
+      created_at: new Date().toISOString(),
+      user: { login: 'coderabbitai[bot]' },
+    });
+    return response;
+  };
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked', 'a later unrelated action must not answer an ignored command');
+  assert.match(harness.failures[0], /did not acknowledge the review command/);
+});
+
+// The acknowledgement wait is up to 30s of real time after the last snapshot.
+test('a head change during the acknowledgement wait is not reported as a clean success', async () => {
+  const harness = makeHarness({
+    // The final re-read, after the acknowledgement, sees a moved head.
+    pulls: [
+      pullRequest(), pullRequest(), pullRequest(), pullRequest(),
+      pullRequest({ head: NEXT_HEAD }),
+    ],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  // The review is spent — CodeRabbit accepted it — so the command must NOT be
+  // deleted here, or the next relabel looks untried and buys a second one.
+  assert.equal(harness.actionsComments.length, 1);
+  assert.match(harness.failures[0], /changed while waiting for that acknowledgement/);
+});
+
+test('the gate crashing after a post does not recover as a successful request', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  // Crash after the command is posted: the ready-label removal throws.
+  harness.github.rest.issues.removeLabel = async () => {
+    throw new Error('label service exploded');
+  };
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked', 'a crash is when the gate knows LEAST — it must not report success');
+  assert.notEqual(result.status, 'requested');
+});
+
+test("CodeRabbit's own auto-generated summary is not an acknowledgement", async () => {
+  const current = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL] });
+  const harness = makeHarness({
+    action: 'labeled',
+    eventLabel: 'unrelated-label',
+    pulls: [current, current],
+    eventPullRequest: current,
+    existingComments: [
+      { id: 99, body: reviewCommandBody(HEAD), user: { login: 'github-actions[bot]' } },
+      // CodeRabbit posts this unprompted, even with automatic reviews disabled,
+      // and it quotes the command inside its own tips block. A delayed one
+      // landing after the command must not read as an answer to it.
+      {
+        id: 100,
+        body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n@coderabbitai review',
+        user: { login: 'coderabbitai[bot]' },
+      },
+    ],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures[0], /never acknowledged the review command/);
 });
 
 test('an ordinary unrelated label event with no gate state is ignored', async () => {
@@ -1093,10 +1320,14 @@ test('a stale unrelated-label payload cannot lose dedupe state after the first l
   harness.context.payload.label = { name: READY_LABEL };
   const retry = await execute(harness);
 
-  assert.equal(retry.status, 'duplicate');
+  // The retry must not post a SECOND paid command — that is what this test is
+  // about, and it still holds. It is no longer a green `duplicate`, because
+  // nothing here shows CodeRabbit acknowledged the standing command: marker plus
+  // command is dedupe state, not proof that a review was requested.
+  assert.equal(retry.status, 'blocked');
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
-  assert.equal(harness.comments.length, 1);
+  assert.equal(harness.actionsComments.length, 1, 'no second command may be posted');
 });
 
 test('a metadata edit that displaces a draft reset clears the old gate labels', async () => {
@@ -1200,10 +1431,12 @@ for (const [failureName, failureOptions] of [
     harness.context.payload.label = { name: READY_LABEL };
     const retry = await execute(harness);
 
-    assert.equal(retry.status, 'duplicate');
+    // Same reasoning as the other retry paths: no second paid command, but no
+    // green `duplicate` either without an acknowledgement to point at.
+    assert.equal(retry.status, 'blocked');
     assert.equal(harness.liveLabels.has(READY_LABEL), false);
     assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
-    assert.equal(harness.comments.length, 1);
+    assert.equal(harness.actionsComments.length, 1, 'no second command may be posted');
   });
 }
 
@@ -1455,7 +1688,7 @@ test('a post-comment snapshot API failure deletes the command and clears both la
   const result = await execute(harness);
 
   assert.equal(result.status, 'blocked');
-  assert.deepEqual(harness.comments, []);
+  assert.deepEqual(harness.actionsComments, []);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /could not complete the post-comment candidate snapshot/);
@@ -1543,10 +1776,14 @@ test('an early API failure preserves a pre-existing marker and prevents a duplic
 
   await harness.github.rest.issues.addLabels({ labels: [READY_LABEL] });
   const retry = await execute(harness);
-  assert.equal(retry.status, 'duplicate');
+  // The retry must not post a SECOND paid command — that is what this test is
+  // about, and it still holds. It is no longer a green `duplicate`, because
+  // nothing here shows CodeRabbit acknowledged the standing command: marker plus
+  // command is dedupe state, not proof that a review was requested.
+  assert.equal(retry.status, 'blocked');
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
-  assert.equal(harness.comments.length, 1);
+  assert.equal(harness.actionsComments.length, 1, 'no second command may be posted');
 });
 
 test('drafts, auto-merge, branch state, stale heads, and low-permission actors fail closed', async (t) => {
@@ -1607,7 +1844,9 @@ test('temporarily unknown mergeability is polled before the candidate is rejecte
   });
 
   assert.equal(result.status, 'requested');
-  assert.deepEqual(waits, [17]);
+  // One mergeability poll, then the single acknowledgement wait before the lookup
+  // that finds CodeRabbit's reply.
+  assert.deepEqual(waits, [17, 5_000]);
   assert.deepEqual(harness.failures, []);
 });
 
@@ -1662,7 +1901,7 @@ test('a head change while the command is posted deletes the raced comment and cl
   const result = await execute(harness);
 
   assert.equal(result.status, 'blocked');
-  assert.deepEqual(harness.comments, []);
+  assert.deepEqual(harness.actionsComments, []);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /changed while the review command was being posted/);
@@ -1681,7 +1920,7 @@ test('an ambiguous recovery still revalidates and deletes a command left on a ra
   const result = await execute(harness);
 
   assert.equal(result.status, 'blocked');
-  assert.deepEqual(harness.comments, []);
+  assert.deepEqual(harness.actionsComments, []);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
   assert.match(harness.failures[0], /changed while the review command was being posted/);
@@ -1706,7 +1945,7 @@ test('an ambiguous comment failure preserves dedupe state when the command actua
   assert.equal(result.recovered, true);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
-  assert.deepEqual(harness.comments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
+  assert.deepEqual(harness.actionsComments.map((comment) => comment.body), [reviewCommandBody(HEAD)]);
   assert.deepEqual(harness.failures, []);
 });
 
@@ -1772,9 +2011,253 @@ test('an old-head marker and command are deleted, not left beside the current-he
   // The superseded command must be GONE. Leaving it beside the new one spends a
   // second review out of the paid hourly allowance on one frozen candidate.
   assert.deepEqual(
-    harness.comments.map((comment) => comment.body),
+    harness.actionsComments.map((comment) => comment.body),
     [reviewCommandBody(HEAD)],
   );
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+});
+
+// ── reviewDecision refusal ───────────────────────────────────────────────────
+//
+// Mutation tests, not coverage: each one puts the gate in a state where EVERY
+// other validation passes, so the only thing that can refuse is the new check. If
+// the reviewDecision guard is deleted, these go green in the wrong direction —
+// status becomes 'requested' and a command appears.
+
+test('a CHANGES_REQUESTED verdict refuses the request and posts nothing', async () => {
+  const harness = makeHarness({ reviewDecision: 'CHANGES_REQUESTED' });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  // The control: this exact harness with no verdict posts and is credited. So the
+  // verdict is the only variable, and the refusal is attributable to it.
+  assert.deepEqual(harness.actionsComments, [], 'no paid review may be spent on a pull request that cannot merge');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.match(harness.failures[0], /reviewDecision=CHANGES_REQUESTED/);
+});
+
+test('the control for the CHANGES_REQUESTED refusal: the same candidate without the verdict is requested', async () => {
+  const harness = makeHarness({ reviewDecision: null });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'requested');
+  assert.equal(harness.actionsComments.length, 1);
+});
+
+test('APPROVED and REVIEW_REQUIRED verdicts do not refuse — only CHANGES_REQUESTED does', async () => {
+  for (const decision of ['APPROVED', 'REVIEW_REQUIRED']) {
+    const harness = makeHarness({ reviewDecision: decision });
+    const result = await execute(harness);
+    assert.equal(result.status, 'requested', `${decision} must not block the request`);
+  }
+});
+
+test('an unreadable review decision fails CLOSED rather than posting blind', async () => {
+  const harness = makeHarness({ reviewDecisionFailure: true });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.actionsComments, []);
+  assert.match(harness.failures[0], /could not read the pull request review decision/);
+});
+
+// The confirmation pass exists because state moves between the first snapshot and
+// the post. A verdict submitted during the quiet period must be caught there —
+// checking reviewDecision only once, before the wait, would miss it.
+test('a CHANGES_REQUESTED verdict submitted during the quiet period is caught by the confirmation pass', async () => {
+  const harness = makeHarness();
+  let graphqlCalls = 0;
+  harness.github.graphql = async () => {
+    graphqlCalls += 1;
+    return {
+      repository: {
+        pullRequest: { reviewDecision: graphqlCalls === 1 ? null : 'CHANGES_REQUESTED' },
+      },
+    };
+  };
+  const result = await execute(harness);
+
+  assert.equal(graphqlCalls >= 2, true, 'the review decision must be re-read after the quiet period');
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.actionsComments, [], 'the late verdict must be caught BEFORE the command is posted');
+  assert.match(harness.failures[0], /reviewDecision=CHANGES_REQUESTED/);
+});
+
+// ── CodeRabbit acknowledgement ───────────────────────────────────────────────
+//
+// Posting is not requesting. Every one of these would have reported `requested`
+// before the acknowledgement poll existed.
+
+test('silence is only declared after the FULL documented acknowledgement window', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  const waits = [];
+  const result = await run({
+    github: harness.github,
+    context: harness.context,
+    core: harness.core,
+    config: {
+      requiredChecks: REQUIRED_CHECKS,
+      ignoredChecks: IGNORED_CHECKS,
+      quietPeriodMs: 0,
+      mergeabilityPollMs: 0,
+      settle: async (milliseconds) => waits.push(milliseconds),
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  // The wait comes BEFORE each lookup, including the first, so six attempts are a
+  // real 30 seconds. Polling first and waiting between attempts gave 25s and an
+  // immediate first read that could not possibly have seen a reply.
+  assert.deepEqual(waits, [5_000, 5_000, 5_000, 5_000, 5_000, 5_000]);
+  assert.equal(waits.reduce((total, wait) => total + wait, 0), 30_000);
+});
+
+test('an unacknowledged command is NOT a request: it fails and clears the marker', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(harness.actionsComments, [], 'the inert command must not be left behind to look like a request');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false, 'the marker must be cleared so a retry is possible');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.match(harness.failures[0], /did not acknowledge the review command/);
+});
+
+test('an acknowledgement posted BEFORE the command does not count', async () => {
+  // CodeRabbit posts an auto-generated summary comment even with automatic
+  // reviews disabled, and that comment quotes `@coderabbitai review` inside its
+  // own tips block. Two sessions have already miscounted requests from it. An
+  // acknowledgement must be strictly newer than the command it answers.
+  const harness = makeHarness({
+    coderabbitAcknowledgement: 'silent',
+    existingComments: [{
+      id: 1,
+      body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n@coderabbitai review',
+      created_at: new Date().toISOString(),
+      user: { login: 'coderabbitai[bot]' },
+    }],
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures[0], /did not acknowledge the review command/);
+});
+
+// The three-outcome rule. A lookup that FAILED is not a confirmed absence, and
+// collapsing the two would clear the dedupe marker on a request that may be live
+// — inviting a relabel that buys a SECOND paid review.
+test('an unverifiable acknowledgement lookup preserves the command and the marker', async () => {
+  const harness = makeHarness({
+    coderabbitAcknowledgement: 'silent',
+    // Call 1 is the pre-attempt snapshot; 2-4 are the acknowledgement poll.
+    commentListFailuresAt: [2, 3, 4],
+  });
+  const result = await execute(harness, { ackPollAttempts: 3 });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.actionsComments.length, 1, 'an unverifiable lookup must NOT delete a command that may be live');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true, 'the dedupe marker must survive an unverifiable lookup');
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.match(harness.failures[0], /acknowledgement could not be checked/);
+});
+
+test('a successful FINAL lookup after earlier failures is a confirmed absence', async () => {
+  const harness = makeHarness({
+    coderabbitAcknowledgement: 'silent',
+    commentListFailuresAt: [2, 3],
+  });
+  const result = await execute(harness, { ackPollAttempts: 3 });
+
+  assert.equal(result.status, 'blocked');
+  // The LAST attempt succeeded and saw no acknowledgement after the full wait —
+  // a confirmed absence, so the marker is cleared for a deliberate retry.
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.failures[0], /did not acknowledge the review command/);
+});
+
+// Regression: an EARLY empty read followed by outages is not evidence of absence.
+// CodeRabbit may have answered during the interval nobody could observe, so
+// deleting the command and clearing the marker there would let a retry buy a
+// second paid review. Only a successful FINAL lookup confirms an absence — which
+// is why the success flag is reset on every failure rather than latched once.
+test('an early empty lookup followed by outages is UNVERIFIABLE, not a confirmed absence', async () => {
+  const harness = makeHarness({
+    coderabbitAcknowledgement: 'silent',
+    // Call 1 is the pre-attempt snapshot; call 2 (poll attempt 1) succeeds and
+    // sees nothing; calls 3 and 4 (attempts 2 and 3) fail.
+    commentListFailuresAt: [3, 4],
+  });
+  const result = await execute(harness, { ackPollAttempts: 3 });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.actionsComments.length, 1, 'the command may be live — it must not be deleted');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true, 'the dedupe marker must survive an unobservable interval');
+  assert.match(harness.failures[0], /acknowledgement could not be checked/);
+});
+
+test('a CodeRabbit refusal is distinct from silence and does not present the attempt as untried', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  const listComments = harness.github.rest.issues.listComments;
+  let lookups = 0;
+  harness.github.rest.issues.listComments = async (params) => {
+    const response = await listComments(params);
+    lookups += 1;
+    if (lookups >= 2) {
+      response.data.push({
+        id: 900 + lookups,
+        body: '> [!WARNING]\n> Action not completed. Rate limit reached.',
+        created_at: new Date().toISOString(),
+        user: { login: 'coderabbitai[bot]' },
+      });
+    }
+    return response;
+  };
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  // Heard and declined: the attempt was spent, so state stays put.
+  assert.equal(harness.actionsComments.length, 1);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.match(harness.failures[0], /REFUSED the review command/);
+});
+
+// Never clear a marker while its command may still stand: that pairing is the
+// only thing preventing a duplicate paid review.
+test('a failed command deletion preserves the marker even on a confirmed non-acknowledgement', async () => {
+  const harness = makeHarness({
+    coderabbitAcknowledgement: 'silent',
+    deleteCommentFailure: true,
+  });
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.actionsComments.length, 1);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true, 'the marker must survive while the command it dedupes still stands');
+  assert.match(harness.failures[0], /the posted command could not be removed/);
+});
+
+test('a late acknowledgement inside the poll window still credits the request', async () => {
+  const harness = makeHarness({ coderabbitAcknowledgement: 'silent' });
+  let lookups = 0;
+  const listComments = harness.github.rest.issues.listComments;
+  harness.github.rest.issues.listComments = async (params) => {
+    const response = await listComments(params);
+    lookups += 1;
+    // Answers on the third poll, the way a slow acknowledgement would.
+    if (lookups === 3) {
+      response.data.push({
+        id: response.data.length + 1,
+        body: 'Review triggered.',
+        created_at: new Date().toISOString(),
+        user: { login: 'coderabbitai[bot]' },
+      });
+    }
+    return response;
+  };
+  const result = await execute(harness);
+
+  assert.equal(result.status, 'requested');
+  assert.equal(result.acknowledged, true);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
 });
 
