@@ -58,7 +58,14 @@ export default function Fields() {
   const counties = [...new Set(fields.map((f) => f.county).filter(Boolean))] as string[];
   const customerNames = [...new Set(fields.map((f) => f.customer_name).filter(Boolean))].sort() as string[];
 
-  const fetchFields = useCallback(async () => {
+  /**
+   * Reloads the field list. Resolves TRUE when the list on screen is now current, FALSE when
+   * it is not — this function handles its own RPC error, so callers cannot learn that from a
+   * rejection. The bulk import needs the difference: its results screen tells the operator to
+   * look rows up in this list before re-importing them, and acting on a stale list is what
+   * creates a duplicate field.
+   */
+  const fetchFields = useCallback(async (): Promise<boolean> => {
     // get_fields_with_geojson returns total_acres only; the two-acre model's
     // override/measured acres live on the fields table. Pull them alongside (the
     // fields_select RLS policy allows it) so the list shows the acres that actually
@@ -69,7 +76,7 @@ export default function Fields() {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_fields' } });
       toast('error', 'Failed to load fields. Please try again.');
       setLoading(false);
-      return;
+      return false;
     }
 
     // Pull the two-acre columns separately (kept sequential, not Promise.all, so the
@@ -97,6 +104,7 @@ export default function Fields() {
     });
     setFields(rows);
     setLoading(false);
+    return true;
   }, [toast]);
 
   useEffect(() => {
