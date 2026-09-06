@@ -29,7 +29,10 @@ GitHub Codex P1 "Gate edits to migration reviewer charters") added three pattern
 migration-proof minter trusts verbatim — `.claude/agents/**`, `scripts/write-apply-proofs.mjs`,
 `scripts/write-apply-proofs-lib.mjs` — for 19 patterns and 76 `ask` entries. Charter edits were
 silent on `main` too (bare `Edit`/`Write` allow), so this closes a pre-existing gap rather than a
-regression; binding charter hashes into the proof itself is recorded as a follow-up.
+regression; binding charter hashes into the proof itself is recorded as a follow-up. A third round
+(`gpt-5.6-sol` HIGH on `02b342610`) made the same three paths hard-denied for shell and path-field
+writers in `review-proof-guard.mjs` (the `ask` tier covers native editors only) and added
+`scripts/write-apply-proofs-lib.mjs` to the risky-path set so its diff needs the exact-SHA review.
 
 **Mode correction after review:** inheriting Auto left new named connector mutations
 eligible for classifier approval. `acceptEdits` keeps ordinary local edits automatic

@@ -299,6 +299,8 @@ assert.deepEqual(
 // gate machinery — editing them must itself require the second-model verdict.
 assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
+// PR #605 (gpt-5.6-sol HIGH on 02b342610): the minter's helper module is gate machinery too.
+assert.deepEqual(riskyFiles(["scripts/write-apply-proofs-lib.mjs"]), ["scripts/write-apply-proofs-lib.mjs"]);
 assert.deepEqual(riskyFiles(["scripts/overnight-codex-gate.mjs"]), ["scripts/overnight-codex-gate.mjs"]);
 assert.deepEqual(
   riskyFiles(["package.json"]),

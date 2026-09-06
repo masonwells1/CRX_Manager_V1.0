@@ -393,6 +393,10 @@ const RISKY_PATH_RES = [
   // changes require the same independent verdict (Codex round-7, PR #142).
   /(^|\/)\.claude\/agents\//i,
   /(^|\/)scripts\/write-apply-proofs\.mjs$/i,
+  // The minter's helper module carries the charter prompt builder and verdict
+  // parser; a `return true` there weakens the gate with no risky keyword in the
+  // diff (gpt-5.6-sol HIGH on PR #605 head 02b342610).
+  /(^|\/)scripts\/write-apply-proofs-lib\.mjs$/i,
   // The hook-REGISTRATION surfaces: every guard is only active because it is
   // wired here. A PR that de-registers a guard (removes the pr-merge-guard line,
   // etc.) touches ONLY these files and would otherwise merge un-gated, disabling

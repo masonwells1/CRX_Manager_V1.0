@@ -196,6 +196,11 @@ for (const payload of [
 
 assert.equal(run({ tool_name: "Write", tool_input: { file_path: "docs/review.md", content: "ok" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).stdout, "");
+// Running the proof minter and READING a charter stay allowed; only writes are gated.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/write-apply-proofs.mjs --migration supabase/migrations/20260905_x.sql" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cat .claude/agents/rls-security-reviewer.md" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "grep -n verdict scripts/write-apply-proofs-lib.mjs" } }).stdout, "");
+assert.equal(run({ tool_name: "Read", tool_input: { file_path: ".claude/agents/rls-security-reviewer.md" } }).stdout, "");
 // 2026-08-18 false-positive class: a cd to an UNRELATED literal directory plus a
 // read-only mention of the state dir must be allowed — only the cd TARGET matters.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "C:\\CRX_Manager\\.claude\\worktrees\\skills-audit-x" && wc -l src/app.ts; ls .claude/session-state 2>/dev/null' } }).stdout, "");
@@ -503,6 +508,21 @@ for (const command of [
   "cp /tmp/evil scripts/verify-deps.mjs",
   "rm -f scripts/agent-manifest-parity.mjs",
   "cp /tmp/evil scripts/sync-agent-workflows.mjs",
+  // PR #605 (gpt-5.6-sol HIGH on 02b342610): the migration-proof minter's INPUTS.
+  // write-apply-proofs.mjs reads each .claude/agents/<reviewer>.md verbatim and
+  // runs it as a machine-verdict review; a weakened charter or minter mints a
+  // clean proof for a LIVE apply before any merge-time review sees the edit.
+  // `Set-Content` to all three was probe-confirmed ALLOW before this fix.
+  "Set-Content .claude/agents/rls-security-reviewer.md",
+  "cp /tmp/evil .claude/agents/migration-drift-reviewer.md",
+  "echo x > .claude/agents/rls-security-reviewer.md",
+  "sed -i s/BLOCKERS/CLEAN/ .claude/agents/compliance-reviewer.md",
+  "Set-Content scripts/write-apply-proofs.mjs",
+  "cp /tmp/evil scripts/write-apply-proofs.mjs",
+  "Set-Content scripts/write-apply-proofs-lib.mjs",
+  "tee scripts/write-apply-proofs-lib.mjs",
+  "cp /tmp/evil .claude//agents/rls-security-reviewer.md",
+  "cp /tmp/evil .claude/commands/../agents/rls-security-reviewer.md",
   // SEVENTH gpt-5.6-sol round, both P1 and both reproduced by the reviewer.
   //
   // (a) `rg --pre CMD` runs CMD on every input path, so an allowlisted READER
@@ -608,6 +628,12 @@ for (const command of [
 // must deny too — Codex listed these alongside the shell bypasses.
 for (const payload of [
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".husky/pre-push" } },
+  // PR #605 (gpt-5.6-sol HIGH on 02b342610): proof-minter inputs through a path field.
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/agents/rls-security-reviewer.md" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/agents/migration-drift-reviewer.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/write-apply-proofs.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/write-apply-proofs-lib.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/../agents/rls-security-reviewer.md" } },
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/hooks/sql-safety.mjs" } },
   { tool_name: "mcp__filesystem__edit_file", tool_input: { path: ".codex/hooks.json" } },
   { tool_name: "apply_patch", tool_input: { patch: "*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n" } },
