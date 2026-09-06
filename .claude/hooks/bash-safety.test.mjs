@@ -64,7 +64,9 @@ ok(!checkDangerousCommand(null), "null command allowed (no throw)");
 //    and named its removal the next harness task. The corpus below is the SAME
 //    corpus the classifier was tested against, re-sorted by what the by-name rule
 //    does with each entry, so every flip from deny to allow is explicit and
-//    pinned. ──
+//    pinned. Since the producer's retirement on 2026-09-05 (PR #622) its four
+//    former exact invocations are denied too: the script that enforced the blob
+//    and proof checks is gone. ──
 const decodedPowerShellProcessLaunch = "Set-Item Env:NODE_OPTIONS ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1yZXF1aXJlPS4vcHJlbG9hZC5janM='))); Set-Variable E ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('bm9kZQ=='))); Set-Variable A @(([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('c2NyaXB0cy9hcHBseS1saXZlLXRlc3RkYXRhLW1haW50ZW5hbmNlLTIwMjYwODEyLm1qcw=='))),([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1hcHByb3ZlZC1ieS1tYXNvbj0yMDI2LTA4LTEy')))); Start-Process (Get-Variable E -ValueOnly) -ArgumentList (Get-Variable A -ValueOnly) -Wait -NoNewWindow";
 for (const command of [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
@@ -73,7 +75,8 @@ for (const command of [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
 ]) {
   ok(maintenanceProducerNamed(command), `the exact command names the producer: ${command}`);
-  eq(checkMaintenanceProducerInvocation(command), null, `…and is exempt as one of the four reviewed invocations: ${command}`);
+  ok(checkMaintenanceProducerInvocation(command), `former exact producer invocation denied after retirement: ${command}`);
+  ok(/retired unapplied on 2026-09-05/.test(checkMaintenanceProducerInvocation(command)), `denial names the retirement: ${command}`);
 }
 // (a) The producer or its approval token in any spelling that survives
 //     quote/slash/whitespace/escape stripping — chained, wrapped, re-spelled,
@@ -171,10 +174,12 @@ ok(!maintenanceProducerNamed(decodedPowerShellProcessLaunch) && !computedJavaScr
 //     producer and none launches a JavaScript runtime on a computed script. Two of
 //     them ARE producer invocations with the name split or held in variables
 //     (`& ('no','de' -join '') …`, `& $EXE $OPTION $MODULE $SCRIPT $APPROVAL`):
-//     allowed on purpose. The producer refuses any argv but its exact reviewed one,
-//     a body that differs from its committed HEAD blob, and any write without a
-//     fresh exact-head Sol proof; and the same run was always reachable through
-//     `node runner.mjs`, which the classifier never saw. The generated Codex
+//     allowed on purpose. When this corpus was sorted the producer still existed
+//     and refused any argv but its exact reviewed one, a body that differs from
+//     its committed HEAD blob, and any write without a fresh exact-head Sol
+//     proof; since its retirement (PR #622) there is no file at that path to run,
+//     and the same run was always reachable through `node runner.mjs`, which
+//     the classifier never saw. The generated Codex
 //     production guard keeps the full classifier for the session that holds
 //     production credentials.
 for (const command of [
@@ -355,10 +360,6 @@ for (const command of [
   ok(computedJavaScriptScriptArgument(command), `computed option name, unquoted value, or loader value is still a computed script: ${command}`);
   ok(checkDangerousCommand(command), `computed option launch denied: ${command}`);
 }
-const focusedProducerHarness = "node scripts/apply-live-testdata-maintenance-20260812.test.mjs";
-ok(!maintenanceProducerNamed(focusedProducerHarness), "focused producer test harness is not the producer's name");
-eq(checkMaintenanceProducerInvocation(focusedProducerHarness), null, "focused producer test harness stays allowed by the shell guard");
-ok(!checkDangerousCommand(focusedProducerHarness), "focused producer test harness stays runnable");
 // Quoted data that merely MENTIONS a runtime, a shell, or an encoded-command
 // spelling was never an invocation; it stays outside the producer gate.
 for (const dataCommand of [

@@ -277,37 +277,37 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-09-05 — the one-use live-SQL-guard maintenance producer has waited 24 days unapplied; retire it or run its activation lane (Mason's decision)
+## CLOSED 2026-09-05 — the one-use live-SQL-guard maintenance producer was retired unapplied (Mason's decision)
 
-**What it is.** `scripts/apply-live-testdata-maintenance-20260812.mjs` is the reviewed, blob-pinned
+**What it was.** `scripts/apply-live-testdata-maintenance-20260812.mjs`, the reviewed, blob-pinned
 tool built on 2026-08-12 to regenerate the live SQL classifier in `.claude/hooks/live-testdata-lib.mjs`
-from three reviewed snippets under `docs/maintenance/`, without reopening a generic write path to a
-guard file. It runs only as one of four exact commands. Its write mode has never run: the target
-still matches the producer's pinned input blob (`419f4e8f…`, checked 2026-09-05), so the apply is
-still valid, and the 2026-08-12 handoff (`docs/handoffs/2026-08-12-live-sql-guard-maintenance-build-to-review.md`)
-recorded activation as BLOCKED until the `DO`-based rollback smoke chains had a safe execution
-route, because the repaired classifier correctly rejects raw `DO` and the smoke workflow sends those
-chains through the classified `execute_sql` path.
+from three reviewed snippets under `docs/maintenance/`. It ran only as one of four exact commands and
+its apply lane never ran: activation was recorded as BLOCKED in
+`docs/handoffs/2026-08-12-live-sql-guard-maintenance-build-to-review.md` until the `DO`-based
+rollback smoke chains had a safe execution route.
 
-**What has changed since.** The producer's outer shell guard on the Claude side — the
-opaque-invocation classifier that refused 849 ordinary commands in a fortnight — was replaced on
-2026-09-05 by a by-name rule (`docs/changelog.d/2026-09-05-maintenance-producer-guard-by-name.md`),
-so retiring the producer no longer buys any token relief; it is cleanup. Separately, the classifier
-defects catalogued on 2026-09-02 in `docs/reference/agent-guardrails.md` (the five read-only
-spellings refused as `identifier(`) are NOT addressed by the 2026-08-12 snippets — they contain no
-handling for `AS a(argname)`, a `WITH RECURSIVE` column list, or `AS MATERIALIZED (` — so applying
-the maintenance would not fix the false positives currently being hit.
+**Why retire rather than apply.** The 2026-08-12 snippets contain no handling for the classifier
+defects catalogued on 2026-09-02 in `docs/reference/agent-guardrails.md` (`AS a(argname)`, a
+`WITH RECURSIVE` column list, `AS MATERIALIZED (`), so applying the maintenance would not have fixed
+the false positives currently being hit. Mason decided on 2026-09-05 to retire it without applying.
 
-**The decision, with one recommendation.** Retire it unapplied: run `node
-scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12
---retire-producer` on a branch (it needs a clean worktree and a fresh exact-head Sol proof, which the
-ordinary landing flow mints), commit the deletion, and land it through the normal PR pipeline. A
-classifier repair that covers the 2026-09-02 family is then a new, ordinary reviewed change against
-the guard file, not a revival of this producer. The alternative — running the activation lane
-(apply, keep the red-to-green regressions, then retire, after building the safe `DO` smoke route the
-handoff requires) — spends a review cycle on a repair that no longer targets the live defect.
-Either way the `.codex/hooks/production-action-guard.mjs` matcher and `codex-push-lib.mjs` anchors
-the producer pins stay as they are; retirement only deletes the producer file.
+**How it was executed.** The decision record landed first, on its own, because the producer's
+`--retire-producer` lane (read first and confirmed to perform one local file deletion and nothing
+else: no Supabase client, no SQL, no network in any lane) only runs against a commit that still
+contains the producer and carries a fresh exact-head `gpt-5.6-sol` proof. That proof was minted
+against the docs-only commit `3ce6068af` (rebased to `c870e4aba` after PR #621 landed on `main`),
+the lane ran and removed the producer, and the following
+commit removed with it its test, the three snippet inputs, the CI step that ran the test, the
+`.gitattributes` pins for the deleted scripts, and the Codex guard-test block that shelled out to
+the harness. On the exact-SHA Codex review's P1, the Claude shell guard's allowlist of the producer's
+four exact invocations was removed as well, so every mention of the path now fails closed (the
+script that enforced the blob and proof checks is gone). The Codex production guard and the push
+guard's risky-path entry keep naming the path; that is deliberate and harmless. Changelogs: `docs/changelog.d/2026-09-05-retire-20260812-maintenance-producer.md`
+and `docs/changelog.d/2026-09-05-retired-20260812-maintenance-producer-removed.md`.
+
+**Still open.** The `live-testdata-lib.mjs` read-side false positives (2026-09-02 family) are
+untouched by this retirement. A repair is a new ordinary reviewed change against the guard file,
+not a revival of the producer.
 
 ## OPEN 2026-09-04 — the migration drift reviewer's overload check can only see AUTHORED history, and its sanctioned runner can never show it the live catalog
 

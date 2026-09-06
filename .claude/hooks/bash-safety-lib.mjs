@@ -14,30 +14,29 @@
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
+// The producer was retired unapplied on 2026-09-05 (Mason's decision, PR #622).
+// Its four exact invocations used to be allow-listed here because the script
+// itself enforced the committed-blob and exact-head-proof checks; with the
+// script gone those checks are gone too, so a replacement file at the same path
+// must not be runnable through the old exact spellings. Every mention now fails
+// closed.
 const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
-const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
-  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
-]);
 
 // ── maintenance producer: denied BY NAME (2026-09-05) ──────────────────────
-// scripts/apply-live-testdata-maintenance-20260812.mjs is the one reviewed,
-// blob-pinned tool allowed to rewrite three protected guard files, and it runs
-// only as one of the four exact commands above. From 2026-08-12 to 2026-09-05
-// this file also carried a ~350-line "opaque invocation" classifier that refused
-// ANY command whose executable or script could not be read from its text —
-// `node -e`, `bash -c`, `python -c`, `| xargs`, heredocs, `$X` or `[ -f x ]` in
-// executable position, PowerShell script blocks — on the theory that such a
-// command MIGHT run the producer without naming it. Measured over the fortnight
-// 2026-08-21..09-04 it fired 849 times; 59 of those named the producer. The
-// 2026-08-31 decision (docs/manual/DECISION_LOG.md) recorded it as ineffective —
-// `node runner.mjs` or `make x` execute the producer freely — and named its
-// removal the next harness task. Removed here. What remains is exact:
+// scripts/apply-live-testdata-maintenance-20260812.mjs was the one reviewed,
+// blob-pinned tool allowed to rewrite three protected guard files. From
+// 2026-08-12 to 2026-09-05 this file also carried a ~350-line "opaque invocation"
+// classifier that refused ANY command whose executable or script could not be
+// read from its text — `node -e`, `bash -c`, `python -c`, `| xargs`, heredocs,
+// `$X` or `[ -f x ]` in executable position, PowerShell script blocks — on the
+// theory that such a command MIGHT run the producer without naming it. Measured
+// over the fortnight 2026-08-21..09-04 it fired 849 times; 59 of those named the
+// producer. The 2026-08-31 decision (docs/manual/DECISION_LOG.md) recorded it as
+// ineffective — `node runner.mjs` or `make x` execute the producer freely — and
+// named its removal the next harness task. Removed here. What remains is exact:
 //   • any spelling of the producer's name or of its approval token that survives
-//     quote/slash/whitespace/escape stripping, unless the whole command is one of
-//     the four reviewed invocations;
+//     quote/slash/whitespace/escape stripping (no exact spelling is allowed
+//     since the retirement);
 //   • a JavaScript runtime (node/nodejs/bun/deno) whose SCRIPT argument cannot be
 //     read from the text (`node "$F"`, `node scripts/$(…)`, `node scripts/appl?-…`),
 //     because that is the one shape that runs a file whose name this rule cannot
@@ -45,11 +44,9 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
 //     shell, a transparent launcher) is inspected, so `rg -n 'node "$F"' docs` is
 //     data. Arguments AFTER the script and inline code (`-e`/`-p`/stdin) are not
 //     scanned: `node scripts/x.mjs "$SINCE"` and `node -e "…${x}…"` are ordinary.
-// The boundary against a nameless invocation is the producer itself: it refuses
-// anything but its exact argv, a dirty worktree, main or a detached HEAD, a body
-// that differs from its committed HEAD blob, and any write mode without a fresh
-// exact-head Sol proof; its only outputs are three pinned blobs in a branch
-// worktree. The generated Codex production guard
+// A nameless launch is bounded by the PR pipeline every guard-file change must
+// pass, not by this rule: the producer that used to enforce its own argv, blob,
+// and proof checks no longer exists. The generated Codex production guard
 // (.codex/hooks/production-action-guard.mjs) keeps the full classifier,
 // blob-pinned, for the Codex session that holds production credentials.
 export function maintenanceProducerNamed(command) {
@@ -212,9 +209,8 @@ export function computedJavaScriptScriptArgument(command) {
 
 export function checkMaintenanceProducerInvocation(command) {
   const value = String(command || "").trim();
-  if (MAINTENANCE_PRODUCER_ALLOWED_COMMANDS.has(value)) return null;
   if (maintenanceProducerNamed(value)) {
-    return "Blocked maintenance producer invocation. Use one exact repository-relative node command only; chaining, wrappers, alternate spellings, reordered or unknown arguments, and indirect writers are denied.";
+    return "Blocked maintenance producer invocation. The 2026-08-12 maintenance producer was retired unapplied on 2026-09-05 and no invocation of that path is allowed; chaining, wrappers, substitutions, alternate spellings, and indirect writers are denied as before.";
   }
   if (computedJavaScriptScriptArgument(value)) {
     return "Blocked JavaScript runtime launch of a script whose path is computed at run time (node \"$F\", node scripts/$(...), a glob). The maintenance producer runs only by its exact reviewed command; spell the script path out.";

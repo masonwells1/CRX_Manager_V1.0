@@ -78,7 +78,17 @@ proof, so the owner's terminal is the only path for this change.
 The Codex App's three P2 findings on the PR's first commit are fixed in the same PR; see
 `docs/changelog.d/2026-09-05-pr619-shell-guard-redirection-quote-option-fixes.md`.
 
-**Proof.** `node .claude/hooks/bash-safety.test.mjs` (458 assertions, including the live hook on
+**The producer was retired while this PR was open.** PR #622 (merged 2026-09-05 21:30Z) deleted
+`scripts/apply-live-testdata-maintenance-20260812.mjs`, its harness and snippet inputs, and — on a
+Codex P1 — removed the four-command allowlist from this same guard so every mention of the path
+fails closed. `main` was merged into this branch by content: the by-name matcher and the
+computed-script rule stay, no allowlist comes back (the four former exact spellings are now pinned
+as denied, with the retirement named in the refusal), and the test for the deleted harness file is
+gone. The "producer's own gates" reasoning above describes the state when the corpus was sorted;
+since the retirement there is no file at that path to run, and a nameless launch is bounded by the
+PR pipeline every guard-file change must pass.
+
+**Proof.** `node .claude/hooks/bash-safety.test.mjs` (459 assertions, including the live hook on
 the four shapes that used to be refused) and `node .claude/hooks/mcp-tool-guard.test.mjs` (30). The
-producer's own harness and the Codex guard's suite are unchanged and untouched. Exact-SHA Codex
-proof via `scripts/write-codex-push-proof.mjs` recorded in the PR.
+Codex guard's suite is unchanged and untouched. Exact-SHA Codex proof via
+`scripts/write-codex-push-proof.mjs` recorded in the PR.
