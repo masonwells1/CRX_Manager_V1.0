@@ -299,7 +299,32 @@ assert.deepEqual(
 // gate machinery — editing them must itself require the second-model verdict.
 assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
+// PR #605 (gpt-5.6-sol HIGH on 02b342610): the minter's helper module is gate machinery too.
+assert.deepEqual(riskyFiles(["scripts/write-apply-proofs-lib.mjs"]), ["scripts/write-apply-proofs-lib.mjs"]);
+// GitHub Codex P1 on 8179ae989: preview_start runs whatever .claude/launch.json names.
+assert.deepEqual(riskyFiles([".claude/launch.json"]), [".claude/launch.json"]);
+// protected-surface-parity (PR #605 round 12): gate inputs + manifest-sync scripts.
+// Round thirteen: CI-reachable prose/orchestration dirs, and .codex by shape.
+assert.deepEqual(riskyFiles([".claude/commands/ship.md"]), [".claude/commands/ship.md"]);
+assert.deepEqual(riskyFiles([".claude/skills/graphify/SKILL.md"]), [".claude/skills/graphify/SKILL.md"]);
+assert.deepEqual(riskyFiles([".claude/workflows/truthful-review-states.test.mjs"]), [".claude/workflows/truthful-review-states.test.mjs"]);
+assert.deepEqual(riskyFiles([".codex/sync-from-claude.ps1"]), [".codex/sync-from-claude.ps1"]);
+assert.deepEqual(riskyFiles([".codex/config.toml"]), [".codex/config.toml"]);
+assert.deepEqual(riskyFiles([".codex/hooks.json"]), [".codex/hooks.json"]);
+assert.deepEqual(riskyFiles([".claude/schema-registry.json"]), [".claude/schema-registry.json"]);
+assert.deepEqual(riskyFiles([".claude/caller-graph.json"]), [".claude/caller-graph.json"]);
+assert.deepEqual(riskyFiles(["scripts/agent-manifest-parity.mjs"]), ["scripts/agent-manifest-parity.mjs"]);
+assert.deepEqual(riskyFiles(["scripts/sync-agent-workflows.mjs"]), ["scripts/sync-agent-workflows.mjs"]);
 assert.deepEqual(riskyFiles(["scripts/overnight-codex-gate.mjs"]), ["scripts/overnight-codex-gate.mjs"]);
+// PR #605 CodeRabbit F3, resolved by WIDENING (2026-09-06): the settings globs and the shell regex
+// both cross "/", so a nested check/validate/verify script must be risky here too. This case
+// FAILED against the old `[^/]+$` form — that is the backwards proof.
+assert.deepEqual(riskyFiles(["scripts/check-x/y.txt"]), ["scripts/check-x/y.txt"]);
+assert.deepEqual(riskyFiles(["scripts/verify-deps/helpers/index.mjs"]), ["scripts/verify-deps/helpers/index.mjs"]);
+assert.deepEqual(riskyFiles(["scripts/validate-schema/run.mjs"]), ["scripts/validate-schema/run.mjs"]);
+// Near-miss controls: no hyphen, or a different prefix, stay non-risky by path.
+assert.deepEqual(riskyFiles(["scripts/checkfoo/nested.txt"]), []);
+assert.deepEqual(riskyFiles(["scripts/zzz-probe/nested.txt"]), []);
 assert.deepEqual(
   riskyFiles(["package.json"]),
   ["package.json"],
@@ -309,6 +334,18 @@ assert.deepEqual(
 // de-registers a guard by editing only these must still require the verdict.
 assert.deepEqual(riskyFiles([".claude/settings.json"]), [".claude/settings.json"]);
 assert.deepEqual(riskyFiles([".codex/hooks.json"]), [".codex/hooks.json"]);
+// PR #605: these editable surfaces must require review regardless of content.
+for (const configPath of [
+  ".coderabbit.yaml",
+  ".codex/config.toml",
+  ".claude/settings.local.json",
+  "scripts/check-agent-guidance.mjs",
+  "scripts/validate-example.ps1",
+  "scripts/verify-example.sh",
+]) {
+  assert.deepEqual(riskyFiles([configPath]), [configPath]);
+}
+assert.deepEqual(riskyFiles(["docs/verify-example.md", "scripts/example.mjs"]), []);
 assert.deepEqual(
   riskyFiles([
     "src/pages/Home.tsx",

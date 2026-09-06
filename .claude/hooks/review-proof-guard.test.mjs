@@ -14,6 +14,17 @@ function run(payload) {
   });
 }
 
+// PR #605 CodeRabbit F4 (2026-09-06): an allow is "silent AND exited 0". Before this, 54 lines
+// in this file asserted only `.stdout === ""`, so a hook that crashed (empty stdout, non-zero
+// exit) satisfied every one of them — "allowed" and "died" were the same observation, the same
+// species as the 2026-07-28 incident where 30 Windows guards silently failed open.
+function allowed(payload) {
+  const label = `${payload.tool_name} ${JSON.stringify(payload.tool_input).slice(0, 90)}`;
+  const result = run(payload);
+  assert.equal(result.status, 0, `hook should exit 0 on an allowed call: ${label} ${result.stderr || ""}`);
+  assert.equal(result.stdout, "", `must stay silent on an allowed call: ${label}`);
+}
+
 for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/session-state/claude-review-push.json", content: "{}" } },
   { tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\codex-review-abc.json" } },
@@ -194,15 +205,36 @@ for (const payload of [
   assert.match(result.stdout, /"permissionDecision":"deny"/);
 }
 
-assert.equal(run({ tool_name: "Write", tool_input: { file_path: "docs/review.md", content: "ok" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).stdout, "");
+allowed({ tool_name: "Write", tool_input: { file_path: "docs/review.md", content: "ok" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/run-claude-review.mjs --scope base-main" } });
+// Running the proof minter and READING a charter stay allowed; only writes are gated.
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/write-apply-proofs.mjs --migration supabase/migrations/20260905_x.sql" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cat .claude/agents/rls-security-reviewer.md" } });
+allowed({ tool_name: "Bash", tool_input: { command: "grep -n verdict scripts/write-apply-proofs-lib.mjs" } });
+allowed({ tool_name: "Read", tool_input: { file_path: ".claude/agents/rls-security-reviewer.md" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cat .claude/launch.json" } });
+allowed({ tool_name: "Read", tool_input: { file_path: ".claude/launch.json" } });
+// protected-surface-parity (PR #605 round 12): reads, the generators, and npm stay silent.
+allowed({ tool_name: "Bash", tool_input: { command: "cat package.json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "jq .scripts package.json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm run typecheck" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm install left-pad" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/regenerate-schema-registry.mjs --from-introspection /tmp/introspection.json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/generate-caller-graph.mjs --live-json /tmp/live.json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cat .claude/schema-registry.json" } });
+// Round thirteen: reads of the newly protected prose and orchestration files stay silent.
+allowed({ tool_name: "Bash", tool_input: { command: "cat .claude/commands/ship.md" } });
+allowed({ tool_name: "Bash", tool_input: { command: "grep -rn verdict .claude/workflows" } });
+allowed({ tool_name: "Bash", tool_input: { command: "ls .claude/skills" } });
+allowed({ tool_name: "Read", tool_input: { file_path: ".codex/sync-from-claude.ps1" } });
+allowed({ tool_name: "Read", tool_input: { file_path: ".claude/caller-graph.json" } });
 // 2026-08-18 false-positive class: a cd to an UNRELATED literal directory plus a
 // read-only mention of the state dir must be allowed — only the cd TARGET matters.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "C:\\CRX_Manager\\.claude\\worktrees\\skills-audit-x" && wc -l src/app.ts; ls .claude/session-state 2>/dev/null' } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd /c/repo && cat .claude/session-state/README.md" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude/hooks && node review-proof-guard.test.mjs" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: 'cd "C:\\CRX_Manager\\.claude\\worktrees\\skills-audit-x" && wc -l src/app.ts; ls .claude/session-state 2>/dev/null' } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd /c/repo && cat .claude/session-state/README.md" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd .claude/hooks && node review-proof-guard.test.mjs" } });
 // Unresolvable target WITHOUT any state-dir mention is fine.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "$HOME/projects" && ls' } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: 'cd "$HOME/projects" && ls' } });
 // Option tokens before an UNRELATED literal target must not re-trigger the
 // old "cd anywhere + state-dir mention" false positive.
 const optionAllow = run({ tool_name: "Bash", tool_input: { command: "cd -- /c/repo && ls .claude/session-state 2>/dev/null" } });
@@ -210,58 +242,58 @@ assert.equal(optionAllow.status, 0);
 assert.equal(optionAllow.stdout, "");
 // Multi-line commands whose cds all target innocent directories stay allowed —
 // the newline fix must not turn every multi-line script into a false positive.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd /c/repo\nnpm run test\nls .claude/session-state" } }).stdout, "");
-assert.equal(run({ tool_name: "PowerShell", tool_input: { command: "Push-Location C:\\repo\nGet-ChildItem" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "cd /c/repo\nnpm run test\nls .claude/session-state" } });
+allowed({ tool_name: "PowerShell", tool_input: { command: "Push-Location C:\\repo\nGet-ChildItem" } });
 // Round 4 non-regressions: `sl` must not swallow `sleep`; the sanctioned
 // removal script is the allowed path and never names the ledger file; a
 // destructive verb WITHOUT any state-dir mention stays allowed.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "sleep 5 && ls .claude/session-state" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --name stale_probe" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --list" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules && npm install" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "sleep 5 && ls .claude/session-state" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --name stale_probe" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --list" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules && npm install" } });
 // Round 5 non-regressions (F4/F5/F6): the deglue pass must not split a verb out
 // of an unrelated word; an empty location target WITHOUT a state-dir mention is
 // fine; and a destructive verb on a `.claude`-PREFIXED but distinct path
 // (`.claude-cache`, `.clauderc`) must stay allowed — only bare `.claude` counts.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "scandir.parse('.claude/session-state')" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd && ls /tmp" } }).stdout, "");
-assert.equal(run({ tool_name: "PowerShell", tool_input: { command: "Get-Content foo.json | sl" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf .claude-cache && rm -rf build/.clauderc" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "scandir.parse('.claude/session-state')" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd && ls /tmp" } });
+allowed({ tool_name: "PowerShell", tool_input: { command: "Get-Content foo.json | sl" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rm -rf .claude-cache && rm -rf build/.clauderc" } });
 // Round 6 non-regressions: the new backslash-dropped and quote-stripped views
 // must not manufacture a false `.claude` component or proof basename. A
 // destructive verb on a `.claude`-PREFIXED-but-distinct path stays allowed even
 // after the `\` is dropped, and a find-delete on an unrelated `.claudex` glob is
 // fine — only bare `.claude` as a whole component with a delete/exec counts.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf build\\.clauderc-cache" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "find src -name '*.claudex' -delete" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "rm -rf build\\.clauderc-cache" } });
+allowed({ tool_name: "Bash", tool_input: { command: "find src -name '*.claudex' -delete" } });
 // Round 7 non-regressions: the component-aware / glob-fail-closed / new-verb net
 // must not over-match. A glob with NO literal prefix (`*.js`), a destructive verb
 // on an unrelated path, and `git clean` / `rsync --delete` / `truncate` that name
 // no protected component all stay allowed. Only a glob whose LITERAL prefix could
 // expand to `.claude` / `session-state` / the ledger — or a redirect INTO the
 // state dir — is denied.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm dist/*.js" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules/.cache" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "echo hi > /tmp/out" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "echo x > .claude-notes.txt" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "git clean -fdx dist" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rsync -a --delete /tmp/a/ /tmp/b/" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "truncate -s0 /tmp/log" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "rm dist/*.js" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules/.cache" } });
+allowed({ tool_name: "Bash", tool_input: { command: "echo hi > /tmp/out" } });
+allowed({ tool_name: "Bash", tool_input: { command: "echo x > .claude-notes.txt" } });
+allowed({ tool_name: "Bash", tool_input: { command: "git clean -fdx dist" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rsync -a --delete /tmp/a/ /tmp/b/" } });
+allowed({ tool_name: "Bash", tool_input: { command: "truncate -s0 /tmp/log" } });
 // The unresolvable-target skeleton check must not over-match: a `$VAR` target whose
 // literal parts are NOT protected components stays allowed, and a `.claude`-PREFIXED
 // but distinct component (`.claude-cache`) stays allowed even unresolved.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd $HOME/session-state-notes && ls" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude-cache/$sub && ls" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "cd $HOME/session-state-notes && ls" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd .claude-cache/$sub && ls" } });
 // Round 8 non-regressions: the dotted-lead glob floor must not over-block an
 // ordinary delete whose glob lead is a bare `s`/`a` (a prefix of `session-state`
 // / `applied-source-ledger.json` but too generic to be a real target of them),
 // and the MCP directory-level deny must still allow a legit hook/settings edit
 // or a hook-file move that never enters `.claude/session-state`.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm s*.o" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm a*.log" } }).stdout, "");
-assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/review-proof-guard.mjs", content: "// edit" } }).stdout, "");
-assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/settings.json", content: "{}" } }).stdout, "");
-assert.equal(run({ tool_name: "Edit", tool_input: { file_path: ".claude/hooks/stop-wrap.mjs" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "rm s*.o" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rm a*.log" } });
+allowed({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/review-proof-guard.mjs", content: "// edit" } });
+allowed({ tool_name: "Write", tool_input: { file_path: ".claude/settings.json", content: "{}" } });
+allowed({ tool_name: "Edit", tool_input: { file_path: ".claude/hooks/stop-wrap.mjs" } });
 // DELIBERATELY REVERSED 2026-09-01. This line used to assert that an MCP move of
 // a hook file was ALLOWED — true when `guarded-surface-lock` existed to catch it.
 // With the lock deleted, that is exactly the "silently rewrite a guard, then run
@@ -276,9 +308,9 @@ assert.match(
 // Ack valve (stop-wrap-ack.json): the ONE session-state basename stop-wrap.mjs
 // tells the agent to write to acknowledge loose ends — must be ALLOWED again
 // (the round-8 whole-dir deny had broken this designed carve-out).
-assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/session-state/stop-wrap-ack.json", content: '{"signature":"x"}' } }).stdout, "");
-assert.equal(run({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\stop-wrap-ack.json" } }).stdout, "");
-assert.equal(run({ tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } }).stdout, "");
+allowed({ tool_name: "Write", tool_input: { file_path: ".claude/session-state/stop-wrap-ack.json", content: '{"signature":"x"}' } });
+allowed({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\stop-wrap-ack.json" } });
+allowed({ tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } });
 
 // ── Worktree-path denials: a tripwire for any future carve-out ──────────────
 // Agent worktrees live at <repo>/.claude/worktrees/<name>/, so every file in one
@@ -501,8 +533,47 @@ for (const command of [
   "cp /tmp/evil scripts/check-ledger-update.mjs",
   "echo x > scripts/validate-sql.mjs",
   "cp /tmp/evil scripts/verify-deps.mjs",
+  // PR #605 F3 (widen): nested check-script paths deny through the shell too.
+  "cp /tmp/evil scripts/check-x/y.txt",
+  "printf x > scripts/validate-schema/run.mjs",
   "rm -f scripts/agent-manifest-parity.mjs",
   "cp /tmp/evil scripts/sync-agent-workflows.mjs",
+  // PR #605 (gpt-5.6-sol HIGH on 02b342610): the migration-proof minter's INPUTS.
+  // write-apply-proofs.mjs reads each .claude/agents/<reviewer>.md verbatim and
+  // runs it as a machine-verdict review; a weakened charter or minter mints a
+  // clean proof for a LIVE apply before any merge-time review sees the edit.
+  // `Set-Content` to all three was probe-confirmed ALLOW before this fix.
+  "Set-Content .claude/agents/rls-security-reviewer.md",
+  "cp /tmp/evil .claude/agents/migration-drift-reviewer.md",
+  "echo x > .claude/agents/rls-security-reviewer.md",
+  "sed -i s/BLOCKERS/CLEAN/ .claude/agents/compliance-reviewer.md",
+  "Set-Content scripts/write-apply-proofs.mjs",
+  "cp /tmp/evil scripts/write-apply-proofs.mjs",
+  "Set-Content scripts/write-apply-proofs-lib.mjs",
+  "tee scripts/write-apply-proofs-lib.mjs",
+  "cp /tmp/evil .claude//agents/rls-security-reviewer.md",
+  "cp /tmp/evil .claude/commands/../agents/rls-security-reviewer.md",
+  // GitHub Codex P1 on 8179ae989: preview_start runs the command .claude/launch.json names.
+  "Set-Content .claude/launch.json",
+  "echo x > .claude/launch.json",
+  "cp /tmp/evil .claude/launch.json",
+  "sed -i s/npm/curl/ .claude/launch.json",
+  "cp /tmp/evil .claude/commands/../launch.json",
+  // protected-surface-parity (PR #605 round 12): gate inputs and the scripts manifest.
+  // Round thirteen: commands/skills/workflows reach CI; .codex is matched by shape.
+  "echo x > .claude/commands/ship.md",
+  "cp /tmp/evil .claude/skills/graphify/SKILL.md",
+  "Set-Content .claude/workflows/truthful-review-states.test.mjs",
+  "sed -i s/x/y/ .claude/workflows/migration-review.js",
+  "tee .codex/sync-from-claude.ps1",
+  "cp /tmp/evil .codex/sync-from-claude.ps1",
+  "Set-Content .claude/schema-registry.json",
+  "cp /tmp/evil .claude/caller-graph.json",
+  "sed -i s/x/y/ package.json",
+  "cp /tmp/evil package.json",
+  "echo x > package.json",
+  "tee package.json",
+  "Set-Content ./package.json",
   // SEVENTH gpt-5.6-sol round, both P1 and both reproduced by the reviewer.
   //
   // (a) `rg --pre CMD` runs CMD on every input path, so an allowlisted READER
@@ -608,6 +679,22 @@ for (const command of [
 // must deny too — Codex listed these alongside the shell bypasses.
 for (const payload of [
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".husky/pre-push" } },
+  // PR #605 (gpt-5.6-sol HIGH on 02b342610): proof-minter inputs through a path field.
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/agents/rls-security-reviewer.md" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/agents/migration-drift-reviewer.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/write-apply-proofs.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/write-apply-proofs-lib.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/../agents/rls-security-reviewer.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/launch.json" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/launch.json" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/ship.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/skills/graphify/SKILL.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/workflows/truthful-review-states.test.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".codex/sync-from-claude.ps1" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/schema-registry.json" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/caller-graph.json" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "package.json" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: "package.json" } },
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/hooks/sql-safety.mjs" } },
   { tool_name: "mcp__filesystem__edit_file", tool_input: { path: ".codex/hooks.json" } },
   { tool_name: "apply_patch", tool_input: { patch: "*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n" } },
@@ -621,10 +708,17 @@ for (const payload of [
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".github//workflows/ci.yml" } },
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".husky//pre-push" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude\\\\hooks\\sql-safety.mjs" } },
+  // PR #605 CodeRabbit F3, resolved by WIDENING: nested check/validate/verify script paths deny
+  // through a path field, matching the settings globs (measured to cross "/") and the shell regex.
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/check-x/y.txt" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: "scripts/verify-deps/helpers/index.mjs" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
   assert.match(result.stdout, /"permissionDecision":"deny"/, `path-field writer must deny: ${payload.tool_name}`);
+  assert.match(result.stdout, /Use native Edit\/Write/);
+  assert.match(result.stdout, /exact-SHA independent review before merge/);
+  assert.doesNotMatch(result.stdout, /ask.*tier/);
 }
 
 // Read-only built-ins must be allowed on protected paths — this guard's own
@@ -641,15 +735,15 @@ for (const payload of [
 }
 
 // Native Write/Edit are deliberately NOT denied here — there is no unlock any
-// more, so denying them would permanently strand hook maintenance. The `ask` tier
-// gates them instead. Pinned so the exemption stays a recorded choice.
+// more, so denying them would permanently strand hook maintenance. Independent
+// review gates delivery instead. Pinned so the exemption stays a recorded choice.
 for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/hooks/sql-safety.mjs", content: "x" } },
   { tool_name: "Edit", tool_input: { file_path: ".husky/pre-push" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "", `native editor stays with the ask tier: ${payload.tool_name}`);
+  assert.equal(result.stdout, "", `native editor remains allowed: ${payload.tool_name}`);
 }
 
 // KNOWN OVER-BLOCK, pinned deliberately rather than papered over. A dotted
@@ -684,6 +778,6 @@ for (const payload of [
 // without ever exercising it, and would have stayed green if the workaround broke.
 // The pattern below is the real thing: quoted, bracket-classed, and free of the
 // `|` that splits the segment.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } });
 
 console.log("OK - review proof guard checks passed.");

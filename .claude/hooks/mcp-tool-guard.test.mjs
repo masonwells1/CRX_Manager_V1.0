@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -163,4 +163,231 @@ ok(isDeny(r), "moving the supabase DIRECTORY (parent of migrations) is denied");
 r = runHook({ tool_name: "mcp__Desktop_Commander__move_file", tool_input: { source: "docs", destination: "docs-old" } });
 eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
 
+// ── 2026-09-05 (GitHub Codex P1 on PR #605): Supabase leaves fail CLOSED ──────
+// Under Auto mode an unlisted tool reaches the classifier, so an unknown or
+// renamed Supabase mutation must be denied by the guard, not left to chance.
+r = runHook({ tool_name: "mcp__supabase__future_write_tool", tool_input: {} });
+ok(isDeny(r), "unknown Supabase leaf (supabase server) is denied");
+r = runHook({ tool_name: "mcp__claude_ai_Supabase__delete_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "unknown Supabase leaf (claude_ai_Supabase server) is denied");
+r = runHook({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__future_write_tool", tool_input: {} });
+ok(isDeny(r), "unknown Supabase leaf (UUID connector) is denied");
+r = runHook({ tool_name: "mcp__Supabase__pause_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "known lifecycle mutation (pause_project) is denied by the guard too");
+r = runHook({ tool_name: "mcp__Supabase__list_tables", tool_input: { project_id: "x" } });
+eq(r.stdout.trim(), "", "read-only Supabase leaf (list_tables) is silent (allowed)");
+r = runHook({ tool_name: "mcp__supabase__Search_Docs", tool_input: { graphql_query: "{}" } });
+eq(r.stdout.trim(), "", "read-only leaf matches case-insensitively");
+r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "select 1" } });
+eq(r.stdout.trim(), "", "execute_sql is left to the live-data guards (silent here)");
+r = runHook({ tool_name: "mcp__supabase__apply_migration", tool_input: {} });
+eq(r.stdout.trim(), "", "apply_migration is left to migration-apply-guard (silent here)");
+r = runHook({ tool_name: "mcp__claude_ai_Supabase__deploy_edge_function", tool_input: {} });
+eq(r.stdout.trim(), "", "deploy_edge_function is left to the ask tier (silent here)");
+r = runHook({ tool_name: "mcp__github__future_write_tool", tool_input: {} });
+eq(r.stdout.trim(), "", "non-Supabase server with an unknown leaf is not matched by the Supabase rule");
+
+// ── 2026-09-05 (GitHub Codex P1, PR #605 head f9bd7e4a0): unregistered UUID ──
+// The Supabase connector UUID changes on reinstall. Sensitive leaves on ANY
+// UUID-shaped server are denied until that UUID is registered.
+const ALT_UUID = "mcp__0f1e2d3c-4b5a-4c6d-8e7f-a0b1c2d3e4f5__";
+r = runHook({ tool_name: ALT_UUID + "pause_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "pause_project on an unregistered connector UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "deploy_edge_function", tool_input: { name: "send-email" } });
+ok(isDeny(r), "deploy_edge_function on an unregistered connector UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "apply_migration", tool_input: {} });
+ok(isDeny(r), "apply_migration on an unregistered connector UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "Execute_SQL", tool_input: { query: "select 1" } });
+ok(isDeny(r), "execute_sql on an unregistered connector UUID is denied (case-insensitive)");
+r = runHook({ tool_name: ALT_UUID + "list_projects", tool_input: {} });
+eq(r.stdout.trim(), "", "Supabase read-only leaf on an unregistered UUID passes through (harmless on any connector)");
+r = runHook({ tool_name: ALT_UUID + "get_event", tool_input: { id: "1" } });
+eq(r.stdout.trim(), "", "read-shaped leaf (get_) on an unregistered UUID passes through");
+r = runHook({ tool_name: ALT_UUID + "search_files", tool_input: { q: "x" } });
+eq(r.stdout.trim(), "", "read-shaped leaf (search_) on an unregistered UUID passes through");
+// Codex probe 2026-09-05 (PR #605 head c3e2b3fd7): unknown or renamed mutations on a
+// reinstalled connector must NOT fall through to the classifier.
+r = runHook({ tool_name: ALT_UUID + "delete_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "unknown mutation (delete_project) on an unregistered UUID is denied");
+ok(r.stdout.includes("exact entry for connector UUID"), "denial names the missing exact settings entry");
+r = runHook({ tool_name: ALT_UUID + "future_write_tool", tool_input: {} });
+ok(isDeny(r), "never-seen leaf (future_write_tool) on an unregistered UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "Create_Event", tool_input: {} });
+ok(isDeny(r), "non-read leaf in mixed case on an unregistered UUID is denied");
+r = runHook({ tool_name: ALT_UUID + "import-claude-design-from-url", tool_input: {} });
+ok(isDeny(r), "hyphenated non-read leaf on an unregistered UUID is denied (regex accepts hyphens)");
+// Registration is PER TOOL (Codex P1 on 68c1c32f0): one listed leaf never settles the
+// rest of the server. The Vercel UUID has an exact `deploy_to_vercel` entry in
+// .claude/settings.json; `unpause_project` has none and is not read-shaped.
+const VERCEL_UUID = "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__";
+r = runHook({ tool_name: VERCEL_UUID + "deploy_to_vercel", tool_input: {} });
+eq(r.stdout.trim(), "", "deploy_to_vercel on the Vercel UUID has an exact settings entry and is left to its ask tier");
+r = runHook({ tool_name: VERCEL_UUID + "unpause_project", tool_input: { project_id: "x" } });
+ok(isDeny(r), "unpause_project on the Vercel UUID has no exact entry and is denied (per-tool registration)");
+r = runHook({ tool_name: VERCEL_UUID + "list_deployments", tool_input: {} });
+eq(r.stdout.trim(), "", "read-shaped leaf on the Vercel UUID passes");
+
+// Codex probe on 68c1c32f0: a reinstalled Supabase connector with ONLY list_projects
+// registered must still have its mutations denied. Fixture settings via CLAUDE_PROJECT_DIR.
+function withProjectSettings(entries, fn) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mcp-tool-guard-registry-"));
+  try {
+    mkdirSync(path.join(dir, ".claude"));
+    writeFileSync(path.join(dir, ".claude", "settings.json"), JSON.stringify({ permissions: entries }));
+    fn(dir);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+const PARTIAL_UUID = "mcp__7a7a7a7a-1111-4222-8333-444444444444__";
+withProjectSettings({ allow: [PARTIAL_UUID + "list_projects"] }, (dir) => {
+  r = runHook({ tool_name: PARTIAL_UUID + "list_projects", tool_input: {} }, dir);
+  eq(r.stdout.trim(), "", "the one exactly registered leaf passes");
+  r = runHook({ tool_name: PARTIAL_UUID + "delete_project", tool_input: {} }, dir);
+  ok(isDeny(r), "delete_project on a partially registered UUID is still denied");
+  r = runHook({ tool_name: PARTIAL_UUID + "future_write_tool", tool_input: {} }, dir);
+  ok(isDeny(r), "future_write_tool on a partially registered UUID is still denied");
+  r = runHook({ tool_name: PARTIAL_UUID + "deploy_edge_function", tool_input: {} }, dir);
+  ok(isDeny(r), "deploy_edge_function on a partially registered UUID is still denied");
+  ok(r.stdout.includes("Supabase live-action leaf"), "denial names the Supabase live-action leaf");
+});
+// A UUID whose settings entry names a leaf only Supabase has (list_tables) IS the Supabase
+// connector: the complete Supabase policy applies to every tool on it.
+const SB_UUID = "mcp__8b8b8b8b-1111-4222-8333-444444444444__";
+withProjectSettings({ allow: [SB_UUID + "list_tables"] }, (dir) => {
+  r = runHook({ tool_name: SB_UUID + "list_projects", tool_input: {} }, dir);
+  eq(r.stdout.trim(), "", "identified Supabase UUID: read-only allowlist leaf passes");
+  r = runHook({ tool_name: SB_UUID + "execute_sql", tool_input: { query: "select 1" } }, dir);
+  ok(isDeny(r), "identified Supabase UUID: execute_sql requires an exact ask/deny entry");
+  r = runHook({ tool_name: SB_UUID + "get_event", tool_input: {} }, dir);
+  ok(isDeny(r), "identified Supabase UUID: a read-shaped leaf NOT on the allowlist is denied (complete policy)");
+  ok(r.stdout.includes("identified as the Supabase connector"), "denial explains the identification");
+  r = runHook({ tool_name: SB_UUID + "delete_project", tool_input: {} }, dir);
+  ok(isDeny(r), "identified Supabase UUID: unknown mutation denied");
+  r = runHook({ tool_name: SB_UUID + "pause_project", tool_input: {} }, dir);
+  ok(isDeny(r), "identified Supabase UUID: lifecycle leaf denied");
+  // Codex P1 on af30d4c17: the ask entries name specific servers, so a deploy on an
+  // identified-but-unlisted UUID must NOT pass as "gated elsewhere".
+  r = runHook({ tool_name: SB_UUID + "deploy_edge_function", tool_input: { name: "send-email" } }, dir);
+  ok(isDeny(r), "identified Supabase UUID without an exact deploy entry: deploy_edge_function is denied");
+  ok(r.stdout.includes("deploy prompt"), "denial explains the missing ask entry");
+});
+withProjectSettings({ allow: [SB_UUID + "list_tables"], ask: [SB_UUID + "deploy_edge_function"] }, (dir) => {
+  r = runHook({ tool_name: SB_UUID + "deploy_edge_function", tool_input: { name: "send-email" } }, dir);
+  eq(r.stdout.trim(), "", "identified Supabase UUID WITH an exact ask entry: deploy_edge_function is left to the ask tier");
+});
+// Same rule on the named servers: the repo ask list names supabase/Supabase/claude_ai_Supabase,
+// so a differently named Supabase server has no prompt and must be denied.
+r = runHook({ tool_name: "mcp__supabase__deploy_edge_function", tool_input: { name: "x" } });
+eq(r.stdout.trim(), "", "deploy_edge_function on mcp__supabase__ (exact ask entry exists) is left to the ask tier");
+r = runHook({ tool_name: "mcp__claude_ai_Supabase__deploy_edge_function", tool_input: { name: "x" } });
+eq(r.stdout.trim(), "", "deploy_edge_function on mcp__claude_ai_Supabase__ (exact ask entry exists) is left to the ask tier");
+r = runHook({ tool_name: "mcp__other_supabase__deploy_edge_function", tool_input: { name: "x" } });
+ok(isDeny(r), "deploy_edge_function on a Supabase-named server with no ask entry is denied");
+// Codex P1 on 6de456ac5: an `allow` entry for a live-action leaf is the bypass itself and
+// must not count as registration; only `ask` or `deny` settles it.
+// GitHub Codex P2 on 3612eb3a1: list_branches / create_branch exist on the GitHub connector
+// too, so they must not fingerprint a UUID as Supabase. A GitHub-shaped UUID registered for
+// them keeps its ordinary read tools and its own ask-tier tools.
+const GH_UUID = "mcp__6d6d6d6d-1111-4222-8333-444444444444__";
+withProjectSettings({ allow: [GH_UUID + "list_branches", GH_UUID + "create_branch"], ask: [GH_UUID + "create_pull_request"] }, (dir) => {
+  for (const leaf of ["get_file_contents", "pull_request_read", "list_branches", "search_code"]) {
+    r = runHook({ tool_name: GH_UUID + leaf, tool_input: {} }, dir);
+    eq(r.stdout.trim(), "", `${leaf}: GitHub-shaped UUID registered for shared branch leaves is NOT treated as Supabase`);
+  }
+  r = runHook({ tool_name: GH_UUID + "create_pull_request", tool_input: {} }, dir);
+  eq(r.stdout.trim(), "", "create_pull_request with an exact ask entry is left to the ask tier, not denied as a Supabase mutation");
+  r = runHook({ tool_name: GH_UUID + "create_branch", tool_input: {} }, dir);
+  ok(isDeny(r), "create_branch registered only in allow on an unidentified UUID is still denied (allow line does not settle a mutation)");
+  r = runHook({ tool_name: GH_UUID + "delete_file", tool_input: {} }, dir);
+  ok(isDeny(r), "unlisted mutation on the GitHub-shaped UUID is still denied");
+});
+withProjectSettings({ allow: [GH_UUID + "list_branches", GH_UUID + "list_tables"] }, (dir) => {
+  r = runHook({ tool_name: GH_UUID + "get_file_contents", tool_input: {} }, dir);
+  ok(isDeny(r), "a genuinely Supabase-distinctive leaf (list_tables) still identifies the UUID: off-allowlist read denied");
+});
+const ALLOW_UUID = "mcp__9c9c9c9c-1111-4222-8333-444444444444__";
+withProjectSettings({ allow: [ALLOW_UUID + "pause_project", ALLOW_UUID + "create_project", ALLOW_UUID + "restore_project"] }, (dir) => {
+  for (const leaf of ["pause_project", "create_project", "restore_project"]) {
+    r = runHook({ tool_name: ALLOW_UUID + leaf, tool_input: { project_id: "x" } }, dir);
+    ok(isDeny(r), `${leaf} registered only in allow on an unidentified UUID is still denied`);
+  }
+  ok(r.stdout.includes("an `allow` line does not count"), "denial says an allow line does not count");
+  r = runHook({ tool_name: ALLOW_UUID + "sync_env", tool_input: {} }, dir);
+  ok(isDeny(r), "unrelated non-read leaf with no entry is denied");
+});
+withProjectSettings({ ask: [ALLOW_UUID + "pause_project"], deny: [ALLOW_UUID + "create_project"], allow: [ALLOW_UUID + "sync_env"] }, (dir) => {
+  r = runHook({ tool_name: ALLOW_UUID + "pause_project", tool_input: { project_id: "x" } }, dir);
+  eq(r.stdout.trim(), "", "pause_project with an exact ask entry is left to the ask tier");
+  r = runHook({ tool_name: ALLOW_UUID + "create_project", tool_input: {} }, dir);
+  eq(r.stdout.trim(), "", "create_project with an exact deny entry is left to the deny tier");
+  r = runHook({ tool_name: ALLOW_UUID + "sync_env", tool_input: {} }, dir);
+  ok(isDeny(r), "an unidentified mutation cannot be settled by an allow entry");
+});
+for (const leaf of ["delete_project", "sync_env", "future_write_tool"]) {
+  withProjectSettings({ allow: [ALLOW_UUID + leaf] }, (dir) => {
+    r = runHook({ tool_name: ALLOW_UUID + leaf, tool_input: {} }, dir);
+    ok(isDeny(r), `${leaf}: a saved allow entry cannot authorize an unidentified mutation`);
+  });
+  for (const tier of ["ask", "deny"]) {
+    withProjectSettings({ [tier]: [ALLOW_UUID + leaf] }, (dir) => {
+      r = runHook({ tool_name: ALLOW_UUID + leaf, tool_input: {} }, dir);
+      eq(r.stdout, "", `${leaf}: defer to the exact ${tier} permission`);
+    });
+  }
+}
+withProjectSettings({ allow: [SB_UUID + "list_tables", SB_UUID + "deploy_edge_function"] }, (dir) => {
+  r = runHook({ tool_name: SB_UUID + "deploy_edge_function", tool_input: { name: "x" } }, dir);
+  ok(isDeny(r), "identified Supabase UUID with deploy_edge_function only in allow: still denied");
+});
+// Kebab-case leaves on the NAMED Supabase servers hit the same fail-closed branch
+// (Codex P1 on 68c1c32f0).
+r = runHook({ tool_name: "mcp__supabase__future-write-tool", tool_input: {} });
+ok(isDeny(r), "hyphenated unknown leaf on mcp__supabase__ is denied");
+r = runHook({ tool_name: "mcp__claude_ai_Supabase__delete-project", tool_input: {} });
+ok(isDeny(r), "hyphenated unknown leaf on mcp__claude_ai_Supabase__ is denied");
+r = runHook({ tool_name: "mcp__Supabase__pause-project", tool_input: {} });
+ok(isDeny(r), "hyphenated lifecycle leaf on mcp__Supabase__ is denied");
+r = runHook({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function", tool_input: {} });
+eq(r.stdout.trim(), "", "deploy_edge_function on the REGISTERED UUID is still left to the ask tier");
+
+for (const server of ["supabase_prod", "my_supabase_connector"]) {
+  r = runHook({ tool_name: `mcp__${server}__pause_project`, tool_input: {} });
+  ok(isDeny(r), "suffix-qualified Supabase lifecycle action is denied");
+  r = runHook({ tool_name: `mcp__${server}__future_write_tool`, tool_input: {} });
+  ok(isDeny(r), "suffix-qualified Supabase unknown mutation is denied");
+  r = runHook({ tool_name: `mcp__${server}__list_tables`, tool_input: {} });
+  eq(r.stdout.trim(), "", "suffix-qualified Supabase reads still pass");
+  r = runHook({ tool_name: `mcp__${server}__execute_sql`, tool_input: { query: "select 1" } });
+  ok(isDeny(r), "renamed Supabase SQL requires exact approval registration");
+}
+withProjectSettings({ allow: [SB_UUID + "list_tables", SB_UUID + "execute_sql"] }, (dir) => {
+  r = runHook({ tool_name: SB_UUID + "execute_sql", tool_input: { query: "update public.profiles set role = 'admin'" } }, dir);
+  ok(isDeny(r), "replacement UUID SQL allow entry cannot authorize a profile write");
+});
+for (const tier of ["ask", "deny"]) {
+  withProjectSettings({ allow: [SB_UUID + "list_tables"], [tier]: [SB_UUID + "execute_sql"] }, (dir) => {
+    r = runHook({ tool_name: SB_UUID + "execute_sql", tool_input: { query: "select 1" } }, dir);
+    eq(r.stdout.trim(), "", `replacement UUID SQL defers to its explicit ${tier} rule`);
+  });
+}
+for (const prefix of [SB_UUID, "mcp__other_supabase__", "mcp__supabase_prod__"]) {
+  withProjectSettings({ allow: [prefix + "list_tables", prefix + "apply_migration"] }, (dir) => {
+    r = runHook({ tool_name: prefix + "apply_migration", tool_input: { name: "probe", query: "select 1" } }, dir);
+    ok(isDeny(r), "replacement/alias migration does not inherit authority from read or allow entries");
+  });
+  for (const tier of ["ask", "deny"]) {
+    withProjectSettings({ allow: [prefix + "list_tables"], [tier]: [prefix + "apply_migration"] }, (dir) => {
+      r = runHook({ tool_name: prefix + "apply_migration", tool_input: {} }, dir);
+      eq(r.stdout.trim(), "", `replacement/alias migration defers to its exact ${tier} rule`);
+    });
+  }
+}
+// Pin permission coverage to the guard's recognized filesystem mutator set.
+// Adding a new recognized mutator without a matching deny must fail this check.
+const hookSource = readFileSync(path.join(__dirname, "mcp-tool-guard.mjs"), "utf8");
+const mutatorAlternatives = hookSource.match(/^const DC_WRITE_RE = .*__\(([^)]+)\)/m);
+ok(mutatorAlternatives, "recognized filesystem mutator alternatives are discoverable");
+const permissionConfig = JSON.parse(readFileSync(path.join(__dirname, "../settings.json"), "utf8"));
+for (const leaf of mutatorAlternatives[1].split("|")) {
+  ok(permissionConfig.permissions.deny.includes(`mcp__Desktop_Commander__${leaf}`), `Desktop Commander ${leaf} is denied by settings`);
+}
 console.log(`mcp-tool-guard: ${pass} assertions passed`);
