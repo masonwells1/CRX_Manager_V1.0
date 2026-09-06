@@ -29,8 +29,14 @@ try {
     assistant("sub-response", [{ type: "tool_use", id: "sub-tool", name: "Read", input: { file_path: "fixture.txt" } }]),
     user([{ type: "tool_result", tool_use_id: "sub-tool", is_error: true, content: "REVIEW PROOF GUARD: fixture refusal" }]),
   ]);
-  const result = spawnSync(process.execPath, [script, "--root", root, "--start", "2026-09-04", "--end", "2026-09-05"], { encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr);
+  // A DIRECTORY named like a transcript under subagents/ must be skipped, not
+  // streamed: the main loop checked isDirectory() but the subagent loop only
+  // checked mtime, so createReadStream raised EISDIR and the report crashed
+  // (CodeRabbit review of #613 at 336ad30f0). Its mtime is "now", inside the
+  // pre-filter, so it reaches the reader on the old code.
+  mkdirSync(path.join(subagents, "folder-named-like-a-transcript.jsonl"));
+  const result = spawnSync(process.execPath, [script, "--root", root, "--start", "2026-09-04", "--end", "2026-09-05"], { encoding: "utf8", timeout: 60_000 });
+  assert.equal(result.status, 0, `the report must survive a directory named *.jsonl under subagents/: ${result.stderr}`);
   assert.match(result.stdout, /main sessions 1 \| subagent transcripts 1 \| human prompts 2 \| API calls 2 \| unique tool calls 1/);
   assert.match(result.stdout, /"review-proof":1/);
   console.log("claude-usage-report: parent prompts counted; subagent prompts excluded; subagent usage and denials retained");

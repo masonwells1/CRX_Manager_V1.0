@@ -31,7 +31,9 @@ eligibility. This change does presentation only.
   the second carries "LANDING POLICY: as stated above (unchanged)." instead of the full paragraph.
   A single reminder is unchanged. The Codex adapter invokes the same router, so both surfaces
   benefit.
-- `scripts/claude-usage-report.mjs` (new, read-only): the analyzer behind the audit, repaired per
+- `scripts/claude-usage-report.mjs` (new; read-only except for the explicit `--denials <path>`
+  export, which writes the refused tool calls to a scratch path outside any git checkout and
+  refuses an existing file): the analyzer behind the audit, repaired per
   the Astra review — events filtered by their own timestamp inside an explicit window, one usage
   record per API response, tool calls deduplicated by id, synthetic records excluded, human prompts
   separated from machine envelopes, parse diagnostics printed. It reads local transcripts only and

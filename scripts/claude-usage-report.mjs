@@ -77,6 +77,7 @@ for (const dir of fs.readdirSync(root)) {
         if (!g.endsWith(".jsonl")) continue;
         const subFp = path.join(sub, g);
         let subSt; try { subSt = fs.statSync(subFp); } catch { continue; }
+        if (!subSt.isFile()) continue; // a directory named like a transcript would reach createReadStream (CodeRabbit, PR #613)
         if (subSt.mtimeMs < start) continue; // same window pre-filter as the main transcripts (CodeRabbit, PR #613)
         files.push({ fp: subFp, dir, sub: true });
       }
