@@ -19,8 +19,9 @@ second correct copy would only reset the drift clock. `CURRENT_STATE.md` already
 current high-water; its nearby 998-row provenance note now explicitly identifies that number as the
 superseded afternoon capture before #606, rather than calling it the same read as the current
 999-row evening capture. It also records precisely that five of the six commission candidates had
-fallen below the new high-water before the entire ordered set was restamped together. No migration,
-guard, script, or code file changed.
+fallen below the new high-water before the entire ordered set was restamped together; the matching
+candidate summary in `KNOWN_ISSUES.md` uses the same precise wording. No migration, guard, script,
+or code file changed.
 
 **Proof observed.** `npm run check:docs` passes with the `Last verified:` stamps and freshness rows
 green for both manuals. The focused documentation diff contains this entry,
