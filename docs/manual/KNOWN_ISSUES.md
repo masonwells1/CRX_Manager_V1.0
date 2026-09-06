@@ -1032,8 +1032,11 @@ assuming any screen is covered.
 `OrderDetail`, `DeliveryDetail`, `InvoiceDetail`, `FieldApplicationInvoice`, `Returns`,
 `PrepaymentManagerPanel`, `MonthEndClose`. Nine keys are also given a record scope via the hook's
 `intentScope` / `getKeyFor`, because detail pages do NOT remount on a route-id change (every
-`<x>/:id` route in `src/App.tsx` is rendered without a `key` prop) and a retained unscoped key
-would otherwise replay record A's receipt against record B.
+`<x>/:id` route in `src/App.tsx` **except `jobs/:id`**, which is keyed by id via
+`JobDetailRoute`, is rendered without a `key` prop) and a retained unscoped key would otherwise
+replay record A's receipt against record B. The `jobs/:id` exception costs the argument nothing:
+none of the nine record-scoped keys lives on `JobDetail`, and every page they do live on is still
+rendered unkeyed.
 
 **The bar a site had to clear, tightened twice by review.** It is not enough that the key names the
 right record: the scope must bind **everything a retry can vary**. `check_idempotency` matches on
