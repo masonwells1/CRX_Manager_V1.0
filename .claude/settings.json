@@ -133,7 +133,6 @@
       "mcp__Claude_Browser__tabs_create",
       "mcp__Claude_Browser__tabs_select",
       "mcp__Claude_Browser__tabs_close",
-      "mcp__Claude_Browser__preview_start",
       "mcp__Claude_Browser__preview_list",
       "mcp__Claude_Browser__preview_logs",
       "mcp__Claude_Browser__preview_stop",
@@ -285,9 +284,10 @@
       "mcp__Claude_Browser__form_input",
       "mcp__Claude_Browser__javascript_tool",
       "mcp__Claude_Browser__browser_batch",
-      "mcp__Claude_Browser__read_network_requests"
+      "mcp__Claude_Browser__preview_start"
     ],
     "deny": [
+      "mcp__Claude_Browser__read_network_requests",
       "Bash(git push --force:*)",
       "Bash(git push --force-with-lease:*)",
       "Bash(git push -f:*)",

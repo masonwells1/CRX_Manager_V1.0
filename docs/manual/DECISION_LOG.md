@@ -39,7 +39,11 @@ it was a route around every Bash hook. `preview_start` itself stays allowed. A f
 (`gpt-5.6-sol` HIGH on `d6302e28b`) moved `mcp__Claude_Browser__read_network_requests` from `allow`
 to `ask`: CRX page traffic carries Supabase bearer tokens and signed customer-document links, and
 nothing proves the connector redacts them, so network capture in the preview browser prompts; the
-other thirteen read-only browser tools stay allowed.
+other thirteen read-only browser tools stay allowed. A sixth round (GitHub Codex P1s on `c82d29308`)
+moved `preview_start` to `ask` — `git switch` to a branch carrying a modified `.claude/launch.json`
+defeats edit protection, so starting a configured preview prompts — and moved
+`read_network_requests` to `deny`: an approved capture still puts bearer tokens and signed URLs into
+model context, so it stays blocked (main's effective behaviour) until redaction is proven.
 
 **Mode correction after review:** inheriting Auto left new named connector mutations
 eligible for classifier approval. `acceptEdits` keeps ordinary local edits automatic
