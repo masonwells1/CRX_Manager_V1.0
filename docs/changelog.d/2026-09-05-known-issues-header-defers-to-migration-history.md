@@ -1,4 +1,4 @@
-## 2026-09-05 — KNOWN_ISSUES.md stops restating the migration boundary; migration-history.md is the single source
+## 2026-09-05 — Manuals stop presenting conflicting migration-ledger captures
 
 **Why.** The renumber commit `6c7929797` on PR #592 refreshed the live-ledger capture at the top of
 `docs/reference/migration-history.md` (999 rows / 992 distinct names, effective high-water
@@ -16,11 +16,13 @@ or a `max(version)` at all. It points at the "THIS IS THE CURRENT BOUNDARY" capt
 reason, and keeps the reading-trap guidance (`version` vs `name`, `max(name)` garbage, bare-name
 rows synthesized to `<version>_<name>`). Pointing rather than restating was chosen deliberately: a
 second correct copy would only reset the drift clock. `CURRENT_STATE.md` already carries the
-current high-water and was not changed. No migration, guard, script, or code file changed.
+current high-water; its nearby 998-row provenance note now explicitly identifies that number as the
+superseded afternoon capture before #606, rather than calling it the same read as the current
+999-row evening capture. No migration, guard, script, or code file changed.
 
-**Proof observed.** `npm run check:docs` passes with the `Last verified:` stamp and freshness rows
-green for `KNOWN_ISSUES.md`. `git diff --stat` shows exactly two files: this entry and
-`docs/manual/KNOWN_ISSUES.md`.
+**Proof observed.** `npm run check:docs` passes with the `Last verified:` stamps and freshness rows
+green for both manuals. The focused documentation diff contains this entry,
+`docs/manual/KNOWN_ISSUES.md`, and `docs/manual/CURRENT_STATE.md`.
 
 **Not verified.** Nothing on live was re-read for this change; the boundary figures quoted above are
 the ones already recorded in `migration-history.md` by the earlier 2026-09-05 evening capture.
