@@ -12,6 +12,8 @@ import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult, rpcAuthErrorMessage } from '../../lib/db';
+import { sanitizeError } from '../../lib/errorSanitizer';
+import { isDefinitiveRpcRejection } from '../../lib/idempotency';
 import {
   parseShapefileBundle,
   parseShapefileZip,
@@ -49,7 +51,13 @@ import { fingerprintIntentPayload } from '../../lib/idempotency';
 interface BulkFieldImportProps {
   open: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  /**
+   * Refreshes the field list behind this modal. Resolving to FALSE means the refresh failed
+   * and the list on screen is stale; the results screen says so, because its advice is to look
+   * rows up in that list. Returning nothing is treated as success, so a caller that does not
+   * report either way keeps working.
+   */
+  onSuccess: () => boolean | void | Promise<boolean | void>;
 }
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -67,6 +75,54 @@ const STEP_LABELS = [
 
 const ACCEPTED_EXTENSIONS = ['.zip', '.shp', '.dbf', '.shx', '.prj', '.geojson', '.json', '.kml'];
 const MAX_SIZE = 25 * 1024 * 1024; // 25MB
+
+/**
+ * Whether a failed RPC on this screen PROVES PostgreSQL answered and rolled back, so nothing
+ * was written and the row is genuinely safe to re-import.
+ *
+ * Both `save_field` and `set_field_boundary` are independently transactional and COMMIT before
+ * their response comes back, so anything short of a positive refusal has to be treated as
+ * possibly-committed. Two things must therefore both hold:
+ *
+ * - The status is a 4xx. postgrest-js reports 0 when fetch itself failed and no response
+ *   arrived, and a gateway or proxy can answer 502 / 503 / 504 (or a 408 / 429 timeout) AFTER
+ *   the RPC reached PostgreSQL and committed. A PostgREST 5xx is swept in with those: it
+ *   usually does mean PostgreSQL raised and rolled back, but Supabase's edge can synthesise a
+ *   JSON error too and nothing on the client can tell the two apart.
+ * - The error is a positively identified PostgreSQL/PostgREST refusal, per the shared
+ *   `isDefinitiveRpcRejection()` — which already excludes the connection-class SQLSTATEs and
+ *   the PGRST0xx pool-level codes for exactly this reason. A non-blank code is NOT enough on
+ *   its own: transport libraries and proxies attach codes of their own.
+ *
+ * Everything else is an unknown outcome. The operator is told to check that row rather than
+ * that it is safe to retry, because a retry mints a fresh idempotency key and would create a
+ * second copy of something that may already exist.
+ */
+function rpcDefinitelyRolledBack(status: number | undefined, error: unknown): boolean {
+  return typeof status === 'number'
+    && status >= 400
+    && status < 500
+    && isDefinitiveRpcRejection(error);
+}
+
+/**
+ * A short, printable reason for a row whose outcome we never learned.
+ *
+ * A lost fetch gives a useful one-liner ("TypeError: Failed to fetch"), but a gateway answers
+ * with a whole HTML error page. Dumping that into the results list would bury the OUTCOME
+ * UNKNOWN instruction the operator actually has to act on, so tags are stripped and the text
+ * is clamped. The status is kept, because that is what tells support where it died.
+ */
+function clampReason(message: string): string {
+  const text = message.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+}
+
+function shortServerReason(status: number | undefined, message: string): string {
+  const clamped = clampReason(message);
+  const where = typeof status === 'number' && status > 0 ? `HTTP ${status}` : 'no response';
+  return clamped ? `${where}: ${clamped}` : where;
+}
 
 export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldImportProps) {
   const { toast } = useToast();
@@ -105,7 +161,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   const uploadInFlightRef = useRef(false);
 
   // Step 7: Results
-  const [results, setResults] = useState<{ success: number; failed: number; errors: string[]; warnings: string[] } | null>(null);
+  // `created` counts every row that reached the database, INCLUDING rows counted as failed
+  // because only their boundary failed. Re-importing one of those creates a duplicate, so the
+  // results screen needs it to tell the operator which rows are safe to retry.
+  const [results, setResults] = useState<{ success: number; failed: number; created: number; unknownOutcome: number; errors: string[]; warnings: string[] } | null>(null);
 
   // Fetch customers for step 4
   useEffect(() => {
@@ -415,10 +474,19 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
     let success = 0;
     let failed = 0;
+    // Every row whose save_field call committed, whether or not the rest of the row landed.
+    let created = 0;
+    // Rows whose save_field outcome we never learned — the response was lost after the
+    // request went out, so PostgreSQL may or may not have committed it. These must NOT be
+    // presented as safe to re-import.
+    let unknownOutcome = 0;
     const errors: string[] = [];
     const warnings: string[] = [];
 
     for (const [fieldIndex, pf] of validFields.entries()) {
+      // Once the request is sent the outcome is unknown until the server tells us
+      // otherwise, so this starts pessimistic the moment save_field is called.
+      let saveOutcome: 'not-sent' | 'committed' | 'rejected' | 'unknown' = 'not-sent';
       try {
         // Pre-validate the FULL multi-part acreage against the server's 0.1–5000 band BEFORE
         // creating the field. Otherwise an out-of-band import creates a field that
@@ -465,7 +533,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           pf.stated_acres ?? null,
         ])}`;
 
-        const { data: fieldId, error: saveError } = await supabase.rpc('save_field', {
+        saveOutcome = 'unknown';
+        const { data: fieldId, error: saveError, status: saveStatus } = await supabase.rpc('save_field', {
           p_field_id: (null as string | null) as string,
           p_field_payload: fieldPayload,
           p_billing_defaults: [],
@@ -474,32 +543,61 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         });
 
         if (saveError) {
+          // Only a response that proves PostgreSQL answered and rolled back makes this row safe
+          // to re-import; anything ambiguous is an unknown outcome. See the helper above.
+          saveOutcome = rpcDefinitelyRolledBack(saveStatus, saveError) ? 'rejected' : 'unknown';
           failed++;
-          errors.push(`"${pf.field_name}": ${rpcAuthErrorMessage(saveError) ?? saveError.message}`);
+          const reason = rpcAuthErrorMessage(saveError) ?? saveError.message;
+          // The row has to be identifiable in the list, not just in the counter above it:
+          // "re-import the rejected rows" is unusable advice if a lost response reads exactly
+          // like a rejection.
+          errors.push(saveOutcome === 'unknown'
+            ? `"${pf.field_name}": OUTCOME UNKNOWN — the server did not give a clear answer (${shortServerReason(saveStatus, reason)}). It may have been created; check the field list before re-importing this row.`
+            : `"${pf.field_name}": ${reason}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
+          saveOutcome = 'committed';
+          // save_field has COMMITTED. Count the row as created before anything else can fail, so
+          // a later boundary or override failure still reports the field as existing.
+          created++;
           // Persist the boundary via the server-authoritative acreage RPC — it measures the
           // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
           // legacy boundary/centroid in sync, and sets measured_acres (the billable default).
           let boundaryOk = false;
+          // set_field_boundary is independently transactional and commits before it answers, so
+          // once the request goes out whether the boundary landed is unknown until the server
+          // positively refuses it. Starting optimistic here would let the screen state an
+          // unverified database condition as fact — and then invite an admin to act on it.
+          let boundaryUnknown = true;
           try {
-            const { data: bData, error: bErr } = await supabase.rpc('set_field_boundary', {
+            const { data: bData, error: bErr, status: bStatus } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
               p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
               p_performed_by: profile.id,
               p_idempotency_key: setBoundaryIdem.getKeyFor(intentScope),
             });
-            if (bErr) throw bErr;
+            if (bErr) {
+              if (rpcDefinitelyRolledBack(bStatus, bErr)) boundaryUnknown = false;
+              throw bErr;
+            }
             assertRpcResult(bData, 'set_field_boundary');
             boundaryOk = true;
+            boundaryUnknown = false;
           } catch (geoError: unknown) {
             // Acreage was pre-validated above, so set_field_boundary rejecting here is a rare
             // residual (degenerate geometry / a DB error). The field exists with an in-band
             // client total_acres; count it as failed (an admin can remove it — a sales_rep
             // delete is RLS-blocked). A fully-atomic create_field_with_boundary RPC is the
             // documented follow-up that would also avoid this residual.
-            const msg = geoError instanceof Error ? geoError.message : String(geoError);
+            // Supabase rejections are PLAIN OBJECTS with .message, not Error instances, so
+            // String() rendered them as "[object Object]" — the operator saw no reason at all.
+            const msg = sanitizeError(geoError);
             failed++;
-            errors.push(`"${pf.field_name}": Field created but boundary measurement failed — ${msg}`);
+            // Only a positive refusal proves the boundary is missing. If the answer was lost or
+            // ambiguous the boundary may well be there, and saying otherwise could get a
+            // correctly imported field deleted.
+            errors.push(boundaryUnknown
+              ? `"${pf.field_name}": Field created, but we never learned whether its map boundary landed (${clampReason(msg)}). Check this field before changing or removing it.`
+              : `"${pf.field_name}": Field created but boundary measurement failed — ${msg}`);
           }
           if (boundaryOk) {
             // Bill on the FILE's stated acreage (owner choice 2026-06-23): set it as the billable
@@ -523,7 +621,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                   if (ovErr) throw ovErr;
                   assertRpcResult(ovData, 'set_field_override_acres');
                 } catch (ovError: unknown) {
-                  const msg = ovError instanceof Error ? ovError.message : String(ovError);
+                  const msg = sanitizeError(ovError);
                   warnings.push(`"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
                 }
               }
@@ -539,20 +637,52 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         }
       } catch (err: unknown) {
         failed++;
-        errors.push(`"${pf.field_name}": ${err instanceof Error ? err.message : String(err)}`);
+        const reason = sanitizeError(err);
+        // Still 'unknown' here means save_field was sent and threw before returning an id —
+        // same ambiguity as a lost response, so it gets the same label.
+        errors.push(saveOutcome === 'unknown'
+          ? `"${pf.field_name}": OUTCOME UNKNOWN — ${reason}. It may have been created; check the field list before re-importing this row.`
+          : `"${pf.field_name}": ${reason}`);
       }
+
+      // Still 'unknown' means save_field was sent and never told us what happened — either the
+      // response was lost, or it threw before the id came back. Either way the row cannot be
+      // called safe to re-import.
+      if (saveOutcome === 'unknown') unknownOutcome++;
 
       setUploadProgress((prev) => ({ ...prev, current: prev.current + 1 }));
     }
 
-    setResults({ success, failed, errors, warnings });
+    // The warning on the results screen tells the operator to look rows up in the field list
+    // behind this modal, so that list has to be current for everything that reached the
+    // database — or may have. Gating the refresh on `success` left it stale in exactly the
+    // cases the warning is about: the operator would check a pre-import list, not find the
+    // field, and re-import it — creating the duplicate this screen exists to prevent.
+    if (success > 0 || created > 0 || unknownOutcome > 0) {
+      // Two different failure shapes, and the common one does NOT throw: the parent's refresh
+      // handles its own RPC error and resolves false. Relying on a rejection alone would have
+      // left the operator reading a stale list while being told to trust it — which is the
+      // whole reason this refresh exists.
+      let refreshed: boolean | void = false;
+      let refreshReason = '';
+      try {
+        refreshed = await onSuccess();
+      } catch (refreshError: unknown) {
+        refreshReason = ` (${clampReason(sanitizeError(refreshError))})`;
+      }
+      if (refreshed === false) {
+        errors.push(`The field list behind this window could not be refreshed${refreshReason}. Reload the page before checking any row in this list.`);
+      }
+    }
+
+    setResults({ success, failed, created, unknownOutcome, errors, warnings });
     setStep(7);
     setUploading(false);
+    // main moved the parent refresh above (it now awaits onSuccess() for every row that
+    // reached the database, including unknown outcomes), so the old trailing onSuccess()
+    // call is gone. The in-flight latch still has to clear here or handleUpload/handleClose
+    // stay blocked for the life of the modal.
     uploadInFlightRef.current = false;
-
-    if (success > 0) {
-      onSuccess();
-    }
   };
 
   // ─── Navigation ─────────────────────────────────────────────────────
@@ -951,11 +1081,72 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               </p>
             </div>
 
+            {/* Re-importing the whole file duplicates every row that already reached the database.
+                A row counted as failed can still have created a field (save_field commits before
+                the boundary call), so `created` — not `success` — is what the operator must not
+                send again. Until an atomic create-field-with-boundary RPC exists, the server
+                cannot recognise the repeat, so this has to be said out loud.
+
+                `invalidCount` is in the condition because invalid rows are filtered out BEFORE the
+                import and never reach `failed`. A file whose good rows all import cleanly still
+                leaves the operator a reason to come back — the bad rows — and without this they
+                would be told nothing before re-uploading the whole file. */}
+            {(results.created > 0 || results.unknownOutcome > 0)
+              && (results.failed > 0 || invalidCount > 0) && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <p className="text-xs font-medium text-amber-700">
+                    Do not re-import this whole file
+                  </p>
+                </div>
+                {results.created > 0 && (
+                  <p className="text-xs text-amber-700">
+                    {results.created} field{results.created > 1 ? 's' : ''} from this file already
+                    exist{results.created > 1 ? '' : 's'} here. Importing the file again would
+                    create a second copy of each one.
+                    {results.failed > 0 && ' That includes every row below saying a field was created — the field is there even where the rest of that row did not finish.'}
+                  </p>
+                )}
+                {results.unknownOutcome > 0 && (
+                  <p className="text-xs text-amber-700 mt-1">
+                    {results.unknownOutcome} row{results.unknownOutcome > 1 ? 's' : ''} never came
+                    back with a clear answer, so we cannot tell whether
+                    {results.unknownOutcome > 1 ? ' they were' : ' it was'} created.
+                    {results.unknownOutcome > 1 ? ' They are' : ' It is'} marked &ldquo;OUTCOME
+                    UNKNOWN&rdquo; below. We reloaded the field list behind this window, but a write
+                    that was still going through may not be in it yet. Wait a moment, reload the
+                    page, and confirm{' '}
+                    {results.unknownOutcome > 1 ? 'those rows are' : 'that row is'} really absent
+                    before importing {results.unknownOutcome > 1 ? 'them' : 'it'} again.
+                  </p>
+                )}
+                {invalidCount > 0 && (
+                  <p className="text-xs text-amber-700 mt-1">
+                    {invalidCount} row{invalidCount > 1 ? 's' : ''} in this file
+                    {invalidCount > 1 ? ' were' : ' was'} skipped before the import and
+                    {invalidCount > 1 ? ' are' : ' is'} not listed below. Put
+                    {invalidCount > 1 ? ' those rows' : ' that row'} in a NEW file containing only
+                    {invalidCount > 1 ? ' them' : ' it'} — re-uploading this whole file would create
+                    a second copy of every field it already made.
+                  </p>
+                )}
+                {results.failed > 0 && (
+                  <p className="text-xs text-amber-700 mt-1">
+                    Re-import only the rows below that are neither marked &ldquo;OUTCOME
+                    UNKNOWN&rdquo; nor say a field was created. Look up any field the list mentions
+                    before asking an admin to change or remove it — a row can report a step as
+                    failed when the server simply never answered.
+                  </p>
+                )}
+              </div>
+            )}
+
             {results.errors.length > 0 && (
               <div className="p-3 bg-red-50 border border-red-100 rounded-lg max-h-32 overflow-y-auto">
                 <p className="text-xs font-medium text-secondary mb-1">Errors:</p>
                 {results.errors.map((err, i) => (
-                  <p key={i} className="text-xs text-secondary">{err}</p>
+                  <p key={i} className="text-xs text-secondary break-words">{err}</p>
                 ))}
               </div>
             )}
@@ -964,7 +1155,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               <div className="p-3 bg-amber-50 border border-amber-100 rounded-lg max-h-32 overflow-y-auto">
                 <p className="text-xs font-medium text-amber-700 mb-1">Imported, with notes:</p>
                 {results.warnings.map((w, i) => (
-                  <p key={i} className="text-xs text-amber-600">{w}</p>
+                  <p key={i} className="text-xs text-amber-600 break-words">{w}</p>
                 ))}
               </div>
             )}
