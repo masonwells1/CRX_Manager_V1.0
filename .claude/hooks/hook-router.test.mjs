@@ -59,6 +59,15 @@ for (const [prompt, marker] of promptCases) {
   eq(dedupeContextBlocks(["POLICY-ish", "POLICY"], [{ text: "POLICY", replacement: "P2" }]), ["POLICY-ish", "P2"], "a superstring counts as carrying the block (exact substring match)");
   eq(dedupeContextBlocks(["A", "B"], [{ text: "POLICY", replacement: "P2" }]), ["A", "B"], "contexts without the block are untouched");
   eq(dedupeContextBlocks(["A\n\nPOLICY", "B\n\nPOLICY"], []), ["A\n\nPOLICY", "B\n\nPOLICY"], "no blocks configured → no rewriting");
+  // A context in which nothing was replaced comes back byte-for-byte — leading
+  // and trailing whitespace and runs of blank lines included (CodeRabbit review
+  // of #613 at ebebfc34d: the first cut trimmed and collapsed every context).
+  const untouched = "  lead\n\n\n\nmiddle\n\n\ntrail  \n";
+  eq(dedupeContextBlocks([untouched], []), [untouched], "no blocks configured → whitespace preserved exactly");
+  eq(dedupeContextBlocks([untouched], [{ text: "POLICY", replacement: "P2" }]), [untouched], "block configured but absent → whitespace preserved exactly");
+  eq(dedupeContextBlocks([`${untouched}POLICY`], [{ text: "POLICY", replacement: "P2" }]), [`${untouched}POLICY`], "first occurrence kept → whitespace preserved exactly");
+  // Only the rewritten context is normalised, and only after the replacement.
+  eq(dedupeContextBlocks(["POLICY", `${untouched}POLICY\n\n\n`], [{ text: "POLICY", replacement: "P2" }]), ["POLICY", "lead\n\nmiddle\n\ntrail  \nP2"], "the replaced context is trimmed and its blank-line runs collapsed");
 }
 
 const temp = mkdtempSync(path.join(os.tmpdir(), "crx-hook-router-"));

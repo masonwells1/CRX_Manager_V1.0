@@ -21,19 +21,28 @@ function parsePayload() {
 // FIRST context that carries it and replaced by a one-line pointer in every
 // later one, so a prompt that trips two reminders pays for the policy once
 // instead of twice per turn. Only an exact, whole-block match is touched;
-// nothing else in a module's text is rewritten. Each block is
-// { text, replacement }.
+// nothing else in a module's text is rewritten: a context in which no block
+// was replaced is returned byte-for-byte, and the blank-line collapse plus
+// trim run only on a context that WAS rewritten, to close the gap the removed
+// block leaves behind (CodeRabbit review of #613 at ebebfc34d: the first cut
+// normalised every context, so callers with no configured block still got
+// modified text). Each block is { text, replacement }.
 export function dedupeContextBlocks(contexts, blocks = []) {
   const seen = new Set();
   return (contexts || []).map((context) => {
     let text = String(context);
+    let replaced = false;
     for (const block of blocks || []) {
       const needle = String(block?.text || "");
       if (!needle || !text.includes(needle)) continue;
-      if (seen.has(needle)) text = text.split(needle).join(String(block.replacement || ""));
-      else seen.add(needle);
+      if (seen.has(needle)) {
+        text = text.split(needle).join(String(block.replacement || ""));
+        replaced = true;
+      } else {
+        seen.add(needle);
+      }
     }
-    return text.replace(/\n{3,}/g, "\n\n").trim();
+    return replaced ? text.replace(/\n{3,}/g, "\n\n").trim() : text;
   });
 }
 
