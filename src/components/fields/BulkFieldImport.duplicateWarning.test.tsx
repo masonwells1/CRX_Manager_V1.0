@@ -138,9 +138,15 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
     rpc.mockImplementation((fn: string) => {
       if (fn === 'save_field') return Promise.resolve({ data: 'field-A', error: null });
       if (fn === 'set_field_boundary') {
-        return Promise.resolve({ data: null, error: { message: 'degenerate geometry', code: 'XX000' } });
+        // A real PostgREST refusal: 4xx carrying a SQLSTATE (22023 invalid_parameter_value).
+        // That is what proves the boundary did NOT land.
+        return Promise.resolve({
+          data: null,
+          error: { message: 'degenerate geometry', code: '22023' },
+          status: 400,
+        });
       }
-      return Promise.resolve({ data: {}, error: null });
+      return Promise.resolve({ data: {}, error: null, status: 200 });
     });
 
     render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
@@ -170,9 +176,13 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
         return Promise.resolve({ data: `field-${saves}`, error: null });
       }
       if (fn === 'set_field_boundary' && args.p_field_id === 'field-2') {
-        return Promise.resolve({ data: null, error: { message: 'degenerate geometry', code: 'XX000' } });
+        return Promise.resolve({
+          data: null,
+          error: { message: 'degenerate geometry', code: '22023' },
+          status: 400,
+        });
       }
-      return Promise.resolve({ data: { field_id: args.p_field_id }, error: null });
+      return Promise.resolve({ data: { field_id: args.p_field_id }, error: null, status: 200 });
     });
 
     render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
@@ -181,6 +191,34 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
     // 1 succeeded, 1 failed — but TWO fields exist.
     expect(screen.getByText(/successfully imported 1 field/i)).toBeInTheDocument();
     expect(warningText()).toContain('2 fields from this file already exist here.');
+  });
+
+  it('does not claim the boundary is missing when the boundary response was lost', async () => {
+    // set_field_boundary is independently transactional and commits before it answers. If the
+    // answer is lost the boundary may well be there. Saying flatly that it is not — and pointing
+    // an admin at the field — could get a correctly imported field deleted.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') return Promise.resolve({ data: 'field-A', error: null, status: 200 });
+      if (fn === 'set_field_boundary') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'TypeError: Failed to fetch', code: '' },
+          status: 0,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    const line = screen.getByText(/North 1.*never learned whether its map boundary landed/i).textContent ?? '';
+    expect(line).toContain('Field created');
+    expect(line).toContain('Check this field before changing or removing it');
+    // The definite wording is reserved for a positive refusal.
+    expect(screen.queryByText(/boundary measurement failed/i)).not.toBeInTheDocument();
+    // The field DID commit, so the re-import warning still stands.
+    expect(warningText()).toContain('1 field from this file already exists here.');
   });
 
   it('does NOT warn when every row imported cleanly', async () => {
@@ -318,6 +356,48 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
     await runImport();
 
     expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+    expect(screen.getByText(/North 1.*OUTCOME UNKNOWN/)).toBeInTheDocument();
+  });
+
+  it('WARNS on a 4xx whose code is a TRANSPORT code, not a PostgreSQL one', async () => {
+    // The sharp edge: a non-blank code is not enough. Transport libraries and intermediaries
+    // attach codes of their own (ETIMEDOUT, ECONNRESET), and PGRST0xx are pool-level failures
+    // that can happen after a statement already committed. Only a real SQLSTATE or a PGRST1xx+
+    // refusal proves PostgreSQL is what answered — which is what the shared
+    // isDefinitiveRpcRejection() already encodes.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'upstream request timeout', code: 'ETIMEDOUT' },
+          status: 408,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+    expect(screen.getByText(/North 1.*OUTCOME UNKNOWN/)).toBeInTheDocument();
+  });
+
+  it('WARNS on a 4xx carrying a PGRST0xx pool-level code, which can follow a commit', async () => {
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'could not obtain a connection', code: 'PGRST001' },
+          status: 400,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
     expect(screen.getByText(/North 1.*OUTCOME UNKNOWN/)).toBeInTheDocument();
   });
 

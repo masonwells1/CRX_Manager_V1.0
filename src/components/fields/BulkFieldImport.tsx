@@ -13,6 +13,7 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult, rpcAuthErrorMessage } from '../../lib/db';
 import { sanitizeError } from '../../lib/errorSanitizer';
+import { isDefinitiveRpcRejection } from '../../lib/idempotency';
 import {
   parseShapefileBundle,
   parseShapefileZip,
@@ -68,28 +69,32 @@ const ACCEPTED_EXTENSIONS = ['.zip', '.shp', '.dbf', '.shx', '.prj', '.geojson',
 const MAX_SIZE = 25 * 1024 * 1024; // 25MB
 
 /**
- * Whether a failed save_field call PROVES PostgreSQL answered and rolled back, so no field
- * was created and the row is genuinely safe to re-import.
+ * Whether a failed RPC on this screen PROVES PostgreSQL answered and rolled back, so nothing
+ * was written and the row is genuinely safe to re-import.
  *
- * Two things must both hold, because a save_field that reaches the database COMMITS before
- * anything else in the row runs:
+ * Both `save_field` and `set_field_boundary` are independently transactional and COMMIT before
+ * their response comes back, so anything short of a positive refusal has to be treated as
+ * possibly-committed. Two things must therefore both hold:
  *
- * - The status is a 4xx. A non-zero status alone proves nothing: postgrest-js reports 0 when
- *   fetch itself failed and no response arrived, and a gateway or proxy can answer 502 / 503 /
- *   504 (or a 408 / 429 timeout) AFTER the RPC reached PostgreSQL and committed.
- * - The body carried an error code. PostgREST answers a rejection with JSON carrying `code` —
- *   a SQLSTATE like `42501`, or a `PGRST###`. A gateway answers with HTML or plain text,
- *   which postgrest-js surfaces as { message: <body> } with an empty code.
+ * - The status is a 4xx. postgrest-js reports 0 when fetch itself failed and no response
+ *   arrived, and a gateway or proxy can answer 502 / 503 / 504 (or a 408 / 429 timeout) AFTER
+ *   the RPC reached PostgreSQL and committed. A PostgREST 5xx is swept in with those: it
+ *   usually does mean PostgreSQL raised and rolled back, but Supabase's edge can synthesise a
+ *   JSON error too and nothing on the client can tell the two apart.
+ * - The error is a positively identified PostgreSQL/PostgREST refusal, per the shared
+ *   `isDefinitiveRpcRejection()` — which already excludes the connection-class SQLSTATEs and
+ *   the PGRST0xx pool-level codes for exactly this reason. A non-blank code is NOT enough on
+ *   its own: transport libraries and proxies attach codes of their own.
  *
- * Everything else is an unknown outcome. The operator is told to look that row up rather than
- * being told it is safe to retry, because a retry mints a fresh idempotency key and would
- * create a second copy of a field that may already exist.
+ * Everything else is an unknown outcome. The operator is told to check that row rather than
+ * that it is safe to retry, because a retry mints a fresh idempotency key and would create a
+ * second copy of something that may already exist.
  */
-function saveFieldDefinitelyRolledBack(
-  status: number | undefined,
-  error: { code?: string | null },
-): boolean {
-  return typeof status === 'number' && status >= 400 && status < 500 && Boolean(error.code);
+function rpcDefinitelyRolledBack(status: number | undefined, error: unknown): boolean {
+  return typeof status === 'number'
+    && status >= 400
+    && status < 500
+    && isDefinitiveRpcRejection(error);
 }
 
 /**
@@ -100,9 +105,13 @@ function saveFieldDefinitelyRolledBack(
  * UNKNOWN instruction the operator actually has to act on, so tags are stripped and the text
  * is clamped. The status is kept, because that is what tells support where it died.
  */
-function shortServerReason(status: number | undefined, message: string): string {
+function clampReason(message: string): string {
   const text = message.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-  const clamped = text.length > 120 ? `${text.slice(0, 120)}…` : text;
+  return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+}
+
+function shortServerReason(status: number | undefined, message: string): string {
+  const clamped = clampReason(message);
   const where = typeof status === 'number' && status > 0 ? `HTTP ${status}` : 'no response';
   return clamped ? `${where}: ${clamped}` : where;
 }
@@ -500,7 +509,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         if (saveError) {
           // Only a response that proves PostgreSQL answered and rolled back makes this row safe
           // to re-import; anything ambiguous is an unknown outcome. See the helper above.
-          saveOutcome = saveFieldDefinitelyRolledBack(saveStatus, saveError) ? 'rejected' : 'unknown';
+          saveOutcome = rpcDefinitelyRolledBack(saveStatus, saveError) ? 'rejected' : 'unknown';
           failed++;
           const reason = rpcAuthErrorMessage(saveError) ?? saveError.message;
           // The row has to be identifiable in the list, not just in the counter above it:
@@ -518,16 +527,25 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
           // legacy boundary/centroid in sync, and sets measured_acres (the billable default).
           let boundaryOk = false;
+          // set_field_boundary is independently transactional and commits before it answers, so
+          // once the request goes out whether the boundary landed is unknown until the server
+          // positively refuses it. Starting optimistic here would let the screen state an
+          // unverified database condition as fact — and then invite an admin to act on it.
+          let boundaryUnknown = true;
           try {
-            const { data: bData, error: bErr } = await supabase.rpc('set_field_boundary', {
+            const { data: bData, error: bErr, status: bStatus } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
               p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
               p_performed_by: profile!.id,
               p_idempotency_key: crypto.randomUUID(),
             });
-            if (bErr) throw bErr;
+            if (bErr) {
+              if (rpcDefinitelyRolledBack(bStatus, bErr)) boundaryUnknown = false;
+              throw bErr;
+            }
             assertRpcResult(bData, 'set_field_boundary');
             boundaryOk = true;
+            boundaryUnknown = false;
           } catch (geoError: unknown) {
             // Acreage was pre-validated above, so set_field_boundary rejecting here is a rare
             // residual (degenerate geometry / a DB error). The field exists with an in-band
@@ -538,7 +556,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             // String() rendered them as "[object Object]" — the operator saw no reason at all.
             const msg = sanitizeError(geoError);
             failed++;
-            errors.push(`"${pf.field_name}": Field created but boundary measurement failed — ${msg}`);
+            // Only a positive refusal proves the boundary is missing. If the answer was lost or
+            // ambiguous the boundary may well be there, and saying otherwise could get a
+            // correctly imported field deleted.
+            errors.push(boundaryUnknown
+              ? `"${pf.field_name}": Field created, but we never learned whether its map boundary landed (${clampReason(msg)}). Check this field before changing or removing it.`
+              : `"${pf.field_name}": Field created but boundary measurement failed — ${msg}`);
           }
           if (boundaryOk) {
             // Bill on the FILE's stated acreage (owner choice 2026-06-23): set it as the billable
@@ -1003,9 +1026,9 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                   <p className="text-xs text-amber-700">
                     {results.created} field{results.created > 1 ? 's' : ''} from this file already
                     exist{results.created > 1 ? '' : 's'} here. Importing the file again would
-                    create a second copy of each one. That includes any row below saying
-                    &ldquo;Field created but boundary measurement failed&rdquo; — that field exists,
-                    it just has no map boundary yet.
+                    create a second copy of each one. That includes every row below saying a field
+                    was created — the field is there even where the rest of that row did not
+                    finish.
                   </p>
                 )}
                 {results.unknownOutcome > 0 && (
@@ -1021,8 +1044,9 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                 )}
                 <p className="text-xs text-amber-700 mt-1">
                   Re-import only the rows below that are neither marked &ldquo;OUTCOME
-                  UNKNOWN&rdquo; nor say a field was created, and ask an admin to remove any
-                  incomplete field.
+                  UNKNOWN&rdquo; nor say a field was created. Look up any field the list mentions
+                  before asking an admin to change or remove it — a row can report a step as
+                  failed when the server simply never answered.
                 </p>
               </div>
             )}
