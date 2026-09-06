@@ -33,8 +33,10 @@ intent-rotation resets in `ProductDetail`, `PurchaseOrderDetail`, `JobDetail`'s 
 - **`src/pages/CustomerDetail.tsx`** — `save_customer` had the same reset-before-assert. Reordered.
 - **`src/pages/CustomerDetail.tsx`**, route-changed-mid-flight branch — released the key on `!error`
   alone, which does not rule out an empty reply. This branch cannot assert (it must return quietly
-  rather than throw into a customer that is no longer on screen), so it now applies the same
-  emptiness test inline: `!error && data != null`.
+  rather than throw into a customer that is no longer on screen), so it applies the test inline.
+  This round shipped it as `!error && data != null`; **round 8 replaced that with
+  `!error && hasReceiptId(data, 'customer_id')`**, because `{}` is non-null and names no customer.
+  The current code is the `hasReceiptId` form — do not restore the `data != null` one.
 - **`src/pages/JobDetail.tsx`** — `next_job_number` was called as `if (!error && data)`, which
   discarded BOTH failure shapes and left the job-number field blank with no toast and no Sentry
   event. Harmless while the RPC could not fail; not harmless since the F2 number-generator gate

@@ -1003,8 +1003,10 @@ sweep enumerated the class structurally rather than by name (find every destruct
 confirmed the set below is complete: 14 files bind a renamed reset and only these three sites were
 wrong. `QuoteBuilder`'s `save_quote` and `CustomerDetail`'s `save_customer` reset-before-assert are
 reordered; `CustomerDetail`'s route-changed branch now releases the key only for a reply that is
-both error-free and NON-EMPTY (`!error && data != null`) — it cannot assert, because it must return
-quietly rather than throw into a customer no longer on screen. `QuoteBuilder` leaves
+both error-free and a REAL RECEIPT (`!error && hasReceiptId(data, 'customer_id')`) — it cannot
+assert, because it must return quietly rather than throw into a customer no longer on screen.
+It shipped as `data != null` and was tightened on 2026-09-05: `assertRpcResult` rejects only a
+MISSING reply, so `{}` passed that test while naming no customer at all. `QuoteBuilder` leaves
 `KNOWN_UNFIXED_SITES` entirely; `CustomerDetail` keeps ONE pinned entry, which is now correct code
 that a LINE-ORDER scanner still reports because it cannot read an inline emptiness test.
 **Three test harnesses had stubbed `assertRpcResult` as `vi.fn((d) => d)`** — a passthrough that
