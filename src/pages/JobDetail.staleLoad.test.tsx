@@ -1,11 +1,17 @@
 /**
  * JobDetail.staleLoad.test.tsx — cross-record stale-load contamination.
  *
- * The route `jobs/:id` in src/App.tsx carries NO `key` prop, so changing only the id
- * does NOT remount JobDetail. The previous job's in-flight loads therefore keep running
- * after the operator has clicked into a different job, and their setters land on the form
- * that is now showing THAT job. A save afterwards targets the CURRENT route id while the
- * form holds the OLD record's values — one job's data written onto another's row.
+ * ORIGINAL DEFECT: `jobs/:id` carried NO `key` prop, so changing only the id did NOT
+ * remount JobDetail. The previous job's in-flight loads kept running after the operator
+ * clicked into a different job, and their setters landed on the form now showing THAT job.
+ * A save afterwards targeted the CURRENT route id while the form held the OLD record's
+ * values — one job's data written onto another's row.
+ *
+ * IN PRODUCTION THE ROUTE IS NOW KEYED: `JobDetailRoute` renders `<JobDetail key={id} />`,
+ * so a record change remounts. These tests mount JobDetail DIRECTLY and DELIBERATELY
+ * WITHOUT that key, so they keep exercising the in-component guards the keyed route makes
+ * redundant — that is what keeps them honest if the key is ever removed.
+ * `JobDetailRoute.test.tsx` pins the key itself.
  *
  * Found by the exact-SHA gpt-5.6-sol review of PR #603 head 5dad64e2 (2026-09-05), rated
  * HIGH, pre-existing on main. Two sequences are covered here, one per open path:
@@ -74,12 +80,20 @@ function buildGatedChain(
   return self;
 }
 
-vi.mock('../lib/db', () => ({
-  supabase: { from: mockFrom, rpc: mockRpc, storage: { from: vi.fn() } },
-  checkMutationResult: vi.fn(),
-  assertRpcResult: vi.fn((d) => d),
-  sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
-}));
+// Spread the real module first: JobDetail imports hasRpcCode and RpcErrorCodes from here and
+// uses them in its RPC error branches (the LICENSE_EXPIRED catch in handleStart, among
+// others). A factory that omits them passes today only because no test in this file reaches
+// those branches — the next one that does would fail on the mock, not on the behaviour.
+vi.mock('../lib/db', async (importOriginal) => {
+  const actual = await (importOriginal() as Promise<Record<string, unknown>>);
+  return {
+    ...actual,
+    supabase: { from: mockFrom, rpc: mockRpc, storage: { from: vi.fn() } },
+    checkMutationResult: vi.fn(),
+    assertRpcResult: vi.fn((d) => d),
+    sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  };
+});
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1', role: 'admin', full_name: 'Test Admin' }, role: 'admin' }),
 }));
@@ -186,7 +200,8 @@ describe('JobDetail cross-record stale-load guard', () => {
     await waitFor(() => expect(jobsCalls).toBe(1));
     expect(screen.queryByRole('heading', { name: 'J-AAAA-1001' })).toBeNull();
 
-    // The operator clicks into job B. No remount — the route has no `key`.
+    // The operator clicks into job B. No remount here: this file mounts JobDetail directly,
+    // without the route's key, on purpose — see the header.
     await act(async () => { await router.navigate('/jobs/job-b'); });
     await screen.findByRole('heading', { name: 'J-BBBB-2002' });
 

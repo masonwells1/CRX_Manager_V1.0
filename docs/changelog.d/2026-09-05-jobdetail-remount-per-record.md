@@ -30,7 +30,7 @@ Round 5 closed the licence-override prompt on a route commit. It closed only tha
 change of job, and each dialog's `onConfirm` calls the CURRENT render's handler — which reads the
 CURRENT `id`:
 
-```
+```tsx
 onConfirm={() => { setShowCompleteConfirm(false); handleComplete(); }}
 ```
 

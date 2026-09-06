@@ -569,6 +569,50 @@ jobs:
           TEMP: ${{ runner.temp }}
         run: node scripts/supplier-pricing-phase3-private-artifacts.test.mjs
 
+      - name: Report 8.3 short-name generation on the runner volumes
+        # 2026-09-05 (Codex GitHub App P2 on #612): review-proof-guard.test.mjs
+        # carries Windows 8.3 short-name alias cases. They run only when the
+        # volume holding the test fixture (TEMP) hands out aliases; otherwise the
+        # test prints a skip note. Measured on windows-latest (PR #620): 8dot3
+        # name creation is ENABLED on C: and DISABLED on D:, which holds both the
+        # checkout and `runner.temp`, so a fixture under `runner.temp` never gets
+        # an alias. The guard suite below therefore uses a long-form directory on
+        # C: (a plain long path, unlike the default TEMP's `RUNNER~1` short form,
+        # so the Git-toplevel comparison above still holds). This step prints the
+        # per-volume setting and lists a fresh long-named probe file on each
+        # candidate volume with `dir /x`, so the log shows which one aliases.
+        shell: pwsh
+        env:
+          RUNNER_TEMP_ROOT: ${{ runner.temp }}
+          GUARD_TEMP_ROOT: C:\crx-guard-temp
+        run: |
+          $volumes = @("C:", (Split-Path -Qualifier $env:GITHUB_WORKSPACE), (Split-Path -Qualifier $env:RUNNER_TEMP_ROOT)) | Select-Object -Unique
+          foreach ($volume in $volumes) {
+            Write-Host "--- fsutil 8dot3name query $volume"
+            fsutil 8dot3name query $volume
+          }
+          foreach ($root in @($env:RUNNER_TEMP_ROOT, $env:GUARD_TEMP_ROOT)) {
+            $probe = Join-Path $root "eight-dot-three-probe"
+            New-Item -ItemType Directory -Force -Path $probe | Out-Null
+            Set-Content -Path (Join-Path $probe "codex-review-0123abcd.json") -Value "{}"
+            Write-Host "--- dir /x $probe (a ~1 entry in the short-name column means aliases are generated)"
+            cmd /c dir /x $probe
+          }
+
+      - name: Guard-hook regression tests (win32 alias and path semantics)
+        # 2026-09-05: the same suite lint-typecheck-test runs on Ubuntu. Here it
+        # executes the win32-only branches — the 8.3 alias cases, the `dir /x`
+        # parser, and realpathSync.native handling — that skip on every other
+        # platform, so before this step they ran nowhere in CI. Every file in
+        # the suite imports only Node builtins and sibling scripts, so no
+        # `npm ci` is needed. TEMP points at the C: directory the probe step
+        # created, because that is the volume that generates 8.3 aliases; the
+        # test prints "no 8.3 aliases on this volume" if that ever stops holding.
+        env:
+          TMP: C:\crx-guard-temp
+          TEMP: C:\crx-guard-temp
+        run: npm run test:correction-guards
+
   e2e-smoke:
     name: E2E Smoke Tests
     runs-on: ubuntu-latest

@@ -12,9 +12,11 @@ gated and which was itself skipped. Partial compliance with a finding is the sam
 
 ### What went wrong
 
-`/jobs/:id` carries no `key`, so changing the id does not remount `JobDetail`. Clicking **Start
-Job** and then opening another job while `start_job` was still in flight resumed the handler on a
-page now showing a different record, and it ran its whole success block unconditionally:
+`/jobs/:id` carried no `key` **at the time**, so changing the id did not remount `JobDetail`. (The
+keyed route that fixes this at the root ships in this same PR — see the remount-per-record entry.)
+Clicking **Start Job** and then opening another job while `start_job` was still in flight resumed
+the handler on a page now showing a different record, and it ran its whole success block
+unconditionally:
 
 - `toast('success', 'Job started')` — the confirmation appeared over the job the operator had
   moved to, reading as though *that* job had been started. It had not.

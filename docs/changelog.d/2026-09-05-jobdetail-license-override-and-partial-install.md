@@ -15,7 +15,7 @@ the ticket and route-id guards did not reach them.
 
 `performSave`'s `catch` handles `LICENSE_EXPIRED` by opening the admin "Assign Anyway" prompt. The
 success path immediately above it is gated on `stillOnThisJob()`; this branch was not. The route
-has no `key`, so moving between jobs does not remount the page — the prompt therefore followed the
+had no `key` **then**, so moving between jobs did not remount the page — the prompt therefore followed the
 operator onto the next job, and confirming it calls `performSave(true, reason)` from the *current*
 render. An admin clicking through it saved the job then on screen through the administrative
 licence-override path, and the activity entry read as a deliberate override of that job. The

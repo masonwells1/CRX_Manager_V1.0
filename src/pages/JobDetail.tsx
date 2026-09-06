@@ -309,13 +309,19 @@ export default function JobDetail() {
   // While the guard is up, adoption waits; the settle tick forces one adoption
   // pass on the render that contains the fully-refetched state.
   const baselineSettleGuardRef = useRef(false);
-  // Cross-record stale-load guard. The `jobs/:id` route carries NO `key` prop, so
-  // changing only the id does NOT remount this page: the previous job's in-flight
-  // loads keep running and would install THEIR record's values into the form that
-  // now shows a different job — and the next save writes them to the CURRENT route
-  // id. Every load run takes a generation ticket; a run whose ticket is no longer
-  // current installs nothing. This gates the CALL, not the record id, so two
-  // overlapping loads of the SAME job are still ordered by ticket.
+  // Cross-record stale-load guard.
+  // WHAT WAS WRONG: `jobs/:id` USED TO carry no `key` prop, so changing only the id did
+  // NOT remount this page — the previous job's in-flight loads kept running and installed
+  // THEIR record's values into the form now showing a different job, and the next save
+  // wrote them to the CURRENT route id.
+  // TODAY THE ROUTE IS KEYED: `JobDetailRoute` renders `<JobDetail key={id} />`, so a
+  // record change REMOUNTS instead. This ticket is KEPT for the two cases the remount does
+  // not cover: two overlapping loads of the SAME job inside one mount, and the direct
+  // unkeyed mounts the tests use. See the block at ~1980-2001 for exactly which guards the
+  // remount made redundant and which survived it.
+  // Every load run takes a generation ticket; a run whose ticket is no longer current
+  // installs nothing. This gates the CALL, not the record id, so two overlapping loads of
+  // the SAME job are still ordered by ticket.
   const loadGenerationRef = useRef(0);
   // The SECOND, independent operand. The ticket alone orders CALLS but does not bind a
   // call to a RECORD, and several handlers (`handleStart`, `handleComplete`, the save
@@ -2030,8 +2036,9 @@ export default function JobDetail() {
     // rows are populated and dirty-tracking is armed — otherwise a late-landing
     // lookup re-render after arming would mark a freshly-opened job dirty.
     // Take this run's ticket BEFORE any await, and before fetchJob captures it.
-    // The route has no `key`, so this effect re-running IS the "operator moved to
-    // another job" signal; the cleanup below bumps the ticket for unmount too.
+    // With the route keyed, a job -> job move REMOUNTS and this effect runs fresh; in the
+    // tests' unkeyed direct mounts it re-runs instead. Either way, this effect running IS
+    // the "operator moved to another job" signal; the cleanup below bumps for unmount too.
     // The layout effect above has already bumped and re-pointed routeIdRef for this
     // commit; bumping again here is monotonic and harmless.
     const generation = ++loadGenerationRef.current;

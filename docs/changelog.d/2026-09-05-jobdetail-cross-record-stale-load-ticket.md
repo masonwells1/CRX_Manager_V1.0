@@ -1,7 +1,8 @@
 ## 2026-09-05 — JobDetail: stop one job's in-flight load from landing on another job's form
 
-**What was wrong.** The `jobs/:id` route in `src/App.tsx` carries no `key` prop, so changing
-only the id does **not** remount `JobDetail`. The previous job's in-flight loads kept running
+**What was wrong.** The `jobs/:id` route in `src/App.tsx` carried no `key` prop, so changing
+only the id did **not** remount `JobDetail`. (The keyed route that fixes this at the root ships
+in the same PR — see the remount-per-record entry.) The previous job's in-flight loads kept running
 after the operator clicked into a different job, and their setters landed on the form now
 showing that other job. A save afterwards targets the **current** route id while the form holds
 the **old** record's values — one job's data written onto another job's row.
