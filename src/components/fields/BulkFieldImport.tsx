@@ -1037,8 +1037,14 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                 A row counted as failed can still have created a field (save_field commits before
                 the boundary call), so `created` — not `success` — is what the operator must not
                 send again. Until an atomic create-field-with-boundary RPC exists, the server
-                cannot recognise the repeat, so this has to be said out loud. */}
-            {(results.created > 0 || results.unknownOutcome > 0) && results.failed > 0 && (
+                cannot recognise the repeat, so this has to be said out loud.
+
+                `invalidCount` is in the condition because invalid rows are filtered out BEFORE the
+                import and never reach `failed`. A file whose good rows all import cleanly still
+                leaves the operator a reason to come back — the bad rows — and without this they
+                would be told nothing before re-uploading the whole file. */}
+            {(results.created > 0 || results.unknownOutcome > 0)
+              && (results.failed > 0 || invalidCount > 0) && (
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
                 <div className="flex items-center gap-1.5 mb-1.5">
                   <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -1050,9 +1056,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                   <p className="text-xs text-amber-700">
                     {results.created} field{results.created > 1 ? 's' : ''} from this file already
                     exist{results.created > 1 ? '' : 's'} here. Importing the file again would
-                    create a second copy of each one. That includes every row below saying a field
-                    was created — the field is there even where the rest of that row did not
-                    finish.
+                    create a second copy of each one.
+                    {results.failed > 0 && ' That includes every row below saying a field was created — the field is there even where the rest of that row did not finish.'}
                   </p>
                 )}
                 {results.unknownOutcome > 0 && (
@@ -1061,17 +1066,31 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                     back with a clear answer, so we cannot tell whether
                     {results.unknownOutcome > 1 ? ' they were' : ' it was'} created.
                     {results.unknownOutcome > 1 ? ' They are' : ' It is'} marked &ldquo;OUTCOME
-                    UNKNOWN&rdquo; below — look
-                    {results.unknownOutcome > 1 ? ' those rows' : ' that row'} up in the field list
+                    UNKNOWN&rdquo; below. We reloaded the field list behind this window, but a write
+                    that was still going through may not be in it yet. Wait a moment, reload the
+                    page, and confirm{' '}
+                    {results.unknownOutcome > 1 ? 'those rows are' : 'that row is'} really absent
                     before importing {results.unknownOutcome > 1 ? 'them' : 'it'} again.
                   </p>
                 )}
-                <p className="text-xs text-amber-700 mt-1">
-                  Re-import only the rows below that are neither marked &ldquo;OUTCOME
-                  UNKNOWN&rdquo; nor say a field was created. Look up any field the list mentions
-                  before asking an admin to change or remove it — a row can report a step as
-                  failed when the server simply never answered.
-                </p>
+                {invalidCount > 0 && (
+                  <p className="text-xs text-amber-700 mt-1">
+                    {invalidCount} row{invalidCount > 1 ? 's' : ''} in this file
+                    {invalidCount > 1 ? ' were' : ' was'} skipped before the import and
+                    {invalidCount > 1 ? ' are' : ' is'} not listed below. Put
+                    {invalidCount > 1 ? ' those rows' : ' that row'} in a NEW file containing only
+                    {invalidCount > 1 ? ' them' : ' it'} — re-uploading this whole file would create
+                    a second copy of every field it already made.
+                  </p>
+                )}
+                {results.failed > 0 && (
+                  <p className="text-xs text-amber-700 mt-1">
+                    Re-import only the rows below that are neither marked &ldquo;OUTCOME
+                    UNKNOWN&rdquo; nor say a field was created. Look up any field the list mentions
+                    before asking an admin to change or remove it — a row can report a step as
+                    failed when the server simply never answered.
+                  </p>
+                )}
               </div>
             )}
 

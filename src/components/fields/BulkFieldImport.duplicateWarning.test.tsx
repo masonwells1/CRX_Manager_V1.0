@@ -72,6 +72,10 @@ function square(): Polygon {
 }
 
 let rowCount = 1;
+// When set, the LAST row parses as invalid — the component filters it out before the import,
+// which is exactly the case the skipped-row warning exists for.
+let lastRowInvalid = false;
+let validateCalls = 0;
 
 vi.mock('../../lib/fieldImportParser', () => ({
   parseShapefileBundle: vi.fn(),
@@ -93,7 +97,10 @@ vi.mock('../../lib/fieldImportParser', () => ({
     fullGeometries: Array.from({ length: rowCount }, () => square()),
   }),
   calculateFieldMetrics: () => ({ acres: 40, centroid: { type: 'Point', coordinates: [-88, 40] } }),
-  validateFullGeometry: () => [],
+  validateFullGeometry: () => {
+    validateCalls += 1;
+    return lastRowInvalid && validateCalls === rowCount ? ['Boundary geometry is invalid'] : [];
+  },
   geometryAcres: () => 40,
 }));
 
@@ -114,7 +121,7 @@ async function runImport() {
   await click(/^next$/i);          // step 3 -> 4
   await click(/stub-assign/i);
   await click(/^next$/i);          // step 4 -> 5
-  await click(new RegExp(`import ${rowCount} field`, 'i'));
+  await click(new RegExp(`import ${lastRowInvalid ? rowCount - 1 : rowCount} field`, 'i'));
   await waitFor(() => expect(screen.getByText(/import complete/i)).toBeInTheDocument());
 }
 
@@ -130,6 +137,8 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
   beforeEach(() => {
     rpc.mockReset();
     rowCount = 1;
+    lastRowInvalid = false;
+    validateCalls = 0;
   });
 
   it('counts a row whose field was created but whose boundary failed', async () => {
@@ -299,6 +308,53 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
 
     expect(onSuccess).toHaveBeenCalled();
     expect(screen.queryByText(/could not be refreshed/i)).not.toBeInTheDocument();
+  });
+
+  it('warns about rows the parser SKIPPED, even when every imported row was clean', async () => {
+    // Invalid rows are filtered out before the import, so they never reach `failed`. Without
+    // this the screen is silent: the operator fixes the bad rows in the spreadsheet, re-uploads
+    // the whole file, and duplicates every field the first upload created.
+    rowCount = 2;
+    lastRowInvalid = true;
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') return Promise.resolve({ data: 'field-A', error: null, status: 200 });
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+    expect(screen.getByText(/skipped before the import/i)).toBeInTheDocument();
+    // And it must point somewhere safe rather than at the whole file again.
+    expect(screen.getByText(/NEW file containing only/i)).toBeInTheDocument();
+    // Nothing failed, so there is no error list. Advice about "the rows below" would point at an
+    // empty box and away from the skipped rows, which are the only thing to act on.
+    expect(screen.queryByText(/Re-import only the rows below/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/every row below saying a field was created/i)).not.toBeInTheDocument();
+  });
+
+  it('tells the operator an unknown row may not be in the refreshed list YET', async () => {
+    // The refresh is one immediate snapshot. A save whose response was lost may still be
+    // committing, so a refresh that succeeded can legitimately not show it. Sending the operator
+    // to that list as if it settled the question is the same trap as never refreshing at all.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') {
+        return Promise.resolve({ data: null, error: { message: 'Failed to fetch', code: '' }, status: 0 });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    const onSuccess = vi.fn().mockResolvedValue(true);
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={onSuccess} />);
+    await runImport();
+
+    expect(onSuccess).toHaveBeenCalled();
+    expect(screen.getByText(/may not be in it yet/i)).toBeInTheDocument();
+    // JSX drops the whitespace between an expression ending a line and the text on the next one,
+    // which rendered "that row isreally absent" and "importing itagain" on screen. The tests read
+    // through the DOM's text, so only an assertion on the joined words catches it.
+    expect(screen.getByText(/that row is really absent before importing it again/i)).toBeInTheDocument();
   });
 
   it('does NOT warn when every row imported cleanly', async () => {
