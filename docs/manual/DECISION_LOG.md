@@ -27,12 +27,15 @@ were auto-approved on the same paths under `acceptEdits`. Matching `MultiEdit(..
 original list happened to spell. A second review round (Codex HIGH on `1730c5cfd`, matched by the
 GitHub Codex P1 "Gate edits to migration reviewer charters") added three patterns the
 migration-proof minter trusts verbatim — `.claude/agents/**`, `scripts/write-apply-proofs.mjs`,
-`scripts/write-apply-proofs-lib.mjs` — for 19 patterns and 76 `ask` entries. Charter edits were
+`scripts/write-apply-proofs-lib.mjs` — for 20 patterns and 80 `ask` entries. Charter edits were
 silent on `main` too (bare `Edit`/`Write` allow), so this closes a pre-existing gap rather than a
 regression; binding charter hashes into the proof itself is recorded as a follow-up. A third round
 (`gpt-5.6-sol` HIGH on `02b342610`) made the same three paths hard-denied for shell and path-field
 writers in `review-proof-guard.mjs` (the `ask` tier covers native editors only) and added
 `scripts/write-apply-proofs-lib.mjs` to the risky-path set so its diff needs the exact-SHA review.
+A fourth round (GitHub Codex P1 on `8179ae989`) added `.claude/launch.json` to all three lists:
+`preview_start`, newly allowed, executes the command that file names, so an unprotected edit to
+it was a route around every Bash hook. `preview_start` itself stays allowed.
 
 **Mode correction after review:** inheriting Auto left new named connector mutations
 eligible for classifier approval. `acceptEdits` keeps ordinary local edits automatic

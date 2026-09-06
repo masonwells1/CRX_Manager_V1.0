@@ -201,6 +201,8 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/write
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cat .claude/agents/rls-security-reviewer.md" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "grep -n verdict scripts/write-apply-proofs-lib.mjs" } }).stdout, "");
 assert.equal(run({ tool_name: "Read", tool_input: { file_path: ".claude/agents/rls-security-reviewer.md" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cat .claude/launch.json" } }).stdout, "");
+assert.equal(run({ tool_name: "Read", tool_input: { file_path: ".claude/launch.json" } }).stdout, "");
 // 2026-08-18 false-positive class: a cd to an UNRELATED literal directory plus a
 // read-only mention of the state dir must be allowed — only the cd TARGET matters.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "C:\\CRX_Manager\\.claude\\worktrees\\skills-audit-x" && wc -l src/app.ts; ls .claude/session-state 2>/dev/null' } }).stdout, "");
@@ -523,6 +525,12 @@ for (const command of [
   "tee scripts/write-apply-proofs-lib.mjs",
   "cp /tmp/evil .claude//agents/rls-security-reviewer.md",
   "cp /tmp/evil .claude/commands/../agents/rls-security-reviewer.md",
+  // GitHub Codex P1 on 8179ae989: preview_start runs the command .claude/launch.json names.
+  "Set-Content .claude/launch.json",
+  "echo x > .claude/launch.json",
+  "cp /tmp/evil .claude/launch.json",
+  "sed -i s/npm/curl/ .claude/launch.json",
+  "cp /tmp/evil .claude/commands/../launch.json",
   // SEVENTH gpt-5.6-sol round, both P1 and both reproduced by the reviewer.
   //
   // (a) `rg --pre CMD` runs CMD on every input path, so an allowlisted READER
@@ -634,6 +642,8 @@ for (const payload of [
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/write-apply-proofs.mjs" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/write-apply-proofs-lib.mjs" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/../agents/rls-security-reviewer.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/launch.json" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/launch.json" } },
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/hooks/sql-safety.mjs" } },
   { tool_name: "mcp__filesystem__edit_file", tool_input: { path: ".codex/hooks.json" } },
   { tool_name: "apply_patch", tool_input: { patch: "*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n" } },

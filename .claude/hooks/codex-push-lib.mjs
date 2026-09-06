@@ -397,6 +397,9 @@ const RISKY_PATH_RES = [
   // parser; a `return true` there weakens the gate with no risky keyword in the
   // diff (gpt-5.6-sol HIGH on PR #605 head 02b342610).
   /(^|\/)scripts\/write-apply-proofs-lib\.mjs$/i,
+  // preview_start executes the runtimeExecutable/runtimeArgs this file names
+  // (GitHub Codex P1 on PR #605 head 8179ae989).
+  /(^|\/)\.claude\/launch\.json$/i,
   // The hook-REGISTRATION surfaces: every guard is only active because it is
   // wired here. A PR that de-registers a guard (removes the pr-merge-guard line,
   // etc.) touches ONLY these files and would otherwise merge un-gated, disabling

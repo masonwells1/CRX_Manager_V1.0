@@ -301,6 +301,8 @@ assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".cla
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
 // PR #605 (gpt-5.6-sol HIGH on 02b342610): the minter's helper module is gate machinery too.
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs-lib.mjs"]), ["scripts/write-apply-proofs-lib.mjs"]);
+// GitHub Codex P1 on 8179ae989: preview_start runs whatever .claude/launch.json names.
+assert.deepEqual(riskyFiles([".claude/launch.json"]), [".claude/launch.json"]);
 assert.deepEqual(riskyFiles(["scripts/overnight-codex-gate.mjs"]), ["scripts/overnight-codex-gate.mjs"]);
 assert.deepEqual(
   riskyFiles(["package.json"]),
