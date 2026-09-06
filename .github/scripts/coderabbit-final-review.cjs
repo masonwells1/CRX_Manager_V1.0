@@ -4,6 +4,7 @@ const READY_LABEL = 'ready-for-coderabbit';
 const REQUESTED_LABEL = 'coderabbit-review-requested';
 const REVIEW_COMMAND = '@coderabbitai review';
 const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
+const CODERABBIT_BOT_LOGIN = 'coderabbitai[bot]';
 const RESET_ACTIONS = new Set([
   'synchronize',
   'closed',
@@ -18,6 +19,19 @@ const ACCEPTABLE_CHECK_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
 const DEFAULT_QUIET_PERIOD_MS = 30_000;
 const DEFAULT_MERGEABILITY_POLL_ATTEMPTS = 4;
 const DEFAULT_MERGEABILITY_POLL_MS = 2_000;
+// How long to wait for CodeRabbit to acknowledge the posted command before
+// declaring the request unheard. Sized from measured behaviour on this repo, not
+// guessed: acknowledged requests replied in 6s and 11s, while unacknowledged ones
+// were still silent after 24 and 62 minutes. There is no useful middle — a 30s
+// window separates the two populations with room to spare, and waiting longer
+// only delays a failure the operator needs to see.
+//
+// The wait comes BEFORE each lookup, including the first, so the window really is
+// attempts x interval. An earlier revision polled first and waited between
+// attempts, which made six attempts five intervals — 25s of a documented 30s
+// window, and an immediate first read that could not possibly have seen a reply.
+const DEFAULT_ACK_POLL_ATTEMPTS = 6;
+const DEFAULT_ACK_POLL_MS = 5_000;
 
 function normalize(value) {
   return String(value || '').trim().toLowerCase();
@@ -347,6 +361,174 @@ function validateAuthorizationState(pullRequest, defaultBranch) {
   return reasons;
 }
 
+// POSTING IS NOT REQUESTING. The gate used to report success the moment GitHub
+// accepted the comment, which is only evidence that a comment exists — not that
+// CodeRabbit heard it. Measured on this repository, same PR, same head, same
+// command text, minutes apart, with the comment AUTHOR as the only variable:
+//
+//   github-actions[bot]  #535 16:09:16Z -> no acknowledgement, 62 min
+//   github-actions[bot]  #449 16:48:40Z -> no acknowledgement, 24 min+
+//   masonwells1 (User)   #535 02:19:49Z -> acknowledged in 11 s
+//   masonwells1 (User)   #535 17:11:38Z -> acknowledged in  6 s
+//
+// So every "requested" this gate has ever reported for a bot-authored command was
+// a false positive, and `coderabbit-review-requested` was never evidence of a
+// request.
+//
+// WHY THIS VERIFIES RATHER THAN ENCODES A RULE. CodeRabbit's current documentation
+// does not state which identities may issue commands — checked 2026-09-05 against
+// the commands guide, the configuration reference and the "why reviews might not
+// trigger" knowledge-base article. `auto_review.ignore_usernames` is the closest
+// thing and it governs PR AUTHORS ("Skip reviews for PRs authored by these
+// usernames"), not comment authors. The bot-filtering above is therefore an
+// OBSERVED behaviour with no documented contract, which is exactly the kind of
+// thing that must not be hard-coded as an assumption: it could change in either
+// direction without notice. Hence no allowlist of "identities that work" — the
+// gate posts, then checks whether CodeRabbit actually answered.
+//
+// Returns one of three states, deliberately distinct:
+//   { acknowledged: true }                    CodeRabbit replied.
+//   { acknowledged: false, verified: true }   it demonstrably did not.
+//   { acknowledged: false, verified: false }  we could not find out.
+// The third must never be collapsed into the second: treating an unverifiable
+// lookup as a confirmed absence would clear the dedupe marker on a request that
+// may well be live, and invite a relabel that buys a SECOND paid review.
+// CodeRabbit's own auto-generated summary. It posts this WITHOUT being asked, even
+// with automatic reviews disabled, and it quotes `@coderabbitai review` inside its
+// tips block. A delayed one landing after our command would otherwise read as an
+// acknowledgement of a command it knows nothing about.
+const CODERABBIT_SUMMARY_MARKER = 'auto-generated comment: summarize by coderabbit.ai';
+// The measured tell for a command CodeRabbit REFUSED. This is not the same as
+// silence: a refusal means it heard the command and still costed the attempt, so a
+// retry is not free and the state must not be cleared as if nothing happened.
+const CODERABBIT_REFUSAL_MARKER = 'action not completed';
+// The measured tells for a command CodeRabbit ACCEPTED, observed on this
+// repository at 6s and 11s on #535.
+const CODERABBIT_ACCEPTANCE_MARKERS = ['action performed', 'review triggered'];
+
+// POLARITY MATTERS MORE THAN THE PATTERNS. An earlier revision recognised the two
+// KNOWN comment shapes and treated everything else as an acknowledgement, which
+// fails OPEN: any unrelated or delayed bot comment — a walkthrough, a status note,
+// an answer to somebody else's chat — would have greened the gate for a command
+// CodeRabbit never accepted. So the acceptance tells are matched POSITIVELY and
+// anything unrecognised is 'other', which is not an acknowledgement.
+//
+// The cost of that choice, stated rather than hidden: if CodeRabbit changes its
+// acceptance wording, this gate stops recognising real acknowledgements and starts
+// reporting "never acknowledged". That is noisy, and it is the safe direction — it
+// refuses to certify a review it can no longer see, instead of certifying one that
+// never happened. Fix it by updating these markers against observed replies, never
+// by widening the default back to "anything counts".
+function classifyCodeRabbitComment(body) {
+  const text = normalize(body);
+  if (text.includes(CODERABBIT_SUMMARY_MARKER)) return 'summary';
+  if (text.includes(CODERABBIT_REFUSAL_MARKER)) return 'refusal';
+  if (CODERABBIT_ACCEPTANCE_MARKERS.some((marker) => text.includes(marker))) {
+    return 'acknowledgement';
+  }
+  return 'other';
+}
+
+async function awaitCodeRabbitAcknowledgement({
+  github, owner, repo, pullNumber, sinceCommentId, attempts, pollMs, settle, core,
+}) {
+  let lastError = null;
+  let lastLookupSucceeded = false;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (pollMs > 0) await settle(pollMs);
+    try {
+      const comments = await github.paginate(
+        github.rest.issues.listComments,
+        { owner, repo, issue_number: pullNumber, per_page: 100 },
+      );
+      lastLookupSucceeded = true;
+      // Strictly AFTER our command. Compare by comment id, which is monotonic per
+      // repository and, unlike created_at, cannot tie at one-second resolution.
+      // Only the FIRST CodeRabbit comment after our command is treated as a reply
+      // to it. Scanning the whole tail for any matching phrase would let an
+      // unrelated later action ("Action performed" for something else entirely)
+      // answer a command CodeRabbit ignored. This is a proximity binding, not a
+      // causal one — see the residual note at the call site.
+      const reply = comments
+        .filter((comment) => (
+          normalize(comment?.user?.login) === CODERABBIT_BOT_LOGIN
+          && Number(comment?.id || 0) > Number(sinceCommentId || 0)
+        ))
+        .sort((left, right) => Number(left.id || 0) - Number(right.id || 0))[0];
+      const kind = reply ? classifyCodeRabbitComment(reply.body) : null;
+      if (kind === 'refusal') {
+        return { acknowledged: false, verified: true, refused: true, commentId: reply.id };
+      }
+      if (kind === 'acknowledgement') {
+        return { acknowledged: true, verified: true, commentId: reply.id };
+      }
+    } catch (error) {
+      lastLookupSucceeded = false;
+      lastError = error;
+      core.warning(`Acknowledgement lookup attempt ${attempt + 1} failed: ${error.message}`);
+    }
+  }
+
+  // Absence is only CONFIRMED when the FINAL lookup — the one after the whole wait
+  // — succeeded. An early empty read followed by outages is not evidence of
+  // absence: CodeRabbit may have answered during the interval nobody could see,
+  // and treating that as confirmed would delete a command and clear a dedupe
+  // marker for a request that is actually live, letting a retry buy a second paid
+  // review. `lastLookupSucceeded` is therefore reset on every failure rather than
+  // latched once.
+  return lastLookupSucceeded
+    ? { acknowledged: false, verified: true }
+    : { acknowledged: false, verified: false, error: lastError };
+}
+
+// A candidate carrying CHANGES_REQUESTED provably cannot merge: BOTH merge gates
+// (.claude/hooks/pr-merge-guard.mjs and the MCP merge path) hard-deny that verdict.
+// Requesting a review for it spends one of a small number of shared hourly
+// CodeRabbit slots on work that cannot land. Observed on #449 — BLOCKED solely on a
+// standing objection, every check green, so every other validation here passed and
+// the gate posted, directly ahead of a candidate that needed the slot.
+//
+// Read the SAME field the merge gates read, through GraphQL, rather than
+// re-deriving it from listReviews. A local re-derivation would have to model
+// dismissed reviews, COMMENTED reviews, staleness and CODEOWNERS, and any
+// divergence would surface as this gate refusing candidates the merge gate allows
+// — or, worse, allowing ones it denies. One source, one answer.
+async function collectReviewDecisionBlockers({
+  github, owner, repo, pullNumber, core,
+}) {
+  let decision;
+  try {
+    const response = await github.graphql(
+      `query($owner: String!, $repo: String!, $number: Int!) {
+        repository(owner: $owner, name: $repo) {
+          pullRequest(number: $number) { reviewDecision }
+        }
+      }`,
+      { owner, repo, number: pullNumber },
+    );
+    decision = response?.repository?.pullRequest?.reviewDecision;
+  } catch (error) {
+    // Fail CLOSED, consistently with every other snapshot in this gate: an
+    // unreadable pull request, an unreadable check list and an unreadable
+    // mergeability state all block here too. Refusing costs a relabel; posting
+    // blind can spend a paid slot on a pull request that cannot merge.
+    //
+    // Known cost, stated rather than hidden: a refusal leaves a red
+    // `final-review-gate` check run on this head, and a previous completed-failure
+    // run of this workflow still counts as a blocking check on later attempts at
+    // the same SHA, so a transient GraphQL error can require a new commit. That is
+    // a separate open defect in this gate, not a reason to fail open here.
+    core.warning(`Could not read the review decision: ${error.message}`);
+    return [`could not read the pull request review decision (${error.message})`];
+  }
+
+  if (normalize(decision) === 'changes_requested') {
+    return ['a reviewer has requested changes (reviewDecision=CHANGES_REQUESTED), so this pull request cannot merge and a review request would be spent on it'];
+  }
+  return [];
+}
+
 function actionRunId(detailsUrl) {
   const match = String(detailsUrl || '').match(/\/actions\/runs\/(\d+)(?:\/|$)/);
   return match ? Number(match[1]) : null;
@@ -500,6 +682,48 @@ async function requestedMarkerHasCommand({ github, owner, repo, pullNumber, head
   return comments.some((comment) => isActionsReviewComment(comment, headSha));
 }
 
+// Marker + command is DEDUPE state, not proof that a review was requested. The
+// label event this gate raises by adding REQUESTED_LABEL queues another run, and
+// that run used to see marker + command and report a "confirmed" duplicate — so an
+// unverifiable (or unheard) request was laundered into a confirmed one by the very
+// next event, defeating the acknowledgement check entirely. This re-derives the
+// answer from the comments themselves: find the command for this head, then look
+// for a CodeRabbit reply newer than it.
+async function inspectExistingRequest({ github, owner, repo, pullNumber, headSha }) {
+  let comments;
+  try {
+    comments = await github.paginate(
+      github.rest.issues.listComments,
+      { owner, repo, issue_number: pullNumber, per_page: 100 },
+    );
+  } catch (error) {
+    return { verified: false, acknowledged: false, error };
+  }
+
+  const command = comments
+    .filter((comment) => isActionsReviewComment(comment, headSha))
+    .sort((left, right) => Number(right.id || 0) - Number(left.id || 0))[0];
+  if (!command) return { verified: true, acknowledged: false, commandMissing: true };
+
+  // Same first-reply rule as the live poll, so the two cannot disagree about what
+  // counts as an answer to a command.
+  const reply = comments
+    .filter((comment) => (
+      normalize(comment?.user?.login) === CODERABBIT_BOT_LOGIN
+      && Number(comment?.id || 0) > Number(command.id || 0)
+    ))
+    .sort((left, right) => Number(left.id || 0) - Number(right.id || 0))[0];
+  const kind = reply ? classifyCodeRabbitComment(reply.body) : null;
+  if (kind === 'refusal') {
+    return { verified: true, acknowledged: false, refused: true, commandId: command.id };
+  }
+  return {
+    verified: true,
+    acknowledged: kind === 'acknowledgement',
+    commandId: command.id,
+  };
+}
+
 // The single reconciliation routine. Every event that must re-derive gate state
 // from the LIVE pull request goes through here — label events and metadata
 // edits alike. `reasonPrefix` is the only thing that varied between the former
@@ -574,9 +798,49 @@ async function reconcileLabelEvent({
     }
 
     if (markerConfirmed) {
+      // Marker + command is not proof. Ask the comments whether CodeRabbit
+      // actually answered before calling this request confirmed — otherwise this
+      // path launders an unheard or unverifiable request into a success on the
+      // very next label event, which is the event this gate raises itself.
+      const existing = await inspectExistingRequest({
+        github, owner, repo, pullNumber, headSha,
+      });
       await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-      core.notice(`Preserved the confirmed CodeRabbit request for ${headSha} after a label event.`);
-      return { status: 'duplicate', headSha };
+
+      if (existing.acknowledged) {
+        core.notice(`Preserved the acknowledged CodeRabbit request for ${headSha} after a label event.`);
+        return { status: 'duplicate', headSha, acknowledged: true };
+      }
+
+      if (existing.refused) {
+        // Heard and declined. The attempt was spent, so the command and marker
+        // stay: presenting this as untried would invite another paid attempt.
+        core.setFailed(`CodeRabbit refused the review command for ${headSha}; the spent attempt's command and marker were preserved.`);
+        return { status: 'blocked', headSha, acknowledged: false, refused: true };
+      }
+
+      if (!existing.verified) {
+        core.setFailed(`Could not confirm whether CodeRabbit acknowledged the request for ${headSha} (${existing.error?.message || 'lookup failed'}); the command and marker were preserved so a retry cannot buy a second review.`);
+        return { status: 'blocked', headSha, acknowledged: false };
+      }
+
+      // Confirmed unheard. Same treatment as the request path: clear the pairing
+      // so a deliberate retry is possible, and never clear the marker while the
+      // command it dedupes still stands.
+      let cleared = false;
+      try {
+        if (existing.commandId) {
+          await github.rest.issues.deleteComment({
+            owner, repo, comment_id: existing.commandId,
+          });
+        }
+        await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+        cleared = true;
+      } catch (cleanupError) {
+        core.warning(`Could not clear the unacknowledged request: ${cleanupError.message}`);
+      }
+      core.setFailed(`CodeRabbit never acknowledged the review command for ${headSha}, so no review was requested${cleared ? '; the command and marker were cleared for a deliberate retry' : ' and the command could not be removed, so the marker was preserved'}.`);
+      return { status: 'blocked', headSha, acknowledged: false };
     }
     return resetCandidate({
       github,
@@ -674,6 +938,8 @@ async function runGate({ github, context, core, config, attemptState }) {
   const mergeabilityPollAttempts = config.mergeabilityPollAttempts
     ?? DEFAULT_MERGEABILITY_POLL_ATTEMPTS;
   const mergeabilityPollMs = config.mergeabilityPollMs ?? DEFAULT_MERGEABILITY_POLL_MS;
+  const ackPollAttempts = config.ackPollAttempts ?? DEFAULT_ACK_POLL_ATTEMPTS;
+  const ackPollMs = config.ackPollMs ?? DEFAULT_ACK_POLL_MS;
   const settle = config.settle
     || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
 
@@ -794,9 +1060,35 @@ async function runGate({ github, context, core, config, attemptState }) {
         pullNumber,
         headSha: expectedHeadSha,
       })) {
+        // The SECOND laundering path, and the one that matters most: this is the
+        // ready-label route, so it is exactly what an operator relabelling after a
+        // refused or unverifiable attempt lands on. Reporting a green `duplicate`
+        // here would present a request CodeRabbit never accepted as a completed
+        // one. Marker + command is dedupe state; only a reply is proof.
+        const existing = await inspectExistingRequest({
+          github, owner, repo, pullNumber, headSha: expectedHeadSha,
+        });
         await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-        core.notice(`CodeRabbit was already requested for ${expectedHeadSha}; duplicate event ignored.`);
-        return { status: 'duplicate', headSha: expectedHeadSha };
+
+        if (existing.acknowledged) {
+          core.notice(`CodeRabbit already acknowledged a request for ${expectedHeadSha}; duplicate event ignored.`);
+          return { status: 'duplicate', headSha: expectedHeadSha, acknowledged: true };
+        }
+        return blockCandidate({
+          github,
+          owner,
+          repo,
+          pullNumber,
+          core,
+          // blockCandidate removes only the ready label, so the requested marker
+          // and its command stay attached here — which is what must happen: the
+          // attempt may have been spent, or may still be live.
+          reason: existing.refused
+            ? `a review command for ${expectedHeadSha} was already posted and CodeRabbit REFUSED it; that attempt was spent, so relabelling cannot buy another — resolve it by hand`
+            : existing.verified
+              ? `a review command for ${expectedHeadSha} was already posted but CodeRabbit never acknowledged it; relabelling will not make it heard — confirm no review exists for this head, then resolve it by hand`
+              : `a review command for ${expectedHeadSha} was already posted and its acknowledgement could not be checked (${existing.error?.message || 'lookup failed'}); the command and marker were preserved so a retry cannot buy a second review`,
+        });
       }
       // The marker had no command for THIS head, but the pull request can still
       // carry a superseded head's command from a run this event replaced. Delete
@@ -829,15 +1121,19 @@ async function runGate({ github, context, core, config, attemptState }) {
     }
   }
 
-  const blockers = await collectCheckBlockers({
-    github,
-    owner,
-    repo,
-    headSha: expectedHeadSha,
-    config,
-    core,
-    selfRunId: context.runId,
-  });
+  const [checkBlockers, reviewDecisionBlockers] = await Promise.all([
+    collectCheckBlockers({
+      github,
+      owner,
+      repo,
+      headSha: expectedHeadSha,
+      config,
+      core,
+      selfRunId: context.runId,
+    }),
+    collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
+  ]);
+  const blockers = [...checkBlockers, ...reviewDecisionBlockers];
   if (blockers.length > 0) {
     return blockCandidate({
       github,
@@ -850,7 +1146,11 @@ async function runGate({ github, context, core, config, attemptState }) {
   }
 
   if (quietPeriodMs > 0) await settle(quietPeriodMs);
-  const [confirmationPullRequest, confirmationCheckBlockers] = await Promise.all([
+  const [
+    confirmationPullRequest,
+    confirmationCheckBlockers,
+    confirmationReviewDecisionBlockers,
+  ] = await Promise.all([
     getPullRequestWithResolvedMergeability({
       github,
       owner,
@@ -869,6 +1169,10 @@ async function runGate({ github, context, core, config, attemptState }) {
       core,
       selfRunId: context.runId,
     }),
+    // Re-read after the quiet period: a reviewer can submit CHANGES_REQUESTED
+    // during it, and this confirmation pass exists precisely to catch state that
+    // moved between the first snapshot and the post.
+    collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
   ]);
   const confirmationReasons = validatePullRequest(
     confirmationPullRequest,
@@ -876,6 +1180,7 @@ async function runGate({ github, context, core, config, attemptState }) {
     expectedHeadSha,
   );
   confirmationReasons.push(...confirmationCheckBlockers);
+  confirmationReasons.push(...confirmationReviewDecisionBlockers);
   if (confirmationReasons.length > 0) {
     return blockCandidate({
       github,
@@ -931,8 +1236,9 @@ async function runGate({ github, context, core, config, attemptState }) {
 
   let finalPullRequest;
   let finalCheckBlockers;
+  let finalReviewDecisionBlockers;
   try {
-    [finalPullRequest, finalCheckBlockers] = await Promise.all([
+    [finalPullRequest, finalCheckBlockers, finalReviewDecisionBlockers] = await Promise.all([
       getPullRequestWithResolvedMergeability({
         github,
         owner,
@@ -951,6 +1257,11 @@ async function runGate({ github, context, core, config, attemptState }) {
         core,
         selfRunId: context.runId,
       }),
+      // The LAST look before the command goes out. Checking the review decision
+      // only in the two earlier snapshots left a window — the mergeability poll and
+      // the marker write both happen after them — in which an objection could land
+      // and still cost a review slot.
+      collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
     ]);
   } catch (finalSnapshotError) {
     let cleanupNote = '';
@@ -980,6 +1291,7 @@ async function runGate({ github, context, core, config, attemptState }) {
   // validations, not just the ready label.
   finalReasons.push(...requestedMarkerStillAttached(finalPullRequest));
   finalReasons.push(...finalCheckBlockers);
+  finalReasons.push(...finalReviewDecisionBlockers);
   if (finalReasons.length > 0) {
     await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
     return blockCandidate({
@@ -1120,11 +1432,179 @@ async function runGate({ github, context, core, config, attemptState }) {
       reason: `pull request changed while the review command was being posted; ${postCommentReasons.join('; ')}`,
     });
   }
+  // The command is posted and the candidate is still valid. That is NOT yet a
+  // requested review — see awaitCodeRabbitAcknowledgement above for why.
+  //
+  // RESIDUAL, and the honest limit of this check: the acknowledgement is bound to
+  // the command by AUTHOR, by ORDER (it must be the first CodeRabbit comment after
+  // it) and by TIME (inside the window), but not CAUSALLY. CodeRabbit's reply does
+  // not name the head or the command it answers, and its documentation defines no
+  // acknowledgement contract, so a reply to some other action arriving first in
+  // that window would be misread. What this check does prove is the thing that was
+  // actually broken and silently false for months: that the command was HEARD
+  // rather than dropped for being bot-authored.
+  //
+  // It deliberately does NOT try to prove a review of this exact head exists. That
+  // proof is head-bound and belongs where it already lives — the merge gate, which
+  // must match a CodeRabbit review's commit_id to the final head. Widening this
+  // 30-second poll into a review-existence check would take minutes and would
+  // duplicate a gate that already exists.
+  const acknowledgement = await awaitCodeRabbitAcknowledgement({
+    github,
+    owner,
+    repo,
+    pullNumber,
+    sinceCommentId: createdComment.id,
+    attempts: ackPollAttempts,
+    pollMs: ackPollMs,
+    settle,
+    core,
+  });
+
+  if (!acknowledgement.acknowledged) {
+    if (acknowledgement.refused) {
+      // CodeRabbit HEARD the command and declined it. Measured behaviour: a
+      // refusal still costs the attempt. So this is the one non-acknowledged
+      // outcome where the command and marker must STAY — deleting them would
+      // present a spent attempt as though nothing had been tried, and the next
+      // relabel would spend another.
+      await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+      return blockCandidate({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: `CodeRabbit REFUSED the review command for ${expectedHeadSha} (it replied, but declined); the attempt was still spent, so the command and requested marker were preserved rather than presenting this as an untried candidate`,
+      });
+    }
+    if (!acknowledgement.verified) {
+      // UNVERIFIABLE, not absent. Keep the command and the dedupe marker exactly
+      // as they are: the request may be live, and clearing the marker here would
+      // let a relabel buy a second paid review for the same head. The ready label
+      // still comes off, because this candidate is not awaiting another attempt.
+      await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+      return blockCandidate({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        core,
+        reason: `the review command was posted but CodeRabbit's acknowledgement could not be checked (${acknowledgement.error?.message || 'lookup failed'}); the command and the requested marker were preserved so a retry cannot buy a second review — confirm by hand whether a review exists for ${expectedHeadSha} before relabelling`,
+      });
+    }
+
+    // CONFIRMED unheard after the full window. Clear the command and marker so the
+    // next attempt is a genuine one.
+    //
+    // RESIDUAL, stated rather than buried: deleting the comment cannot revoke an
+    // event CodeRabbit may already be processing. If it answers after the window
+    // closes and someone then relabels, two paid reviews are possible. The window
+    // is sized so that gap is narrow — every acknowledgement ever measured here
+    // arrived inside 11s, against a 30s wait — and it cannot be closed by waiting,
+    // only narrowed. It is why the failure message tells the operator to confirm no
+    // review exists for this head before relabelling, and why the ready-label path
+    // now refuses to re-post over an existing command rather than quietly adding a
+    // second one.
+    let cleanupNote = '';
+    let markerCleared = false;
+    try {
+      await github.rest.issues.deleteComment({
+        owner,
+        repo,
+        comment_id: createdComment.id,
+      });
+      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+      markerCleared = true;
+    } catch (cleanupError) {
+      // Never clear the marker while its command may still stand — that pairing is
+      // what prevents a duplicate paid review.
+      cleanupNote = `; the posted command could not be removed (${cleanupError.message}), so the requested marker was preserved and a relabel will be treated as a duplicate`;
+    }
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    return blockCandidate({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      reason: `CodeRabbit did not acknowledge the review command for ${expectedHeadSha} within the acknowledgement window, so no review was requested${markerCleared ? ' and the command and requested marker were cleared for a deliberate retry' : ''}${cleanupNote}. Before relabelling, confirm no review already exists for this head — a late acknowledgement cannot be revoked by deleting the comment`,
+    });
+  }
+
+  // The acknowledgement wait is up to 30 seconds of real time AFTER the last state
+  // snapshot. A head change, a newly failing check, a removed label, auto-merge
+  // being switched on, or a CHANGES_REQUESTED verdict inside that window would
+  // otherwise be reported as a clean success on a candidate that had already
+  // stopped being one. Re-read before crediting.
+  let settledPullRequest;
+  let settledCheckBlockers;
+  let settledReviewDecisionBlockers;
+  try {
+    [settledPullRequest, settledCheckBlockers, settledReviewDecisionBlockers] = await Promise.all([
+      getPullRequestWithResolvedMergeability({
+        github,
+        owner,
+        repo,
+        pullNumber,
+        attempts: mergeabilityPollAttempts,
+        pollMs: mergeabilityPollMs,
+        settle,
+      }),
+      collectCheckBlockers({
+        github,
+        owner,
+        repo,
+        headSha: expectedHeadSha,
+        config,
+        core,
+        selfRunId: context.runId,
+      }),
+      collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
+    ]);
+  } catch (settledSnapshotError) {
+    // The review IS requested and acknowledged at this point — that cannot be
+    // undone, and the command must stay so a relabel cannot buy a second one. Only
+    // the verdict is withheld.
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    return blockCandidate({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      reason: `CodeRabbit acknowledged the review for ${expectedHeadSha}, but the candidate could not be re-verified afterwards (${settledSnapshotError.message}); the command and marker were preserved — re-check the candidate by hand`,
+    });
+  }
+
+  const settledReasons = validatePullRequest(
+    settledPullRequest,
+    context.payload.repository.default_branch,
+    expectedHeadSha,
+  );
+  settledReasons.push(...requestedMarkerStillAttached(settledPullRequest));
+  settledReasons.push(...settledCheckBlockers);
+  settledReasons.push(...settledReviewDecisionBlockers);
+  if (settledReasons.length > 0) {
+    // Deliberately NOT deleting the command here: CodeRabbit has already accepted
+    // it, so the review is spent whether or not the comment survives. Removing it
+    // would make the next relabel look untried and buy a second one.
+    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+    return blockCandidate({
+      github,
+      owner,
+      repo,
+      pullNumber,
+      core,
+      reason: `CodeRabbit acknowledged the review for ${expectedHeadSha}, but the candidate changed while waiting for that acknowledgement, so the review no longer covers a valid frozen candidate; ${settledReasons.join('; ')}`,
+    });
+  }
+
   await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-  core.notice(`Requested one CodeRabbit review for frozen head ${expectedHeadSha}.`);
+  core.notice(`Requested one CodeRabbit review for frozen head ${expectedHeadSha}; CodeRabbit acknowledged it. This proves the command was HEARD, not that a review of this exact head exists — the merge gate still has to match a review's commit_id to the final head.`);
   return recoveredCommand
-    ? { status: 'requested', headSha: expectedHeadSha, recovered: true }
-    : { status: 'requested', headSha: expectedHeadSha };
+    ? { status: 'requested', headSha: expectedHeadSha, recovered: true, acknowledged: true }
+    : { status: 'requested', headSha: expectedHeadSha, acknowledged: true };
 }
 
 async function run(args) {
@@ -1212,8 +1692,23 @@ async function run(args) {
       if (recoveredCleanupFailures.length > 0) {
         core.warning(`Could not clear workflow labels after recovery: ${recoveredCleanupFailures.join('; ')}`);
       }
+      // The THIRD place "a command exists" was being read as "a review was
+      // requested". Crashing after a refusal or an unverifiable poll would
+      // otherwise recover as a success and undo the whole acknowledgement check —
+      // the crash path is precisely when the gate knows least, so it is the last
+      // place that should be optimistic. The command and marker are left attached
+      // either way; only the reported outcome differs.
+      const recoveredAcknowledgement = await inspectExistingRequest({
+        github, owner, repo, pullNumber, headSha,
+      });
+      if (recoveredAcknowledgement.acknowledged) {
+        return {
+          status: 'requested', headSha, recovered: true, acknowledged: true,
+        };
+      }
+      core.setFailed(`The gate crashed after posting a review command for ${headSha} (${unexpectedError.message}) and CodeRabbit's acknowledgement ${recoveredAcknowledgement.verified ? 'was never observed' : 'could not be checked'}; the command and requested marker were preserved, so confirm by hand whether a review exists for this head before relabelling.`);
       return {
-        status: 'requested', headSha, recovered: true,
+        status: 'blocked', headSha, recovered: true, acknowledged: false,
       };
     }
 

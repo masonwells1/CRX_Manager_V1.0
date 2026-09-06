@@ -2073,11 +2073,61 @@ export default function JobDetail() {
         setGrowerShareFieldNames([]);
         setLoaderVesselId(ASSIGNED_VEHICLE_VESSEL_VALUE);
         setTankCapacity('');
-        const { data, error } = await supabase.rpc('next_job_number');
-        if (!isCurrentLoad()) return;
-        if (!error && data) setJobNumber(assertRpcResult<string>(data, 'next_job_number'));
+        // The previewed job number is the only thing standing between the operator
+        // and a job they cannot save. `if (!error && data)` discarded BOTH failure
+        // shapes — a raised error and an empty reply — leaving the field blank with
+        // no explanation. Since the F2 number-generator gate applied live
+        // (2026-09-04), a deactivated or out-of-role profile hits exactly that path.
+        // Mirror the CycleCounts shape: throw the failure into one handler and say
+        // what happened.
+        //
+        // next_job_number() RESERVES NOTHING — it reads MAX(job_number)+1 under a
+        // transaction-scoped advisory lock and returns text; save_job() assigns the
+        // number that is actually kept. So this is a preview, and the wording below
+        // must not promise the operator that a number is being held for them.
+        //
+        // MERGE 2026-09-06: main gated these UI effects on a `cancelled` boolean set
+        // in the effect cleanup. This branch already carries a stronger primitive for
+        // the same hazard — isCurrentLoad(), a generation ticket — so the invariant is
+        // expressed once, in that form, rather than carrying two mechanisms for one
+        // rule. A boolean only knows "this effect run was torn down"; the ticket also
+        // survives A -> B -> A navigation, where a remount re-arms a fresh
+        // `cancelled = false` while the first visit's reply is still in flight.
+        //
+        // Sentry stays UNGATED, exactly as main had it: a real server failure happened
+        // and is worth reporting even though the operator has moved on. That is the
+        // same partition this file applies to the save receipt — gate what lands on
+        // THIS page, never what merely records a fact.
+        try {
+          const { data, error } = await supabase.rpc('next_job_number');
+          if (error) throw error;
+          const previewedJobNumber = assertRpcResult<string>(data, 'next_job_number');
+          if (isCurrentLoad()) setJobNumber(previewedJobNumber);
+        } catch (err: unknown) {
+          // Supabase errors are PLAIN OBJECTS, not Error instances, so
+          // `new Error(String(err))` yields "[object Object]" and throws away the
+          // only useful part of the report — the message and code. Carry the
+          // message across so Sentry records INSUFFICIENT_ROLE rather than nothing.
+          const reportedMessage = err instanceof Error
+            ? err.message
+            : (typeof err === 'object' && err !== null && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : String(err));
+          Sentry.captureException(
+            err instanceof Error ? err : new Error(reportedMessage),
+            { tags: { source: 'rpc', action: 'next_job_number' } },
+          );
+          if (isCurrentLoad()) {
+            toast(
+              'error',
+              hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)
+                ? 'Your account is not permitted to start a new job. Ask an administrator to check your role before entering one.'
+                : `Could not load the next job number — ${sanitizeError(err)}. Reload before entering this job.`,
+            );
+          }
+        }
         const recipeParam = searchParams.get('recipe_id');
-        if (recipeParam) setRecipeId(recipeParam);
+        if (recipeParam && isCurrentLoad()) setRecipeId(recipeParam);
         // New job: loading is already false; the loading-settle effect arms
         // initialLoadDone after the first committed frame.
       }
@@ -2085,7 +2135,7 @@ export default function JobDetail() {
     // Supersede this run on unmount as well as on re-run. The next run takes a
     // fresh ticket with ++, so the counter stays monotonic either way.
     return () => { loadGenerationRef.current += 1; };
-  }, [id, fetchJob, isNew, loadLookups, searchParams]);
+  }, [id, fetchJob, isNew, loadLookups, searchParams, toast]);
 
   // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')
   // job_location_dispatches row on this job? The assignment-unification migration

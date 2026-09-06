@@ -16,7 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
@@ -41,11 +41,26 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
   return self;
 }
 
-vi.mock('../lib/db', () => ({
+vi.mock('../lib/db', async () => ({
   supabase: { from: mockFrom, rpc: mockRpc, storage: { from: vi.fn() } },
   checkMutationResult: vi.fn(),
-  assertRpcResult: vi.fn((d) => d),
+  // The REAL assertRpcResult. The passthrough stub `vi.fn((d) => d)` never throws, so
+  // an RPC answering with an empty payload and no error — the ambiguous reply this
+  // helper exists to reject — was indistinguishable from success in every test here.
+  assertRpcResult: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).assertRpcResult,
   sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  // Previously absent. JobDetail imports both, so any code path reaching them under
+  // this mock would fail on `undefined` rather than on the behaviour under test.
+  hasRpcCode: (error: { message?: string }, code: string) => (
+    error?.message === code
+    || error?.message?.startsWith(`${code}:`) === true
+    || error?.message?.startsWith(`${code} `) === true
+  ),
+  RpcErrorCodes: {
+    AUTH_REQUIRED: 'AUTH_REQUIRED',
+    ACTOR_MISMATCH: 'ACTOR_MISMATCH',
+    INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE',
+  },
 }));
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1', role: 'admin', full_name: 'Test Admin' }, role: 'admin' }),
@@ -58,6 +73,16 @@ vi.mock('react-router-dom', async () => {
 vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
 }));
+// Isolate JobDetail from an UNRELATED child that calls its own RPC. RelatedNotes
+// fetches get_notes_for_entity on mount; this file's fixture answers every RPC with
+// `{ data: null, error: null }`, which the REAL assertRpcResult correctly rejects. The
+// rejection escapes as an unhandled promise rejection — the suite still reports "tests
+// passed" while vitest exits 1 with 26 errors, so it is invisible to a grep for FAIL.
+// Mocking the child is the same isolation CustomerDetail.test.tsx already applies; the
+// alternative (teaching every per-test mockRpc override about an unrelated RPC) breaks
+// again the next time someone calls mockRpc.mockResolvedValue.
+// Found by the Codex GitHub App review of 26edc763 (P1), 2026-09-05.
+vi.mock('../components/team/RelatedNotes', () => ({ default: () => null }));
 vi.mock('../hooks/usePageMeta', () => ({ usePageMeta: () => {} }));
 vi.mock('../hooks/useUnsavedChanges', () => ({
   useUnsavedChanges: () => ({ state: 'unblocked', reset: vi.fn(), proceed: vi.fn() }),
@@ -74,6 +99,7 @@ vi.mock('../lib/dateUtils', async (orig) => {
   return { ...actual, localToday: () => '2026-08-19' };
 });
 
+import { Sentry } from '../lib/sentry';
 import JobDetail from './JobDetail';
 
 const DRY_PRODUCT = {
@@ -983,5 +1009,132 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     });
     await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     expect(screen.queryByText(/This line cannot be saved/i)).toBeNull();
+  }, 30000);
+});
+
+/**
+ * The previewed job number is the only thing standing between the operator and a job
+ * they cannot save, and its failure used to be invisible.
+ *
+ * `if (!error && data) setJobNumber(...)` discarded BOTH failure shapes — a raised
+ * error and an empty reply — so the field simply stayed blank with no toast and no
+ * Sentry event. Harmless while `next_job_number` could not fail; not harmless since
+ * the F2 number-generator gate applied live on 2026-09-04, which raises
+ * INSUFFICIENT_ROLE for a deactivated or out-of-role profile. That user got a blank
+ * box and no way to know why.
+ *
+ * "Preview", not "reservation": next_job_number() reads MAX(job_number)+1 under a
+ * transaction-scoped advisory lock and returns text. It persists nothing — save_job()
+ * assigns the number that is actually kept.
+ */
+describe('JobDetail — a failed job-number lookup is explained', () => {
+  beforeEach(() => {
+    mockToast.mockClear();
+    mockRpc.mockClear();
+    vi.mocked(Sentry.captureException).mockClear();
+    mockFrom.mockReturnValue(buildChain({ data: [], error: null }));
+  });
+
+  function mountNewJob() {
+    return render(
+      <MemoryRouter initialEntries={['/jobs/new']}>
+        <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it('names the role gate when next_job_number is refused', async () => {
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'next_job_number'
+        ? { data: null, error: { message: 'INSUFFICIENT_ROLE' } }
+        : { data: null, error: null },
+    ));
+
+    mountNewJob();
+
+    await waitFor(
+      () => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/not permitted to start a new job/i)),
+      { timeout: 15000 },
+    );
+    // The toast is only half the promise. Asserting the Sentry call as well binds the
+    // OTHER half: a source-order pin that greps for `Sentry.captureException` survives
+    // a wrong argument or an unreachable call, and would not notice either.
+    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(
+      // The MESSAGE, not just `expect.any(Error)`: a Supabase error is a plain
+      // object, so a naive `new Error(String(err))` reports "[object Object]" and
+      // still satisfies a bare any-Error assertion.
+      expect.objectContaining({ message: expect.stringContaining('INSUFFICIENT_ROLE') }),
+      { tags: { source: 'rpc', action: 'next_job_number' } },
+    );
+  }, 30000);
+
+  it('still explains an EMPTY reply, which carries no error at all', async () => {
+    // The other half of the discarded pair. `{ data: null, error: null }` is the
+    // permission-denied shape assertRpcResult exists to catch: nothing to inspect, and
+    // the old truthiness test dropped it just as silently as a raised error.
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    mountNewJob();
+
+    await waitFor(
+      () => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/Could not load the next job number/i)),
+      { timeout: 15000 },
+    );
+    expect(vi.mocked(Sentry.captureException)).toHaveBeenCalledWith(
+      expect.any(Error),
+      { tags: { source: 'rpc', action: 'next_job_number' } },
+    );
+  }, 30000);
+
+  /**
+   * Raised by the gpt-5.6-sol review of dff631f1. JobDetail is reused across
+   * `jobs/:id`, so it does NOT remount when the route id alone changes. Making the
+   * failure loud therefore created a new way to be wrong: a slow refusal for
+   * /jobs/new could surface as an error toast over an EXISTING job the operator had
+   * since opened — a message about a screen they already left.
+   */
+  it('does not raise the /jobs/new failure over a job opened while it was in flight', async () => {
+    let releaseNumber: (value: { data: unknown; error: unknown }) => void = () => {};
+    const pendingNumber = new Promise<{ data: unknown; error: unknown }>((resolve) => { releaseNumber = resolve; });
+    mockRpc.mockImplementation((name: string) => (
+      name === 'next_job_number' ? pendingNumber : Promise.resolve({ data: null, error: null })
+    ));
+    // job-1 must be a REAL row: the destination page renders it, and an empty
+    // fixture crashes the header on `status.replace(...)` — which surfaces as an
+    // `Errors` line beside a green pass count, not as a failure.
+    mockFrom.mockImplementation((table: string) => (
+      table === 'jobs'
+        ? buildChain({ data: makeJob(HAZARD_CHEM), error: null })
+        : buildChain({ data: [], error: null })
+    ));
+
+    render(
+      <MemoryRouter initialEntries={['/jobs/new']}>
+        <Link to="/jobs/job-1">Open an existing job</Link>
+        <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    // Wait until the request is genuinely IN FLIGHT before navigating. Without this
+    // the Link exists immediately, the click can land while loadLookups() is still
+    // running, and the test would pass without ever exercising the race — and would
+    // then FAIL against a stricter effect that returns early after the lookups.
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some(([name]) => name === 'next_job_number')).toBe(true),
+      { timeout: 15000 },
+    );
+    fireEvent.click(await screen.findByRole('link', { name: 'Open an existing job' }));
+    // Only NOW does the number request come back, and it fails.
+    releaseNumber({ data: null, error: { message: 'INSUFFICIENT_ROLE' } });
+
+    // Sentry still hears about it — the server failure really happened.
+    await waitFor(
+      () => expect(vi.mocked(Sentry.captureException)).toHaveBeenCalled(),
+      { timeout: 15000 },
+    );
+    expect(
+      mockToast,
+      'a /jobs/new failure must not appear over the existing job the operator opened',
+    ).not.toHaveBeenCalledWith('error', expect.stringMatching(/job number|not permitted to start a new job/i));
   }, 30000);
 });
