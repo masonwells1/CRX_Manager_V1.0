@@ -967,6 +967,41 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
         } finally {
           rmSync(aliasParent, { recursive: true, force: true });
         }
+        // An NTFS stream qualifier on the name (Codex GitHub App review of
+        // b7c4b4b22, P1): `x.json::$DATA` opens x.json's default data stream on
+        // Windows while the spelled string no longer ends in `.json`. The guard
+        // resolves with `realpathSync.native`, which returns the file's final
+        // path WITHOUT the stream qualifier (GetFinalPathNameByHandle), so the
+        // resolved string ends in `.json` and the evidence and proof-name rules
+        // still fire. Oracle as above: the guard must deny exactly when the OS
+        // opens the qualified string as the proof (on POSIX the qualified name
+        // is an ordinary absent file, so the guard must stay quiet).
+        writeFileSync(path.join(externalDir, "codex-review-abc.json"), "{\"verdict\":\"clean\"}");
+        for (const [label, plain, cwd] of [
+          ["evidence through the junctioned state dir", viaJunction, junctionRoot],
+          ["evidence by its external name", path.join(externalDir, "migration-review-20260901120000_x.json"), junctionRoot],
+          ["a push proof by its external name", path.join(externalDir, "codex-review-abc.json"), junctionRoot],
+        ]) {
+          const body = readFileSync(plain, "utf8");
+          for (const qualifier of ["::$DATA", "::$data"]) {
+            const raw = `${plain}${qualifier}`;
+            let opened = null;
+            try { opened = readFileSync(raw, "utf8"); } catch { opened = null; }
+            for (const tool_name of ["Read", "NotebookRead"]) {
+              const tool_input = tool_name === "Read" ? { file_path: raw } : { notebook_path: raw };
+              const result = run({ tool_name, cwd, tool_input });
+              assert.equal(result.status, 0, `hook should exit 0: ${tool_name} ${label}${qualifier}`);
+              if (opened === body) {
+                assert.match(result.stdout, /"permissionDecision":"deny"/, `a stream-qualified name the OS opens as ${label} must deny: ${raw}`);
+              } else {
+                assert.equal(result.stdout, "", `a stream-qualified name the OS does not open stays allowed (${label}): ${raw}`);
+              }
+            }
+          }
+        }
+        if (process.platform === "win32") {
+          assert.equal(readFileSync(`${viaJunction}::$DATA`, "utf8"), readFileSync(viaJunction, "utf8"), "on Windows the ::$DATA form must have opened the proof, so the cases above exercised the deny branch");
+        }
       } else {
         console.log("review-proof-guard.test: junction/directory-symlink creation refused — junctioned state-dir cases skipped");
       }
