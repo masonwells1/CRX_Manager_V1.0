@@ -19,6 +19,7 @@ import {
   maintenanceProducerNamed,
   computedJavaScriptScriptArgument,
   splitShellSegments,
+  splitShellWords,
   resolveNpmScriptChain,
   readPackageScripts,
 } from "./bash-safety-lib.mjs";
@@ -335,6 +336,34 @@ eq(splitShellSegments("rg -n 'a; b | c' docs; node x").length, 2, "quoted separa
 eq(splitShellSegments('echo "a; \\" b"; node x').length, 2, "an escaped quote inside double quotes does not end the quote");
 eq(splitShellSegments("echo a\\; node x").length, 1, "a backslash-escaped separator does not split");
 eq(splitShellSegments("echo 'unterminated; node x").length, 1, "an unterminated quote swallows the rest of the line");
+//     4. Round 2 (Codex App P2 on 939c2d3cf): a quoted redirection target with
+//        whitespace is ONE word, both in the token walk after the runtime and
+//        in the head-word scan, so skipping the target cannot expose half of it
+//        as a literal script.
+for (const command of [
+  'node > "out file" "$F"',
+  'node >"out file" "$F"',
+  "node 2> 'err log' \"$F\"",
+  'node > "out file" -- "$F"',
+  '> "out file" node "$F"',
+  '2>"err log" node "$F"',
+  'F=x > "out file" node "$F"',
+]) {
+  ok(computedJavaScriptScriptArgument(command), `quoted redirection target does not hide a computed script: ${command}`);
+  ok(checkDangerousCommand(command), `computed-script launch behind a quoted redirection target denied: ${command}`);
+}
+for (const command of [
+  'node > "out file" scripts/safe.mjs',
+  '> "out file" node scripts/safe.mjs',
+  'node "out file.js"',
+  'echo "a b" > "out file"',
+]) {
+  ok(!computedJavaScriptScriptArgument(command), `quoted redirection target or quoted literal script is not computed: ${command}`);
+  eq(checkDangerousCommand(command), null, `literal script behind a quoted redirection target stays allowed: ${command}`);
+}
+eq(splitShellWords('node > "out file" "$F"').length, 4, "a quoted word with whitespace is one word");
+eq(splitShellWords("echo a\\ b c").length, 3, "a backslash-escaped space keeps its word together");
+eq(splitShellWords("echo 'unterminated word").length, 2, "an unterminated quote swallows the rest of the line");
 //     3. A literal, non-loader option whose computed value is QUOTED keeps the
 //        parser moving toward the (literal) script; an unquoted expansion can
 //        word-split into a script argument, and a computed option NAME or a
@@ -534,6 +563,9 @@ for (const command of [
 r = runHook({ tool_name: "Bash", tool_input: { command: 'F=x; node</dev/null "$F"' } });
 eq(r.status, 0, "bash-safety exits 0 after denying a redirection-glued computed launch");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies node</dev/null \"$F\"");
+r = runHook({ tool_name: "Bash", tool_input: { command: 'node > "out file" "$F"' } });
+eq(r.status, 0, "bash-safety exits 0 after denying a launch behind a quoted redirection target");
+ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies node > \"out file\" \"$F\"");
 
 for (const command of [
   "git push origin feature/test --force",

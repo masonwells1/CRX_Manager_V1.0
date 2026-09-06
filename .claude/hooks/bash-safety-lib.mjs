@@ -146,17 +146,59 @@ export function splitShellSegments(text) {
   segments.push(current);
   return segments;
 }
-function segmentHead(segment) {
-  let rest = segment.replace(/^[\s({@&]+/, "");
-  let prefix;
-  // Leading assignments (`F=x node …`) and redirections (`</dev/null node …`)
-  // precede the head word without changing it.
-  while ((prefix = /^(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S)*|\d*[<>]+\S*)\s*/.exec(rest)) !== null && prefix[0].length > 0) {
-    const word = prefix[0].trim();
-    rest = rest.slice(prefix[0].length);
-    if (BARE_REDIRECTION_OPERATOR_RE.test(word)) rest = rest.replace(/^\S+\s*/, "");
+// Split one segment into the WORDS a shell would pass, honouring quotes: a
+// quoted redirection target with whitespace (`node > "out file" "$F"`) is one
+// word, so skipping the target cannot leave half of it (`file"`) looking like a
+// literal script (Codex App P2 on 939c2d3cf, PR #619). Quotes stay in the word;
+// a backslash outside single quotes keeps its next character in the word.
+export function splitShellWords(text) {
+  const words = [];
+  let current = "";
+  let quote = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      if (char === "\\" && quote === '"' && index + 1 < text.length) {
+        current += char + text[index + 1];
+        index += 1;
+        continue;
+      }
+      if (char === quote) quote = null;
+      current += char;
+      continue;
+    }
+    if (char === "\\" && index + 1 < text.length) {
+      current += char + text[index + 1];
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) words.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
   }
-  const token = (/^[^\s<>]+/.exec(rest) || [""])[0];
+  if (current) words.push(current);
+  return words;
+}
+function segmentHead(segment) {
+  const words = splitShellWords(segment.replace(/^[\s({@&]+/, ""));
+  let index = 0;
+  // Leading assignments (`F=x node …`) and redirections (`</dev/null node …`,
+  // `> "out file" node …`) precede the head word without changing it; a bare
+  // operator's target is the next whole word.
+  while (index < words.length) {
+    const word = words[index];
+    if (!/^[A-Za-z_]\w*=/.test(word) && !REDIRECTION_WORD_RE.test(word)) break;
+    index += BARE_REDIRECTION_OPERATOR_RE.test(word) ? 2 : 1;
+  }
+  const token = (/^[^<>]+/.exec(words[index] || "") || [""])[0];
   return token.replace(/^\$?["']+|["']+$/g, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
 }
 export function computedJavaScriptScriptArgument(command) {
@@ -167,7 +209,7 @@ export function computedJavaScriptScriptArgument(command) {
     const match = JS_RUNTIME_TOKEN_RE.exec(segment);
     if (!match) continue;
     const bunOrDeno = /bun|deno/i.test(match[0]);
-    const tokens = segment.slice(match.index + match[0].length).trim().split(/\s+/).filter(Boolean);
+    const tokens = splitShellWords(segment.slice(match.index + match[0].length));
     for (let index = 0; index < tokens.length; index += 1) {
       const raw = tokens[index];
       const token = raw.replace(/^["']+|["']+$/g, "");
