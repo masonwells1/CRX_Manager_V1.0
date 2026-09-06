@@ -773,8 +773,15 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
    *
    * Retaining the key across an ambiguous reply is the point of F1 — but on a detail
    * page that does not remount when the route id changes (every `<x>/:id` route in
-   * src/App.tsx is rendered without a `key` prop), an unscoped retained key can replay
-   * record A's receipt against record B.
+   * src/App.tsx EXCEPT `jobs/:id`, which is keyed by id via `JobDetailRoute`, is
+   * rendered without a `key` prop), an unscoped retained key can replay record A's
+   * receipt against record B.
+   *
+   * The `jobs/:id` exception does not weaken the rationale for any key listed below:
+   * none of the record-scoped keys lives on JobDetail. Every page they DO live on --
+   * OrderDetail, DeliveryDetail, InvoiceDetail, FieldApplicationInvoice, Returns,
+   * PrepaymentManagerPanel, MonthEndClose -- is still rendered unkeyed, so the
+   * record scope is still load-bearing for all nine.
    *
    * SCOPE OF THIS PR, narrowed 2026-09-03 after the round-2 Codex review found the
    * generalisation unsafe, and narrowed AGAIN after round 4. A key is only listed here
