@@ -1,21 +1,25 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-09-05 for the migration-ledger header; the F2 entry retains its separate
-2026-09-04 verification.** The ordering boundary is the newest applied authored NAME:
-**`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`, read-only
-`list_migrations` on 2026-09-05). Live held **998 ledger rows / 991 distinct names** at that
-point-in-time. The commission snapshot (`20260903230000`, ledger version `20260904040643`) was
-followed by the invoice-date fallback (`20260904160000`, version `20260904130047`) and then the
-invoice-season correction (`20260904180000`). The last file is not yet on `main`; open PR #599 owns
-that repository/production gap. Read ordering from the NAME — it is what
-the ordering guard compares and it moves far less often than the counters. Two further reading
-traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
-reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
-because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …) sort above digits
-— use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` here as a point-in-time
-observation, not a fact** — any lane applying a migration moves them, so
-re-read live rather than trusting them, and do not re-pin them here on every apply. Only the ledger
-header was re-read on 2026-09-05. The F2 item below was last re-verified against live on 2026-09-04
+2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
+count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
+`docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
+there before any apply decision, and update it there — never restate it here. The reason is a trap
+hit for real on 2026-09-05: for several hours this header still named the afternoon boundary
+(`20260904180000_invoice_season_follows_invoice_date`, 998 rows) after PR #606 had moved the live
+high-water to `20260905185938_refuse_null_job_field_acres` (999 rows), so a migration stamped
+between the two read as safe from this manual while the ordering guard refused it. Two
+hand-maintained copies of one moving fact will always drift apart; this file now keeps none.
+Read ordering from the NAME — it is what the ordering guard compares and it moves far less often
+than the counters; when a row was recorded under a bare name (as #606's was), the guard synthesizes
+`<version>_<name>`, and the capture in `migration-history.md` records that effective stamp. Two
+further reading traps, both hit for real on 2026-09-04: `version` and `name` are different columns
+and diverge, so reading the boundary off `version` gives a plausible wrong answer; and `max(name)`
+returns garbage, because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …)
+sort above digits — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` in
+that capture as a point-in-time observation, not a fact** — any lane applying a migration moves
+them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05.
+The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
