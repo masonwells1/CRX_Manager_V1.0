@@ -35,7 +35,11 @@ writers in `review-proof-guard.mjs` (the `ask` tier covers native editors only) 
 `scripts/write-apply-proofs-lib.mjs` to the risky-path set so its diff needs the exact-SHA review.
 A fourth round (GitHub Codex P1 on `8179ae989`) added `.claude/launch.json` to all three lists:
 `preview_start`, newly allowed, executes the command that file names, so an unprotected edit to
-it was a route around every Bash hook. `preview_start` itself stays allowed.
+it was a route around every Bash hook. `preview_start` itself stays allowed. A fifth round
+(`gpt-5.6-sol` HIGH on `d6302e28b`) moved `mcp__Claude_Browser__read_network_requests` from `allow`
+to `ask`: CRX page traffic carries Supabase bearer tokens and signed customer-document links, and
+nothing proves the connector redacts them, so network capture in the preview browser prompts; the
+other thirteen read-only browser tools stay allowed.
 
 **Mode correction after review:** inheriting Auto left new named connector mutations
 eligible for classifier approval. `acceptEdits` keeps ordinary local edits automatic

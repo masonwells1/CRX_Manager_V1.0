@@ -129,7 +129,6 @@
       "mcp__Claude_Browser__get_page_text",
       "mcp__Claude_Browser__find",
       "mcp__Claude_Browser__read_console_messages",
-      "mcp__Claude_Browser__read_network_requests",
       "mcp__Claude_Browser__tabs_context",
       "mcp__Claude_Browser__tabs_create",
       "mcp__Claude_Browser__tabs_select",
@@ -285,7 +284,8 @@
       "mcp__Claude_Browser__navigate",
       "mcp__Claude_Browser__form_input",
       "mcp__Claude_Browser__javascript_tool",
-      "mcp__Claude_Browser__browser_batch"
+      "mcp__Claude_Browser__browser_batch",
+      "mcp__Claude_Browser__read_network_requests"
     ],
     "deny": [
       "Bash(git push --force:*)",
