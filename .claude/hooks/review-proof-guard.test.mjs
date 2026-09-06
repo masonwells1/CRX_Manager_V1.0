@@ -973,9 +973,15 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
         // resolves with `realpathSync.native`, which returns the file's final
         // path WITHOUT the stream qualifier (GetFinalPathNameByHandle), so the
         // resolved string ends in `.json` and the evidence and proof-name rules
-        // still fire. Oracle as above: the guard must deny exactly when the OS
-        // opens the qualified string as the proof (on POSIX the qualified name
-        // is an ordinary absent file, so the guard must stay quiet).
+        // still fire. Oracle as above: the guard must deny whenever the OS opens
+        // the qualified string as the proof. On POSIX the qualified name is an
+        // ordinary absent file, and two name rules then decide by themselves:
+        // a name that lexically ENTERS `.claude/session-state` fails closed when
+        // it does not resolve (there is nothing to read from a missing file), and
+        // a name carrying a proof basename is denied before any resolution. Only
+        // an absent name outside the state directory with no proof basename
+        // stays quiet (Codex GitHub App review of 33994be9e, P1: the first draft
+        // expected silence for the state-directory case on POSIX).
         writeFileSync(path.join(externalDir, "codex-review-abc.json"), "{\"verdict\":\"clean\"}");
         for (const [label, plain, cwd] of [
           ["evidence through the junctioned state dir", viaJunction, junctionRoot],
@@ -987,14 +993,17 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
             const raw = `${plain}${qualifier}`;
             let opened = null;
             try { opened = readFileSync(raw, "utf8"); } catch { opened = null; }
+            const entersStateDir = /[\\/]\.claude[\\/]session-state[\\/]/i.test(raw);
+            const namesProof = /codex-review-[\w-]+\.json/i.test(raw);
+            const mustDeny = opened === body || entersStateDir || namesProof;
             for (const tool_name of ["Read", "NotebookRead"]) {
               const tool_input = tool_name === "Read" ? { file_path: raw } : { notebook_path: raw };
               const result = run({ tool_name, cwd, tool_input });
               assert.equal(result.status, 0, `hook should exit 0: ${tool_name} ${label}${qualifier}`);
-              if (opened === body) {
-                assert.match(result.stdout, /"permissionDecision":"deny"/, `a stream-qualified name the OS opens as ${label} must deny: ${raw}`);
+              if (mustDeny) {
+                assert.match(result.stdout, /"permissionDecision":"deny"/, `a stream-qualified name must deny when the OS opens it as ${label} (opened=${opened === body}), when it enters the state dir (${entersStateDir}), or when it names a proof (${namesProof}): ${raw}`);
               } else {
-                assert.equal(result.stdout, "", `a stream-qualified name the OS does not open stays allowed (${label}): ${raw}`);
+                assert.equal(result.stdout, "", `a stream-qualified name the OS does not open, outside the state dir, naming no proof, stays allowed (${label}): ${raw}`);
               }
             }
           }
