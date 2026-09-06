@@ -2206,6 +2206,52 @@ describe('QuoteBuilder', () => {
     return { ...fixture, quote: { ...fixture.quote, row_version: rowVersion } };
   }
 
+  /**
+   * The empty-reply branch sits ABOVE `editingSessionChanged()`, so it needed its own
+   * session check — raised as a P2 by the exact-SHA gpt-5.6-sol review of `451727ee9`.
+   *
+   * An ambiguous `{}` reply for quote A that lands after the operator has moved to
+   * quote B must still retain A's key, but it must not SAY anything: an unqualified
+   * "the save came back without an ID" toast over quote B reads as a failure of the
+   * quote on screen, which is the same route-reply leak the guard below exists to
+   * stop. Silence plus retention is the correct pair here.
+   */
+  it('stays silent about quote A empty reply once the operator has moved to quote B', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveReply = openableGate();
+    let saveCalls = 0;
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveCalls += 1;
+      if (saveCalls === 1) {
+        await saveReply.opened;
+        // The ambiguous reply: no error, and no receipt in it.
+        return { data: {}, error: null };
+      }
+      return { data: { quote_id: 'quote-b', row_version: 12 }, error: null };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {});
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(saveCalls).toBe(1));
+
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+
+    saveReply.open();
+    await flushPendingWork();
+
+    expect(
+      mockToast.mock.calls.map((c) => String(c[1])).join(' | '),
+      "quote A's ambiguous reply must not report a failure over quote B",
+    ).not.toMatch(/came back without an ID/);
+
+    // Retention is the other half of the pair: A's key must survive, unretired.
+    expect(mockResetIdempotencyKey).not.toHaveBeenCalledWith('quote-a');
+  });
+
   it('drops a late save_quote reply for quote A rather than installing its token on quote B', async () => {
     const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
     const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);

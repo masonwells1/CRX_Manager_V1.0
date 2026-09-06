@@ -565,3 +565,26 @@ because a regression to a page-wide key would produce a different spelling.
 Proof: the identity fix is mutation-proven — restoring the unstable dependency fails exactly the
 three A → B → A load-ordering tests and nothing else. Suite 351 files / 5025 passed / 123 skipped;
 typecheck, lint and build clean.
+
+## Round 10 — the recovery instruction destroyed the receipt it had just preserved
+
+The exact-SHA review of `451727ee9` raised a **P1 against this branch's own round-8 fix**, and it was
+right. On a create, an ambiguous `{}` reply retains the key — and then the message told the operator
+to reload. The key lives in a `useRef` inside the mounted form, so reloading discards the very
+receipt that had just been kept. The retry would mint a fresh key the server cannot replay and
+insert a second record: the exact outcome the retention exists to prevent, reached by following the
+instruction the fix itself printed. **Retention that the recovery path throws away is not retention.**
+
+Both pages now split the message by path. A create says to press Save again *without* reloading,
+because replaying the original payload is what redeems the server's cached result. An existing
+record still says to reload, because for it the reload IS the authoritative resolution and the
+reload path releases the key deliberately.
+
+A **P2** on the same branch: QuoteBuilder's empty-reply return sits above `editingSessionChanged()`,
+so quote A's unqualified "came back without an ID" toast could appear over quote B — the same
+route-reply leak that guard exists to stop. The branch now checks the session before speaking while
+still retaining A's key. Silence plus retention is the correct pair; the key is not conditional on
+anyone being told. Mutation-proven: forcing the toast unconditionally fails exactly that test.
+
+Neither finding was reachable before round 8, because before it the key was retired on that path and
+there was no retained receipt to lose or misreport.

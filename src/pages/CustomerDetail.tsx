@@ -906,7 +906,17 @@ export default function CustomerDetail() {
         // which reports and clears `saving`. Retiring first and discovering the
         // emptiness afterwards is what would insert the customer a second time.
         if (!hasReceiptId(result, 'customer_id')) {
-          throw new Error('save_customer returned no customer ID — the save outcome is unknown. Reload before making further changes.');
+          // Do NOT tell a create to reload. The retained key lives in a `useRef` in
+          // this mounted component, so a reload discards the very receipt this branch
+          // just preserved — the retry then mints a fresh key the server cannot
+          // replay and inserts a second customer, which is the outcome the retention
+          // exists to prevent. Retention only pays off if the operator stays on the
+          // form and saves again, replaying the original payload against the server's
+          // cached result. An EXISTING customer is different: reloading it IS the
+          // authoritative resolution, and the reload path releases the key on purpose.
+          throw new Error(isNew
+            ? 'The save came back without an ID, so it is unknown whether this customer was created. Press Save again WITHOUT reloading — the retry replays the same request, so the server returns the original result instead of creating a second customer.'
+            : 'save_customer returned no customer ID — the save outcome is unknown. Reload before making further changes.');
         }
         resetSaveCustomerIdempotencyKey();
         const rowVersionResult = resolveAuthoritativeSaveRowVersion(

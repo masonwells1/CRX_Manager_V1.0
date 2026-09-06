@@ -1809,7 +1809,27 @@ export default function QuoteBuilder() {
       // worse than a missed check — on an edit route it manufactured a plausible id
       // out of the URL, so an unverified save reported itself as a confirmed one.
       if (!hasReceiptId(result, 'quote_id')) {
-        toast('error', 'The quote save came back without an ID, so its outcome is unknown. Reload the quote before making further changes.');
+        // The key is retained either way — this reply proves nothing about what
+        // committed. Two things still have to be right about how we SAY that.
+        //
+        // Only speak to the operator if they are still in the session that sent this
+        // save. Quote A's unqualified failure toast over quote B is the same
+        // route-reply leak `editingSessionChanged()` exists to stop, and this early
+        // return sits above it.
+        //
+        // And do not tell a CREATE to reload. The key lives in a `useRef` inside this
+        // mounted component, so a reload discards the very receipt that was just
+        // retained — the retry then mints a fresh key the server cannot replay and
+        // inserts a second quote, which is the outcome this whole branch exists to
+        // prevent. Retention only pays off if the operator stays on the form and
+        // retries, replaying the original payload against the server's cached result.
+        // An EXISTING quote is different: reloading it IS the authoritative
+        // resolution, and the reload path releases the key deliberately.
+        if (!editingSessionChanged()) {
+          toast('error', saveQuoteIntentScope === 'new'
+            ? 'The save came back without an ID, so it is unknown whether this quote was created. Press Save Draft again WITHOUT reloading — the retry replays the same request, so the server returns the original result instead of creating a second quote.'
+            : 'The quote save came back without an ID, so its outcome is unknown. Reload the quote before making further changes.');
+        }
         return null;
       }
       resetSaveQuoteIdempotencyKey();
