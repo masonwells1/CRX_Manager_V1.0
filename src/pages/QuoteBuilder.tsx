@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   Save,
@@ -50,7 +50,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
-import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
+import { BelowCostApprovalHandledError, isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
@@ -294,6 +294,19 @@ export default function QuoteBuilder() {
   // Once this tab has observed a numeric token, recovery must never downgrade
   // it to the frontend-first legacy tokenless contract.
   const quoteNumericVersionRequiredRef = useRef(false);
+  // The quote whose save was rejected with IDEMPOTENCY_PAYLOAD_CONFLICT while the
+  // operator was no longer in that editing session, so the recovery dialog could
+  // not be shown for it. The server has bound this key to a different payload, so
+  // every later save reusing it — of ANY quote, because the key is scoped by
+  // operation and user — is rejected the same way until the key rotates.
+  //
+  // The key is NOT rotated here. It is a receipt as well as a retry token: it may
+  // represent a save that committed and lost its reply, and replaying the original
+  // payload is the only deterministic way to learn that. Retiring it early is what
+  // #603 shipped and reverted. Rotation happens where it is sanctioned — after an
+  // authoritative reload of this existing quote resolves the outcome — which is
+  // the same rule `reloadAfterStaleSave` already follows.
+  const payloadConflictQuoteIdRef = useRef<string | null>(null);
   const [staleSaveOpen, setStaleSaveOpen] = useState(false);
 
   const getCreateVersionAttempt = useCallback(() => {
@@ -451,17 +464,30 @@ export default function QuoteBuilder() {
   // describes a record this page is no longer showing, so it must install
   // nothing: not the form, not quoteId, not the row-version token.
   const quoteLoadSerialRef = useRef(0);
-  // The quote the URL currently names, captured during render so it is already
-  // correct for any effect or handler that runs on the new route. The serial
-  // above orders CALLS; this binds a call to a RECORD, and the two operands have
-  // genuinely independent sources (one from this component's own call order, one
-  // from the router). Both are needed: `fetchQuote` is also called from stale
-  // closures that survive a navigation — the stale-save reload and the
-  // post-conversion refetch — and such a call MINTS THE NEWEST SERIAL for the
-  // quote the operator already left, so a serial check alone would certify the
-  // stale snapshot as current instead of rejecting it.
+  // The quote the URL currently names. The serial above orders CALLS; this binds
+  // a call to a RECORD, and the two operands have genuinely independent sources
+  // (one from this component's own call order, one from the router). Both are
+  // needed: `fetchQuote` is also called from stale closures that survive a
+  // navigation — the stale-save reload and the post-conversion refetch — and such
+  // a call MINTS THE NEWEST SERIAL for the quote the operator already left, so a
+  // serial check alone would certify the stale snapshot as current instead of
+  // rejecting it.
+  //
+  // Written in a LAYOUT EFFECT, never during render. React may begin rendering a
+  // transition to another quote and then discard that render while the current
+  // one is still the committed screen; a render-time write publishes the new id
+  // anyway. The save guard reads this ref to decide whether its reply still
+  // belongs on screen, so a route that "changed" only inside a discarded render
+  // makes it drop a VALID reply after the database has committed — leaving the
+  // stale row-version token and a dirty form, and sending the operator's retry
+  // into stale-write recovery on a document that drives cost and price. A layout
+  // effect runs on commit, and before the passive effects that start the loads,
+  // so every reader still sees the committed route. Same discipline, and the same
+  // reasoning, as `CustomerDetail.tsx`'s `currentIdRef`.
   const routeQuoteIdRef = useRef<string | null>(id ?? null);
-  routeQuoteIdRef.current = id ?? null;
+  useLayoutEffect(() => {
+    routeQuoteIdRef.current = id ?? null;
+  }, [id]);
   const blocker = useUnsavedChanges(isDirty);
 
   // Status-based guards
@@ -809,6 +835,18 @@ export default function QuoteBuilder() {
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
   const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
+    // Refuse at the door, BEFORE taking a serial. A load for a quote the operator
+    // has already left is doomed either way — it would reject itself below — but
+    // taking a number on the way past is NOT free. The serial is a shared resource:
+    // burning one supersedes the legitimate load of the quote now on screen, which
+    // then installs nothing and strands the page behind a skeleton that never
+    // clears, and it makes an unrelated in-flight SAVE of that quote look like it
+    // belongs to an editing session that ended.
+    //
+    // Reachable through the delayed post-conversion `fetchQuote(savedId)` below and
+    // through `reloadAfterStaleSave`, both of which run from closures that survive a
+    // navigation. Same discipline as CustomerDetail's tab loader.
+    if (routeQuoteIdRef.current !== quoteId) return false;
     const loadSerial = ++quoteLoadSerialRef.current;
     // Two independent halves; neither subsumes the other, and each has its own
     // regression test. `supersededByNewerLoad` orders CALLS, so reopening the
@@ -932,6 +970,17 @@ export default function QuoteBuilder() {
     quoteRowVersionRef.current = finalRowVersion;
     quoteNumericVersionRequiredRef.current = finalRowVersion !== null;
     quoteVersionRecoveryRequiredRef.current = false;
+    // This IS the authoritative reload that a rejected save key was waiting for:
+    // the operator is looking at what the database actually holds for this quote,
+    // so the receipt has served its purpose and the key may finally rotate. Same
+    // condition `reloadAfterStaleSave` uses, reached through the ordinary reopen
+    // instead of the recovery dialog — which the moved-session path cannot show.
+    // Scoped to the quote the conflict belongs to: reloading a DIFFERENT quote
+    // resolves nothing about this one.
+    if (payloadConflictQuoteIdRef.current === q.id) {
+      payloadConflictQuoteIdRef.current = null;
+      resetSaveQuoteIdempotencyKey();
+    }
     setQuoteId(q.id);
     setQuoteNumber(q.quote_number);
     setCustomerId(q.customer_id);
@@ -988,7 +1037,7 @@ export default function QuoteBuilder() {
     const loadGeneration = ++initialLoadGenerationRef.current;
     setInstalledLoadGeneration(loadGeneration);
     return true;
-  }, [toast, navigate]);
+  }, [toast, navigate, resetSaveQuoteIdempotencyKey]);
 
   const reloadAfterStaleSave = useCallback(async () => {
     if (!quoteId) return false;
@@ -1550,13 +1599,99 @@ export default function QuoteBuilder() {
 
     try {
       const idemKey = getSaveQuoteIdempotencyKey();
-      const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_quote', withBelowCostReason('save_quote', {
-        p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
-        p_quote_payload: quotePayload as Json,
-        p_sections: sectionsPayload,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      }, reason)));
+      // Which record, and which editing session of it, this request belongs to —
+      // captured BEFORE it is sent. The entry check at the top of this function
+      // cannot stand in for either: that ran before the request existed, and
+      // everything installed below is written AFTER the reply lands.
+      // `runWithBelowCostApproval` can also park this await on an operator
+      // decision, which widens the window from a round trip to however long that
+      // dialog stays open.
+      //
+      // Two operands, and each is load-bearing on its own.
+      //
+      // The route id is NOT unique over time. Leaving quote A for B and returning
+      // to A restores it, so a route-only check would accept this reply into a
+      // DIFFERENT editing session of the same quote: the callers would clear the
+      // dirty flag over edits made after the return, which were never part of this
+      // request, and report them saved. The load serial is what separates those
+      // sessions, because returning to A re-runs `fetchQuote` and mints a new one.
+      //
+      // The serial alone is not enough either, for the reason documented at its
+      // declaration: `fetchQuote` is also called from stale closures, and such a
+      // call mints the NEWEST serial for a record the operator has already left.
+      const routeAtSend = routeQuoteIdRef.current;
+      const loadAtSend = quoteLoadSerialRef.current;
+      const editingSessionChanged = () =>
+        routeQuoteIdRef.current !== routeAtSend || quoteLoadSerialRef.current !== loadAtSend;
+      const quoteNumberAtSend = quoteNumber;
+      // The record this request actually targets — component state, not the route.
+      // Null on a create, which has no record to reopen.
+      const quoteIdAtSend = (quoteId && isEditing) ? quoteId : null;
+      const { data, error } = await runWithBelowCostApproval((reason) => {
+        // `reason` is non-null ONLY on the post-approval retry, so this never
+        // touches the first send.
+        //
+        // The below-cost dialog parks that first send on an operator decision,
+        // and it is a GLOBAL dialog that names the product and nothing else —
+        // never which quote is being approved. If the operator moved to another
+        // quote (or reloaded this one) while it was open, the approval they just
+        // gave was given while looking at a different record, so it may not be
+        // spent on this one. Refuse the retry rather than send it.
+        //
+        // Refusing HERE, before the request exists, is what makes this safe to
+        // report plainly: the first attempt was rejected by PostgreSQL, which
+        // rolls back, and the retry is never sent — so unlike the lost-reply
+        // case below, the outcome is known and the message may say so.
+        if (reason !== null && editingSessionChanged()) {
+          toast('error', `Quote ${quoteNumberAtSend || 'you were editing'} was not saved. The below-cost approval finished after you left that quote, so it was not applied — reopen the quote and save again.`);
+          throw new BelowCostApprovalHandledError();
+        }
+        return supabase.rpc('save_quote', withBelowCostReason('save_quote', {
+          p_quote_id: quoteIdAtSend as string,
+          p_quote_payload: quotePayload as Json,
+          p_sections: sectionsPayload,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        }, reason));
+      });
+
+      // The editing session this save belonged to is gone. Quote A's failure is
+      // not quote B's, so neither the stale-write recovery dialog nor a bare error
+      // toast may land here. It is not swallowed either: the operator left
+      // believing this saved. Name the quote, because what they are looking at is
+      // a different one — or a freshly reloaded copy of the same one — and an
+      // unqualified failure would read as belonging to it.
+      //
+      // Latching `quoteVersionRecoveryRequiredRef` here would be actively wrong on
+      // the return-to-A path: it would strand a freshly loaded quote behind a
+      // "reload before saving" gate it has already satisfied.
+      //
+      // Deliberately does NOT touch the idempotency key. The outcome here is
+      // genuinely unknown, so the key must survive for the retry (F1) exactly as it
+      // does on the in-route error paths below.
+      //
+      // And because it is unknown, the message must not claim a rollback. A reply
+      // lost in transit AFTER PostgreSQL committed arrives through this same
+      // `error` branch, so "your changes were not stored" would be a guess stated
+      // as fact — and the operator is not even looking at this quote to check. Say
+      // what is true (unconfirmed) and what to do about it. The retained key is
+      // what makes the retry safe if it did commit.
+      if (error && editingSessionChanged()) {
+        // A payload conflict is not merely "unconfirmed" — the server has bound
+        // this key to a DIFFERENT payload, so it can never accept the current one
+        // again. The in-route branch below recovers through the reload dialog,
+        // which rotates the key; that dialog cannot be shown here, because it
+        // belongs to a quote the operator has left. Remember which quote is
+        // waiting for that reload instead. Without this the key stays poisoned for
+        // the life of the component and every later save — of any quote, since the
+        // key is scoped by operation and user rather than by record — repeats the
+        // same conflict.
+        if (hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT) && quoteIdAtSend) {
+          payloadConflictQuoteIdRef.current = quoteIdAtSend;
+        }
+        toast('error', `Quote ${quoteNumberAtSend || 'you were editing'} could not be confirmed as saved. Reopen it to check, and save again if your changes are missing.`);
+        return null;
+      }
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
@@ -1577,6 +1712,19 @@ export default function QuoteBuilder() {
         toast('error', 'Quote save completed without an ID. Refresh before making further changes.');
         return null;
       }
+      // The editing session that sent this save is gone, so nothing below belongs
+      // to what is on screen now: the authoritative row-version token, the
+      // commission baseline, `setQuoteId`, and — through the `null` return — the
+      // callers' dirty-clear, success toast and navigation. Every caller gates
+      // its post-save work on a non-null id, so returning `null` suppresses them.
+      //
+      // Placed AFTER the reply is verified and the key rotated, not before. This
+      // save committed; retiring its key is correct and must happen wherever the
+      // reply lands, or a later unrelated save would replay this committed
+      // result. Rotating it in a second, earlier place would also re-introduce
+      // the reset-before-verify ordering that `idempotency-reset-order.test.ts`
+      // pins this file against.
+      if (editingSessionChanged()) return null;
       // The save committed, but conversion and other chained actions must not
       // continue unless this tab can install the exact authoritative token.
       if (!installAuthoritativeQuoteRowVersion(result.row_version, 'saved')) {
