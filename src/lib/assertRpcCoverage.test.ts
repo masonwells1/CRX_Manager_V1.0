@@ -41,6 +41,23 @@ const RPC_CAPTURE_PATTERN = /=\s*await\s+supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*
 const RPC_WRAPPED_CAPTURE_PATTERN =
   /=\s*await\s+\w+\s*\(\s*(?:async\s*)?\(?\s*\w+\s*\)?\s*=>\s*supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
 
+// The same wrapped capture, but with a BLOCK-bodied callback:
+// `= await someRunner((reason) => { …guard…; return supabase.rpc('name', …) })`.
+// Added 2026-09-05 because the pattern above only sees an arrow whose body IS
+// the rpc call, so a callback that checks something first escaped counting
+// ENTIRELY — an unasserted RPC there was invisible, which is a fail-OPEN hole,
+// not a strictness choice.
+//
+// The tempered `(?:(?!supabase…rpc)[\s\S])*?` stops at the FIRST supabase.rpc
+// inside the block, so a callback containing several is counted once, matching
+// the single response the runner resolves with. A block-bodied runner callback
+// containing NO rpc at all would let this scan run past the block to a later
+// call site and over-count — which fails this test loudly rather than passing
+// quietly, and is the direction a guard should err in. No such callback exists
+// in `src/` today (checked across every file when this was added).
+const RPC_WRAPPED_BLOCK_CAPTURE_PATTERN =
+  /=\s*await\s+\w+\s*\(\s*(?:async\s*)?\(?\s*\w+\s*\)?\s*=>\s*\{(?:(?!supabase(?:Untyped)?\s*\.\s*rpc)[\s\S])*?supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
+
 // `assertRpcResult(...)` invocations. The optional `<...>` group handles
 // generic-type uses like `assertRpcResult<{ id: string }>(data, 'rpc_name')`,
 // which the previous regex silently missed.
@@ -110,6 +127,7 @@ describe('assertRpcResult coverage', () => {
         const rpcMatches = [
           ...content.matchAll(RPC_CAPTURE_PATTERN),
           ...content.matchAll(RPC_WRAPPED_CAPTURE_PATTERN),
+          ...content.matchAll(RPC_WRAPPED_BLOCK_CAPTURE_PATTERN),
         ];
         const rpcNames = rpcMatches.map((m) => m[1]);
 

@@ -7,6 +7,26 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
+
+**Source:** Mason's decision on 2026-09-05, after the 2026-09-05 analysis recorded in `docs/manual/KNOWN_ISSUES.md`.
+
+**Decision.** `scripts/apply-live-testdata-maintenance-20260812.mjs` is to be deleted through its own `--retire-producer` lane (one local file deletion; the script never touched the database in any lane), together with its test and its three snippet inputs. Its apply lane never ran, and its snippets did not cover the classifier defects found on 2026-09-02, so applying it would not have repaired the live false positives. The deletion is executed in the commit that follows this record, because the retire lane only runs against a reviewed commit that still contains the producer; `docs/manual/KNOWN_ISSUES.md` tracks whether it has landed.
+
+**What this forbids/implies:** do not revive the producer or its snippets; a classifier repair is a new, ordinary reviewed change against `.claude/hooks/live-testdata-lib.mjs`. The by-name deny rules that still name the retired path in the three guard files stay as they are until a separate guard change removes them. Once the deletion lands, editing `.codex/hooks/production-action-guard.mjs` no longer requires a blob re-pin.
+
+## 2026-09-04 — Agent instructions use a lean shared contract and task-routed detail
+
+**Source:** Mason's request to analyze the CRX documentation setup against current Codex and Claude guidance, make `AGENTS.md` as lean as possible, prefer simple readable code, and explicitly design for an owner who cannot review code.
+
+**Decision.** `AGENTS.md` remains the short shared contract for durable owner, authority, safety, CRX hard-rule, verification, and routing behavior. Detailed procedures, examples, model tuning, and volatile facts load only when the task needs their workflow or reference file; deterministic requirements stay in hooks, tests, and CI. `CLAUDE.md` remains a small Claude-only router that imports the shared contract.
+
+**Claude tuning move.** The former `CLAUDE.md` Model Tuning section, including its concise response behavior, delegation budget, review-prompt rules, and effort mapping, moved to `docs/reference/claude-model-tuning.md`. The literal `<tone_preference>` wrapper is retired; its operative behavior remains in `AGENTS.md` Owner Communication and the on-demand tuning reference. Claude keeps Mason's existing one-time pre-code plan checkpoint for multi-file or risk-sensitive work. Codex keeps its standing authority to proceed after a short plan and must not require repeated nudges.
+
+**Machine-wide Codex contract.** Mason's same request also authorized trimming `C:\Users\mason\.codex\AGENTS.md`, which affects every local Codex project, not only CRX Manager. The file now keeps only cross-project owner communication, authority, safety, quality, and proof rules; CRX-specific instructions remain in this repository. Verified 2026-09-04: the active file is SHA-256 `870CAAD0F309757A6D5205A0F91C7C0B91D57604BF7427A5670428B8703EC94D`. Recoverable snapshots are `C:\Users\mason\.codex\backups\20260904-codex-behavior\AGENTS.md` (before, SHA-256 `B8715E9934B4161838C6153448C8AD0730D5E31EBA104C762A7D37E721A6777C`) and `AGENTS.after-lean-20260904.md` in the same folder (after, same hash as the active file). Future machine-wide edits require a fresh owner request and a recoverable before/after record because they can affect FarmRx and every other project.
+
+**What this forbids/implies:** do not re-expand always-loaded files with task procedures already routed elsewhere; do not remove a hard rule without moving or superseding it; do not present findings from a checkout behind `origin/main` as current; and do not make Mason name files, select technical implementations, or paste setup prompts. Delegation routes to `docs/workflows/AGENT_COLLABORATION.md`, while every code change routes through the lightweight coding guide so settled decisions and known issues are checked without loading the full safety rulebook. `scripts/check-agent-guidance.mjs` enforces size budgets, critical rule presence, and valid routing paths.
+
 ## 2026-09-04 — preserve positional actor numbering across ARRAY defaults in PR #449
 
 **Source:** Mason's continuing direction to get PR #449 clean and mergeable, applied after the
@@ -230,6 +250,7 @@ authorize another general pattern-hardening round, a new SQL parser, wider actor
 cross-routine dataflow, incremental-edit reconstruction, changes to the post-apply predicates, or
 claims that the hook is a security boundary. Future residuals return to the capped posture unless
 Mason separately authorizes them.
+
 ## 2026-09-03 — invoice payment terms run from the INVOICE DATE; the UTC hole is a separate, smaller issue
 
 **Source:** Mason's decision on 2026-09-03, put to him by the orchestrator session as one question
@@ -969,14 +990,14 @@ for the closed-allowlist shape that entry needs. Still parked; nothing was chang
 **Source:** Mason's in-chat request on 2026-08-31 to tune both CLAUDE.md files for effectiveness;
 Codex PR #528 review finding that this log still scoped the tuning decision to Opus 5.
 
-**Decision.** The `CLAUDE.md` Model Tuning section added by the 2026-07-25 entry applies to the
+**Decision.** The Model Tuning guidance now kept in `docs/reference/claude-model-tuning.md` and originally added to `CLAUDE.md` by the 2026-07-25 entry applies to the
 whole Claude 5 family — Opus 5 and Fable 5 — not only Opus 5. The 2026-07-25 calibration
 (`<tone_preference>`, deliverable-length rule, subagent budget, self-verification carve-out,
 uncapped review prompts with the settled overnight-sweep exception, and the effort ladder) carries
 over to Fable 5 unchanged. The carry-over is provisional — the 2026-07-25 review measured Opus 5
 only — but binding until a newer harness review supersedes it.
 
-**Operative rule.** A Fable 5 session follows the Model Tuning rules exactly as an Opus 5 session
+**Operative rule.** A Fable 5 session follows the model-tuning rules exactly as an Opus 5 session
 would; do not treat the section as Opus-only or relitigate its scope. Every settled exception and
 the pending effort sweep from the 2026-07-25 entry remain in force. This supersedes only the
 model-scope wording of the 2026-07-25 entry; its substance is unchanged.
@@ -3102,8 +3123,8 @@ from zero in a throwaway container, all six post-baseline migrations replayed, 4
 **Decision (Mason, in-chat):** tune the harness for Claude Opus 5 and drop Hermes — "we don't use Hermes really." No third-agent contract, entry point, or hook adapter will be built.
 **Why:** an Opus 5 review found the harness already close to Anthropic's guidance, with the gaps being things that were *missing* (no effort policy, no subagent budget, no length calibration) rather than things that were wrong.
 **What this forbids/implies:**
-- `CLAUDE.md` gains a **Model Tuning (Claude Opus 5)** section: concise-response `<tone_preference>`, written-deliverable length calibration, a subagent budget capped at the fan-outs already defined in `.claude/workflows/`, and an effort mapping (`low` mechanical → `xhigh` foundation/migration review). The effort mapping is an unmeasured starting point; **never lower effort on a money/RLS/migration path to save tokens.**
-- Redundant self-verification instructions are discouraged, but this **does not** relax the `AGENTS.md` Verification Standard, the Codex cross-model gate, or the adversarial skeptics on money/RLS/migration paths — those are production-safety and independent-check mechanisms, not model self-checks.
+- At the time, `CLAUDE.md` gained a **Model Tuning (Claude Opus 5)** section; on 2026-09-04 that guidance moved without weakening to `docs/reference/claude-model-tuning.md`. It covers concise responses, written-deliverable length calibration, a subagent budget capped at the fan-outs already defined in `.claude/workflows/`, and an effort mapping (`low` mechanical → `xhigh` foundation/migration review). The effort mapping is an unmeasured starting point; **never lower effort on a money/RLS/migration path to save tokens.**
+- Redundant self-verification instructions are discouraged, but this **does not** relax `AGENTS.md`'s Verification and Closeout rules, the Codex cross-model gate, or the adversarial skeptics on money/RLS/migration paths — those are production-safety and independent-check mechanisms, not model self-checks.
 - Review prompts must request every finding and filter later; never instruct a reviewer to "only report high-severity issues" or "be conservative" (Opus 5 obeys literally and reports less). **SETTLED (Mason, 2026-07-25) — bounded overnight sweeps are exempt.** `overnight-bug-hunt.js:51`, `money-inventory-hunt.js:52`, and `whole-codebase-audit.js:29` keep their 8–10 "most significant" caps; the per-run cost of uncapped fan-out outweighs the tail findings. Accepted trade-off: a low-ranked correctness bug can be dropped before the skeptic pass on those runs. The rule binds everywhere else — do not add a cap to any other review prompt.
 - **SETTLED (Mason, 2026-07-25) — night hunt stays at `high`.** `money-inventory-hunt.js` pins `effort: 'high'` at `:293` and `:334`. It stays there until an effort sweep on real CRX tasks measures otherwise; nothing indicates `high` is currently failing, and `xhigh` costs more on the largest fan-out in the repo. The `xhigh` row of the mapping therefore does not reach those agents by design, not by oversight.
 - `AGENTS.md` gains a scope paragraph (deliver what was asked, at the scope intended) applying to Claude and Codex alike.

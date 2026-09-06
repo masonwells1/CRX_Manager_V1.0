@@ -414,9 +414,45 @@ describe.skipIf(!isLiveDB)('Live DB: CHECK Constraint Values', () => {
 
 // ─── Known Function Overloads (intentional) ──────────────────────────
 // Functions that legitimately have multiple overloads in pg_proc.
-// next_invoice_number: no-args version (column default) + type-aware version
+//
+// This list is read by THREE tests that pull in different directions, so an
+// entry is never harmless in all of them:
+//   - "no public function has more than 1 overload" treats it as an ALLOWLIST —
+//     an in-scope overloaded function MISSING from this list fails.
+//   - "known overloaded functions actually have overloads" asserts every entry
+//     really has count(*) > 1 — a STALE entry fails.
+//   - "known overloaded functions list is small (<=2 entries)" caps its length,
+//     and unlike the other two it runs WITHOUT live credentials.
+// A name therefore belongs here only if live pg_proc shows it carrying more
+// than one overload, and only if there are at most two such names.
+//
+// Emptied 2026-09-05 after checking live pg_proc. Both live tests were failing.
+//
+// `next_invoice_number` and `check_rate_limit` were listed here. Live has
+// exactly ONE version of each (`next_invoice_number` pronargs 1,
+// `check_rate_limit` pronargs 4), so the second test failed on both. The old
+// comment also claimed next_invoice_number had a "no-args version (column
+// default) + type-aware version"; that was wrong on its own terms —
+// `invoices.invoice_number` defaults to
+// `next_invoice_number('field_application'::text)`, which passes an argument,
+// and migration 20260526151856 dropped the zero-arg form.
+//
+// The FIRST test was failing too, which nobody had recorded: live carries 8
+// overloaded functions in `public`, all owned by the `plpgsql_check` extension
+// (2.7), and none were listed. They are not listed now either — they are
+// excluded at the query instead, because they are not the drift this guard is
+// for and because the <=2 cap above exists to keep genuine app exceptions rare.
+// Putting 8 extension names here would have forced that cap up and destroyed
+// the signal it carries. See the query comment for the measured scope.
+//
+// Both failures stayed latent only because the live half sits behind
+// `describe.skipIf(!isLiveDB)`, `isLiveDB` is false without credentials, and no
+// workflow runs `test:schema-live`.
+//
+// Empty is the correct live state: no migration-created public function has
+// intentional overloads.
 
-const KNOWN_OVERLOADED_FUNCTIONS = ['next_invoice_number', 'check_rate_limit'];
+const KNOWN_OVERLOADED_FUNCTIONS: string[] = [];
 
 // ─── Live DB: Idempotency Body Check (PR-19, 2026-05-10) ───────────────
 // schemaIntegrity.test.ts maintains a list of mutating RPCs that MUST use
@@ -430,7 +466,7 @@ const KNOWN_OVERLOADED_FUNCTIONS = ['next_invoice_number', 'check_rate_limit'];
 // MUTATING_RPCS_WITH_IDEMPOTENCY and asserts the body either references
 // `check_idempotency` (the canonical helper-function pattern) OR carries
 // the explicit `-- idempotency-body-check: exempt` marker for the small set
-// of functions that use raw inline lookups (documented in CLAUDE.md).
+// of functions that use raw inline lookups (documented in docs/reference/sql-canonical-patterns.md).
 
 import {
   FUNCTIONS_REQUIRING_SECURITY_INVOKER,
@@ -533,7 +569,7 @@ describe.skipIf(!isLiveDB)('Live DB: Mutating RPC Idempotency Bodies', () => {
         `    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;\n` +
         `  END IF;\n\n` +
         `Or carry "-- idempotency-body-check: exempt" if using a raw inline lookup ` +
-        `(documented exception, see CLAUDE.md "Canonical Patterns for New RPCs").`,
+        `(documented exception, see docs/reference/sql-canonical-patterns.md).`,
     ).toHaveLength(0);
   });
 });
@@ -770,11 +806,37 @@ describe.skipIf(!isLiveDB)('Live DB: Required SECURITY INVOKER functions', () =>
 describe.skipIf(!isLiveDB)('Live DB: No Unintended Function Overloads', () => {
   it('no public function has more than 1 overload (except known exceptions)', async () => {
     const result = await queryInformationSchema(`
-      SELECT proname, count(*) as overload_count
-      FROM pg_proc
-      WHERE pronamespace = 'public'::regnamespace
-      GROUP BY proname
+      SELECT p.proname, count(*) as overload_count
+      FROM pg_proc p
+      WHERE p.pronamespace = 'public'::regnamespace
+      GROUP BY p.proname
+      -- Report a name only when it is overloaded AND at least one of its
+      -- overloads is ours. This guard catches accidental overloads introduced by
+      -- OUR migrations (the bug class behind 40+ March 2026 issues); an
+      -- extension's functions are managed by CREATE/ALTER EXTENSION and cannot
+      -- fork that way. plpgsql_check 2.7 is installed into public and
+      -- legitimately ships 8 overloaded functions, which is why this test was
+      -- failing for every listed and unlisted name alike.
+      --
+      -- The suppression is deliberately applied AFTER grouping, not as a WHERE
+      -- filter before it. Filtering extension rows out first would mean an
+      -- application migration that created a function sharing an extension
+      -- function's name left only its own single row, count 1, and the collision
+      -- would pass undetected. Grouping everything and suppressing only names
+      -- whose overloads are ENTIRELY extension-owned keeps that case visible.
+      --
+      -- classid is required, not decorative: pg_depend.objid is only meaningful
+      -- alongside the catalog it belongs to, so an unrelated dependency row whose
+      -- objid happened to equal a pg_proc oid would otherwise exclude a real
+      -- function. This mirrors the standing live predicate in
+      -- scripts/db-invariant-sweeps/predicates/overloads.sql, which has carried
+      -- the same exclusion, and the same plpgsql_check rationale, since
+      -- 2026-06-11 — this test was simply out of sync with it.
       HAVING count(*) > 1
+         AND bool_or(NOT EXISTS (
+               SELECT 1 FROM pg_depend d
+               WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+             ))
     `);
 
     const unexpected = (result as Array<{ proname: string; overload_count: number }>).filter(

@@ -1,9 +1,9 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-04 for the migration-ledger facts; 2026-09-03 for the F2 entry.** The
+**Last verified: 2026-09-04 for both the migration-ledger facts and the F2 entry.** The
 ordering boundary is the newest applied authored NAME:
-**`20260903230000_commission_report_snapshot_contract`** (ledger version `20260904040643`, read-only
-`list_migrations` on 2026-09-04). Read ordering from the NAME — it is what
+**`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`, read-only
+production query on 2026-09-04). Read ordering from the NAME — it is what
 the ordering guard compares and it moves far less often than the counters. Two further reading
 traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
 reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
@@ -11,13 +11,15 @@ because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, �
 — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` here as a point-in-time
 observation, not a fact** — any lane applying a migration moves them, so
 re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
-F2 item below was re-verified against live on this date (function bodies, grants, the
-`invoices.invoice_number` column DEFAULT, and the live `profiles` role/active counts); every other
+F2 item below was re-verified against live on this date (post-apply function bodies, grants, and a
+three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-six-file disk-vs-live migration drift confirmed the same day and the PR that owns it.
+nine-file disk-vs-live migration drift confirmed the same day and its open owning PRs.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
-`20260903153402`.** It is also the current ordering boundary named above. Verified independently
+`20260903153402`.** It was the ordering boundary when this paragraph was written; later migrations
+have since applied above it. It remains the installed `save_job` source body for the local row-916
+follow-up. Verified independently
 against production on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job`
 is at md5 `18d08d5f40aea91fe13ac3e5a686c549` with exactly one overload, so no duplicate function was
 created. This **supersedes every earlier statement in this file that F06 was merged but not
@@ -275,6 +277,91 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## CLOSED 2026-09-05 — the one-use live-SQL-guard maintenance producer was retired unapplied (Mason's decision)
+
+**What it was.** `scripts/apply-live-testdata-maintenance-20260812.mjs`, the reviewed, blob-pinned
+tool built on 2026-08-12 to regenerate the live SQL classifier in `.claude/hooks/live-testdata-lib.mjs`
+from three reviewed snippets under `docs/maintenance/`. It ran only as one of four exact commands and
+its apply lane never ran: activation was recorded as BLOCKED in
+`docs/handoffs/2026-08-12-live-sql-guard-maintenance-build-to-review.md` until the `DO`-based
+rollback smoke chains had a safe execution route.
+
+**Why retire rather than apply.** The 2026-08-12 snippets contain no handling for the classifier
+defects catalogued on 2026-09-02 in `docs/reference/agent-guardrails.md` (`AS a(argname)`, a
+`WITH RECURSIVE` column list, `AS MATERIALIZED (`), so applying the maintenance would not have fixed
+the false positives currently being hit. Mason decided on 2026-09-05 to retire it without applying.
+
+**How it was executed.** The decision record landed first, on its own, because the producer's
+`--retire-producer` lane (read first and confirmed to perform one local file deletion and nothing
+else: no Supabase client, no SQL, no network in any lane) only runs against a commit that still
+contains the producer and carries a fresh exact-head `gpt-5.6-sol` proof. That proof was minted
+against the docs-only commit `3ce6068af` (rebased to `c870e4aba` after PR #621 landed on `main`),
+the lane ran and removed the producer, and the following
+commit removed with it its test, the three snippet inputs, the CI step that ran the test, the
+`.gitattributes` pins for the deleted scripts, and the Codex guard-test block that shelled out to
+the harness. On the exact-SHA Codex review's P1, the Claude shell guard's allowlist of the producer's
+four exact invocations was removed as well, so every mention of the path now fails closed (the
+script that enforced the blob and proof checks is gone). The Codex production guard and the push
+guard's risky-path entry keep naming the path; that is deliberate and harmless. Changelogs: `docs/changelog.d/2026-09-05-retire-20260812-maintenance-producer.md`
+and `docs/changelog.d/2026-09-05-retired-20260812-maintenance-producer-removed.md`.
+
+**Still open.** The `live-testdata-lib.mjs` read-side false positives (2026-09-02 family) are
+untouched by this retirement. A repair is a new ordinary reviewed change against the guard file,
+not a revival of the producer.
+
+## OPEN 2026-09-04 — the migration drift reviewer's overload check can only see AUTHORED history, and its sanctioned runner can never show it the live catalog
+
+**Deferred deliberately by Mason on 2026-09-04**, split out of PR #594 so the uncontested
+search-method fix could land alone. This is a **pre-existing hole on `main`**, not one that PR
+introduced: `git diff origin/main` on that branch removed no rule and lowered no severity.
+
+**What CHECK 2 in `.claude/agents/migration-drift-reviewer.md` actually does.** It greps
+`supabase/migrations/` for an earlier `CREATE OR REPLACE FUNCTION` of the same name with different
+argument types, and calls it a BLOCKER when the new migration does not first `DROP FUNCTION` the
+old one. That is a search of the *authored files in this repository* — nothing else.
+
+**Hole 1 — live-only drift is invisible.** An overload that exists in the live database but was
+never authored into a migration file (applied by hand, applied from a branch whose file never
+landed, or created by a since-reverted migration) leaves no trace for the grep to find. CHECK 2
+reports clean, the new function is created beside the unseen one, and callers can resolve to the
+wrong overload. The 2026-03 incident class this check exists to catch is exactly that outcome.
+
+**Hole 2 — the sanctioned proof runner cannot close hole 1.**
+`scripts/write-apply-proofs.mjs` (`buildReviewerCharterPrompt`, ~line 75) executes this charter as a
+sandboxed read-only Codex run whose prompt carries **only the charter text and the migration path**.
+It injects no catalog query result, and the charter itself tells the reviewer it cannot call Supabase
+MCP. So a rule of the form "require live `pg_proc` evidence before clearing this check" would emit a
+finding on **every** migration containing a `CREATE OR REPLACE FUNCTION`, forever — the run would
+return BLOCKERS, no function migration could be applied through the sanctioned path, and the gate
+would be routed around. A gate that always fails is a gate that gets bypassed. This was found by an
+exact-SHA `gpt-5.6-sol` proof on PR #594 and is why the rule was withdrawn rather than shipped.
+
+**What a real fix has to solve, so the next attempt does not rediscover it:**
+
+1. **Get live evidence into the runner.** Either `write-apply-proofs.mjs` runs the catalog query
+   itself and injects the rows into the charter prompt, or the orchestrator records them as task
+   evidence the charter is told to look for. Without one of those, no evidence rule is satisfiable.
+2. **Compare argument types canonically, not as rendered text.** `oid::regprocedure::text` renders
+   BOTH the schema and the argument types **search_path-dependently**. Two identically named types
+   in different schemas can render as an exact string match while Postgres resolves different type
+   OIDs and creates a second overload. Evidence must carry `proargtypes` (the canonical input-type
+   OID vector), or types rendered under an explicitly stated search_path.
+3. **Never let a COUNT acquit.** A count cannot tell `f(integer)` from `f(text)`: live holds
+   `f(integer)`, the migration adds `f(text)` with no `DROP FUNCTION`, the pre-apply count reads
+   **1**, and applying leaves **2** overloads. `pronargs` is a count and has the same defect.
+   Candidate-authored prose asserting "exactly one overload" is not evidence either.
+4. **Keep detection and acquittal separate.** Local history must decide the default verdict with no
+   database access, so the check always reaches a verdict. Live evidence's only job is to *acquit* a
+   history-detected BLOCKER in the stale case where a later `DROP` removed an overload the files
+   still show. Absence of live evidence must leave the BLOCKER standing — never a HIGH demanding
+   evidence the run cannot fetch, and never clean.
+
+**Blast radius, so this is not read as urgent.** Nothing regressed: the reviewer behaves exactly as
+it did before PR #594, and the live-only-drift gap has been there as long as the check has. What
+changed on 2026-09-04 is that it is now written down instead of only being known.
+
+---
+
 ## SETTLED 2026-09-03 (basis) / FIXED IN CODE, MIGRATION PENDING LIVE APPLY (UTC fallbacks) — "invoice due dates derive from the invoice date, not the Chicago posting date"
 
 **Report (`codex-transaction-review`, 2026-09-03):** due dates derive from `invoice_date` rather
@@ -315,6 +402,52 @@ Mason's call, not a defect to fix unilaterally.
 
 Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md` and
 `docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md`.
+
+## FIXED 2026-09-05 — the CodeRabbit gate reported "requested" without ever confirming a review was requested, and spent slots on unmergeable PRs
+
+Two defects in `.github/scripts/coderabbit-final-review.cjs`. Both are fixed; the entry stays because
+the *reasoning* is reusable and because the first one invalidates historical gate output.
+
+**1. Posting is not requesting — every "requested" was unverified.** The gate reported success as
+soon as GitHub accepted its comment. Measured on this repo, same PR, same head, same command text,
+minutes apart, with the comment AUTHOR as the only variable: `github-actions[bot]` posts went
+unacknowledged after 62 min (#535) and 24 min+ (#449), while `masonwells1` posts were acknowledged in
+11 s and 6 s. So a bot-authored command was never heard, and
+**`coderabbit-review-requested` was never evidence that a review was requested** — do not read any
+gate success from before 2026-09-05 as proof a review happened.
+
+The gate now waits for CodeRabbit's own reply, authored by `coderabbitai[bot]` and strictly newer
+than the command (its auto-generated summary comment quotes `@coderabbitai review` in its own tips
+block, and has already caused two sessions to miscount requests). Three outcomes, deliberately
+distinct: acknowledged → credited; **confirmed** unheard → fail, delete the inert command and clear
+the marker so a retry is possible; **unverifiable** → fail but keep both, because the request may be
+live and clearing the marker would invite a relabel that buys a second paid review. An unverifiable
+lookup is never a confirmed absence.
+
+**CodeRabbit's docs do not state which identities may issue commands** — checked 2026-09-05 against
+the commands guide, the configuration reference and the "why reviews might not trigger" KB article.
+`auto_review.ignore_usernames` governs PR *authors*, not comment authors. The bot-filtering is an
+observed behaviour with no documented contract, so it is verified at runtime rather than encoded as
+an assumption; do not add an allowlist of identities that "work".
+
+**2. A PR that provably cannot merge still spent a review slot.** Both merge gates hard-deny
+`reviewDecision == CHANGES_REQUESTED`; the final-review gate did not look at it, so #449 — BLOCKED on
+a standing objection with every check green — passed every other validation and consumed one of ~2-3
+shared hourly slots ahead of a candidate that needed it. Now refused, reading the same field the
+merge gates read (GraphQL, not a `listReviews` re-derivation, so the two cannot diverge), re-checked
+after the quiet period, and failing closed if unreadable.
+
+Both refusals are mutation-proven: removing the reviewDecision check turns 2 tests red, removing the
+acknowledgement poll turns 5 red, and collapsing "unverifiable" into "confirmed absent" turns 1 red.
+No workflow permission changed — `pull-requests: write` already covers the GraphQL read, and the
+permissions block is the bricking class (an invalid key makes the file unloadable and yields a
+zero-job run).
+
+**Still open in this gate, and NOT addressed here:** a failed run poisons its own head permanently
+(a previous completed-failure run of the workflow counts as a blocking check on later attempts at the
+same SHA, so only a new commit clears it). Practical rule unchanged: **never apply
+`ready-for-coderabbit` until every required check has already CONCLUDED green.** Also still missing
+is the invalid-permission-key test from #569.
 
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
@@ -868,8 +1001,11 @@ assuming any screen is covered.
 `OrderDetail`, `DeliveryDetail`, `InvoiceDetail`, `FieldApplicationInvoice`, `Returns`,
 `PrepaymentManagerPanel`, `MonthEndClose`. Nine keys are also given a record scope via the hook's
 `intentScope` / `getKeyFor`, because detail pages do NOT remount on a route-id change (every
-`<x>/:id` route in `src/App.tsx` is rendered without a `key` prop) and a retained unscoped key
-would otherwise replay record A's receipt against record B.
+`<x>/:id` route in `src/App.tsx` **except `jobs/:id`**, which is keyed by id via
+`JobDetailRoute`, is rendered without a `key` prop) and a retained unscoped key would otherwise
+replay record A's receipt against record B. The `jobs/:id` exception costs the argument nothing:
+none of the nine record-scoped keys lives on `JobDetail`, and every page they do live on is still
+rendered unkeyed.
 
 **The bar a site had to clear, tightened twice by review.** It is not enough that the key names the
 right record: the scope must bind **everything a retry can vary**. `check_idempotency` matches on
@@ -910,7 +1046,26 @@ payload binding (`fingerprintIntentPayload`), not a scope — a route scope bind
 there is no route. Deliberately left out of PR #584, which six adversarial rounds had already
 narrowed to exclude exactly this class.
 
-**ALSO OPEN — the original sweep missed an entire class, now enumerated.** It matched
+**CLOSED 2026-09-05 — the aliased class is swept and its three defects are fixed.** The follow-up
+sweep enumerated the class structurally rather than by name (find every destructuring of
+`useIdempotencyKey`, capture the local identifier it binds, then search for THAT identifier) and
+confirmed the set below is complete: 14 files bind a renamed reset and only these three sites were
+wrong. `QuoteBuilder`'s `save_quote` and `CustomerDetail`'s `save_customer` reset-before-assert are
+reordered; `CustomerDetail`'s route-changed branch now releases the key only for a reply that is
+both error-free and a REAL RECEIPT (`!error && hasReceiptId(data, 'customer_id')`) — it cannot
+assert, because it must return quietly rather than throw into a customer no longer on screen.
+It shipped as `data != null` and was tightened on 2026-09-05: `assertRpcResult` rejects only a
+MISSING reply, so `{}` passed that test while naming no customer at all. `QuoteBuilder` leaves
+`KNOWN_UNFIXED_SITES` entirely; `CustomerDetail` keeps ONE pinned entry, which is now correct code
+that a LINE-ORDER scanner still reports because it cannot read an inline emptiness test.
+**Three test harnesses had stubbed `assertRpcResult` as `vi.fn((d) => d)`** — a passthrough that
+never throws, which deleted the ambiguous-reply path from every test in those files and would have
+kept a fully regressed screen green. `QuoteBuilder.test.tsx`, `CustomerDetail.test.tsx` and
+`JobDetail.billingHazard.test.tsx` now use the real function, and each fix is proven by mounting the
+real screen and confirming the test fails against the unfixed source first. The historical
+description of the class follows.
+
+**ORIGINALLY OPEN — the original sweep missed an entire class, now enumerated.** It matched
 `resetKey()` / `resetKeyFor(` literally and never saw **aliased** resets from destructured hooks
 (`const { resetKey: resetXKey } = useIdempotencyKey(...)`). The guard now resolves aliases per file
 and the class is counted, which surfaced sites no sweep or review had listed. **Real defects:**
@@ -1066,7 +1221,28 @@ these call sites. **Fix shape:** reorder every post-RPC reset after `assertRpcRe
 click-level reset, tests for transport failure / failure envelope / lost-response replay / success /
 changed intent. Money path → exact-SHA `gpt-5.6-sol` proof, then CodeRabbit.
 
-**F2 — `next_*_number` generators callable by any authenticated session with no active-profile or
+## RESOLVED 2026-09-04 (migration `20260903160000` APPLIED LIVE as ledger version `20260904023121`; code merged in PR #583, squash `3a6d52fc7`) — F2
+
+**Closed and proven live, not assumed.** All eight generators now raise `AUTH_REQUIRED` with no
+`auth.uid()` and `INSUFFICIENT_ROLE` unless the caller is an `is_active = true` profile in the
+allowed role set, gated **before** the advisory lock. Direct `authenticated` EXECUTE was revoked
+from the six the browser never calls; `next_cycle_count_number` and `next_job_number` keep it
+because `CycleCounts.tsx` and `JobDetail.tsx` call them directly. `anon` holds EXECUTE on none.
+**Observed on live 2026-09-04:** deactivated `sales_rep` → `INSUFFICIENT_ROLE`; unauthenticated →
+`AUTH_REQUIRED`; active `admin` → a cycle-count number issued normally. Account identifiers and the
+issued number are deliberately not recorded — this repository is public and the *outcome* is the
+proof. Full apply and proof provenance is row 910 of
+`docs/reference/migration-history.md`. **Residual CLOSED 2026-09-05, once F06 had landed and
+`JobDetail.tsx` was free to edit:** the call was `if (!error && data) setJobNumber(...)`, which
+discarded BOTH failure shapes — a raised error and an empty reply — so a refused user saw a silently
+blank job-number field. It now mirrors the `CycleCounts.tsx` shape: throw the failure into one
+handler, report it to Sentry, and name the cause for the operator (`INSUFFICIENT_ROLE` gets a
+role-specific message rather than the raw token). Both shapes are pinned by tests that mount
+`/jobs/new` and were confirmed to fail against the unfixed source. The original diagnosis is kept
+below.
+
+**F2 (ORIGINAL DIAGNOSIS — the hole described here is now closed) — `next_*_number` generators
+callable by any authenticated session with no active-profile or
 role gate.** Eight `SECURITY DEFINER` generators (`next_application_record_number`,
 `next_commission_payment_number`, `next_cycle_count_number`, `next_delivery_number`,
 `next_invoice_number`, `next_job_number`, `next_po_number`, `next_return_number`) grant `EXECUTE` to
@@ -1088,7 +1264,13 @@ directly and would break. A TARGETED revoke of the other six is right, and is wh
 **Fix shape:** new migration, all eight, in-body active-profile + role gates, plus direct
 `authenticated` EXECUTE revoked from the six with no browser caller, through `migration-review`.
 
-**Status 2026-09-03 — FIX WRITTEN AND PROVEN, NOT YET APPLIED.**
+**HISTORICAL PRE-APPLY NOTE, 2026-09-03 — superseded by the applied-live status at the top of this
+entry. Kept for the derivation, NOT as a status.** Everything from here to the end of this entry
+describes the state before the 2026-09-04 apply; where it says "not applied", read "not applied
+*yet, as of 2026-09-03*". The current status is the heading above: APPLIED LIVE as ledger version
+`20260904023121`, verified against production.
+
+**Status as it stood 2026-09-03 — fix written and proven, apply still pending.**
 `supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql` on branch
 `claude/f2-number-generator-gates-e12d02` covers all **eight**, gates in-body before each advisory
 lock, **and narrows the grants**: direct `authenticated` EXECUTE is REVOKED from the six generators
@@ -1112,9 +1294,12 @@ showing a guard actually fires. `typecheck`/`lint` clean.
 above:** that the branch "re-emits no `GRANT`/`REVOKE`" (it now revokes from six), and that
 `_complete_delivery_authorized_impl` "checks authentication but not role" (it checks role; verified
 against live `prosrc`). Both were true when written.
-**Not applied live and not merged** — the live apply needs Mason's in-chat approval, a same-session
-apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict. This item stays OPEN until that lands;
-`codex/section1-security-hardening-20260725` stays until then per the branch-retention note below.
+**The 2026-09-03 precondition, now SATISFIED — kept for provenance.** As of that date this read
+"not applied live and not merged: the live apply needs Mason's in-chat approval, a same-session
+apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict, and this item stays OPEN until that
+lands." All three were obtained on 2026-09-04 and the migration applied; the item is RESOLVED per
+the heading above. **The branch-retention note still stands on its own terms:**
+`codex/section1-security-hardening-20260725` is retained per the note below and must not be deleted.
 
 **F3 — nine enforcement-file patterns missing from the `.claude/settings.json` `ask` list.**
 `scripts/agent-manifest-parity.mjs`, `scripts/sync-agent-workflows.mjs`, `scripts/normalize-eol.mjs`,
@@ -1320,16 +1505,23 @@ Keep this separate from the equal-unit exact-decimal fix, and replace the conver
 exact rational/decimal conversion in a focused follow-up.
 
 
-## OPEN 2026-09-04 — Invalid job acreage still needs a server-side refusal
+## OPEN 2026-09-04 — Server acreage refusal is written and proven, not yet applied
 
 An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
 `null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every
 nonblank non-finite or negative acreage at the top of `performSave`, including the
 expired-license override path, before saving state, payload work, or `save_job`. Intentional
 blank acreage retains its established payload meaning of zero. The live `save_job` function
-already refuses non-finite and negative field acreage before any write. The issue stays open
-because a missing acreage key or JSON-null acreage is still coalesced to zero; a separate forward
-migration must refuse those two cases authoritatively. The unrelated different-unit chemical
+already refuses non-finite and negative field acreage before any write. The issue stays open in
+production because a missing acreage key or JSON-null acreage can still store SQL NULL in the
+nullable `job_fields.acres_to_treat` column even though the header sum treats it as zero. Local
+forward migration `20260904185900_refuse_null_job_field_acres.sql` refuses those two cases
+authoritatively before any write, with distinct diagnostics. Its current-main disposable proof
+passes exact source/candidate pins, A1-A4 behavior, eleven apply-abort mutations, and four runtime
+break-it canaries after the required restamp above the live migration high-water. No live apply is
+authorized. Other present but nonnumeric scalar values still fail closed at PostgreSQL's numeric
+cast with its native error; friendlier diagnostics for that separate malformed-input class are not
+part of this candidate. Do not author a competing migration. The unrelated different-unit chemical
 conversion issue above also remains open.
 
 

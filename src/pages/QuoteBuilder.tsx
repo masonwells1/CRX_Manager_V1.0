@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   Save,
@@ -50,7 +50,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
-import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
+import { BelowCostApprovalHandledError, isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
@@ -58,6 +58,9 @@ import {
   readRowVersion,
   resolveAuthoritativeSaveRowVersion,
   resolveDirectMutationRowVersion,
+  hasReceiptId,
+  NON_SAVE_RECOVERY,
+  type StaleSaveConflictOrigin,
 } from '../lib/recordVersionConcurrency';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { warnIfOverCreditLimit } from '../lib/creditLimit';
@@ -224,10 +227,6 @@ export default function QuoteBuilder() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const { runWithBelowCostApproval } = useBelowCostApproval();
-  const {
-    getKey: getSaveQuoteIdempotencyKey,
-    resetKey: resetSaveQuoteIdempotencyKey,
-  } = useIdempotencyKey('save_quote', profile?.id || '');
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   // A committed conversion can be replayed from the idempotency cache with
   // status:'created'. Keep that marker so a lost response can still trigger
@@ -294,6 +293,19 @@ export default function QuoteBuilder() {
   // Once this tab has observed a numeric token, recovery must never downgrade
   // it to the frontend-first legacy tokenless contract.
   const quoteNumericVersionRequiredRef = useRef(false);
+  // The quote whose save was rejected with IDEMPOTENCY_PAYLOAD_CONFLICT while the
+  // operator was no longer in that editing session, so the recovery dialog could
+  // not be shown for it. The server has bound this key to a different payload, so
+  // every later save reusing it — of ANY quote, because the key is scoped by
+  // operation and user — is rejected the same way until the key rotates.
+  //
+  // The key is NOT rotated here. It is a receipt as well as a retry token: it may
+  // represent a save that committed and lost its reply, and replaying the original
+  // payload is the only deterministic way to learn that. Retiring it early is what
+  // #603 shipped and reverted. Rotation happens where it is sanctioned — after an
+  // authoritative reload of this existing quote resolves the outcome — which is
+  // the same rule `reloadAfterStaleSave` already follows.
+  const payloadConflictQuoteIdRef = useRef<string | null>(null);
   const [staleSaveOpen, setStaleSaveOpen] = useState(false);
 
   const getCreateVersionAttempt = useCallback(() => {
@@ -358,6 +370,69 @@ export default function QuoteBuilder() {
   const [quoteNumber, setQuoteNumber] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
   const [quoteId, setQuoteId] = useState<string | null>(id || null);
+  // Scoped by the quote this save actually TARGETS. F1 makes an ambiguous reply
+  // RETAIN this key, and QuoteBuilder does not remount when only `:id` changes (no
+  // `<x>/:id` route in src/App.tsx carries a `key` prop). Page-wide, an unresolved
+  // key minted for quote A would therefore be sent with quote B's payload; the
+  // server fingerprints the mismatch and answers IDEMPOTENCY_PAYLOAD_CONFLICT, so
+  // it fails closed with no cross-quote write — but B gets a conflict dialog it
+  // did nothing to earn. `create_quote_version` below already scopes this way, for
+  // this same reason.
+  //
+  // The scope mirrors `p_quote_id` EXACTLY (see the save_quote call), so it binds
+  // the record the RPC writes rather than the route — which is why route-id
+  // scoping would be wrong here: `/quotes/new` has no route id, and `quoteId` is
+  // state that the create path reassigns after the save.
+  //
+  // RESIDUAL, stated rather than implied: every create scopes to 'new', so an
+  // unresolved create can still be inherited by the next create on this mount.
+  // Binding that needs PR #535's fingerprintIntentPayload.
+  const saveQuoteIntentScope = (quoteId && isEditing) ? quoteId : 'new';
+  const {
+    getKey: getSaveQuoteIdempotencyKey,
+    resetKey: resetSaveQuoteIdempotencyKey,
+    resetKeyFor: resetSaveQuoteKeyFor,
+  } = useIdempotencyKey('save_quote', profile?.id || '', saveQuoteIntentScope);
+  // Which scope produced the conflict the stale-save dialog is currently offering to
+  // recover. Scoping the key made this necessary: the dialog stays open across a route
+  // change, and `reloadAfterStaleSave` releases the CURRENT render's scope, so an
+  // operator who navigates A -> B with A's dialog open and then clicks Reload would
+  // release B's key and leave A's rejected one in place. Recorded at the moment the
+  // conflict opens, checked before anything is released.
+  //
+  // EVERY site that opens this dialog must record the scope. An opener that skips it
+  // leaves the PREVIOUS quote's scope standing, and the comparison below then refuses
+  // to release the CURRENT quote's key after its own authoritative reload — so that
+  // quote's next edited save fails closed and forces a reload that discards the
+  // operator's edits. Recording at only the save-conflict branch was exactly that
+  // defect. Keep Editing clears the record because the dialog it belonged to is gone;
+  // the reload path clears it only when it actually releases, since a reload for a
+  // DIFFERENT quote must leave the originating quote's key retained.
+  const staleSaveConflictScopeRef = useRef<StaleSaveConflictOrigin>(null);
+
+  // The wall clock one save_quote attempt is pinned to, per intent scope.
+  //
+  // The server fingerprints the WHOLE request — quote id, the entire quote payload,
+  // the sections, and the actor — into `v_request_fingerprint`
+  // (20260812115236_quote_items_cost_at_quote_snapshot.sql:348) and rejects a replay
+  // whose fingerprint differs with IDEMPOTENCY_PAYLOAD_CONFLICT. `expires_at` and
+  // `sent_at` are derived from `Date.now()`, so a plain re-send regenerates them to a
+  // different millisecond and can never match the original.
+  //
+  // Without this, the recovery instruction below — press Save again on the SAME
+  // retained key — is impossible to carry out: the retained key would be a receipt no
+  // request this page can build could ever redeem, and a create whose first attempt
+  // committed server-side would be stranded with no way back to it.
+  //
+  // So the first save under a given key records the instant, and every retry under
+  // that same key reuses it. Retiring the key mints a new one, which is a new attempt
+  // and takes a fresh instant. Keyed by scope and stamped with the key it was minted
+  // for, so an A -> B -> A navigation cannot hand quote A's retry quote B's clock.
+  //
+  // Only the CLOCK is frozen, never the payload. If the operator edits the quote —
+  // `valid_days` included — the fingerprint legitimately changes and the server is
+  // right to refuse: that is a different request, not a retry.
+  const saveQuoteAttemptClockRef = useRef<Map<string, { key: string; atMs: number }>>(new Map());
   const [isPlanned, setIsPlanned] = useState(false);
   const [wasPlanned, setWasPlanned] = useState(false);
 
@@ -444,6 +519,37 @@ export default function QuoteBuilder() {
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const initialLoadGenerationRef = useRef(0);
   const [installedLoadGeneration, setInstalledLoadGeneration] = useState(0);
+  // Serial number for quote loads. App.tsx routes every /quotes/:id to this one
+  // element with no `key`, so navigating between two saved quotes re-runs the id
+  // effect WITHOUT remounting. A load whose serial is no longer current has been
+  // superseded — by a route change, or by a newer reload of the same quote — and
+  // describes a record this page is no longer showing, so it must install
+  // nothing: not the form, not quoteId, not the row-version token.
+  const quoteLoadSerialRef = useRef(0);
+  // The quote the URL currently names. The serial above orders CALLS; this binds
+  // a call to a RECORD, and the two operands have genuinely independent sources
+  // (one from this component's own call order, one from the router). Both are
+  // needed: `fetchQuote` is also called from stale closures that survive a
+  // navigation — the stale-save reload and the post-conversion refetch — and such
+  // a call MINTS THE NEWEST SERIAL for the quote the operator already left, so a
+  // serial check alone would certify the stale snapshot as current instead of
+  // rejecting it.
+  //
+  // Written in a LAYOUT EFFECT, never during render. React may begin rendering a
+  // transition to another quote and then discard that render while the current
+  // one is still the committed screen; a render-time write publishes the new id
+  // anyway. The save guard reads this ref to decide whether its reply still
+  // belongs on screen, so a route that "changed" only inside a discarded render
+  // makes it drop a VALID reply after the database has committed — leaving the
+  // stale row-version token and a dirty form, and sending the operator's retry
+  // into stale-write recovery on a document that drives cost and price. A layout
+  // effect runs on commit, and before the passive effects that start the loads,
+  // so every reader still sees the committed route. Same discipline, and the same
+  // reasoning, as `CustomerDetail.tsx`'s `currentIdRef`.
+  const routeQuoteIdRef = useRef<string | null>(id ?? null);
+  useLayoutEffect(() => {
+    routeQuoteIdRef.current = id ?? null;
+  }, [id]);
   const blocker = useUnsavedChanges(isDirty);
 
   // Status-based guards
@@ -708,8 +814,12 @@ export default function QuoteBuilder() {
     }
     quoteRowVersionRef.current = null;
     quoteVersionRecoveryRequiredRef.current = true;
+    staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
     setStaleSaveOpen(true);
     toast('warning', `The quote was ${action}, but its save-protection version could not be confirmed. Refresh before editing, revising, or converting it.`);
+    // No scope in the dep list, and none needed: this opener records the module
+    // constant NON_SAVE_RECOVERY, which cannot go stale in a closure. Stamping a
+    // scope here is what needed the dependency — and was the wrong thing to stamp.
   }, [toast]);
 
   const applyDirectQuoteMutationRowVersion = useCallback((
@@ -730,9 +840,11 @@ export default function QuoteBuilder() {
     // belong to another writer. Do not adopt it: preserve local edits and make
     // the next whole-record save fail closed until the operator reloads.
     quoteVersionRecoveryRequiredRef.current = true;
+    staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
     setStaleSaveOpen(true);
     toast('warning', `The quote was ${action}, but another edit may have completed at the same time. Your current edits were kept; reload before saving, revising, or converting it.`);
     return false;
+    // No scope dependency — see clearQuoteRowVersionWithRefreshWarning above.
   }, [toast]);
 
   // An RPC response without row_version must never be followed by a blind
@@ -791,11 +903,38 @@ export default function QuoteBuilder() {
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
   const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
+    // Refuse at the door, BEFORE taking a serial. A load for a quote the operator
+    // has already left is doomed either way — it would reject itself below — but
+    // taking a number on the way past is NOT free. The serial is a shared resource:
+    // burning one supersedes the legitimate load of the quote now on screen, which
+    // then installs nothing and strands the page behind a skeleton that never
+    // clears, and it makes an unrelated in-flight SAVE of that quote look like it
+    // belongs to an editing session that ended.
+    //
+    // Reachable through the delayed post-conversion `fetchQuote(savedId)` below and
+    // through `reloadAfterStaleSave`, both of which run from closures that survive a
+    // navigation. Same discipline as CustomerDetail's tab loader.
+    if (routeQuoteIdRef.current !== quoteId) return false;
+    const loadSerial = ++quoteLoadSerialRef.current;
+    // Two independent halves; neither subsumes the other, and each has its own
+    // regression test. `supersededByNewerLoad` orders CALLS, so reopening the
+    // SAME quote twice still resolves to the newer call. `routeLeftThisQuote`
+    // binds this call to a RECORD, so a load started from a stale closure
+    // cannot install merely because it holds the newest serial.
+    //
+    // Re-checked after every await. A load that must not install returns false
+    // without touching form state, toasts, navigation or `loading` — whichever
+    // load is current owns all of those now.
+    const supersededByNewerLoad = () => quoteLoadSerialRef.current !== loadSerial;
+    const routeLeftThisQuote = () => routeQuoteIdRef.current !== quoteId;
+    const mustNotInstall = () => supersededByNewerLoad() || routeLeftThisQuote();
+
     const quoteRes = await supabase
       .from('quotes')
       .select('*, customer:customers(*)')
       .eq('id', quoteId)
       .maybeSingle();
+    if (mustNotInstall()) return false;
 
     if (quoteRes.error || !quoteRes.data) {
       if (quoteRes.error) {
@@ -820,6 +959,7 @@ export default function QuoteBuilder() {
         .eq('quote_id', quoteId)
         .order('sort_order'),
     ]);
+    if (mustNotInstall()) return false;
 
     // Build and validate the complete editable snapshot before changing any
     // form state. A failed Reload must never replace an operator's local work
@@ -837,6 +977,8 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('id', quoteId)
       .maybeSingle();
+    if (mustNotInstall()) return false;
+
     const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
     const stableVersion = initialRowVersion === finalRowVersion
       && (initialRowVersion !== null || !requireStableRowVersion);
@@ -896,6 +1038,33 @@ export default function QuoteBuilder() {
     quoteRowVersionRef.current = finalRowVersion;
     quoteNumericVersionRequiredRef.current = finalRowVersion !== null;
     quoteVersionRecoveryRequiredRef.current = false;
+    // This IS the authoritative reload that a rejected save key was waiting for:
+    // the operator is looking at what the database actually holds for this quote,
+    // so the receipt has served its purpose and the key may finally rotate. Same
+    // condition `reloadAfterStaleSave` uses, reached through the ordinary reopen
+    // instead of the recovery dialog — which the moved-session path cannot show.
+    // Scoped to the quote the conflict belongs to: reloading a DIFFERENT quote
+    // resolves nothing about this one.
+    // Retired BY NAME rather than through the current render's scope.
+    //
+    // The demonstrated reason is identity, not correctness of the target: the scoped
+    // `resetKey` changes whenever the scope changes, and #618 made it a dependency of
+    // `fetchQuote`. Since the scope is derived from `quoteId` STATE, which lags the
+    // route until `setQuoteId` below, that dependency re-created `fetchQuote` on
+    // every navigation and re-ran the load effect — loading each quote twice, which
+    // is what broke #618's own A -> B -> A load-ordering tests when the two changes
+    // met. `resetKeyFor` is memoized on [operation, userId] alone and does not move.
+    //
+    // Naming the quote is also the honest form of the call: this line means "retire
+    // the key belonging to the quote being reopened", and `resetKey()` only says that
+    // while the rendered scope happens to already be `q.id`. It does today — a
+    // mutation of this line back to `resetKey()` still passes the suite, so the
+    // wrong-target failure is NOT a bug observed here and is not claimed as one.
+    // `resetKeyFor(q.id)` removes the dependence on that coincidence.
+    if (payloadConflictQuoteIdRef.current === q.id) {
+      payloadConflictQuoteIdRef.current = null;
+      resetSaveQuoteKeyFor(q.id);
+    }
     setQuoteId(q.id);
     setQuoteNumber(q.quote_number);
     setCustomerId(q.customer_id);
@@ -921,6 +1090,8 @@ export default function QuoteBuilder() {
       .eq('quote_id', quoteId)
       .is('deleted_at', null)
       .not('quote_section_id', 'is', null);
+    if (mustNotInstall()) return false;
+
     if (sectionJobsError) {
       Sentry.captureException(sectionJobsError, { tags: { source: 'read', action: 'load_quote_section_jobs' } });
       toast('warning', 'Quote loaded, but scheduled-job badges could not be refreshed.');
@@ -937,6 +1108,8 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
+    if (mustNotInstall()) return false;
+
     if (versionsError) {
       Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
       toast('warning', 'Quote loaded, but version history could not be refreshed.');
@@ -948,7 +1121,7 @@ export default function QuoteBuilder() {
     const loadGeneration = ++initialLoadGenerationRef.current;
     setInstalledLoadGeneration(loadGeneration);
     return true;
-  }, [toast, navigate]);
+  }, [toast, navigate, resetSaveQuoteKeyFor]);
 
   const reloadAfterStaleSave = useCallback(async () => {
     if (!quoteId) return false;
@@ -962,8 +1135,33 @@ export default function QuoteBuilder() {
       installedSnapshot = await fetchQuote(quoteId, quoteNumericVersionRequiredRef.current);
       if (installedSnapshot) {
         // The rejected key may represent a committed save whose response was
-        // lost. Rotate it only after a complete authoritative reload succeeds.
-        resetSaveQuoteIdempotencyKey();
+        // lost. Rotate it only after a complete authoritative reload succeeds —
+        // and only when the reload that just succeeded is for the SAME quote that
+        // produced the conflict. If the operator navigated away with the dialog
+        // open, releasing here would retire the wrong scope's key and strand the
+        // rejected one; leaving it retained is the safe direction, because a
+        // retained key can still replay.
+        //
+        // An earlier revision retired it in that case, reasoning that a
+        // payload-rejected key can only ever be rejected again. That is wrong, and it
+        // was a duplicate-write hazard: the key rejects the CHANGED payload, but
+        // replaying the ORIGINAL one returns the server's cached receipt. On a create
+        // that receipt carries the id of a row that may already have committed, and it
+        // is the only deterministic way to learn the create's outcome. Deleting it
+        // lets a later retry mint a fresh key and insert the record a second time.
+        //
+        // So the cost of retaining is one unearned conflict dialog when the operator
+        // returns to that quote, which then self-heals on its own reload. The cost of
+        // retiring is a possible duplicate quote. Retaining is the safe direction.
+        // Release ONLY for a reload of the same quote whose save_quote call produced
+        // this dialog. A different quote's scope must keep its key, and so must
+        // NON_SAVE_RECOVERY: ten of this page's eleven openers are lifecycle actions
+        // with no rejected save key of their own, and releasing on their reload would
+        // retire a save_quote receipt whose own reply was never validated.
+        if (staleSaveConflictScopeRef.current === saveQuoteIntentScope) {
+          resetSaveQuoteIdempotencyKey();
+          staleSaveConflictScopeRef.current = null;
+        }
         if (resetCreateVersionAfterReloadRef.current) {
           resetCreateVersionAttempt();
           resetCreateVersionAfterReloadRef.current = false;
@@ -1001,6 +1199,10 @@ export default function QuoteBuilder() {
     resetCreateVersionAttempt,
     resetRestoreVersionAttempt,
     resetSaveQuoteIdempotencyKey,
+    // Required, not cosmetic: without it this callback compares the conflict's
+    // recorded scope against a STALE one, which is the exact confusion the check
+    // exists to prevent.
+    saveQuoteIntentScope,
   ]);
 
   useEffect(() => {
@@ -1020,6 +1222,11 @@ export default function QuoteBuilder() {
         .then(({ data }) => { if (data) setQuoteTemplates(data as QuoteTemplate[]); });
     }
     if (isEditing && id) {
+      // This effect also runs on a route change between two saved quotes, where
+      // the previous quote's form is still mounted and filled in. Present the
+      // skeleton until THIS id's snapshot installs, so the operator is never
+      // shown quote A's numbers under quote B's address.
+      setLoading(true);
       fetchQuote(id);
     } else {
       generateQuoteNumber().then(() => {
@@ -1360,6 +1567,17 @@ export default function QuoteBuilder() {
   }, [sections]);
 
   const saveQuote = async (newStatus?: QuoteStatus): Promise<string | null> => {
+    // Fail closed when the loaded quote is not the quote the URL names. The
+    // skeleton normally hides the form for the whole transition, but a load that
+    // ERRORS clears `loading` while deliberately keeping the previous quote's
+    // edits on screen — leaving a live Save button over the record the operator
+    // navigated away from. `p_quote_id` below is this same `quoteId`, so
+    // refusing before any RPC also means no idempotency key is ever minted
+    // against the wrong quote.
+    if (isEditing && quoteId !== id) {
+      toast('error', 'This quote has not finished loading. Refresh the page before saving so your changes go to the right quote.');
+      return null;
+    }
     if (!customerId) {
       toast('error', 'Please select a customer');
       return null;
@@ -1431,6 +1649,18 @@ export default function QuoteBuilder() {
       return null;
     }
 
+    // Minted before the payload so the frozen clock can be bound to it. `getKey`
+    // returns the SAME key until it is retired, so this is a read, not a new attempt.
+    const idemKey = getSaveQuoteIdempotencyKey();
+    const previousAttempt = saveQuoteAttemptClockRef.current.get(saveQuoteIntentScope);
+    let saveAttemptAtMs: number;
+    if (previousAttempt && previousAttempt.key === idemKey) {
+      saveAttemptAtMs = previousAttempt.atMs;
+    } else {
+      saveAttemptAtMs = Date.now();
+      saveQuoteAttemptClockRef.current.set(saveQuoteIntentScope, { key: idemKey, atMs: saveAttemptAtMs });
+    }
+
     const quotePayload = {
       quote_number: quoteNumber,
       customer_id: customerId,
@@ -1451,12 +1681,12 @@ export default function QuoteBuilder() {
       total_margin_pct: totals.totalMarginPct,
       valid_days: validDays,
       expires_at: new Date(
-        Date.now() + validDays * 24 * 60 * 60 * 1000
+        saveAttemptAtMs + validDays * 24 * 60 * 60 * 1000
       ).toISOString(),
       header_notes: headerNotes || null,
       footer_notes: footerNotes || null,
       is_planned: isPlanned,
-      ...(newStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
+      ...(newStatus === 'sent' ? { sent_at: new Date(saveAttemptAtMs).toISOString() } : {}),
     };
 
     // Build sections JSON for the atomic RPC
@@ -1493,20 +1723,110 @@ export default function QuoteBuilder() {
     }));
 
     try {
-      const idemKey = getSaveQuoteIdempotencyKey();
-      const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_quote', withBelowCostReason('save_quote', {
-        p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
-        p_quote_payload: quotePayload as Json,
-        p_sections: sectionsPayload,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      }, reason)));
+      // Which record, and which editing session of it, this request belongs to —
+      // captured BEFORE it is sent. The entry check at the top of this function
+      // cannot stand in for either: that ran before the request existed, and
+      // everything installed below is written AFTER the reply lands.
+      // `runWithBelowCostApproval` can also park this await on an operator
+      // decision, which widens the window from a round trip to however long that
+      // dialog stays open.
+      //
+      // Two operands, and each is load-bearing on its own.
+      //
+      // The route id is NOT unique over time. Leaving quote A for B and returning
+      // to A restores it, so a route-only check would accept this reply into a
+      // DIFFERENT editing session of the same quote: the callers would clear the
+      // dirty flag over edits made after the return, which were never part of this
+      // request, and report them saved. The load serial is what separates those
+      // sessions, because returning to A re-runs `fetchQuote` and mints a new one.
+      //
+      // The serial alone is not enough either, for the reason documented at its
+      // declaration: `fetchQuote` is also called from stale closures, and such a
+      // call mints the NEWEST serial for a record the operator has already left.
+      const routeAtSend = routeQuoteIdRef.current;
+      const loadAtSend = quoteLoadSerialRef.current;
+      const editingSessionChanged = () =>
+        routeQuoteIdRef.current !== routeAtSend || quoteLoadSerialRef.current !== loadAtSend;
+      const quoteNumberAtSend = quoteNumber;
+      // The record this request actually targets — component state, not the route.
+      // Null on a create, which has no record to reopen.
+      const quoteIdAtSend = (quoteId && isEditing) ? quoteId : null;
+      const { data, error } = await runWithBelowCostApproval((reason) => {
+        // `reason` is non-null ONLY on the post-approval retry, so this never
+        // touches the first send.
+        //
+        // The below-cost dialog parks that first send on an operator decision,
+        // and it is a GLOBAL dialog that names the product and nothing else —
+        // never which quote is being approved. If the operator moved to another
+        // quote (or reloaded this one) while it was open, the approval they just
+        // gave was given while looking at a different record, so it may not be
+        // spent on this one. Refuse the retry rather than send it.
+        //
+        // Refusing HERE, before the request exists, is what makes this safe to
+        // report plainly: the first attempt was rejected by PostgreSQL, which
+        // rolls back, and the retry is never sent — so unlike the lost-reply
+        // case below, the outcome is known and the message may say so.
+        if (reason !== null && editingSessionChanged()) {
+          toast('error', `Quote ${quoteNumberAtSend || 'you were editing'} was not saved. The below-cost approval finished after you left that quote, so it was not applied — reopen the quote and save again.`);
+          throw new BelowCostApprovalHandledError();
+        }
+        return supabase.rpc('save_quote', withBelowCostReason('save_quote', {
+          p_quote_id: quoteIdAtSend as string,
+          p_quote_payload: quotePayload as Json,
+          p_sections: sectionsPayload,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        }, reason));
+      });
+
+      // The editing session this save belonged to is gone. Quote A's failure is
+      // not quote B's, so neither the stale-write recovery dialog nor a bare error
+      // toast may land here. It is not swallowed either: the operator left
+      // believing this saved. Name the quote, because what they are looking at is
+      // a different one — or a freshly reloaded copy of the same one — and an
+      // unqualified failure would read as belonging to it.
+      //
+      // Latching `quoteVersionRecoveryRequiredRef` here would be actively wrong on
+      // the return-to-A path: it would strand a freshly loaded quote behind a
+      // "reload before saving" gate it has already satisfied.
+      //
+      // Deliberately does NOT touch the idempotency key. The outcome here is
+      // genuinely unknown, so the key must survive for the retry (F1) exactly as it
+      // does on the in-route error paths below.
+      //
+      // And because it is unknown, the message must not claim a rollback. A reply
+      // lost in transit AFTER PostgreSQL committed arrives through this same
+      // `error` branch, so "your changes were not stored" would be a guess stated
+      // as fact — and the operator is not even looking at this quote to check. Say
+      // what is true (unconfirmed) and what to do about it. The retained key is
+      // what makes the retry safe if it did commit.
+      if (error && editingSessionChanged()) {
+        // A payload conflict is not merely "unconfirmed" — the server has bound
+        // this key to a DIFFERENT payload, so it can never accept the current one
+        // again. The in-route branch below recovers through the reload dialog,
+        // which rotates the key; that dialog cannot be shown here, because it
+        // belongs to a quote the operator has left. Remember which quote is
+        // waiting for that reload instead. Without this the key stays poisoned for
+        // the life of the component and every later save — of any quote, since the
+        // key is scoped by operation and user rather than by record — repeats the
+        // same conflict.
+        if (hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT) && quoteIdAtSend) {
+          payloadConflictQuoteIdRef.current = quoteIdAtSend;
+        }
+        toast('error', `Quote ${quoteNumberAtSend || 'you were editing'} could not be confirmed as saved. Reopen it to check, and save again if your changes are missing.`);
+        return null;
+      }
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
           || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)
           || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
           quoteVersionRecoveryRequiredRef.current = true;
+          // The ONE opener that leaves a rejected save_quote key outstanding, so the
+          // ONLY one allowed to record a scope. Bind the dialog to the quote that
+          // produced it, so the recovery cannot release a different quote's key if
+          // the route changes while it is open.
+          staleSaveConflictScopeRef.current = saveQuoteIntentScope;
           setStaleSaveOpen(true);
           return null;
         }
@@ -1514,13 +1834,59 @@ export default function QuoteBuilder() {
         return null;
       }
 
-      resetSaveQuoteIdempotencyKey();
       const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown }>(data, 'save_quote');
-      const savedQuoteId = result.quote_id || quoteId;
-      if (!savedQuoteId) {
-        toast('error', 'Quote save completed without an ID. Refresh before making further changes.');
+      // A save_quote that answers with an EMPTY payload and no error is ambiguous —
+      // the row may already be committed — so retiring the key first would send the
+      // user's retry under a fresh key the server cannot replay, writing the quote
+      // twice. `assertRpcResult` does NOT catch that: it rejects only a MISSING
+      // reply, and `{}` passes through it untouched. So the receipt has to be tested
+      // here, before the key is retired. The old `|| quoteId` fallback made this
+      // worse than a missed check — on an edit route it manufactured a plausible id
+      // out of the URL, so an unverified save reported itself as a confirmed one.
+      if (!hasReceiptId(result, 'quote_id')) {
+        // The key is retained either way — this reply proves nothing about what
+        // committed. Two things still have to be right about how we SAY that.
+        //
+        // Only speak to the operator if they are still in the session that sent this
+        // save. Quote A's unqualified failure toast over quote B is the same
+        // route-reply leak `editingSessionChanged()` exists to stop, and this early
+        // return sits above it.
+        //
+        // And do not tell a CREATE to reload. The key lives in a `useRef` inside this
+        // mounted component, so a reload discards the very receipt that was just
+        // retained — the retry then mints a fresh key the server cannot replay and
+        // inserts a second quote, which is the outcome this whole branch exists to
+        // prevent. Retention only pays off if the operator stays on the form and
+        // retries, replaying the original payload against the server's cached result.
+        // An EXISTING quote is different: reloading it IS the authoritative
+        // resolution, and the reload path releases the key deliberately.
+        if (!editingSessionChanged()) {
+          toast('error', saveQuoteIntentScope === 'new'
+            ? 'The save came back without an ID, so it is unknown whether this quote was created. Press Save Draft again WITHOUT reloading — the retry replays the same request, so the server returns the original result instead of creating a second quote.'
+            : 'The quote save came back without an ID, so its outcome is unknown. Reload the quote before making further changes.');
+        }
         return null;
       }
+      resetSaveQuoteIdempotencyKey();
+      const savedQuoteId = result.quote_id;
+      // The editing session that sent this save is gone, so nothing below belongs
+      // to what is on screen now: the authoritative row-version token, the
+      // commission baseline, `setQuoteId`, and — through the `null` return — the
+      // callers' dirty-clear, success toast and navigation. Every caller gates
+      // its post-save work on a non-null id, so returning `null` suppresses them.
+      //
+      // Placed AFTER the reply is verified and the key rotated, not before. This
+      // save committed; retiring its key is correct and must happen wherever the
+      // reply lands, or a later unrelated save would replay this committed
+      // result. Rotating it in a second, earlier place would also re-introduce
+      // the reset-before-verify ordering that `idempotency-reset-order.test.ts`
+      // pins this file against.
+      //
+      // #618 wrote that "the reply is verified" against `assertRpcResult` alone,
+      // which only rejects a MISSING reply. The receipt test above is what makes
+      // the sentence true, and it is why the reset now sits below it rather than
+      // above the assert as it did on main.
+      if (editingSessionChanged()) return null;
       // The save committed, but conversion and other chained actions must not
       // continue unless this tab can install the exact authoritative token.
       if (!installAuthoritativeQuoteRowVersion(result.row_version, 'saved')) {
@@ -1979,6 +2345,7 @@ export default function QuoteBuilder() {
   const handleEmailToGrower = async () => {
     if (!quoteId) { toast('warning', 'Save the quote before emailing it.'); return; }
     if (quoteVersionRecoveryRequiredRef.current) {
+      staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
       setStaleSaveOpen(true);
       toast('error', 'The email was NOT sent. Reload the quote, then email it again.');
       return;
@@ -2124,6 +2491,7 @@ export default function QuoteBuilder() {
         || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetCreateVersionAfterReloadRef.current = true;
         quoteVersionRecoveryRequiredRef.current = true;
+        staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
         setStaleSaveOpen(true);
         toast('error', 'The quote changed and the email was NOT sent. Reload the quote, then review and send it again.');
       } else {
@@ -2192,6 +2560,7 @@ export default function QuoteBuilder() {
         || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetCreateVersionAfterReloadRef.current = true;
         quoteVersionRecoveryRequiredRef.current = true;
+        staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
         setStaleSaveOpen(true);
         toast('error', 'The quote changed before it could be marked presented. Reload and review it before trying again.');
       } else {
@@ -2234,6 +2603,7 @@ export default function QuoteBuilder() {
   const handleRestoreVersion = async (versionId: string) => {
     if (!quoteId || !profile) return;
     if (quoteVersionRecoveryRequiredRef.current) {
+      staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
       setStaleSaveOpen(true);
       toast('error', 'Reload the quote before restoring a saved version.');
       return;
@@ -2281,6 +2651,7 @@ export default function QuoteBuilder() {
         || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetRestoreVersionAfterReloadRef.current = true;
         quoteVersionRecoveryRequiredRef.current = true;
+        staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
         setStaleSaveOpen(true);
         toast('error', 'The quote changed before the version could be restored. Reload and review it before trying again.');
       } else {
@@ -2553,6 +2924,7 @@ export default function QuoteBuilder() {
 
   const handleConvertToOrder = async () => {
     if (quoteVersionRecoveryRequiredRef.current) {
+      staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
       setStaleSaveOpen(true);
       toast('error', 'The order was not created. Reload the quote, then try Convert to Order again.');
       return;
@@ -2727,6 +3099,7 @@ export default function QuoteBuilder() {
         || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetConvertAfterReloadRef.current = true;
         quoteVersionRecoveryRequiredRef.current = true;
+        staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
         setStaleSaveOpen(true);
         toast('warning', 'The quote changed while conversion was starting. Its order outcome was left untouched; reload and review before retrying.');
         setConverting(false);
@@ -2838,6 +3211,7 @@ export default function QuoteBuilder() {
     setBookingAsOrder(true);
     try {
       if (quoteVersionRecoveryRequiredRef.current) {
+        staleSaveConflictScopeRef.current = NON_SAVE_RECOVERY;
         setStaleSaveOpen(true);
         toast('error', 'The order was not created. Reload the quote, then try Book as Order again.');
         return;
@@ -4485,7 +4859,13 @@ export default function QuoteBuilder() {
       <RecordVersionConflictDialog
         open={staleSaveOpen}
         entityLabel="quote"
-        onKeepEditing={() => setStaleSaveOpen(false)}
+        onKeepEditing={() => {
+          // The dialog is no longer offering to recover anything, so its recorded
+          // origin must not outlive it. Keeping the record here is what let a
+          // dismissed conflict on one quote block the next quote's release.
+          staleSaveConflictScopeRef.current = null;
+          setStaleSaveOpen(false);
+        }}
         onReload={reloadAfterStaleSave}
       />
 

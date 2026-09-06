@@ -6,6 +6,11 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  chicagoCalendarStamp,
+  manualFreshnessBoundary,
+  parseLatestMigrationHistoryEntry,
+} from "./check-doc-drift-lib.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const rows = [];
@@ -19,13 +24,11 @@ const app = read("src/App.tsx");
 const databaseSchema = read("docs/reference/database-schema.md");
 const schemaRegistry = JSON.parse(read(".claude/schema-registry.json"));
 
-const historyClaim = history.match(
-  /^#\s*Migration History\s*\((\d+)\s+(?:migrations?|migration-history entries)\)/m,
-)?.[1];
+const historyClaim = parseLatestMigrationHistoryEntry(history);
 const historySequences = [...history.matchAll(/^\|\s*(\d+)\s*\|\s*\d{8,14}\s*\|/gm)]
   .map((match) => Number(match[1]));
 const latestHistorySequence = historySequences.length ? Math.max(...historySequences) : 0;
-row("migration-history sequence", historyClaim ?? "missing", latestHistorySequence,
+row("migration-history latest sequence", historyClaim ?? "missing", latestHistorySequence,
   Number(historyClaim) === latestHistorySequence ? "PASS" : "FAIL",
   `parsed history rows: ${historySequences.length}`);
 
@@ -117,7 +120,10 @@ for (const doc of manualDocs) {
 
 // HARD freshness gate (2026-07-16 scaffolding review): the two docs that describe
 // LIVE state must not claim a "Last verified" date OLDER than the newest migration
-// on disk. A migration dated after the stamp means the schema/behavior changed
+// on disk, capped at today's America/Chicago calendar date. A future stamp cannot
+// truthfully force a future verification claim before that business date arrives;
+// on and after that date the normal freshness rule applies. A migration dated after
+// the stamp means the schema/behavior changed
 // after the doc was last checked — so its freshness promise is stale. This is the
 // forcing function the manual layer lacked: within 48h of shipping, KNOWN_ISSUES
 // listed an applied-live fix as "parked" while claiming same-day re-verification.
@@ -127,16 +133,18 @@ const newestMigDate = migrations
   .filter(Boolean)
   .sort()
   .at(-1); // YYYYMMDD of the newest migration
+const todayChicago = chicagoCalendarStamp();
+const freshnessDate = manualFreshnessBoundary(newestMigDate, todayChicago);
 for (const doc of ["CURRENT_STATE.md", "KNOWN_ISSUES.md"]) {
   const rel = `docs/manual/${doc}`;
   if (!existsSync(path.join(ROOT, rel))) continue; // the "stamp present" check above already failed this
   const m = read(rel).match(/Last verified:?\*{0,2}\s*(\d{4})-(\d{2})-(\d{2})/);
   if (!m) continue; // no parseable stamp — already a FAIL above
   const stampDate = `${m[1]}${m[2]}${m[3]}`; // YYYYMMDD
-  const fresh = !newestMigDate || stampDate >= newestMigDate;
-  row(`manual freshness ${doc}`, `stamp >= newest migration (${newestMigDate ?? "none"})`, `stamp ${stampDate}`,
+  const fresh = !freshnessDate || stampDate >= freshnessDate;
+  row(`manual freshness ${doc}`, `stamp >= freshness boundary (${freshnessDate ?? "none"})`, `stamp ${stampDate}`,
     fresh ? "PASS" : "FAIL",
-    fresh ? "" : `migration ${newestMigDate} is newer than this doc's "Last verified" stamp — re-verify the doc against live state (list_migrations / the live schema), correct anything stale, THEN bump the stamp. Do not bump the date without re-reading.`);
+    fresh ? "" : `migration ${newestMigDate} requires freshness through ${freshnessDate} (America/Chicago today ${todayChicago}) but this doc is older — re-verify it against live state (list_migrations / the live schema), correct anything stale, THEN bump the stamp. Do not bump the date without re-reading.`);
 }
 
 console.log("check-doc-drift");
