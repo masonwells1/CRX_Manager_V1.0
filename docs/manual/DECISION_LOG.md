@@ -44,6 +44,30 @@ moved `preview_start` to `ask` — `git switch` to a branch carrying a modified 
 defeats edit protection, so starting a configured preview prompts — and moved
 `read_network_requests` to `deny`: an approved capture still puts bearer tokens and signed URLs into
 model context, so it stays blocked (main's effective behaviour) until redaction is proven.
+A seventh round replaced ad-hoc rounds with a test. `.claude/hooks/protected-surface-parity.test.mjs` (wired into
+`npm run test:agent-workflows`, so CI and the pre-commit hook run it) asserts that the three by-name lists agree —
+settings `ask` (all four native editors per pattern), `review-proof-guard.mjs`'s shell and path-field patterns, and
+`codex-push-lib.mjs`'s `RISKY_PATH_RES` — and that every tracked top-level entry under `.claude/` and `.codex/` is
+either protected or recorded in writing as deliberately open. It fails on `main` (56 divergences) and on the branch
+head that preceded it, `45d80321e` (13), which is the proof it is load-bearing rather than decorative. Writing the
+test forced six entries to be decided on evidence rather than habit, each traced to what reads or executes it:
+`.claude/schema-registry.json` (four registered PreToolUse hooks parse it — `generated-column-check.mjs:46`,
+`session-staleness.mjs:110`, `sql-safety.mjs:137`, `status-enum-check.mjs:95` — plus two CI checks and the migration
+review packet; `sql-safety.mjs` wraps its read in a fail-open `catch`, so corrupting the file silently disables that
+check rather than blocking); `.claude/caller-graph.json` (`grant-change-guard.mjs:218` trusts its CONTENT — a missing
+graph fails closed on a risky REVOKE, but a stale one only warns, and a DOCTORED one is not caught at all);
+`.claude/commands/**`, `.claude/skills/**` and `.claude/workflows/**` (all reach CI: `package.json:57` runs the two
+`.test.mjs` files under `workflows/` and `scripts/check-agent-workflows.mjs`, which reads six command files by name,
+and `.github/workflows/ci.yml:468` plus `.husky/pre-commit:43` execute that script — a weakened test still turns the
+CI row green, so the gate lies instead of failing, and the equivalent test files under `.claude/hooks/` were already
+protected, which makes the omission an accident rather than a decision); and `.codex/**` by shape, which brings in
+`sync-from-claude.ps1`. That last one is NOT reachable from CI, husky, or any hook — it is protected because it was
+the only unguarded entry in a directory whose other three were already covered, and one pattern ends the category.
+The reachability trace matched path STRINGS, so a script that assembles one of these paths dynamically would have
+been missed; none was found, but that is a negative grep, not a proof. Cost, stated plainly: editing a slash-command
+or skill file now prompts, and `.codex/sync-from-claude.ps1` can no longer be run from the Bash tool. Mason's
+2026-09-03 ruling against blanket `.claude/**` prompting still holds — the set stays by-name, and the test is what
+keeps a by-name set honest.
 
 **Mode correction after review:** inheriting Auto left new named connector mutations
 eligible for classifier approval. `acceptEdits` keeps ordinary local edits automatic

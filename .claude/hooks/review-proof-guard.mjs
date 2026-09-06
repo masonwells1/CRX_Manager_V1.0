@@ -414,8 +414,26 @@ if (shellTool) {
   // executes the `runtimeExecutable`/`runtimeArgs` that file names, so a shell or
   // path-field rewrite of it followed by preview_start ran any command outside every
   // Bash hook. Reading it stays allowed.
+  // protected-surface-parity.test.mjs (PR #605, round twelve) derived the rest from one
+  // question - what does a gate producer read from the working tree at decision time?
+  // `.claude/schema-registry.json` (three SQL PreToolUse hooks and the migration review
+  // packet), `.claude/caller-graph.json` (grant-change-guard), and `package.json` (the
+  // scripts CI and husky run) were native-editor protected but shell-writable here. The
+  // generators that rewrite the first two (`node scripts/regenerate-schema-registry.mjs`,
+  // `node scripts/generate-caller-graph.mjs`) never name their output on the command
+  // line, so they are unaffected; `npm install`/`npm pkg set` never name package.json.
+  // Round thirteen widened it again, by shape rather than by the file that got caught:
+  // `.claude/commands`, `.claude/skills` and `.claude/workflows` all reach CI - the two
+  // `.test.mjs` files under workflows and `check-agent-workflows.mjs` run inside
+  // `npm run test:agent-workflows` (package.json:57, ci.yml:468, .husky/pre-commit:43),
+  // and `check-agent-guidance.mjs` reads `commands/preflight.md`, `commands/ship.md` and
+  // `skills/graphify/SKILL.md` by name. A defanged test still turns the CI row green, so
+  // the gate does not fail, it lies. `.codex` is now matched bare, the way `.husky` is:
+  // `sync-from-claude.ps1` was the last unprotected entry in a directory whose other
+  // three were already covered, and it writes into `.codex/hooks/**` (an agent that
+  // needs to run it does so outside the Bash tool, or edits the outputs deliberately).
   const ENFORCEMENT_SURFACE_RE =
-    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\](?:hooks|config\.toml)|\.claude[/\\](?:hooks|agents|launch\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts[/\\](?:(?:check|validate|verify)-[^\s"']*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
+    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex|\.claude[/\\](?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts[/\\](?:(?:check|validate|verify)-[^\s"']*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
   // FAIL-CLOSED READ-ONLY ALLOWLIST — deliberately NOT a destructive-verb list.
   // @proven-by review-proof-guard.test.mjs (the deny block asserts that heads
   // absent from this set — cp, tee, rm, Set-Content, command, npx — are refused,
@@ -744,7 +762,7 @@ if (shellTool) {
       namesEnforcementSurface(v)) ||
     enforcementSegments(v).some((seg) =>
       namesEnforcementSurface(seg) && !enforcementSegmentIsReadOnly(seg)))) {
-    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .claude/agents, .claude/launch.json, .codex/hooks, .coderabbit.yaml, or the check/validate/proof scripts are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write; the permission tiers in .claude/settings.json decide whether that native edit proceeds, prompts, or is refused, and every one of these paths is a risky path that cannot merge without the exact-SHA Codex proof.");
+    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .claude/agents, .claude/commands, .claude/skills, .claude/workflows, .claude/launch.json, .claude/schema-registry.json, .claude/caller-graph.json, .codex, .coderabbit.yaml, package.json, or the check/validate/proof/parity scripts are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write; the permission tiers in .claude/settings.json decide whether that native edit proceeds, prompts, or is refused, and every one of these paths is a risky path that cannot merge without the exact-SHA Codex proof.");
   }
 }
 
@@ -800,11 +818,11 @@ if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todow
   };
   const enforcementPathHit = pathCandidates.some((candidate) => {
     if (candidate == null) return false;
-    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex\/(?:hooks|config\.toml)|\.claude\/(?:hooks|agents|launch\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts\/(?:(?:check|validate|verify)-[^/]*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i
+    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex|\.claude\/(?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts\/(?:(?:check|validate|verify)-[^/]*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i
       .test(`/${resolvePathCandidate(candidate)}`);
   });
   if (enforcementPathHit) {
-    deny("REVIEW PROOF GUARD: this tool would write to .husky, .github/workflows, .claude/hooks, .claude/agents, .claude/launch.json, .codex/hooks, .coderabbit.yaml, or the check/validate/proof scripts through a path field. These decide whether the commit, push, CI, and review gates run at all. Use native Edit/Write for a deliberate change; enforcement-surface changes require an exact-SHA independent review before merge.");
+    deny("REVIEW PROOF GUARD: this tool would write to .husky, .github/workflows, .claude/hooks, .claude/agents, .claude/commands, .claude/skills, .claude/workflows, .claude/launch.json, .claude/schema-registry.json, .claude/caller-graph.json, .codex, .coderabbit.yaml, package.json, or the check/validate/proof/parity scripts through a path field. These decide whether the commit, push, CI, and review gates run at all. Use native Edit/Write for a deliberate change; enforcement-surface changes require an exact-SHA independent review before merge.");
   }
 }
 if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {

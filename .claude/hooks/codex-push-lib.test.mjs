@@ -303,6 +303,18 @@ assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs-lib.mjs"]), ["scripts/write-apply-proofs-lib.mjs"]);
 // GitHub Codex P1 on 8179ae989: preview_start runs whatever .claude/launch.json names.
 assert.deepEqual(riskyFiles([".claude/launch.json"]), [".claude/launch.json"]);
+// protected-surface-parity (PR #605 round 12): gate inputs + manifest-sync scripts.
+// Round thirteen: CI-reachable prose/orchestration dirs, and .codex by shape.
+assert.deepEqual(riskyFiles([".claude/commands/ship.md"]), [".claude/commands/ship.md"]);
+assert.deepEqual(riskyFiles([".claude/skills/graphify/SKILL.md"]), [".claude/skills/graphify/SKILL.md"]);
+assert.deepEqual(riskyFiles([".claude/workflows/truthful-review-states.test.mjs"]), [".claude/workflows/truthful-review-states.test.mjs"]);
+assert.deepEqual(riskyFiles([".codex/sync-from-claude.ps1"]), [".codex/sync-from-claude.ps1"]);
+assert.deepEqual(riskyFiles([".codex/config.toml"]), [".codex/config.toml"]);
+assert.deepEqual(riskyFiles([".codex/hooks.json"]), [".codex/hooks.json"]);
+assert.deepEqual(riskyFiles([".claude/schema-registry.json"]), [".claude/schema-registry.json"]);
+assert.deepEqual(riskyFiles([".claude/caller-graph.json"]), [".claude/caller-graph.json"]);
+assert.deepEqual(riskyFiles(["scripts/agent-manifest-parity.mjs"]), ["scripts/agent-manifest-parity.mjs"]);
+assert.deepEqual(riskyFiles(["scripts/sync-agent-workflows.mjs"]), ["scripts/sync-agent-workflows.mjs"]);
 assert.deepEqual(riskyFiles(["scripts/overnight-codex-gate.mjs"]), ["scripts/overnight-codex-gate.mjs"]);
 assert.deepEqual(
   riskyFiles(["package.json"]),

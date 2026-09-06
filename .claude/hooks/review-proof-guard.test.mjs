@@ -203,6 +203,20 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "grep -n verdict sc
 assert.equal(run({ tool_name: "Read", tool_input: { file_path: ".claude/agents/rls-security-reviewer.md" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cat .claude/launch.json" } }).stdout, "");
 assert.equal(run({ tool_name: "Read", tool_input: { file_path: ".claude/launch.json" } }).stdout, "");
+// protected-surface-parity (PR #605 round 12): reads, the generators, and npm stay silent.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cat package.json" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "jq .scripts package.json" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "npm run typecheck" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "npm install left-pad" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/regenerate-schema-registry.mjs --from-introspection /tmp/introspection.json" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/generate-caller-graph.mjs --live-json /tmp/live.json" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cat .claude/schema-registry.json" } }).stdout, "");
+// Round thirteen: reads of the newly protected prose and orchestration files stay silent.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cat .claude/commands/ship.md" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "grep -rn verdict .claude/workflows" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "ls .claude/skills" } }).stdout, "");
+assert.equal(run({ tool_name: "Read", tool_input: { file_path: ".codex/sync-from-claude.ps1" } }).stdout, "");
+assert.equal(run({ tool_name: "Read", tool_input: { file_path: ".claude/caller-graph.json" } }).stdout, "");
 // 2026-08-18 false-positive class: a cd to an UNRELATED literal directory plus a
 // read-only mention of the state dir must be allowed — only the cd TARGET matters.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "C:\\CRX_Manager\\.claude\\worktrees\\skills-audit-x" && wc -l src/app.ts; ls .claude/session-state 2>/dev/null' } }).stdout, "");
@@ -531,6 +545,21 @@ for (const command of [
   "cp /tmp/evil .claude/launch.json",
   "sed -i s/npm/curl/ .claude/launch.json",
   "cp /tmp/evil .claude/commands/../launch.json",
+  // protected-surface-parity (PR #605 round 12): gate inputs and the scripts manifest.
+  // Round thirteen: commands/skills/workflows reach CI; .codex is matched by shape.
+  "echo x > .claude/commands/ship.md",
+  "cp /tmp/evil .claude/skills/graphify/SKILL.md",
+  "Set-Content .claude/workflows/truthful-review-states.test.mjs",
+  "sed -i s/x/y/ .claude/workflows/migration-review.js",
+  "tee .codex/sync-from-claude.ps1",
+  "cp /tmp/evil .codex/sync-from-claude.ps1",
+  "Set-Content .claude/schema-registry.json",
+  "cp /tmp/evil .claude/caller-graph.json",
+  "sed -i s/x/y/ package.json",
+  "cp /tmp/evil package.json",
+  "echo x > package.json",
+  "tee package.json",
+  "Set-Content ./package.json",
   // SEVENTH gpt-5.6-sol round, both P1 and both reproduced by the reviewer.
   //
   // (a) `rg --pre CMD` runs CMD on every input path, so an allowlisted READER
@@ -644,6 +673,14 @@ for (const payload of [
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/../agents/rls-security-reviewer.md" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/launch.json" } },
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/launch.json" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/ship.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/skills/graphify/SKILL.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/workflows/truthful-review-states.test.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".codex/sync-from-claude.ps1" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/schema-registry.json" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/caller-graph.json" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "package.json" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: "package.json" } },
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/hooks/sql-safety.mjs" } },
   { tool_name: "mcp__filesystem__edit_file", tool_input: { path: ".codex/hooks.json" } },
   { tool_name: "apply_patch", tool_input: { patch: "*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n" } },
