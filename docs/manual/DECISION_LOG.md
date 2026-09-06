@@ -42,6 +42,14 @@ explain the original policy decision, not a guarantee that every native edit is 
 
 **What this forbids/implies:** no agent may self-certify past a `BLOCKERS` verdict; when Codex objects to a settings change, the objection goes to Mason and only Mason's own GitHub merge lands it. A hook or settings edit remains a risky path: agents still need the exact-SHA Codex proof to merge one. Do not re-add the removed `ask` entries without a fresh decision here. Recorded as a known residual in `docs/reference/agent-guardrails.md`.
 
+## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
+
+**Source:** Mason's decision on 2026-09-05, after the 2026-09-05 analysis recorded in `docs/manual/KNOWN_ISSUES.md`.
+
+**Decision.** `scripts/apply-live-testdata-maintenance-20260812.mjs` is to be deleted through its own `--retire-producer` lane (one local file deletion; the script never touched the database in any lane), together with its test and its three snippet inputs. Its apply lane never ran, and its snippets did not cover the classifier defects found on 2026-09-02, so applying it would not have repaired the live false positives. The deletion is executed in the commit that follows this record, because the retire lane only runs against a reviewed commit that still contains the producer; `docs/manual/KNOWN_ISSUES.md` tracks whether it has landed.
+
+**What this forbids/implies:** do not revive the producer or its snippets; a classifier repair is a new, ordinary reviewed change against `.claude/hooks/live-testdata-lib.mjs`. The by-name deny rules that still name the retired path in the three guard files stay as they are until a separate guard change removes them. Once the deletion lands, editing `.codex/hooks/production-action-guard.mjs` no longer requires a blob re-pin.
+
 ## 2026-09-04 — Agent instructions use a lean shared contract and task-routed detail
 
 **Source:** Mason's request to analyze the CRX documentation setup against current Codex and Claude guidance, make `AGENTS.md` as lean as possible, prefer simple readable code, and explicitly design for an owner who cannot review code.
