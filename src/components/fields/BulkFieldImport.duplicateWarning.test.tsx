@@ -195,13 +195,18 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
     expect(screen.queryByText(/do not re-import this whole file/i)).not.toBeInTheDocument();
   });
 
-  it('does NOT warn when nothing reached the database', async () => {
-    // save_field itself fails, so no field exists and re-importing is safe.
+  it('does NOT warn when the server explicitly rejected the row', async () => {
+    // PostgreSQL answered (a real HTTP status), so the transaction rolled back and no
+    // field exists. This row genuinely is safe to re-import.
     rpc.mockImplementation((fn: string) => {
       if (fn === 'save_field') {
-        return Promise.resolve({ data: null, error: { message: 'permission denied', code: '42501' } });
+        return Promise.resolve({
+          data: null,
+          error: { message: 'permission denied', code: '42501' },
+          status: 403,
+        });
       }
-      return Promise.resolve({ data: {}, error: null });
+      return Promise.resolve({ data: {}, error: null, status: 200 });
     });
 
     render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
@@ -209,5 +214,49 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
 
     expect(screen.getByText(/permission denied/i)).toBeInTheDocument();
     expect(screen.queryByText(/do not re-import this whole file/i)).not.toBeInTheDocument();
+  });
+
+  it('WARNS when the response was lost, because the row may have committed anyway', async () => {
+    // postgrest-js reports status 0 when fetch itself failed and no response ever arrived.
+    // The request may still have reached PostgreSQL and committed, so this row must NOT be
+    // presented as safe to retry — the retry mints a fresh key and would duplicate it.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'TypeError: Failed to fetch', code: '' },
+          status: 0,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    // Nothing is confirmed created, so a warning gated only on `created` would be absent.
+    expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+    const p = screen.getByText(/never came back with a clear answer/i, { selector: "p" });
+    expect(p.textContent?.replace(/\s+/g, ' ')).toContain(
+      '1 row never came back with a clear answer',
+    );
+    // It must not claim the field exists — only that we cannot tell.
+    expect(screen.queryByText(/already exist/i, { selector: 'p' })).not.toBeInTheDocument();
+  });
+
+  it('WARNS when save_field answered with no id, because that outcome is ambiguous too', async () => {
+    // A 200 carrying null data makes assertRpcResult throw. The server answered, but not
+    // with an id, so whether anything committed is unknowable from here — the row must be
+    // treated the same as a lost response, not as a clean rejection.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') return Promise.resolve({ data: null, error: null, status: 200 });
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    await runImport();
+
+    expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+    expect(screen.getByText(/never came back with a clear answer/i, { selector: "p" })).toBeInTheDocument();
   });
 });

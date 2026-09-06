@@ -1,6 +1,6 @@
 ## 2026-09-05 - Warn against re-importing a bulk field import, and stop showing "[object Object]" as the reason
 
-Two changes to the bulk field import results screen. Neither touches the import
+Three changes to the bulk field import results screen. None touches the import
 logic itself; the underlying duplicate-field defect is unchanged and still needs the
 server-side fix described at the bottom.
 
@@ -22,7 +22,8 @@ immediately after `assertRpcResult(fieldId, 'save_field')` succeeds, before anyt
 else can fail. It counts every row that reached the database regardless of how the
 row was ultimately classified. The results screen shows an amber warning when
 `created > 0 && failed > 0`, naming the count and calling out the
-"Field created but boundary measurement failed" rows specifically.
+"Field created but boundary measurement failed" rows specifically. **That condition was
+widened in section 3 below** — `created` alone proved insufficient.
 
 Driving the warning off `success` instead of `created` would have made it **absent in
 the single worst case** — one row, boundary failed: 0 imported, 1 failed, one field
@@ -44,21 +45,46 @@ All three now use `sanitizeError` from `src/lib/errorSanitizer.ts`, which alread
 handles the plain-object shape and additionally strips schema identifiers — the same
 treatment the rest of the app gives RPC errors.
 
+### 3. Codex P1 on the PR — a lost response is not a rejection
+
+The first version counted only rows whose `save_field` call returned an id. Codex's review
+of PR #623 pointed out the hole, confirmed here from the installed `postgrest-js` source
+before fixing: if the request reaches PostgreSQL and **commits** but the HTTP response is
+lost, Supabase surfaces a fetch error and the row looks un-created. The warning would then
+have told the operator that row was safe to re-import — causing exactly the duplicate it
+exists to prevent, with more confidence than before the warning existed.
+
+`postgrest-js` (`dist/index.mjs`, the fetch-failure branch) returns `status: 0` and an empty
+`code` **only** when fetch itself failed and no response arrived; any real PostgreSQL
+rejection carries a real HTTP status. That is the discriminator. Each row now resolves to
+one of `not-sent` / `committed` / `rejected` / `unknown`, set pessimistically to `unknown`
+the moment the request goes out and narrowed only when the server actually says something.
+`unknown` also covers a 200 carrying a null id, where `assertRpcResult` throws and the row's
+fate is equally unknowable.
+
+The screen now shows two separate sentences: confirmed-existing fields, and rows whose
+outcome is unknown and must be looked up before retrying. Only rows the server explicitly
+rejected are described as safe to re-import.
+
 ### Verification
 
 - `npm run typecheck` clean · `npm run lint` clean · `npm run build` succeeded.
-- `npm run test` — 352 files, 5012 passed, 0 failed, 123 skipped.
-- New `src/components/fields/BulkFieldImport.duplicateWarning.test.tsx` — 4 tests
+- `npm run test` — 352 files, 5014 passed, 0 failed, 123 skipped.
+- New `src/components/fields/BulkFieldImport.duplicateWarning.test.tsx` — 6 tests
   driving the **real** component through the **real** `handleUpload`, mocking only the
   network boundary, auth, toast, the child steps and the file parser: a boundary-failed
   row is counted; a clean row and a boundary-failed row are counted together; no
   warning on a fully clean import; no warning when `save_field` itself failed and
-  nothing reached the database.
-- **Four mutations, each verified to be a real edit and not a silent no-op, source
-  restored byte-identical after every run — all four caught:** the warning driven by
+  nothing reached the database; a lost response still warns; a 200 carrying no id still warns.
+- **Seven mutations, each verified to be a real edit and not a silent no-op, source
+  restored byte-identical after every run — all seven caught:** the warning driven by
   `success` instead of `created`; the count displayed from `success`; `created`
-  incremented only after the boundary lands; and the boundary error `String()`-ed back
-  to `[object Object]`.
+  incremented only after the boundary lands; the boundary error `String()`-ed back to
+  `[object Object]`; a lost response treated as a definite rejection; the warning
+  suppressed for an unknown-outcome row; and the outcome assumed known until the server
+  answers. **That last one ESCAPED on the first run** — nothing covered a 200 carrying
+  a null id, so the pessimistic default could be deleted with every test still green. The
+  sixth test exists because of it; reading the suite did not reveal the gap.
 - **Rendered and looked at.** The real component's results panel was captured from the
   test DOM and viewed in the browser, before and after the error-message fix. The
   before shot is what exposed `[object Object]`.
