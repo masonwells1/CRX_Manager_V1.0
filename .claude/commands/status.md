@@ -1,3 +1,9 @@
+---
+# Read-only report: faster model at low effort (docs/reference/claude-model-tuning.md).
+model: sonnet
+effort: low
+---
+
 Show a quick project status dashboard for CRX Manager. Gather this info and present it cleanly:
 
 1. **Git status**: current branch, uncommitted changes, last 3 commits (one-line each)

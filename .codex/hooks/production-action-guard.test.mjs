@@ -248,17 +248,10 @@ try {
   });
   assert.equal(deniedProducerRun.blocked, true, "producer execution without exact-head proof is denied");
   assert.match(deniedProducerRun.reason, /exact-SHA adversarial gate/i, "producer denial identifies the required proof");
+  // The producer's own regression harness used to run here. The producer was
+  // retired unapplied on 2026-09-05 (Mason's decision), so the by-name denial
+  // above is the whole remaining contract: a retired path must still be refused.
 
-  const focusedProducerOutput = execFileSync(
-    process.execPath,
-    [path.join(projectRoot, "scripts", producerName.replace(/\.mjs$/, ".test.mjs"))],
-    { cwd: projectRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  assert.match(
-    focusedProducerOutput,
-    /87 classifier assertions \+ 308 producer assertions passed/,
-    "the standard guard suite executes the focused producer regression harness",
-  );
   assert.equal(evaluateProductionAction({ toolName: "mcp__node_repl__node_repl", toolInput: { code: "1 + 1" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__github__push_files", toolInput: { branch: "main" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__github__create_or_update_file", toolInput: { branch: "main" } }).blocked, true);
