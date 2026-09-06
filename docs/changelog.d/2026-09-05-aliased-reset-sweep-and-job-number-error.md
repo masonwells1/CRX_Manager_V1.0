@@ -588,3 +588,10 @@ anyone being told. Mutation-proven: forcing the toast unconditionally fails exac
 
 Neither finding was reachable before round 8, because before it the key was retired on that path and
 there was no retained receipt to lose or misreport.
+
+**The general lesson, past this PR: any recovery instruction that says "reload" must be checked
+against what the reload destroys.** A reload is not a neutral act. Here it unmounted the component
+holding the only copy of the receipt, so the instruction and the fix were working against each
+other — and the code comment alone would not have carried that to the next reader, because at each
+site the instruction looks obviously correct. Ask what state lives only in the mounted component
+before telling anyone to discard it.
