@@ -14,6 +14,14 @@ const assistant = (id, content = []) => ({
   message: { id, model: "fixture-model", content, usage: { input_tokens: 10, output_tokens: 2 } },
 });
 const writeRecords = (file, records) => writeFileSync(file, records.map(JSON.stringify).join("\n") + "\n");
+// The --denials export is an adjudication record, so it has to carry the WHOLE refused command and
+// the WHOLE guard reason. The old code clipped the command at 300 characters and the reason at 160
+// (and only ever saw the first 400 characters of the reason), so a long refusal was exported
+// without the part that says what actually happened (Codex GitHub App P2, PR #613). Both fixtures
+// below run past every one of those bounds and end in a sentinel, so a re-introduced clip drops the
+// sentinel and fails the assertions.
+const longCommand = `node scripts/probe.mjs ${"x".repeat(360)} --tail=COMMAND_TAIL_KEPT`;
+const longReason = `REVIEW PROOF GUARD: ${"the reason continues ".repeat(30)}REASON_TAIL_KEPT`;
 try {
   const project = path.join(root, "CRX-fixture");
   const subagents = path.join(project, "main", "subagents");
@@ -26,8 +34,8 @@ try {
   writeRecords(path.join(subagents, "agent-fixture.jsonl"), [
     user("Parent agent instructions, not Mason's words."),
     user([{ type: "text", text: "Another agent instruction." }]),
-    assistant("sub-response", [{ type: "tool_use", id: "sub-tool", name: "Read", input: { file_path: "fixture.txt" } }]),
-    user([{ type: "tool_result", tool_use_id: "sub-tool", is_error: true, content: "REVIEW PROOF GUARD: fixture refusal" }]),
+    assistant("sub-response", [{ type: "tool_use", id: "sub-tool", name: "Bash", input: { command: longCommand } }]),
+    user([{ type: "tool_result", tool_use_id: "sub-tool", is_error: true, content: longReason }]),
   ]);
   // A DIRECTORY named like a transcript under subagents/ must be skipped, not
   // streamed: the main loop checked isDirectory() but the subagent loop only
@@ -74,8 +82,11 @@ try {
   mkdirSync(path.dirname(scratchOut), { recursive: true });
   const allowed = spawnSync(process.execPath, [script, ...windowArgs, "--denials", scratchOut], { encoding: "utf8" });
   assert.equal(allowed.status, 0, allowed.stderr);
-  assert.match(readFileSync(scratchOut, "utf8"), /REVIEW PROOF GUARD: fixture refusal/, "a scratch destination outside any checkout receives the denials");
-  console.log("claude-usage-report: --denials refuses every destination inside a git checkout and writes to a scratch path");
+  const exported = readFileSync(scratchOut, "utf8");
+  assert.match(exported, /REVIEW PROOF GUARD: /, "a scratch destination outside any checkout receives the denials");
+  assert.match(exported, /COMMAND_TAIL_KEPT/, "the export must carry the whole refused command, not a 300-character prefix");
+  assert.match(exported, /REASON_TAIL_KEPT/, "the export must carry the whole guard reason, not a 160-character prefix");
+  console.log("claude-usage-report: --denials refuses every destination inside a git checkout, writes to a scratch path, and keeps whole commands and reasons");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -171,7 +171,10 @@ for (const f of files) {
               const tu = toolById.get(rid);
               if (!tu) { diag.unpairedDenials++; continue; }
               denialKinds[kind]++; s.denials++;
-              denied.push({ kind, tool: tu.name || "?", command: tu.command || "", session: s.id.slice(0, 8), msg: head.slice(0, 160) });
+              // Store the WHOLE reason, not `head`: the --denials export exists to adjudicate a
+              // refusal, so a clipped reason defeats it. Only `head` is clipped, and only because
+              // it feeds the classification regexes above (Codex GitHub App P2, PR #613).
+              denied.push({ kind, tool: tu.name || "?", command: tu.command || "", session: s.id.slice(0, 8), msg: txt });
             }
           }
         }
@@ -188,7 +191,10 @@ for (const f of files) {
           seenToolUse.add(part.id);
           toolCounts[part.name] = (toolCounts[part.name] || 0) + 1; s.tools++;
           const inp = part.input || {};
-          toolById.set(part.id, { name: part.name, command: String(inp.command || inp.pattern || inp.file_path || inp.path || "").slice(0, 300) });
+          // Keep the exact invocation. Nothing prints this string — it is only serialised by the
+          // --denials export, where a clipped command hides what was actually refused (Codex
+          // GitHub App P2, PR #613).
+          toolById.set(part.id, { name: part.name, command: String(inp.command || inp.pattern || inp.file_path || inp.path || "") });
         }
       }
       const u = o.message.usage;
