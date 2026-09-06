@@ -32,11 +32,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, dirtyStates } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockToast, mockNavigate, mockNotifyCreditLimit, dirtyStates } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
   mockToast: vi.fn(),
   mockNavigate: vi.fn(),
+  // The DURABLE half of the credit warning: notifyCreditLimitExceeded -> notifyAdmins writes
+  // a notification row. A toast can be missed; this row is the record that the limit was
+  // breached, so it is what the CRX-ENTITY-003 test actually asserts on.
+  mockNotifyCreditLimit: vi.fn(),
   // Every isDirty value the page has handed to useUnsavedChanges. The dirty engine
   // has no dedicated DOM of its own, so this is how the third test observes it.
   dirtyStates: [] as boolean[],
@@ -112,6 +116,12 @@ vi.mock('../hooks/useUnsavedChanges', () => ({
     return { state: 'unblocked', reset: vi.fn(), proceed: vi.fn() };
   },
 }));
+// Spread the real module: JobDetail imports a dozen notify* helpers from here. Only the
+// credit-limit one is replaced, so the rest keep their real behaviour.
+vi.mock('../lib/notificationTriggers', async (importOriginal) => {
+  const actual = await (importOriginal() as Promise<Record<string, unknown>>);
+  return { ...actual, notifyCreditLimitExceeded: mockNotifyCreditLimit };
+});
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/criticalAction', () => ({
@@ -575,4 +585,83 @@ describe('JobDetail cross-record stale-load guard', () => {
    * What IS established: downgrading `useLayoutEffect` to `useEffect` reddens nothing in
    * this file. Treat the layout effect as reasoned-and-strictly-earlier, not as proven.
    */
+  /**
+   * CRX-ENTITY-003 — a regression THIS PR introduced, caught by the gpt-5.6-sol review of
+   * head 2b9c19c4c and rated High.
+   *
+   * An earlier round gated the WHOLE save-success block on stillOnThisJob(). For an UPDATE
+   * that is purely protective. For a CREATE it is not: `save_job` runs with p_job_id NULL and
+   * the row COMMITS regardless, so suppressing the acknowledgement traded a VISIBLE wrong
+   * (the operator yanked onto the job they just made) for a SILENT one — a job exists and
+   * nobody was told. useIdempotencyKey's map is component-local and dies on unmount, so the
+   * operator's retry mints a FRESH key, the DB replay check cannot match, and the second
+   * save_job writes a DUPLICATE job that can be completed, invoiced, or move inventory.
+   *
+   * Suppressed in the same arm: warnIfOverCreditLimit, which writes a durable admin
+   * notification row. A credit control that leaves no trace is not a weakened control, it is
+   * an absent one. Neither statement touches JobDetail state, so neither had anything to be
+   * protected from — gating them could only subtract.
+   *
+   * Confirmed 2026-09-06 that this test FAILS against the fully-gated source (no success
+   * toast, no check_customer_credit_limit call, no notification) and passes with the split.
+   */
+  it('still acknowledges a NEW job that commits after the operator has left, and still runs the credit check', async () => {
+    const saveGate = deferred();
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return buildChain({ data: [{ id: 'cust-1', farm_name: 'Farm Alpha', is_active: true }], error: null });
+      }
+      if (table === 'jobs') return buildChain({ data: JOB_B, error: null });
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'save_job') {
+        return saveGate.promise.then(() => ({ data: { job_id: 'job-created-1' }, error: null }));
+      }
+      if (fn === 'check_customer_credit_limit') {
+        return Promise.resolve({
+          data: { exceeded: true, farm_name: 'Farm Alpha', outstanding_ar: 90000, credit_limit: 50000 },
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    const router = mountAt('/jobs/new');
+    const option = await screen.findByRole('option', { name: 'Farm Alpha' });
+    const customerSelect = option.closest('select') as HTMLSelectElement;
+    await act(async () => { fireEvent.change(customerSelect, { target: { value: 'cust-1' } }); });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save Job/ })); });
+    await waitFor(() => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true));
+
+    // The operator leaves while save_job is still in flight. The row commits anyway.
+    await act(async () => { await router.navigate('/jobs/job-b'); });
+    await screen.findByRole('heading', { name: 'J-BBBB-2002' });
+    await act(async () => { saveGate.release(); await saveGate.promise; });
+
+    // 1. The create receipt still reaches the operator — the ONLY evidence the job exists.
+    //    It must also be ENTITY-SPECIFIC: this toast lands over an unrelated page and
+    //    auto-dismisses in 4s (Toast.tsx:47), so a bare 'Job created' is a floating claim
+    //    the operator cannot attach to anything. Naming the customer is what makes it a
+    //    receipt rather than a notification, so that is what this pins.
+    await waitFor(() => {
+      expect(mockToast.mock.calls.some(
+        (c) => c[0] === 'success'
+          && String(c[1]).includes('Farm Alpha')
+          && String(c[1]).includes('created'),
+      )).toBe(true);
+    });
+
+    // 2. The credit control still runs on the committed row, and still leaves its record.
+    await waitFor(() => {
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'check_customer_credit_limit')).toBe(true);
+    });
+    await waitFor(() => expect(mockNotifyCreditLimit).toHaveBeenCalled());
+
+    // 3. And the page the operator is on NOW is untouched: no redirect onto the new job,
+    //    which is the wrong this PR's guard exists to prevent. Both halves at once.
+    expect(mockNavigate).not.toHaveBeenCalledWith('/jobs/job-created-1');
+    expect(screen.getByRole('heading', { name: 'J-BBBB-2002' })).toBeTruthy();
+  });
 });

@@ -2855,18 +2855,56 @@ export default function JobDetail() {
         })();
       }
 
-      // The job row is saved regardless; only the on-screen consequences are gated. A
-      // stale success here would clear the CURRENT job's dirty flag, or navigate the
-      // operator off the job they are now editing and onto the one they left.
-      if (stillOnThisJob()) {
-        toast('success', isNew ? 'Job created' : 'Job saved');
+      // CRX-ENTITY-003. An earlier round of this PR gated this WHOLE block on
+      // stillOnThisJob(). That was too wide: the reasoning only ever applied to the
+      // statements that touch THIS page. The row COMMITS regardless, so gating the
+      // acknowledgement of a CREATE traded a visible wrong (yanked onto the new job) for
+      // a silent one (a job exists and nobody was told) — and a component-local
+      // idempotency key dies on unmount, so the operator's retry mints a DUPLICATE job.
+      //
+      // The partition test, stated precisely so it does not over-generalise. Ungate a
+      // statement only when BOTH hold: it touches no page state, AND it carries information
+      // the operator cannot otherwise recover. Both halves are load-bearing. The
+      // 'Job started' / 'Job completed' / 'Job cancelled' / invoice-created toasts further
+      // down touch no page state either and stay GATED on purpose: their RPCs refuse a
+      // replay (complete_job requires in_progress; transfer_job_to_invoice refuses
+      // 'Job already invoiced'), so a retry there yields an explanatory error, not a
+      // duplicate row. save_job with p_job_id NULL is the ONE site where the retry
+      // silently duplicates, which is what makes its receipt load-bearing rather than
+      // merely courteous.
+      const onThisJob = stillOnThisJob();
+
+      if (isNew) {
+        // UNGATED — the create receipt. For a CREATE there is no record on screen to fall
+        // back on, so this toast is the only evidence the job exists. A late arrival names
+        // the CUSTOMER so it cannot be misread as a confirmation about whatever job is on
+        // screen now: SaveJobResult carries only { job_id } (:199), so the farm name already
+        // in this closure is the most identifying thing available without another round trip.
+        const createdForFarm = customers.find((c) => c.id === customerId)?.farm_name;
+        toast('success', onThisJob
+          ? 'Job created'
+          : `Job for ${createdForFarm || 'this customer'} created — find it in the jobs list`);
+        // UNGATED — warnIfOverCreditLimit touches NO JobDetail state. It writes a durable
+        // admin notification row (notifyCreditLimitExceeded -> notifyAdmins) and raises a
+        // toast from the app-level provider. Gating it silently skipped a credit control
+        // on an already-committed job; on main this warning always fired.
+        void warnIfOverCreditLimit(customerId, toast);
+      } else if (onThisJob) {
+        // GATED — for an UPDATE the record is already known to exist, so a late "Job saved"
+        // carries no receipt, only the false impression that the job now on screen saved.
+        toast('success', 'Job saved');
+      }
+
+      // GATED — every statement below lands on THIS page. A stale success must not clear
+      // the CURRENT job's dirty flag, refetch over it, or navigate the operator off the
+      // job they are now editing and onto the one they left.
+      if (onThisJob) {
         setIsDirty(false);
         setSavedApplicatorId(applicatorId || null);
         setSavedJobDate(jobDate);
 
         if (isNew) {
           navigate(`/jobs/${result.job_id}`);
-          void warnIfOverCreditLimit(customerId, toast);
         } else {
           await fetchJob();
         }
