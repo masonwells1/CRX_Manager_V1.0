@@ -856,6 +856,93 @@ describe('QuoteBuilder', () => {
   });
 
   /**
+   * Retaining the key is only half a retry. The server fingerprints the WHOLE request
+   * — `md5(quote_id || quote_payload || sections || performed_by)` in
+   * 20260812115236_quote_items_cost_at_quote_snapshot.sql:348 — and answers a replay
+   * whose fingerprint differs with IDEMPOTENCY_PAYLOAD_CONFLICT rather than the cached
+   * result. `expires_at` was built from `Date.now()` on every save, so the retry this
+   * page instructs the operator to perform sent a different millisecond every time and
+   * could never redeem the key it had just been told to keep.
+   *
+   * `Date.now` is forced to advance here on purpose. Two clicks in a real test run can
+   * land inside the same millisecond, and this test would then pass against the very
+   * bug it exists to catch.
+   *
+   * Covered on the EDIT path. The create path builds its payload from the same lines
+   * with the same frozen clock and differs only in the scope string (`'new'`), but
+   * driving a create to a save through this harness needs a customer and an item
+   * selected in the UI, so create is reasoned, not executed, here.
+   */
+  it('sends a byte-identical payload on the retry, not just an identical key', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    // First attempt is ambiguous, so the key is retained. Second attempt is the retry.
+    mockRpc
+      .mockImplementationOnce(() => Promise.resolve({ data: {}, error: null }))
+      .mockImplementation(() => Promise.resolve({
+        data: { quote_id: quote.id, row_version: 8 },
+        error: null,
+      }));
+
+    renderQuoteBuilder(quote.id);
+    await screen.findByText('Save Draft');
+
+    let clock = 1_800_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+      clock += 60_000;
+      return clock;
+    });
+
+    try {
+      fireEvent.click(screen.getByText('Save Draft'));
+      await waitFor(() => {
+        expect(mockRpc.mock.calls.filter(([name]) => name === 'save_quote').length).toBe(1);
+      });
+      expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByText('Save Draft'));
+      await waitFor(() => {
+        expect(mockRpc.mock.calls.filter(([name]) => name === 'save_quote').length).toBe(2);
+      });
+
+      const saves = mockRpc.mock.calls
+        .filter(([name]) => name === 'save_quote')
+        .map(([, args]) => args as {
+          p_idempotency_key: string;
+          p_quote_payload: Record<string, unknown>;
+          p_sections: unknown;
+        });
+
+      expect(saves[1].p_idempotency_key).toBe(saves[0].p_idempotency_key);
+      expect(
+        saves[1].p_quote_payload.expires_at,
+        'expires_at moved between attempts, so the server fingerprint cannot match',
+      ).toBe(saves[0].p_quote_payload.expires_at);
+      // Everything the server hashes, not only the field that regressed.
+      expect(saves[1].p_quote_payload).toEqual(saves[0].p_quote_payload);
+      expect(saves[1].p_sections).toEqual(saves[0].p_sections);
+
+      // The retry redeemed the receipt, so the key is finally retired.
+      await waitFor(() => expect(mockResetIdempotencyKey).toHaveBeenCalled());
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  /**
    * Only ONE of this page's eleven dialog openers is a save_quote conflict.
    *
    * The other ten are lifecycle actions — decline, email, version restore, convert,

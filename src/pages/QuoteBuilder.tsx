@@ -409,6 +409,30 @@ export default function QuoteBuilder() {
   // the reload path clears it only when it actually releases, since a reload for a
   // DIFFERENT quote must leave the originating quote's key retained.
   const staleSaveConflictScopeRef = useRef<StaleSaveConflictOrigin>(null);
+
+  // The wall clock one save_quote attempt is pinned to, per intent scope.
+  //
+  // The server fingerprints the WHOLE request — quote id, the entire quote payload,
+  // the sections, and the actor — into `v_request_fingerprint`
+  // (20260812115236_quote_items_cost_at_quote_snapshot.sql:348) and rejects a replay
+  // whose fingerprint differs with IDEMPOTENCY_PAYLOAD_CONFLICT. `expires_at` and
+  // `sent_at` are derived from `Date.now()`, so a plain re-send regenerates them to a
+  // different millisecond and can never match the original.
+  //
+  // Without this, the recovery instruction below — press Save again on the SAME
+  // retained key — is impossible to carry out: the retained key would be a receipt no
+  // request this page can build could ever redeem, and a create whose first attempt
+  // committed server-side would be stranded with no way back to it.
+  //
+  // So the first save under a given key records the instant, and every retry under
+  // that same key reuses it. Retiring the key mints a new one, which is a new attempt
+  // and takes a fresh instant. Keyed by scope and stamped with the key it was minted
+  // for, so an A -> B -> A navigation cannot hand quote A's retry quote B's clock.
+  //
+  // Only the CLOCK is frozen, never the payload. If the operator edits the quote —
+  // `valid_days` included — the fingerprint legitimately changes and the server is
+  // right to refuse: that is a different request, not a retry.
+  const saveQuoteAttemptClockRef = useRef<Map<string, { key: string; atMs: number }>>(new Map());
   const [isPlanned, setIsPlanned] = useState(false);
   const [wasPlanned, setWasPlanned] = useState(false);
 
@@ -1625,6 +1649,18 @@ export default function QuoteBuilder() {
       return null;
     }
 
+    // Minted before the payload so the frozen clock can be bound to it. `getKey`
+    // returns the SAME key until it is retired, so this is a read, not a new attempt.
+    const idemKey = getSaveQuoteIdempotencyKey();
+    const previousAttempt = saveQuoteAttemptClockRef.current.get(saveQuoteIntentScope);
+    let saveAttemptAtMs: number;
+    if (previousAttempt && previousAttempt.key === idemKey) {
+      saveAttemptAtMs = previousAttempt.atMs;
+    } else {
+      saveAttemptAtMs = Date.now();
+      saveQuoteAttemptClockRef.current.set(saveQuoteIntentScope, { key: idemKey, atMs: saveAttemptAtMs });
+    }
+
     const quotePayload = {
       quote_number: quoteNumber,
       customer_id: customerId,
@@ -1645,12 +1681,12 @@ export default function QuoteBuilder() {
       total_margin_pct: totals.totalMarginPct,
       valid_days: validDays,
       expires_at: new Date(
-        Date.now() + validDays * 24 * 60 * 60 * 1000
+        saveAttemptAtMs + validDays * 24 * 60 * 60 * 1000
       ).toISOString(),
       header_notes: headerNotes || null,
       footer_notes: footerNotes || null,
       is_planned: isPlanned,
-      ...(newStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
+      ...(newStatus === 'sent' ? { sent_at: new Date(saveAttemptAtMs).toISOString() } : {}),
     };
 
     // Build sections JSON for the atomic RPC
@@ -1687,7 +1723,6 @@ export default function QuoteBuilder() {
     }));
 
     try {
-      const idemKey = getSaveQuoteIdempotencyKey();
       // Which record, and which editing session of it, this request belongs to —
       // captured BEFORE it is sent. The entry check at the top of this function
       // cannot stand in for either: that ran before the request existed, and

@@ -595,3 +595,58 @@ holding the only copy of the receipt, so the instruction and the fix were workin
 other — and the code comment alone would not have carried that to the next reader, because at each
 site the instruction looks obviously correct. Ask what state lives only in the mounted component
 before telling anyone to discard it.
+
+## Round 11 — the receipt was retained, but no request could ever redeem it
+
+The exact-SHA `gpt-5.6-sol` proof refused the merged head `555d6b50b` with a **High**, and it was
+right. Round 10 taught the operator to retry on the retained key. Round 11 is the discovery that
+the retry it prescribed could not succeed.
+
+`save_quote` does not key its replay on the idempotency key alone. It fingerprints the WHOLE
+request — `md5(jsonb_build_object('quote_id', …, 'quote_payload', …, 'sections', …,
+'performed_by', …)::text)` at
+`20260812115236_quote_items_cost_at_quote_snapshot.sql:348` — and a lookup whose stored
+`_request_fingerprint` differs raises `IDEMPOTENCY_PAYLOAD_CONFLICT` instead of returning the
+cached result.
+
+QuoteBuilder built `expires_at` from `Date.now()` on every save, and `sent_at` likewise. So the
+"same" request was never the same request: it differed by however many milliseconds passed between
+the two presses. The consequences, in order of severity:
+
+- On the **create** path the first attempt may already have committed server-side. The retry is
+  rejected on fingerprint, the recovery reload returns false immediately because a new quote has no
+  id yet, and the only remaining move — start over on a fresh key — writes the quote a second time.
+  That is precisely the duplicate the receipt exists to prevent.
+- On the **edit** path the retry is rejected too; the operator is merely stuck rather than
+  double-writing.
+- The round-10 tests could not see any of it. They asserted the KEY was unchanged across the retry
+  and never compared the payload, so they passed against a request the server would refuse.
+
+Fixed by freezing the wall clock for the lifetime of one attempt: the first save under a given key
+records the instant, every retry under that same key reuses it, and retiring the key starts a new
+attempt with a fresh instant. The freeze is keyed by intent scope and stamped with the key it was
+minted for, so an A -> B -> A navigation cannot hand quote A's retry quote B's clock. Only the
+CLOCK is frozen — an operator edit, `valid_days` included, still changes the fingerprint, and the
+server is still right to refuse it, because that is a different request and not a retry.
+
+`CustomerDetail` was checked and is unaffected: its `save_customer` payload carries no clock-derived
+field, so round 10's "press Save again WITHOUT reloading" was always sound there.
+
+Proven three ways. A new test forces `Date.now` to advance between attempts and compares the entire
+payload, not just the key — the forced advance matters, because two clicks in one millisecond would
+otherwise let the test pass against the bug it exists to catch. Mutating `saveAttemptAtMs` back to
+`Date.now()` fails it on the two mismatched `expires_at` values. And the payloads the page actually
+emits were run through the server's own fingerprint expression read-only on live: with the fix both
+attempts hash `f254a8405db72cc366bfdf3612056339`; with the old code they hash
+`989d5b6617d8aae90c767c8cca652342` against `be27e47d714c274efcc13ade9e7d6ef3`.
+
+Coverage stated honestly: the payload-identity test runs on the EDIT path. The create path builds
+its payload from the same lines with the same frozen clock and differs only in the scope string, but
+driving a create to a save through this harness needs a customer and an item selected in the UI, so
+create is reasoned rather than executed. The test says so in its own comment.
+
+**The general lesson, past this PR: retaining an idempotency key is only half a retry.** The other
+half is the ability to reproduce the request byte-for-byte, and any clock-derived field in a
+fingerprinted payload silently removes it. A key that no reachable request can redeem is worse than
+no key at all, because the page confidently instructs the operator to do something that cannot
+work. Before telling anyone to retry, check what the SERVER compares — not what the client kept.
