@@ -1976,6 +1976,29 @@ export default function JobDetail() {
   // become the new job's. An operator saving in that window wrote one job's data onto
   // another's row, which is the exact corruption this page-level guard exists to prevent.
   // Gating on `loading` swaps the form for the skeleton until the new job's data lands.
+  //
+  // WHAT THE ROUTE-ID REMOUNT CHANGED (see src/components/JobDetailRoute.tsx). The route now keys
+  // this component by job id, so a job -> job navigation UNMOUNTS this instance and mounts a
+  // fresh one. Within one mount `id` can therefore never change. That makes parts of the
+  // machinery below redundant IN PRODUCTION, and saying so is the point — an unreachable guard
+  // that reads like a guarantee is worse than no guard:
+  //
+  //   - Redundant while the route stays keyed: every `routeIdRef` comparison (it can no longer
+  //     differ from `id`); the `setLoading(true)` below (a saved job now MOUNTS with loading
+  //     true, from useState(!isNew)); and the license-prompt close below (a fresh instance
+  //     starts with the prompt shut).
+  //   - Still load-bearing: the epoch counter, because leaving this page — to another job or
+  //     off JobDetail entirely — now always unmounts, and the cleanup below is what tells an
+  //     in-flight handler its record is gone. It is the guard that survived the remount, not
+  //     the one the remount replaced.
+  //   - Still load-bearing: the load-generation ticket and fetchJob's gather/install split,
+  //     which order two loads of the SAME job inside one mount. A remount cannot help there.
+  //
+  // All of it is KEPT deliberately. The tests below mount this component directly, WITHOUT the
+  // route's key, so they continue to exercise the redundant paths — that is what keeps them
+  // honest if the key is ever dropped, and JobDetailRoute.test.tsx pins the key itself so the
+  // two cannot silently diverge. Do not delete a guard here on the grounds that the remount
+  // covers it without first removing that pin and saying so out loud.
   useLayoutEffect(() => {
     loadGenerationRef.current += 1;
     routeEpochRef.current += 1;
