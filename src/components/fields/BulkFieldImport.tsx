@@ -49,7 +49,8 @@ import type { Customer, ParsedImportField } from '../../types';
 interface BulkFieldImportProps {
   open: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  /** Refreshes the field list behind this modal. May be async, and may reject. */
+  onSuccess: () => void | Promise<void>;
 }
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -611,13 +612,23 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       setUploadProgress((prev) => ({ ...prev, current: prev.current + 1 }));
     }
 
+    // The warning on the results screen tells the operator to look rows up in the field list
+    // behind this modal, so that list has to be current for everything that reached the
+    // database — or may have. Gating the refresh on `success` left it stale in exactly the
+    // cases the warning is about: the operator would check a pre-import list, not find the
+    // field, and re-import it — creating the duplicate this screen exists to prevent.
+    if (success > 0 || created > 0 || unknownOutcome > 0) {
+      try {
+        await onSuccess();
+      } catch (refreshError: unknown) {
+        // Failing silently here is worse than giving no advice at all, for the same reason.
+        errors.push(`The field list behind this window could not be refreshed (${clampReason(sanitizeError(refreshError))}). Reload the page before checking any row in this list.`);
+      }
+    }
+
     setResults({ success, failed, created, unknownOutcome, errors, warnings });
     setStep(7);
     setUploading(false);
-
-    if (success > 0) {
-      onSuccess();
-    }
   };
 
   // ─── Navigation ─────────────────────────────────────────────────────

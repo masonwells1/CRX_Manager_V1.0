@@ -149,8 +149,14 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
       return Promise.resolve({ data: {}, error: null, status: 200 });
     });
 
-    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    const onSuccess = vi.fn();
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={onSuccess} />);
     await runImport();
+
+    // A field reached the database, so the list behind this modal MUST be refreshed — the
+    // warning below tells the operator to look this row up there. Nothing "succeeded", so a
+    // refresh gated on success would leave them reading the pre-import list.
+    expect(onSuccess).toHaveBeenCalled();
 
     // Scoped to the row's own error line — the warning below deliberately quotes the
     // same phrase so the operator can match the two up, so a bare match is ambiguous.
@@ -221,6 +227,33 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
     expect(warningText()).toContain('1 field from this file already exists here.');
   });
 
+  it('says so when the field list could not be refreshed', async () => {
+    // The advice is "look this row up in the field list". If the refresh failed and we said
+    // nothing, the operator would check a stale list, not find the field, and re-import it —
+    // which is the exact failure this screen exists to prevent.
+    rpc.mockImplementation((fn: string) => {
+      if (fn === 'save_field') return Promise.resolve({ data: 'field-A', error: null, status: 200 });
+      if (fn === 'set_field_boundary') {
+        return Promise.resolve({
+          data: null,
+          error: { message: 'degenerate geometry', code: '22023' },
+          status: 400,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null, status: 200 });
+    });
+
+    const onSuccess = vi.fn().mockRejectedValue(new Error('get_fields_with_geojson returned no data'));
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={onSuccess} />);
+    await runImport();
+
+    expect(onSuccess).toHaveBeenCalled();
+    const line = screen.getByText(/could not be refreshed/i).textContent ?? '';
+    expect(line).toContain('Reload the page before checking any row in this list');
+    // The import result itself is still reported.
+    expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
+  });
+
   it('does NOT warn when every row imported cleanly', async () => {
     rpc.mockImplementation((fn: string, args: Record<string, unknown>) => {
       if (fn === 'save_field') return Promise.resolve({ data: 'field-A', error: null });
@@ -247,9 +280,12 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
       return Promise.resolve({ data: {}, error: null, status: 200 });
     });
 
-    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    const onSuccess = vi.fn();
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={onSuccess} />);
     await runImport();
 
+    // Nothing reached the database, so there is nothing new for the list to show.
+    expect(onSuccess).not.toHaveBeenCalled();
     expect(screen.getByText(/permission denied/i)).toBeInTheDocument();
     expect(screen.queryByText(/do not re-import this whole file/i)).not.toBeInTheDocument();
     // A genuine rejection must NOT be labelled ambiguous, or the marker means nothing.
@@ -271,8 +307,13 @@ describe('BulkFieldImport — re-import duplicate warning', () => {
       return Promise.resolve({ data: {}, error: null, status: 200 });
     });
 
-    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={vi.fn()} />);
+    const onSuccess = vi.fn();
+    render(<BulkFieldImport open onClose={vi.fn()} onSuccess={onSuccess} />);
     await runImport();
+
+    // The row is the whole reason the operator is being sent to the field list, so that list
+    // has to be current. created is 0 here, so only the unknown count can trigger this.
+    expect(onSuccess).toHaveBeenCalled();
 
     // Nothing is confirmed created, so a warning gated only on `created` would be absent.
     expect(screen.getByText(/do not re-import this whole file/i)).toBeInTheDocument();
