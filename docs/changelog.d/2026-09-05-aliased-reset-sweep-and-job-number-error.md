@@ -519,3 +519,47 @@ each failed, and only it.
   with the round-7 retraction. Retiring on a payload conflict is what risks the duplicate; the cost
   of retaining is one unearned conflict dialog that the next reload clears. The residual is named
   above and its proper close is the server-side receipt lookup, not a fourth client patch.
+
+## Round 9 — integrating #618, and a mock that made correct code look broken
+
+CodeRabbit's next pass raised one Major: a late `save_quote` reply installing quote A's state over
+quote B. That is #618's subject, and #618 merged to `main` while this branch waited — so the fix
+already existed and this branch simply did not have it. Merging `main` brought it in, with a real
+conflict in `QuoteBuilder.tsx` and its test file, since both branches rewrote the same save handler.
+
+Resolved by content: #618's `editingSessionChanged()` route guard and this branch's receipt test
+both survive, in that order — verify the reply, retire the key, then refuse to apply post-save state
+to a quote the operator has left. #618's comment claimed the guard sat "after the reply is
+verified", which was true only of `assertRpcResult`; the receipt test is what makes the sentence
+true, and it is why the reset now sits below it rather than above the assert as it did on `main`.
+
+**The instructive part was a defect in this branch's own test harness.** After the merge, eight
+tests failed with the page stuck on its loading skeleton. The component was fine — proved by running
+#618's own unmodified test file against the merged component, which passed 48 of 49. The fault was
+that this branch's `useIdempotencyKey` mock returned a fresh object literal on every render, where
+the real hook returns `useCallback`-stable functions. #618 had made `resetSaveQuoteIdempotencyKey` a
+dependency of `fetchQuote`, so an unstable identity re-created `fetchQuote` every render, re-ran the
+load effect, and loaded forever. **A mock that was unrealistic in a way nobody had needed before made
+correct production code look broken.**
+
+Fixing the mock exposed a real one underneath. The scoped `resetKey` legitimately changes identity
+when the scope changes, and the scope derives from `quoteId` STATE, which lags the route — so every
+navigation re-created `fetchQuote` and loaded each quote twice. That is a genuine defect of the two
+changes meeting, invisible to either branch alone, and it broke #618's own A → B → A load-ordering
+tests. The reopen now retires the key by name with `resetKeyFor(q.id)`, which is memoized on
+`[operation, userId]` and does not move.
+
+Stated rather than implied: retiring by name also removes a dependence on the rendered scope
+happening to be `q.id` at that moment. It is today — a mutation of that line back to `resetKey()`
+still passes the whole suite — so the wrong-target failure is **not** a bug observed here and is not
+claimed as one.
+
+Four of #618's tests asserted the page-wide key spelling (`test-idem-key-1`). Updated to the scoped
+form, with the reasoning corrected rather than the numbers alone: #618 needed the key to ROTATE off
+quote A's committed save before quote B could safely reuse it, and scoping means B never held A's
+key to begin with. The hazard is gone rather than re-checked, and the assertion still binds it,
+because a regression to a page-wide key would produce a different spelling.
+
+Proof: the identity fix is mutation-proven — restoring the unstable dependency fails exactly the
+three A → B → A load-ordering tests and nothing else. Suite 351 files / 5025 passed / 123 skipped;
+typecheck, lint and build clean.

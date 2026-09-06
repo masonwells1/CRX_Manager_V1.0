@@ -277,6 +277,38 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## CLOSED 2026-09-05 — the one-use live-SQL-guard maintenance producer was retired unapplied (Mason's decision)
+
+**What it was.** `scripts/apply-live-testdata-maintenance-20260812.mjs`, the reviewed, blob-pinned
+tool built on 2026-08-12 to regenerate the live SQL classifier in `.claude/hooks/live-testdata-lib.mjs`
+from three reviewed snippets under `docs/maintenance/`. It ran only as one of four exact commands and
+its apply lane never ran: activation was recorded as BLOCKED in
+`docs/handoffs/2026-08-12-live-sql-guard-maintenance-build-to-review.md` until the `DO`-based
+rollback smoke chains had a safe execution route.
+
+**Why retire rather than apply.** The 2026-08-12 snippets contain no handling for the classifier
+defects catalogued on 2026-09-02 in `docs/reference/agent-guardrails.md` (`AS a(argname)`, a
+`WITH RECURSIVE` column list, `AS MATERIALIZED (`), so applying the maintenance would not have fixed
+the false positives currently being hit. Mason decided on 2026-09-05 to retire it without applying.
+
+**How it was executed.** The decision record landed first, on its own, because the producer's
+`--retire-producer` lane (read first and confirmed to perform one local file deletion and nothing
+else: no Supabase client, no SQL, no network in any lane) only runs against a commit that still
+contains the producer and carries a fresh exact-head `gpt-5.6-sol` proof. That proof was minted
+against the docs-only commit `3ce6068af` (rebased to `c870e4aba` after PR #621 landed on `main`),
+the lane ran and removed the producer, and the following
+commit removed with it its test, the three snippet inputs, the CI step that ran the test, the
+`.gitattributes` pins for the deleted scripts, and the Codex guard-test block that shelled out to
+the harness. On the exact-SHA Codex review's P1, the Claude shell guard's allowlist of the producer's
+four exact invocations was removed as well, so every mention of the path now fails closed (the
+script that enforced the blob and proof checks is gone). The Codex production guard and the push
+guard's risky-path entry keep naming the path; that is deliberate and harmless. Changelogs: `docs/changelog.d/2026-09-05-retire-20260812-maintenance-producer.md`
+and `docs/changelog.d/2026-09-05-retired-20260812-maintenance-producer-removed.md`.
+
+**Still open.** The `live-testdata-lib.mjs` read-side false positives (2026-09-02 family) are
+untouched by this retirement. A repair is a new ordinary reviewed change against the guard file,
+not a revival of the producer.
+
 ## OPEN 2026-09-04 — the migration drift reviewer's overload check can only see AUTHORED history, and its sanctioned runner can never show it the live catalog
 
 **Deferred deliberately by Mason on 2026-09-04**, split out of PR #594 so the uncontested
