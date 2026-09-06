@@ -455,11 +455,6 @@ jobs:
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:correction-guards
 
-      - name: Live-testdata maintenance producer regression tests
-        # Wired 2026-09-03: this file was tracked but run by nothing.
-        if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
-        run: node scripts/apply-live-testdata-maintenance-20260812.test.mjs
-
       - name: Phase 3C private-artifact regression tests
         if: ${{ needs.ci-scope.outputs.full_ci == 'true' }}
         run: npm run test:supplier-pricing-phase3c-packet

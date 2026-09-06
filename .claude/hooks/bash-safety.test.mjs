@@ -55,8 +55,10 @@ ok(!checkDangerousCommand("git push origin feature/x"), "ordinary feature push a
 ok(!checkDangerousCommand(""), "empty command allowed");
 ok(!checkDangerousCommand(null), "null command allowed (no throw)");
 
-// ── maintenance producer: current outer shell guard closes the pre-bootstrap
-//    TOCTOU gap before the generated production-action guard is installed. ──
+// ── maintenance producer: the outer shell guard closes the pre-bootstrap TOCTOU
+//    gap before the generated production-action guard is installed. Since the
+//    producer's retirement on 2026-09-05 its four former exact invocations are
+//    denied too: the script that enforced the blob and proof checks is gone. ──
 const decodedPowerShellProcessLaunch = "Set-Item Env:NODE_OPTIONS ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1yZXF1aXJlPS4vcHJlbG9hZC5janM='))); Set-Variable E ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('bm9kZQ=='))); Set-Variable A @(([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('c2NyaXB0cy9hcHBseS1saXZlLXRlc3RkYXRhLW1haW50ZW5hbmNlLTIwMjYwODEyLm1qcw=='))),([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1hcHByb3ZlZC1ieS1tYXNvbj0yMDI2LTA4LTEy')))); Start-Process (Get-Variable E -ValueOnly) -ArgumentList (Get-Variable A -ValueOnly) -Wait -NoNewWindow";
 for (const command of [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
@@ -64,7 +66,8 @@ for (const command of [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
 ]) {
-  eq(checkMaintenanceProducerInvocation(command), null, `exact producer invocation allowed by shell guard: ${command}`);
+  ok(checkMaintenanceProducerInvocation(command), `former exact producer invocation denied after retirement: ${command}`);
+  ok(/retired unapplied on 2026-09-05/.test(checkMaintenanceProducerInvocation(command)), `denial names the retirement: ${command}`);
 }
 for (const command of [
   decodedPowerShellProcessLaunch,
