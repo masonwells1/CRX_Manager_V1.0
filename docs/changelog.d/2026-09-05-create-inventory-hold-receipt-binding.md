@@ -51,11 +51,26 @@ cleanly. Printed
 `CREATE_INVENTORY_HOLD_INTENT_REAL_SCHEMA_PASS pre_chain=FAIL pre_race=1_hold_loser_errors legacy_receipt=REFUSED post_chain=PASS post_race=1_hold_loser_replays rerun=PASS`.
 Full vitest suite (353 files), typecheck, and build pass.
 
-**Not verified.** Nothing ran against production. The installed live body was NOT re-read from the live
-database in this session; the pin rests on the checked-in production dump and the baseline ledger. The
-preflight fails closed if the live body hash or argument list differs from the pins, or if any unexpired
-pre-migration hold receipt exists (apply in a quiet window). The manual docs' "Last verified" stamps were
-deliberately not bumped for the same reason, so the doc-drift freshness rows stay red on this branch until
-a read-only live check is approved. The apply itself, the post-apply
-invariant sweeps, and the browser flow against the applied wrapper remain to be done after Mason approves
-the apply.
+**Live read-only check (2026-09-06, Mason-authorized, 15:39-15:42 UTC).** No live write. Every preflight
+condition held against production `rhyzpcqhnizqbxphqdkr`: exactly one `create_inventory_hold` overload;
+owner `postgres`, `plpgsql`, SECURITY DEFINER, `proconfig = {search_path=public, pg_temp}`; the full
+argument list with defaults equal to the pin; `md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` over the
+4,046-character body, the same text whose sha256 is the pinned `3c86421e…` (md5 recomputed locally from
+the 2026-07-27 dump for the comparison — the live-data guard's read-only allowlist has no `digest()`, so
+the guard was worked WITH, not around); `_create_inventory_hold_intent_impl_20260905` absent;
+`check_idempotency_intent`, `extensions.digest` and `pg_catalog.trim_scale` installed; both receipt-binding
+columns present; EXECUTE on the RPC held by `authenticated` and `service_role`, not `anon`;
+`check_idempotency_intent` executable by none of those three; and ZERO unexpired `create_inventory_hold`
+receipts of any kind, so `PREFLIGHT_LEGACY_RECEIPTS` would not have fired. The pre-existing
+`section9_bind_idempotency_receipt_20260826` BEFORE INSERT trigger returns `NEW` unchanged for operations
+outside its AP/receiving list and so does not touch hold receipts. The ledger read also found the
+authored-name ordering boundary unchanged at `20260904180000_invoice_season_follows_invoice_date`
+(999 rows) and `.claude/session-state/applied-migrations.json` was refreshed from that capture. The manual
+docs' "Last verified" stamps were bumped to 2026-09-06 on the strength of this read and `check-doc-drift`
+now passes.
+
+**Not verified.** The apply itself, the post-apply invariant sweeps, the regenerated
+`src/types/supabase.ts` (`p_idempotency_key` is still typed optional at line 11865), and the browser flow
+against the applied wrapper remain to be done after Mason approves the apply. The apply gate additionally
+requires a fresh `scripts/write-apply-proofs.mjs` stamp, which spends a rationed Codex review credit and
+expires after 30 minutes, so it must be minted immediately before the apply.

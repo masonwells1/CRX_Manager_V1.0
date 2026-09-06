@@ -1,9 +1,14 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-04 for both the migration-ledger facts and the F2 entry.** The
+**Last verified: 2026-09-06 for the migration-ledger facts and for the live `create_inventory_hold`
+surface described in the OPEN 2026-09-05 manual-hold entry below; the F2 entry still carries its
+2026-09-04 verification and was NOT re-read on 2026-09-06.** The
 ordering boundary is the newest applied authored NAME:
-**`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`, read-only
-production query on 2026-09-04). Read ordering from the NAME — it is what
+**`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`, re-read
+2026-09-06 and unchanged; row count 999, `max(version)` `20260905185938` — that newest row is
+`refuse_null_job_field_acres`, the `20260904185900` file applied live on 2026-09-05 18:59:38 UTC
+WITHOUT its timestamp prefix, which is why it does not move the authored-name boundary). Read
+ordering from the NAME — it is what
 the ordering guard compares and it moves far less often than the counters. Two further reading
 traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
 reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
@@ -1455,7 +1460,17 @@ admin/sales_rep gate, key required, request fingerprint, then `check_idempotency
 advisory lock, actor + fingerprint binding) BEFORE any mutation, then the renamed body, then receipt
 binding. Post-fix race in the same container = 1 hold, both sessions succeed with the same `hold_id`;
 the rolled-back chain `smoke-create-inventory-hold-intent-binding.sql` passes; re-apply is clean.
-**No live apply is authorized and no live query was made**; the preflight fails closed if the
+**No live apply is authorized.** Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
+and every preflight condition held: one overload, owner `postgres`, `plpgsql`, SECURITY DEFINER,
+`proconfig = {search_path=public, pg_temp}`, the pinned argument list with defaults,
+`md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` for the 4,046-character body whose sha256 is the
+pinned `3c86421e…` (md5 recomputed locally from the 2026-07-27 dump for comparison — the live-data
+guard's read-only allowlist has no `digest()`), the private impl name absent, all three helpers
+present, both binding columns present, EXECUTE held by `authenticated`/`service_role` and not `anon`,
+`check_idempotency_intent` executable by none of those three, and ZERO unexpired
+`create_inventory_hold` receipts of any kind. The pre-existing
+`section9_bind_idempotency_receipt_20260826` BEFORE INSERT trigger short-circuits for operations
+outside its AP/receiving list, so it leaves hold receipts alone. The preflight still fails closed if the
 installed body hash or argument list differs from the pins, and REFUSES (`PREFLIGHT_LEGACY_RECEIPTS`) while
 any unexpired receipt written by the old body exists — such a receipt would otherwise lock its operator out
 of creating any hold for up to 24 hours after the swap, so the apply belongs in a quiet window and may need
