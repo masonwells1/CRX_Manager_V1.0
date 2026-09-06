@@ -221,6 +221,26 @@ function makeEmptySection(order: number): LocalSection {
   };
 }
 
+/**
+ * Listing an unreadable saved version must not mean going quiet about it.
+ *
+ * A row the server never stamped as restorable is expected historical data — it predates the
+ * current snapshot shape — and reporting one on every page load would be noise. A row the server
+ * DID stamp is one the current writer produced, so failing this app's snapshot validation means
+ * either the stored snapshot is corrupt or the writer and the validator have drifted apart. That
+ * is silent from the user's side (the version simply reads as unavailable), so it has to be
+ * visible from ours. One report per load, not one per row.
+ */
+function reportUntrustworthyQuoteVersions(unreadable: UnreadableQuoteVersion[], quoteId: string) {
+  const anomalies = unreadable.filter((v) => v.server_trusted);
+  if (anomalies.length === 0) return;
+  Sentry.captureMessage('server-trusted quote version failed snapshot validation', {
+    level: 'error',
+    tags: { source: 'read', action: 'load_quote_versions' },
+    extra: { quoteId, versionNumbers: anomalies.map((v) => v.version_number) },
+  });
+}
+
 export default function QuoteBuilder() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -1119,10 +1139,12 @@ export default function QuoteBuilder() {
     } else {
       // Snapshots older than the current shape are listed, not hidden: see
       // adaptQuoteVersionList. They are an expected part of the historical data, so they
-      // raise neither a toast nor a Sentry report on every load.
+      // raise neither a toast nor a Sentry report on every load. A row the SERVER trusts that
+      // still fails validation is not that, and is reported.
       const { versions, unreadable } = adaptQuoteVersionList(versionsData);
       setQuoteVersions(versions);
       setUnreadableQuoteVersions(unreadable);
+      reportUntrustworthyQuoteVersions(unreadable, quoteId);
     }
 
     setLoading(false);
@@ -2608,6 +2630,7 @@ export default function QuoteBuilder() {
     const { versions, unreadable } = adaptQuoteVersionList(data);
     setQuoteVersions(versions);
     setUnreadableQuoteVersions(unreadable);
+    reportUntrustworthyQuoteVersions(unreadable, quoteId);
   }, [quoteId]);
 
   const handleRestoreVersion = async (versionId: string) => {
@@ -3708,11 +3731,15 @@ export default function QuoteBuilder() {
               );
             })}
             {/*
-              Snapshots saved before the current shape existed. Listed last because they are the
-              oldest, and listed at all so a quote whose only versions are legacy still shows its
-              history. Shown without an item count or total: both would have to be read out of a
-              snapshot this build cannot trust. Not selectable, so they reach neither the compare
-              view nor restore — which the server already refuses for them.
+              Saved versions whose snapshot this build cannot read. Listed at all so a quote whose
+              only versions are legacy still shows its history, and shown without an item count or
+              total because both would have to be read out of a snapshot that cannot be trusted.
+              Not selectable, so they reach neither the compare view nor restore.
+
+              Only rows the server itself treats as legacy are called an older format; a row the
+              server stamped as restorable says only that its details are unavailable, because
+              calling it old would be a guess. Those also raise a Sentry report — see
+              reportUntrustworthyQuoteVersions.
             */}
             {unreadableQuoteVersions.map((v) => (
               <div key={v.id} className="py-3 px-3 flex items-center justify-between">
@@ -3723,7 +3750,9 @@ export default function QuoteBuilder() {
                   </span>
                 </div>
                 <div className="text-sm text-secondary italic">
-                  Saved in an older format &middot; details unavailable
+                  {v.server_trusted
+                    ? 'Details unavailable'
+                    : 'Saved in an older format · details unavailable'}
                 </div>
               </div>
             ))}

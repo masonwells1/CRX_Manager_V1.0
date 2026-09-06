@@ -150,6 +150,16 @@ export interface UnreadableQuoteVersion {
   id: string;
   version_number: number;
   sent_at: string;
+  /**
+   * True when the server stamped this row as restorable. `restore_trusted_at` is set by the
+   * current version writer and was deliberately never backfilled onto older rows
+   * (20260826220000), so an empty value means the server itself treats the row as legacy.
+   *
+   * A row the server DOES trust that this validator cannot parse is therefore not an old
+   * format — it is corruption, or the writer and this validator having drifted apart. The
+   * caller must keep reporting those; only the server-legacy rows are expected data.
+   */
+  server_trusted: boolean;
 }
 
 export interface QuoteVersionList {
@@ -166,6 +176,9 @@ export interface QuoteVersionList {
  * versions are legacy would lose their version history entirely. Keep those rows here, with
  * only the columns the row itself guarantees, so the caller can list them without inventing
  * an item count or a total for them.
+ *
+ * `server_trusted` on each unreadable row says whether the row is expected legacy data or an
+ * anomaly the caller should still report — listing a row must never mean going quiet about it.
  */
 export function adaptQuoteVersionList(rows: QuoteVersionRow[] | null | undefined): QuoteVersionList {
   const versions: QuoteVersion[] = [];
@@ -180,6 +193,7 @@ export function adaptQuoteVersionList(rows: QuoteVersionRow[] | null | undefined
         id: row.id,
         version_number: row.version_number,
         sent_at: row.sent_at,
+        server_trusted: row.restore_trusted_at != null,
       });
     }
   }

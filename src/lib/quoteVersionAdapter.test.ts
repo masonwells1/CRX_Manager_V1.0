@@ -171,7 +171,29 @@ describe('quote version list split', () => {
       id: 'version-legacy',
       version_number: 1,
       sent_at: '2026-09-05T00:00:00Z',
+      server_trusted: false,
     });
+  });
+
+  it('marks an unreadable row the server stamped as restorable as an anomaly, not legacy', () => {
+    // restore_trusted_at is set only by the current version writer and was never backfilled
+    // (20260826220000), so a row carrying it should always parse. One that does not is
+    // corruption or writer/validator drift — the caller has to be able to tell the difference.
+    const row = legacyFlatRow();
+    row.restore_trusted_at = '2026-09-06T00:00:00Z';
+
+    const { unreadable } = adaptQuoteVersionList([row]);
+
+    expect(unreadable[0].server_trusted).toBe(true);
+  });
+
+  it('treats a row the server never stamped as expected legacy data', () => {
+    const row = legacyFlatRow();
+    row.restore_trusted_at = null;
+
+    const { unreadable } = adaptQuoteVersionList([row]);
+
+    expect(unreadable[0].server_trusted).toBe(false);
   });
 
   it('returns empty lists for no rows', () => {
@@ -184,6 +206,8 @@ describe('quote version list split', () => {
 
     expect(page).toContain('unreadableQuoteVersions.map');
     expect(page).toContain('Saved in an older format');
+    // The anomaly path must stay wired: listing a row the server trusts must not silence it.
+    expect(page).toContain('reportUntrustworthyQuoteVersions');
     // The version-count button and the history card must both count them, or an all-legacy
     // quote still shows nothing.
     expect(page.match(/savedVersionCount/g)?.length).toBeGreaterThanOrEqual(3);

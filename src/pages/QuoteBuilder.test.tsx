@@ -239,6 +239,14 @@ vi.mock('../hooks/useUnsavedChanges', () => ({
   },
 }));
 
+const { mockSentryCaptureMessage, mockSentryCaptureException } = vi.hoisted(() => ({
+  mockSentryCaptureMessage: vi.fn(),
+  mockSentryCaptureException: vi.fn(),
+}));
+vi.mock('../lib/sentry', () => ({
+  Sentry: { captureMessage: mockSentryCaptureMessage, captureException: mockSentryCaptureException },
+}));
+
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/notificationTriggers', () => ({ notifyLargeOrder: mockNotifyLargeOrder, notifyCreditLimitExceeded: vi.fn() }));
 vi.mock('../lib/metrics', () => ({ trackBusinessEvent: mockTrackBusinessEvent }));
@@ -619,6 +627,63 @@ describe('QuoteBuilder', () => {
     // The old behaviour warned the operator on every single load and reported to Sentry.
     // A legacy snapshot is expected historical data, not an incident.
     expect(mockToast).not.toHaveBeenCalledWith('warning', expect.stringContaining('could not be displayed'));
+    expect(mockSentryCaptureMessage).not.toHaveBeenCalled();
+
+    // Listing a row must not make it actionable: an unreadable snapshot can reach neither the
+    // compare view nor restore. Without this, adding an onClick to the row would still pass.
+    const legacyRowNode = screen.getAllByText(/Saved in an older format/)[0].closest('div')?.parentElement;
+    expect(legacyRowNode).toBeTruthy();
+    expect(legacyRowNode).not.toHaveAttribute('role');
+    expect(legacyRowNode).not.toHaveAttribute('tabindex');
+    fireEvent.click(legacyRowNode!);
+    expect(screen.queryByRole('button', { name: /Restore/i })).not.toBeInTheDocument();
+  });
+
+  it('reports an unreadable version the server stamped as restorable instead of calling it old', async () => {
+    // restore_trusted_at is set only by the current writer, so a row carrying it should always
+    // parse. One that does not is corruption or writer/validator drift — the user sees the same
+    // "unavailable" either way, so the alarm has to fire on our side.
+    const { quote, product, section, item } = makeQuoteFixture('sent', 7);
+    const unreadableTrustedRow = {
+      id: 'version-9',
+      quote_id: quote.id,
+      version_number: 9,
+      sent_by: 'profile-1',
+      sent_at: '2026-09-06T10:00:00.000Z',
+      sent_method: null,
+      snapshot_data: { quote_number: 'Q-drift', totals: { total_price: 10 }, sections: [] },
+      pdf_url: null,
+      notes: null,
+      restore_trusted_at: '2026-09-06T10:00:01.000Z',
+    };
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', email: 'grower@example.com', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : table === 'quote_versions'
+                  ? [unreadableTrustedRow]
+                  : [],
+      error: null,
+    }));
+
+    renderQuoteBuilder(quote.id);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Versions \(1\)/ }));
+
+    expect(await screen.findByText('Details unavailable')).toBeInTheDocument();
+    // Calling it an older format would be a guess: the server says this row is current.
+    expect(screen.queryByText(/Saved in an older format/)).not.toBeInTheDocument();
+    expect(mockSentryCaptureMessage).toHaveBeenCalledWith(
+      'server-trusted quote version failed snapshot validation',
+      expect.objectContaining({ level: 'error' }),
+    );
   });
 
   it('handles quote not found gracefully when editing invalid ID', async () => {
