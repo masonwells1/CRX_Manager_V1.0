@@ -12,7 +12,9 @@
 // the command or path that was refused, the guard's reason) to a NEW file so they can be adjudicated.
 // It refuses to overwrite an existing file. That output quotes command text verbatim — it is the
 // subject of the audit, so it is not redacted — which is why it belongs in a scratchpad, never in
-// the repository. Nothing is sent anywhere, and no prompt text is printed unless --titles is passed.
+// the repository: a destination inside ANY git checkout (a `.git` entry somewhere above it) is
+// refused before anything is written (Codex App review of #613). Nothing is sent anywhere, and no
+// prompt text is printed unless --titles is passed.
 //
 // Method (each rule answers a finding from the gpt-6-astra adversarial review, 2026-09-04):
 //  - events are filtered by their OWN `timestamp` inside an explicit [start, end) window; a
@@ -246,6 +248,23 @@ for (const s of [...mains].sort((a, b) => b.cacheRead - a.cacheRead).slice(0, 12
   console.log(`${s.id.slice(0, 8)} calls ${String(s.calls).padStart(5)} tools ${String(s.tools).padStart(5)} prompts ${String(s.prompts).padStart(4)} peak ${fmt(s.maxCtx).padStart(8)} cacheRead ${fmt(s.cacheRead).padStart(14)} out ${fmt(s.out).padStart(10)} denials ${String(s.denials).padStart(3)}${showTitles ? ` | ${s.title}` : ""}`);
 }
 if (denialsOut) {
+  // The export quotes refused command text verbatim. Inside a git checkout a later broad
+  // `git add` would commit it, so any destination with a `.git` entry somewhere above it is
+  // refused — decided by that shape, not by this checkout's name, so a sibling worktree or an
+  // unrelated repository is refused the same way (Codex App review of #613 at 1097d85e6).
+  const destination = path.resolve(denialsOut);
+  let probe = path.dirname(destination);
+  let checkoutRoot = null;
+  for (;;) {
+    if (fs.existsSync(path.join(probe, ".git"))) { checkoutRoot = probe; break; }
+    const parent = path.dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  if (checkoutRoot != null) {
+    console.error(`\n--denials refuses to write inside a git checkout (${checkoutRoot}): the export quotes refused command text verbatim and must not be committable. Write it under a scratch directory instead.`);
+    process.exit(2);
+  }
   if (fs.existsSync(denialsOut)) {
     console.error(`\n--denials refuses to overwrite an existing file: ${denialsOut} (pick a new path)`);
     process.exit(1);

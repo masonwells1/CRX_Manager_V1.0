@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -34,6 +34,33 @@ try {
   assert.match(result.stdout, /main sessions 1 \| subagent transcripts 1 \| human prompts 2 \| API calls 2 \| unique tool calls 1/);
   assert.match(result.stdout, /"review-proof":1/);
   console.log("claude-usage-report: parent prompts counted; subagent prompts excluded; subagent usage and denials retained");
+
+  // --denials writes refused command text verbatim, so its destination must not sit inside a git
+  // checkout, where a later broad `git add` would commit it (Codex App review of #613 at 1097d85e6).
+  // The rule is by shape — any ancestor owning a `.git` entry — not by this checkout's name, so a
+  // sibling worktree or an unrelated repository is refused the same way.
+  const windowArgs = ["--root", root, "--start", "2026-09-04", "--end", "2026-09-05"];
+  const repoRoot = path.resolve(path.dirname(script), "..");
+  const fakeCheckout = path.join(root, "some-checkout");
+  mkdirSync(path.join(fakeCheckout, "nested", "deeper"), { recursive: true });
+  writeFileSync(path.join(fakeCheckout, ".git"), "gitdir: elsewhere\n");
+  for (const [label, destination] of [
+    ["this checkout", path.join(repoRoot, "usage-denials-fixture.json")],
+    ["a directory marked as a checkout by a .git file", path.join(fakeCheckout, "nested", "deeper", "out.json")],
+    ["a relative path resolved against a checkout cwd", "usage-denials-fixture.json"],
+  ]) {
+    const refused = spawnSync(process.execPath, [script, ...windowArgs, "--denials", destination], { encoding: "utf8", cwd: label.startsWith("a relative") ? fakeCheckout : undefined });
+    assert.equal(refused.status, 2, `--denials into ${label} must exit 2 (stderr: ${refused.stderr})`);
+    assert.match(refused.stderr, /refuses to write inside a git checkout/, `--denials into ${label} must say why`);
+    const wouldBe = path.isAbsolute(destination) ? destination : path.join(fakeCheckout, destination);
+    assert.equal(existsSync(wouldBe), false, `--denials into ${label} must not create the file`);
+  }
+  const scratchOut = path.join(root, "scratch", "out.json");
+  mkdirSync(path.dirname(scratchOut), { recursive: true });
+  const allowed = spawnSync(process.execPath, [script, ...windowArgs, "--denials", scratchOut], { encoding: "utf8" });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.match(readFileSync(scratchOut, "utf8"), /REVIEW PROOF GUARD: fixture refusal/, "a scratch destination outside any checkout receives the denials");
+  console.log("claude-usage-report: --denials refuses every destination inside a git checkout and writes to a scratch path");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
