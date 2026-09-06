@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -44,10 +44,18 @@ try {
   const fakeCheckout = path.join(root, "some-checkout");
   mkdirSync(path.join(fakeCheckout, "nested", "deeper"), { recursive: true });
   writeFileSync(path.join(fakeCheckout, ".git"), "gitdir: elsewhere\n");
+  // A parent that is a symlink or junction INTO the checkout keeps the spelled path clear of
+  // `.git` while the file lands inside it (Codex App review of #613 at 18c2faf17); the export
+  // must canonicalise the nearest existing parent before deciding. A junction needs no privilege
+  // on Windows; on Linux it is a directory symlink.
+  const symlinkedParent = path.join(root, "export-alias");
+  let aliased = false;
+  try { symlinkSync(path.join(fakeCheckout, "nested"), symlinkedParent, "junction"); aliased = true; } catch { /* filesystem without directory symlinks */ }
   for (const [label, destination] of [
     ["this checkout", path.join(repoRoot, "usage-denials-fixture.json")],
     ["a directory marked as a checkout by a .git file", path.join(fakeCheckout, "nested", "deeper", "out.json")],
     ["a relative path resolved against a checkout cwd", "usage-denials-fixture.json"],
+    ...(aliased ? [["a symlinked parent that points into a checkout", path.join(symlinkedParent, "out.json")]] : []),
   ]) {
     const refused = spawnSync(process.execPath, [script, ...windowArgs, "--denials", destination], { encoding: "utf8", cwd: label.startsWith("a relative") ? fakeCheckout : undefined });
     assert.equal(refused.status, 2, `--denials into ${label} must exit 2 (stderr: ${refused.stderr})`);
@@ -55,6 +63,7 @@ try {
     const wouldBe = path.isAbsolute(destination) ? destination : path.join(fakeCheckout, destination);
     assert.equal(existsSync(wouldBe), false, `--denials into ${label} must not create the file`);
   }
+  if (!aliased) console.log("claude-usage-report: directory symlink creation refused by the OS — symlinked-parent case skipped");
   const scratchOut = path.join(root, "scratch", "out.json");
   mkdirSync(path.dirname(scratchOut), { recursive: true });
   const allowed = spawnSync(process.execPath, [script, ...windowArgs, "--denials", scratchOut], { encoding: "utf8" });

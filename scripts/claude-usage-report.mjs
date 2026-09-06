@@ -252,15 +252,33 @@ if (denialsOut) {
   // `git add` would commit it, so any destination with a `.git` entry somewhere above it is
   // refused — decided by that shape, not by this checkout's name, so a sibling worktree or an
   // unrelated repository is refused the same way (Codex App review of #613 at 1097d85e6).
+  // The walk runs over the REAL location as well as the spelled one: a parent that is a
+  // symlink or junction into a checkout (`/tmp/export -> <repo>/docs`) keeps the spelled chain
+  // clear of `.git` while the file lands inside the repository (Codex App review of #613 at
+  // 18c2faf17). The nearest existing ancestor is canonicalised with realpath, the missing tail
+  // re-attached, and BOTH chains are walked; either one reaching `.git` refuses.
   const destination = path.resolve(denialsOut);
-  let probe = path.dirname(destination);
-  let checkoutRoot = null;
-  for (;;) {
-    if (fs.existsSync(path.join(probe, ".git"))) { checkoutRoot = probe; break; }
-    const parent = path.dirname(probe);
-    if (parent === probe) break;
-    probe = parent;
-  }
+  const checkoutRootAbove = (file) => {
+    let probe = path.dirname(file);
+    for (;;) {
+      if (fs.existsSync(path.join(probe, ".git"))) return probe;
+      const parent = path.dirname(probe);
+      if (parent === probe) return null;
+      probe = parent;
+    }
+  };
+  const realDestination = (() => {
+    let existing = path.dirname(destination);
+    const missing = [path.basename(destination)];
+    while (!fs.existsSync(existing)) {
+      const parent = path.dirname(existing);
+      if (parent === existing) return destination;
+      missing.unshift(path.basename(existing));
+      existing = parent;
+    }
+    try { return path.join(fs.realpathSync.native(existing), ...missing); } catch { return destination; }
+  })();
+  const checkoutRoot = checkoutRootAbove(realDestination) ?? checkoutRootAbove(destination);
   if (checkoutRoot != null) {
     console.error(`\n--denials refuses to write inside a git checkout (${checkoutRoot}): the export quotes refused command text verbatim and must not be committable. Write it under a scratch directory instead.`);
     process.exit(2);
