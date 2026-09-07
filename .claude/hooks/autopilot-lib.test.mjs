@@ -65,9 +65,44 @@ eq(autopilotDecision("Bash", { command: "git -C /repo filter-branch --all" }), "
 eq(autopilotDecision("Bash", { command: "gh -R masonwells1/CRX_Manager_V1.0 pr merge 535 --squash" }), "deny", "gh -R pr merge denied");
 eq(autopilotDecision("Bash", { command: "gh --repo masonwells1/CRX_Manager_V1.0 pr merge 535" }), "deny", "gh --repo pr merge denied");
 
-// The other direction, which is why the option tokens are ENUMERATED and not
-// `.*`: a wildcard between binary and subcommand blocks ordinary work. Every
+// ── the ENUMERATED option list leaked, twice (2026-09-07) ────────────────
+// The first fix above listed the option spellings it knew (`-[cC]\s+\S+|--\S+`,
+// `-[RFf]\s+\S+|--repo\s+\S+`), so it inherited that list's omissions. Codex
+// raised it; both cases below were then reproduced by RUNNING autopilotDecision
+// against a corpus, not by re-reading the regex — the same way the hole above was
+// found. Every one of these returned "allow" (i.e. armed mode would have pushed or
+// merged) until the option region was rewritten by SHAPE.
+//
+// (1) `\S+` stops at the first space, so a QUOTED value defeated the git matcher.
+//     CRX worktrees genuinely live under a path with a space, so this is an
+//     ordinary command here, not a contrived one.
+eq(autopilotDecision("Bash", { command: 'git -C "C:/CRX Manager/wt" push origin HEAD:feature' }), "deny", "PROVEN BYPASS: double-quoted -C path with a space");
+eq(autopilotDecision("Bash", { command: "git -C 'C:/CRX Manager/wt' push origin HEAD:feature" }), "deny", "PROVEN BYPASS: single-quoted -C path with a space");
+eq(autopilotDecision("Bash", { command: "git -C C:/CRX\\ Manager/wt push origin HEAD" }), "deny", "a backslash-escaped space is the same word");
+eq(autopilotDecision("Bash", { command: 'git --git-dir="C:/CRX Manager/.git" push origin HEAD' }), "deny", "--opt=\"quoted value\" is one token");
+eq(autopilotDecision("Bash", { command: 'gh -R "masonwells1/CRX Manager" pr merge 625' }), "deny", "a quoted gh -R value is one token");
+// (2) `-[RFf]\s+` demanded a DETACHED value, so an ATTACHED short-option value
+//     defeated the gh matcher. Attached short values are standard POSIX/gh usage.
+eq(autopilotDecision("Bash", { command: "gh -Rmasonwells1/CRX_Manager_V1.0 pr merge 625" }), "deny", "PROVEN BYPASS: gh attached short-option value");
+eq(autopilotDecision("Bash", { command: "git -CC:/CRX_Manager/wt push origin HEAD" }), "deny", "git attached short-option value");
+eq(autopilotDecision("Bash", { command: 'git -C"C:/CRX Manager/wt" push origin HEAD' }), "deny", "attached AND quoted in one token");
+eq(autopilotDecision("Bash", { command: "gh --repo=masonwells1/CRX_Manager_V1.0 pr merge 625" }), "deny", "gh --repo=value");
+// The quoted/attached forms must reach every other git rule too, not just push —
+// one option region feeds all of them.
+eq(autopilotDecision("Bash", { command: 'git -c core.hooksPath=.husky -C "C:/CRX Manager/wt" push origin HEAD' }), "deny", "repeated globals, one of them quoted");
+eq(autopilotDecision("Bash", { command: 'git -C "C:/CRX Manager/wt" push --force origin HEAD' }), "deny", "quoted -C + force push");
+eq(autopilotDecision("Bash", { command: 'git -C "C:/CRX Manager/wt" reset --hard HEAD~1' }), "deny", "quoted -C + hard reset");
+eq(autopilotDecision("Bash", { command: 'git -C "C:/CRX Manager/wt" clean -fd' }), "deny", "quoted -C + clean -fd");
+eq(autopilotDecision("Bash", { command: 'git -C "C:/CRX Manager/wt" worktree remove ../x' }), "deny", "quoted -C + worktree remove");
+eq(autopilotDecision("Bash", { command: 'git -C "C:/CRX Manager/wt" branch -D feature' }), "deny", "quoted -C + branch -D");
+eq(autopilotDecision("Bash", { command: "git -c 'user.name=A B' push origin HEAD" }), "deny", "quoted -c key=value");
+eq(autopilotDecision("Bash", { command: "gh -R owner/repo --json x pr merge 1" }), "deny", "a gh global after -R still reaches pr merge");
+
+// The other direction, which is why the option region is a described SHAPE and
+// not `.*`: a wildcard between binary and subcommand blocks ordinary work. Every
 // line below MUST stay allowed — `git commit -m "fix the push bug"` above all.
+// The region ends at the first word that is neither an option nor an option's
+// value, and that word is the subcommand; a leading `-` is what opens it at all.
 eq(autopilotDecision("Bash", { command: 'git commit -m "fix the push bug"' }), "allow", "commit message naming push still allowed");
 eq(autopilotDecision("Bash", { command: 'git commit -m "do not push this yet"' }), "allow", "commit message about pushing still allowed");
 eq(autopilotDecision("Bash", { command: "git -C /repo status --short" }), "allow", "git -C status allowed");
@@ -78,6 +113,30 @@ eq(autopilotDecision("Bash", { command: "git --version" }), "allow", "git --vers
 eq(autopilotDecision("Bash", { command: "gh pr view 535 --json headRefOid" }), "allow", "gh pr view allowed");
 eq(autopilotDecision("Bash", { command: "gh pr checks 603" }), "allow", "gh pr checks allowed");
 eq(autopilotDecision("Bash", { command: "gh -R masonwells1/CRX_Manager_V1.0 pr list" }), "allow", "gh -R pr list allowed");
+// The same quoted/attached spellings that must now be DENIED above must not drag
+// ordinary work down with them. A quoted global option is a normal thing to type
+// in this repo, so these are the commands the widened matcher could have broken.
+eq(autopilotDecision("Bash", { command: 'git -C "C:/CRX Manager/wt" commit -m "fix the push bug"' }), "allow", "quoted -C + a commit message naming push stays allowed");
+eq(autopilotDecision("Bash", { command: 'git -C "C:/CRX Manager/wt" status --short' }), "allow", "quoted -C + status allowed");
+eq(autopilotDecision("Bash", { command: "git -C 'C:/CRX Manager/wt' log -3 --format=%H" }), "allow", "quoted -C + log allowed");
+eq(autopilotDecision("Bash", { command: "git -C 'C:/CRX Manager/wt' rev-parse HEAD" }), "allow", "quoted -C + rev-parse allowed");
+eq(autopilotDecision("Bash", { command: "git -c core.pager=cat -C 'a b' show --stat HEAD" }), "allow", "two globals + show allowed");
+eq(autopilotDecision("Bash", { command: "git -C 'a b' branch --show-current" }), "allow", "quoted -C + branch --show-current allowed (only -D is denied)");
+eq(autopilotDecision("Bash", { command: "git -C 'a b' stash push -m wip" }), "allow", "`stash push` is not `git push`");
+eq(autopilotDecision("Bash", { command: "gh -Rmasonwells1/CRX_Manager_V1.0 pr list" }), "allow", "gh attached -R + pr list allowed");
+eq(autopilotDecision("Bash", { command: "gh -R owner/repo pr view 1 --json mergeStateStatus" }), "allow", "gh -R pr view allowed");
+eq(autopilotDecision("Bash", { command: 'gh pr comment 607 --body "ready to merge"' }), "allow", "a comment body naming merge stays allowed");
+eq(autopilotDecision("Bash", { command: "gh workflow list -R owner/repo" }), "allow", "a gh option AFTER the subcommand is not a global");
+
+// Linear, not exponential. The option region nests quantifiers, so prove it does
+// not backtrack catastrophically on a long non-matching command rather than
+// assuming it: each iteration's only real branch point ends the loop.
+{
+  const many = "git " + Array.from({ length: 400 }, (_, i) => `-c k${i}=v${i} --flag${i} val${i}`).join(" ") + " status";
+  const t0 = Date.now();
+  eq(autopilotDecision("Bash", { command: many }), "allow", "400 global options + a benign subcommand is allowed");
+  ok(Date.now() - t0 < 1000, "the option region does not backtrack catastrophically");
+}
 
 // ── overnight-arm handshake ──────────────────────────────────────────────
 ok(intentFresh(JSON.stringify({ created: new Date().toISOString() })), "fresh intent recognized");

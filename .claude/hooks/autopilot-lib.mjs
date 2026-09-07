@@ -31,13 +31,50 @@ const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|
 // did not actually prevent pushing or merging (found 2026-09-05, by running the
 // guard against a corpus rather than by reading it).
 //
-// The option tokens are ENUMERATED, deliberately not `.*`: a wildcard between a
-// binary and its subcommand would deny `git commit -m "fix the push bug"`, which
-// must stay approved. Both directions are covered in autopilot-lib.test.mjs.
-const GIT_OPTS = String.raw`(?:\s+(?:-[cC]\s+\S+|--\S+))*`;
-const GH_OPTS = String.raw`(?:\s+(?:-[RFf]\s+\S+|--repo\s+\S+|--\S+))*`;
-const git = (rest) => new RegExp(String.raw`\bgit\b${GIT_OPTS}\s+${rest}`);
-const gh = (rest) => new RegExp(String.raw`\bgh\b${GH_OPTS}\s+${rest}`);
+// The first fix ENUMERATED the option spellings (`-[cC]\s+\S+|--\S+` for git,
+// `-[RFf]\s+\S+|--repo\s+\S+|--\S+` for gh) and so inherited that list's
+// omissions — the name-listed-carve-out failure this repo keeps re-learning. Two
+// shapes walked straight through it, both reproduced by EXECUTION (2026-09-07):
+//
+//   git -C "C:/CRX Manager/wt" push …    `\S+` stops at the first space, and CRX
+//                                        worktrees sit under a path with a space
+//   gh -Rmasonwells1/CRX_Ma… pr merge …  `-[RFf]\s+` demanded a DETACHED value;
+//                                        attached short values are normal usage
+//
+// So the option region is described by SHAPE now, not by spelling. Two token
+// classes and nothing else:
+//
+//   OPT_TOKEN  a shell word STARTING WITH `-`. Everything after the dash is just
+//              "more word", so `--force`, `-Rowner/repo`, `--repo=owner/repo`,
+//              `--git-dir="C:/CRX Manager/.git"` and `-C"a b"` are one token each
+//              with no special case per spelling.
+//   VAL_TOKEN  a shell word NOT starting with `-`: an option's detached value.
+//
+// A shell word is a run of quoted sections (which MAY contain spaces),
+// backslash-escaped characters, and ordinary characters. That is what closes the
+// quoting hole for every option at once instead of for the ones someone listed.
+//
+// This is still not `.*`, and the benign controls are why. The region ends at the
+// first word that is neither an option nor an option's value — and that word is
+// the subcommand. `git commit -m "fix the push bug"` opens with `commit`, which is
+// not an OPT_TOKEN, so the region is EMPTY and the pattern then needs `push` where
+// `commit` stands; the `push` inside the quoted message is never reachable from
+// this `git`. Only a leading `-` opens the region at all. Both directions are
+// asserted in autopilot-lib.test.mjs, including the two bypasses above.
+//
+// Known, asserted over-denial: a valueless global option followed by the
+// subcommand can swallow that subcommand as its "value" (`git --no-pager log
+// --grep push` denies). Telling those apart needs per-option arity, i.e. another
+// name list — and for a DENY set an occasional extra denial is the safe side.
+//
+// `\s` (not `[^\S\r\n]`) is deliberate: these are DENY patterns, so treating a
+// newline as separation makes them broader, never narrower.
+const WORD_CHUNK = String.raw`(?:"[^"]*"|'[^']*'|\\[\s\S]|[^\s'"\\])`;
+const OPT_TOKEN = String.raw`-${WORD_CHUNK}*`;
+const VAL_TOKEN = String.raw`(?!-)${WORD_CHUNK}+`;
+const GLOBAL_OPTS = String.raw`(?:\s+${OPT_TOKEN}(?:\s+${VAL_TOKEN})?)*`;
+const git = (rest) => new RegExp(String.raw`\bgit\b${GLOBAL_OPTS}\s+${rest}`);
+const gh = (rest) => new RegExp(String.raw`\bgh\b${GLOBAL_OPTS}\s+${rest}`);
 
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
