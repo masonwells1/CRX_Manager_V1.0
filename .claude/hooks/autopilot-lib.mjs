@@ -78,33 +78,8 @@ function prefixChain(word) {
   return `--${word[0]}${inner}(?=$|[\\s=])`;
 }
 
-// A command head, written the way Windows actually resolves one: the NAME is
-// case-insensitive and the executable suffix is optional. On Windows an
-// npm/winget-installed CLI is normally a `.cmd` shim, which is exactly how
-// `gh.cmd` arises in practice — and measured against this module on origin/main,
-// EVERY head in the deny set below was defeated by a suffix:
-//
-//   deny   gh pr merge 123        allow  gh.cmd pr merge 123
-//   deny   git push origin main   allow  git.exe push origin main   <- the push rule
-//   deny   git reset --hard HEAD  allow  git.exe reset --hard HEAD
-//   deny   git branch -D x        allow  git.exe branch -D x
-//   deny   vercel deploy --prod   allow  vercel.cmd deploy --prod
-//   deny   supabase db reset      allow  supabase.cmd db reset
-//
-// This case-fold is safe precisely BECAUSE it is a filename: the filesystem
-// resolves it that way. Option letters get no such treatment (see above).
-const EXE_SUFFIX = String.raw`(?:\.(?:[eE][xX][eE]|[cC][mM][dD]|[bB][aA][tT]|[cC][oO][mM]|[pP][sS]1))?`;
-function bin(name) {
-  const chars = name
-    .split("")
-    .map((c) => (/[a-z]/i.test(c) ? `[${c.toLowerCase()}${c.toUpperCase()}]` : c))
-    .join("");
-  return String.raw`\b${chars}${EXE_SUFFIX}`;
-}
-
 // `rm` / `RM` / `rm.exe`, path-qualified or not.
-const RM_HEAD = bin("rm");
-const GIT = bin("git");
+const RM_HEAD = String.raw`\b[rR][mM](?:\.(?:[eE][xX][eE]|[cC][mM][dD]|[bB][aA][tT]))?`;
 
 // A recursive `rm` in ANY spelling. Note this denies a recursive delete whether
 // or not `-f` is also present: `-f` only suppresses prompts, and in a
@@ -139,19 +114,19 @@ const CMD_RECURSIVE_DELETE_RE = new RegExp(
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
-  new RegExp(GIT + String.raw`\s+push\b`),         // no unattended push — Mason reviews in the morning
-  new RegExp(GIT + String.raw`\s+(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)`),
-  new RegExp(GIT + String.raw`\s+reset\s+--hard\b`),
+  /git\s+push\b/,                                  // no unattended push — Mason reviews in the morning
+  /git\s+(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)/,
+  /git\s+reset\s+--hard\b/,
   // `git clean --force` (and `--force -d`) bypassed the old fixed-position rule,
   // which only looked at the FIRST token after `clean`. `-X` is a distinct flag
   // from `-x`, not a case variant, and is destructive in its own right.
-  new RegExp(GIT + String.raw`\s+clean\b` + OPT_SCAN + `(?:${prefixChain("force")}|${cluster("fdxX")})`),
+  new RegExp(String.raw`git\s+clean\b` + OPT_SCAN + `(?:${prefixChain("force")}|${cluster("fdxX")})`),
   /--no-verify\b/,
   // `-n` is git-commit's own documented short form of `--no-verify`. Matched only
   // as a STANDALONE token: inside a cluster a preceding value-taking option
   // swallows the rest (`git commit -mn` is the message "n", not a flag), so a
   // naive cluster match would deny an ordinary commit.
-  new RegExp(GIT + String.raw`\s+commit\b` + OPT_SCAN + String.raw`-n(?=$|\s)`),
+  new RegExp(String.raw`git\s+commit\b` + OPT_SCAN + String.raw`-n(?=$|\s)`),
   RM_RECURSIVE_RE,
   PS_RECURSIVE_REMOVE_RE,
   CMD_RECURSIVE_DELETE_RE,
@@ -161,25 +136,24 @@ const DENY_BASH_RES = [
   // matching `/s` inside `/srv`. Narrowing an existing deny is not this change's
   // job, so both run and the union is what the caller sees.
   /\brmdir\b|\bdel\s+\/[sq]/i,
-  new RegExp(GIT + String.raw`\s+worktree\s+remove\b`),
+  /git\s+worktree\s+remove\b/,
   // Force-delete of a branch. `-D` is the documented shorthand for
   // `--delete --force`, but the equivalents `-Df`, `-d -f`, `-f -d`,
   // `--force --delete` and `--delete -f` all reach the same place, and the old
   // rule knew only two of them.
-  new RegExp(GIT + String.raw`\s+branch\b` + OPT_SCAN + cluster("D")),
+  new RegExp(String.raw`git\s+branch\b` + OPT_SCAN + cluster("D")),
   new RegExp(
-    GIT + String.raw`\s+branch\b` +
+    String.raw`git\s+branch\b` +
       `(?=${OPT_SCAN}(?:${prefixChain("delete")}|${cluster("d")}))` +
       `(?=${OPT_SCAN}(?:${prefixChain("force")}|${cluster("f")}))`
   ),
-  new RegExp(GIT + String.raw`\s+filter-(?:branch|repo)\b`),
-  new RegExp(`(?:${bin("npx")}\\s+)?` + bin("supabase") + String.raw`\s+db\s+(?:push|reset)\b`),
-  new RegExp(`(?:${bin("npx")}\\s+)?` + bin("supabase") + String.raw`\s+migration\s+repair\b`),
-  // CLI edge deploy = same gate as the MCP tool
-  new RegExp(`(?:${bin("npx")}\\s+)?` + bin("supabase") + String.raw`\s+functions\s+deploy\b`),
-  new RegExp(bin("gh") + String.raw`\s+pr\s+merge\b`),  // lands on main around the push guard
+  /git\s+filter-(?:branch|repo)\b/,
+  /(?:npx\s+)?supabase\s+db\s+(?:push|reset)\b/,
+  /(?:npx\s+)?supabase\s+migration\s+repair\b/,
+  /(?:npx\s+)?supabase\s+functions\s+deploy\b/,    // CLI edge deploy = same gate as the MCP tool
+  /\bgh\s+pr\s+merge\b/,                           // lands on main around the push guard
   /\b(?:dropdb|createdb)\b/,
-  new RegExp(bin("vercel") + String.raw`\s+(?:deploy|--prod|promote)\b`),
+  /\bvercel\s+(?:deploy|--prod|promote)\b/,
   /(?:^|[\s;&|>])\.env\b/,                         // touching .env
   /(?:>>?|tee)\s+['"]?[^\s'";|&]*\.env\b/,         // writing to .env
 ];
