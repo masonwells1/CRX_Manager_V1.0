@@ -45,10 +45,12 @@ The wrapper is not one of the four writers this file re-emits, and changing an a
 requires `CREATE OR REPLACE` of its whole 5,112-byte body — a separate re-emit with its own md5
 pin. Tracked as its own change rather than widening a money migration mid-landing.
 
-Live exposure today is nil: the only caller,
-`src/components/deliveries/QuickDeliveryModal.tsx:381`, always passes `p_scheduled_date`. It is
-seeded from `localToday()`, which reads the **browser** clock rather than the business zone — a
-separate frontend defect of the same family, also not fixed here.
+No known application caller omits the date: the only one,
+`src/components/deliveries/QuickDeliveryModal.tsx:381`, always passes `p_scheduled_date`. Any direct
+RPC caller that omits it still reaches the wrapper's UTC `CURRENT_DATE` default and remains exposed,
+so this is a statement about known callers, not about the RPC's surface. The application caller's
+date is seeded from `localToday()`, which reads the **browser** clock rather than the business zone —
+a separate frontend defect of the same family, also not fixed here.
 
 ## Proof
 

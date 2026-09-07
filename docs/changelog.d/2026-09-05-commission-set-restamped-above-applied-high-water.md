@@ -46,9 +46,12 @@ refused by the same guard against the same ledger (negative control). The contai
 re-run at the new filenames with settled data present: the old order still halts with the payout
 guard never installed, the real order installs every file through `20260905200600` with the guard's
 recorder and trigger in place and only the repair refused last, the widened pin is still
-load-bearing, and the repair still applies after the guard. The emitted order from the shipped
-`scripts/list-post-baseline-migrations.mjs` ends `…200000, 200200, 200300, 200400, 200500,
-200600, 210000`. The `LEDGER` phase proves the names against the ledger as read on 2026-09-05; it
+load-bearing, and the repair still applies after the guard. As emitted by the shipped
+`scripts/list-post-baseline-migrations.mjs` at the time of that run — that is, before the
+consolidation recorded below — the order ended `…200000, 200200, 200300, 200400, 200500, 200600,
+210000`. That is the historical seven-name prover output preserved as evidence, not the current
+plan; the pending set is the six files described below.
+The `LEDGER` phase proves the names against the ledger as read on 2026-09-05; it
 is not apply-time authorization. The governed apply path re-reads the live ledger itself and
 refuses a snapshot older than 24 hours.
 

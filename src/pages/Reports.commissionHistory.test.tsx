@@ -222,10 +222,13 @@ describe('Reports commission history', () => {
     }
   });
 
-  it('samples the Chicago business day once when deriving rolling presets', () => {
+  it('samples the Chicago business day once when deriving rolling presets', async () => {
     renderReports();
     fireEvent.click(screen.getByRole('button', { name: 'Financial' }));
     fireEvent.click(screen.getByRole('button', { name: 'Commission Balance' }));
+    // Let the initial commission request settle first. Its rerender would otherwise consume the
+    // mockReturnValueOnce below, leaving the preset to derive from 2026-10-01.
+    await screen.findByText('CP-2026-0042');
 
     const businessToday = vi.spyOn(dateUtils, 'todayInBusinessTz')
       .mockReturnValueOnce('2026-09-30')

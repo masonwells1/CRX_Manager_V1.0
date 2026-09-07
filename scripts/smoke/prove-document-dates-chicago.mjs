@@ -72,9 +72,14 @@ const WRITERS = [
 
 const log = (m) => process.stdout.write(`${m}\n`);
 
+// This prover applies the candidate while other sessions may hold table locks. Without an upper
+// bound a holder that never releases blocks spawnSync forever, keeps the container alive, and hangs
+// CI until the outer job limit. `...options` stays last so a phase can raise this for a long apply.
+const DOCKER_TIMEOUT_MS = 10 * 60 * 1000;
+
 function docker(args, options = {}) {
-  const r = spawnSync('docker', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...options });
-  if (!options.allowFailure && r.status !== 0) throw new Error(`docker ${args.join(' ')} failed:\n${r.stdout}\n${r.stderr}`);
+  const r = spawnSync('docker', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: DOCKER_TIMEOUT_MS, ...options });
+  if (!options.allowFailure && r.status !== 0) throw new Error(`docker ${args.join(' ')} failed${r.error ? ` (${r.error.message})` : ''}:\n${r.stdout}\n${r.stderr}`);
   return r;
 }
 function psql(sql, options = {}) {

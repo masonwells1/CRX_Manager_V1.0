@@ -25,9 +25,10 @@ item still carries its earlier verification date. See `docs/manual/CURRENT_STATE
 nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
 
 Six local commission candidates (`20260905200000` through `20260905210000`, excluding superseded `20260905200500`) remain unapplied;
-the complete six-file set was restamped together on 2026-09-05 evening after #606 applied live as
-ledger row `20260905185938`. Five files had sorted below that high-water and the ordering guard would
-have refused them; the set's relative order was preserved during the restamp.
+the complete six-file set was restamped together on 2026-09-05 evening, after a #606 apply moved the
+live ordering boundary above most of the set, and the set's relative order was preserved during the
+restamp. This file deliberately does not name that boundary — re-read it from the live-ledger capture
+in `docs/reference/migration-history.md` before any apply decision.
 The label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
