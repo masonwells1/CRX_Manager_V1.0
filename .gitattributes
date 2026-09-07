@@ -33,6 +33,14 @@ supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql text eol
 supabase/migrations/20260717171331_restore_legacy_pricing_version_compat.sql text eol=lf
 supabase/migrations/20260723193312_product_families_return_policy_foundation.sql text eol=lf
 supabase/migrations/20260729222311_bind_save_field_actor.sql text eol=lf
+# 20260630180000 installs the preview_field_app_invoice_split body that
+# 20260906120000's PREFLIGHT_BODY_DRIFT pins at md5 ca33fb973d86dbf3a2788dc11fbc49a5.
+# Measured 2026-09-06: unpinned, a Windows checkout of it carries 913 CR bytes and
+# replays a body hashing 181f9d550b0416629c62353cc2f53986 instead, so a cold local
+# rebuild would abort a CORRECT migration and report it as body drift.
+# Git already stores this file with LF, so this pin changes the checkout, not the
+# reviewed bytes of an applied migration.
+supabase/migrations/20260630180000_field_app_pricing_unit_fix.sql text eol=lf
 supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 

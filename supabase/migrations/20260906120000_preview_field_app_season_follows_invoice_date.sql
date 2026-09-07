@@ -23,9 +23,19 @@
 -- same fallback save uses, never UTC.
 --
 -- The body is the live body byte-faithful (md5(prosrc) = ca33fb973d86dbf3a2788dc11fbc49a5,
--- verified against live 2026-09-06) plus four additive deltas: the p_invoice_date parameter,
--- four declares, the season setup after derive_customer_shares_from_fields, and the
--- customer_application_rates lookup binding to v_price_season instead of current_season().
+-- verified against live 2026-09-06) plus FIVE deltas -- four additions and one substitution.
+-- The enumeration exists so a reviewer can confirm nothing unlisted moved, so it names the
+-- largest region explicitly instead of folding it into "the season setup":
+--   1. ADD the p_invoice_date parameter to the declaration.
+--   2. ADD four declares (v_customer_count, v_new_season, v_group_id, v_row_season).
+--   3. ADD the two statements after derive_customer_shares_from_fields that count the customers
+--      and compute v_new_season from COALESCE(p_invoice_date, the Chicago business date).
+--   4. ADD the per-customer season-resolution block INSIDE the loop, which sets v_price_season
+--      from the group's stored season, the edited invoice's stored season, or v_new_season.
+--      This is the largest single change in the file.
+--   5. SUBSTITUTE v_price_season for current_season() in the customer_application_rates lookup.
+--      This one replaces existing text. It is not additive, and calling it additive would let a
+--      reviewer skip the one line where the old behaviour actually lived.
 -- Nothing else moves; no pricing, rounding, unit-conversion or ACL behaviour changes.
 --
 -- caller-analysis: preview_field_app_invoice_split :: the only live caller
@@ -48,20 +58,29 @@
 DO $preflight$
 DECLARE
   v_count int;
+  v_oid   oid;
   v_src   text;
   v_owner text;
   v_nargs int;
   v_identity text;
+  v_grantees text;
 BEGIN
   -- The rollover rule this whole file depends on, pinned exactly as the save-side sibling
   -- 20260904180000 pins it. Both exposure windows named in this file's header are stated in terms
   -- of the October 1 boundary, so if compute_season ever stops rolling there, every claim above is
   -- wrong and a cold rebuild would reinstall this body against a different fiscal year with no
   -- guard firing. IS DISTINCT FROM, not <>, so a NULL return fails closed instead of passing.
-  IF compute_season(DATE '2026-09-30') IS DISTINCT FROM 2026
-     OR compute_season(DATE '2026-10-01') IS DISTINCT FROM 2027 THEN
+  --
+  -- Schema-qualified. This DO block is not SECURITY DEFINER and carries no SET search_path, so an
+  -- unqualified call here would be the ONE place in this file whose behaviour depends on the
+  -- applying session's search_path -- exactly what the postflight's choice of
+  -- pg_get_function_identity_arguments over oid::regprocedure was made to avoid. Unqualified, a
+  -- connection whose search_path lacks public aborts with "function compute_season(date) does not
+  -- exist" instead of this guard's message.
+  IF public.compute_season(DATE '2026-09-30') IS DISTINCT FROM 2026
+     OR public.compute_season(DATE '2026-10-01') IS DISTINCT FROM 2027 THEN
     RAISE EXCEPTION 'PREFLIGHT_SEASON_RULE: compute_season must return 2026 for 2026-09-30 and 2027 for 2026-10-01, got % and %.',
-      compute_season(DATE '2026-09-30'), compute_season(DATE '2026-10-01');
+      public.compute_season(DATE '2026-09-30'), public.compute_season(DATE '2026-10-01');
   END IF;
 
   SELECT count(*) INTO v_count
@@ -82,11 +101,12 @@ BEGIN
       'PREFLIGHT_OVERLOAD: expected exactly 1 overload before replacement, found % -- the live catalog holds a signature this file does not know about. Enumerate them before applying.', v_count;
   END IF;
 
-  SELECT p.prosrc,
+  SELECT p.oid,
+         p.prosrc,
          p.proowner::regrole::text,
          p.pronargs,
          p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
-    INTO v_src, v_owner, v_nargs, v_identity
+    INTO v_oid, v_src, v_owner, v_nargs, v_identity
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'preview_field_app_invoice_split';
@@ -124,13 +144,33 @@ BEGIN
       RAISE EXCEPTION
         'PREFLIGHT_REPLAY_BODY_DRIFT: the installed 5-argument body md5 is %, not this file''s candidate pin 83f6600412ced085d0876a3c7339ff12. Something changed it after this migration was applied; re-applying would silently overwrite that change. Diff and re-review before replaying.', md5(v_src);
     END IF;
-    RAISE NOTICE 'PREFLIGHT_OK: the 5-argument candidate is already installed and its body still matches this file''s pin; this apply is a replay.';
+    -- Same argument, one field over. The DROP below also destroys the installed ACL, and the
+    -- GRANT/REVOKE block further down then restores exactly the reviewed set -- so a grant another
+    -- lane added would be reverted and the postflight, which only ever sees the reviewed set,
+    -- would report OK. Pin the grantee set on this path too, before the DROP.
+    SELECT string_agg(DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END, ', '
+                      ORDER BY CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END)
+      INTO v_grantees
+      FROM pg_proc p, aclexplode(p.proacl) a
+     WHERE p.oid = v_oid AND a.privilege_type = 'EXECUTE';
+
+    IF v_grantees IS DISTINCT FROM 'authenticated, postgres, service_role' THEN
+      RAISE EXCEPTION
+        'PREFLIGHT_REPLAY_GRANT_DRIFT: the installed 5-argument function grants EXECUTE to %, not the reviewed set (authenticated, postgres, service_role). The DROP below would silently revert that change. Diff and re-review before replaying.', COALESCE(v_grantees, '(nobody)');
+    END IF;
+
+    RAISE NOTICE 'PREFLIGHT_OK: the 5-argument candidate is already installed and its body and grants still match this file''s pins; this apply is a replay.';
     RETURN;
   END IF;
 
-  IF v_nargs <> 4 THEN
+  -- Identity, not pronargs, for the same reason the replay branch above uses identity: a count of
+  -- 4 says nothing about the types or the names, so a hypothetical
+  -- (jsonb,jsonb,uuid,timestamptz) overload would pass a count test and then be hashed against a
+  -- pin belonging to a different function. Downstream PREFLIGHT_BODY_DRIFT would still refuse it,
+  -- but it would be reported as body drift rather than as the wrong signature.
+  IF v_identity <> 'preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid)' THEN
     RAISE EXCEPTION
-      'PREFLIGHT_SIGNATURE: expected either the 4-argument predecessor or the 5-argument candidate, found % arguments (%).', v_nargs, v_identity;
+      'PREFLIGHT_SIGNATURE: expected either the 4-argument predecessor or the 5-argument candidate, found % (% arguments).', v_identity, v_nargs;
   END IF;
 
   IF md5(v_src) <> 'ca33fb973d86dbf3a2788dc11fbc49a5' THEN
@@ -449,6 +489,15 @@ BEGIN
 END;
 $function$;
 
+-- Establish the ownership the postflight asserts, rather than depending on the applying role
+-- happening to be postgres. DROP+CREATE re-owns the function to whoever runs the migration, and
+-- 20260729015706's column-level revoke on application_services.cost_per_acre_cents -- which names
+-- this function explicitly -- is safe only while it is a POSTGRES-OWNED SECURITY DEFINER. Without
+-- this line POSTFLIGHT_OWNER would abort a correct apply run by any other role, at the very end,
+-- after everything appeared to work. Same statement 20260729125314, 20260731001654 and
+-- 20260826221000 use, for the same reason.
+ALTER FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid, date) OWNER TO postgres;
+
 REVOKE ALL ON FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid, date) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid, date) FROM anon;
 GRANT EXECUTE ON FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid, date) TO authenticated, service_role;
@@ -466,6 +515,8 @@ DECLARE
   v_body_md5 text;
   v_signature text;
   v_arguments text;
+  v_volatile "char";
+  v_lang     text;
   v_extra    text;
   v_has_anon boolean;
   v_has_pub  boolean;
@@ -486,10 +537,12 @@ BEGIN
          p.proowner::regrole::text,
          p.prosecdef,
          COALESCE(array_to_string(p.proconfig, ','), '<none>'),
+         p.provolatile,
+         (SELECT l.lanname FROM pg_language l WHERE l.oid = p.prolang),
          md5(p.prosrc),
          p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
          pg_get_function_arguments(p.oid)
-    INTO v_oid, v_owner, v_secdef, v_config, v_body_md5, v_signature, v_arguments
+    INTO v_oid, v_owner, v_secdef, v_config, v_volatile, v_lang, v_body_md5, v_signature, v_arguments
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'preview_field_app_invoice_split';
@@ -510,8 +563,10 @@ BEGIN
   -- a perfectly correct migration and report it as a signature change. This rendering emits only
   -- pg_catalog type names, which are always visible, so it does not depend on the caller's path.
   -- It also carries the argument NAMES, which is what PostgREST actually resolves on: a renamed
-  -- p_invoice_date would break every Preview call just as surely as a deleted one, and this is the
-  -- only check in the file that would see it.
+  -- p_invoice_date would break every Preview call just as surely as a deleted one. md5(prosrc) is
+  -- blind to it, since prosrc is only the text between the body markers. POSTFLIGHT_ARGUMENT_
+  -- DEFAULTS below would also catch a rename, because pg_get_function_arguments renders names too;
+  -- this is the check that reports it AS a signature change.
   IF v_signature <> 'preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid, p_invoice_date date)' THEN
     RAISE EXCEPTION
       'POSTFLIGHT_SIGNATURE: the replacement installed %, not the 5-argument signature the frontend calls. Preview would fail with PGRST202 for every operator.', v_signature;
@@ -532,6 +587,17 @@ BEGIN
   IF NOT v_secdef THEN
     RAISE EXCEPTION
       'POSTFLIGHT_NOT_SECURITY_DEFINER: the replacement dropped SECURITY DEFINER, so it can no longer read the pricing tables its callers are gated out of.';
+  END IF;
+
+  -- Volatility and language are declaration properties, so md5(prosrc) cannot see either -- the
+  -- same blind spot that made POSTFLIGHT_ARGUMENT_DEFAULTS necessary. STABLE is not cosmetic here:
+  -- it is what lets the planner treat this read-only pricing function as constant within a
+  -- statement, and a silent flip to VOLATILE would change plans and cost while every other check
+  -- in this block still passed. plpgsql is pinned because a language change would mean the body
+  -- this file hashes is being interpreted by something else entirely.
+  IF v_volatile <> 's' OR v_lang <> 'plpgsql' THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_VOLATILITY: expected a STABLE plpgsql function; found provolatile=% language=%.', v_volatile, v_lang;
   END IF;
 
   -- Exact string, not a substring test. A substring test would accept
@@ -619,12 +685,21 @@ BEGIN
   -- message, and POSTFLIGHT_GRANT_ANON -- the check whose whole job is to name the 20260624020000
   -- regression, and which the prover mutation-tests by name -- would become unreachable and
   -- therefore unfalsifiable. Specific diagnoses first, catch-all last.
-  SELECT string_agg(DISTINCT COALESCE(a.grantee::regrole::text, 'PUBLIC'), ', ' ORDER BY COALESCE(a.grantee::regrole::text, 'PUBLIC'))
+  -- CASE, not COALESCE. grantee 0 is PUBLIC, and 0::oid::regrole::text renders as '-', not NULL,
+  -- so a COALESCE(..., 'PUBLIC') label never fires and PUBLIC would be reported as '-'.
+  --
+  -- This arm reads aclexplode, so unlike the three checks above it sees only DIRECT grants: a
+  -- future role reaching EXECUTE through membership in authenticated is not reported here. That is
+  -- the right trade for a catch-all whose job is to name unreviewed GRANTEES -- membership in an
+  -- already-reviewed role is a decision made elsewhere -- but it is a real limit, not an oversight.
+  SELECT string_agg(DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END, ', '
+                    ORDER BY CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END)
     INTO v_extra
     FROM pg_proc p, aclexplode(p.proacl) a
    WHERE p.oid = v_oid
      AND a.privilege_type = 'EXECUTE'
-     AND COALESCE(a.grantee::regrole::text, 'PUBLIC') NOT IN ('postgres', 'authenticated', 'service_role');
+     AND (CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END)
+           NOT IN ('postgres', 'authenticated', 'service_role');
 
   IF v_extra IS NOT NULL THEN
     RAISE EXCEPTION

@@ -42,10 +42,27 @@
  *   5. re-applying is safe: the preflight takes its REPLAY path, the postflight still runs,
  *      and the single signature, grants and behaviour are unchanged;
  *   6. mutations, each of which MUST be caught -- this is what makes the phase-4 pass mean
- *      something rather than rubber-stamping the same misunderstanding. TEN test the
+ *      something rather than rubber-stamping the same misunderstanding. NINETEEN test the
  *      migration's own apply-time guards by a NAMED abort and THREE test its behaviour
  *      (those three install cleanly; no static guard can see a season-logic regression,
- *      which is precisely why the behavioural probes exist):
+ *      which is precisely why the behavioural probes exist).
+ *
+ *      COVERAGE, stated so nobody has to infer it. Of the migration's twenty-one distinct
+ *      abort labels, nineteen are exercised here by a mutant that makes them fire BY NAME.
+ *      The three that are not, and why:
+ *        - PREFLIGHT_SIGNATURE: reaching it needs a 4-argument overload with the right
+ *          arity and the WRONG names or types, which the repo has no source for. Every
+ *          such shape is still refused downstream by PREFLIGHT_BODY_DRIFT, so it is
+ *          fail-closed, but it would be reported as body drift rather than as a signature
+ *          change.
+ *        - POSTFLIGHT_ACL_DEFAULT: unreachable on this project. Supabase's ALTER DEFAULT
+ *          PRIVILEGES materialises proacl on every newly created function, so a NULL ACL
+ *          cannot occur; 6e proves POSTFLIGHT_GRANT_PUBLIC catches that case instead.
+ *        - POSTFLIGHT_GRANT_LOST's service_role arm: 5k proves the authenticated arm; the
+ *          service_role arm is the same three lines against a different role name.
+ *      Everything else in the list below fires. A guard that has never fired is
+ *      indistinguishable from a guard that cannot fire, which is why this is written down
+ *      rather than summarised as "all guards are proven".
  *        2d. a wrong preflight body pin must abort the apply (PREFLIGHT_BODY_DRIFT) so a
  *            live body another lane changed is never silently overwritten;
  *        2e. a function handed to a different owner must abort (PREFLIGHT_OWNER), because
@@ -194,6 +211,17 @@ function previewSignatures() {
                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                   WHERE n.nspname = 'public' AND p.proname = '${PREVIEW}'`);
 }
+function previewSignatureCount() {
+  return Number(scalar(`SELECT count(*)::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                         WHERE n.nspname = 'public' AND p.proname = '${PREVIEW}'`));
+}
+// Membership-aware, matching the migration's own postflight: a role that reaches EXECUTE through
+// another role holds it just as surely as one granted it directly.
+function previewHasExecute(role) {
+  return scalar(`SELECT bool_or(has_function_privilege('${role}', p.oid, 'EXECUTE'))::text
+                   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                  WHERE n.nspname = 'public' AND p.proname = '${PREVIEW}'`) === 'true';
+}
 function previewGrants() {
   return scalar(`SELECT string_agg(r.rolname || '=' || has_function_privilege(r.rolname, p.oid, 'EXECUTE')::text, ',' ORDER BY r.rolname)
                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace,
@@ -304,10 +332,18 @@ const AUTHENTICATE = `
  * all -- which is precisely why this could never be fixed in the frontend.
  * Everything the probe writes is rolled back by its own terminating exception.
  */
-function parityProbe(label, { mode, invoiceDate, createDate = null, withDate }) {
-  const previewArgs = withDate
-    ? `jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})), '[]'::jsonb, v_svc, v_inv, DATE '${invoiceDate}'`
-    : `jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})), '[]'::jsonb, v_svc, v_inv`;
+function parityProbe(label, { mode, invoiceDate, createDate = null, withDate, named = false }) {
+  const locations = `jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES}))`;
+  // `named` emits PostgreSQL's named notation (p_locations => ...). PostgREST resolves an RPC by
+  // the SET OF ARGUMENT NAMES in the JSON body, which is the entire reason this migration does
+  // DROP+CREATE instead of adding an overload -- so a positional call cannot stand in for the
+  // deploy-order claim. This container has no PostgREST; named notation is the closest the SQL
+  // layer gets to it, and it is the layer where a renamed or removed argument actually bites.
+  const previewArgs = named
+    ? `p_locations => ${locations}, p_chemicals => '[]'::jsonb, p_application_service_id => v_svc, p_invoice_id => v_inv`
+    : withDate
+      ? `${locations}, '[]'::jsonb, v_svc, v_inv, DATE '${invoiceDate}'`
+      : `${locations}, '[]'::jsonb, v_svc, v_inv`;
   const createStep = mode === 'reopen'
     ? `
   v_res := ${SAVE_IMPL}(
@@ -370,6 +406,102 @@ $probe$;`;
     savedTotal: Number(m[4]),
     savedSeason: Number(m[5]),
     storedSeason: m[6] === 'none' ? null : Number(m[6]),
+  };
+}
+
+/**
+ * The invoice-GROUP branch (`IF v_group_id IS NOT NULL`), which no single-customer probe can
+ * reach. Every other probe here seeds one customer, so `jsonb_array_length(v_customers)` is 1 and
+ * the loop only ever takes branch 2 or branch 3 -- meaning the branch that prices a SPLIT invoice
+ * from each member's own stored season had no test at all, and a wrong join predicate in it (a
+ * missing `deleted_at IS NULL`, a customer mismatch) would have gone unnoticed.
+ *
+ * Two customers split one field 50/50, so save creates a real invoice_group_id and one invoice per
+ * customer. The group is created IN season, then reopened at a NEXT-season date: save will not
+ * re-season an existing invoice, so both members keep their stored season and preview must quote
+ * each member's stored-season rate. If preview took the date instead, both would quote RATE_NEXT.
+ */
+function groupProbe(label, { createDate, invoiceDate }) {
+  const locations = `jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES}))`;
+  const sql = `
+DO $probe$
+DECLARE
+  v_a uuid; v_b uuid; v_field uuid; v_svc uuid; v_res jsonb;
+  v_inv uuid; v_group uuid; v_preview jsonb;
+  v_preview_a bigint; v_preview_b bigint; v_saved_a bigint; v_saved_b bigint;
+  v_season_a int; v_season_b int; v_members int;
+BEGIN
+${AUTHENTICATE}
+  INSERT INTO customers (farm_name) VALUES ('[SMOKE] preview ${label} A ' || substr(gen_random_uuid()::text, 1, 8)) RETURNING id INTO v_a;
+  INSERT INTO customers (farm_name) VALUES ('[SMOKE] preview ${label} B ' || substr(gen_random_uuid()::text, 1, 8)) RETURNING id INTO v_b;
+  INSERT INTO fields (customer_id, field_name, total_acres) VALUES (v_a, '[SMOKE] field ${label}', ${ACRES}) RETURNING id INTO v_field;
+  -- Two billing defaults on ONE field is what makes derive_customer_shares_from_fields return two
+  -- customers, which is what makes save allocate an invoice_group_id.
+  INSERT INTO field_billing_defaults (field_id, customer_id, split_pct, is_primary)
+    VALUES (v_field, v_a, 50, true), (v_field, v_b, 50, false);
+  INSERT INTO application_services (name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
+    VALUES ('[SMOKE] service ${label}', ${RATE_DEFAULT}, 0, true) RETURNING id INTO v_svc;
+  INSERT INTO customer_application_rates (customer_id, application_service_id, rate_per_acre_cents, season) VALUES
+    (v_a, v_svc, ${RATE_CUR}, ${SEASON_NOW}), (v_a, v_svc, ${RATE_NEXT}, ${SEASON_NOW + 1}),
+    (v_b, v_svc, ${RATE_CUR}, ${SEASON_NOW}), (v_b, v_svc, ${RATE_NEXT}, ${SEASON_NOW + 1});
+
+  -- Create the split invoice in season.
+  v_res := ${SAVE_IMPL}(
+    NULL, jsonb_build_object('invoice_date', '${createDate}'),
+    ${locations}, '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
+  SELECT i.id, i.invoice_group_id INTO v_inv, v_group
+    FROM invoices i WHERE i.customer_id = v_a AND i.invoice_type = 'field_application' AND i.deleted_at IS NULL LIMIT 1;
+  IF v_group IS NULL THEN
+    RAISE EXCEPTION 'PROBE_SETUP ${label}: save did not create an invoice GROUP, so the group branch is not under test (result %)', v_res;
+  END IF;
+  SELECT count(*) INTO v_members FROM invoices i WHERE i.invoice_group_id = v_group AND i.deleted_at IS NULL;
+  IF v_members <> 2 THEN
+    RAISE EXCEPTION 'PROBE_SETUP ${label}: expected 2 invoices in the group, found %', v_members;
+  END IF;
+
+  -- Reopen at a date in the NEXT season and preview that form.
+  v_preview := ${PREVIEW}(${locations}, '[]'::jsonb, v_svc, v_inv, DATE '${invoiceDate}');
+  SELECT (line->>'unit_price_cents')::bigint INTO v_preview_a
+    FROM jsonb_array_elements(v_preview -> 'per_customer') pc,
+         jsonb_array_elements(pc -> 'lines') line
+   WHERE line->>'kind' = 'service_fee' AND (pc->>'customer_id')::uuid = v_a LIMIT 1;
+  SELECT (line->>'unit_price_cents')::bigint INTO v_preview_b
+    FROM jsonb_array_elements(v_preview -> 'per_customer') pc,
+         jsonb_array_elements(pc -> 'lines') line
+   WHERE line->>'kind' = 'service_fee' AND (pc->>'customer_id')::uuid = v_b LIMIT 1;
+  IF v_preview_a IS NULL OR v_preview_b IS NULL THEN
+    RAISE EXCEPTION 'PROBE_SETUP ${label}: preview returned no per-customer service_fee for one of the two members (%)', v_preview;
+  END IF;
+
+  -- Save that same reopened form.
+  v_res := ${SAVE_IMPL}(
+    v_inv, jsonb_build_object('invoice_date', '${invoiceDate}'),
+    ${locations}, '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
+  SELECT ii.unit_price_cents, i.season INTO v_saved_a, v_season_a
+    FROM invoices i JOIN invoice_items ii ON ii.invoice_id = i.id
+   WHERE i.customer_id = v_a AND i.invoice_type = 'field_application' AND i.deleted_at IS NULL
+     AND ii.is_application_fee LIMIT 1;
+  SELECT ii.unit_price_cents, i.season INTO v_saved_b, v_season_b
+    FROM invoices i JOIN invoice_items ii ON ii.invoice_id = i.id
+   WHERE i.customer_id = v_b AND i.invoice_type = 'field_application' AND i.deleted_at IS NULL
+     AND ii.is_application_fee LIMIT 1;
+  IF v_saved_a IS NULL OR v_saved_b IS NULL THEN
+    RAISE EXCEPTION 'PROBE_SETUP ${label}: one of the two members has no application-fee line after save (result %)', v_res;
+  END IF;
+
+  RAISE EXCEPTION 'PROBE_ROLLBACK ${label} preview_a=% saved_a=% preview_b=% saved_b=% season_a=% season_b=%',
+    v_preview_a, v_saved_a, v_preview_b, v_saved_b, v_season_a, v_season_b;
+END
+$probe$;`;
+  const r = psql(sql, { allowFailure: true });
+  const out = `${r.stdout}\n${r.stderr}`;
+  const m = /PROBE_ROLLBACK \S+ preview_a=(\S+) saved_a=(\S+) preview_b=(\S+) saved_b=(\S+) season_a=(\S+) season_b=(\S+)/.exec(out);
+  assert.ok(m, `${label}: group probe did not reach its rollback marker:\n${out.slice(-2500)}`);
+  return {
+    label,
+    previewA: Number(m[1]), savedA: Number(m[2]),
+    previewB: Number(m[3]), savedB: Number(m[4]),
+    seasonA: Number(m[5]), seasonB: Number(m[6]),
   };
 }
 
@@ -599,15 +731,30 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   // changelog and migration-history all promise that applying the migration before the frontend
   // ships is safe because "an already-deployed 4-argument caller still resolves through the
   // DEFAULT". Every other probe here passes five arguments, so that promise had never actually
-  // been run. Call the installed 5-argument function with exactly FOUR named arguments -- the
-  // shape the currently-deployed frontend sends -- and require it to resolve and price correctly.
+  // been run. Call the installed 5-argument function with exactly FOUR NAMED arguments -- the
+  // argument-name set the currently-deployed frontend sends -- and require it to resolve and price
+  // correctly. Named notation, not positional: positional would only re-prove that PL/pgSQL
+  // defaults work, which was never in doubt, while the claim under test is about resolution by
+  // argument NAME.
   // Dated in-season so the Chicago fallback and the invoice date land in the same season, which is
   // what makes agreement the right expectation rather than a coincidence.
-  const fourArgCaller = parityProbe('AFTER_FOUR_ARGUMENT_CALLER', { mode: 'new', invoiceDate: DATE_IN_SEASON, withDate: false });
+  const fourArgCaller = parityProbe('AFTER_FOUR_ARGUMENT_CALLER', { mode: 'new', invoiceDate: DATE_IN_SEASON, withDate: false, named: true });
   assertAgrees(fourArgCaller);
   assert.equal(fourArgCaller.previewRate, RATE_CUR,
     `a 4-argument caller must still resolve through the DEFAULTs and price at ${RATE_CUR}: ${JSON.stringify(fourArgCaller)}`);
-  log(`PHASE 4d: the deploy-order fallback is real -- a 4-argument caller resolves against the 5-argument function and quotes ${fourArgCaller.previewRate}c/acre`);
+  log(`PHASE 4d: the deploy-order fallback is real -- a 4-NAMED-argument caller resolves against the 5-argument function and quotes ${fourArgCaller.previewRate}c/acre`);
+
+  // PHASE 4e: the invoice-GROUP branch, which every single-customer probe above leaves untouched.
+  const groupReopen = groupProbe('AFTER_GROUP_REOPEN', { createDate: DATE_IN_SEASON, invoiceDate: DATE_NEXT_SEASON });
+  assert.equal(groupReopen.previewA, groupReopen.savedA,
+    `group member A: preview quoted ${groupReopen.previewA}c/acre but save charged ${groupReopen.savedA}c/acre`);
+  assert.equal(groupReopen.previewB, groupReopen.savedB,
+    `group member B: preview quoted ${groupReopen.previewB}c/acre but save charged ${groupReopen.savedB}c/acre`);
+  assert.equal(groupReopen.previewA, RATE_CUR,
+    `a split invoice stored in season ${SEASON_NOW}, reopened at ${DATE_NEXT_SEASON}, must still quote ${RATE_CUR}c/acre: ${JSON.stringify(groupReopen)}`);
+  assert.equal(groupReopen.seasonA, SEASON_NOW, 'save must not re-season an existing group member');
+  assert.equal(groupReopen.seasonB, SEASON_NOW, 'save must not re-season the other group member either');
+  log(`PHASE 4e: the invoice-GROUP branch is exercised -- a two-customer split stored in season ${groupReopen.seasonA}, reopened at ${DATE_NEXT_SEASON}, quotes and charges ${groupReopen.previewA}c/acre for both members`);
 
   // ---- PHASE 5: re-apply is safe ----------------------------------------------------
   const replayOut = said(apply('candidate.sql'));
@@ -639,14 +786,18 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   // an edit that dropped p_invoice_date would leave the count at 1 and the body md5 unchanged,
   // so every other postflight check would pass while Preview failed with PGRST202 for everyone.
   // Drop the parameter from the CREATE and the apply must refuse. The ACL statements name the
-  // 5-argument signature explicitly, so a naive version of this mutant aborts at the REVOKE
-  // before the postflight ever runs -- refused, but by a different guard, which would leave
-  // POSTFLIGHT_SIGNATURE untested. Rewrite the ACL signatures too, so the ONLY thing left to
-  // catch the arity change is the check under test, and assert on its name.
+  // 5-argument signature explicitly, and so does the ALTER ... OWNER TO postgres, so a naive
+  // version of this mutant aborts at whichever of those comes first -- refused, but by
+  // PostgreSQL's "function does not exist" rather than by the guard under test, which would leave
+  // POSTFLIGHT_SIGNATURE untested. (That is not hypothetical: adding the OWNER statement broke
+  // this phase exactly that way.) Rewrite every non-DROP reference to the 5-argument signature, so
+  // the ONLY thing left to catch the arity change is the check under test, and assert on its name.
+  // The DROPs are deliberately NOT rewritten -- the file must still drop the installed function.
   const abortedSig = applyMutant('drops-the-new-parameter', (sql) => sql
     .replace(', p_invoice_date date DEFAULT NULL::date)', ')')
     .replace("p_invoice_date, (now() AT TIME ZONE 'America/Chicago')::date", "(now() AT TIME ZONE 'America/Chicago')::date")
-    .replaceAll(`ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date)`, `ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid)`),
+    .replaceAll(`ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date)`, `ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid)`)
+    .replaceAll(`ALTER FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date)`, `ALTER FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid)`),
   { mustFail: true });
   assert.match(said(abortedSig), /POSTFLIGHT_SIGNATURE/, 'dropping the new parameter must be refused by the postflight signature check, by name');
   assert.equal(previewSignatures(), afterSignatures, 'the refused apply must leave the 5-argument signature installed');
@@ -725,6 +876,137 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   assert.equal(previewGrants(), startGrants, "the real candidate must reinstate live's access surface");
   log('PHASE 5e: the overload check is load-bearing -- a surviving second signature aborts at POSTFLIGHT_OVERLOAD and rolls back');
 
+  // PHASE 5f-5m: the guards that had never been shown able to fire.
+  //
+  // Two reviews independently made the same point: the file disclosed ONE guard as unproven
+  // (POSTFLIGHT_ACL_DEFAULT, unreachable on this project), which implied every other guard WAS
+  // proven. Nine were not. A guard that has never fired is indistinguishable from a guard that
+  // cannot fire -- that is the failure this whole prover exists to prevent, so the answer is to
+  // make them fire, not to widen the disclaimer.
+  //
+  // Each of these starts from the installed candidate, so each takes the preflight's REPLAY path.
+  // That is deliberate for the postflight ones: the replay path is the weakest path in the file,
+  // and a postflight guard that only fires on a cold apply would be a guard with a hole in it.
+
+  // 5f: PREFLIGHT_SEASON_RULE. Move the expected rollover year and the file must refuse before it
+  // touches anything -- the point being that this guard can fail, not merely that it can pass.
+  const abortedSeasonRule = applyMutant('wrong-season-rule',
+    (sql) => sql.replace('IS DISTINCT FROM 2026', 'IS DISTINCT FROM 9999'), { mustFail: true });
+  assert.match(said(abortedSeasonRule), /PREFLIGHT_SEASON_RULE/, 'a false rollover expectation must abort at the season-rule guard, by name');
+  assert.equal(previewSignatures(), afterSignatures, 'the refused apply must change nothing');
+  log('PHASE 5f: the season-rule guard is load-bearing -- a false rollover expectation aborts at PREFLIGHT_SEASON_RULE');
+
+  // 5g: POSTFLIGHT_OWNER. This is now a genuine test rather than an accident of who runs the
+  // migration: the file carries ALTER FUNCTION ... OWNER TO postgres, so pointing that statement
+  // at another role is the only way the postflight's owner check can see a wrong owner.
+  // Membership is required for ALTER ... OWNER TO to be permitted at all; without it the mutant
+  // is refused by PostgreSQL ("must be able to SET ROLE") before the postflight ever runs, which
+  // would look like a pass and prove nothing about the guard under test.
+  psql(`CREATE ROLE preview_owner_probe; GRANT CREATE ON SCHEMA public TO preview_owner_probe;
+        GRANT preview_owner_probe TO postgres;`, { wrap: true });
+  const abortedPostOwner = applyMutant('hands-the-replacement-to-another-owner',
+    (sql) => sql.replace('OWNER TO postgres;', 'OWNER TO preview_owner_probe;'), { mustFail: true });
+  assert.match(said(abortedPostOwner), /POSTFLIGHT_OWNER/, 're-owning the replacement must abort at the postflight owner check, by name');
+  assert.equal(previewOwner(), 'postgres', 'the refused apply must roll back to a postgres-owned function');
+  psql(`REVOKE preview_owner_probe FROM postgres;
+        REVOKE CREATE ON SCHEMA public FROM preview_owner_probe; DROP ROLE preview_owner_probe;`, { wrap: true });
+  log('PHASE 5g: the postflight owner check is load-bearing -- re-owning the replacement aborts at POSTFLIGHT_OWNER and rolls back');
+
+  // 5h: POSTFLIGHT_NOT_SECURITY_DEFINER. Without SECURITY DEFINER this function loses its read of
+  // application_services.cost_per_acre_cents, which authenticated is revoked from -- every Preview
+  // would fail with permission denied. The body md5 is untouched, so no other check sees it.
+  const abortedSecdef = applyMutant('drops-security-definer',
+    (sql) => sql.replace(' STABLE SECURITY DEFINER', ' STABLE SECURITY INVOKER'), { mustFail: true });
+  assert.match(said(abortedSecdef), /POSTFLIGHT_NOT_SECURITY_DEFINER/, 'dropping SECURITY DEFINER must abort by name');
+  assert.equal(previewSignatures(), afterSignatures, 'the refused apply must change nothing');
+  log('PHASE 5h: the SECURITY DEFINER check is load-bearing -- SECURITY INVOKER aborts at POSTFLIGHT_NOT_SECURITY_DEFINER');
+
+  // 5i: POSTFLIGHT_SEARCH_PATH, mutated as the actual attack rather than as a typo. PREPENDING an
+  // entry ahead of public is what lets a planted object shadow a real one; a substring test would
+  // accept it, which is exactly why the check compares the whole string.
+  const abortedPath = applyMutant('prepends-a-search-path-entry',
+    (sql) => sql.replace("SET search_path TO 'public', 'pg_temp'", "SET search_path TO 'pg_temp', 'public'"), { mustFail: true });
+  assert.match(said(abortedPath), /POSTFLIGHT_SEARCH_PATH/, 'a prepended search_path entry must abort by name');
+  assert.equal(previewSignatures(), afterSignatures, 'the refused apply must change nothing');
+  log('PHASE 5i: the search_path pin is load-bearing -- PREPENDING pg_temp ahead of public aborts at POSTFLIGHT_SEARCH_PATH');
+
+  // 5j: POSTFLIGHT_VOLATILITY. A silent STABLE -> VOLATILE flip changes planning and cost for a
+  // read-only pricing function, and md5(prosrc) is blind to it because volatility lives in the
+  // declaration, not the body -- the same blind spot that made the DEFAULTs check necessary.
+  const abortedVolatile = applyMutant('flips-stable-to-volatile',
+    (sql) => sql.replace(' STABLE SECURITY DEFINER', ' VOLATILE SECURITY DEFINER'), { mustFail: true });
+  assert.match(said(abortedVolatile), /POSTFLIGHT_VOLATILITY/, 'flipping STABLE to VOLATILE must abort by name');
+  assert.equal(previewSignatures(), afterSignatures, 'the refused apply must change nothing');
+  log('PHASE 5j: the volatility pin is load-bearing -- STABLE flipped to VOLATILE aborts at POSTFLIGHT_VOLATILITY');
+
+  // 5k: POSTFLIGHT_GRANT_LOST. The mirror image of the anon mutants: those prove the file does not
+  // grant too much, this proves it does not grant too LITTLE. Losing authenticated would take
+  // Preview away from every operator, and nothing else in the file would notice.
+  //
+  // MEASURED, and worth recording because it changes what this phase can honestly claim: simply
+  // deleting `authenticated` from the GRANT does NOT abort. Supabase's ALTER DEFAULT PRIVILEGES
+  // already grants EXECUTE to authenticated on every newly CREATEd function, so the explicit GRANT
+  // in this file is belt-and-braces on this project, not the thing that confers the privilege --
+  // the same mechanism that makes POSTFLIGHT_ACL_DEFAULT unreachable here. The only way for
+  // authenticated to actually LOSE EXECUTE is for the file to revoke it, so that is the mutant.
+  const revokedAuth = `REVOKE EXECUTE ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date) FROM authenticated;`;
+  const abortedGrantLost = applyMutant('revokes-authenticated',
+    (sql) => sql.replace(`GRANT EXECUTE ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date) TO authenticated, service_role;`,
+                         `GRANT EXECUTE ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date) TO service_role;
+${revokedAuth}`),
+    { mustFail: true });
+  assert.match(said(abortedGrantLost), /POSTFLIGHT_GRANT_LOST/, 'failing to grant authenticated must abort by name');
+  assert.equal(previewGrants(), startGrants, "the refused apply must roll back to live's access surface");
+  log('PHASE 5k: the grant-retained check is load-bearing -- dropping authenticated aborts at POSTFLIGHT_GRANT_LOST');
+
+  // 5l: PREFLIGHT_REPLAY_GRANT_DRIFT, the ACL half of the replay hole. PHASE 5d covers the body;
+  // this covers the grants, which the DROP destroys just as thoroughly. The migration file is NOT
+  // mutated here -- the drift is in the database, put there the way another lane would put it --
+  // and the assertion that matters is the second one: the outside grant must SURVIVE the refusal.
+  psql('CREATE ROLE preview_replay_probe;', { wrap: true });
+  psql(`GRANT EXECUTE ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date) TO preview_replay_probe;`, { wrap: true });
+  const abortedReplayGrant = psql('\\i /tmp/candidate.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(abortedReplayGrant.status, 0, 'replaying over a drifted ACL was expected to ABORT and did not');
+  assert.match(said(abortedReplayGrant), /PREFLIGHT_REPLAY_GRANT_DRIFT/, 'the refusal must name the replay grant check');
+  assert.match(said(abortedReplayGrant), /preview_replay_probe/, 'the refusal must name the grantee the apply would have destroyed');
+  assert.equal(previewHasExecute('preview_replay_probe'), true,
+    "the other lane's grant must SURVIVE the refusal -- a guard that aborts after destroying it would prove nothing");
+  psql(`REVOKE EXECUTE ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date) FROM preview_replay_probe;
+        DROP ROLE preview_replay_probe;`, { wrap: true });
+  assert.equal(previewGrants(), startGrants, "the container must be back on live's access surface");
+  log('PHASE 5l: the replay GRANT pin is load-bearing -- an outside grant aborts the replay at PREFLIGHT_REPLAY_GRANT_DRIFT and SURVIVES it');
+
+  // 5m: PREFLIGHT_OVERLOAD. PHASE 5e proves the POSTflight notices a second signature the file
+  // created; this proves the PREflight notices one that was already there. An earlier revision of
+  // this file asserted that in a prose comment without ever running it.
+  copyText(predecessorCreate, 'predecessor-preview.sql', workDir);
+  psql('\\i /tmp/predecessor-preview.sql', { wrap: true });
+  assert.equal(previewSignatureCount(), 2, 'precondition: the container must hold two overloads before this apply');
+  const abortedPreOverload = psql('\\i /tmp/candidate.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(abortedPreOverload.status, 0, 'applying over two overloads was expected to ABORT and did not');
+  assert.match(said(abortedPreOverload), /PREFLIGHT_OVERLOAD/, 'a pre-existing second overload must abort at the preflight overload check, by name');
+  assert.equal(previewSignatureCount(), 2, 'the refused apply must leave both overloads exactly as it found them');
+  psql(`DROP FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid);`, { wrap: true });
+  assert.equal(previewSignatures(), afterSignatures, 'the container must be back on the single 5-argument candidate');
+  log('PHASE 5m: the preflight overload check is load-bearing -- a pre-existing second signature aborts at PREFLIGHT_OVERLOAD and both survive');
+
+  // 5n: PREFLIGHT_MISSING. This file REPLACES a reviewed function; if nothing is there, the
+  // premise is wrong and it must refuse rather than quietly CREATE one -- a fresh CREATE would
+  // skip the body pin entirely, which is the check the whole file is built around.
+  psql(`DROP FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date);`, { wrap: true });
+  assert.equal(previewSignatureCount(), 0, 'precondition: the function must be absent');
+  const abortedMissing = psql('\\i /tmp/candidate.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(abortedMissing.status, 0, 'applying with nothing installed was expected to ABORT and did not');
+  assert.match(said(abortedMissing), /PREFLIGHT_MISSING/, 'an absent function must abort at the preflight existence check, by name');
+  assert.equal(previewSignatureCount(), 0, 'the refused apply must not have created anything');
+  psql('\\i /tmp/predecessor-preview.sql', { wrap: true });
+  psql(`REVOKE ALL ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid) FROM PUBLIC, anon;
+        GRANT EXECUTE ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid) TO authenticated, service_role;`, { wrap: true });
+  apply('candidate.sql');
+  assert.equal(previewSignatures(), afterSignatures, 'the real candidate must reinstate exactly one 5-argument signature');
+  assert.equal(previewGrants(), startGrants, "the real candidate must reinstate live's access surface");
+  log('PHASE 5n: the preflight existence check is load-bearing -- an absent function aborts at PREFLIGHT_MISSING and creates nothing');
+
   // ---- PHASE 6: mutations, each of which MUST be caught ------------------------------
   // The next two mutants change the BODY, so the postflight body pin proven in 5a would refuse
   // them before they could be observed misbehaving -- and the point of these two is the season
@@ -792,6 +1074,11 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   assert.notEqual(leakedGrants, startGrants, 'the anon REVOKE must be load-bearing');
   log(`PHASE 6d: mutant CAUGHT -- with both the REVOKE and its postflight check removed the grants become ${leakedGrants} instead of ${startGrants}`);
 
+  // The anon grant this phase deliberately opened is now ACL drift on the installed 5-argument
+  // function, so a straight re-apply would be refused by PREFLIGHT_REPLAY_GRANT_DRIFT -- correctly,
+  // and that refusal is proven in 5l. Clear the drift the mutant introduced FIRST, so the restore
+  // exercises a clean replay instead of tripping a guard that belongs to a different phase.
+  psql(`REVOKE EXECUTE ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date) FROM anon;`, { wrap: true });
   apply('candidate.sql');
   assert.equal(previewGrants(), startGrants, 'the real candidate must close the anon grant the mutant opened');
 
@@ -842,7 +1129,7 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   assertAgrees(parityProbe('FINAL_CROSS_EDIT', { mode: 'reopen', createDate: DATE_IN_SEASON, invoiceDate: DATE_NEXT_SEASON, withDate: true }));
   log('PHASE 7: real candidate reinstalled over the mutants -- owner, grants, signature and behaviour back to live posture');
 
-  log('\nPREVIEW_SEASON_PROOF_PASS all phases, including all thirteen mutation phases -- ten refused by a named abort, three caught behaviourally -- behaved as required');
+  log('\nPREVIEW_SEASON_PROOF_PASS all phases, including all twenty-two mutation phases -- nineteen refused by a named abort, three caught behaviourally -- behaved as required');
 } finally {
   docker(['rm', '-f', NAME], { allowFailure: true });
 }
