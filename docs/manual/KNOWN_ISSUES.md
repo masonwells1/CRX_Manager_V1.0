@@ -403,6 +403,52 @@ Mason's call, not a defect to fix unilaterally.
 Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md` and
 `docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md`.
 
+## FIXED 2026-09-05 — the CodeRabbit gate reported "requested" without ever confirming a review was requested, and spent slots on unmergeable PRs
+
+Two defects in `.github/scripts/coderabbit-final-review.cjs`. Both are fixed; the entry stays because
+the *reasoning* is reusable and because the first one invalidates historical gate output.
+
+**1. Posting is not requesting — every "requested" was unverified.** The gate reported success as
+soon as GitHub accepted its comment. Measured on this repo, same PR, same head, same command text,
+minutes apart, with the comment AUTHOR as the only variable: `github-actions[bot]` posts went
+unacknowledged after 62 min (#535) and 24 min+ (#449), while `masonwells1` posts were acknowledged in
+11 s and 6 s. So a bot-authored command was never heard, and
+**`coderabbit-review-requested` was never evidence that a review was requested** — do not read any
+gate success from before 2026-09-05 as proof a review happened.
+
+The gate now waits for CodeRabbit's own reply, authored by `coderabbitai[bot]` and strictly newer
+than the command (its auto-generated summary comment quotes `@coderabbitai review` in its own tips
+block, and has already caused two sessions to miscount requests). Three outcomes, deliberately
+distinct: acknowledged → credited; **confirmed** unheard → fail, delete the inert command and clear
+the marker so a retry is possible; **unverifiable** → fail but keep both, because the request may be
+live and clearing the marker would invite a relabel that buys a second paid review. An unverifiable
+lookup is never a confirmed absence.
+
+**CodeRabbit's docs do not state which identities may issue commands** — checked 2026-09-05 against
+the commands guide, the configuration reference and the "why reviews might not trigger" KB article.
+`auto_review.ignore_usernames` governs PR *authors*, not comment authors. The bot-filtering is an
+observed behaviour with no documented contract, so it is verified at runtime rather than encoded as
+an assumption; do not add an allowlist of identities that "work".
+
+**2. A PR that provably cannot merge still spent a review slot.** Both merge gates hard-deny
+`reviewDecision == CHANGES_REQUESTED`; the final-review gate did not look at it, so #449 — BLOCKED on
+a standing objection with every check green — passed every other validation and consumed one of ~2-3
+shared hourly slots ahead of a candidate that needed it. Now refused, reading the same field the
+merge gates read (GraphQL, not a `listReviews` re-derivation, so the two cannot diverge), re-checked
+after the quiet period, and failing closed if unreadable.
+
+Both refusals are mutation-proven: removing the reviewDecision check turns 2 tests red, removing the
+acknowledgement poll turns 5 red, and collapsing "unverifiable" into "confirmed absent" turns 1 red.
+No workflow permission changed — `pull-requests: write` already covers the GraphQL read, and the
+permissions block is the bricking class (an invalid key makes the file unloadable and yields a
+zero-job run).
+
+**Still open in this gate, and NOT addressed here:** a failed run poisons its own head permanently
+(a previous completed-failure run of the workflow counts as a blocking check on later attempts at the
+same SHA, so only a new commit clears it). Practical rule unchanged: **never apply
+`ready-for-coderabbit` until every required check has already CONCLUDED green.** Also still missing
+is the invalid-permission-key test from #569.
+
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
 The gate landed on `main` as `f2307fbf9` with these four items knowingly open. They were recorded
@@ -955,8 +1001,11 @@ assuming any screen is covered.
 `OrderDetail`, `DeliveryDetail`, `InvoiceDetail`, `FieldApplicationInvoice`, `Returns`,
 `PrepaymentManagerPanel`, `MonthEndClose`. Nine keys are also given a record scope via the hook's
 `intentScope` / `getKeyFor`, because detail pages do NOT remount on a route-id change (every
-`<x>/:id` route in `src/App.tsx` is rendered without a `key` prop) and a retained unscoped key
-would otherwise replay record A's receipt against record B.
+`<x>/:id` route in `src/App.tsx` **except `jobs/:id`**, which is keyed by id via
+`JobDetailRoute`, is rendered without a `key` prop) and a retained unscoped key would otherwise
+replay record A's receipt against record B. The `jobs/:id` exception costs the argument nothing:
+none of the nine record-scoped keys lives on `JobDetail`, and every page they do live on is still
+rendered unkeyed.
 
 **The bar a site had to clear, tightened twice by review.** It is not enough that the key names the
 right record: the scope must bind **everything a retry can vary**. `check_idempotency` matches on
@@ -997,7 +1046,26 @@ payload binding (`fingerprintIntentPayload`), not a scope — a route scope bind
 there is no route. Deliberately left out of PR #584, which six adversarial rounds had already
 narrowed to exclude exactly this class.
 
-**ALSO OPEN — the original sweep missed an entire class, now enumerated.** It matched
+**CLOSED 2026-09-05 — the aliased class is swept and its three defects are fixed.** The follow-up
+sweep enumerated the class structurally rather than by name (find every destructuring of
+`useIdempotencyKey`, capture the local identifier it binds, then search for THAT identifier) and
+confirmed the set below is complete: 14 files bind a renamed reset and only these three sites were
+wrong. `QuoteBuilder`'s `save_quote` and `CustomerDetail`'s `save_customer` reset-before-assert are
+reordered; `CustomerDetail`'s route-changed branch now releases the key only for a reply that is
+both error-free and a REAL RECEIPT (`!error && hasReceiptId(data, 'customer_id')`) — it cannot
+assert, because it must return quietly rather than throw into a customer no longer on screen.
+It shipped as `data != null` and was tightened on 2026-09-05: `assertRpcResult` rejects only a
+MISSING reply, so `{}` passed that test while naming no customer at all. `QuoteBuilder` leaves
+`KNOWN_UNFIXED_SITES` entirely; `CustomerDetail` keeps ONE pinned entry, which is now correct code
+that a LINE-ORDER scanner still reports because it cannot read an inline emptiness test.
+**Three test harnesses had stubbed `assertRpcResult` as `vi.fn((d) => d)`** — a passthrough that
+never throws, which deleted the ambiguous-reply path from every test in those files and would have
+kept a fully regressed screen green. `QuoteBuilder.test.tsx`, `CustomerDetail.test.tsx` and
+`JobDetail.billingHazard.test.tsx` now use the real function, and each fix is proven by mounting the
+real screen and confirming the test fails against the unfixed source first. The historical
+description of the class follows.
+
+**ORIGINALLY OPEN — the original sweep missed an entire class, now enumerated.** It matched
 `resetKey()` / `resetKeyFor(` literally and never saw **aliased** resets from destructured hooks
 (`const { resetKey: resetXKey } = useIdempotencyKey(...)`). The guard now resolves aliases per file
 and the class is counted, which surfaced sites no sweep or review had listed. **Real defects:**
@@ -1164,10 +1232,14 @@ because `CycleCounts.tsx` and `JobDetail.tsx` call them directly. `anon` holds E
 `AUTH_REQUIRED`; active `admin` → a cycle-count number issued normally. Account identifiers and the
 issued number are deliberately not recorded — this repository is public and the *outcome* is the
 proof. Full apply and proof provenance is row 910 of
-`docs/reference/migration-history.md`. **Residual, filed to the F06 lane, NOT fixed here:**
-`src/pages/JobDetail.tsx:1861-1862` discards the RPC error, so a refused user sees a silently blank
-job-number field instead of a toast; `CycleCounts.tsx` handles the same refusal correctly. The
-original diagnosis is kept below.
+`docs/reference/migration-history.md`. **Residual CLOSED 2026-09-05, once F06 had landed and
+`JobDetail.tsx` was free to edit:** the call was `if (!error && data) setJobNumber(...)`, which
+discarded BOTH failure shapes — a raised error and an empty reply — so a refused user saw a silently
+blank job-number field. It now mirrors the `CycleCounts.tsx` shape: throw the failure into one
+handler, report it to Sentry, and name the cause for the operator (`INSUFFICIENT_ROLE` gets a
+role-specific message rather than the raw token). Both shapes are pinned by tests that mount
+`/jobs/new` and were confirmed to fail against the unfixed source. The original diagnosis is kept
+below.
 
 **F2 (ORIGINAL DIAGNOSIS — the hole described here is now closed) — `next_*_number` generators
 callable by any authenticated session with no active-profile or
