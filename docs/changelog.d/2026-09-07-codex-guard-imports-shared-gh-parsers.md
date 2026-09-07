@@ -93,17 +93,38 @@ auto-merge and lands nothing. The deleted local copy gated it.
   `node scripts/agent-manifest-parity.mjs` and `npm run agent-health` all pass. Parity
   is unaffected: no hook was added or removed on either side.
 
-### Other name lists found in the same file, reported not fixed
+### Other name lists in the same file — reachability MEASURED, not read
 
-- `NODE_INTERPRETER_RE` (line ~753) — `(?:node|npx|tsx|ts-node|bun|deno)(?:\.exe)?`.
-  Same one-item extension list. Reachable: `npx` on Windows *is* `npx.cmd`, so
-  `S=scripts/apply-migration-file.mjs; npx.cmd $S` skips the unresolvable-interpreter
-  refusal. It is a defence-in-depth arm — the literal `liveApplyScriptMentioned`
-  matcher still catches every spelling that names the script outright — so the bypass
-  needs an expansion hiding the name.
-- `usesDynamicProcessEval` (lines ~763-765) — `node(?:\.exe)?` in three places.
-  Same list. Windows ships no `node.cmd` by default, so this one is narrow.
-- `normalizeShellHead` (line ~433) — strips `\.(?:exe|cmd|bat|com)$`. Also a roster,
-  but its omissions fail **closed**: an unstripped extension makes the head
-  unrecognised, and an unrecognised head is treated as a writer and denied. Over-block,
-  not under-block.
+Each was probed through `evaluateProductionAction`, because a list's omission only
+matters if some *other* rule does not already catch the case. Two of the three are
+compensated; one is not.
+
+**`usesDynamicProcessEval` (lines ~763-765) — REACHABLE, a real gap.** Three
+`node(?:\.exe)?` occurrences, and the helper is node-only while its sibling
+`NODE_INTERPRETER_RE` already knows about `npx`/`tsx`/`ts-node`/`bun`/`deno`. This
+rule exists to stop an interpreter running code the guard never gets to inspect.
+Measured:
+
+| command | verdict |
+| --- | --- |
+| `echo x \| node`, `echo x \| node.exe`, `node -` | BLOCKED |
+| `echo x \| node.cmd` / `node.bat` / `node.ps1` / `nodejs` | **allowed** |
+| `echo x \| C:\tools\node.cmd` | **allowed** |
+| `node.cmd -` / `node.cmd --eval "x"` / `node.cmd -p "x"` | **allowed** |
+| `echo x \| bun`, `echo x \| deno`, `bun -e "x"`, `deno eval "x"` | **allowed** |
+
+Not fixed here: it is a different helper with a different blast radius, and this
+change is deliberately confined to the gh binary. It wants the same treatment —
+`BIN_TAIL` plus the interpreter set `NODE_INTERPRETER_RE` already carries.
+
+**`NODE_INTERPRETER_RE` (line ~753) — same one-item list, not independently
+reachable in the forms tested.** `npx.cmd $S`, `node.cmd $S`, `bun.cmd $S` and
+`deno.cmd $S` were all BLOCKED — but by `computedSegmentWithUnrecognizedCommand`
+(an unrecognised head plus computed text), not by this rule. Its omissions are
+covered in those shapes; it should still lose the list when the file is next
+touched, because a compensator is not a fix.
+
+**`normalizeShellHead` (line ~433) — strips `\.(?:exe|cmd|bat|com)$`.** Also a
+roster, but its omissions fail **closed**: an unstripped extension leaves the head
+unrecognised, and an unrecognised head is treated as a writer and denied.
+Over-block, not under-block.
