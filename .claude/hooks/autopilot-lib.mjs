@@ -155,7 +155,7 @@ const gh = (rest) => new RegExp(String.raw`${bin("gh")}${GLOBAL_OPTS}\s+${rest}`
 // verified by execution, not reasoned about. It is given the same shape only so
 // the three rules read consistently; do not mistake it for the thing doing the
 // work, which is the `supabase` anchor.
-const cmd = (name, rest) => new RegExp(String.raw`${bin(name)}\s+${rest}`);
+const nameAnchored = (name, rest) => new RegExp(String.raw`${bin(name)}\s+${rest}`);
 const NPX = String.raw`(?:${bin("npx")}\s+)?`;
 
 // Bash command shapes that must never be auto-approved: history rewrites,
@@ -166,7 +166,7 @@ const DENY_BASH_RES = [
   git(String.raw`reset\s+--hard\b`),
   git(String.raw`clean\s+-[A-Za-z]*[fdx]`),
   /--no-verify\b/,
-  cmd("rm", String.raw`(?:-[A-Za-z]*r[A-Za-z]*f|-[A-Za-z]*f[A-Za-z]*r)`), // rm -rf / -fr
+  nameAnchored("rm", String.raw`(?:-[A-Za-z]*r[A-Za-z]*f|-[A-Za-z]*f[A-Za-z]*r)`), // rm -rf / -fr
   new RegExp(String.raw`\brmdir\b|${bin("del")}\s+\/[sq]`, "i"),
   git(String.raw`worktree\s+remove\b`),
   git(String.raw`branch\s+(?:-D|--delete\s+--force)\b`),
@@ -176,7 +176,7 @@ const DENY_BASH_RES = [
   new RegExp(String.raw`${NPX}${bin("supabase")}\s+functions\s+deploy\b`), // CLI edge deploy = same gate as the MCP tool
   gh(String.raw`pr\s+merge\b`),                    // lands on main around the push guard
   /\b(?:dropdb|createdb)\b/,
-  cmd("vercel", String.raw`(?:deploy|--prod|promote)\b`),
+  nameAnchored("vercel", String.raw`(?:deploy|--prod|promote)\b`),
   /(?:^|[\s;&|>])\.env\b/,                         // touching .env
   /(?:>>?|tee)\s+['"]?[^\s'";|&]*\.env\b/,         // writing to .env
 ];
