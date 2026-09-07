@@ -111,6 +111,17 @@ const CMD_RECURSIVE_DELETE_RE = new RegExp(
   "i"
 );
 
+// `git commit` short options that CONSUME the rest of their cluster as a value:
+// -m <msg>, -c/-C <commit>, -F <file>, -t <file>, -u[<mode>], -S[<keyid>]. A
+// letter appearing AFTER one of these is that option's value, not a flag, which
+// is why `git commit -mn` is the message "n". Letters ahead of a clustered `-n`
+// must come from the complement of this set.
+const GIT_COMMIT_VALUE_OPTS = "mcCFtuS";
+const GIT_COMMIT_FLAG_ONLY = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  .split("")
+  .filter((c) => !GIT_COMMIT_VALUE_OPTS.includes(c))
+  .join("");
+
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
@@ -122,11 +133,21 @@ const DENY_BASH_RES = [
   // from `-x`, not a case variant, and is destructive in its own right.
   new RegExp(String.raw`git\s+clean\b` + OPT_SCAN + `(?:${prefixChain("force")}|${cluster("fdxX")})`),
   /--no-verify\b/,
-  // `-n` is git-commit's own documented short form of `--no-verify`. Matched only
-  // as a STANDALONE token: inside a cluster a preceding value-taking option
-  // swallows the rest (`git commit -mn` is the message "n", not a flag), so a
-  // naive cluster match would deny an ordinary commit.
-  new RegExp(String.raw`git\s+commit\b` + OPT_SCAN + String.raw`-n(?=$|\s)`),
+  // `-n` is git-commit's own documented short form of `--no-verify`, and git's
+  // parse-options clusters short flags, so `-nv` and `-vn` are `-n` too. A first
+  // draft matched only a STANDALONE `-n`, which those two clusters walked past
+  // (CodeRabbit, PR #631).
+  //
+  // A naive cluster match is the opposite error: a short option that TAKES A
+  // VALUE swallows the rest of its cluster, so `git commit -mn` is the message
+  // "n" and denying it would break an ordinary commit. The rule therefore allows
+  // only NON-value-taking letters ahead of the `n`. `-Sn` is conservatively left
+  // alone, because `-S` takes an OPTIONAL key id and the shell text cannot say
+  // which reading git will take.
+  new RegExp(
+    String.raw`git\s+commit\b` + OPT_SCAN +
+      `-[${GIT_COMMIT_FLAG_ONLY}]*n[A-Za-z]*(?=$|\\s)`
+  ),
   RM_RECURSIVE_RE,
   PS_RECURSIVE_REMOVE_RE,
   CMD_RECURSIVE_DELETE_RE,

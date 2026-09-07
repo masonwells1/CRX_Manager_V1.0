@@ -131,7 +131,20 @@ allowBash("git branch -a", "listing branches stays allowed");
 allowBash("git branch -m old new", "renaming stays allowed");
 denyBash("git commit -n -m x", "PROVEN BYPASS: -n is git-commit's own short form of --no-verify");
 denyBash("git commit -m x -n", "PROVEN BYPASS: -n in trailing position");
+// CodeRabbit, PR #631: git's parse-options CLUSTERS short flags, so a
+// standalone-only match let these through — they are `-n` plus another flag.
+denyBash("git commit -nv -m x", "PROVEN BYPASS: clustered -nv is --no-verify + --verbose");
+denyBash("git commit -vn -m x", "PROVEN BYPASS: clustered -vn");
+denyBash("git commit -an -m x", "clustered -an is --all + --no-verify");
+denyBash("git commit -na", "clustered -na, flag after the n");
+denyBash("git commit -qn -m x", "clustered -qn");
+// The opposite error: a VALUE-taking short option swallows the rest of its own
+// cluster, so these are messages and filenames, not flags, and must stay allowed.
 allowBash("git commit -mn 'msg'", "`-mn` is the MESSAGE \"n\", not a flag — must not over-deny");
+allowBash("git commit -amn 'msg'", "`-amn` is --all plus the message \"n\"");
+allowBash("git commit -Fnotes.txt", "`-F` takes a FILE; the rest of the cluster is its name");
+allowBash("git commit -tnotes.txt", "`-t` takes a template file");
+allowBash("git commit -cnew", "`-c` takes a commit to reuse");
 allowBash("git commit --amend --no-edit", "--no-edit is not --no-verify");
 allowBash("git commit -m x", "an ordinary commit stays allowed");
 
