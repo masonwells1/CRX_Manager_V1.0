@@ -54,7 +54,9 @@ function rolesFromEnv(): RoleCred[] {
 const ALL: Role[] = ['admin', 'sales_rep', 'driver', 'applicator'];
 const AS: Role[] = ['admin', 'sales_rep'];
 const ADMIN: Role[] = ['admin'];
-const ROUTES: { path: string; roles: Role[] }[] = [
+type CrawlRoute = { path: string; roles: Role[]; intentionalRedirectTo?: string };
+
+const ROUTES: CrawlRoute[] = [
   { path: '/', roles: ALL },
   { path: '/team-board', roles: ALL },
   { path: '/notifications', roles: ALL },
@@ -96,12 +98,15 @@ const ROUTES: { path: string; roles: Role[] }[] = [
   { path: '/dispatch', roles: ['admin', 'sales_rep', 'applicator'] },
   { path: '/financial-dashboard', roles: ADMIN },
   { path: '/month-end', roles: ADMIN },
-  { path: '/integrity-report', roles: ADMIN },
-  { path: '/integrity-cleanup', roles: ADMIN },
+  // These bookmark-preserving routes deliberately redirect to a tab on their
+  // replacement page. A successful redirect is a passing behavior, not a page
+  // that failed to render.
+  { path: '/integrity-report', roles: ADMIN, intentionalRedirectTo: '/integrity' },
+  { path: '/integrity-cleanup', roles: ADMIN, intentionalRedirectTo: '/integrity' },
   { path: '/commission-payments', roles: ADMIN },
   { path: '/customer-transactions', roles: ADMIN },
-  { path: '/prepayments', roles: ADMIN },
-  { path: '/prepay-workspace', roles: ADMIN },
+  { path: '/prepayments', roles: ADMIN, intentionalRedirectTo: '/prepay' },
+  { path: '/prepay-workspace', roles: ADMIN, intentionalRedirectTo: '/prepay' },
   { path: '/accounts-payable', roles: ADMIN },
   { path: '/accounts-payable/bills', roles: ADMIN },
   { path: '/vendors', roles: ADMIN },
@@ -129,7 +134,7 @@ interface RouteResult {
   consoleErrors: string[];
   pageErrors: string[];
   failedResponses: string[];
-  status: 'ok' | 'crashed' | 'console-errors' | 'network-errors' | 'unexpected-redirect' | 'guard-ok' | 'guard-leak';
+  status: 'ok' | 'crashed' | 'console-errors' | 'network-errors' | 'unexpected-redirect' | 'intentional-redirect' | 'guard-ok' | 'guard-leak';
 }
 
 const results: RouteResult[] = [];
@@ -154,7 +159,7 @@ async function login(page: Page, email: string, password: string): Promise<void>
   }
 }
 
-async function crawlRoute(page: Page, role: Role, route: { path: string; roles: Role[] }): Promise<void> {
+async function crawlRoute(page: Page, role: Role, route: CrawlRoute): Promise<void> {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   const failedResponses: string[] = [];
@@ -194,16 +199,18 @@ async function crawlRoute(page: Page, role: Role, route: { path: string; roles: 
   let status: RouteResult['status'];
   if (!allowed) {
     status = redirected ? 'guard-ok' : 'guard-leak';
-  } else if (redirected) {
-    // Codex P2: an ALLOWED route that redirects away never rendered — a broken/missing route
-    // or an auth/profile-guard regression. Don't let it fall through to 'ok'.
-    status = 'unexpected-redirect';
   } else if (crashed) {
     status = 'crashed';
   } else if (pageErrors.length > 0 || consoleErrors.length > 0) {
     status = 'console-errors';
   } else if (failedResponses.length > 0) {
     status = 'network-errors';
+  } else if (route.intentionalRedirectTo === finalPath) {
+    status = 'intentional-redirect';
+  } else if (redirected) {
+    // Codex P2: an ALLOWED route that redirects away never rendered — a broken/missing route
+    // or an auth/profile-guard regression. Don't let it fall through to 'ok'.
+    status = 'unexpected-redirect';
   } else {
     status = 'ok';
   }
@@ -280,7 +287,7 @@ test.afterAll(() => {
     routeCount: ROUTES.length,
     summary,
     // Only the actionable results — drop the clean "ok" and "guard-ok" rows to keep it tight.
-    problems: results.filter((r) => r.status !== 'ok' && r.status !== 'guard-ok'),
+    problems: results.filter((r) => r.status !== 'ok' && r.status !== 'guard-ok' && r.status !== 'intentional-redirect'),
     results,
   };
   writeFileSync(resolve(outDir, 'crawl-latest.json'), JSON.stringify(payload, null, 2), 'utf-8');

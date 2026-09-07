@@ -27,6 +27,47 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 **What this forbids/implies:** do not re-expand always-loaded files with task procedures already routed elsewhere; do not remove a hard rule without moving or superseding it; do not present findings from a checkout behind `origin/main` as current; and do not make Mason name files, select technical implementations, or paste setup prompts. Delegation routes to `docs/workflows/AGENT_COLLABORATION.md`, while every code change routes through the lightweight coding guide so settled decisions and known issues are checked without loading the full safety rulebook. `scripts/check-agent-guidance.mjs` enforces size budgets, critical rule presence, and valid routing paths.
 
+## 2026-09-03 — accepted the Codex HIGH on the Section 9 apply window; a lock-then-check migration needs a quiesced rollout
+
+**Source:** Mason's in-chat acceptance on 2026-09-03 ("yeah accept it and write up the rule"),
+after the exact-SHA `gpt-5.6-sol` push-proof review of PR #535 at `1e1c645e9` returned
+`CODEX_PROOF_VERDICT: BLOCKERS` with one HIGH.
+
+**The finding, which is correct.** `20260831160000` (and `20260831233000`, same shape) takes
+`LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE` and *then* checks for legacy
+unbound receipts. `SHARE ROW EXCLUSIVE` does not conflict with `ACCESS SHARE`, so the old
+`reverse_receiving_record` body's opening plain `SELECT` on that table passes straight through the
+lock. A legacy reversal already in flight could therefore clear the migration's preflight, run the
+OLD body without the new closed-period, active-vendor-bill and audit-snapshot protections, delete
+the receiving record and photos, and block only at its final receipt `INSERT` — resuming after the
+migration commits and leaving an unbound receipt no later migration rechecks. A real, narrow
+data-loss and financial-integrity window.
+
+**Decision: accepted as a closed residual, not remediated.** Two reasons. It describes the
+*rollout procedure*, not the code — Codex's remedy (quiesce, drain, apply, verify, restore) is a
+procedure for an apply that already completed, and an applied migration must never be edited. And
+the window was demonstrably never entered: at both applies (2026-09-03 02:39Z and 12:47Z) there was
+zero app activity. Verified three independent ways — `idempotency_keys` had **0** rows created that
+day against 52 total whose newest was 2026-08-18 (so the table is not purged; that is real absence,
+not missing evidence), `financial_audit_log` had **0** rows since 2026-09-02 12:00Z (226 rows total,
+newest 2026-08-19 06:00:00Z), and `receiving_records`' newest row is 2026-06-10 20:58:54Z out of 130
+— nothing created after it. State that boundary precisely: a `created_at >= '2026-06-10'` query
+returns **1**, not 0, because the newest row falls on that date. Nearly three months of no receiving
+activity, let alone inside a lock window measured in seconds.
+
+**The operative rule this implies — apply it to future migrations, which is the whole point of
+accepting rather than dismissing:** when a migration replaces a function whose OLD body writes to a
+table the migration itself locks, the lock does not serialize the old body. Anything the old body
+does *before* its first conflicting write runs unprotected. Such a migration needs a genuinely
+quiesced rollout — stop the relevant traffic, drain in-flight executions, apply, verify no unbound
+receipts or orphaned deletions were produced, then restore traffic — and a concurrency proof that
+exercises a legacy call which has already passed its receipt lookup when the migration begins.
+Taking the lock earlier in the file does not fix this; only quiescing does.
+
+**What this does not license.** This is not a precedent for merging past a Codex BLOCKER. It was
+accepted because the risk was measured as unrealised and the remedy was unavailable, both recorded
+above. A BLOCKER whose risk is live, or which names a fixable defect, still parks the change.
+
 ## 2026-09-03 — invoice payment terms run from the INVOICE DATE; the UTC hole is a separate, smaller issue
 
 **Source:** Mason's decision on 2026-09-03, put to him by the orchestrator session as one question

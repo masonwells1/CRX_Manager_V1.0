@@ -1,5 +1,56 @@
 import { describe, it, expect } from 'vitest';
-import { MONEY_PRECISION_MESSAGE, parseDollarsToCents, parseDollarsToCentsSigned } from '../parseCents';
+import {
+  MONEY_PRECISION_MESSAGE,
+  isWholeCentDollarInput,
+  parseDollarsToCents,
+  parseDollarsToCentsSigned,
+} from '../parseCents';
+
+describe('isWholeCentDollarInput', () => {
+  it.each(['25', '25.5', '25.50', '25.', '.50', '0'])('accepts exact-cent input %s', (value) => {
+    expect(isWholeCentDollarInput(value)).toBe(true);
+  });
+
+  it.each(['1.999', '1e5', '1.2.3', '$1.00', '', '-1.00'])('rejects unsafe positive input %s', (value) => {
+    expect(isWholeCentDollarInput(value)).toBe(false);
+  });
+
+  it('accepts a leading minus only when the field allows negative amounts', () => {
+    expect(isWholeCentDollarInput('-10.25', { allowNegative: true })).toBe(true);
+    expect(isWholeCentDollarInput('10-25', { allowNegative: true })).toBe(false);
+  });
+
+  it('rejects an amount whose cents value exceeds exact integer range', () => {
+    // The decimal-places pattern alone bounds precision but not magnitude:
+    // "90071992547409.93" parses to 9007199254740993 cents, one past
+    // Number.MAX_SAFE_INTEGER (9007199254740991), so it cannot be represented
+    // exactly and would reach a money RPC silently rounded.
+    expect(Number.isSafeInteger(parseDollarsToCentsSigned('90071992547409.93'))).toBe(false);
+    expect(isWholeCentDollarInput('90071992547409.93')).toBe(false);
+    expect(isWholeCentDollarInput('-90071992547409.93', { allowNegative: true })).toBe(false);
+  });
+
+  it('accepts exactly the largest safe amount and rejects the next cent', () => {
+    // Number.MAX_SAFE_INTEGER is 9007199254740991 cents — i.e. $90071992547409.91,
+    // NOT .90. An earlier version of this test called .90 "the largest exactly
+    // representable amount", which left the real boundary untested and would have
+    // passed an off-by-one that rejected a legitimate maximum amount.
+    expect(parseDollarsToCentsSigned('90071992547409.91')).toBe(Number.MAX_SAFE_INTEGER);
+    expect(isWholeCentDollarInput('90071992547409.91')).toBe(true);
+    expect(isWholeCentDollarInput('90071992547409.92')).toBe(false);
+  });
+
+  // The parsers now REFUSE more than two fractional digits (null) instead of
+  // truncating, so this guard's regex is no longer the only thing standing
+  // between "1.999" and a stored 199. Pin that the two rules are independent:
+  // the guard still refuses on shape, and the parser it calls still returns a
+  // real number for the in-shape magnitude cases above, so neither rule is
+  // quietly doing the other's job.
+  it('refuses excess precision on shape, before the parser null can reach it', () => {
+    expect(isWholeCentDollarInput('1.999')).toBe(false);
+    expect(parseDollarsToCents('1.999')).toBeNull();
+  });
+});
 
 describe('parseDollarsToCents (positive-only default)', () => {
   it('parses whole dollars', () => expect(parseDollarsToCents('25')).toBe(2500));

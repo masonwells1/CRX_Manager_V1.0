@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { fingerprintIntentPayload, getIdempotencyBindingRejection } from '../lib/idempotency';
 import {
   UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
@@ -393,9 +394,19 @@ export default function PurchaseOrderDetail() {
 
     let request: ReceivePoIntent;
     let idemKey: string;
+    // Whether this submission is a RETRY of a frozen request rather than a fresh
+    // receive. `completedElsewhere` cannot answer that: an ordinary same-payload
+    // replay is returned by receive_po_items as a NORMAL success — the SQL does
+    // `RETURN v_replay -> 'result'` with no error and no replay marker
+    // (20260831233000_bind_section9_replays_to_intent.sql), so every
+    // `completedElsewhere = true` assignment sits in the RPC ERROR branch and none
+    // of them fires. Gating post-commit side effects on it alone left the common
+    // replay completely unguarded. (gpt-5.6-sol on 2ff8bdafc.)
+    let wasLockedReplay = false;
     try {
       const lockedRequest = receiveIntent.unresolvedIntent;
       if (lockedRequest) {
+        wasLockedReplay = true;
         // A committed receipt reduces the live remaining quantity. Revalidating
         // against that refreshed state would deadlock the exact replay that must
         // reconcile a lost response, so locked retries use the frozen request.
@@ -474,6 +485,25 @@ export default function PurchaseOrderDetail() {
       idemKey = receiveIntent.getIdempotencyKey();
     } catch (error) {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { tags: { source: 'durable-intent', page: 'purchase-order-detail' } });
+      // "Nothing was received" is only true for a FIRST attempt. When a frozen
+      // request is already pending, this same catch is reached by a RETRY — and the
+      // storage failure that broke the earlier post-commit cleanup is exactly what
+      // breaks preparation now, so the retry after a committed receipt is the most
+      // likely way to land here. Telling that operator nothing was received
+      // contradicts the warning they just read and pushes them to receive again from
+      // another browser or device, where no local pending intent exists, a FRESH key
+      // is minted, and the server has no way to recognise the duplicate — the one
+      // outcome this whole intent mechanism exists to prevent.
+      // (gpt-5.6-sol on 2ff8bdafc.)
+      if (wasLockedReplay) {
+        toast(
+          'error',
+          'This retry could not be prepared, so nothing further was sent — but do NOT receive these '
+          + 'goods again on another device. An earlier attempt may already have recorded them. '
+          + 'Reload this page and check the receiving history below before doing anything else.',
+        );
+        return;
+      }
       toast('error', 'Receiving could not be safely prepared. Nothing was received; refresh and try again.');
       return;
     }
@@ -514,10 +544,88 @@ export default function PurchaseOrderDetail() {
         } else {
           responseData = assertRpcResult(data, 'receive_po_items');
         }
-        await receiveIntent.resolveIntent();
+        // POST-COMMIT, and it can reject: resolveIntent() writes to IndexedDB, which
+        // fails on quota, in a private window, or against a corrupted store. The
+        // protective block below existed for exactly this hazard but started one line
+        // too late, so a cleanup rejection reported a COMMITTED receive as failed and
+        // skipped the damaged-goods alert, the PDF and the refresh.
+        //
+        // Deliberately does NOT retire or rotate the key when this fails. A failed
+        // resolve leaves the intent PENDING, which is the safe direction: a later
+        // retry replays under the SAME key and reconciles against the committed
+        // receipt. Clearing the key here is what would let a retry mint a fresh one
+        // and receive the goods a second time.
+        let cleanupFailed = false;
+        try {
+          await receiveIntent.resolveIntent();
+        } catch (resolveErr) {
+          cleanupFailed = true;
+          // Telemetry alone is NOT enough here, and treating it as enough was the
+          // defect (gpt-5.6-sol on c127bd535). Retaining the key prevents a
+          // double-receive, but it does not preserve LIVENESS: the intent stays
+          // PENDING, so handleReceive replays the frozen request and the operator
+          // cannot receive a different shipment until this clears. A silent success
+          // message would leave them to discover that as a mystery.
+          //
+          // `cleanupFailed` keeps the modal open below. It must be a LOCAL flag, not
+          // a re-read of the recovery effect's state: that effect is edge-triggered
+          // on the identity of `unresolvedIntent`, and a failed resolve leaves the
+          // very same object in place. Nothing re-runs it, so the form the earlier
+          // wording promised would "reopen" was in fact closed one line later and
+          // never came back on its own. (gpt-5.6-sol on 862cd144d.)
+          //
+          // Say what happened and what to do. Submitting the reopened form again is
+          // safe: it replays under the same key, reconciles against the receipt that
+          // already committed, and takes the completedElsewhere path rather than
+          // receiving the goods twice.
+          try {
+            Sentry.captureException(resolveErr);
+          } catch {
+            // Nothing left to report through; the receipt still stands.
+          }
+          // Do not promise the retry will WORK. Resubmitting runs the same local
+          // cleanup that just failed, so a transient rejection clears and a
+          // persistently broken store does not — and once the retry window expires,
+          // handleReceive refuses before it even attempts reconciliation. Telling the
+          // operator "submit it again to clear it" as if it always succeeds hands them
+          // an instruction that can loop forever. State the outcome that is certain
+          // (the goods are recorded), the action that may work, and the escalation
+          // when it does not. (gpt-5.6-sol on 862cd144d.)
+          toast(
+            'warning',
+            'These goods WERE received and recorded — that part is safe and will not be undone. '
+            + 'A local record could not be cleared, so the receiving form stays open showing this '
+            + 'same receipt. Submitting it again is safe and will not receive twice; it may clear '
+            + 'the record. If it keeps coming back, reload the page, and if it still persists this '
+            + 'browser cannot clear it — report it, and do not attempt other receipts on this '
+            + 'device until it is resolved.',
+          );
+        }
+        const receivingRecordIds = (responseData as { receiving_record_ids?: string[] } | null)?.receiving_record_ids || [];
+        const damagedReceiptIntentIds = receivingRecordIds.length > 0 ? receivingRecordIds : [idemKey];
 
-        // AUDIT 3.2: Notify admins about damaged/non-good items
-        if (po && !completedElsewhere) {
+        // AUDIT 3.2: Notify admins about damaged/non-good items.
+        //
+        // Everything from here to setReceiveOpen(false) is POST-COMMIT: the
+        // inventory is already recorded and resolveIntent() above has retired the
+        // retry lock. If any of it rejects, runCriticalAction reports the whole
+        // action as failed for a receive that actually succeeded, the modal stays
+        // open, and the operator's retry mints a FRESH key against the retired
+        // intent — receiving the same goods a second time. So this block must not
+        // be able to throw, whatever the notification helpers do later.
+        try {
+        // AUDIT 3.2: Notify admins about damaged/non-good items.
+        //
+        // This runs on a REPLAY too — deliberately NOT gated on
+        // `completedElsewhere`. The receipt has committed, possibly on an earlier
+        // attempt whose response never reached this tab, so the damaged goods are
+        // recorded while nobody has necessarily been told about them. Gating this
+        // on a first commit meant a retried receive silently dropped the damage
+        // alert: inventory correct, damage report never sent. Re-alerting is
+        // prevented by the receipt-derived idempotency key
+        // (`damagedReceiptIntentIds`), which falls back to this request's own key
+        // when the replay carried no receiving_record_ids.
+        if (po) {
           const damagedItems = request.itemsPayload
             .filter((ip) => ip.condition && ip.condition !== 'good')
             .map((ip) => {
@@ -529,10 +637,18 @@ export default function PurchaseOrderDetail() {
               };
             });
           if (damagedItems.length > 0) {
-            notifyDamagedReceiving(po.po_number, damagedItems, po.id);
+            await notifyDamagedReceiving(po.po_number, damagedItems, po.id, damagedReceiptIntentIds);
           }
+        }
 
-          // AUDIT: Notify admins about over-received items
+        // AUDIT: Notify admins about over-received items.
+        //
+        // This one STAYS scoped to a first, non-replay commit. Unlike the damaged
+        // notification it carries no idempotency key, so a replay would re-alert;
+        // and the "remaining" quantity it reports is derived from `items` held in
+        // memory, which the earlier commit has already moved past. On a replay it
+        // would send a duplicate alert quoting the wrong numbers.
+        if (po && !completedElsewhere && !wasLockedReplay) {
           const overItems = request.itemsPayload
             .filter((ip) => {
               const poItem = items.find((i) => i.id === ip.po_item_id);
@@ -552,10 +668,49 @@ export default function PurchaseOrderDetail() {
             notifyOverReceive(po.po_number, overItems, po.id);
           }
         }
+        } catch (notifyErr) {
+          // Never surface a post-commit notification failure as a receiving
+          // failure — see the comment above this block. The reporter itself is
+          // wrapped for the same reason logNotificationFailure wraps its own
+          // Sentry calls: an exception escaping HERE would report a committed
+          // receipt as failed, and the operator's retry mints a fresh key
+          // against the already-retired intent, receiving the goods twice.
+          // A guard whose own error path can throw is not a guard.
+          try {
+            Sentry.captureException(notifyErr);
+          } catch {
+            // Nothing left to report through; the receipt still stands.
+          }
+        }
 
-        // Offer PDF download
-        const receivingRecordIds = (responseData as { receiving_record_ids?: string[] } | null)?.receiving_record_ids;
-        if (receivingRecordIds && receivingRecordIds.length > 0 && po) {
+        // Offer PDF download.
+        //
+        // Scoped to a first, non-replay commit for the same reason as the
+        // over-receive alert above: the slip is stamped with `new Date()` and the
+        // CURRENT operator, but a replay is answering for a receipt that committed
+        // EARLIER, possibly in another tab or by another person. Regenerating it
+        // here produced a receiving document stating the wrong time and the wrong
+        // receiver — a paper record that goes in a vendor file.
+        //
+        // What is traded, stated honestly rather than as "nothing is lost", which
+        // was an overstatement (gpt-5.6-sol on 2ff8bdafc): receiving history's own
+        // download button (`handleDownloadHistoryPdf`) prints from the STORED
+        // record, so it carries the real `received_at` and `received_by_name` — but
+        // it prints ONE record per row (`items: [record]`), so a multi-line receipt
+        // cannot be reproduced there as a single grouped slip, and its product and
+        // receiver names are joined from CURRENT data rather than an at-receipt
+        // snapshot. A correct one-line-at-a-time reprint beats a single slip
+        // asserting a receiving time and a receiver that never happened, so the
+        // trade is deliberate — but it is a trade.
+        // (gpt-5.6-sol on 862cd144d.)
+        //
+        // `wasLockedReplay` is the half that actually matters in practice: the
+        // ordinary retry of an identical request comes back as a NORMAL success, so
+        // `completedElsewhere` stays false and this gate never closed for the very
+        // case it was written for. A retry of a frozen request is answering for a
+        // receipt that may already have committed, so it gets the same treatment.
+        // (gpt-5.6-sol on 2ff8bdafc.)
+        if (receivingRecordIds && receivingRecordIds.length > 0 && po && !completedElsewhere && !wasLockedReplay) {
           try {
             const { downloadReceivingPdf } = await import('../lib/receivingPdf');
             await downloadReceivingPdf({
@@ -580,8 +735,11 @@ export default function PurchaseOrderDetail() {
             // PDF download is non-critical
           }
         }
-
-        setReceiveOpen(false);
+        // Keep the form open when the local cleanup failed, so the warning toast's
+        // "the receiving form stays open showing this same receipt" is TRUE. The
+        // reopen it used to promise never happened: closing here left the operator
+        // with an expiring toast and no visible trace of the blocked intent.
+        if (!cleanupFailed) setReceiveOpen(false);
         fetchPO();
         fetchReceivingHistory();
         return completedElsewhere;
@@ -590,7 +748,23 @@ export default function PurchaseOrderDetail() {
       setLoading: setSaving,
       sentryTag: 'receive_po_items',
       onSuccess: (completedElsewhere) => {
-        if (!completedElsewhere) toast('success', 'Items received and inventory updated');
+        // `completedElsewhere` already announced itself with its own warning toast
+        // in the RPC error branch — adding a second message here would report one
+        // outcome twice.
+        if (completedElsewhere) return;
+        // "Items received and inventory updated" asserts that THIS submission
+        // performed the receipt. On a retry of a frozen request that is not
+        // established: the server returns a cached result for a receipt that may
+        // have committed on an earlier attempt, and it arrives as an ORDINARY
+        // success, so nothing above has said anything yet. Both cases end with the
+        // goods recorded exactly once — say that, which is true either way and does
+        // not credit this attempt with work it may not have done.
+        // (gpt-5.6-sol on 2ff8bdafc.)
+        if (wasLockedReplay) {
+          toast('success', 'Receiving reconciled — these goods are recorded once, and the PO is up to date.');
+          return;
+        }
+        toast('success', 'Items received and inventory updated');
       },
     });
   };
@@ -622,8 +796,8 @@ export default function PurchaseOrderDetail() {
   };
 
   const openReverseModal = (rec: ReceivingRecord) => {
-    // Codex P2 fix: reset key per receiving-record target.
-    reverseIdem.resetKey();
+    // Retain the key across modal reopen. A lost response must replay the same
+    // reversal intent; the server rejects changed input before a fresh key is minted.
     setReverseRecord(rec);
     setReverseReason('');
     setReverseOpen(true);
@@ -654,14 +828,41 @@ export default function PurchaseOrderDetail() {
       fetchPO();
       fetchReceivingHistory();
     } catch (err: unknown) {
-      toast('error', sanitizeError(err));
+      // A lost response leaves the reversal COMMITTED. The operator then edits
+      // the reason and retries, which re-sends the retained key with different
+      // input, so `check_idempotency_intent` answers IDEMPOTENCY_INTENT_MISMATCH
+      // and hands the committed receipt back in its DETAIL payload.
+      //
+      // Rotating the key on that receipt throws away the only proof the work
+      // happened AND guarantees the next attempt fails for an unrelated reason:
+      // `reverse_receiving_record` deletes the row (20260831160000...sql:195),
+      // so a fresh key hits `Receiving record not found`. Meanwhile neither
+      // refresh runs, so the already-reversed row stays on screen and clickable.
+      // Redeem the receipt instead — the same shape the receive path above uses.
+      //
+      // The record id is compared so a receipt belonging to a DIFFERENT record
+      // can never close this modal or claim this row was handled; only a receipt
+      // for the record actually on screen is allowed to stand in for success.
+      const receipt = getIdempotencyMismatchResult(err, 'reverse_receiving_record');
+      if (receipt && receipt.record_id === reverseRecord.id) {
+        reverseIdem.resetKey();
+        toast('warning', 'That reversal already completed. The PO has been refreshed instead of reversing it twice.');
+        setReverseOpen(false);
+        setReverseRecord(null);
+        fetchPO();
+        fetchReceivingHistory();
+      } else {
+        if (getIdempotencyBindingRejection(err)) {
+          reverseIdem.resetKey();
+        }
+        toast('error', sanitizeError(err));
+      }
     }
     setReversing(false);
   };
 
   const openEditModal = () => {
-    // Codex P2 fix: reset key per edit-modal open (PO payload editable).
-    savePOIdem.resetKey();
+    // Retain the key across modal reopen until success or a proven binding rejection.
     if (!po) return;
     setEditForm({
       vendor: po.vendor,
@@ -713,21 +914,31 @@ export default function PurchaseOrderDetail() {
     if (!po || !profile) return;
     setSaving(true);
 
+    // Assigned inside the try so the catch can retire the exact scope it used.
+    let saveScope = '';
     try {
       // Keep received lines in-place and preserve the exact selected Product UUID
       // for editable lines when the RPC updates this PO atomically.
       const itemsPayload = buildPurchaseOrderEditItemsPayload(editItems);
 
-      const savePOKey = savePOIdem.getKey();
+      const poPayload = {
+        vendor: editForm.vendor,
+        status: editForm.status,
+        submitted_date: editForm.submitted_date || null,
+        expected_delivery_date: editForm.expected_delivery_date || null,
+        notes: editForm.notes || null,
+      };
+      // save_purchase_order only checks that a cached receipt belongs to the same
+      // PO id — it binds neither the actor nor the edited payload (verified
+      // against the live catalog; no 20260831 migration adds that binding). A
+      // key retained across a reopened edit modal would therefore let an EDITED
+      // retry replay the earlier receipt and report a save that never happened.
+      // Scope the key to the exact edit so changed content mints a fresh one.
+      saveScope = `save-po:${id}:${fingerprintIntentPayload([poPayload, itemsPayload])}`;
+      const savePOKey = savePOIdem.getKeyFor(saveScope);
       const { data, error } = await supabase.rpc('save_purchase_order', {
         p_po_id: id!,
-        p_po_payload: {
-          vendor: editForm.vendor,
-          status: editForm.status,
-          submitted_date: editForm.submitted_date || null,
-          expected_delivery_date: editForm.expected_delivery_date || null,
-          notes: editForm.notes || null,
-        },
+        p_po_payload: poPayload,
         p_items: itemsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: savePOKey,
@@ -735,13 +946,18 @@ export default function PurchaseOrderDetail() {
 
       if (error) throw error;
       assertRpcResult(data, 'save_purchase_order');
-      savePOIdem.resetKey();
+      savePOIdem.resetKeyFor(saveScope);
 
       toast('success', 'Purchase order updated');
       setEditOpen(false);
       fetchPO();
     } catch (err: unknown) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        if (saveScope) savePOIdem.resetKeyFor(saveScope);
+        toast('warning', 'That retry belongs to a different purchase-order edit. Nothing was changed; retry with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setSaving(false);
   };
@@ -769,7 +985,12 @@ export default function PurchaseOrderDetail() {
       toast('success', `Purchase order ${po.po_number} submitted`);
       fetchPO();
     } catch (err: unknown) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        resetSubmitPOKey();
+        toast('warning', 'That retry belongs to a different purchase-order submission. Nothing was submitted; retry with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setSaving(false);
   };
@@ -778,8 +999,14 @@ export default function PurchaseOrderDetail() {
     if (!po || !profile) return;
     setSaving(true);
 
+    // cancel_purchase_order replays on the KEY ALONE — it checks neither the PO
+    // id nor the reason (verified against the live catalog; no 20260831
+    // migration adds that binding). A key retained across a reopened dialog on a
+    // DIFFERENT purchase order would replay this receipt and report that order
+    // cancelled when nothing happened. Scope the key to the exact cancellation.
+    const cancelScope = `cancel-po:${id}:${fingerprintIntentPayload([cancelReason || 'Cancelled'])}`;
     try {
-      const cancelKey = cancelPOIdem.getKey();
+      const cancelKey = cancelPOIdem.getKeyFor(cancelScope);
       const { data, error } = await supabase.rpc('cancel_purchase_order', {
         p_po_id: id!,
         p_reason: cancelReason || 'Cancelled',
@@ -789,14 +1016,19 @@ export default function PurchaseOrderDetail() {
 
       if (error) throw error;
       assertRpcResult(data, 'cancel_purchase_order');
-      cancelPOIdem.resetKey();
+      cancelPOIdem.resetKeyFor(cancelScope);
 
       toast('success', 'Purchase order cancelled');
       setCancelOpen(false);
       setCancelReason('');
       fetchPO();
     } catch (err: unknown) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        cancelPOIdem.resetKeyFor(cancelScope);
+        toast('warning', 'That retry belongs to a different cancellation. The purchase order was not changed; retry with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setSaving(false);
   };
@@ -862,7 +1094,7 @@ export default function PurchaseOrderDetail() {
                 Edit
               </Button>
               {canManagePO && (po.status === 'draft' || po.status === 'submitted') && (
-                <Button variant="danger" icon={<Ban className="w-4 h-4" />} onClick={() => { cancelPOIdem.resetKey(); setCancelOpen(true); }}>
+                <Button variant="danger" icon={<Ban className="w-4 h-4" />} onClick={() => setCancelOpen(true)}>
                   Cancel PO
                 </Button>
               )}

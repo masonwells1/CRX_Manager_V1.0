@@ -21,6 +21,41 @@ export function generateIdempotencyKey(operation: string, userId: string): strin
   return `${operation}:${userId}:${uuid}`;
 }
 
+/**
+ * Deterministic fingerprint of the payload a retained key was minted for.
+ *
+ * useIdempotencyKey retains one key per intent scope so a lost response can be
+ * replayed safely. That is only correct while the scope still identifies the
+ * SAME work: if a scope is built from position and name alone, a later action
+ * carrying different content reuses the earlier key and replays the earlier
+ * receipt. Appending this fingerprint to the scope makes changed content mint a
+ * fresh key, while a true retry of unchanged content keeps replaying.
+ *
+ * FNV-1a is a local lookup hash, not a security boundary. This mirrors
+ * pendingBulkPOIntentStorageKey in src/lib/bulkPOImportRetry.ts, which uses the
+ * same hash for the same local-identity purpose.
+ *
+ * KNOWN LIMIT — do not read more protection into this than it gives. For RPCs
+ * that bind the actor and payload server-side, this is only a local convenience
+ * and the server remains the authoritative duplicate check. But several call
+ * sites deliberately target RPCs that replay on the KEY ALONE — `adjust_inventory`
+ * and `retire_inventory_item` say so in their own comments (live catalog:
+ * key-only check_idempotency, no actor/payload binding). For those, this 64-bit
+ * digest is the ONLY thing separating two different payloads, and some of the
+ * fingerprinted payloads include operator-entered free text (e.g. `adjustNote`).
+ * Accidental collision is negligible at these volumes; a deliberate one is not
+ * structurally prevented. Do not widen this function's use to a new key-only RPC
+ * without either a collision-resistant digest or server-side payload binding.
+ */
+export function fingerprintIntentPayload(value: unknown): string {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(JSON.stringify(value) ?? 'undefined')) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
 type IdempotencyMismatchDetail = {
   operation?: string;
   result?: Record<string, unknown>;

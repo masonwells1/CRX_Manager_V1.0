@@ -2277,6 +2277,7 @@ export type Database = {
           count_number: string
           created_at: string
           id: string
+          item_revision: number
           initiated_by: string
           notes: string | null
           started_at: string
@@ -2289,6 +2290,7 @@ export type Database = {
           count_number: string
           created_at?: string
           id?: string
+          item_revision?: number
           initiated_by?: string
           notes?: string | null
           started_at?: string
@@ -2301,6 +2303,7 @@ export type Database = {
           count_number?: string
           created_at?: string
           id?: string
+          item_revision?: number
           initiated_by?: string
           notes?: string | null
           started_at?: string
@@ -11674,6 +11677,7 @@ export type Database = {
         Args: {
           p_completed_by?: string
           p_cycle_count_id: string
+          p_expected_item_revision?: number
           p_idempotency_key?: string
         }
         Returns: undefined
@@ -12032,10 +12036,12 @@ export type Database = {
           p_adjustment_cents?: number
           p_bill_date?: string
           p_bill_number?: string
+          p_confirm_po_overage?: boolean
           p_due_date?: string
           p_idempotency_key?: string
           p_notes?: string
           p_payment_terms?: string
+          p_po_overage_reason?: string
           p_purchase_order_id?: string
           p_subtotal_cents?: number
           p_vendor_id: string
@@ -14194,9 +14200,11 @@ export type Database = {
           p_adjustment_cents: number
           p_bill_date: string
           p_bill_id: string
+          p_confirm_po_overage?: boolean
           p_due_date: string
           p_idempotency_key?: string
           p_notes: string
+          p_po_overage_reason?: string
           p_subtotal_cents: number
         }
         Returns: Json

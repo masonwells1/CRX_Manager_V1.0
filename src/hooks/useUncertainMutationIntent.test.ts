@@ -96,6 +96,105 @@ describe('useUncertainMutationIntent', () => {
     expect(result.current.isIntentLocked).toBe(true);
   });
 
+  it('reports a retained intent to the handler that is still running, not just to the next render', async () => {
+    // Models NewVendorBill's PO-overage branch: one handler calls beginIntent(),
+    // gets a definitive rejection, calls classifyFailure(), and must then decide
+    // whether the pending record survived — all before React re-renders. Reading
+    // the unresolvedIntent STATE field there returns the render-time value (null),
+    // so the survivor is invisible and the confirmation retry silently drops its
+    // p_confirm_po_overage fields. getUnresolvedIntent() reads the ref instead.
+    const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>({
+      operation: 'create_vendor_bill',
+      userId: 'admin-same-tick-read',
+      surface: 'new-vendor-bill',
+      scope: 'bill-same-tick-read',
+    }));
+
+    // Captured at the render that STARTS the save, exactly like a component closure.
+    const handler = result.current;
+    expect(handler.unresolvedIntent).toBeNull();
+
+    let staleStateRead: { amount: number } | null = null;
+    let currentRefRead: { amount: number } | null = null;
+    await act(async () => {
+      await handler.beginIntent({ amount: 100 });
+      // Break durable claim release so classifyFailure RETAINS the record, which
+      // is the "another claimant still holds it" case the branch must detect.
+      Object.defineProperty(globalThis, 'indexedDB', {
+        configurable: true,
+        writable: true,
+        value: undefined,
+      });
+      await handler.classifyFailure({ code: '23514', message: 'validation failed' });
+      staleStateRead = handler.unresolvedIntent;
+      currentRefRead = handler.getUnresolvedIntent();
+    });
+
+    // The state field is stale inside the handler — this is the trap, asserted so
+    // nobody "simplifies" the call site back to it.
+    expect(staleStateRead).toBeNull();
+    // The accessor sees the survivor immediately.
+    expect(currentRefRead).toEqual({ amount: 100 });
+  });
+
+  // Why NewVendorBill must NOT offer a reason prompt while a claim survives.
+  // This is the vendor-bill shape at the layer that owns the behavior: once a
+  // pending record exists, beginIntent() returns it VERBATIM and ignores the
+  // intent it was handed. So the confirmed retry re-sends the ORIGINAL payload —
+  // p_confirm_po_overage stays false and p_po_overage_reason never appears — and
+  // the server repeats the identical refusal. A reason prompt there can only loop.
+  it('drops the overage confirmation from a retry while a pending record survives', async () => {
+    type BillArgs = { p_bill_number: string; p_confirm_po_overage: boolean; p_po_overage_reason?: string };
+    const { result } = renderHook(() => useUncertainMutationIntent<BillArgs>({
+      operation: 'create_vendor_bill',
+      userId: 'admin-overage-retry',
+      surface: 'new-vendor-bill',
+      scope: 'bill-overage-retry',
+    }));
+
+    // First attempt: no confirmation, as the page sends it before the server refuses.
+    await act(async () => {
+      await result.current.beginIntent({ p_bill_number: 'VB-1', p_confirm_po_overage: false });
+    });
+
+    // The pending record is still there — which is exactly the state the page is in
+    // when classifyFailure() cannot delete it because a peer tab holds a live claim.
+    // The cause of survival does not matter here; its consequence does.
+    expect(result.current.getUnresolvedIntent()).not.toBeNull();
+
+    // The confirmed retry, exactly as the page performs it. handleSave(true, reason)
+    // builds confirmed args, but the call site is
+    //   unresolvedIntent ? beginIntent(unresolvedIntent) : beginIntent({ ...fresh })
+    // and on the retry render unresolvedIntent IS set — so the confirmed args are
+    // computed and then discarded before the hook ever sees them.
+    // Build the CONFIRMED args the page computes on the retry, then apply the
+    // page's own selection expression to them. This test previously passed the
+    // already-unconfirmed survivor straight to beginIntent() and asserted it came
+    // back unconfirmed — tautological, and green even if the page stopped
+    // building confirmed args altogether. The defect is that the selection
+    // discards them, so the selection is what has to be exercised.
+    const confirmedArgs: BillArgs = {
+      p_bill_number: 'VB-1',
+      p_confirm_po_overage: true,
+      p_po_overage_reason: 'Freight surcharge approved by the owner',
+    };
+    const survivor = result.current.getUnresolvedIntent() as BillArgs | null;
+    // Verbatim shape of the call site: a surviving intent wins over fresh args.
+    const sentToHook = survivor ?? confirmedArgs;
+    // The confirmation the operator just supplied never reaches the hook at all.
+    expect(sentToHook).not.toBe(confirmedArgs);
+
+    let retried!: BillArgs;
+    await act(async () => {
+      retried = await result.current.beginIntent(sentToHook);
+    });
+
+    // The confirmation is gone: this retry is byte-identical to the refused one.
+    expect(retried.p_confirm_po_overage).toBe(false);
+    expect(retried.p_po_overage_reason).toBeUndefined();
+    expect(retried).toEqual({ p_bill_number: 'VB-1', p_confirm_po_overage: false });
+  });
+
   it('keeps an intent mismatch locked until the caller reconciles the receipt', async () => {
     const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>());
     await act(async () => result.current.beginIntent({ amount: 100 }));

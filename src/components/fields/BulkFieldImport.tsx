@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Upload,
   CheckCircle,
@@ -44,6 +44,8 @@ import {
   type AssignableField,
 } from '../../lib/fieldImportCustomers';
 import type { Customer, ParsedImportField } from '../../types';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { fingerprintIntentPayload } from '../../lib/idempotency';
 
 
 interface BulkFieldImportProps {
@@ -125,6 +127,9 @@ function shortServerReason(status: number | undefined, message: string): string 
 export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
+  const saveFieldIdem = useIdempotencyKey('save_field', profile?.id || '');
+  const setBoundaryIdem = useIdempotencyKey('set_field_boundary', profile?.id || '');
+  const setOverrideAcresIdem = useIdempotencyKey('set_field_override_acres', profile?.id || '');
 
   // Step tracking
   const [step, setStep] = useState<Step>(1);
@@ -153,6 +158,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // Step 6: Upload progress
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
+  const uploadInFlightRef = useRef(false);
 
   // Step 7: Results
   // `created` counts every row that reached the database, INCLUDING rows counted as failed
@@ -183,6 +189,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   };
 
   const handleClose = () => {
+    // The import pipeline is intentionally not cancellable once it starts:
+    // closing would let the old session mutate a newly opened dialog and call
+    // onSuccess for the wrong session. Keep every dismissal path disabled
+    // until the current upload has reached its terminal result screen.
+    if (uploadInFlightRef.current) return;
     // Reset all state
     setStep(1);
     setFiles([]);
@@ -453,9 +464,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // ─── Step 6: Upload ─────────────────────────────────────────────────
 
   const handleUpload = async () => {
+    if (!profile || uploadInFlightRef.current) return;
     const validFields = parsedFields.filter((f) => f.isValid);
     if (validFields.length === 0) return;
 
+    uploadInFlightRef.current = true;
     setUploading(true);
     setUploadProgress({ current: 0, total: validFields.length });
 
@@ -470,7 +483,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    for (const pf of validFields) {
+    for (const [fieldIndex, pf] of validFields.entries()) {
       // Once the request is sent the outcome is unknown until the server tells us
       // otherwise, so this starts pessimistic the moment save_field is called.
       let saveOutcome: 'not-sent' | 'committed' | 'rejected' | 'unknown' = 'not-sent';
@@ -503,13 +516,30 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           is_active: true,
         };
 
+        // The ordered import row keeps every retry of THIS row on the same
+        // server-side intent, while a neighboring row gets a distinct key.
+        // Position and name alone are not enough to identify the work: a lost
+        // save_field response leaves this key cached (handleClose resets the
+        // modal's state but not the hook's scoped keys, and Fields.tsx keeps
+        // the component mounted), so a later import carrying the same row
+        // index, customer and field name but a DIFFERENT boundary would replay
+        // the earlier field_id and overwrite that existing field instead of
+        // creating the requested one. Fingerprinting the payload the key was
+        // minted for makes changed content mint a fresh key, while a true retry
+        // of unchanged content still replays.
+        const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}:${fingerprintIntentPayload([
+          fieldPayload,
+          pf.full_boundary_geojson,
+          pf.stated_acres ?? null,
+        ])}`;
+
         saveOutcome = 'unknown';
         const { data: fieldId, error: saveError, status: saveStatus } = await supabase.rpc('save_field', {
           p_field_id: (null as string | null) as string,
           p_field_payload: fieldPayload,
           p_billing_defaults: [],
-          p_performed_by: profile!.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_performed_by: profile.id,
+          p_idempotency_key: saveFieldIdem.getKeyFor(intentScope),
         });
 
         if (saveError) {
@@ -542,8 +572,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             const { data: bData, error: bErr, status: bStatus } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
               p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
-              p_performed_by: profile!.id,
-              p_idempotency_key: crypto.randomUUID(),
+              p_performed_by: profile.id,
+              p_idempotency_key: setBoundaryIdem.getKeyFor(intentScope),
             });
             if (bErr) {
               if (rpcDefinitelyRolledBack(bStatus, bErr)) boundaryUnknown = false;
@@ -585,8 +615,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                   const { data: ovData, error: ovErr } = await supabase.rpc('set_field_override_acres', {
                     p_field_id: fieldId,
                     p_override_acres: pf.stated_acres,
-                    p_performed_by: profile!.id,
-                    p_idempotency_key: crypto.randomUUID(),
+                    p_performed_by: profile.id,
+                    p_idempotency_key: setOverrideAcresIdem.getKeyFor(intentScope),
                   });
                   if (ovErr) throw ovErr;
                   assertRpcResult(ovData, 'set_field_override_acres');
@@ -597,6 +627,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               }
             }
             success++;
+            // The full row pipeline completed, so a later import attempt is
+            // new intent. Do not rotate keys before the boundary/override
+            // steps finish or a lost response could create a duplicate field.
+            saveFieldIdem.resetKeyFor(intentScope);
+            setBoundaryIdem.resetKeyFor(intentScope);
+            setOverrideAcresIdem.resetKeyFor(intentScope);
           }
         }
       } catch (err: unknown) {
@@ -642,6 +678,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     setResults({ success, failed, created, unknownOutcome, errors, warnings });
     setStep(7);
     setUploading(false);
+    // main moved the parent refresh above (it now awaits onSuccess() for every row that
+    // reached the database, including unknown outcomes), so the old trailing onSuccess()
+    // call is gone. The in-flight latch still has to clear here or handleUpload/handleClose
+    // stay blocked for the life of the modal.
+    uploadInFlightRef.current = false;
   };
 
   // ─── Navigation ─────────────────────────────────────────────────────
@@ -716,7 +757,14 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // ─── Render ─────────────────────────────────────────────────────────
 
   return (
-    <Modal open={open} onClose={handleClose} title="Import" accent="Fields" maxWidth="max-w-5xl">
+    <Modal
+      open={open}
+      onClose={handleClose}
+      closeDisabled={uploading}
+      title="Import"
+      accent="Fields"
+      maxWidth="max-w-5xl"
+    >
       <div className="space-y-4">
         {/* Step indicator */}
         <div className="flex items-center gap-1">
@@ -1124,7 +1172,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             )}
           </div>
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={handleClose}>
+            <Button variant="secondary" onClick={handleClose} disabled={uploading}>
               {step === 7 ? 'Close' : 'Cancel'}
             </Button>
             {step < 6 && (

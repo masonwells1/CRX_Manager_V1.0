@@ -106,6 +106,8 @@ migration is **applied live** and its schema marker exists. The schema-shape evi
 grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded, not promoted into post-apply
 proof.
 
+**PR #535 gauntlet chain — all six migrations APPLIED LIVE 2026-09-03.** `20260831160000`, `20260831161000`, `20260831162000` and `20260831212415` applied as ledger versions `20260903023935`, `20260903024550`, `20260903025249` and `20260903025854`; `20260831233000` and `20260831235900` applied as `20260903124710` and `20260903124741`. Live ledger **at that point: 992 rows** — the 2026-09-03 14:01 UTC pre-F06 boundary, superseded by the 993-row 15:34 UTC capture above and not to be used as the current figure. Each went through the full migration-apply gate with Mason's explicit in-chat approval and clean Codex drift + RLS reviews. Post-apply verification against the live catalog: `update_vendor_bill` is a single 9-argument overload accepting `p_confirm_po_overage`/`p_po_overage_reason`; `cycle_counts.item_revision` exists; `trg_bump_cycle_count_item_revision` is present on `cycle_count_items` and its body carries the `CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN` guard. **The frontend half of PR #535 has not merged yet** — until it does, `main` calls none of the new parameters, which is why live is healthy with the database ahead of the deployed app.
+
 The prior header readings are retained as provenance: 977 rows / `20260826205935` / authored
 high-water `20260826150000` after the COMMENT-only apply, and before that 976 rows /
 `20260825142708` / authored high-water `20260820120000`. They are historical and must not be used

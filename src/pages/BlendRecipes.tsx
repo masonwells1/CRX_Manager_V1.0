@@ -1,4 +1,4 @@
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Plus, Trash2, Copy } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -14,6 +14,7 @@ import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { fingerprintIntentPayload } from '../lib/idempotency';
 import { Sentry } from '../lib/sentry';
 import UnitSelect from '../components/blendtickets/UnitSelect';
 import { blockedUnitSaveMessage, isKnownUnit, type UnitLoadState } from '../lib/units';
@@ -62,6 +63,7 @@ export default function BlendRecipes() {
   const { profile } = useAuth();
   const { toast } = useToast();
   const saveRecipeIdem = useIdempotencyKey('save_blend_recipe', profile?.id || '');
+  const duplicateRecipeIdem = useIdempotencyKey('save_blend_recipe', profile?.id || '');
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   // Item units are a PICKER, not free text, so a recipe can no longer carry a unit the
@@ -87,6 +89,8 @@ export default function BlendRecipes() {
   });
   const [editItems, setEditItems] = useState<EditItem[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<RecipeRow | null>(null);
+  const [duplicateBusy, setDuplicateBusy] = useState<Record<string, boolean>>({});
+  const duplicateInFlightRef = useRef(new Set<string>());
 
   const fetchRecipes = useCallback(async () => {
     setLoading(true);
@@ -328,7 +332,13 @@ export default function BlendRecipes() {
   };
 
   const handleDuplicate = async (recipe: RecipeRow) => {
-    await runCriticalAction({
+    const scope = `duplicate:${recipe.id}`;
+    if (duplicateInFlightRef.current.has(scope)) return;
+    duplicateInFlightRef.current.add(scope);
+    setDuplicateBusy((prev) => ({ ...prev, [recipe.id]: true }));
+
+    try {
+      await runCriticalAction({
       action: async () => {
         // Duplicate via save_blend_recipe (atomic recipe+items) rather than a
         // direct blend_recipe_items insert. The RPC is backward-compatible with
@@ -343,31 +353,57 @@ export default function BlendRecipes() {
           .order('sort_order');
         if (itemsErr) throw itemsErr;
 
+        const duplicateItems = (items as RecipeItemDbRow[] | null || []).map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit: item.unit,
+          rate_per_acre: item.rate_per_acre,
+          price_per_unit_cents: item.price_per_unit_cents ?? 0,
+          notes: item.notes ?? null,
+        }));
+
+        // Keep the same key for a lost-response retry of this exact source
+        // recipe. A different row gets its own scoped intent and cannot replay
+        // this duplicate's cached result.
+        //
+        // Bind the key to the fetched SNAPSHOT, not just the recipe id: this
+        // page is not remounted between duplications, so a recipe that is
+        // edited and duplicated again would otherwise reuse the cached key,
+        // let save_blend_recipe replay key-only, and report success while no
+        // copy of the revised recipe was ever created.
+        const intentScope = `${scope}:${fingerprintIntentPayload([
+          recipe.name,
+          recipe.recipe_type,
+          recipe.description ?? null,
+          recipe.crop_type ?? null,
+          recipe.timing ?? null,
+          duplicateItems,
+        ])}`;
+
         const { data, error } = await supabase.rpc('save_blend_recipe', {
           p_recipe_id: null as unknown as string,
           p_name: `${recipe.name} (Copy)`,
           p_recipe_type: recipe.recipe_type,
-          p_items: (items as RecipeItemDbRow[] | null || []).map((item) => ({
-            product_id: item.product_id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit: item.unit,
-            rate_per_acre: item.rate_per_acre,
-            price_per_unit_cents: item.price_per_unit_cents ?? 0,
-            notes: item.notes ?? null,
-          })),
+          p_items: duplicateItems,
           p_description: recipe.description || undefined,
           p_crop_type: recipe.recipe_type === 'crop_specific' ? recipe.crop_type || undefined : undefined,
           p_timing: recipe.recipe_type === 'crop_specific' ? recipe.timing || undefined : undefined,
+          p_idempotency_key: duplicateRecipeIdem.getKeyFor(intentScope),
         });
         if (error) throw error;
         assertRpcResult(data, 'save_blend_recipe');
+        duplicateRecipeIdem.resetKeyFor(intentScope);
       },
       toast,
       successMessage: 'Recipe duplicated',
       sentryTag: 'duplicate_recipe',
       onSuccess: () => fetchRecipes(),
-    });
+      });
+    } finally {
+      duplicateInFlightRef.current.delete(scope);
+      setDuplicateBusy((prev) => ({ ...prev, [recipe.id]: false }));
+    }
   };
 
   const handleDelete = (recipe: RecipeRow) => {
@@ -470,6 +506,7 @@ export default function BlendRecipes() {
           <button
             onClick={(e) => { e.stopPropagation(); handleDuplicate(row); }}
             title="Duplicate"
+            disabled={Boolean(duplicateBusy[row.id])}
             className="p-1.5 text-gray-400 hover:text-crx-green rounded"
           >
             <Copy className="w-4 h-4" />

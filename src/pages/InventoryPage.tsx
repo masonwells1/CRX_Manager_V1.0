@@ -21,7 +21,7 @@ import {
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
   useUncertainMutationIntent,
 } from '../hooks/useUncertainMutationIntent';
-import { getIdempotencyMismatchResult } from '../lib/idempotency';
+import { fingerprintIntentPayload, getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
@@ -368,9 +368,7 @@ export default function InventoryPage() {
   };
 
   const openHoldModal = () => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset page-scoped key on each open
-    // so different products/customers can't share an idempotency intent.
-    createHoldIdem.resetKey();
+    // Retain the key across modal reopen until success or a proven binding rejection.
     fetchProducts();
     fetchCustomers();
     setHoldProductId('');
@@ -391,10 +389,30 @@ export default function InventoryPage() {
   const [forceHoldOpen, setForceHoldOpen] = useState(false);
   const [forceHoldServerMessage, setForceHoldServerMessage] = useState('');
 
+  // create_inventory_hold replays on the KEY ALONE — it binds neither the actor
+  // nor the payload (verified against the live catalog; none of the 20260831
+  // migrations add that binding either). So a retained page-scoped key is only
+  // safe while it identifies the exact hold it was minted for. Scoping it to the
+  // payload keeps a genuine lost-response retry replaying while a different
+  // product, customer, quantity or expiry mints a fresh key — the protection the
+  // 2026-05-16 per-open resetKey() provided, without discarding real retries.
+  const holdIntentScope = (force: boolean, forceReason: string | null) =>
+    `hold:${fingerprintIntentPayload([
+      holdProductId,
+      holdCustomerId || null,
+      parseFloat(holdQty),
+      'manual',
+      holdExpires || null,
+      holdNotes || null,
+      force,
+      forceReason ?? null,
+    ])}`;
+
   const callCreateHoldRpc = async (force: boolean, forceReason: string | null) => {
     if (!profile) return;
     const qty = parseFloat(holdQty);
-    const idemKey = createHoldIdem.getKey();
+    const scope = holdIntentScope(force, forceReason);
+    const idemKey = createHoldIdem.getKeyFor(scope);
     const { data, error } = await supabase.rpc('create_inventory_hold', {
       p_product_id: holdProductId,
       p_customer_id: (holdCustomerId || null) as string,
@@ -409,7 +427,7 @@ export default function InventoryPage() {
     });
     if (error) throw error;
     assertRpcResult(data, 'create_inventory_hold');
-    createHoldIdem.resetKey();
+    createHoldIdem.resetKeyFor(scope);
   };
 
   const handleCreateHold = async () => {
@@ -461,7 +479,12 @@ export default function InventoryPage() {
           toast('error', sanitizeError(err));
         }
       } else {
-        toast('error', sanitizeError(err));
+        if (getIdempotencyBindingRejection(err)) {
+          createHoldIdem.resetKeyFor(holdIntentScope(false, null));
+          toast('warning', 'That retry belongs to a different inventory hold. No hold was created; retry with a fresh key.');
+        } else {
+          toast('error', sanitizeError(err));
+        }
       }
     } finally {
       setCreatingHold(false);
@@ -478,7 +501,12 @@ export default function InventoryPage() {
       fetchInventory();
       fetchHolds();
     } catch (err: unknown) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        createHoldIdem.resetKeyFor(holdIntentScope(true, reason));
+        toast('warning', 'That retry belongs to a different inventory hold. No hold was created; retry with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     } finally {
       setCreatingHold(false);
     }
@@ -640,14 +668,17 @@ export default function InventoryPage() {
           p_performed_by: request.performedBy,
           p_idempotency_key: idemKey,
         });
+        let completedElsewhere = false;
         if (error) {
           const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
           const recordIds = receipt?.receiving_record_ids;
           if (Array.isArray(recordIds) && recordIds.length > 0 && recordIds.every((id) => typeof id === 'string')) {
+            completedElsewhere = true;
             toast('warning', 'The earlier receipt already completed. Refreshing inventory instead of receiving it twice.');
           } else {
             const disposition = await receivePoIntent.classifyFailure(error);
             if (disposition === 'resolved') {
+              completedElsewhere = true;
               toast('warning', 'This receipt completed in another tab. Refreshing inventory instead of receiving it twice.');
             } else if (disposition === 'definitive') {
               throw error;
@@ -659,12 +690,12 @@ export default function InventoryPage() {
           assertRpcResult(data, 'receive_po_items');
         }
         await receivePoIntent.resolveIntent();
-        return request.quantity;
+        return { quantity: request.quantity, completedElsewhere };
       },
       toast,
       sentryTag: 'receive_po_items',
-      onSuccess: (receivedQuantity) => {
-        toast('success', `Received ${receivedQuantity} units`);
+      onSuccess: ({ quantity: receivedQuantity, completedElsewhere }) => {
+        if (!completedElsewhere) toast('success', `Received ${receivedQuantity} units`);
         setReceiveOpen(false);
         setReceiveQty('');
         setReceivePOItemId('');
@@ -683,7 +714,13 @@ export default function InventoryPage() {
 
     await runCriticalAction({
       action: async () => {
-        const idemKey = adjustIdem.getKey();
+        // adjust_inventory replays on the key alone (live catalog: key-only
+        // check_idempotency, no actor/payload binding, and no 20260831 migration
+        // adds one). Scope the retained key to the exact row and delta so a
+        // reopened dialog on a DIFFERENT item cannot replay this receipt and
+        // report a stock change that never happened.
+        const scope = `adjust:${fingerprintIntentPayload([selectedId, qty, adjustNote || null])}`;
+        const idemKey = adjustIdem.getKeyFor(scope);
         const { data, error } = await supabase.rpc('adjust_inventory', {
           p_inventory_id: selectedId,
           p_delta: qty,
@@ -691,9 +728,12 @@ export default function InventoryPage() {
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
-        if (error) throw error;
+        if (error) {
+          if (getIdempotencyBindingRejection(error)) adjustIdem.resetKeyFor(scope);
+          throw error;
+        }
         assertRpcResult(data, 'adjust_inventory');
-        adjustIdem.resetKey();
+        adjustIdem.resetKeyFor(scope);
       },
       toast,
       successMessage: `Adjusted by ${qty} units`,
@@ -713,8 +753,7 @@ export default function InventoryPage() {
   // order/delivery between validation and delete. retire_inventory_item RPC
   // does it all in one transaction with FOR UPDATE on the inventory row.
   const handleDelete = (inventoryId: string) => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset retire key per inventory target.
-    retireIdem.resetKey();
+    // Retain the key across confirmation reopen until success or a proven binding rejection.
     setDeleteConfirmId(inventoryId);
   };
 
@@ -723,15 +762,23 @@ export default function InventoryPage() {
 
     await runCriticalAction({
       action: async () => {
-        const idemKey = retireIdem.getKey();
+        // retire_inventory_item replays on the key alone (live catalog: key-only
+        // check_idempotency, no target binding). Scope to the row being retired
+        // so a reopened confirmation on a DIFFERENT item cannot replay this
+        // receipt and report a deletion that never happened.
+        const scope = `retire:${fingerprintIntentPayload([deleteConfirmId])}`;
+        const idemKey = retireIdem.getKeyFor(scope);
         const { data, error } = await supabase.rpc('retire_inventory_item', {
           p_inventory_id: deleteConfirmId,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
-        if (error) throw error;
+        if (error) {
+          if (getIdempotencyBindingRejection(error)) retireIdem.resetKeyFor(scope);
+          throw error;
+        }
         assertRpcResult(data, 'retire_inventory_item');
-        retireIdem.resetKey();
+        retireIdem.resetKeyFor(scope);
       },
       toast,
       successMessage: 'Inventory item deleted',
@@ -975,7 +1022,7 @@ export default function InventoryPage() {
                   <ArrowDownToLine className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); adjustIdem.resetKey(); setSelectedId(row.id); setAdjustOpen(true); }}
+                  onClick={(e) => { e.stopPropagation(); setSelectedId(row.id); setAdjustOpen(true); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Manual Adjustment"
                   aria-label="Manual Adjustment"
@@ -1216,7 +1263,6 @@ export default function InventoryPage() {
           }}
           onReceive={openReceiveModal}
           onAdjust={(id) => {
-            adjustIdem.resetKey();
             setSelectedId(id);
             setAdjustOpen(true);
           }}

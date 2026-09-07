@@ -14,7 +14,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
-import { exportToCSV, fmtCSV } from '../lib/csvExport';
+import { exportToCSV } from '../lib/csvExport';
 import { formatCents as fmt } from '../lib/money';
 import type { APAgingRow, APDashboardSummary } from '../types';
 
@@ -232,12 +232,12 @@ export default function AccountsPayable() {
                     agingData as unknown as Record<string, unknown>[],
                     [
                       { key: 'vendor_name', header: 'Vendor' },
-                      { key: 'current_amount', header: 'Current (Not Due)', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'days_1_30', header: '1-30 Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'days_31_60', header: '31-60 Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'days_61_90', header: '61-90 Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'over_90', header: '90+ Days Past Due', format: (v) => fmtCSV((v as number) / 100) },
-                      { key: 'total_outstanding', header: 'Total', format: (v) => fmtCSV((v as number) / 100) },
+                      { key: 'current_amount', header: 'Current (Not Due)', format: (v) => fmt(Number(v)) },
+                      { key: 'days_1_30', header: '1-30 Days Past Due', format: (v) => fmt(Number(v)) },
+                      { key: 'days_31_60', header: '31-60 Days Past Due', format: (v) => fmt(Number(v)) },
+                      { key: 'days_61_90', header: '61-90 Days Past Due', format: (v) => fmt(Number(v)) },
+                      { key: 'over_90', header: '90+ Days Past Due', format: (v) => fmt(Number(v)) },
+                      { key: 'total_outstanding', header: 'Total', format: (v) => fmt(Number(v)) },
                       { key: 'bill_count', header: 'Bills' },
                     ],
                     'ap_aging_report'

@@ -12,12 +12,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Use vi.hoisted so mock variables are available when vi.mock factory runs (hoisted above imports)
-const { mockRpc, mockInsert, mockSelect, mockEq } = vi.hoisted(() => ({
-  mockRpc: vi.fn().mockResolvedValue({ data: null, error: null }),
+const { mockRpc, mockRpcThrowOnError, mockInsert, mockSelect, mockEq } = vi.hoisted(() => ({
+  mockRpcThrowOnError: vi.fn().mockResolvedValue({ data: null, error: null }),
+  mockRpc: vi.fn(),
   mockInsert: vi.fn().mockResolvedValue({ data: null, error: null }),
   mockSelect: vi.fn().mockReturnThis(),
   mockEq: vi.fn().mockReturnThis(),
 }));
+
+mockRpc.mockReturnValue({ throwOnError: mockRpcThrowOnError });
 
 vi.mock('./db', () => ({
   supabase: {
@@ -420,25 +423,35 @@ describe('notifyDamagedReceiving', () => {
       { productName: 'Atrazine', quantity: 5, condition: 'damaged' },
       { productName: 'Glyphosate', quantity: 2, condition: 'wrong_item' },
     ];
-    await notifyDamagedReceiving('PO-001', items, 'po-uuid');
+    await notifyDamagedReceiving('PO-001', items, 'po-uuid', ['receipt-b', 'receipt-a']);
 
     expect(mockRpc).toHaveBeenCalledWith('notify_damaged_receiving', {
       p_po_number: 'PO-001',
       p_items_summary: expect.stringContaining('Atrazine'),
       p_po_id: 'po-uuid',
-      p_idempotency_key: expect.any(String),
+      p_idempotency_key: expect.stringMatching(/^damaged-receiving:po-uuid:[0-9a-f]{64}$/),
     });
   });
 
   it('does nothing when no damaged items', async () => {
-    await notifyDamagedReceiving('PO-001', [], 'po-uuid');
+    await notifyDamagedReceiving('PO-001', [], 'po-uuid', ['receipt-a']);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when damaged items have no receipt intent IDs', async () => {
+    await notifyDamagedReceiving(
+      'PO-001',
+      [{ productName: 'Atrazine', quantity: 5, condition: 'damaged' }],
+      'po-uuid',
+      [],
+    );
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
   it('does not throw on error', async () => {
-    mockRpc.mockRejectedValueOnce(new Error('fail'));
+    mockRpcThrowOnError.mockRejectedValueOnce(new Error('fail'));
     await expect(
-      notifyDamagedReceiving('PO-001', [{ productName: 'X', quantity: 1, condition: 'damaged' }], 'po-uuid')
+      notifyDamagedReceiving('PO-001', [{ productName: 'X', quantity: 1, condition: 'damaged' }], 'po-uuid', ['receipt-a'])
     ).resolves.toBeUndefined();
   });
 });

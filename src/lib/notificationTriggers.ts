@@ -18,6 +18,16 @@ import { Sentry } from './sentry';
 import { createNotification, notifyAdmins } from './activityLogger';
 import { localToday, formatLocalDate, parseLocalDate } from './dateUtils';
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('');
+}
+
 /**
  * Log a notification failure to the failed_notifications table.
  * This replaces silent console.error swallowing with persistent tracking.
@@ -31,10 +41,26 @@ async function logNotificationFailure(
 ): Promise<void> {
   const errorMessage = error instanceof Error ? error.message : String(error);
 
-  // Report to Sentry for visibility
-  Sentry.captureException(error, { tags: { source: 'notification_failure', notification_type: notificationType } });
+  // Report to Sentry for visibility.
+  //
+  // This must not be able to reject. Every notify* helper awaits this from its
+  // own catch block, and several are awaited by callers AFTER a money/inventory
+  // RPC has committed and its idempotency intent has been retired (e.g. the
+  // damaged-receiving notification in PurchaseOrderDetail). An exception
+  // escaping here would report a committed receive as failed, and the operator's
+  // retry would mint a fresh key and receive the same goods twice.
+  try {
+    Sentry.captureException(error, { tags: { source: 'notification_failure', notification_type: notificationType } });
+  } catch {
+    // Reporting the reporter is not possible; drop it rather than break the caller.
+  }
 
   try {
+    // .throwOnError() matters here: Supabase RESOLVES with { error } rather than
+    // rejecting, so a plain await swallowed a failed insert entirely — the alert
+    // was lost AND no failure row and no Sentry breadcrumb recorded that it was
+    // lost. RETURNS void, so this is the fire-and-forget form; the catch below
+    // turns it back into a Sentry report.
     await supabase.rpc('log_failed_notification', {
       p_notification_type: notificationType,
       p_entity_type: entityType ?? undefined,
@@ -42,10 +68,15 @@ async function logNotificationFailure(
       p_error_message: errorMessage,
       p_payload: (payload ?? {}) as Json,
       p_idempotency_key: crypto.randomUUID(),
-    });
+    }).throwOnError();
   } catch (logErr) {
-    // Last-resort: if even logging fails, report to Sentry
-    Sentry.captureException(logErr, { tags: { source: 'notification_failure_log', notification_type: notificationType } });
+    // Last-resort: if even logging fails, report to Sentry — and swallow a
+    // failure from the reporter itself, for the same reason as above.
+    try {
+      Sentry.captureException(logErr, { tags: { source: 'notification_failure_log', notification_type: notificationType } });
+    } catch {
+      // Nothing left to report through.
+    }
   }
 }
 
@@ -404,11 +435,16 @@ export async function notifyOrderNeedsPricing(
 export async function notifyDamagedReceiving(
   poNumber: string,
   damagedItems: Array<{ productName: string; quantity: number; condition: string }>,
-  poId: string
+  poId: string,
+  receiptIntentIds: string[],
 ) {
   if (!damagedItems || damagedItems.length === 0) return;
+  if (receiptIntentIds.length === 0) return;
 
   try {
+    const receiptIntentDigest = await sha256Hex(
+      JSON.stringify([...receiptIntentIds].sort()),
+    );
     const summary = damagedItems
       .map((i) => `${i.productName} (${i.quantity} — ${i.condition})`)
       .join(', ');
@@ -420,7 +456,10 @@ export async function notifyDamagedReceiving(
       p_po_number: poNumber,
       p_items_summary: summary,
       p_po_id: poId,
-      p_idempotency_key: crypto.randomUUID(),
+      // The receive RPC returns immutable receiving-record IDs. Binding the
+      // notification to that set makes a lost-response retry replay safely
+      // instead of emitting a second damaged-receipt alert.
+      p_idempotency_key: `damaged-receiving:${poId}:${receiptIntentDigest}`,
     }).throwOnError();
   } catch (err) {
     await logNotificationFailure('damaged_receiving', err, 'purchase_order', poId, {

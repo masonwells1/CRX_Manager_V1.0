@@ -19,11 +19,13 @@ import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import ReasonModal from '../components/ui/ReasonModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import {
   UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
@@ -31,7 +33,12 @@ import {
 } from '../hooks/useUncertainMutationIntent';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { MONEY_PRECISION_MESSAGE, parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
+import {
+  MONEY_PRECISION_MESSAGE,
+  isWholeCentDollarInput,
+  parseDollarsToCents,
+  parseDollarsToCentsSigned,
+} from '../lib/parseCents';
 import { centsToDollarInput, formatCents as fmt } from '../lib/money';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import { Sentry } from '../lib/sentry';
@@ -109,6 +116,53 @@ export default function VendorBillDetail() {
   const [editDueDate, setEditDueDate] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [editing, setEditing] = useState(false);
+  const [editOverageMessage, setEditOverageMessage] = useState<string | null>(null);
+
+  // The route id as of NOW, readable after an await. `id` itself is captured by
+  // each render's closure, so a handler that awaited across a route change still
+  // sees the bill it started on and cannot tell that it is answering late.
+  const currentBillIdRef = useRef(id);
+
+  // The route id alone CANNOT tell a late response whether it is still answering
+  // the edit that produced it. Leaving bill A and returning to A — or simply
+  // closing and reopening A's editor with different figures — leaves
+  // `currentBillIdRef.current === targetBillId` true, so a stale response was
+  // adopted by a NEW editing session: on success it closed the editor and
+  // discarded the operator's unsaved figures, and on an overage refusal it opened
+  // the reason prompt over them, where confirming submitted the CURRENT form with
+  // a justification collected for the previous one. (gpt-5.6-sol on c127bd535.)
+  //
+  // This counter identifies the editing session, not the record. It advances on
+  // every route change and every editor open, so A -> B -> A and
+  // open -> close -> open are both distinguishable from never having left.
+  const editSessionRef = useRef(0);
+  // Advanced in a LAYOUT effect, and deliberately in neither of the two obvious
+  // places.
+  //
+  // Not a passive `useEffect`: that is deferred past paint, so a response landing
+  // in the gap still read the OLD id and passed a check that should already have
+  // failed. Not during render either, which is where this started: React may
+  // render a screen and then discard it — this app wraps its lazy routes in
+  // `<Suspense>` (`App.tsx`), so an interrupted navigation does exactly that — and
+  // React does not roll back a ref written by an abandoned render. The counter
+  // advanced for a bill the operator never actually moved to, and a legitimate
+  // in-flight save for the bill still on screen was then judged stale: the wrong
+  // "an earlier edit finished" warning, and a re-save writing a second activity
+  // row for one edit. (gpt-5.6-sol on 862cd144d.)
+  //
+  // A layout effect is the commit-phase middle: it runs synchronously before the
+  // browser paints, so it is no later than the render-phase write from the
+  // operator's point of view — nothing can be on screen ahead of it — and React
+  // never runs it for a render it throws away. The id guard keeps StrictMode's
+  // double-invoked mount from counting twice.
+  const lastRouteIdForSessionRef = useRef(id);
+  useLayoutEffect(() => {
+    currentBillIdRef.current = id;
+    if (lastRouteIdForSessionRef.current !== id) {
+      lastRouteIdForSessionRef.current = id;
+      editSessionRef.current += 1;
+    }
+  }, [id]);
 
   // Route changes must retire every visible bill-specific form while preserving
   // any unresolved durable payment record under the old bill's storage scope.
@@ -135,6 +189,11 @@ export default function VendorBillDetail() {
     setEditBillDate('');
     setEditDueDate('');
     setEditNotes('');
+    // ReasonModal opens solely on editOverageMessage !== null, and this component
+    // stays MOUNTED across /accounts-payable/bills/:id changes. Leaving it set
+    // carried the previous bill's overage prompt onto the next bill, while every
+    // other edit field above had been cleared out from under it.
+    setEditOverageMessage(null);
   }, [id]);
 
   useEffect(() => {
@@ -225,6 +284,10 @@ export default function VendorBillDetail() {
       setPayModalOpen(false);
       setPayModalBillId(null);
       toast('error', 'The selected vendor bill changed. Reopen Record Payment on the current bill.');
+      return;
+    }
+    if (!isWholeCentDollarInput(payAmount)) {
+      toast('error', 'Enter the payment in dollars with no more than two decimal places');
       return;
     }
     const amountCents = parseDollarsToCents(payAmount);
@@ -340,14 +403,45 @@ export default function VendorBillDetail() {
     setEditDueDate(bill.due_date);
     setEditNotes(bill.notes || '');
     setEditModalBillId(bill.id);
+    // A reopened editor is a NEW session even on the same bill: the figures in it
+    // are not the ones any in-flight request was built from.
+    editSessionRef.current += 1;
+    // An overage prompt raised for the PREVIOUS session must not survive into this
+    // one. Confirming it calls handleEditBill(true, reason), which reads the CURRENT
+    // form — so a justification collected for the old figures would authorize an
+    // overage on the new ones. The route-change effect already clears this; a
+    // same-bill reopen needs it too.
+    setEditOverageMessage(null);
     setEditModalOpen(true);
   };
 
-  const handleEditBill = async () => {
+  // Closing the editor ENDS the session. Without this the token advanced only on
+  // open and on route change, so a late refusal for an edit the operator had
+  // explicitly cancelled still matched and reopened the overage prompt over a
+  // closed editor — and confirming it then failed the entry guard on the now-null
+  // editModalBillId, surfacing an error instead of the action the prompt offered.
+  // (gpt-5.6-sol on 862cd144d.) Both close paths — the Modal's onClose and the
+  // Cancel button — route through here so they cannot drift apart.
+  const closeEditModal = () => {
+    editSessionRef.current += 1;
+    setEditOverageMessage(null);
+    setEditModalOpen(false);
+    setEditModalBillId(null);
+  };
+
+  const handleEditBill = async (confirmPoOverage = false, poOverageReason = '') => {
     if (!bill || bill.id !== id || editModalBillId !== id) {
       setEditModalOpen(false);
       setEditModalBillId(null);
       toast('error', 'The selected vendor bill changed. Reopen Edit Bill on the current bill.');
+      return;
+    }
+    if (!isWholeCentDollarInput(editSubtotal)) {
+      toast('error', 'Enter the subtotal in dollars with no more than two decimal places');
+      return;
+    }
+    if (!isWholeCentDollarInput(editAdjustment || '0', { allowNegative: true })) {
+      toast('error', 'Enter the adjustment in dollars with no more than two decimal places');
       return;
     }
     const subtotalCents = parseDollarsToCents(editSubtotal);
@@ -357,7 +451,10 @@ export default function VendorBillDetail() {
       return;
     }
     // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
-    const adjustmentCents = parseDollarsToCentsSigned(editAdjustment);
+    // `|| '0'` matches the isWholeCentDollarInput guard above, so the value that
+    // was validated is the value that gets parsed — an empty adjustment is a
+    // deliberate 0, not a refusal.
+    const adjustmentCents = parseDollarsToCentsSigned(editAdjustment || '0');
     if (adjustmentCents === null) { toast('error', `Adjustment: ${MONEY_PRECISION_MESSAGE}`); return; }
     if (!editBillDate || !editDueDate) {
       toast('error', 'Bill date and due date are required');
@@ -368,6 +465,27 @@ export default function VendorBillDetail() {
       return;
     }
     setEditing(true);
+    // The bill this submission is FOR. Every UI update below happens after an
+    // await, by which time the operator may have navigated to another bill —
+    // this component stays mounted across /accounts-payable/bills/:id changes,
+    // so nothing unmounts the late handler. Compare against the live route id
+    // before touching any shared UI state.
+    //
+    // The entry guard above does NOT cover this: after navigating it passes,
+    // because `bill`, `id` and `editModalBillId` have all legitimately advanced
+    // to the NEW bill. The only stale thing is which bill the answer is about.
+    // Left unguarded, a PO-overage refusal for bill A reopened the reason prompt
+    // while bill B was on screen; confirming it called handleEditBill(true, …)
+    // against B, authorizing an overage B was never checked for and recording
+    // A's justification against it.
+    const targetBillId = bill.id;
+    // Captured BEFORE the await, compared after. Both halves are required: the
+    // route id catches a move to another bill, the session catches a return to
+    // this one and a reopened editor, which the route id alone reports as "still
+    // here". Anything that reaches the UI below must satisfy both.
+    const submissionSession = editSessionRef.current;
+    const isStillCurrentBill = () =>
+      currentBillIdRef.current === targetBillId && editSessionRef.current === submissionSession;
     try {
       const key = editIdem.getKey();
       const { data, error } = await supabase.rpc('update_vendor_bill', {
@@ -378,18 +496,124 @@ export default function VendorBillDetail() {
         p_due_date: editDueDate,
         p_notes: editNotes || '',
         p_idempotency_key: key,
+        p_confirm_po_overage: confirmPoOverage,
+        p_po_overage_reason: poOverageReason || undefined,
       });
       if (error) throw error;
       assertRpcResult<{ success: boolean; bill_id: string; old_total_cents: number; new_total_cents: number }>(data, 'update_vendor_bill');
+      // The edit COMMITTED, so retire its key whether or not the operator is
+      // still looking at this bill — that is a fact about the request, not about
+      // the screen. Only the reporting below is route-dependent.
       editIdem.resetKey();
+      if (!isStillCurrentBill()) {
+        // The edit COMMITTED. Returning silently here suppressed reconciliation as
+        // well as reporting: the replacement editing session kept showing bill data
+        // fetched BEFORE this edit landed, and submitting it re-sent those stale
+        // fields over the committed ones. `fetchBill()` is state reconciliation, not
+        // reporting — only the success toast and closing the editor are
+        // session-scoped. (gpt-5.6-sol on 862cd144d.)
+        //
+        // Do NOT claim the edit on screen saved — it did not; an EARLIER one did.
+        //
+        // Two different stale cases, and they must NOT be treated alike
+        // (gpt-5.6-sol on 2ff8bdafc, which caught both halves of the previous
+        // version of this branch).
+        if (currentBillIdRef.current === targetBillId) {
+          // SAME bill, a later editing session. Refreshing the record is right and
+          // this fetchBill closure is for this route.
+          //
+          // But be precise about what refreshes. fetchBill() updates `bill`; it does
+          // NOT rewrite editSubtotal/editAdjustment/dates/notes in an editor that is
+          // ALREADY OPEN — those were copied from `bill` when the editor opened,
+          // BEFORE this edit committed. The old wording ("the bill has been
+          // refreshed — check the figures on screen") pointed the operator AT the
+          // stale fields as if they were the refreshed ones; saving them reverts the
+          // edit that just committed. Name the fields as stale and give the one
+          // action that actually loads the new values.
+          toast(
+            'warning',
+            'An earlier edit to this bill saved after you reopened the editor. The figures in this '
+            + 'form were loaded BEFORE that change — close and reopen the editor to see the current '
+            + 'values before saving, or your save will overwrite what just landed.',
+          );
+          fetchBill();
+          return;
+        }
+        // DIFFERENT bill on screen. Deliberately no toast and NO fetch.
+        //
+        // This `fetchBill` is the closure from the render that started the edit, so
+        // it queries the bill the operator has LEFT. It sets the shared `loading`
+        // flag first and then returns at its own `activeBillIdRef` guard WITHOUT
+        // clearing it — wedging the bill the operator is actually looking at on a
+        // permanent loading screen. Calling it here was the only way to reach that
+        // leak. The commit is already recorded and the key retired; the next visit
+        // to this bill re-reads it, and a warning naming "this bill" would be about
+        // a bill that is not on screen.
+        Sentry.captureMessage('vendor-bill edit committed after the operator left the bill', {
+          level: 'info',
+          tags: { source: 'vendor-bill-edit', reason: 'stale-route-commit' },
+        });
+        return;
+      }
       toast('success', 'Bill updated');
       setEditModalOpen(false);
       setEditModalBillId(null);
       fetchBill();
     } catch (err) {
-      toast('error', sanitizeError(err));
+      // A late answer for a bill the operator has left may not touch the UI. It
+      // must not reopen the reason prompt, close the editor they have since
+      // opened, or toast about a bill that is no longer on screen. The key is
+      // deliberately left retained here: the request's outcome is unknown, and
+      // retaining is the direction that replays rather than double-applies.
+      if (!isStillCurrentBill()) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+          tags: { source: 'vendor-bill-edit', reason: 'stale-route-response' },
+        });
+        return;
+      }
+      if (hasRpcCode(err, RpcErrorCodes.PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED)) {
+        setEditOverageMessage(
+          'The exact server total shows this edit would raise active billing above 105% of the purchase order. Enter a reason to confirm the overage.',
+        );
+      } else if (getIdempotencyBindingRejection(err)) {
+        // A binding rejection can still carry the receipt of an edit that
+        // COMMITTED and lost its response. The confirmed PO-overage path is the
+        // real case: the reason modal has already closed, so the next Save
+        // re-sends the same visible edit with p_confirm_po_overage=false and no
+        // reason under the retained key, and the server answers
+        // IDEMPOTENCY_INTENT_MISMATCH with the committed update receipt.
+        // Discarding it and rotating the key would run the edit a second time
+        // and write duplicate financial-audit and activity rows.
+        //
+        // A matching bill_id does NOT establish that the edit on screen is the
+        // edit that committed. An intent MISMATCH means the payload differed, so
+        // the receipt necessarily belongs to an EARLIER submission against this
+        // same bill — and the difference can be the notes or either date, not
+        // just the amount, so no field comparison here can prove equivalence.
+        // Report only what the receipt actually proves: an earlier edit landed,
+        // and the fields currently on screen are unconfirmed. Then show the
+        // stored bill so the operator can see the real state and decide.
+        const committed = getIdempotencyMismatchResult(err, 'update_vendor_bill');
+        const committedBillId = committed?.bill_id;
+        if (committed && typeof committedBillId === 'string' && committedBillId === bill.id) {
+          editIdem.resetKey();
+          toast('warning', 'An earlier edit to this bill was already saved. Your latest changes were NOT confirmed — showing the saved bill so you can check it and re-apply them if needed.');
+          setEditModalOpen(false);
+          setEditModalBillId(null);
+          fetchBill();
+        } else {
+          editIdem.resetKey();
+          toast('warning', 'That retry belongs to a different bill edit. Your current changes were not saved; retry to submit them with a fresh key.');
+        }
+      } else {
+        toast('error', sanitizeError(err));
+      }
+    } finally {
+      // Must be a finally: the stale-route guards above return early, and this
+      // used to sit after the try/catch. Skipping it would strand the page with
+      // the Save button spinning and disabled until a reload.
+      setEditing(false);
     }
-    setEditing(false);
   };
 
   const handleVoidPayment = async () => {
@@ -427,7 +651,12 @@ export default function VendorBillDetail() {
       setVoidPaymentReason('');
       fetchBill();
     } catch (err) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        voidPaymentIdem.resetKeyFor(voidPaymentScope);
+        toast('warning', 'That retry belongs to a different payment void. The payment was not changed; retry with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setVoidingPayment(false);
   };
@@ -456,7 +685,12 @@ export default function VendorBillDetail() {
       setVoidModalBillId(null);
       fetchBill();
     } catch (err) {
-      toast('error', sanitizeError(err));
+      if (getIdempotencyBindingRejection(err)) {
+        voidIdem.resetKeyFor(voidBillScope);
+        toast('warning', 'That retry belongs to a different bill void. This bill was not changed; retry to submit this void with a fresh key.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setVoiding(false);
   };
@@ -793,10 +1027,7 @@ export default function VendorBillDetail() {
       {/* Edit Bill Modal (PR-14, 2026-05-10) */}
       <Modal
         open={editModalOpen}
-        onClose={() => {
-          setEditModalOpen(false);
-          setEditModalBillId(null);
-        }}
+        onClose={closeEditModal}
         title="Edit Vendor Bill"
       >
         <div className="space-y-4">
@@ -838,17 +1069,30 @@ export default function VendorBillDetail() {
           <div className="flex justify-end gap-3 pt-2">
             <Button
               variant="ghost"
-              onClick={() => {
-                setEditModalOpen(false);
-                setEditModalBillId(null);
-              }}
+              onClick={closeEditModal}
             >
               Cancel
             </Button>
-            <Button onClick={handleEditBill} loading={editing}>Save Changes</Button>
+            <Button onClick={() => void handleEditBill()} loading={editing}>Save Changes</Button>
           </div>
         </div>
       </Modal>
+
+      <ReasonModal
+        open={editOverageMessage !== null}
+        onClose={() => setEditOverageMessage(null)}
+        onConfirm={(reason) => {
+          setEditOverageMessage(null);
+          void handleEditBill(true, reason);
+        }}
+        title="Confirm PO billing overage"
+        message={editOverageMessage || ''}
+        confirmLabel="Save Changes"
+        variant="warning"
+        loading={editing}
+        placeholder="Why should cumulative billing exceed the PO total?"
+        minLength={5}
+      />
 
       {/* Void Payment Modal (PR-13, 2026-05-10) */}
       <Modal

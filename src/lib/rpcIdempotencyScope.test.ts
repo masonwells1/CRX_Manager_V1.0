@@ -339,6 +339,13 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // The intent-bound public wrapper owns the actor+return fingerprint while
   // this service-role-only helper preserves the committed receive namespace.
   _receive_return_impl_20260714: ['receive_return'],
+  // Direct EXECUTE is revoked from browser and service roles. This serialized
+  // receiving-reversal implementation is the write half of the public
+  // reverse_receiving_record wrapper; both layers must share the public cache
+  // namespace so the wrapper can intent-check and replay the result the
+  // implementation saves. A private operation name would strand that receipt
+  // and allow the reversal to run twice after a timeout.
+  _section9_reverse_receiving_record_serialized: ['reverse_receiving_record'],
   // Migration 20260904160000 (invoice_date fallbacks -> America/Chicago business
   // day) is the FIRST on-disk CREATE of these three private implementations
   // under their post-rename names: each was originally renamed with

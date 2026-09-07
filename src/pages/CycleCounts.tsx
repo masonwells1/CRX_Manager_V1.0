@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Plus, CheckCircle, XCircle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -9,10 +9,14 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import {
+  resolveCycleCountWriteIntent,
+  type CycleCountWriteIntent,
+} from '../lib/cycleCountWriteIntent';
 import { logActivity } from '../lib/activityLogger';
 import HelpTip from '../components/ui/HelpTip';
 import type { CycleCount, CycleCountItem } from '../types';
@@ -27,6 +31,11 @@ type CountRow = CycleCount & {
 
 type CountItemRow = CycleCountItem & {
   product_name: string;
+};
+
+type CompletionSnapshot = {
+  items: CountItemRow[];
+  itemRevision: number;
 };
 
 interface CycleCountDbRow {
@@ -49,10 +58,16 @@ interface CountItemDbRow {
   [key: string]: unknown;
 }
 
+// Failed item writes are keyed by their OWNING cycle count so a failure in one
+// count cannot block completing another. Cycle-count ids are UUIDs and never
+// contain ':', so this prefix is unambiguous.
+const failedItemWriteKey = (cycleCountId: string, itemId: string) => `${cycleCountId}:${itemId}`;
+
 export default function CycleCounts() {
   const { profile, role } = useAuth();
   const { toast } = useToast();
   const completeCycleCountIdem = useIdempotencyKey('complete_cycle_count', profile?.id || '');
+  const updateCycleCountItemIdem = useIdempotencyKey('update_cycle_count_item', profile?.id || '');
   const reverseCycleCountIdem = useIdempotencyKey('reverse_cycle_count', profile?.id || '');
   const cancelCycleCountIdem = useIdempotencyKey('cancel_cycle_count', profile?.id || '');
   const [counts, setCounts] = useState<CountRow[]>([]);
@@ -73,10 +88,54 @@ export default function CycleCounts() {
   const [loadingItems, setLoadingItems] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+  // The cycle count the open "complete anyway?" confirmation was asked ABOUT.
+  // The confirm path completes without re-running the uncounted-items check —
+  // correct for the count the operator answered for, dangerous for any other —
+  // so the answer has to carry the record identity, not just a boolean.
+  const [completeConfirmCountId, setCompleteConfirmCountId] = useState<string | null>(null);
   const [completeConfirmMsg, setCompleteConfirmMsg] = useState("");
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [reversing, setReversing] = useState(false);
   const [reverseConfirmOpen, setReverseConfirmOpen] = useState(false);
+  const [preparingCompletion, setPreparingCompletion] = useState(false);
+  const itemWriteQueuesRef = useRef(new Map<string, Promise<void>>());
+  // Each pending write carries its own cycle_count_id. Completion may only wait
+  // on writes belonging to the count being completed — see
+  // waitForAuthoritativeCountItems.
+  const pendingItemWritesRef = useRef(new Set<{ cycleCountId: string; promise: Promise<void> }>());
+  const failedItemWritesRef = useRef(new Set<string>());
+  const itemWriteIntentsRef = useRef(new Map<string, CycleCountWriteIntent>());
+  // Latest item_revision this client has SEEN ACKNOWLEDGED per cycle count.
+  //
+  // A successful update_cycle_count_item only SCHEDULES setActiveCount, and the
+  // completion handler reads its captured `activeCount` after awaiting the pending
+  // writes — so the operator's own just-saved edit left `reviewedRevision` on the
+  // pre-write value while the server had already advanced. The revision check then
+  // reported the operator's OWN edit as "someone else changed this" and made them
+  // review and click again. A ref updates synchronously and is not subject to React
+  // batching or to a stale closure, so it survives the await that state does not.
+  //
+  // Keyed by cycle count for the same reason the pending/failed write sets are:
+  // this component outlives the detail modal, so an unkeyed value would let count A's
+  // revision decide count B's completion.
+  const latestItemRevisionRef = useRef(new Map<string, number>());
+  // Identifies the current DETAIL SESSION: which count is open, and which visit to
+  // it. Bumped by openDetail, so both a switch (A -> B) and a reopen (A -> A)
+  // supersede anything still in flight — an id comparison catches only the switch.
+  // See closeDetail for why hiding the modal deliberately does not bump it.
+  //
+  // It is a session rather than an openDetail request because the completion path
+  // writes this same shared state after its own awaits, from a different function.
+  // An earlier version bumped this only in openDetail and guarded only openDetail's
+  // writes; completing count A, closing the modal mid-flight and opening count B
+  // still painted A's rows under B's heading, and updateCountedQty then derived
+  // p_item_id from them — an inventory adjustment against a product the operator
+  // was not looking at. Guarding one entry point made the whole file read as
+  // protected. Every response-derived write to activeCount/countItems must be
+  // gated on still being the session that started the work.
+  const detailSessionRef = useRef(0);
+  const itemWriteSequenceRef = useRef(0);
+  const completionInFlightRef = useRef(false);
 
   const isAdmin = role === 'admin';
 
@@ -214,17 +273,99 @@ export default function CycleCounts() {
     });
   };
 
+  // Hiding the detail modal deliberately does NOT end the detail session, and the
+  // reason is worth stating because the review that found the completion-path bug
+  // asked for the opposite.
+  //
+  // Ending the session on close would abort a completion the operator had already
+  // asked for, and tell them they "moved to a different cycle count" when they did
+  // not. It is also unnecessary: the danger is a superseded response painting over
+  // a DIFFERENT count, and every route to a different count goes through openDetail,
+  // which bumps the session — including reopening the same count. With the modal
+  // closed there is nothing on screen to paint over, so the late write is harmless
+  // and the completion the operator requested still lands.
+  const closeDetail = () => {
+    setShowDetail(false);
+  };
+
   // Open detail modal
   const openDetail = async (count: CountRow) => {
+    // Which detail session owns the shared detail state. Every response-derived
+    // write below is gated on still being the current session.
+    //
+    // This is NOT a pre-existing defect left alone: `main` reaches `setCountItems`
+    // after ONE await, and this branch added the revision seed read ahead of the
+    // items query, so there are now TWO — a WIDER window in which opening a second
+    // count lets the first one land on top of it. Guarding `setActiveCount` by id
+    // (below) and leaving `setCountItems` unguarded made the function read as
+    // protected while the dangerous write stayed open: `setCountItems` is what puts
+    // another count's rows on screen, and `updateCountedQty` derives `p_item_id`
+    // from that state, so an inventory adjustment could be sent against a different
+    // count's item. One half of a pairing guarded is the shape this branch has been
+    // finding elsewhere all along. (CodeRabbit on de2c43a83; widening confirmed
+    // against origin/main.)
+    //
+    // An id comparison alone would not be enough anyway: reopening the SAME count
+    // twice gives two calls whose ids match, and the older response would still be
+    // adopted. The token distinguishes calls, not records.
+    const session = detailSessionRef.current + 1;
+    detailSessionRef.current = session;
+    const isCurrentSession = () => detailSessionRef.current === session;
+
     setActiveCount(count);
     setShowDetail(true);
     setLoadingItems(true);
+
+    // Seed the reviewed-revision baseline from the server before loading items.
+    // The list row this modal opened from can be minutes old, and completion now
+    // compares what the operator has actually reviewed against the authoritative
+    // revision; seeding from a stale list row would warn about a change the
+    // operator is already looking at. Reading the revision BEFORE the items is
+    // the fail-safe order: if an item changes while the item snapshot loads, the
+    // seeded revision is the older one, so completion warns (or the server
+    // refuses) rather than silently adopting the change.
+    const { data: revisionRow, error: revisionError } = await supabase
+      .from('cycle_counts')
+      .select('item_revision')
+      .eq('id', count.id)
+      .single();
+    // The ref is seeded HERE too, not just activeCount. It outranks state when
+    // completion reads the reviewed baseline, so an entry left over from an earlier
+    // visit to this same count would survive a reopen and outrank the revision just
+    // loaded from the server — reporting a change the operator is already looking at.
+    // Every place that establishes a reviewed baseline has to move BOTH, or the one
+    // that is read silently wins with the older value.
+    if (revisionError) {
+      Sentry.captureException(revisionError);
+      // Could not confirm a revision: drop any stale entry rather than let an
+      // unconfirmed leftover outrank the row actually loaded. The read then falls
+      // back to activeCount, which the fail-closed check downstream already handles.
+      if (isCurrentSession()) latestItemRevisionRef.current.delete(count.id);
+    } else if (typeof revisionRow?.item_revision === 'number' && isCurrentSession()) {
+      // Deliberately overwrites a newer value an in-flight write may have just
+      // recorded. That is the same fail-safe ordering the comment above describes for
+      // activeCount: seeding the OLDER revision makes completion warn rather than
+      // silently adopt a change the operator has not seen.
+      latestItemRevisionRef.current.set(count.id, revisionRow.item_revision);
+      setActiveCount((previousCount) =>
+        previousCount && previousCount.id === count.id
+          ? { ...previousCount, item_revision: revisionRow.item_revision }
+          : previousCount
+      );
+    }
 
     const { data, error } = await supabase
       .from('cycle_count_items')
       .select('*, product:products(product_name)')
       .eq('cycle_count_id', count.id)
       .order('created_at');
+
+    // Everything below writes SHARED detail state — the rows on screen, the loading
+    // flag, and an error message about them. A superseded call must touch none of
+    // it. `setLoadingItems(false)` is deliberately inside the gate too: the newest
+    // call owns that flag, and letting a stale one clear it would drop the spinner
+    // while the current count is still loading.
+    if (!isCurrentSession()) return;
 
     if (error) {
       Sentry.captureException(error);
@@ -239,86 +380,426 @@ export default function CycleCounts() {
     setLoadingItems(false);
   };
 
-  // Update a single item's counted quantity (via RPC — server validates parent.status='in_progress')
+  // `isCurrentSession` is not optional on purpose. This function ends in a write to
+  // the shared detail state after an await, so every caller has to say which detail
+  // session it is refreshing FOR — a caller that cannot answer that has no business
+  // painting rows. Making it a required parameter is what stops the next completion
+  // path from being added without a guard, which is exactly how this was missed.
+  const refreshCountItems = async (
+    cycleCountId: string,
+    isCurrentSession: () => boolean
+  ): Promise<CountItemRow[] | null> => {
+    const { data, error } = await supabase
+      .from('cycle_count_items')
+      .select('*, product:products(product_name)')
+      .eq('cycle_count_id', cycleCountId)
+      .order('created_at');
+    if (!isCurrentSession()) return null;
+    if (error) {
+      Sentry.captureException(error);
+      toast('error', 'Failed to refresh count items before completion');
+      return null;
+    }
+    const rows = ((data || []) as CountItemDbRow[]).map((item) => ({
+      ...item,
+      product_name: item.product?.product_name || 'Unknown',
+    })) as CountItemRow[];
+    setCountItems(rows);
+    return rows;
+  };
+
+  // Update a single item's counted quantity (via RPC — server validates parent.status='in_progress').
+  // Queue writes per item so a slow earlier keystroke cannot arrive after a newer value and overwrite it.
   const updateCountedQty = async (itemId: string, countedQty: number | null) => {
     const item = countItems.find((i) => i.id === itemId);
-    if (!item || !profile) return;
+    if (!item || !profile || completionInFlightRef.current) return;
+
+    // Reject non-finite quantities before they reach the write intent. A
+    // type="number" box accepts "1e309", which parseFloat turns into Infinity,
+    // and JSON.stringify canonicalizes Infinity/NaN to null. That made a garbage
+    // entry produce byte-identical valueKey/scope to a deliberate "clear this
+    // count" (JSON.stringify([null, null])) — so it both collided with that
+    // intent and sent null to the server, silently CLEARING the counted quantity
+    // instead of reporting bad input.
+    if (countedQty !== null && !Number.isFinite(countedQty)) {
+      toast('error', 'Enter a valid count quantity.');
+      return;
+    }
 
     const variance = countedQty !== null ? countedQty - item.expected_qty : null;
     const variancePct = countedQty !== null && item.expected_qty !== 0
       ? Math.round(((variance || 0) / item.expected_qty) * 100 * 100) / 100
       : null;
-
-    const { data, error } = await supabase.rpc('update_cycle_count_item', {
-      p_item_id: itemId,
-      p_counted_qty: countedQty ?? undefined,
-      p_performed_by: profile.id,
-    });
-
-    if (error) {
-      Sentry.captureException(error);
-      toast('error', error.message || 'Failed to update count');
-      return;
-    }
-    assertRpcResult(data, 'update_cycle_count_item');
-
-    // Update local state
-    setCountItems((prev) =>
-      prev.map((i) =>
-        i.id === itemId
-          ? {
-              ...i,
-              counted_qty: countedQty,
-              variance,
-              variance_pct: variancePct !== null ? Math.round(variancePct * 100) / 100 : null,
-              is_counted: countedQty !== null,
-              counted_by: profile.id,
-              counted_at: new Date().toISOString(),
-            }
-          : i
-      )
+    // Retain one key for an uncertain same-value retry, but advance the local
+    // sequence whenever the requested value changes. This makes A -> B -> A
+    // three distinct intents instead of replaying the first A after B.
+    const resolvedIntent = resolveCycleCountWriteIntent(
+      itemId,
+      countedQty,
+      itemWriteIntentsRef.current.get(itemId),
+      itemWriteSequenceRef.current,
     );
+    itemWriteSequenceRef.current = resolvedIntent.nextSequence;
+    itemWriteIntentsRef.current.set(itemId, resolvedIntent.intent);
+    const intentScope = resolvedIntent.intent.scope;
+    const idempotencyKey = updateCycleCountItemIdem.getKeyFor(intentScope);
+
+    const previous = itemWriteQueuesRef.current.get(itemId) ?? Promise.resolve();
+    const write = previous.catch(() => undefined).then(async () => {
+      try {
+      const { data, error } = await supabase.rpc('update_cycle_count_item', {
+        p_item_id: itemId,
+        p_counted_qty: countedQty ?? undefined,
+        p_performed_by: profile.id,
+        p_idempotency_key: idempotencyKey,
+      });
+
+      if (error) {
+        failedItemWritesRef.current.add(failedItemWriteKey(item.cycle_count_id, itemId));
+        Sentry.captureException(error);
+        toast('error', error.message || 'Failed to update count');
+        return;
+      }
+      const result = assertRpcResult<{ item_revision: number }>(data, 'update_cycle_count_item');
+      updateCycleCountItemIdem.resetKeyFor(intentScope);
+      if (itemWriteIntentsRef.current.get(itemId)?.scope === intentScope) {
+        itemWriteIntentsRef.current.delete(itemId);
+      }
+      failedItemWritesRef.current.delete(failedItemWriteKey(item.cycle_count_id, itemId));
+      // Record the acknowledged revision SYNCHRONOUSLY, before the setActiveCount
+      // below only schedules the same value. The completion handler reads this ref
+      // after awaiting pending writes, when the scheduled state update may not have
+      // been applied to its captured `activeCount` yet.
+      latestItemRevisionRef.current.set(item.cycle_count_id, result.item_revision);
+      setActiveCount((previousCount) =>
+        previousCount && previousCount.id === item.cycle_count_id
+          ? { ...previousCount, item_revision: result.item_revision }
+          : previousCount
+      );
+
+      setCountItems((prev) =>
+        prev.map((i) =>
+          i.id === itemId
+            ? {
+                ...i,
+                counted_qty: countedQty,
+                variance,
+                variance_pct: variancePct !== null ? Math.round(variancePct * 100) / 100 : null,
+                is_counted: countedQty !== null,
+                counted_by: profile.id,
+                counted_at: new Date().toISOString(),
+              }
+            : i
+        )
+      );
+      } catch (writeErr) {
+        // A transport rejection or an assertRpcResult contract failure has to be
+        // recorded exactly like a returned { error }. It used to escape this
+        // queued task instead: no failed-write marker, no toast — and the
+        // rejected promise was then dropped from pendingItemWritesRef by the
+        // finally below. The first completion attempt died on Promise.all with
+        // no explanation, and the SECOND saw a clean pending set and committed
+        // the stale authoritative quantity, silently discarding the operator's
+        // edit as an inventory adjustment.
+        failedItemWritesRef.current.add(failedItemWriteKey(item.cycle_count_id, itemId));
+        Sentry.captureException(writeErr);
+        toast('error', 'Failed to save this count. Re-enter the quantity before completing.');
+      }
+    });
+    itemWriteQueuesRef.current.set(itemId, write);
+    const pendingEntry = { cycleCountId: item.cycle_count_id, promise: write };
+    pendingItemWritesRef.current.add(pendingEntry);
+    try {
+      await write;
+    } finally {
+      pendingItemWritesRef.current.delete(pendingEntry);
+      if (itemWriteQueuesRef.current.get(itemId) === write) itemWriteQueuesRef.current.delete(itemId);
+    }
   };
 
   // Complete the cycle count
-  const handleComplete = () => {
-    if (!activeCount || !profile) return;
+  const waitForAuthoritativeCountItems = async (
+    isCurrentSession: () => boolean
+  ): Promise<CompletionSnapshot | null> => {
+    if (!activeCount) return null;
+    // Superseded before we started: the operator has opened a different count (or
+    // reopened this one). Returning null aborts the completion, which is the safe
+    // direction — the alternative is committing an inventory adjustment for a count
+    // nobody is looking at, from a snapshot taken after they moved on.
+    if (!isCurrentSession()) return null;
+    // Wait ONLY on writes belonging to the count being completed. This set is
+    // component-wide and outlives the detail modal, so awaiting all of it made
+    // completing count B block on a stalled save from count A — indefinitely, since
+    // nothing here times out. Scoping matches how failed writes are already tracked
+    // below; both sets have to be scoped or the wedge just moves from one to the
+    // other. Captured before the await so a mid-flight count switch cannot widen it.
+    const completingCountId = activeCount.id;
+    await Promise.all(
+      [...pendingItemWritesRef.current]
+        .filter((entry) => entry.cycleCountId === completingCountId)
+        .map((entry) => entry.promise)
+    );
+    if (!isCurrentSession()) return null;
+    // Failed writes are tracked per cycle count, not component-wide. A failure
+    // left behind in count A must not block completing count B: this set
+    // outlives the detail modal, so an unscoped check wedged every other count
+    // until the operator reopened A or reloaded the page.
+    const activeFailurePrefix = failedItemWriteKey(activeCount.id, '');
+    if ([...failedItemWritesRef.current].some((key) => key.startsWith(activeFailurePrefix))) {
+      toast('error', 'Fix the failed count update before completing this cycle count.');
+      return null;
+    }
+    // Read the revision first. If any item changes while the item snapshot is
+    // loading, its trigger advances this revision and completion fails closed.
+    const { data: countState, error: countStateError } = await supabase
+      .from('cycle_counts')
+      .select('item_revision, status')
+      .eq('id', activeCount.id)
+      .single();
+    // Gate the toasts below as well as the writes: a superseded completion has no
+    // standing to tell the operator anything about the count they have moved on
+    // from, and "This cycle count is no longer in progress" over a count they just
+    // opened would be a lie about the wrong record.
+    if (!isCurrentSession()) return null;
+    if (countStateError) {
+      Sentry.captureException(countStateError);
+      toast('error', 'Failed to refresh the cycle count revision before completion');
+      return null;
+    }
+    if (countState.status !== 'in_progress') {
+      toast('error', 'This cycle count is no longer in progress. Refresh before continuing.');
+      return null;
+    }
+    if (typeof countState.item_revision !== 'number') {
+      toast('error', 'Cycle count revision protection is not available. Refresh after the database update completes.');
+      return null;
+    }
 
-    const uncounted = countItems.filter((i) => !i.is_counted);
-    if (uncounted.length > 0) {
-      setCompleteConfirmMsg(`${uncounted.length} products have not been counted yet. Complete anyway?`);
-      setCompleteConfirmOpen(true);
+    // Capture what the operator has actually reviewed BEFORE the refresh below
+    // overwrites it, so a mismatch here means ANOTHER client changed an item.
+    //
+    // Prefer the ref over the captured `activeCount`: own edits acknowledge their
+    // revision into the ref synchronously, whereas setActiveCount only SCHEDULES it
+    // and this function has already awaited the pending writes above — its
+    // `activeCount` can still hold the pre-write value. Reading state here reported
+    // the operator's own just-saved edit as a foreign change. Falls back to state
+    // when this client has acknowledged no write for the count (nothing edited this
+    // session), which is the case the ref cannot know about.
+    const reviewedRevision =
+      latestItemRevisionRef.current.get(activeCount.id) ?? activeCount.item_revision;
+
+    const items = await refreshCountItems(activeCount.id, isCurrentSession);
+    if (!items) return null;
+
+    setActiveCount((previousCount) =>
+      previousCount && previousCount.id === activeCount.id
+        ? { ...previousCount, item_revision: countState.item_revision }
+        : previousCount
+    );
+    // Advance the ref WITH the state it takes precedence over. Kept adjacent to the
+    // setActiveCount above on purpose: the two are one operation, and separating them
+    // is exactly how this went wrong.
+    latestItemRevisionRef.current.set(activeCount.id, countState.item_revision);
+    // Why it matters: because the completion read prefers the ref, leaving it behind
+    // here pinned this client to a superseded revision permanently. After another
+    // client's edit the refresh adopts the new revision into state, but every later
+    // click kept reading the old one from the ref and repeated the same mismatch —
+    // completion wedged until a reload or another local write, strictly worse than the
+    // one extra click this ref was added to remove. The invariant the comment below
+    // relies on ("the next click matches, because the reviewed baseline has advanced")
+    // only holds if BOTH baselines advance together. Found by Codex on 1973add81.
+
+    // p_expected_item_revision fails closed only for a change that lands DURING
+    // completion. A change that landed BEFORE the click would otherwise be
+    // adopted silently: the screen showed 10, another tab set 100, and
+    // completion committed an inventory adjustment for 100 that the operator
+    // never saw. The refresh above has put the real numbers on screen; require a
+    // second, explicit click now that they are visible. The next click matches,
+    // because setActiveCount has advanced the reviewed baseline.
+    // Fail CLOSED when the reviewed baseline is missing, not open. item_revision
+    // is optional on the type and the openDetail seed read can fail, and an
+    // earlier version skipped the comparison in that case — which silently
+    // restored the exact bug this guard exists to close. With no baseline we
+    // cannot know whether the refreshed rows are what the operator reviewed, so
+    // treat it the same as a mismatch. setActiveCount above has just stored the
+    // authoritative revision, so the next click has a baseline and proceeds.
+    if (typeof reviewedRevision !== 'number') {
+      toast('error', 'Could not confirm which quantities you reviewed. The list has been refreshed — review the quantities, then complete again.');
+      return null;
+    }
+    if (reviewedRevision !== countState.item_revision) {
+      toast('error', 'These counts were changed somewhere else while this count was open. The list has been refreshed — review the updated quantities, then complete again.');
+      return null;
+    }
+
+    return { items, itemRevision: countState.item_revision };
+  };
+
+  const handleComplete = async () => {
+    if (!activeCount || !profile) return;
+    if (completionInFlightRef.current) return;
+    // Capture the detail session HERE, synchronously with the operator's click, and
+    // carry it through every await below. Capturing further down would read the
+    // session as it is after a switch has already happened, which is the value that
+    // makes a superseded call look current.
+    const session = detailSessionRef.current;
+    const isCurrentSession = () => detailSessionRef.current === session;
+    completionInFlightRef.current = true;
+    setPreparingCompletion(true);
+
+    try {
+      const snapshot = await waitForAuthoritativeCountItems(isCurrentSession);
+      if (!snapshot) return;
+      // The confirmation state below is shared with the rest of the page, so it is a
+      // response-derived write like any other and cannot be opened for a count the
+      // operator has left.
+      if (!isCurrentSession()) return;
+
+      const uncounted = snapshot.items.filter((i) => !i.is_counted);
+      if (uncounted.length > 0) {
+        setCompleteConfirmMsg(`${uncounted.length} products have not been counted yet. Complete anyway?`);
+        setCompleteConfirmCountId(activeCount.id);
+        setCompleteConfirmOpen(true);
+        return;
+      }
+
+      await executeComplete(snapshot, isCurrentSession);
+    } finally {
+      completionInFlightRef.current = false;
+      setPreparingCompletion(false);
+    }
+  };
+
+  // `isCurrentSession` is omitted only by the confirmation dialog's onConfirm, which
+  // fires synchronously from the operator's click — so capturing here is capturing at
+  // the click, the same guarantee handleComplete gets. Every other caller threads its
+  // own, because by then the click is several awaits behind us.
+  const executeComplete = async (
+    snapshot?: CompletionSnapshot,
+    isCurrentSession?: () => boolean
+  ) => {
+    const sessionAtEntry = detailSessionRef.current;
+    const stillCurrentSession =
+      isCurrentSession ?? (() => detailSessionRef.current === sessionAtEntry);
+    setCompleteConfirmOpen(false);
+    if (!activeCount || !profile) return;
+    if (!stillCurrentSession()) return;
+
+    if (!snapshot) {
+      // This branch runs from the confirmation dialog, and it deliberately does
+      // NOT re-check uncounted items — the operator already answered "complete
+      // anyway". That answer is only valid for the count it was asked about. The
+      // dialog's state is separate from the detail modal's, so a count switch
+      // between question and answer would otherwise complete a DIFFERENT count,
+      // skipping its uncounted check, on the strength of another count's yes.
+      const confirmedFor = completeConfirmCountId;
+      setCompleteConfirmCountId(null);
+      if (confirmedFor !== activeCount.id) {
+        toast('error', 'That confirmation was for a different cycle count. Open the count you want to complete and try again.');
+        return;
+      }
+      if (completionInFlightRef.current) return;
+      completionInFlightRef.current = true;
+      setPreparingCompletion(true);
+      try {
+        const refreshedSnapshot = await waitForAuthoritativeCountItems(stillCurrentSession);
+        if (refreshedSnapshot) await executeComplete(refreshedSnapshot, stillCurrentSession);
+      } finally {
+        completionInFlightRef.current = false;
+        setPreparingCompletion(false);
+      }
       return;
     }
 
-    executeComplete();
-  };
-
-  const executeComplete = async () => {
-    setCompleteConfirmOpen(false);
-    if (!activeCount || !profile) return;
-
     await runCriticalAction({
       action: async () => {
-        const key = completeCycleCountIdem.getKey();
+        // Scope the completion key to this exact count and expected revision.
+        // An unscoped key survived closing count A, so completing count B
+        // replayed A's key, the server wrapper raised a payload conflict, and
+        // every retry for B failed until the page was reloaded.
+        const completionScope = `complete:${activeCount.id}:${snapshot.itemRevision}`;
+        // Last check before the RPC commits an inventory adjustment. runCriticalAction
+        // introduces its own async boundary between the caller's check and this call,
+        // so the session can end in between; this is the write that moves real stock,
+        // so it gets its own gate rather than inheriting one from upstream.
+        //
+        // THROW rather than return: returning from this action is how runCriticalAction
+        // is told the work succeeded, so a silent return would fire the success toast
+        // and close the modal for a completion that never ran. Bailing out before
+        // getKeyFor also means no idempotency key is minted, so there is nothing left
+        // behind to retire or replay.
+        if (!stillCurrentSession()) {
+          throw new Error(
+            'You moved to a different cycle count before this one finished. Nothing was completed — reopen the count and try again.'
+          );
+        }
+        const key = completeCycleCountIdem.getKeyFor(completionScope);
         // complete_cycle_count RETURNS void — .throwOnError() for fire-and-forget.
-        await supabase.rpc('complete_cycle_count', {
-          p_cycle_count_id: activeCount.id,
-          p_completed_by: profile.id,
-          p_idempotency_key: key,
-        }).throwOnError();
-        completeCycleCountIdem.resetKey();
+        try {
+          await supabase.rpc('complete_cycle_count', {
+            p_cycle_count_id: activeCount.id,
+            p_completed_by: profile.id,
+            p_idempotency_key: key,
+            p_expected_item_revision: snapshot.itemRevision,
+          }).throwOnError();
+          // Retire the key INSIDE the try, immediately after the awaited
+          // throwOnError() call. Behaviour is unchanged — the catch below rethrows on
+          // every path, so this line was already reachable only on success — but the
+          // reset now sits adjacent to the call it retires instead of after an
+          // intervening catch block, which is what makes its throw-on-error reason
+          // verifiable locally (by the F1 ordering guard and by a human reader alike).
+          completeCycleCountIdem.resetKeyFor(completionScope);
+        } catch (completionErr) {
+          // A change that lands DURING completion is refused by
+          // p_expected_item_revision. Without this branch the operator saw only
+          // the sanitized raw exception ("CYCLE_COUNT_STALE_REVISION") with no
+          // refreshed list and no instruction. Pull the authoritative rows back
+          // in and say plainly what happened; the reviewed-revision baseline
+          // advances with them, so the next click completes what is on screen.
+          if (hasRpcCode(completionErr, RpcErrorCodes.CYCLE_COUNT_STALE_REVISION)) {
+            await waitForAuthoritativeCountItems(stillCurrentSession);
+            throw new Error(
+              'Someone changed a counted quantity while this count was being completed. The list has been refreshed — review the updated quantities, then complete again.'
+            );
+          }
+          throw completionErr;
+        }
 
-        const varianceItems = countItems.filter((i) => i.variance && i.variance !== 0);
+        const varianceItems = snapshot.items.filter((i) => i.variance && i.variance !== 0);
 
-        await logActivity({ event: 'cycle_count_completed', description: `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
+        // The count is COMMITTED and its key is retired by this point, so the
+        // inventory adjustment has already happened. Activity logging is a
+        // post-commit side effect: letting it reject here would surface a
+        // failure toast for a completion that succeeded, and the retry then
+        // runs under a fresh key against an already-completed count.
+        try {
+          await logActivity({ event: 'cycle_count_completed', description: `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
+        } catch (logErr) {
+          // Same reason as the receiving post-commit block: the count is already
+          // COMMITTED and its key retired by this point, so an exception escaping
+          // this catch — including from the reporter itself — would present a
+          // committed inventory adjustment to the operator as a failure.
+          try {
+            Sentry.captureException(logErr);
+          } catch {
+            // Nothing left to report through; the completion still stands.
+          }
+        }
       },
       toast,
       setLoading: setCompleting,
-      successMessage: 'Cycle count completed',
+      // Name the count in the success message. The RPC can land after the operator has
+      // opened a different count, and a bare "Cycle count completed" toast then reads
+      // as a statement about whatever is on screen now.
+      successMessage: `Cycle count ${activeCount.count_number} completed`,
       sentryTag: 'complete_cycle_count',
       onSuccess: () => {
-        setShowDetail(false);
+        // The completion really did happen, so the list always refreshes. But
+        // closeDetail() is session-specific: if the operator moved on while the RPC
+        // was in flight, closing here would shut a DIFFERENT count's open modal out
+        // from under them. Only the session that asked for this completion may close
+        // the detail view it was looking at.
+        if (stillCurrentSession()) closeDetail();
         fetchCounts();
       },
     });
@@ -350,7 +831,7 @@ export default function CycleCounts() {
       successMessage: 'Cycle count cancelled',
       sentryTag: 'cancel_cycle_count',
       onSuccess: () => {
-        setShowDetail(false);
+        closeDetail();
         fetchCounts();
       },
     });
@@ -380,7 +861,7 @@ export default function CycleCounts() {
       await logActivity({ event: 'cycle_count_reversed', description: `Cycle count ${activeCount.count_number} reversed — inventory adjustments undone`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
 
       toast('success', `Cycle count ${activeCount.count_number} reversed. Inventory restored.`);
-      setShowDetail(false);
+      closeDetail();
       fetchCounts();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'reverse_cycle_count' } });
@@ -543,12 +1024,12 @@ export default function CycleCounts() {
       <ConfirmModal
         open={completeConfirmOpen}
         onClose={() => setCompleteConfirmOpen(false)}
-        onConfirm={executeComplete}
+        onConfirm={() => { void executeComplete(); }}
         title="Complete with Uncounted Items"
         message={completeConfirmMsg || `Some products have not been counted yet. Complete anyway?`}
         confirmLabel="Complete Anyway"
         variant="warning"
-        loading={completing}
+        loading={completing || preparingCompletion}
       />
       <ConfirmModal
         open={cancelConfirmOpen}
@@ -573,7 +1054,7 @@ export default function CycleCounts() {
       {/* Cycle Count Detail Modal */}
       <Modal
         open={showDetail}
-        onClose={() => setShowDetail(false)}
+        onClose={closeDetail}
         title={activeCount ? `Cycle Count: ${activeCount.count_number}` : 'Cycle Count'}
         size="large"
       >
@@ -622,6 +1103,7 @@ export default function CycleCounts() {
                               type="number"
                               step="0.01"
                               value={item.counted_qty ?? ''}
+                              disabled={preparingCompletion || completing}
                               onChange={(e) => {
                                 const val = e.target.value === '' ? null : parseFloat(e.target.value);
                                 updateCountedQty(item.id, val);
@@ -700,7 +1182,7 @@ export default function CycleCounts() {
                 </Button>
                 <Button
                   onClick={handleComplete}
-                  loading={completing}
+                  loading={completing || preparingCompletion}
                   icon={<CheckCircle className="w-4 h-4" />}
                 >
                   Complete &amp; Apply Adjustments

@@ -161,6 +161,12 @@ export const RpcErrorCodes = {
   // return-credit COGS and year-end report guards (20260827041000/041100)
   RETURN_CREDIT_CUTOVER_IN_PROGRESS: 'RETURN_CREDIT_CUTOVER_IN_PROGRESS',
   CUSTOMER_SCOPE_DENIED: 'CUSTOMER_SCOPE_DENIED',
+  PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED',
+  // complete_cycle_count optimistic-concurrency refusal (20260831212415). Raised
+  // when another client changed a counted quantity after the completing client
+  // read its snapshot, so the completion would apply inventory adjustments the
+  // operator never reviewed.
+  CYCLE_COUNT_STALE_REVISION: 'CYCLE_COUNT_STALE_REVISION',
   RETURN_NOT_APPROVED: 'RETURN_NOT_APPROVED',
   RETURN_CREDIT_UNIT_MISMATCH: 'RETURN_CREDIT_UNIT_MISMATCH',
   RETURN_CREDIT_INVENTORY_UNIT_MISMATCH: 'RETURN_CREDIT_INVENTORY_UNIT_MISMATCH',

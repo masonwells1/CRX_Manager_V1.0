@@ -839,12 +839,22 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     }
   }, [applyRecord, options, storageKey]);
 
+  // Same value as `unresolvedIntent`, read from the ref instead of state.
+  // `unresolvedIntent` is React state, so a caller that awaits classifyFailure()
+  // and then reads it in the SAME tick still sees the render-time value — which
+  // is null on the first failure, silently skipping any "an intent survived"
+  // branch. applyRecord() writes intentRef synchronously, so this accessor is
+  // correct immediately after classifyFailure()/beginIntent() resolve. Use the
+  // state field for rendering; use this when branching inside an async handler.
+  const getUnresolvedIntent = useCallback(() => intentRef.current, []);
+
   return {
     beginIntent,
     getIdempotencyKey,
     resolveIntent,
     classifyFailure,
     unresolvedIntent,
+    getUnresolvedIntent,
     isIntentLocked: hasUnresolvedRecord,
     isForeignIntentLocked,
     isRetryExpired: retryNotAfterMs !== null && Date.now() >= retryNotAfterMs,

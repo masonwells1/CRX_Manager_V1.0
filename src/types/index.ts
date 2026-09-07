@@ -2414,6 +2414,8 @@ export interface CycleCount {
   count_number: string;
   warehouse: string;
   status: CycleCountStatus;
+  /** Required after migration 20260831212415 is applied. */
+  item_revision?: number;
   initiated_by: string;
   completed_by: string | null;
   notes: string | null;

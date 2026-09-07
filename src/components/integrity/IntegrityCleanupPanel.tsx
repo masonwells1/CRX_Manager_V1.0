@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { ShieldAlert, RefreshCw, AlertTriangle, FileText, Wrench, PackageCheck, Activity } from 'lucide-react';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, sanitizeError } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
@@ -7,6 +7,7 @@ import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
 import { Sentry } from '../../lib/sentry';
 import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages } from '../../lib/deliveryInvoiceCoverage';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { fetchSplitBillingOrderIds, SPLIT_BILLING_BLOCK_REASON } from '../../lib/deliverySplitBilling';
 
 interface NegativeInvRow {
@@ -103,11 +104,7 @@ function describeAlert(a: IntegrityAlertRow): { title: string; detail: string } 
 export default function IntegrityCleanupPanel() {
   const { profile } = useAuth();
   const { toast } = useToast();
-  // F2 fix: idempotency keys are generated per-click (not via useIdempotencyKey)
-  // because the hook caches one key per mount, so rapid clicks across DIFFERENT
-  // rows would all reuse the first row's key — server returns the cached
-  // result for the wrong row and the UI shows a misleading success toast.
-  // Each handler below calls crypto.randomUUID() inline.
+  const reconcileIdem = useIdempotencyKey('reconcile_negative_inventory', profile?.id || '');
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -128,6 +125,7 @@ export default function IntegrityCleanupPanel() {
   const [backfillBusy, setBackfillBusy] = useState<Record<string, boolean>>({});
   const [verifyBusy, setVerifyBusy] = useState<Record<string, boolean>>({});
   const [verifyConfirmId, setVerifyConfirmId] = useState<string | null>(null);
+  const reconcileInFlightRef = useRef(new Set<string>());
 
   const fetchAll = useCallback(async () => {
     setRefreshing(true);
@@ -213,6 +211,16 @@ export default function IntegrityCleanupPanel() {
             };
           }),
         );
+      } else {
+        // A normal Supabase failure arrives FULFILLED as { data: null, error },
+        // so the rejected-only Sentry loop above skips it and `negRes.data` is
+        // falsy — leaving the previously loaded negatives rendered as if they
+        // were current. These rows are clickable and each click writes an
+        // ABSOLUTE inventory quantity, so a stale one is not merely cosmetic.
+        // Clear them, the same way the unbilled section already handles its own
+        // fulfilled-with-error case below.
+        if (negRes.error) Sentry.captureException(negRes.error);
+        setNegatives([]);
       }
 
       if (overRes.data) {
@@ -352,7 +360,11 @@ export default function IntegrityCleanupPanel() {
   const handleReconcile = async (row: NegativeInvRow) => {
     if (!profile) return;
     const input = reconcileInputs[row.id];
-    if (!input?.qty || isNaN(parseFloat(input.qty)) || parseFloat(input.qty) < 0) {
+    const newQuantity = parseFloat(input?.qty ?? '');
+    // Number.isFinite, not isNaN: exponent notation such as 1e309 parses to
+    // Infinity, which is neither NaN nor < 0, so an isNaN/negative pair alone
+    // lets a non-finite quantity through to an inventory-reconciling RPC.
+    if (!input?.qty || !Number.isFinite(newQuantity) || newQuantity < 0) {
       toast('error', 'Enter a non-negative quantity');
       return;
     }
@@ -360,27 +372,58 @@ export default function IntegrityCleanupPanel() {
       toast('error', 'Reason is required');
       return;
     }
+    // Bind retries to this row and its exact operator-entered correction. A
+    // changed quantity or reason is new intent; a lost response is the same
+    // intent and must replay safely.
+    //
+    // Scope on the PARSED quantity, not the raw input text: this RPC writes an
+    // absolute inventory level, and "1.0", "1" and "1e0" all send the identical
+    // p_new_quantity. Keying on the typed string would mint a fresh key for a
+    // reformatted retry, bypass the saved receipt, and re-run the correction —
+    // overwriting any legitimate stock movement that happened in between.
+    const scope = `reconcile:${row.id}:${newQuantity}:${input.reason.trim()}`;
+    if (reconcileInFlightRef.current.has(scope)) return;
+    reconcileInFlightRef.current.add(scope);
     setReconcileInputs((prev) => ({ ...prev, [row.id]: { ...prev[row.id], busy: true } }));
     try {
-      // F2 fix: per-click UUID, not a hook-cached key (which would collide across rows)
-      const idemKey = crypto.randomUUID();
       const { data, error } = await supabase.rpc('reconcile_negative_inventory', {
         p_inventory_id: row.id,
-        p_new_quantity: parseFloat(input.qty),
+        p_new_quantity: newQuantity,
         p_reason: input.reason.trim(),
         p_performed_by: profile.id,
-        // eslint-disable-next-line local-rules/idempotency-key-from-hook -- deliberate per-row key; see F2 comment above
-        p_idempotency_key: idemKey,
+        p_idempotency_key: reconcileIdem.getKeyFor(scope),
       });
       if (error) throw error;
       assertRpcResult(data, 'reconcile_negative_inventory');
+      reconcileIdem.resetKeyFor(scope);
+      // Drop the reconciled row LOCALLY, before the refresh and independently of
+      // whether it succeeds. The receipt was just retired one line above, so
+      // until this row leaves the screen a second click mints a FRESH key and
+      // re-applies an absolute `quantity_available`, overwriting any stock
+      // movement since the first commit. Relying on `fetchAll()` to remove it
+      // was the gap: a normal Supabase `{ error }` on the negatives query is a
+      // FULFILLED promise, so `fetchAll` neither throws nor re-renders that
+      // section, and the stale row stayed clickable with no signal at all.
+      setNegatives((prev) => prev.filter((r) => r.id !== row.id));
       toast('success', `${row.product_name} reconciled to ${input.qty}`);
-      await fetchAll();
+      // The mutation-success boundary ENDS here: the RPC is proven and its retry
+      // receipt is already retired. The refresh below used to sit inside this
+      // try, so a refresh rejection was reported as a FAILED reconciliation —
+      // and a retry then minted a fresh key and re-applied an ABSOLUTE inventory
+      // quantity, overwriting any legitimate stock movement in between. Refresh
+      // failures now say only that the refresh failed.
+      try {
+        await fetchAll();
+      } catch (refreshErr) {
+        Sentry.captureException(refreshErr instanceof Error ? refreshErr : new Error(String(refreshErr)));
+        toast('error', 'Reconciled, but the list could not be refreshed. Reload to see current values.');
+      }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
       // Same non-throwing-Supabase shape as handleBackfillInvoice above.
       toast('error', sanitizeError(err));
     } finally {
+      reconcileInFlightRef.current.delete(scope);
       setReconcileInputs((prev) => ({ ...prev, [row.id]: { ...prev[row.id], busy: false } }));
     }
   };
