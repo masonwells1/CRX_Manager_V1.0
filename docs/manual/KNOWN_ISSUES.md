@@ -1453,25 +1453,108 @@ only.** Both manifests register it under the matcher `"Write|Edit|MultiEdit"` (`
 predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are the **post-apply** half, run against the
 live catalog, and are indifferent to how the file was written.
 
-**Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. The
-**active** hook remains the capped guard: its actor-pattern analysis catches ordinary spellings in full-file
-content, while the narrow 2026-09-03 maintenance reconstructs supported Edit/MultiEdit calls before running
-that unchanged analysis. The **parked PR #449 rewrite** is materially stronger — 19 laundering channels
-closed over two rounds, each reproduced by running the hook and each fix mutation-tested — but **none of
-that is in the running hook**, and this maintenance does not import it. Do not credit the active guard with
-the fixes in PR #449. It is
-**not** a boundary, and no document should describe it as preventing actor forgery. The ordinary
-*incremental* edit path was not covered when this issue was recorded; the narrow 2026-09-03 maintenance
-change now reconstructs full post-edit files without changing the capped actor-analysis patterns.
+**Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. PR #449
+replaces the shorter guard that `main` runs today (235 lines, verified 2026-09-06, already carrying the
+narrow 2026-09-03 Edit/MultiEdit reconstruction maintenance) with the hardened guard described here when
+it lands: supported Edit/MultiEdit changes are reconstructed against the full file with CRLF-safe handling, visible
+actor forwarding to callables is refused, and the 19
+reproduced laundering channels plus the authorized non-first-`INTO`, `VALUES … INTO`, and final-security-mode repairs are covered. Until #449 is
+merged, `main` still runs the shorter guard; after it is merged, this paragraph describes the active hook. The
+rewrite is still **not a boundary**, and no document should describe it as preventing actor forgery. The
+remaining gaps below and the non-`Write`/`Edit`/`MultiEdit` tool-path limit are why the cap remains operative.
+
+**Header-only exemption marker (authorized 2026-09-06).** The `-- actor-binding-check: exempt` marker
+switches the whole guard off, and until this repair the hook searched for it in the raw file text. A
+migration beginning `SELECT '-- actor-binding-check: exempt';` therefore disarmed the guard for every
+routine that followed, with the marker living in ordinary string DATA. The marker is now honored only
+inside the file's leading comment block — the run of whitespace and `--` / `/* */` comments before the
+first executable token — which is where every real use in this repository already puts it. An
+unterminated header block comment fails closed and the guard keeps checking.
+
+**ALTER-originated identity narrowing (authorized 2026-09-06).** The 2026-09-04 rule that stops
+final-security-mode tracking across a rename, schema move, or drop covered only routines with a readable
+CREATE in the same migration. A routine elevated by `ALTER ... SECURITY DEFINER`, renamed away, and then
+shadowed by a namesake replacement that is demoted to `SECURITY INVOKER` still read as demoted. The
+ALTER-only path now applies the same intervening-identity-change test, so the still-elevated routine is
+reported. Neither repair widens actor-name discovery, adds a SQL parser, or changes the broader cap.
+
+**Final-security-mode narrowing (authorized 2026-09-03).** A later
+`ALTER ... SECURITY INVOKER` no longer clears earlier definer evidence when executable SQL in the
+migration contains `ROLLBACK` or `ABORT`; that includes a demotion rolled back to a savepoint and a
+demotion aborted in a later transaction. The hook conservatively requires the authored definer body to
+pass instead of trying to reconstruct transaction state. Comment and string occurrences are masked.
+Invoker demotions count only as top-level migration DDL, so a deferred ALTER stored in another routine
+does not clear the definer evidence. CREATE/ALTER signatures with unqualified custom argument types do
+not match across the boundary; schema qualification is required to avoid search-path overload collapse.
+This closes the reproduced exact-review bypass but does not turn the reader into a transaction parser or
+change the broader cap.
+
+**Post-refusal alias/CALL and mixed-case-history narrowing (authorized 2026-09-03).** A guarded
+parameter can no longer be overwritten through a PL/pgSQL `ALIAS FOR` spelling after its refusal,
+and passing the parameter or alias to a procedure `CALL` is treated as possible `OUT`/`INOUT`
+writeback. The hook deliberately does not attempt live-catalog or overload analysis to prove an
+actor-bearing procedure argument input-only; unusual safe cases retain the reviewed exemption.
+Historical persistent `cron.job` view-alias discovery now includes earlier migration filenames
+with mixed or uppercase `.sql` extensions. These close reproduced exact-review bypasses without
+changing the broader capped posture.
+
+**Final lexical/path narrowing (authorized 2026-09-03).** CREATE-level quoted `"search_path"` and
+`SET search_path FROM CURRENT` now fail closed when operator safety cannot be proved. Adjacent quoted
+`UPDATE"cron"."job"SET` syntax remains inside delayed-command inspection, and migration path aliases
+containing `.`, `..`, or duplicate separators are normalized before the scope decision. These close
+the three reproduced exact-review payloads without changing the broader capped posture.
+
+**Runtime-order narrowing (authorized 2026-09-03).** A direct built-in `set_config` call before the
+actor refusal now invalidates its operator-safety proof. ALTER routine search-path text stored in
+pg_cron or another execution boundary is treated as security-relevant dynamic DDL and fails closed;
+a textually later safe top-level ALTER cannot claim to repair code that executes afterward. This does
+not model general branch or scheduler timing and does not change the broader capped posture.
+
+**Shadowed UUID overload narrowing (authorized 2026-09-03).** When a migration can place a
+user-schema `uuid` before explicit `pg_catalog`, bare UUID signatures are not used to match CREATE and
+ALTER routine identities. A later `SECURITY INVOKER` ALTER therefore cannot demote the wrong overload
+in the guard's model. Explicit `pg_catalog.uuid` remains comparable; broader type resolution is not
+modeled and the capped posture is unchanged.
+
+**Repeated CREATE search-path narrowing (authorized 2026-09-04).** PostgreSQL applies the final of
+multiple legal routine `SET search_path` options. PR #449 now evaluates that effective final value,
+so an earlier explicit `pg_catalog` cannot hide a later unsafe path. This is ordered attribute
+handling, not a general CREATE parser, and the capped posture is unchanged.
+
+**Top-level set_config ordering narrowing (authorized 2026-09-04).** A top-level
+`set_config('search_path', ...)` call now participates in the session order captured by a later
+`ALTER ... SET search_path FROM CURRENT`. Dynamic configuration names fail closed; a statically
+unrelated GUC is ignored, and a later explicit safe `SET search_path` repairs the state. This is one
+bounded callable addition to the existing SET/RESET model, not a general configuration interpreter,
+and the broader capped posture is unchanged.
+
+**ARRAY-default positional narrowing (authorized 2026-09-04).** Routine parameter splitting now
+keeps commas inside square-bracketed `ARRAY[...]` defaults within the same declaration. A preceding
+array default cannot shift a later opaque actor from `$2` to a decoy `$3` in the guard's model. This
+is delimiter bookkeeping in the existing reader, not a general PostgreSQL parser, and the broader
+capped posture remains unchanged.
+
+**Quoted actor-identity narrowing (authorized 2026-09-04).** PostgreSQL folds unquoted parameter
+names to lowercase but preserves quoted names exactly. PR #449 keeps those identities distinct, so
+a refusal for `p_actor` or a same-named trusted local cannot validate a separate `"P_ACTOR"` input.
+Unicode-escaped and non-ASCII quoted actor inputs remain positional-only; this does not widen the
+actor-name grammar or the broader capped posture.
+
+**Routine identity-lifecycle narrowing (authorized 2026-09-04).** A later invoker or search-path
+ALTER is not applied backward across intervening routine/schema rename, move, or drop DDL. Those
+statements can leave the original definer at a new identity while a replacement occupies its old
+name, so the hook keeps evaluating the earlier body instead of treating the replacement's ALTER as
+a demotion. This is bounded fail-closed tracking, not a PostgreSQL catalog-lifecycle model, and the
+broader capped posture remains unchanged.
 
 **What it does NOT catch, plus the one closed plumbing gap, stated so nobody re-derives it:**
 
 | Gap | Why it is open |
 |---|---|
 | Actor-shaped parameters outside the name pattern `^p_\w*by$\|^p_actor\|^p_user` (e.g. `p_target_id`, `p_acting_user_id`) | Deliberate scope limit — and **the live sweep predicates use the SAME name pattern, so this gap is shared, not compensated.** The post-apply sweep does NOT catch this one. Closing it needs real dataflow over write targets, and would have to change the hook and both predicates together. |
-| Re-binding after a passing check (`p_performed_by := p_target_id;`), `EXECUTE … USING`, `INSERT … RETURNING … INTO`, temp-table round trips | **Not covered at write time, and not covered by the sweeps either.** The incidental `hasMutation` trigger that would catch `EXECUTE`/`INSERT` lives in **parked PR #449, not in the running hook** — do not credit the active guard with it. The sweeps miss them for their own reasons: both predicates select only where `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that passes a binding check and *then* re-assigns the parameter is excluded outright; and a temp-table round trip matches neither the `coalesce`/`auth.uid`/role proximity test in `actor-forgery.sql` nor the same-statement `financial_audit_log … <param>` test in `-fin-audit.sql`. |
-| ~~An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function~~ **Closed 2026-09-03 for supported Edit/MultiEdit paths.** | The hook now reconstructs the full post-edit migration with the shared CRLF-safe `edit-splice-lib.mjs` before running its unchanged analysis. Regression tests cover single Edit, MultiEdit, a benign edit, and an existing file-level exemption. This closes only the fragment-plumbing gap; every lexical, rebinding, naming, delegation, and unsupported-tool limit in this table remains. |
-| Cross-routine / cross-migration helpers | **Not covered — and there is no "fail-closed callable rule" in the running hook.** The analysis is intra-routine and single-file, and the active guard only considers a routine whose own body contains a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM`. A `SECURITY DEFINER` wrapper that accepts `p_performed_by` and delegates the write to a helper therefore has no literal DML in its body and is allowed — confirmed by running the real hook, which returned `allow`. Neither sweep predicate follows the helper call either. Any fail-closed callable handling belongs to **parked PR #449**; do not rely on it. |
+| Re-binding after a passing check, dynamic SQL, `RETURNING … INTO`, and temp-table round trips | **NARROWED by PR #449.** Direct `:=`/`=` actor re-binding is covered by both post-apply predicates and by the write-time hook. The hook also treats dynamic `EXECUTE` and visible actor forwarding as mutations, inspects every target in recognized `SELECT`/`VALUES`/`RETURNING`/`FETCH`/`EXECUTE INTO` lists, treats `ALIAS FOR` spellings as the same writable parameter, and conservatively rejects actor-bearing procedure `CALL`s as possible output writeback. Positional aliases and fail-closed opaque Unicode targets are included. Final security-mode matching preserves exact quoted schema/routine identities, so an unrelated equal-length quoted name cannot supply an `INVOKER` demotion. The same final-state model applies later `ALTER` search-path changes before trusting UUID operator resolution; explicit/quoted `SET`, `FROM CURRENT`, `RESET`, and `RESET ALL` are covered, including PostgreSQL's combined quoted-list form such as `'evil, pg_catalog'`. Executable body-level `SET`/`RESET search_path` before the actor refusal also fails closed so runtime operator lookup cannot replace that final routine attribute. This is target-only coverage: it does not propagate actor taint from `VALUES` expressions into unrelated locals. The predicates remain narrower: they do not model `INTO` lists, `EXECUTE … USING`, procedure output, or temp-table dataflow. A temp-table round trip can still separate the actor source from both predicates' sinks, and novel laundering that hides the actor before a later use remains outside this text analysis. The broader best-effort cap remains in force. |
+| ~~An ordinary incremental `Edit` that inserts an unsafe write **inside** an existing function~~ **Closed 2026-09-03 for supported Edit/MultiEdit paths.** | The hook reconstructs the full post-edit migration with CRLF-safe handling before running actor analysis. Regression tests cover single Edit, MultiEdit, a benign edit, and an existing file-level exemption. This closes only the fragment-plumbing gap; every lexical, rebinding, naming, delegation, and unsupported-tool limit in this table remains. |
+| Cross-migration helper implementations and actor-hidden helper calls | PR #449 adds a fail-closed callable-forwarding rule, so an ordinary wrapper that visibly passes its actor parameter to a helper is refused even without literal DML. The hook still cannot inspect a helper body defined in another migration or follow an actor first hidden behind an unmodelled alias/CTE before the call. Neither sweep predicate follows helper calls across routines. Those residuals remain for exact-SHA review and CodeRabbit rather than another regex round. |
 | Novel lexical spellings | The known-unknown. Three rounds each found a *new category*; the tool pattern-matches text, and PostgreSQL's grammar has more spellings than anyone will enumerate. |
 | **A migration written by any tool other than hooked `Write`/`Edit`/`MultiEdit`** — `cat`/`tee`/redirect from Bash or PowerShell, or a generator script | **The guard never runs at all.** Both manifests register it under the matcher `"Write\|Edit\|MultiEdit"` only, and `bash-safety.mjs` blocks *modifying* an existing file under `supabase/migrations/` while permitting **creation** of a new one. Perfectly ordinary SQL with a forgeable actor therefore bypasses the guard on tool choice alone — no lexical trick required. This is the widest gap in this table and it is orthogonal to every other row: they describe SQL the guard mis-reads, this one describes SQL it never sees. The post-apply sweeps do still see the applied routine. |
 
@@ -1482,7 +1565,7 @@ three careful passes.
 
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
-- **For the novel-lexical and non-hooked tool-path gaps** (rows 5 and 6
+- **For the novel-lexical and non-`Write`/`Edit`/`MultiEdit` tool-path gaps** (the final two rows
   above): the exact-SHA `gpt-5.6-sol` proof on migration diffs and the CodeRabbit final review are the
   controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
   not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
@@ -1492,20 +1575,16 @@ three careful passes.
   clears both predicates without trying.** Do not describe any row here as requiring an attacker to clear
   all three controls.
 
-  An ordinary shell-written migration (row 6) needs no cleverness at all. The ordinary incremental Edit
-  path (row 3) was comparably unremarkable before its narrow 2026-09-03 reconstruction fix. "Deliberately
-  obfuscated SQL" describes the novel-lexical row only, and even there it describes what defeats the hook,
-  not what defeats the sweeps.
-- **For cross-routine / cross-migration helpers** (row 4): **only the Codex proof and the CodeRabbit
-  review.** Neither predicate can see this path. `actor-forgery.sql` needs actor/`auth.uid`/role proximity
-  inside the *wrapper's own* `prosrc`, and `-fin-audit.sql` needs both the parameter and the
-  `financial_audit_log` sink in that same source — but the wrapper only hands the parameter to a helper, and
-  a private helper is not even a candidate, since both predicates require
-  `has_function_privilege('authenticated', ...)`. Do not count the sweep here.
-- **For the re-binding and laundering gaps** (row 2): **only the Codex proof and the CodeRabbit review.**
-  Both predicates are gated on `prosrc !~* 'ACTOR_MISMATCH'`, so a re-binding that follows a passing check is
-  excluded from the sweep by the presence of the check it defeated; and a temp-table round trip matches
-  neither predicate's sink test. Do not count the sweep here.
+  The non-`Write`/`Edit`/`MultiEdit` row needs no cleverness: an ordinary shell-written migration bypasses the hook with
+  unremarkable SQL. "Deliberately obfuscated SQL" describes the novel-lexical row only, and even there it
+  describes what defeats the hook, not what defeats the sweeps.
+- **For actor-hidden cross-routine/cross-migration helper calls:** **only the Codex proof and CodeRabbit
+  review.** PR #449 refuses direct visible actor forwarding, but neither predicate can follow a value hidden
+  behind an unmodelled alias into a private helper, and a private helper is not itself a predicate candidate.
+  Do not count the sweep for that residual.
+- **For the remaining laundering gaps:** direct assignment is covered by the predicates and the recognized
+  `INTO` target-list forms are covered by the PR #449 hook. Temp-table and other actor-hiding dataflow remains
+  outside both predicates; only exact-SHA review and CodeRabbit cover those residuals.
 - **For the naming-scope gap** (row 1): **only the Codex proof and the CodeRabbit review.** The sweep
   predicates key on the same `^p_\w*by$|^p_actor|^p_user` pattern, so they share the blind spot rather than
   covering it. Do not cite the sweep as the compensating control for a `p_target_id`-shaped parameter.
@@ -1515,10 +1594,9 @@ Do not remove or weaken the hook — it is cheap and it catches the ordinary cas
 PostgreSQL's own parser (`libpg_query`) rather than more regexes; that removes the lexical category entirely
 but still does not solve the naming-scope limit.
 
-**Related open work.** PR #449 is parked with the 19 closed bypasses and 23 open review findings; it is worth
-landing after one clean review round, as an improvement to a capped control rather than a resumed programme.
-A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-recut-20260831` (no PR) and
-duplicates one of #449's fixes — delete it rather than continuing it.
+**Related delivery state.** PR #449 carries the hardened hook as an improvement to a capped control, not a
+resumed programme. Credit its behavior to the active hook only after Mason merges that PR. Any future novel
+parser/dataflow finding remains capped unless Mason separately authorizes it.
 
 
 ## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion

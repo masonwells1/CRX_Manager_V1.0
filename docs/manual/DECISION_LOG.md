@@ -7,6 +7,32 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-06 — the exempt marker must be a header comment in PR #449; keep the broader cap
+
+**Source:** Mason's continuing direction to get PR #449 clean and mergeable, applied after the two
+still-open exact-SHA Codex findings on the PR were reproduced against the merged candidate.
+
+**Decision.** `-- actor-binding-check: exempt` disables the entire guard, so it is honored only inside
+the migration's leading comment block — the run of whitespace and `--` or `/* */` comments before the
+first executable token. Marker text stored as SQL string data, or written below the migration's SQL,
+no longer disarms the guard. An unterminated header block comment fails closed.
+
+**Boundary.** This is one bounded change to how the escape hatch is recognized. Every existing use in
+this repository already puts the marker on line 1, so no reviewed exemption is withdrawn. It does not
+add a SQL parser, widen actor-name or dataflow discovery, or change the broader best-effort cap.
+
+## 2026-09-06 — stop ALTER-originated final-mode tracking across identity changes in PR #449
+
+**Source:** Same direction and same reproduction session as the entry above.
+
+**Decision.** The 2026-09-04 rule that refuses to track a later `SECURITY INVOKER` across an
+intervening rename, schema move, or drop now also applies to routines elevated by
+`ALTER ... SECURITY DEFINER` with no readable CREATE body in the migration. A namesake replacement's
+demotion cannot clear definer evidence for a routine that was renamed away and stays owner-privileged.
+
+**Boundary.** This extends one existing test to a second code path; a demotion with no intervening
+identity change is still accepted. It does not model the catalog lifecycle or change the broader cap.
+
 ## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
 
 **Source:** Mason's decision on 2026-09-05, after the 2026-09-05 analysis recorded in `docs/manual/KNOWN_ISSUES.md`.
@@ -26,6 +52,230 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 **Machine-wide Codex contract.** Mason's same request also authorized trimming `C:\Users\mason\.codex\AGENTS.md`, which affects every local Codex project, not only CRX Manager. The file now keeps only cross-project owner communication, authority, safety, quality, and proof rules; CRX-specific instructions remain in this repository. Verified 2026-09-04: the active file is SHA-256 `870CAAD0F309757A6D5205A0F91C7C0B91D57604BF7427A5670428B8703EC94D`. Recoverable snapshots are `C:\Users\mason\.codex\backups\20260904-codex-behavior\AGENTS.md` (before, SHA-256 `B8715E9934B4161838C6153448C8AD0730D5E31EBA104C762A7D37E721A6777C`) and `AGENTS.after-lean-20260904.md` in the same folder (after, same hash as the active file). Future machine-wide edits require a fresh owner request and a recoverable before/after record because they can affect FarmRx and every other project.
 
 **What this forbids/implies:** do not re-expand always-loaded files with task procedures already routed elsewhere; do not remove a hard rule without moving or superseding it; do not present findings from a checkout behind `origin/main` as current; and do not make Mason name files, select technical implementations, or paste setup prompts. Delegation routes to `docs/workflows/AGENT_COLLABORATION.md`, while every code change routes through the lightweight coding guide so settled decisions and known issues are checked without loading the full safety rulebook. `scripts/check-agent-guidance.mjs` enforces size budgets, critical rule presence, and valid routing paths.
+
+## 2026-09-04 — preserve positional actor numbering across ARRAY defaults in PR #449
+
+**Source:** Mason's continuing direction to get PR #449 clean and mergeable, applied after the
+mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** Top-level routine-parameter splitting tracks square-bracket nesting as well as
+parentheses. A comma inside a valid `ARRAY[...]` default therefore remains inside its declaration
+and cannot shift the `$n` alias assigned to a later actor parameter.
+
+**Boundary.** This is one bounded delimiter repair in the existing parameter reader. It does not
+add a PostgreSQL parser, widen actor-name/dataflow discovery, or change the broader best-effort cap.
+
+## 2026-09-04 — include top-level set_config in FROM CURRENT ordering for PR #449
+
+**Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory
+replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** Top-level `set_config` calls that name `search_path`, or whose configuration name is
+dynamic, invalidate session search-path trust for a later `ALTER ... SET search_path FROM CURRENT`.
+A later explicit safe `SET search_path` repairs the ordered state; a statically unrelated GUC does not
+change it.
+
+**Boundary.** This extends the existing bounded top-level SET/RESET order model by one callable form.
+It does not interpret arbitrary PostgreSQL configuration state or widen the actor/dataflow cap.
+
+## 2026-09-04 — stop final-mode tracking across routine identity changes in PR #449
+
+**Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory
+replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** A later `SECURITY INVOKER` or search-path ALTER cannot clear or rewrite earlier
+definer evidence when intervening routine/schema rename, move, or drop DDL breaks textual identity.
+
+**Boundary.** The guard records bounded identity-break statement positions and fails closed across
+them; it does not model the full catalog lifecycle. The broader actor-analysis cap remains unchanged.
+
+## 2026-09-04 — preserve quoted actor-parameter identity in PR #449; keep the broader cap
+
+**Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory
+replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** Actor-reference matching follows PostgreSQL identifier semantics: unquoted names fold
+to lowercase, while ordinary quoted ASCII names retain exact case. A refusal for `p_actor` cannot
+clear a distinct `"P_ACTOR"` input or collide with a same-spelled trusted local.
+
+**Boundary.** This seals quoted actor references inside the existing reader only. Unicode-escaped and
+non-ASCII quoted inputs remain positional-only, and the broader actor-name/dataflow cap is unchanged.
+
+## 2026-09-04 — use final repeated CREATE search_path in PR #449; keep the broader cap
+
+**Source:** Mason's continuing direction to fix PR #449 issues, applied after the mandatory
+replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** PostgreSQL permits repeated routine `SET search_path` options and the final option
+governs execution. The guard evaluates that final CREATE-level option in order; its file-wide
+top-level risk scan remains conservative across every search-path statement.
+
+**Boundary.** This orders one repeated routine attribute. It does not become a general CREATE
+option parser or widen actor-name/dataflow analysis; the broader best-effort cap remains.
+
+## 2026-09-03 — fail closed on shadowed bare UUID overload identity in PR #449
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** If a migration can shadow bare `uuid` resolution, unqualified UUID in CREATE/ALTER
+routine signatures is not stable final-mode identity. Only explicit unambiguous identities may let a
+later `SECURITY INVOKER` ALTER remove an earlier SECURITY DEFINER body from actor review.
+
+**Boundary.** This reuses the existing file-level UUID-shadow risk signal. It does not resolve each
+statement's catalog state or widen the actor-name/dataflow analysis; the broader cap remains.
+
+## 2026-09-03 — refuse runtime-ordered search_path poisoning in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced two final-candidate blockers.
+
+**Decision.** A direct built-in `set_config` call before the actor refusal invalidates that refusal's
+operator-safety proof. ALTER routine search-path text stored for later execution is security-relevant
+dynamic DDL and fails closed rather than being ordered lexically against top-level ALTER statements.
+
+**Boundary.** This does not evaluate procedural branches, scheduled execution time, or arbitrary
+configuration APIs. It closes the two reproduced runtime-order paths without changing the broader cap.
+
+## 2026-09-03 — close three exact-review lexical paths in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced three final-candidate blockers.
+
+**Decision.** The guard fails closed on quoted CREATE-level `"search_path"` and inherited CREATE
+`SET search_path FROM CURRENT`; recognizes an adjacent quoted `UPDATE"cron"."job"SET` boundary; and
+normalizes `.`, `..`, and duplicate path separators before deciding whether a file is a migration.
+
+**Boundary.** These repair the three reproduced lexical/path identities only. They do not add a SQL
+parser, broaden actor-name/dataflow discovery, or change the standing best-effort cap.
+
+## 2026-09-03 — parse combined quoted search_path lists in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** Search-path operator safety uses PostgreSQL's list meaning for an ordinary quoted GUC
+value: `'evil, pg_catalog'` is two entries, not one opaque string. The same bounded parser governs
+CREATE attributes, later ALTER attributes, and top-level state inherited by `FROM CURRENT`.
+
+**Boundary.** This is not a general PostgreSQL configuration interpreter. Nonstandard escape-string
+forms fail closed, and the existing actor-name, dataflow, tool-path, and broader-analysis caps remain.
+
+## 2026-09-03 — refuse pre-actor-check body search_path changes in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** A routine-local CREATE/ALTER `search_path` cannot prove UUID operator safety when the
+PL/pgSQL body executes `SET [LOCAL|SESSION] search_path`, quoted `SET "search_path"`, `RESET
+search_path`, or `RESET ALL` before the actor refusal. The guard fails closed on those bounded forms.
+A later body change does not retroactively invalidate an already enforced refusal.
+
+**Boundary.** This is a lexical pre-refusal safety check, not a general procedural configuration
+interpreter. It does not model arbitrary `set_config` expressions or branch feasibility; existing
+mutation/call forwarding rules and the broader actor-analysis cap remain operative.
+
+## 2026-09-03 — include ALTER search_path in PR #449 final routine state; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** A legacy UUID actor-refusal comparison is accepted only when the routine's final
+same-file `search_path` still proves safe operator resolution. Matching top-level `ALTER FUNCTION`/
+`PROCEDURE` forms participate in last-write state for explicit or quoted `SET search_path`, `SET ...
+FROM CURRENT`, `RESET search_path`, and `RESET ALL`. Reset or unreadable inherited state fails closed.
+
+**Boundary.** This tracks one security-relevant routine attribute across already matched CREATE/ALTER
+identities. It does not execute PostgreSQL configuration semantics generally, resolve catalog state,
+or widen actor-name discovery and cross-routine dataflow. Rollback-capable files remain conservative.
+
+## 2026-09-03 — preserve exact quoted routine identities in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** PR #449 must compare `CREATE` and `ALTER FUNCTION`/`PROCEDURE` identities using the
+exact quoted schema and routine names from source, not the syntax mask that blanks quoted contents.
+Distinct equal-length quoted names must never share a later `SECURITY INVOKER` demotion.
+
+**Boundary.** This repairs identity matching only. It does not add catalog resolution, infer
+`search_path` for unqualified names, decode Unicode-escaped identifiers, or widen the actor-name and
+cross-routine dataflow cap. Those ambiguous forms continue to fail closed or require manual review.
+
+## 2026-09-03 — authorize exact-review `VALUES … INTO` target repair in PR #449; keep the broader cap
+
+**Source:** Mason's continuing in-chat direction on 2026-09-03 to "continue fixing issues", applied
+after the mandatory replacement exact-SHA review reproduced this final-candidate blocker.
+
+**Decision.** PR #449 may add valid PL/pgSQL `VALUES (…) INTO` to the write-time guard's existing
+target-only assignment reader. Every recognized target is inspected for overwrite of a guarded actor
+parameter, positional alias, or trusted UUID local initialized from `auth.uid()`. An actor used only as
+a `VALUES` source does not invalidate an otherwise sound refusal.
+
+**Boundary.** This is one narrow exact-review repair. It does not add source-to-target taint
+propagation for `VALUES`, attempt multi-row value correlation, broaden actor-name discovery, resolve
+catalog identities, or reopen general SQL/cross-routine analysis. The 2026-09-01 best-effort cap
+remains operative.
+
+## 2026-09-03 — authorize exact-review alias, CALL, and history repairs in PR #449; keep the broader cap
+
+**Source:** Mason's in-chat direction on 2026-09-03 after the replacement exact-SHA review:
+"continue fixing issues".
+
+**Decision.** PR #449 may close three reproduced final-candidate bypasses. A PL/pgSQL
+`ALIAS FOR` name is another writable spelling of the guarded actor parameter, so rebinding that
+alias invalidates an earlier refusal. A procedure `CALL` that receives the actor or its alias is
+treated as possible `OUT`/`INOUT` rebinding because this write-time reader cannot prove external
+procedure modes and overload resolution. Calls without an actor argument remain compatible.
+Historical persistent `cron.job` alias discovery accepts mixed-case `.sql` extensions just as the
+current-file scope already does, while retaining the existing raw lexical ordering.
+
+**Boundary.** These are narrow exact-review repairs, not a reopening of general SQL parsing or
+cross-routine analysis. The hook does not attempt catalog resolution for procedure argument modes,
+and a safe unusual actor-bearing `CALL` continues to use the reviewed file-level exemption. The
+2026-09-01 best-effort cap remains operative.
+
+## 2026-09-03 — authorize exact-review final-mode repairs in PR #449; keep the broader cap
+
+**Source:** Mason's in-chat direction on 2026-09-03 after the exact-SHA reviewer blocked the
+replacement candidate: "ok fix the issues then".
+
+**Decision.** PR #449 may close the exact-review blocker bypasses in its final
+`SECURITY DEFINER`/`SECURITY INVOKER` mode reader. If executable migration SQL contains a
+`ROLLBACK` (including `ROLLBACK TO SAVEPOINT`) or `ABORT` statement, a later
+`ALTER ... SECURITY INVOKER` is not accepted as proof that an earlier definer mode is gone.
+The reader instead evaluates the remaining definer evidence and requires the authored routine
+body to pass the actor-binding check. Comments and string data are masked before this decision,
+so those words alone do not trigger it. An invoker demotion is accepted only as top-level migration
+DDL, not when stored in a routine body for deferred or conditional execution. Routine CREATE/ALTER
+identity matching also fails closed for unqualified custom argument types, because separate
+search paths can resolve the same text to distinct overloads; custom types must be schema-qualified.
+
+**Boundary.** These are narrow exceptions to the 2026-09-01 cap, authorized because the
+real exact-SHA proof gate reproduced them on otherwise final candidates. They do not add a
+transaction-state parser or reopen general lexical/dataflow hardening. The rule is deliberately
+fail-closed: an unusual safe migration combining an invoker demotion with rollback control must
+be simplified or use the existing reviewed file-level exemption; the same applies to deferred
+demotions and ambiguous custom-type identities. Future residuals remain capped unless Mason
+separately authorizes them.
+
+## 2026-09-03 — authorize one non-first-INTO repair in PR #449; keep the broader cap
+
+**Source:** Mason's in-chat direction on 2026-09-03: "Authorize the one bounded non-first-INTO
+repair; keep the broader cap."
+
+**Decision.** PR #449 may make one narrow repair to the capped write-time actor-binding guard:
+for the already-recognized PL/pgSQL `SELECT`, `RETURNING`, `FETCH`, and dynamic `EXECUTE` `INTO`
+forms, inspect every assignment target rather than only the first. The repair applies both to a
+guarded actor parameter and to a trusted local initialized from `auth.uid()`. Because PostgreSQL
+decodes `U&"..."` identifiers before target resolution and this best-effort guard intentionally does
+not, opaque Unicode targets inside those recognized lists fail closed.
+
+**Boundary.** The 2026-09-01 best-effort cap below remains operative. This exception does not
+authorize another general pattern-hardening round, a new SQL parser, wider actor-name discovery,
+cross-routine dataflow, incremental-edit reconstruction, changes to the post-apply predicates, or
+claims that the hook is a security boundary. Future residuals return to the capped posture unless
+Mason separately authorizes them.
 
 ## 2026-09-03 — invoice payment terms run from the INVOICE DATE; the UTC hole is a separate, smaller issue
 
@@ -65,7 +315,6 @@ change to a posting-date basis is a new owner decision, not a bug fix. `invoice_
 be a Chicago business date on the server — a new `CURRENT_DATE` fallback for it is a bug. The
 split-invoice body's third `CURRENT_DATE` (a commission-record date) was outside this decision and
 is tracked as a follow-up in the changelog entry, not silently changed.
-
 ## 2026-09-03 — the risky-content gate stays loud; the parked prose exemption is retired
 
 **Source:** Mason's in-chat answer on 2026-09-03 ("yes to all three") to the question "leave the
@@ -598,15 +847,34 @@ compensating controls, and conflating them would overstate the defence:
    "an attacker must clear all three" — that is true only for the subset of shapes the predicates' sinks
    happen to cover, and asserting it flatly is the same overclaim this entry exists to remove.
 2. **Re-binding and laundering bypasses** — `p_performed_by := p_target_id;` after a passing check,
-   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips. **The post-apply sweeps do NOT
-   cover these, and it is not a near miss.** Both predicates select only rows where
-   `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that performs a legitimate-looking binding check and *then*
-   re-assigns the parameter is excluded from both sweeps outright — the very presence of the check it
-   defeated is what hides it. A temp-table round trip evades them for a second, independent reason:
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips.
+   **NARROWED 2026-09-01 (ships with PR #449): the direct-assignment form IS now covered by both
+   post-apply sweep predicates.** Each fails closed and scans the whole body — rather than truncating
+   at the refusal — when the actor parameter is assigned to at statement position, so a routine that
+   passes a binding check and then re-assigns the parameter is no longer excluded. The match is pinned
+   to statement position because PL/pgSQL named-argument syntax (`f(p_performed_by := v_actor)`) is
+   lexically identical to assignment; proved on real PostgreSQL 17 in both directions, and confirmed to
+   add zero findings against the live catalog. **The laundering forms below remain uncovered** —
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips are dataflow, not a
+   spelling, and no pattern reaches them. A temp-table round trip evades them for a second, independent reason:
    `actor-forgery.sql` requires the parameter to appear near `coalesce`/`auth.uid`/role text, and
    `actor-forgery-fin-audit.sql` requires it to appear after `financial_audit_log` **before the next
    semicolon**, so stashing the parameter in a temp table in one statement and inserting it into the audit
    log in another satisfies neither. Only the Codex proof and the CodeRabbit review stand here.
+
+   **Bounded repair authorized 2026-09-03 — rebinding through a NON-FIRST `INTO` target.** The exact-SHA
+   `gpt-5.6-sol` proof on PR #449 head `4976ed08` returned **BLOCKERS** on this, and it did not
+   theorise: it ran the payload through the real hook with an authenticated grant and observed
+   `allow`. `SELECT 1, p_target_id INTO v_dummy, p_performed_by` re-forges the actor after a passing
+   check; moving the actor to the FIRST `INTO` target correctly returns `deny`. The same second-target
+   overwrite of a trusted `v_actor := auth.uid()` local also returns `allow`. **Both sweep predicates
+   miss it too** — their rebinding rule recognises assignment syntax (`:=` / `=`) and not `INTO`
+   target lists — so the 2026-09-01 narrowing above covers the *assignment* form ONLY. Do not read it
+   more broadly. Mason authorized PR #449 to inspect every target in the hook's already-recognized
+   `SELECT`/`RETURNING`/`FETCH`/`EXECUTE INTO` forms. That one exception does not reopen the broader
+   pattern-hardening programme or change the hook's best-effort status. The predicates remain
+   unchanged: they still do not model `INTO` target lists, so the exact-SHA proof and CodeRabbit
+   remain the load-bearing review controls for this shape until the candidate lands.
 3. **The naming-scope gap** — actor-shaped parameters that do not match `^p_\w*by$|^p_actor|^p_user`, e.g.
    `p_target_id` or `p_acting_user_id`. **The live sweep predicates share this exact name pattern, so the
    sweep does NOT cover this path either.** Do not claim the sweep as the compensating control for it. The

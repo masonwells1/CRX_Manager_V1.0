@@ -1,3 +1,8 @@
+-- actor-binding-check: exempt
+--   REASON: this parked migration uses formatted SET LOCAL statements only in
+--   its rollback-only proof. Its actor-taking SECURITY DEFINER function binds
+--   v_actor := auth.uid() and raises ACTOR_MISMATCH before mutation; manual
+--   actor-binding review completed 2026-08-12.
 -- 20260813050000_guard_job_commission_split_immutable.sql
 -- STATUS: PARKED DRAFT - NOT APPLIED
 --

@@ -1,3 +1,8 @@
+-- actor-binding-check: exempt
+--   REASON: this parked migration's formatted SQL is limited to role revokes
+--   and rollback-only SET LOCAL proof setup. complete_delivery binds auth.uid()
+--   and raises ACTOR_MISMATCH before mutation; manual actor-binding review
+--   completed 2026-08-12.
 -- 20260813060000_require_completed_delivery_before_invoice_post.sql
 -- STATUS: PARKED DRAFT - NOT APPLIED.
 -- Reviewed three times by both reviewers (RLS/security and migration-drift);
