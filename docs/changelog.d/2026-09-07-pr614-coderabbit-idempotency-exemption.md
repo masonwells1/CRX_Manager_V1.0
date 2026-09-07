@@ -29,8 +29,11 @@ now closed in writing. Revisiting it is a deliberate change across all eight gen
 before inspecting `migrationSql` and then assert both MD5 pins appear in the executable
 `v_md5 NOT IN (...)` and postflight clauses. Checked against the code:
 
-- The pins ARE already in executable SQL — the preflight `NOT IN` list at lines 156-157 and the
-  postflight equality check at line 298. Only the header copies at lines 86-87 are comments.
+- The pins ARE already in executable SQL — the preflight list opened by `IF v_md5 NOT IN (` and the
+  postflight check opened by `IF v_md5 <> '7cbf50dd`. Only the two `--` header copies are comments.
+  (Anchored to the code text on purpose: the line numbers this entry first carried — 156-157, 298
+  and 86-87 — were written against the pre-edit file and were already 22 lines stale when this same
+  commit added the exemption header above them. Corrected 2026-09-07; see that day's second entry.)
 - `scripts/smoke/prove-next-invoice-number-year-chicago.mjs` **never text-matches the pins against
   `migrationSql` at all.** It computes `md5(pg_proc.prosrc)` inside a real PostgreSQL 17 container
   and compares (lines 234, 262, 289, 341, 357). A comment cannot satisfy that, so the class of
