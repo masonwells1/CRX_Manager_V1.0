@@ -17,7 +17,36 @@ function parsePayload() {
   }
 }
 
-function mergeOutputs(outputs, eventName) {
+// A block several modules embed verbatim (the landing policy) is kept in the
+// FIRST context that carries it and replaced by a one-line pointer in every
+// later one, so a prompt that trips two reminders pays for the policy once
+// instead of twice per turn. Only an exact, whole-block match is touched;
+// nothing else in a module's text is rewritten: a context in which no block
+// was replaced is returned byte-for-byte, and the blank-line collapse plus
+// trim run only on a context that WAS rewritten, to close the gap the removed
+// block leaves behind (CodeRabbit review of #613 at ebebfc34d: the first cut
+// normalised every context, so callers with no configured block still got
+// modified text). Each block is { text, replacement }.
+export function dedupeContextBlocks(contexts, blocks = []) {
+  const seen = new Set();
+  return (contexts || []).map((context) => {
+    let text = String(context);
+    let replaced = false;
+    for (const block of blocks || []) {
+      const needle = String(block?.text || "");
+      if (!needle || !text.includes(needle)) continue;
+      if (seen.has(needle)) {
+        text = text.split(needle).join(String(block.replacement || ""));
+        replaced = true;
+      } else {
+        seen.add(needle);
+      }
+    }
+    return replaced ? text.replace(/\n{3,}/g, "\n\n").trim() : text;
+  });
+}
+
+function mergeOutputs(outputs, eventName, dedupeBlocks = []) {
   const contexts = [];
   const reasons = [];
   let decision = "";
@@ -41,13 +70,13 @@ function mergeOutputs(outputs, eventName) {
   if (contexts.length > 0) {
     merged.hookSpecificOutput = {
       hookEventName: eventName,
-      additionalContext: contexts.join("\n\n---\n\n"),
+      additionalContext: dedupeContextBlocks(contexts, dedupeBlocks).join("\n\n---\n\n"),
     };
   }
   return merged;
 }
 
-export async function runHookRouter({ eventName, modulePaths, payload = parsePayload() }) {
+export async function runHookRouter({ eventName, modulePaths, payload = parsePayload(), dedupeBlocks = [] }) {
   if (!payload || !Array.isArray(modulePaths) || modulePaths.length === 0) return null;
 
   const originalExit = process.exit;
@@ -97,6 +126,6 @@ export async function runHookRouter({ eventName, modulePaths, payload = parsePay
   }
 
   if (failed) process.exitCode = 1;
-  return mergeOutputs(outputs, eventName);
+  return mergeOutputs(outputs, eventName, dedupeBlocks);
 }
 

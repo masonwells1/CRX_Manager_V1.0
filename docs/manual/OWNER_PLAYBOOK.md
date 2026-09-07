@@ -105,6 +105,7 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 - **Run an agent-health check** ("is the Claude/Codex setup healthy?") — confirms the hooks, reviewers, and handoff wiring between the two AI tools are actually working, not just present. (`agent-health`)
 - **Check all backup paths actually ran:** the weekly file-based database backup (ask "is my data backed up?"), the automated in-database snapshot inside Supabase, and the nightly Personal DR backup. Independent copies are the point — one system quietly failing should not be a surprise months later.
 - **Skim `docs/manual/KNOWN_ISSUES.md` with your agent** — the one consolidated list of everything known-open: dormant bugs, parked database changes, and decisions waiting on you. A five-minute skim once a month keeps small things from being forgotten.
+- **Ask "where are my Claude tokens going?"** — the agent runs `node scripts/claude-usage-report.mjs` (read-only; it reads the transcripts on this PC, sends nothing anywhere) and reports the last 14 days: how much of the spend is context being re-sent every call, which sessions ran longest, and how many tool calls a guard refused. Roughly three-quarters of spend is re-sent context, so the number to watch is "calls above 200K context"; a session that keeps climbing is cheaper to hand off than to continue.
 
 ---
 
