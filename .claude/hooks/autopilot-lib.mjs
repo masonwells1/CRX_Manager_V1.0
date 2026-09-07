@@ -25,18 +25,127 @@ import path from "node:path";
 // branch/project lifecycle, and destructive file/db ops STAY blocked here.
 const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|merge_pull_request|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
 
+// ── OPTION-SCAN IDIOM (2026-09-07) ──────────────────────────────────────────
+// Several rules below need "this command carries option X somewhere in its
+// argument list". Spelling ONE ordering by hand is the defect this file was
+// caught by: the recursive-delete rule was literally `-[A-Za-z]*r[A-Za-z]*f`,
+// which encodes how `rm -rf` is USUALLY TYPED, not what `rm` ACCEPTS. Measured
+// against this module on origin/main immediately before this change:
+//
+//   deny   rm -rf /            allow  rm -Rf /                 <- catastrophic
+//   deny   rm -rf build        allow  rm -r -f build           <- separated
+//   deny   rm -rfv build       allow  rm --recursive --force build
+//   deny   /usr/bin/rm -rf x   allow  /bin/rm -Rf x
+//   deny   rm -vrf build       allow  rm -vRf build
+//
+// The idiom is `<head>(?:<ws><token>)*?<ws><option>`: walk whole whitespace-
+// delimited tokens forward from the command head and require the option to sit
+// at a token START. Tokens exclude the shell separators `;`, `&`, `|`, `)`, so
+// the scan cannot leak into the NEXT command (`rm foo && ls -r` does not match),
+// and every step ends on whitespace, so a hyphen INSIDE a token is not read as
+// an option (`rm ./my-rf-dir` stays allow).
+//
+// This is deliberately NOT a general case-fold of options. Option letters are
+// case-SIGNIFICANT to a program — `-f` and `-F` are different flags to many
+// tools — so only aliases the program itself documents are accepted:
+//
+//   * `rm` documents `-r`, `-R` and `--recursive` as exact synonyms (GNU
+//     coreutils and BSD/macOS alike). That synonym is the whole bug.
+//   * GNU getopt (and git's parse-options) accept any UNAMBIGUOUS PREFIX of a
+//     long option, so `rm --rec` really is `--recursive`.
+//   * `rm --recursive -F` therefore stays ALLOW: `-F` is not an `rm` flag at all,
+//     and inventing one would over-deny.
+//
+// Binary NAMES are the one thing that IS case-insensitive, because Windows
+// resolves them that way and the executable suffix is optional — `rm`, `RM` and
+// `rm.exe` are the same program, so the head accepts all three.
+const WS = String.raw`[^\S\r\n]+`;
+const OPT_SCAN = String.raw`(?:${WS}[^\s;&|)]+)*?${WS}`;
+
+// A short-option CLUSTER carrying any of `letters` anywhere in it (`-r`, `-rf`,
+// `-vrf`). The trailing `[A-Za-z]*` matters: without it the letter would have to
+// be LAST, and `git clean -fq` would slip through.
+const cluster = (letters) => String.raw`-[A-Za-z]*[${letters}][A-Za-z]*(?=$|\s)`;
+
+// A long option written in full or as any unambiguous prefix: prefixChain("recursive")
+// accepts --r, --re, --rec … --recursive, and nothing longer or different.
+// `--format` does NOT match prefixChain("force"), because the chain must end at a
+// token boundary.
+function prefixChain(word) {
+  let inner = "";
+  for (let i = word.length - 1; i >= 1; i--) inner = `(?:${word[i]}${inner})?`;
+  return `--${word[0]}${inner}(?=$|[\\s=])`;
+}
+
+// `rm` / `RM` / `rm.exe`, path-qualified or not.
+const RM_HEAD = String.raw`\b[rR][mM](?:\.(?:[eE][xX][eE]|[cC][mM][dD]|[bB][aA][tT]))?`;
+
+// A recursive `rm` in ANY spelling. Note this denies a recursive delete whether
+// or not `-f` is also present: `-f` only suppresses prompts, and in a
+// non-interactive agent shell `rm -r dir` deletes the tree with no prompt at all,
+// so requiring BOTH letters was never what made the command safe. That is a
+// deliberate widening beyond the old rule, and it applies only while autopilot is
+// ARMED — an unarmed session is unaffected by this module.
+const RM_RECURSIVE_RE = new RegExp(
+  RM_HEAD + OPT_SCAN + `(?:${prefixChain("recursive")}|${cluster("rR")})`
+);
+
+// PowerShell is the primary shell in this environment and `Remove-Item -Recurse`
+// is its recursive delete; `ri`, `rd`, `rmdir`, `del` and `erase` are all built-in
+// ALIASES of Remove-Item, and PowerShell accepts any unambiguous parameter prefix,
+// so `-r` is `-Recurse`. Scoped to the removal cmdlet, so `Get-ChildItem -Recurse`
+// stays allow.
+const PS_RECURSIVE_REMOVE_RE = new RegExp(
+  String.raw`\b(?:Remove-Item|ri|rd|rmdir|del|erase)\b` + OPT_SCAN +
+    String.raw`-[Rr](?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?(?=$|[\s:])`,
+  "i"
+);
+
+// cmd.exe: `rd` is the documented alias of `rmdir` and `erase` of `del`, and the
+// switches may appear in any order — `del /f /s /q` bypassed the old rule, which
+// only inspected the token immediately after `del`. Switches are case-insensitive
+// in cmd.exe, and `\b` keeps a POSIX path operand (`del /srv/x`) from matching.
+const CMD_RECURSIVE_DELETE_RE = new RegExp(
+  String.raw`\b(?:rmdir|rd|del|erase)\b` + OPT_SCAN + String.raw`\/[sq]\b`,
+  "i"
+);
+
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
   /git\s+push\b/,                                  // no unattended push — Mason reviews in the morning
   /git\s+(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)/,
   /git\s+reset\s+--hard\b/,
-  /git\s+clean\s+-[A-Za-z]*[fdx]/,
+  // `git clean --force` (and `--force -d`) bypassed the old fixed-position rule,
+  // which only looked at the FIRST token after `clean`. `-X` is a distinct flag
+  // from `-x`, not a case variant, and is destructive in its own right.
+  new RegExp(String.raw`git\s+clean\b` + OPT_SCAN + `(?:${prefixChain("force")}|${cluster("fdxX")})`),
   /--no-verify\b/,
-  /\brm\s+-[A-Za-z]*r[A-Za-z]*f|\brm\s+-[A-Za-z]*f[A-Za-z]*r/, // rm -rf / -fr
+  // `-n` is git-commit's own documented short form of `--no-verify`. Matched only
+  // as a STANDALONE token: inside a cluster a preceding value-taking option
+  // swallows the rest (`git commit -mn` is the message "n", not a flag), so a
+  // naive cluster match would deny an ordinary commit.
+  new RegExp(String.raw`git\s+commit\b` + OPT_SCAN + String.raw`-n(?=$|\s)`),
+  RM_RECURSIVE_RE,
+  PS_RECURSIVE_REMOVE_RE,
+  CMD_RECURSIVE_DELETE_RE,
+  // Kept verbatim from the pre-2026-09-07 rule so this change is strictly
+  // ADDITIVE. CMD_RECURSIVE_DELETE_RE's `\b` deliberately spares a POSIX path
+  // operand (`del /srv/foo`), which the old rule denied as a side effect of
+  // matching `/s` inside `/srv`. Narrowing an existing deny is not this change's
+  // job, so both run and the union is what the caller sees.
   /\brmdir\b|\bdel\s+\/[sq]/i,
   /git\s+worktree\s+remove\b/,
-  /git\s+branch\s+(?:-D|--delete\s+--force)\b/,
+  // Force-delete of a branch. `-D` is the documented shorthand for
+  // `--delete --force`, but the equivalents `-Df`, `-d -f`, `-f -d`,
+  // `--force --delete` and `--delete -f` all reach the same place, and the old
+  // rule knew only two of them.
+  new RegExp(String.raw`git\s+branch\b` + OPT_SCAN + cluster("D")),
+  new RegExp(
+    String.raw`git\s+branch\b` +
+      `(?=${OPT_SCAN}(?:${prefixChain("delete")}|${cluster("d")}))` +
+      `(?=${OPT_SCAN}(?:${prefixChain("force")}|${cluster("f")}))`
+  ),
   /git\s+filter-(?:branch|repo)\b/,
   /(?:npx\s+)?supabase\s+db\s+(?:push|reset)\b/,
   /(?:npx\s+)?supabase\s+migration\s+repair\b/,

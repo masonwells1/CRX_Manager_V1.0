@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
+import { autopilotDecision, flagActive, intentFresh, overnightGateDecision, DENY_BASH_RES } from "./autopilot-lib.mjs";
 
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); pass++; }
@@ -29,6 +29,121 @@ eq(autopilotDecision("Bash", { command: "git push origin main" }), "deny", "git 
 eq(autopilotDecision("Bash", { command: "git push --force" }), "deny", "force push denied");
 eq(autopilotDecision("Bash", { command: "git reset --hard HEAD~1" }), "deny", "hard reset denied");
 eq(autopilotDecision("Bash", { command: "rm -rf build" }), "deny", "rm -rf denied");
+
+// ── recursive delete: the ALIASES rm actually has (2026-09-07) ────────────
+// PROVEN BYPASS. The rule was `-[A-Za-z]*r[A-Za-z]*f`, a literal lowercase `r`.
+// GNU coreutils and BSD both document `-R` as an EXACT synonym of `-r`, so every
+// line below returned ALLOW from this module on origin/main — including
+// `rm -Rf /`. Measured, not reasoned: the deny/allow table is in the PR body and
+// in docs/changelog.d/2026-09-07-autopilot-recursive-delete-aliases.md.
+//
+// The fix accepts the aliases rm DOCUMENTS. It is NOT a general case-fold of
+// options: option letters are case-significant to a program, so `-F` is not a
+// force flag and is not treated as one (asserted below).
+const denyBash = (cmd, why) => eq(autopilotDecision("Bash", { command: cmd }), "deny", why);
+const allowBash = (cmd, why) => eq(autopilotDecision("Bash", { command: cmd }), "allow", why);
+
+// (a) the -R case variant, every ordering
+denyBash("rm -Rf build", "PROVEN BYPASS: -R is an exact synonym of -r");
+denyBash("rm -fR build", "PROVEN BYPASS: -fR");
+denyBash("rm -RF build", "PROVEN BYPASS: -RF");
+denyBash("rm -Rf /", "PROVEN BYPASS: rm -Rf / deletes everything and returned allow");
+denyBash("rm -Rf ~/CRX_Manager", "PROVEN BYPASS: -Rf on the repo itself");
+// (b) separated flags — the lowercase canonical spelling ALSO bypassed
+denyBash("rm -r -f build", "PROVEN BYPASS: separated -r -f");
+denyBash("rm -R -f build", "PROVEN BYPASS: separated -R -f");
+denyBash("rm -f -r build", "PROVEN BYPASS: separated -f -r");
+denyBash("rm -f -R build", "PROVEN BYPASS: separated -f -R");
+// (c) long forms, including GNU's unambiguous-prefix abbreviation
+denyBash("rm --recursive --force build", "PROVEN BYPASS: long forms");
+denyBash("rm --force --recursive build", "PROVEN BYPASS: long forms reversed");
+denyBash("rm -r --force build", "PROVEN BYPASS: mixed short/long");
+denyBash("rm -R --force build", "PROVEN BYPASS: mixed -R/long");
+denyBash("rm --recursive -f build", "PROVEN BYPASS: long recursive + short force");
+denyBash("rm --rec -f build", "GNU getopt accepts any unambiguous long-option prefix");
+denyBash("rm --r build", "--r is unambiguous for --recursive among rm's long options");
+// (d) clusters with unrelated letters mixed in
+denyBash("rm -Rfv build", "PROVEN BYPASS: -R inside a cluster");
+denyBash("rm -vRf build", "PROVEN BYPASS: -R mid-cluster");
+denyBash("rm -dRf build", "PROVEN BYPASS: -d before -R");
+denyBash("rm -fvR build", "the recursive letter need not be first or last in a cluster");
+// (e) the binary spelling. A NAME is case-insensitive on Windows and the .exe
+// suffix is optional — unlike an option letter, which is not.
+denyBash("/bin/rm -Rf build", "PROVEN BYPASS: path-qualified binary");
+denyBash("rm.exe -rf build", "PROVEN BYPASS: rm.exe never matched `rm` + whitespace at all");
+denyBash("RM.EXE -rf build", "Windows resolves a binary NAME case-insensitively");
+denyBash("C:/Program Files/Git/usr/bin/rm.exe -rf build", "absolute Windows path to rm.exe");
+denyBash("sudo rm -Rf /var", "sudo prefix");
+denyBash("xargs rm -Rf", "rm reached through xargs");
+// (f) DELIBERATE WIDENING: recursive alone, with no -f. `-f` only suppresses
+// prompts; in a non-interactive agent shell `rm -r dir` deletes the tree anyway,
+// so requiring both letters was never what made the command safe.
+denyBash("rm -r build", "recursive without force is still a recursive delete");
+denyBash("rm -R build", "recursive without force, -R spelling");
+denyBash("rm --recursive build", "recursive without force, long spelling");
+// (g) over-denial controls — the fix must not case-fold options generally
+allowBash("rm -F build", "-F is NOT an rm force flag; inventing that alias would over-deny");
+allowBash("rm -f file.txt", "force without recursive is a single-file delete");
+allowBash("rm --force file.txt", "long force without recursive stays allowed");
+allowBash("rm file.txt", "an ordinary delete stays allowed");
+allowBash("rm ./my-rf-dir", "a hyphen INSIDE a token is not an option");
+allowBash("rm foo.txt && ls -r", "the option scan must not leak past a shell separator");
+allowBash('git commit -m "remove -Rf from the docs"', "text that merely MENTIONS -Rf is not a delete");
+allowBash("npm run build", "ordinary build");
+allowBash("ls -la", "benign control");
+
+// ── PowerShell recursive delete (the primary shell in this environment) ───
+// `ri`, `rd`, `rmdir`, `del` and `erase` are all built-in ALIASES of Remove-Item,
+// and PowerShell accepts any unambiguous parameter prefix, so `-Rec` is `-Recurse`.
+denyBash("Remove-Item -Recurse -Force C:/build", "PowerShell recursive delete");
+denyBash("Remove-Item -Force -Recurse C:/build", "PowerShell, parameters reversed");
+denyBash("remove-item -recurse C:/build", "PowerShell cmdlet names are case-insensitive");
+denyBash("ri -Recurse -Force C:/build", "the `ri` alias of Remove-Item");
+denyBash("rd -Recurse C:/build", "the `rd` alias of Remove-Item");
+denyBash("Remove-Item -Rec C:/build", "an unambiguous PowerShell parameter prefix");
+allowBash("Get-ChildItem -Recurse C:/src", "-Recurse on a READ cmdlet must stay allowed");
+allowBash("gci -Recurse", "the gci alias of Get-ChildItem is not a delete");
+
+// ── cmd.exe aliases and switch ordering ──────────────────────────────────
+denyBash("rd /s /q build", "`rd` is the documented cmd.exe alias of `rmdir`");
+denyBash("RD /S /Q build", "cmd.exe switches are case-insensitive");
+denyBash("erase /s build", "`erase` is the documented cmd.exe alias of `del`");
+denyBash("del /f /s /q build", "PROVEN BYPASS: the old rule only read the token right after `del`");
+
+// ── sibling rules with the same defect shape ─────────────────────────────
+// Each of these knew ONE spelling of a destructive option and missed the
+// documented equivalents.
+denyBash("git clean --force -d", "PROVEN BYPASS: git clean long-form --force");
+denyBash("git clean --force", "PROVEN BYPASS: git clean --force alone");
+denyBash("git clean -fq", "the destructive letter need not be last in the cluster");
+denyBash("git clean -X", "-X is a distinct destructive flag, not a case variant of -x");
+allowBash("git clean -n", "a dry run stays allowed");
+allowBash("git clean --dry-run", "a long-form dry run stays allowed");
+denyBash("git branch -Df feature", "PROVEN BYPASS: -D inside a cluster");
+denyBash("git branch -vD feature", "PROVEN BYPASS: -D after another letter");
+denyBash("git branch -d -f feature", "PROVEN BYPASS: -d -f is what -D is shorthand FOR");
+denyBash("git branch -f -d feature", "PROVEN BYPASS: reversed");
+denyBash("git branch --force --delete feature", "PROVEN BYPASS: long forms reversed");
+denyBash("git branch -d --force feature", "PROVEN BYPASS: mixed short/long");
+denyBash("git branch --delete -f feature", "PROVEN BYPASS: mixed long/short");
+allowBash("git branch --delete feature", "a NON-force delete keeps its prior verdict");
+allowBash("git branch -a", "listing branches stays allowed");
+allowBash("git branch -m old new", "renaming stays allowed");
+denyBash("git commit -n -m x", "PROVEN BYPASS: -n is git-commit's own short form of --no-verify");
+denyBash("git commit -m x -n", "PROVEN BYPASS: -n in trailing position");
+allowBash("git commit -mn 'msg'", "`-mn` is the MESSAGE \"n\", not a flag — must not over-deny");
+allowBash("git commit --amend --no-edit", "--no-edit is not --no-verify");
+allowBash("git commit -m x", "an ordinary commit stays allowed");
+
+// The old rule must be GONE from the live deny set, not merely supplemented: a
+// leftover lowercase-r-then-f pattern would keep passing every assertion above
+// while still describing how the command is TYPED rather than what it ACCEPTS.
+// Asserted against the imported regexes, not the file text, so the explanatory
+// comment that quotes the old pattern cannot satisfy it.
+ok(
+  !DENY_BASH_RES.some((re) => /\[A-Za-z\]\*r\[A-Za-z\]\*f/.test(re.source)),
+  "the literal lowercase-r recursive-delete rule is gone from the live deny set"
+);
 eq(autopilotDecision("Bash", { command: "npm run test -- --no-verify" }), "deny", "--no-verify denied");
 eq(autopilotDecision("Bash", { command: "npx supabase db reset" }), "deny", "supabase db reset denied");
 eq(autopilotDecision("Bash", { command: "git worktree remove ../x" }), "deny", "worktree remove denied");
@@ -176,9 +291,9 @@ function safeTempDir(testDir) {
   return resolvedTestDir;
 }
 
-function runHook(projectDir) {
+function runHook(projectDir, command = "rm -rf /") {
   return spawnSync(process.execPath, [hookPath], {
-    input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /" } }),
+    input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
     encoding: "utf8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
   });
@@ -209,6 +324,18 @@ try {
   const r = runHook(armedDir);
   eq(r.status, 0, "hook exits 0 when armed");
   ok(/"permissionDecision":\s*"deny"/.test(r.stdout), "hook DENIES a deny-set command (rm -rf /) when armed");
+  // The SAME live proof for the spelling that bypassed. Asserting only against
+  // the library would leave the whole hook process untested for this case, and a
+  // library-only green is exactly how this file once certified a command the real
+  // chain refused (see the overnight-intent note above).
+  for (const bypass of ["rm -Rf /", "rm -R -f /", "rm --recursive --force /", "rm.exe -rf /"]) {
+    const rb = runHook(armedDir, bypass);
+    eq(rb.status, 0, `hook exits 0 for ${bypass}`);
+    ok(/"permissionDecision":\s*"deny"/.test(rb.stdout), `LIVE HOOK denies the proven bypass: ${bypass}`);
+  }
+  // …and the live hook must still auto-approve ordinary work while armed.
+  const rAllow = runHook(armedDir, "npm run build");
+  ok(/"permissionDecision":\s*"allow"/.test(rAllow.stdout), "LIVE HOOK still auto-approves an ordinary build when armed");
 } finally {
   rmSync(resolvedArmedDir, { recursive: true, force: true });
 }
