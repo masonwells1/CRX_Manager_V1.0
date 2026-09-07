@@ -145,8 +145,43 @@ const GLOBAL_OPTS = String.raw`(?:\s+${OPT_TOKEN}(?:\s+${VAL_TOKEN})?)*`;
 // denies. The UNQUOTED twin `grep git push.log` already denied before this change,
 // so this makes the guard consistent rather than newly blunt, and an extra denial
 // is the safe side for a deny set.
+// CASE was the fourth axis of the same bug, and on this platform the widest one
+// left. `bin()` embedded a LOWERCASE literal into a case-SENSITIVE RegExp, but
+// Windows resolves command names case-insensitively: `GIT push`, `Git.exe push
+// --force`, `GH pr merge 625 --squash` and `GIT reset --hard origin/main` all run
+// the same programs. Reproduced by RUNNING autopilotDecision at 6600a825b — every
+// one of those returned "allow" while its lowercase twin denied, so armed mode did
+// not prevent pushing, force-pushing, merging or hard-resetting. Raised by
+// CodeRabbit on PR #607.
+//
+// ONLY THE NAME IS FOLDED, and that boundary is not cosmetic — it is the whole
+// reason this is safe:
+//
+//   the BINARY NAME is resolved by the FILESYSTEM/shell, which is
+//     case-insensitive on Windows      -> fold it
+//   the SUBCOMMAND and the OPTIONS are parsed by git/gh/supabase THEMSELVES,
+//     which are case-SENSITIVE everywhere (`git PUSH` is "not a git command",
+//     `--NO-VERIFY` is not a flag)     -> do NOT fold them
+//
+// So a whole-pattern `i` flag would be both wrong and dangerous here. Wrong,
+// because it makes the guard claim to catch `git PUSH`, which is not a command.
+// Dangerous, because `i` collapses `-C` and `-c` inside GLOBAL_OPTS' nested
+// quantifiers — the exact collision this pattern family already has a measured
+// ReDoS on. Inline `(?i:...)` is not supported by this Node's RegExp engine, so it
+// is not an option either. Folding the name means rewriting each of its letters as
+// a two-character class, which is O(1) per position exactly like the literal it
+// replaces: the pathological-input measurements below are unchanged by it.
+//
+// This is a RULE, not a list. `foldCase` derives the classes from whatever name it
+// is given, so every current and future caller of `bin()` is covered without anyone
+// enumerating spellings — `gIT`, `GiT.CmD`, `gH.Ps1`, `SUPABASE.EXE`, `Vercel.Cmd`
+// and `RM.EXE` all match without appearing anywhere in this file or in the tests.
+// Enumerating them would be the name-listed carve-out that has already failed three
+// times in the comments above.
+const foldCase = (name) =>
+  name.replace(/[A-Za-z]/g, (ch) => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
 const BIN_TAIL = String.raw`(?:\.[^\s'".\\/]*)?["']?`;
-const bin = (name) => String.raw`\b${name}\b${BIN_TAIL}`;
+const bin = (name) => String.raw`\b${foldCase(name)}\b${BIN_TAIL}`;
 const git = (rest) => new RegExp(String.raw`${bin("git")}${GLOBAL_OPTS}\s+${rest}`);
 const gh = (rest) => new RegExp(String.raw`${bin("gh")}${GLOBAL_OPTS}\s+${rest}`);
 
@@ -187,10 +222,18 @@ const DENY_BASH_RES = [
   new RegExp(String.raw`${NPX}${bin("supabase")}\s+migration\s+repair\b`),
   new RegExp(String.raw`${NPX}${bin("supabase")}\s+functions\s+deploy\b`), // CLI edge deploy = same gate as the MCP tool
   gh(String.raw`pr\s+merge\b`),                    // lands on main around the push guard
-  /\b(?:dropdb|createdb)\b/,
+  // Same case defect as `bin()`, reached by the three rules that do NOT route
+  // through it. `dropdb`/`createdb` are bare-word BINARY names (nothing required
+  // after them, which is why an extension never broke them) and `.env` is a
+  // FILENAME — all three are resolved case-insensitively on Windows, so `DROPDB
+  // crx` and `echo SECRET >> .ENV` walked through while their lowercase twins
+  // denied. Folded by the same rule rather than by a second, differently-shaped
+  // fix. `rmdir`/`del` below already carry an `i` flag on a pattern with no nested
+  // quantifiers, so they were never exposed; DENY_PATH_RE likewise.
+  new RegExp(String.raw`\b(?:${foldCase("dropdb")}|${foldCase("createdb")})\b`),
   nameAnchored("vercel", String.raw`(?:deploy|--prod|promote)\b`),
-  /(?:^|[\s;&|>])\.env\b/,                         // touching .env
-  /(?:>>?|tee)\s+['"]?[^\s'";|&]*\.env\b/,         // writing to .env
+  new RegExp(String.raw`(?:^|[\s;&|>])\.${foldCase("env")}\b`),          // touching .env
+  new RegExp(String.raw`(?:>>?|${foldCase("tee")})\s+['"]?[^\s'";|&]*\.${foldCase("env")}\b`), // writing to .env
 ];
 
 // Edit/Write targets that must never be auto-approved.

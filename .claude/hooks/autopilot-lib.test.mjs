@@ -275,6 +275,65 @@ eq(autopilotDecision("Bash", { command: "gh.exe pr list" }), "allow", "gh.exe pr
 eq(autopilotDecision("Bash", { command: 'grep "git" push.log' }), "deny", "ACCEPTED over-denial: a quoted word ending in the binary name");
 eq(autopilotDecision("Bash", { command: "grep git push.log" }), "deny", "…whose UNQUOTED twin already denied before this change");
 
+// ── CASE was the fourth axis (2026-09-07, round three; CodeRabbit on #607) ───
+// `bin()` embedded a LOWERCASE literal into a case-SENSITIVE RegExp. Windows
+// resolves command names case-insensitively, so every spelling below runs exactly
+// the same program as its lowercase twin — and every one returned "allow" against
+// the library shipped at 6600a825b. Reproduced by RUNNING the guard, not by
+// reading it: armed mode did not prevent pushing, force-pushing, merging or
+// hard-resetting, because ONE uppercase letter defeated the whole deny set.
+eq(autopilotDecision("Bash", { command: "GIT push origin HEAD" }), "deny", "PROVEN BYPASS: GIT push");
+eq(autopilotDecision("Bash", { command: "Git push origin HEAD" }), "deny", "PROVEN BYPASS: Git push");
+eq(autopilotDecision("Bash", { command: "Git.exe push --force origin HEAD" }), "deny", "PROVEN BYPASS: Git.exe force push");
+eq(autopilotDecision("Bash", { command: "GIT.EXE push origin HEAD" }), "deny", "PROVEN BYPASS: GIT.EXE push");
+eq(autopilotDecision("Bash", { command: "GIT reset --hard origin/main" }), "deny", "PROVEN BYPASS: GIT reset --hard");
+eq(autopilotDecision("Bash", { command: "GH pr merge 625 --squash" }), "deny", "PROVEN BYPASS: GH pr merge");
+eq(autopilotDecision("Bash", { command: "Gh.cmd pr merge 625 --squash" }), "deny", "PROVEN BYPASS: Gh.cmd pr merge");
+eq(autopilotDecision("Bash", { command: 'GIT -C "C:/CRX Manager/wt" push origin HEAD' }), "deny", "PROVEN BYPASS: uppercase binary + a quoted global option");
+// The fold is a RULE derived from the name, so it reaches spellings nobody wrote
+// down — every axis already closed above must keep working at any casing.
+eq(autopilotDecision("Bash", { command: "gIt.BAT push origin HEAD" }), "deny", "an arbitrary mixed casing with an arbitrary extension");
+eq(autopilotDecision("Bash", { command: '"C:/Program Files/Git/bin/GIT.EXE" push origin HEAD' }), "deny", "the quoted Windows install path, uppercased");
+eq(autopilotDecision("Bash", { command: "C:\\Tools\\GIT.exe push origin HEAD" }), "deny", "a Windows backslash path, uppercased");
+eq(autopilotDecision("Bash", { command: "GIT worktree remove ../x" }), "deny", "uppercase + worktree remove");
+eq(autopilotDecision("Bash", { command: "GIT branch -D feature" }), "deny", "uppercase + branch -D");
+eq(autopilotDecision("Bash", { command: "GIT clean -fd" }), "deny", "uppercase + clean -fd");
+eq(autopilotDecision("Bash", { command: "GIT filter-branch --all" }), "deny", "uppercase + filter-branch");
+eq(autopilotDecision("Bash", { command: "SUPABASE.EXE db reset" }), "deny", "uppercase supabase db reset");
+eq(autopilotDecision("Bash", { command: "NPX Supabase functions deploy send-email" }), "deny", "uppercase npx + mixed-case supabase edge deploy");
+eq(autopilotDecision("Bash", { command: "Vercel.Cmd deploy" }), "deny", "mixed-case vercel deploy");
+eq(autopilotDecision("Bash", { command: "RM.EXE -rf build" }), "deny", "uppercase rm -rf");
+eq(autopilotDecision("Bash", { command: "DEL.EXE /s C:/x" }), "deny", "uppercase del /s");
+// The three rules that do NOT route through `bin()` had the identical defect:
+// `dropdb`/`createdb` are bare-word binary names and `.env` is a FILENAME, all
+// resolved case-insensitively on Windows. Folded by the same rule.
+eq(autopilotDecision("Bash", { command: "DROPDB crx" }), "deny", "PROVEN BYPASS: uppercase dropdb");
+eq(autopilotDecision("Bash", { command: "CreateDB crx" }), "deny", "PROVEN BYPASS: mixed-case createdb");
+eq(autopilotDecision("Bash", { command: "echo SECRET >> .ENV" }), "deny", "PROVEN BYPASS: writing to .ENV");
+eq(autopilotDecision("Bash", { command: "cat .Env.local" }), "deny", "PROVEN BYPASS: touching .Env");
+
+// The other direction, and this is the load-bearing half. ONLY THE BINARY NAME is
+// folded, because only the name is resolved by the case-insensitive filesystem.
+// Subcommands and options are parsed by git/gh themselves and ARE case-sensitive
+// everywhere, so a whole-pattern `i` flag would claim to catch commands that do not
+// run — and would additionally collapse `-C` with `-c` inside GLOBAL_OPTS' nested
+// quantifiers, which is the measured ReDoS this pattern family already has.
+eq(autopilotDecision("Bash", { command: "git PUSH origin HEAD" }), "allow", "`git PUSH` is not a git command — the subcommand stays case-SENSITIVE");
+eq(autopilotDecision("Bash", { command: "git RESET --HARD origin/main" }), "allow", "…same for an uppercase subcommand + flag");
+eq(autopilotDecision("Bash", { command: "npm run test -- --NO-VERIFY" }), "allow", "`--NO-VERIFY` is not the flag that skips hooks");
+// And the neighbours must not be swept in at any casing either: `\b` plus
+// \"an extension starts with a dot\" is what holds, and folding does not touch it.
+eq(autopilotDecision("Bash", { command: "GIT status --short" }), "allow", "uppercase binary + a benign subcommand stays allowed");
+eq(autopilotDecision("Bash", { command: "GIT-crypt unlock" }), "allow", "GIT-crypt is a different program at any casing");
+eq(autopilotDecision("Bash", { command: "GitFoo push" }), "allow", "a file literally named gitfoo, uppercased");
+eq(autopilotDecision("Bash", { command: "NPM run GitPush" }), "allow", "an npm script named gitpush, uppercased");
+eq(autopilotDecision("Bash", { command: "GH-dash pr merge 1" }), "allow", "gh-dash is a different program at any casing");
+eq(autopilotDecision("Bash", { command: 'GIT commit -m "fix the push bug"' }), "allow", "a commit message naming push stays allowed at any binary casing");
+eq(autopilotDecision("Bash", { command: "GIT -C /x stash push -m wip" }), "allow", "the COMMON detached form stays allowed at any binary casing");
+eq(autopilotDecision("Bash", { command: "GH pr view 625 --json headRefOid" }), "allow", "GH pr view stays allowed");
+eq(autopilotDecision("Bash", { command: "SUPABASE.EXE status" }), "allow", "uppercase supabase status is still read-only");
+eq(autopilotDecision("Bash", { command: "MyGit push origin" }), "allow", "a longer name ENDING with the binary, uppercased");
+
 // Linear, not exponential. The option region nests quantifiers, so prove it does
 // not backtrack catastrophically on a long non-matching command rather than
 // assuming it: each iteration's only real branch point ends the loop.
@@ -293,15 +352,36 @@ eq(autopilotDecision("Bash", { command: "grep git push.log" }), "deny", "…whos
 // decide (against 0-2ms for every realistic one). Bounding the extension to the
 // last dot-segment — no separator, no further dot, no quote, which is what an
 // extension actually is — leaves nothing to give back. Same input: under 1ms.
+//
+// The BUDGET is 250ms, not 100ms, and the gap between it and the measurement is
+// deliberate. What is being detected is a QUADRATIC — the regression this pins ran
+// 414ms; the fixed pattern runs in ~0-1ms — so anything between the two is noise, not
+// signal. `Date.now()` is wall clock, and this file runs in `test:correction-guards`
+// on shared Ubuntu AND Windows runners, so it includes scheduling pauses and GC that
+// have nothing to do with the regex; 100ms was tight enough to flake on them
+// (CodeRabbit, PR #607). 250ms still fails the 414ms regression by a wide margin,
+// which is the only thing this assertion is for.
+const PATHOLOGICAL_BUDGET_MS = 250;
 {
   const dots = "git.".repeat(5000) + " status";
   const t0 = Date.now();
   eq(autopilotDecision("Bash", { command: dots }), "allow", "a 20k-char repeated-dot string is not a command");
-  ok(Date.now() - t0 < 100, "the binary tail does not backtrack across start positions");
+  ok(Date.now() - t0 < PATHOLOGICAL_BUDGET_MS, "the binary tail does not backtrack across start positions");
   const longPath = `"${"a".repeat(100000)}/git.exe" status`;
   const t1 = Date.now();
   eq(autopilotDecision("Bash", { command: longPath }), "allow", "a 100k-char quoted binary path decides");
-  ok(Date.now() - t1 < 100, "…and does so without backtracking");
+  ok(Date.now() - t1 < PATHOLOGICAL_BUDGET_MS, "a long quoted path decides without backtracking");
+  // Case-folding the binary NAME must not move any of this: a two-character class
+  // costs the same per position as the literal it replaced and adds no branch point
+  // to give back. Measured at mixed case rather than assumed.
+  const mixedDots = "GiT.".repeat(5000) + " status";
+  const t2 = Date.now();
+  eq(autopilotDecision("Bash", { command: mixedDots }), "allow", "a 20k-char MIXED-CASE repeated-dot string is not a command");
+  ok(Date.now() - t2 < PATHOLOGICAL_BUDGET_MS, "case-folding the name adds no backtracking");
+  const mixedPath = `"${"a".repeat(100000)}/GIT.EXE" status`;
+  const t3 = Date.now();
+  eq(autopilotDecision("Bash", { command: mixedPath }), "allow", "a 100k-char quoted UPPERCASE binary path decides");
+  ok(Date.now() - t3 < PATHOLOGICAL_BUDGET_MS, "…and does so without backtracking");
 }
 
 // ── overnight-arm handshake ──────────────────────────────────────────────
