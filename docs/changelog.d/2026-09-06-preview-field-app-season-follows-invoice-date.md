@@ -56,14 +56,47 @@ parameter, so the caller had nothing to pass.
   - `v_row_season` is reset every iteration. The hazard is not `SELECT INTO` — PL/pgSQL assigns NULL
     when no row matches — it is that the `IF`/`ELSIF` can take **neither** branch, leaving the
     previous customer's season in place and pricing this customer against the wrong year.
-  - **Apply-time guards.** A `$preflight$` block asserts one existing overload, `postgres`
-    ownership, the expected signature (with a replay path for the already-installed candidate), and
-    the reviewed body md5 — so an apply over a body another lane changed is refused rather than
-    silently reverting it. A `$postflight$` block reads the catalog back after the replacement and
-    asserts one signature, `postgres` ownership, `SECURITY DEFINER`, the pinned `search_path`, a
-    non-NULL ACL, and — via `aclexplode`, not inferred from the statements above it — that PUBLIC
-    and `anon` hold no EXECUTE while `authenticated` and `service_role` do. The migration runs in a
-    single transaction, so either guard firing rolls the whole file back.
+  - **Apply-time guards.** The migration runs in a single transaction, so any guard firing rolls
+    the whole file back and changes nothing.
+    - `$preflight$`, before anything is dropped: `PREFLIGHT_SEASON_RULE` (the environment really
+      does put 2026-09-30 in season 2026 and 2026-10-01 in season 2027 — if that rule ever moves,
+      every claim below it is about a different calendar); `PREFLIGHT_OVERLOAD` (exactly one
+      existing overload); `PREFLIGHT_OWNER` (`postgres`); `PREFLIGHT_SIGNATURE` (either the
+      4-argument predecessor or the 5-argument candidate); `PREFLIGHT_BODY_DRIFT` (the predecessor's
+      reviewed body md5, so an apply over a body another lane changed is refused rather than
+      silently reverting it); and, on the replay path only, `PREFLIGHT_REPLAY_BODY_DRIFT`.
+    - **Why the replay path needs its own body pin.** When the 5-argument candidate is already
+      installed, the preflight returns early and the postflight's body pin cannot help: the
+      postflight reads `prosrc` *after* `DROP` + `CREATE`, so on a replay it is reading this file's
+      own body and would agree with itself no matter what it destroyed. `PREFLIGHT_REPLAY_BODY_DRIFT`
+      is the only thing standing between a re-apply and a silent overwrite of a patch another lane
+      made to the live 5-argument body — the `batch_apply_prepayments` silent-revert class of
+      2026-07-15. The prover asserts not just that it aborts, but that the simulated patch is *still
+      there* afterwards.
+    - `$postflight$`, reading the catalog back after the replacement: `POSTFLIGHT_OVERLOAD` (exactly
+      one signature); `POSTFLIGHT_SIGNATURE`, compared against the full **named** identity
+      `preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id
+      uuid, p_invoice_id uuid, p_invoice_date date)` — names, not just types, because PostgREST
+      resolves RPCs by argument name, so a rename is a break even when every type matches;
+      `POSTFLIGHT_ARGUMENT_DEFAULTS` (the three `DEFAULT NULL`s a 4-argument caller depends on are
+      still declared — invisible to the signature check, which does not render defaults);
+      `POSTFLIGHT_OWNER`; `POSTFLIGHT_SECDEF`; the exact `search_path` string; `POSTFLIGHT_BODY`
+      (the installed body md5); and the four ACL checks below.
+    - **ACL checks.** PUBLIC is read straight out of `aclexplode(proacl)` (`grantee = 0`), because
+      `has_function_privilege` cannot express PUBLIC — it returns true for every role when PUBLIC
+      holds a grant. `anon`, `authenticated` and `service_role` are read with
+      `has_function_privilege`, which resolves role *membership*; `aclexplode` sees only direct
+      grants and would miss EXECUTE reaching `anon` through a role it belongs to.
+      `POSTFLIGHT_GRANT_UNEXPECTED` then refuses any grantee outside the reviewed set
+      (`postgres`, `authenticated`, `service_role`) and names it. It is deliberately the **last**
+      check in the block: placed earlier, this catch-all would fire first on an `anon` grant and
+      make the named `POSTFLIGHT_GRANT_ANON` unreachable — and therefore unfalsifiable, which is how
+      a guard comes to look proven while testing nothing.
+    - `POSTFLIGHT_ACL_DEFAULT` (a NULL `proacl`) is retained but is **unreachable on this project
+      and is not mutation-proven**: Supabase's `ALTER DEFAULT PRIVILEGES` materialises `proacl` on
+      every newly created function, so the ACL is never NULL here. Deleting every ACL statement is
+      caught by `POSTFLIGHT_GRANT_PUBLIC` instead, which is what the prover asserts. Recorded rather
+      than dressed up, so no one later reads it as covered.
   - **The owner pin is load-bearing, not tidiness.** `CREATE OR REPLACE` keeps a function's owner;
     `DROP` + `CREATE` re-owns it to whoever runs the migration. This body does
     `SELECT * FROM application_services`, and `20260729015706` revoked `SELECT` on that table from
@@ -71,8 +104,12 @@ parameter, so the caller had nothing to pass.
     because every function reading it is a **postgres-owned** SECURITY DEFINER. A re-owned function
     would either break every preview with `permission denied for column cost_per_acre_cents` or
     widen the SECDEF read surface past what the 2026-07-28 ACL audit signed off on.
-  - The legacy 3-argument signature is dropped too, so "exactly one signature afterwards" covers
-    all three known shapes rather than the two this file otherwise names.
+  - The legacy 3-argument signature is dropped too. That DROP *clears* a third known shape; it does
+    not *prove* the "exactly one signature afterwards" claim, because a DROP list can only remove
+    shapes someone thought of. The claim is proven by `POSTFLIGHT_OVERLOAD`, which counts the
+    catalog after the replacement and refuses the apply at any count other than one — including a
+    shape nobody enumerated. `PREFLIGHT_OVERLOAD` makes the same count *before* the apply and prints
+    the unexpected signature so it can be enumerated.
 - **Caller** `src/pages/FieldApplicationInvoice.tsx` `handlePreview` now sends `p_invoice_date` — the
   same `transactionDate` it already sends to `save_field_app_invoice`.
 - **`src/types/supabase.ts`** RPC `Args` updated for the new parameter.
@@ -91,8 +128,8 @@ the prover mutation-tests the `anon` one rather than trusting the comment.
 ### Proof observed
 
 `node scripts/smoke/prove-preview-field-app-season.mjs` → **`PREVIEW_SEASON_PROOF_PASS`**, run against
-migration sha256 `96e8d6f6401e88edbea599a5bf3e6242568a03cb49ca803143ec3cd318ae0a83` and prover sha256
-`7001c167d94f3e2039ae571bfc9a2682ce8e7effee4e245dee17f1cdaaf1fa8b` — recorded because a proof minted
+migration sha256 `7053128623f26835b4c9503d1bf1e2775a35f1591dd807470bd9f8f8ecc4e895` and prover sha256
+`b0650094106926157d8854c9f4ce19040812bf45405f4f6c849c6ddcddeda3d7` — recorded because a proof minted
 against earlier bytes is void, and the apply gate binds the proof to the transmitted file's hash. In a
 network-less `public.ecr.aws/supabase/postgres:17.6.1.143` container. It restores the schema baseline,
 replays 58 ordered post-baseline migrations, installs production's byte-exact bodies, and applies
@@ -109,23 +146,29 @@ replays 58 ordered post-baseline migrations, installs production's byte-exact bo
 - **After the candidate all cases agree**, on both sides of the boundary, including the settled edge
   case — a season-2026 invoice re-dated 2026-10-01 quotes and charges 1111c/acre, not 2222c.
 - **Re-apply is safe:** same single signature, same grants, same behaviour.
-- **Eight mutants, each of which MUST fail by a NAMED abort, and each did:** (a) the fix removed —
-  still calls `current_season()`, both windows mis-price again; (b) `v_price_season := v_new_season`,
-  ignoring the row's stored season — re-breaks the edited-across-the-boundary case (2222 vs 1111);
-  (c) the body pin pointed at a wrong md5 — the apply aborts at `PREFLIGHT_BODY_DRIFT` and changes
-  nothing; (d) the function handed to a different owner — the apply aborts at `PREFLIGHT_OWNER`
-  before dropping anything; (e) a wrong **postflight** body pin on a re-apply — aborts at
-  `POSTFLIGHT_BODY`, which matters because the replay path deliberately skips the preflight's pin,
-  so this is the only thing stopping a re-apply from overwriting a body another lane patched;
-  (f) `p_invoice_date` deleted from the `CREATE` and from the grant statements, so the migration
-  installs the old 4-argument shape while claiming to be this file — aborts at
-  `POSTFLIGHT_SIGNATURE`, which is what stops a silently-reverted signature from being reported as a
-  successful apply; (g) the `anon` REVOKE dropped — the apply aborts at `POSTFLIGHT_GRANT_ANON` and
-  rolls back completely, leaving live's access surface intact; (h) the `anon` REVOKE dropped
-  **together with** its postflight check — the apply succeeds and grants empirically become
-  `anon=true`. (g) and (h) are a pair on purpose: (g) alone would only show that *something* refused
-  the apply, and (h) is what proves the REVOKE itself is what closes the grant. No mutant was ever
-  written to `supabase/migrations/`.
+- **Thirteen mutants, each of which MUST fail, and each did — ten refused at apply time by a named
+  abort, three caught behaviourally.** The distinction is deliberate and worth stating plainly: no
+  static guard can see a season-logic regression, so the three behavioural mutants install cleanly
+  and are caught only by the parity probes and a grant read. Anyone reading this as "the migration
+  refuses a wrong season" would be wrong.
+  - **Refused by a named abort:** (a) a wrong preflight body pin → `PREFLIGHT_BODY_DRIFT`;
+    (b) the function handed to a different owner → `PREFLIGHT_OWNER`, before anything is dropped;
+    (c) a wrong **postflight** body pin on a re-apply → `POSTFLIGHT_BODY`; (d) `p_invoice_date`
+    deleted from the `CREATE` and from the grant statements → `POSTFLIGHT_SIGNATURE`; (e) every
+    `DEFAULT` deleted while the types stay identical → `POSTFLIGHT_ARGUMENT_DEFAULTS`; (f) the live
+    5-argument body patched by another lane and then re-applied → `PREFLIGHT_REPLAY_BODY_DRIFT`,
+    **with the patch still in place afterwards**; (g) the 4-argument `DROP` neutered so a second
+    overload survives the apply → `POSTFLIGHT_OVERLOAD`; (h) the `anon` REVOKE dropped →
+    `POSTFLIGHT_GRANT_ANON`, rolling back completely; (i) every ACL statement deleted →
+    `POSTFLIGHT_GRANT_PUBLIC`; (j) EXECUTE granted to a third role → `POSTFLIGHT_GRANT_UNEXPECTED`,
+    naming the grantee.
+  - **Caught behaviourally:** (k) the fix removed — still calls `current_season()`, both windows
+    mis-price again; (l) `v_price_season := v_new_season`, ignoring the row's stored season —
+    re-breaks the edited-across-the-boundary case (2222 vs 1111); (m) the `anon` REVOKE dropped
+    **together with** its postflight checks — the apply succeeds and grants empirically become
+    `anon=true`. (h) and (m) are a pair on purpose: (h) alone would only show that *something*
+    refused the apply, and (m) is what proves the REVOKE itself is what closes the grant.
+  - No mutant was ever written to `supabase/migrations/`.
 
   Worth recording because it nearly passed silently: the first version of mutant (c) replaced the
   md5 by bare substring, which hit the **header comment** rather than the preflight's comparison —

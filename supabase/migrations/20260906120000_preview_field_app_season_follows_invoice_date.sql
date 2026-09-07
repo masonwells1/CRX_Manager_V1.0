@@ -51,7 +51,19 @@ DECLARE
   v_src   text;
   v_owner text;
   v_nargs int;
+  v_identity text;
 BEGIN
+  -- The rollover rule this whole file depends on, pinned exactly as the save-side sibling
+  -- 20260904180000 pins it. Both exposure windows named in this file's header are stated in terms
+  -- of the October 1 boundary, so if compute_season ever stops rolling there, every claim above is
+  -- wrong and a cold rebuild would reinstall this body against a different fiscal year with no
+  -- guard firing. IS DISTINCT FROM, not <>, so a NULL return fails closed instead of passing.
+  IF compute_season(DATE '2026-09-30') IS DISTINCT FROM 2026
+     OR compute_season(DATE '2026-10-01') IS DISTINCT FROM 2027 THEN
+    RAISE EXCEPTION 'PREFLIGHT_SEASON_RULE: compute_season must return 2026 for 2026-09-30 and 2027 for 2026-10-01, got % and %.',
+      compute_season(DATE '2026-09-30'), compute_season(DATE '2026-10-01');
+  END IF;
+
   SELECT count(*) INTO v_count
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -62,13 +74,19 @@ BEGIN
       'PREFLIGHT_MISSING: public.preview_field_app_invoice_split does not exist, so this migration would CREATE a function where a reviewed one is supposed to be replaced. Investigate before applying.';
   END IF;
 
+  -- Not "the DROP list is incomplete" -- at a count of 2 this aborts BEFORE any DROP runs, so the
+  -- DROP list is irrelevant. What it means is that the live catalog holds an overload this file
+  -- does not know about, and the SELECT ... INTO below would take an arbitrary one of them.
   IF v_count <> 1 THEN
     RAISE EXCEPTION
-      'PREFLIGHT_OVERLOAD: expected exactly 1 overload before replacement, found % -- callers are already split and the DROP list in this file is incomplete.', v_count;
+      'PREFLIGHT_OVERLOAD: expected exactly 1 overload before replacement, found % -- the live catalog holds a signature this file does not know about. Enumerate them before applying.', v_count;
   END IF;
 
-  SELECT p.prosrc, p.proowner::regrole::text, p.pronargs
-    INTO v_src, v_owner, v_nargs
+  SELECT p.prosrc,
+         p.proowner::regrole::text,
+         p.pronargs,
+         p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
+    INTO v_src, v_owner, v_nargs, v_identity
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'preview_field_app_invoice_split';
@@ -88,20 +106,31 @@ BEGIN
       'PREFLIGHT_OWNER: preview_field_app_invoice_split is owned by %, not postgres. DROP+CREATE re-owns it to the applying role, which changes this SECURITY DEFINER function''s effective privileges over application_services. Investigate before applying.', v_owner;
   END IF;
 
-  IF v_nargs = 5 THEN
-    -- Replay: the candidate is already installed, so the 4-argument body pin below describes a
-    -- predecessor that no longer exists and cannot match. The end state is still fully asserted --
-    -- the postflight pins the INSTALLED body md5 as well as the signature, owner, SECDEF,
-    -- search_path and ACL, so a replay over a body another lane had patched is refused there
-    -- rather than silently overwritten. Do not weaken that postflight pin on the assumption this
-    -- preflight covers the body: on this path it does not.
-    RAISE NOTICE 'PREFLIGHT_OK: the 5-argument candidate is already installed; this apply is a replay.';
+  -- Replay: the candidate is already installed. Branch on the IDENTITY, not on pronargs -- a count
+  -- of 5 says nothing about the types, so a hypothetical (jsonb,jsonb,uuid,uuid,timestamptz)
+  -- overload would otherwise take this branch and log a replay notice that is simply untrue.
+  IF v_identity = 'preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid, p_invoice_date date)' THEN
+    -- The body MUST be pinned here, on this path, before the DROP below destroys it.
+    --
+    -- An earlier revision of this file claimed the postflight covered the replay case. It cannot,
+    -- and the distinction is the whole point: the postflight runs AFTER the DROP and CREATE, so
+    -- md5(prosrc) at that moment is unconditionally this file's own body. It can only ever detect
+    -- a mismatch between this file's CREATE text and this file's pin constant -- never a property
+    -- of what was installed beforehand. Without the check below, a lane that patched the live
+    -- 5-argument body would have that patch silently destroyed by a retried apply, which would
+    -- then report POSTFLIGHT_OK. That is the batch_apply_prepayments 2026-07-15 silent-revert
+    -- class, reachable through this file's own replay path.
+    IF md5(v_src) <> '83f6600412ced085d0876a3c7339ff12' THEN
+      RAISE EXCEPTION
+        'PREFLIGHT_REPLAY_BODY_DRIFT: the installed 5-argument body md5 is %, not this file''s candidate pin 83f6600412ced085d0876a3c7339ff12. Something changed it after this migration was applied; re-applying would silently overwrite that change. Diff and re-review before replaying.', md5(v_src);
+    END IF;
+    RAISE NOTICE 'PREFLIGHT_OK: the 5-argument candidate is already installed and its body still matches this file''s pin; this apply is a replay.';
     RETURN;
   END IF;
 
   IF v_nargs <> 4 THEN
     RAISE EXCEPTION
-      'PREFLIGHT_SIGNATURE: expected either the 4-argument predecessor or the 5-argument candidate, found % arguments.', v_nargs;
+      'PREFLIGHT_SIGNATURE: expected either the 4-argument predecessor or the 5-argument candidate, found % arguments (%).', v_nargs, v_identity;
   END IF;
 
   IF md5(v_src) <> 'ca33fb973d86dbf3a2788dc11fbc49a5' THEN
@@ -436,6 +465,8 @@ DECLARE
   v_config   text;
   v_body_md5 text;
   v_signature text;
+  v_arguments text;
+  v_extra    text;
   v_has_anon boolean;
   v_has_pub  boolean;
   v_has_auth boolean;
@@ -456,8 +487,9 @@ BEGIN
          p.prosecdef,
          COALESCE(array_to_string(p.proconfig, ','), '<none>'),
          md5(p.prosrc),
-         p.oid::regprocedure::text
-    INTO v_oid, v_owner, v_secdef, v_config, v_body_md5, v_signature
+         p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
+         pg_get_function_arguments(p.oid)
+    INTO v_oid, v_owner, v_secdef, v_config, v_body_md5, v_signature, v_arguments
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'preview_field_app_invoice_split';
@@ -471,9 +503,30 @@ BEGIN
   -- p_invoice_date from the CREATE would leave the count at 1 and the body md5 unchanged, so
   -- every other check here would pass while the frontend got PGRST202 on every Preview -- the
   -- exact outage this migration exists to make impossible. Assert the identity, not the count.
-  IF v_signature <> 'preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)' THEN
+  --
+  -- Rendered through pg_get_function_identity_arguments rather than oid::regprocedure. regprocedure
+  -- omits the schema only when the function is visible in the APPLYING SESSION's search_path, and
+  -- prepends "public." when it is not -- so a connection whose search_path lacks public would abort
+  -- a perfectly correct migration and report it as a signature change. This rendering emits only
+  -- pg_catalog type names, which are always visible, so it does not depend on the caller's path.
+  -- It also carries the argument NAMES, which is what PostgREST actually resolves on: a renamed
+  -- p_invoice_date would break every Preview call just as surely as a deleted one, and this is the
+  -- only check in the file that would see it.
+  IF v_signature <> 'preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid, p_invoice_date date)' THEN
     RAISE EXCEPTION
       'POSTFLIGHT_SIGNATURE: the replacement installed %, not the 5-argument signature the frontend calls. Preview would fail with PGRST202 for every operator.', v_signature;
+  END IF;
+
+  -- The DEFAULTs are load-bearing and NOTHING else here can see them. Neither the identity
+  -- rendering above nor md5(prosrc) includes a DEFAULT clause -- prosrc is only the text between
+  -- the $function$ markers and is blind to the whole declaration. An edit that dropped
+  -- "DEFAULT NULL::date" would pass every other check in this block while making all five
+  -- arguments mandatory, which breaks every already-deployed 4-argument caller with PGRST202 and
+  -- removes the deploy-order escape hatch this file's header promises ("the reverse order is
+  -- safe"). Assert the full declaration, defaults included.
+  IF v_arguments <> 'p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid DEFAULT NULL::uuid, p_invoice_id uuid DEFAULT NULL::uuid, p_invoice_date date DEFAULT NULL::date' THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_ARGUMENT_DEFAULTS: the replacement declares (%), which changes the argument names or the DEFAULTs a 4-argument caller depends on.', v_arguments;
   END IF;
 
   IF NOT v_secdef THEN
@@ -489,10 +542,13 @@ BEGIN
       'POSTFLIGHT_SEARCH_PATH: expected exactly search_path=public, pg_temp; found %.', v_config;
   END IF;
 
-  -- The installed body is pinned here rather than only in the preflight, so BOTH paths are
-  -- covered. The preflight's pin describes the 4-argument predecessor and is skipped on a replay;
-  -- without this line a replay would silently overwrite a 5-argument body another lane had
-  -- patched -- the exact failure the preflight exists to prevent, on the other path.
+  -- What this pin does and does NOT do, stated precisely, because an earlier revision of this file
+  -- over-claimed it. It runs AFTER the DROP and CREATE, so md5(prosrc) here is unconditionally
+  -- this file's own body. It therefore catches exactly two things: a CREATE body edited without
+  -- updating this constant, and a CRLF smudge that put CR bytes in the body (PREFLIGHT_BODY_DRIFT
+  -- cannot see that one -- it hashes the LIVE body, which is unaffected by how this file is
+  -- checked out). It canNOT see what was installed beforehand, so it does not protect the replay
+  -- path. PREFLIGHT_REPLAY_BODY_DRIFT does that, before the DROP.
   IF v_body_md5 <> '83f6600412ced085d0876a3c7339ff12' THEN
     RAISE EXCEPTION
       'POSTFLIGHT_BODY: the installed body hashes to %, not this file''s candidate pin 83f6600412ced085d0876a3c7339ff12. Either the file was edited without updating this pin, or a CRLF smudge put CR bytes in the body -- see the .gitattributes entry for this file.', v_body_md5;
@@ -503,22 +559,35 @@ BEGIN
   -- Supabase's ALTER DEFAULT PRIVILEGES, an explicit anon grant -- and REVOKE ALL FROM PUBLIC does
   -- not remove the latter. That exact regression is why 20260624030000 had to be written out of
   -- band after 20260624020000 did this same DROP+CREATE on this same function.
+  -- Kept, but honestly labelled: on THIS project it is unreachable, and it is NOT mutation-proven.
+  -- Deleting every ACL statement was measured in the container (prover PHASE 6e) and does not
+  -- produce a NULL proacl -- Supabase's ALTER DEFAULT PRIVILEGES fires on the fresh CREATE and
+  -- materialises the ACL with an explicit PUBLIC entry, so POSTFLIGHT_GRANT_PUBLIC below is what
+  -- actually catches that case. This check remains correct for a database without those default
+  -- privileges, where aclexplode(NULL) yields zero rows and every grantee test below would be
+  -- silently false while PUBLIC in fact held EXECUTE. Belt and braces, not the load-bearing strap.
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = v_oid AND proacl IS NOT NULL) THEN
     RAISE EXCEPTION
       'POSTFLIGHT_ACL_DEFAULT: the function carries a NULL ACL, which means default privileges apply and PUBLIC holds EXECUTE. The REVOKE statements did not take effect.';
   END IF;
 
+  -- PUBLIC is read from the ACL directly, because has_function_privilege cannot express it: it
+  -- reports TRUE for every role when PUBLIC holds the privilege, so it cannot tell "granted to
+  -- this role" from "granted to everyone". grantee = 0 is PUBLIC.
+  --
+  -- The three named roles are read with has_function_privilege, NOT with aclexplode, and the
+  -- difference is the finding this replaced. aclexplode enumerates only DIRECT grants and does not
+  -- resolve role membership: if anon were ever made a member of a role holding EXECUTE -- including
+  -- authenticated, which is granted EXECUTE four lines above -- the direct-grant test would return
+  -- false and this block would certify a posture that is not true, while an unauthenticated caller
+  -- could in fact reach a SECURITY DEFINER pricing read. has_function_privilege resolves membership.
+  -- Verified read-only against live on 2026-09-06 before switching: anon=false, authenticated=true,
+  -- service_role=true, so this stricter form does not false-abort on the state it will meet.
   SELECT EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
                   WHERE p.oid = v_oid AND a.privilege_type = 'EXECUTE' AND a.grantee = 0),
-         EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
-                  WHERE p.oid = v_oid AND a.privilege_type = 'EXECUTE'
-                    AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'anon')),
-         EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
-                  WHERE p.oid = v_oid AND a.privilege_type = 'EXECUTE'
-                    AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'authenticated')),
-         EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
-                  WHERE p.oid = v_oid AND a.privilege_type = 'EXECUTE'
-                    AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'service_role'))
+         has_function_privilege('anon', v_oid, 'EXECUTE'),
+         has_function_privilege('authenticated', v_oid, 'EXECUTE'),
+         has_function_privilege('service_role', v_oid, 'EXECUTE')
     INTO v_has_pub, v_has_anon, v_has_auth, v_has_svc;
 
   IF v_has_pub THEN
@@ -539,6 +608,27 @@ BEGIN
   IF NOT v_has_svc THEN
     RAISE EXCEPTION
       'POSTFLIGHT_GRANT_LOST: service_role no longer holds EXECUTE.';
+  END IF;
+
+  -- LAST, deliberately. "anon and PUBLIC are absent, authenticated and service_role are present"
+  -- is not the same claim as "only those hold it": a grant to some third role -- a future
+  -- reporting or read-only role -- would satisfy every check above. This closes that gap.
+  --
+  -- It runs after the named checks rather than before them because it would otherwise SHADOW
+  -- them: anon is not in the reviewed set, so an anon regression would abort here, with this
+  -- message, and POSTFLIGHT_GRANT_ANON -- the check whose whole job is to name the 20260624020000
+  -- regression, and which the prover mutation-tests by name -- would become unreachable and
+  -- therefore unfalsifiable. Specific diagnoses first, catch-all last.
+  SELECT string_agg(DISTINCT COALESCE(a.grantee::regrole::text, 'PUBLIC'), ', ' ORDER BY COALESCE(a.grantee::regrole::text, 'PUBLIC'))
+    INTO v_extra
+    FROM pg_proc p, aclexplode(p.proacl) a
+   WHERE p.oid = v_oid
+     AND a.privilege_type = 'EXECUTE'
+     AND COALESCE(a.grantee::regrole::text, 'PUBLIC') NOT IN ('postgres', 'authenticated', 'service_role');
+
+  IF v_extra IS NOT NULL THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_GRANT_UNEXPECTED: EXECUTE is held by % in addition to the reviewed set (postgres, authenticated, service_role). Every grantee on a SECURITY DEFINER pricing read must be deliberate.', v_extra;
   END IF;
 
   RAISE NOTICE 'POSTFLIGHT_OK: one postgres-owned SECURITY DEFINER signature with a pinned search_path; EXECUTE held by authenticated and service_role only.';
