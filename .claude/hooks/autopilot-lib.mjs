@@ -53,8 +53,9 @@ const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|
 //     coreutils and BSD/macOS alike). That synonym is the whole bug.
 //   * GNU getopt (and git's parse-options) accept any UNAMBIGUOUS PREFIX of a
 //     long option, so `rm --rec` really is `--recursive`.
-//   * `rm --recursive -F` therefore stays ALLOW: `-F` is not an `rm` flag at all,
-//     and inventing one would over-deny.
+//   * `rm -F build` therefore stays ALLOW: `-F` is not an `rm` flag at all, and
+//     inventing it as a force alias would over-deny. (`rm --recursive -F` DOES
+//     deny — but on the strength of `--recursive`, not of `-F`.)
 //
 // Binary NAMES are the one thing that IS case-insensitive, because Windows
 // resolves them that way and the executable suffix is optional — `rm`, `RM` and
