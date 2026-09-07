@@ -172,7 +172,7 @@ const KNOWN_UNGUARDED: Record<string, string> = {
   'admin_update_profile|new_role': 'NULL new_role means no role change; the NOT IN is a value whitelist, not an auth gate',
   // create_inventory_hold|v_role was listed here as "parked, never applied". The
   // 2026-07-27 production schema dump proves the parked_010 body IS live. The
-  // public wrapper in 20260905210000 gates NULL-safely (NOT EXISTS ... is_active)
+  // public wrapper in 20260905230000 gates NULL-safely (NOT EXISTS ... is_active)
   // before delegating, so the latest disk definition no longer trips the scan.
   // Be precise about what that means: the fail-open `v_role NOT IN` gate still
   // exists, renamed verbatim into _create_inventory_hold_intent_impl_20260905,

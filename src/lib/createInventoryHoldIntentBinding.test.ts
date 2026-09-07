@@ -7,7 +7,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const source = (...parts: string[]) =>
   readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
 
-const migrationName = '20260905210000_bind_create_inventory_hold_receipt_to_intent.sql';
+const migrationName = '20260905230000_bind_create_inventory_hold_receipt_to_intent.sql';
 const migration = source('supabase', 'migrations', migrationName);
 const smoke = source('scripts', 'smoke', 'smoke-create-inventory-hold-intent-binding.sql');
 const prover = source('scripts', 'smoke', 'prove-create-inventory-hold-intent-binding-real-schema.mjs');
@@ -87,7 +87,7 @@ function hasIntentBindingContract(sql: string) {
     && sql.includes('-- caller-analysis: create_inventory_hold ::');
 }
 
-describe('create_inventory_hold receipt binding (20260905210000)', () => {
+describe('create_inventory_hold receipt binding (20260905230000)', () => {
   it('is the newest migration on disk and still marked NOT APPLIED', () => {
     const ordered = readdirSync(join(root, 'supabase', 'migrations'))
       .filter((name) => /^\d{14}_.+\.sql$/.test(name))

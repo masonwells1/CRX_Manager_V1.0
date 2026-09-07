@@ -48,8 +48,16 @@ success; a different row mints its own key and can never replay another row's re
   `idempotency-reset-order`, `gauntletSection3InventoryGuards`, `section9ApIntentBinding` and
   `useUncertainMutationIntent` suites pass.
 
-**Not verified.** The live function bodies were not queried (Mason asked for no live access
-without approval); the analysis is from the newest migration files on disk. The residual risk
-named by CodeRabbit on #535 remains: the server still binds nothing to the key, so a forward
-migration adding actor + payload binding to these three RPCs is the durable fix. That is a
-separate database change, not part of this frontend-only PR.
+**Not verified at the time this entry was first written.** The live function bodies were not queried
+(Mason asked for no live access without approval); that analysis came from the newest migration files
+on disk. Mason later authorized a read-only production check on 2026-09-06, recorded in
+`docs/manual/CURRENT_STATE.md` and in the companion changelog entry
+`2026-09-05-create-inventory-hold-receipt-binding.md`.
+
+**Server-side binding — partially addressed in this same PR.** The residual risk named by CodeRabbit
+on #535 was that the server binds nothing to the key, so a forward migration adding actor + payload
+binding is the durable fix. That migration now ships in this PR:
+`supabase/migrations/20260905230000_bind_create_inventory_hold_receipt_to_intent.sql` (see its own
+changelog entry). It is **written and container-proven but NOT applied live and NOT merged**, and it
+covers **only `create_inventory_hold`** — `adjust_inventory` and `retire_inventory_item` still have
+no actor/payload binding on the server and keep relying on the frontend freeze described above.

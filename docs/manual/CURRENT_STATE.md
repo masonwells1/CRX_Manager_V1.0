@@ -70,10 +70,12 @@ query found it APPLIED LIVE as ledger name `refuse_null_job_field_acres`, versio
 until that lane updates it. Because the ledger recorded it without its timestamp prefix, the
 authored-name ordering boundary above did not move — read ordering from the NAME with care here.
 
-A second local candidate, `20260905210000_bind_create_inventory_hold_receipt_to_intent` (branch
-`claude/inventory-idempotency-key-reset-888161`, history row 917), is written and container-proven but
-**NOT applied and NOT merged** — its stamp is authored above PR #592's two
-pending `20260905*` files, and its safety argument pins the `create_inventory_hold` body by `prosrc`
+A second local candidate, `20260905230000_bind_create_inventory_hold_receipt_to_intent` (branch
+`claude/inventory-idempotency-key-reset-888161`, history row 923), is written and container-proven but
+**NOT applied and NOT merged** — its stamp is authored above PR #592's pending `20260905*` files, and
+deliberately clear of `20260905210000`, which PR #592 occupies with
+`20260905210000_repair_commission_history_label_snapshots.sql` (two migration files sharing one
+timestamp would have undefined apply order), and its safety argument pins the `create_inventory_hold` body by `prosrc`
 sha256 (`3c86421e…`, the body the checked-in 2026-07-27 production dump carries) and fails closed at
 apply time if the installed body differs. **Mason authorized a read-only live check on 2026-09-06 and
 every preflight condition was met**: exactly one `create_inventory_hold` overload, owner `postgres`,

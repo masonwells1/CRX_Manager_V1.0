@@ -1543,7 +1543,7 @@ network-disabled container built from the 2026-07-27 baseline plus all 75 later 
 session 2 exits with that error. The same body also gates role with `v_role NOT IN (...)`, which lets a
 caller with no `profiles` row through (NULL is not IN anything), and accepts a NULL key.
 
-Local forward migration `20260905210000_bind_create_inventory_hold_receipt_to_intent.sql` renames the
+Local forward migration `20260905230000_bind_create_inventory_hold_receipt_to_intent.sql` renames the
 live body to `_create_inventory_hold_intent_impl_20260905` (postgres-only EXECUTE) and installs a
 same-signature wrapper: AUTH_REQUIRED, ACTOR_MISMATCH on a forged `p_performed_by`, a NULL-safe ACTIVE
 admin/sales_rep gate, key required, request fingerprint, then `check_idempotency_intent` (per-key

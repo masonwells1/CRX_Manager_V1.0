@@ -1,6 +1,6 @@
 ## 2026-09-05 - Serialize create_inventory_hold on its idempotency key (local candidate, NOT applied)
 
-**What changed.** New migration `supabase/migrations/20260905210000_bind_create_inventory_hold_receipt_to_intent.sql`,
+**What changed.** New migration `supabase/migrations/20260905230000_bind_create_inventory_hold_receipt_to_intent.sql`,
 a LOCAL CANDIDATE that has NOT been applied live and is NOT merged. It renames the live
 `create_inventory_hold` body to `_create_inventory_hold_intent_impl_20260905` (executable only by
 `postgres`) and installs a same-signature public wrapper that: requires a signed-in caller and refuses a
@@ -68,6 +68,38 @@ authored-name ordering boundary unchanged at `20260904180000_invoice_season_foll
 (999 rows) and `.claude/session-state/applied-migrations.json` was refreshed from that capture. The manual
 docs' "Last verified" stamps were bumped to 2026-09-06 on the strength of this read and `check-doc-drift`
 now passes.
+
+**CodeRabbit review on PR #624 (2026-09-06) — four findings applied, one deliberately skipped.**
+Applied: `closeDisabled` now passed to BOTH locked `Modal` instances on the Inventory page (the
+guarded `onClose` alone left an enabled-looking header X that took initial focus and did nothing);
+`getKeyFor`/`resetKeyFor` added to the idempotency mock in `InventoryPage.productIdentity.test.tsx`
+(`executeDelete` calls the scoped variants, so a test touching the retire confirmation would have
+died with a `TypeError`); the frontend-retry changelog entry no longer claims the server-side binding
+is "a separate database change, not part of this frontend-only PR" — it ships here, and the entry now
+states the binding covers only `create_inventory_hold`, not `adjust_inventory` or
+`retire_inventory_item`; and the migration-history row no longer says "no live query was performed",
+which the 2026-09-06 read-only preflight contradicted.
+
+**Skipped, with reason:** the suggestion to replace the wrapper's inline role predicate with
+`public.is_admin() OR public.is_sales_rep()`. Checked against
+`20260714185631_harden_is_admin_search_path.sql`: the helper is functionally identical to the inline
+predicate — same `public.profiles`, same `is_active = true`, same NULL-safe `EXISTS` — differing only
+in keying on `auth.uid()` rather than the `v_actor` this function has already proven equal to
+`auth.uid()` via its ACTOR_MISMATCH check. So it is a style preference, not a defect, and taking it
+would re-emit an already container-proven body (voiding the 2026-09-05 real-schema proof) and add two
+helper dependencies the preflight does not pin, for no behavioural gain.
+
+**Two defects found while acting on that review, which the review itself did not report.** First,
+PR #592 already occupies the `20260905210000` timestamp with its repair_commission_history_label_snapshots
+migration; this migration was therefore renamed to `20260905230000_bind_create_inventory_hold_receipt_to_intent.sql`,
+because two migration files sharing a timestamp have undefined apply order. Second, the branch
+carried a SECOND history row numbered 917 (`main` already used 917 for `20260905090000`); this row is
+now 923, clear of `main`'s 917 and of PR #592's pending 918-922, and the file header was corrected to
+match. Both were verified with the real parser rather than by eye:
+`localCandidateMigrationPathsFromHistory` from `.claude/hooks/worktree-awareness-lib.mjs` returns
+`state "known"` with 3 local-candidate paths for the resolved file, matching `origin/main`'s own
+`known`. That check also caught a regression introduced while writing this row — naming the sibling
+migration in backticks put two basenames in one LOCAL CANDIDATE row, which the parser refuses.
 
 **Not verified.** The apply itself, the post-apply invariant sweeps, the regenerated
 `src/types/supabase.ts` (`p_idempotency_key` is still typed optional at line 11865), and the browser flow

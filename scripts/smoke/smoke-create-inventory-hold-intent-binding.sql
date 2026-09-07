@@ -3,7 +3,7 @@
 -- exact hold request.
 --
 -- Covers create_inventory_hold after
--- 20260905210000_bind_create_inventory_hold_receipt_to_intent.sql.
+-- 20260905230000_bind_create_inventory_hold_receipt_to_intent.sql.
 --
 -- CONTAINER ONLY: plants [SMOKE] auth.users / profiles / customer / product /
 -- inventory rows itself, which the live-data guard correctly refuses. Run via

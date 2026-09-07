@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Full-chain proof for the local 20260905210000 create_inventory_hold candidate.
+ * Full-chain proof for the local 20260905230000 create_inventory_hold candidate.
  *
  * Builds the checked-in 2026-07-27 production schema baseline in a
  * network-disabled Supabase PostgreSQL 17 container, replays every ordered
@@ -38,7 +38,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-hold-intent-schema-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
-const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260905210000_bind_create_inventory_hold_receipt_to_intent.sql');
+const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260905230000_bind_create_inventory_hold_receipt_to_intent.sql');
 const SMOKE = path.join(ROOT, 'scripts', 'smoke', 'smoke-create-inventory-hold-intent-binding.sql');
 
 const ADMIN = '5a000000-0000-4000-8000-00000000000a';

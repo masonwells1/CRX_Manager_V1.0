@@ -1622,7 +1622,13 @@ export default function InventoryPage() {
       />
 
       {/* Create Hold Modal */}
-      <Modal open={holdOpen} onClose={() => { if (!createHoldIntent.isIntentLocked) setHoldOpen(false); }} title="Create" accent="Hold">
+      <Modal
+        open={holdOpen}
+        onClose={() => { if (!createHoldIntent.isIntentLocked) setHoldOpen(false); }}
+        closeDisabled={createHoldIntent.isIntentLocked}
+        title="Create"
+        accent="Hold"
+      >
         <div className="space-y-4">
           {createHoldIntent.isIntentLocked && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
@@ -1880,7 +1886,13 @@ export default function InventoryPage() {
       </Modal>
 
       {/* Adjust Modal */}
-      <Modal open={adjustOpen} onClose={() => { if (!adjustIntent.isIntentLocked) setAdjustOpen(false); }} title="Manual" accent="Adjustment">
+      <Modal
+        open={adjustOpen}
+        onClose={() => { if (!adjustIntent.isIntentLocked) setAdjustOpen(false); }}
+        closeDisabled={adjustIntent.isIntentLocked}
+        title="Manual"
+        accent="Adjustment"
+      >
         {(() => {
           const selectedRow = inventory.find((r) => r.id === selectedId);
           const parsedDelta = parseFloat(adjustQty);

@@ -85,6 +85,10 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: () => ({
     getKey: () => 'idem-1',
     resetKey: mocks.resetKey,
+    // executeDelete uses the scoped variants; without them a test that opens the
+    // retire confirmation dies with a TypeError before reaching its assertions.
+    getKeyFor: () => 'idem-1',
+    resetKeyFor: mocks.resetKey,
   }),
 }));
 
