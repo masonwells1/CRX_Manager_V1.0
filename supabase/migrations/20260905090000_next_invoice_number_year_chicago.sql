@@ -80,6 +80,28 @@
 -- they carry the same 31 December 2026 deadline; they are recorded as a follow-up in
 -- docs/manual/KNOWN_ISSUES.md. Do not read this migration as closing the family.
 --
+-- IDEMPOTENCY-KEY EXEMPTION, recorded rather than acted on (raised by CodeRabbit on
+-- PR #614, 2026-09-07; also recorded in migration-history row 917). The CRX hard rule
+-- is that a mutating RPC accepts and enforces p_idempotency_key text DEFAULT NULL.
+-- next_invoice_number is EXEMPT, as are the seven sibling next_%_number generators —
+-- none has ever taken one. In order of decisiveness:
+--   1. It is invoked as the invoices.invoice_number COLUMN DEFAULT. A column default
+--      expression has no caller that could supply a key. Live callers also invoke it
+--      with zero arguments.
+--   2. Adding a parameter changes the SIGNATURE, which CREATE OR REPLACE cannot do, so
+--      it would require DROP FUNCTION — the path this header already documents as
+--      dangerous: the fresh CREATE would take the default EXECUTE TO PUBLIC, and the
+--      DROP would hit the dependent invoices.invoice_number column default. It would
+--      also invalidate the body md5 pins below.
+--   3. The rule exists to stop a retry APPLYING a business action twice. This function
+--      only draws the next value from a forward-only per-prefix sequence: a retry
+--      consumes a fresh number, it cannot re-apply anything, and it moves no money or
+--      inventory. A skipped number is a cosmetic gap, not a double-apply.
+--   4. Out of scope here regardless — this file rewrites ONE expression (the year
+--      source) inside an existing function; it does not introduce the function.
+-- Revisiting the exemption is a deliberate change across all eight generators, not
+-- something to bolt onto a parked one-expression fix.
+--
 -- PREFLIGHT PIN. Refuses to run unless the installed body is byte-for-byte either the
 -- reviewed starting body or this file's own candidate body (so a replay is a no-op
 -- rather than a failure). A drifted body aborts the transaction with nothing changed.
