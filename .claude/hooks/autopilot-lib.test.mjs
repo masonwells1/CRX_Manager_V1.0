@@ -163,6 +163,118 @@ eq(autopilotDecision("Bash", { command: 'git -c a"b push' }), "allow", "an unbal
 eq(autopilotDecision("Bash", { command: "git -C 'a push origin main" }), "allow", "same, single-quoted");
 eq(autopilotDecision("Bash", { command: "git -C 'a b' push origin main" }), "deny", "the BALANCED counterpart — which shells DO run — is denied");
 
+// ── the BINARY was the third axis, and the widest (2026-09-07, round two) ────
+// `\bgit\b` / `\bgh\b` is followed by a required `\s`, so ANY spelling the shell
+// still resolves to the same program — an extension, a closing quote — ended the
+// match before the subcommand was read. Every line in this first block returned
+// "allow" against the library shipped at e0bce4a82: armed mode would have pushed,
+// force-pushed, merged and hard-reset. `.exe` is the NATIVE binary spelling on
+// Windows, which is where this repo is developed, so this was not a residual —
+// it defeated the deny-set outright. Reproduced by RUNNING the guard.
+eq(autopilotDecision("Bash", { command: "git.exe push origin HEAD" }), "deny", "PROVEN BYPASS: git.exe push");
+eq(autopilotDecision("Bash", { command: "git.exe push --force origin HEAD" }), "deny", "PROVEN BYPASS: git.exe force push");
+eq(autopilotDecision("Bash", { command: "gh.exe pr merge 625 --squash" }), "deny", "PROVEN BYPASS: gh.exe pr merge");
+eq(autopilotDecision("Bash", { command: "git.exe reset --hard origin/main" }), "deny", "PROVEN BYPASS: git.exe reset --hard");
+eq(autopilotDecision("Bash", { command: "git.exe -C C:/CRX_pr607 push origin HEAD" }), "deny", "PROVEN BYPASS: git.exe with a global option");
+// The extension is matched by SHAPE, so the rule does not depend on anyone having
+// listed the right extensions. PATHEXT is user-configurable; `.com` and `.ps1` are
+// on it out of the box, and the next one nobody has thought of is covered too.
+eq(autopilotDecision("Bash", { command: "git.cmd push origin HEAD" }), "deny", "git.cmd push");
+eq(autopilotDecision("Bash", { command: "git.bat push origin HEAD" }), "deny", "git.bat push");
+eq(autopilotDecision("Bash", { command: "git.ps1 push origin HEAD" }), "deny", "git.ps1 push");
+eq(autopilotDecision("Bash", { command: "git.com push origin HEAD" }), "deny", "git.com push");
+eq(autopilotDecision("Bash", { command: "git.EXE push origin HEAD" }), "deny", "an UPPERCASE extension is the same file on Windows");
+eq(autopilotDecision("Bash", { command: "git.anything-at-all push origin HEAD" }), "deny", "an extension nobody listed is still an extension");
+// A PATH PREFIX is deliberately the same class. It needs no new syntax — a path
+// separator is a non-word character, so `\b` already opens on the final segment,
+// which is what the shell resolves too. The extensionless forms below denied
+// BEFORE this change; they are pinned so that stays true, and the `.exe` forms
+// are the ones this change adds.
+eq(autopilotDecision("Bash", { command: "/usr/bin/git push origin HEAD" }), "deny", "an absolute POSIX path");
+eq(autopilotDecision("Bash", { command: "/usr/bin/git.exe push origin HEAD" }), "deny", "…and with an extension");
+eq(autopilotDecision("Bash", { command: "./git push origin HEAD" }), "deny", "a relative path");
+eq(autopilotDecision("Bash", { command: "./git.exe push origin HEAD" }), "deny", "…and with an extension");
+eq(autopilotDecision("Bash", { command: "C:\\Tools\\git.exe push origin HEAD" }), "deny", "a Windows backslash path");
+eq(autopilotDecision("Bash", { command: 'gh.exe -R "o/r name" pr merge 625' }), "deny", "extension AND a quoted global option");
+// A QUOTED command word is the other half of BIN_TAIL, and it is ordinary Windows
+// usage: the real install path contains a space, so it gets quoted.
+eq(autopilotDecision("Bash", { command: '"C:/Program Files/Git/bin/git.exe" push origin HEAD' }), "deny", "PROVEN BYPASS: the quoted Windows install path");
+eq(autopilotDecision("Bash", { command: "'/opt/git/bin/git.exe' push origin HEAD" }), "deny", "single-quoted binary path");
+eq(autopilotDecision("Bash", { command: '"git" push origin HEAD' }), "deny", "a quoted bare name is still the command word");
+eq(autopilotDecision("Bash", { command: '"C:/Program Files/GitHub CLI/gh.exe" pr merge 625' }), "deny", "quoted gh.exe path + pr merge");
+
+// The other direction. `\b` on both sides of the name, plus "an extension starts
+// with a DOT", is what keeps this off the neighbours: `-` is not `.`, so BIN_TAIL
+// never opens on `git-crypt`, and the required whitespace then lands on `-crypt`
+// instead of on the subcommand. These are the commands a careless widening of the
+// binary anchor would have swept in, so every one of them is pinned.
+eq(autopilotDecision("Bash", { command: "git-crypt unlock" }), "allow", "git-crypt is a different program");
+eq(autopilotDecision("Bash", { command: "git-crypt push origin" }), "allow", "…even when its own subcommand is a deny word");
+eq(autopilotDecision("Bash", { command: "git-lfs push origin main" }), "allow", "git-lfs push is not git push");
+eq(autopilotDecision("Bash", { command: "github-release push" }), "allow", "a longer name starting with the binary");
+eq(autopilotDecision("Bash", { command: "gitfoo push" }), "allow", "a file literally named gitfoo");
+eq(autopilotDecision("Bash", { command: "npm run gitpush" }), "allow", "an npm script named gitpush");
+eq(autopilotDecision("Bash", { command: "npm run git-push" }), "allow", "an npm script named git-push");
+eq(autopilotDecision("Bash", { command: "mygit push origin" }), "allow", "a longer name ENDING with the binary");
+eq(autopilotDecision("Bash", { command: "gh-dash pr merge 1" }), "allow", "gh-dash is a different program");
+eq(autopilotDecision("Bash", { command: "ghq push" }), "allow", "ghq is a different program");
+eq(autopilotDecision("Bash", { command: "ghost pr merge 1" }), "allow", "a longer name starting with gh");
+eq(autopilotDecision("Bash", { command: "cat .gitignore" }), "allow", "reading a dotfile whose name starts with the binary");
+
+// The same shape rule, applied to every OTHER name-anchored rule in the deny set,
+// because they had the identical hole for the identical reason. `npx.cmd` IS the
+// Windows npx and `supabase.exe`/`vercel.cmd` are how those CLIs install there.
+eq(autopilotDecision("Bash", { command: "supabase.exe db reset" }), "deny", "PROVEN BYPASS: supabase.exe db reset");
+eq(autopilotDecision("Bash", { command: "supabase.cmd db push" }), "deny", "supabase.cmd db push");
+eq(autopilotDecision("Bash", { command: "supabase.exe migration repair 20260101" }), "deny", "supabase.exe migration repair");
+eq(autopilotDecision("Bash", { command: "supabase.exe functions deploy send-email" }), "deny", "PROVEN BYPASS: supabase.exe edge deploy");
+eq(autopilotDecision("Bash", { command: '"C:/Program Files/supabase/supabase.exe" db reset' }), "deny", "quoted supabase path");
+eq(autopilotDecision("Bash", { command: "vercel.cmd deploy" }), "deny", "PROVEN BYPASS: vercel.cmd deploy");
+eq(autopilotDecision("Bash", { command: "vercel.exe --prod" }), "deny", "vercel.exe --prod");
+eq(autopilotDecision("Bash", { command: "rm.exe -rf build" }), "deny", "PROVEN BYPASS: rm.exe -rf");
+eq(autopilotDecision("Bash", { command: "/bin/rm.exe -rf build" }), "deny", "a full path to rm.exe");
+eq(autopilotDecision("Bash", { command: "del.exe /s C:/x" }), "deny", "del.exe /s");
+// `rmdir`, `dropdb` and `createdb` are bare-word rules with nothing required
+// after them, so an extension never broke them and they were left alone. Pinned
+// so a future round does not "fix" what was never broken, or break it.
+eq(autopilotDecision("Bash", { command: "rmdir.exe /s x" }), "deny", "rmdir.exe was already covered by the bare-word rule");
+eq(autopilotDecision("Bash", { command: "dropdb.exe crx" }), "deny", "dropdb.exe likewise");
+eq(autopilotDecision("Bash", { command: "createdb.exe crx" }), "deny", "createdb.exe likewise");
+// …and their benign neighbours must not be swept in either.
+eq(autopilotDecision("Bash", { command: "supabase db diff" }), "allow", "supabase db diff is read-only");
+eq(autopilotDecision("Bash", { command: "supabase.exe status" }), "allow", "supabase.exe status is read-only");
+eq(autopilotDecision("Bash", { command: "supabase-py db reset" }), "allow", "a different program whose name starts with supabase");
+eq(autopilotDecision("Bash", { command: "npx supabase gen types typescript" }), "allow", "type generation is not a db reset");
+eq(autopilotDecision("Bash", { command: "vercel-cli deploy" }), "allow", "vercel-cli is a different name");
+eq(autopilotDecision("Bash", { command: "vercel.exe whoami" }), "allow", "vercel.exe whoami is read-only");
+eq(autopilotDecision("Bash", { command: "charm -rf x" }), "allow", "a name ENDING in rm");
+eq(autopilotDecision("Bash", { command: "npm run rm-cache" }), "allow", "an npm script named rm-cache");
+eq(autopilotDecision("Bash", { command: "model /s" }), "allow", "a name ending in del");
+
+// The over-denial trade is UNCHANGED in kind, only reached by more spellings. A
+// differential sweep of 11,016 generated commands (2 binaries x 18 binary
+// spellings x 18 option regions x the subcommand tails) reports 4,125 dangerous
+// shapes newly denied, 240 benign commands newly denied, and ZERO newly allowed.
+// All 240 are the option-region class already accepted above, now reached through
+// a non-plain binary spelling — machine-checked, not eyeballed: for every one of
+// the 240 the plain-binary twin ALREADY denied before this change. The count of
+// genuinely new over-denials is 0. The plain-binary slice of the sweep drifts by
+// 0 in either direction, which is what shows the option grammar was not touched.
+eq(autopilotDecision("Bash", { command: "git.exe --no-pager log --grep push" }), "deny", "INHERITED over-denial: `git --no-pager log --grep push` already denied");
+eq(autopilotDecision("Bash", { command: "git.exe -C/x stash push -m wip" }), "deny", "INHERITED over-denial: the attached-value twin already denied");
+eq(autopilotDecision("Bash", { command: "git.exe -C /x stash push -m wip" }), "allow", "the COMMON detached form stays allowed at every binary spelling");
+eq(autopilotDecision("Bash", { command: "git.exe log --grep push" }), "allow", "…as does the common log search");
+eq(autopilotDecision("Bash", { command: 'git.exe commit -m "fix the push bug"' }), "allow", "a commit message naming push stays allowed at every binary spelling");
+eq(autopilotDecision("Bash", { command: "git.exe status --short" }), "allow", "ordinary work with the native binary spelling stays allowed");
+eq(autopilotDecision("Bash", { command: "gh.exe pr view 625" }), "allow", "gh.exe pr view stays allowed");
+eq(autopilotDecision("Bash", { command: "gh.exe pr list" }), "allow", "gh.exe pr list stays allowed");
+// The one KNOWN new over-denial shape the closing quote buys, stated rather than
+// discovered later: a quoted word ENDING in the binary name satisfies BIN_TAIL.
+// Its unquoted twin already denied before this change, so the guard is now
+// consistent rather than newly blunt — and for a deny set that is the safe side.
+eq(autopilotDecision("Bash", { command: 'grep "git" push.log' }), "deny", "ACCEPTED over-denial: a quoted word ending in the binary name");
+eq(autopilotDecision("Bash", { command: "grep git push.log" }), "deny", "…whose UNQUOTED twin already denied before this change");
+
 // Linear, not exponential. The option region nests quantifiers, so prove it does
 // not backtrack catastrophically on a long non-matching command rather than
 // assuming it: each iteration's only real branch point ends the loop.

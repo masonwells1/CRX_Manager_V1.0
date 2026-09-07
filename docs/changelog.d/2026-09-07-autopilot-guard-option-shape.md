@@ -45,9 +45,12 @@ swallow that subcommand as its "value", so `git --no-pager log --grep push` is d
 apart needs per-option arity — another name list. For a deny-set an occasional extra denial is the
 safe side of the trade, and the four benign controls are unaffected.
 
-**Known residual, not fixed here:** the binary is still matched as `\bgit\b` / `\bgh\b`, so the
-Windows spellings `git.exe push` and `gh.exe pr merge 1` are not seen. That is a different axis from
-the option region and outside this PR's subject; it is unchanged from before either fix.
+**Residual raised here, then FIXED on this same PR:** the binary was still matched as `\bgit\b` /
+`\bgh\b`, so the Windows spellings `git.exe push` and `gh.exe pr merge 1` were not seen. This entry
+originally scoped that out as a candidate for its own PR. That call was reversed once the residual was
+measured against the shipped library — it defeated the entire deny-set, not a corner of it — and it is
+closed by `2026-09-07-autopilot-guard-binary-shape.md`. Read the two together; this paragraph is not
+the PR's final word on the binary anchor.
 
 ## Proof
 
@@ -82,4 +85,6 @@ letting a lone quote count as an ordinary character too, which reintroduces the 
 model removed and starts denying `git -C "a push" status`. All three cases are asserted in the test
 file so this stays a deliberate property rather than a surprise in the next review.
 
-Autopilot is not armed in any worktree, so both bypasses were latent, never live.
+Autopilot is not armed in any worktree, so both bypasses were latent, never live. The flag is per
+worktree, so that claim was later verified across all 42 CRX checkouts rather than for one — see the
+arm-state section of `2026-09-07-autopilot-guard-binary-shape.md`.

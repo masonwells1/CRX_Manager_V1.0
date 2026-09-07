@@ -87,8 +87,76 @@ const WORD_CHUNK = String.raw`(?:"[^"]*"|'[^']*'|\\[\s\S]|[^\s'"\\])`;
 const OPT_TOKEN = String.raw`-${WORD_CHUNK}*`;
 const VAL_TOKEN = String.raw`(?!-)${WORD_CHUNK}+`;
 const GLOBAL_OPTS = String.raw`(?:\s+${OPT_TOKEN}(?:\s+${VAL_TOKEN})?)*`;
-const git = (rest) => new RegExp(String.raw`\bgit\b${GLOBAL_OPTS}\s+${rest}`);
-const gh = (rest) => new RegExp(String.raw`\bgh\b${GLOBAL_OPTS}\s+${rest}`);
+
+// The BINARY was the third axis of the same bug, and the widest one. `\bgit\b`
+// followed by `${GLOBAL_OPTS}\s+` requires whitespace immediately after the NAME,
+// so anything the shell still resolves to git — an extension, a closing quote —
+// ended the match before the subcommand was ever considered. Reproduced by
+// execution at e0bce4a82 (2026-09-07): `git.exe push origin HEAD`,
+// `git.exe push --force`, `git.exe reset --hard origin/main` and
+// `gh.exe pr merge 625 --squash` all returned "allow" while the bare spellings
+// denied. `.exe` is the NATIVE binary spelling on the platform this repo is
+// developed on, so this defeated the whole deny-set, not a corner of it.
+//
+// Listing the extensions (`\.exe|\.cmd|\.bat`) is the name-listed carve-out that
+// already failed twice in the option region above — PATHEXT is user-configurable
+// and `.com`, `.ps1`, a wrapper script with no extension at all, and whatever the
+// next shell adds are not in anyone's list. So the binary is described by SHAPE:
+//
+//   NAME       the exact command name, with `\b` on both sides, so it cannot be
+//              the tail or the head of a longer word (`gitfoo`, `github-cli`).
+//   BIN_TAIL   what may sit between that name and the whitespace before the
+//              subcommand, and it is exactly two things:
+//                (a) an EXTENSION — a `.` followed by more of the same word. Any
+//                    extension, because "what follows the dot" is not a list.
+//                (b) a CLOSING QUOTE — a quoted command word ends with one, and
+//                    `"C:/Program Files/Git/bin/git.exe" push` is the ordinary
+//                    Windows spelling of a path that contains a space.
+//
+// A PATH PREFIX is deliberately in this same class and needs no new syntax: a
+// path separator is a non-word character, so `\b` already opens on the final
+// segment. `/usr/bin/git push`, `./git push`, `C:\Tools\git.exe push` and
+// `"C:/Program Files/Git/bin/git.exe" push` are all matched at the basename —
+// which is what the shell resolves too. That was verified by execution, not
+// assumed; the pre-fix library already denied the unquoted, extensionless path
+// forms for exactly this reason.
+//
+// It does NOT widen onto neighbours, and `\b` plus "an extension starts with a
+// dot" is why. `git-crypt push`, `git-lfs push`, `github-release push`,
+// `gitfoo push`, `npm run gitpush`, `gh-dash pr merge 1` and `ghq push` all stay
+// allowed: `-` is not `.`, so BIN_TAIL does not open, and the required whitespace
+// then lands on `-crypt`/`-lfs`/`-dash` instead of on the subcommand. Asserted in
+// both directions in autopilot-lib.test.mjs.
+//
+// KNOWN over-denial, same trade as the option region: a quoted word that ENDS in
+// `git`/`gh` now also satisfies BIN_TAIL's closing quote, so `grep "git" push.log`
+// denies. The UNQUOTED twin `grep git push.log` already denied before this change,
+// so this makes the guard consistent rather than newly blunt, and an extra denial
+// is the safe side for a deny set.
+const BIN_TAIL = String.raw`(?:\.${WORD_CHUNK}*)?["']?`;
+const bin = (name) => String.raw`\b${name}\b${BIN_TAIL}`;
+const git = (rest) => new RegExp(String.raw`${bin("git")}${GLOBAL_OPTS}\s+${rest}`);
+const gh = (rest) => new RegExp(String.raw`${bin("gh")}${GLOBAL_OPTS}\s+${rest}`);
+
+// Every OTHER name-anchored rule below had the same binary hole, for the same
+// reason — the name is followed by a required `\s`, so an extension ends the match
+// before the dangerous subcommand is read. `supabase.exe db reset`,
+// `vercel.cmd deploy`, `npx.cmd supabase db reset` (npx.cmd IS the Windows npx)
+// and `rm.exe -rf` all walked through. They take the same shape rule rather than
+// a second, differently-shaped fix.
+//
+// `rmdir`, `dropdb` and `createdb` are deliberately NOT changed: they are bare
+// `\b…\b` word matches with nothing required after them, so `rmdir.exe` already
+// denied. Adding BIN_TAIL there would be noise, not safety. Asserted below.
+//
+// The `npx ` prefix is OPTIONAL in these three rules, which makes it inert: the
+// rule already matches from `supabase` onward, so `npx -y supabase db reset` and
+// `npx.cmd supabase db reset` denied before this change and deny after it —
+// verified by execution, not reasoned about. It is given the same shape only so
+// the three rules read consistently; do not mistake it for the thing doing the
+// work, which is the `supabase` anchor.
+const cmd = (name, rest) => new RegExp(String.raw`${bin(name)}\s+${rest}`);
+const NPX = String.raw`(?:${bin("npx")}\s+)?`;
 
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
@@ -98,17 +166,17 @@ const DENY_BASH_RES = [
   git(String.raw`reset\s+--hard\b`),
   git(String.raw`clean\s+-[A-Za-z]*[fdx]`),
   /--no-verify\b/,
-  /\brm\s+-[A-Za-z]*r[A-Za-z]*f|\brm\s+-[A-Za-z]*f[A-Za-z]*r/, // rm -rf / -fr
-  /\brmdir\b|\bdel\s+\/[sq]/i,
+  cmd("rm", String.raw`(?:-[A-Za-z]*r[A-Za-z]*f|-[A-Za-z]*f[A-Za-z]*r)`), // rm -rf / -fr
+  new RegExp(String.raw`\brmdir\b|${bin("del")}\s+\/[sq]`, "i"),
   git(String.raw`worktree\s+remove\b`),
   git(String.raw`branch\s+(?:-D|--delete\s+--force)\b`),
   git(String.raw`filter-(?:branch|repo)\b`),
-  /(?:npx\s+)?supabase\s+db\s+(?:push|reset)\b/,
-  /(?:npx\s+)?supabase\s+migration\s+repair\b/,
-  /(?:npx\s+)?supabase\s+functions\s+deploy\b/,    // CLI edge deploy = same gate as the MCP tool
+  new RegExp(String.raw`${NPX}${bin("supabase")}\s+db\s+(?:push|reset)\b`),
+  new RegExp(String.raw`${NPX}${bin("supabase")}\s+migration\s+repair\b`),
+  new RegExp(String.raw`${NPX}${bin("supabase")}\s+functions\s+deploy\b`), // CLI edge deploy = same gate as the MCP tool
   gh(String.raw`pr\s+merge\b`),                    // lands on main around the push guard
   /\b(?:dropdb|createdb)\b/,
-  /\bvercel\s+(?:deploy|--prod|promote)\b/,
+  cmd("vercel", String.raw`(?:deploy|--prod|promote)\b`),
   /(?:^|[\s;&|>])\.env\b/,                         // touching .env
   /(?:>>?|tee)\s+['"]?[^\s'";|&]*\.env\b/,         // writing to .env
 ];
