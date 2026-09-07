@@ -69,6 +69,20 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
 }
 
 /**
+ * A chain whose await REJECTS, so a post-commit sub-write can fail exactly the way a real
+ * PostgREST error does (a rejected promise out of the awaited builder), rather than by
+ * stubbing the checker that inspects its result.
+ */
+function buildRejectingChain(err: unknown): Record<string, unknown> {
+  const self = chainShell();
+  const settle = () => Promise.reject(err);
+  self.then = (onF: unknown, onR: unknown) => settle().then(onF as never, onR as never);
+  self.catch = (onR: unknown) => settle().catch(onR as never);
+  self.finally = (onF: unknown) => settle().finally(onF as never);
+  return self;
+}
+
+/**
  * A chain that does not answer until `gate` resolves. Resolution is LAZY (settled at await
  * time, not at construction) so the query can be issued long before the test releases it.
  */
@@ -663,5 +677,87 @@ describe('JobDetail cross-record stale-load guard', () => {
     //    which is the wrong this PR's guard exists to prevent. Both halves at once.
     expect(mockNavigate).not.toHaveBeenCalledWith('/jobs/job-created-1');
     expect(screen.getByRole('heading', { name: 'J-BBBB-2002' })).toBeTruthy();
+  });
+
+  /**
+   * The credit check must survive the save handler's EARLY-RETURN BACKSTOPS.
+   *
+   * Saving a job commits in stages: `save_job` writes the row, then two fallible sub-writes
+   * follow — the crew/loader `.update()` and the override applicator assignment. Each has its
+   * own catch that toasts 'Job created, but …' and RETURNS, precisely because the job row
+   * HAS committed and a retry from /jobs/new would mint a SECOND job. Both those catches
+   * deliberately preserve other post-commit work on the way out (they still write the
+   * override audit, still clear isDirty, still move the operator onto the saved job) — the
+   * credit check simply was not on that list, so it sat below them and never ran.
+   *
+   * The result: a job booked for a customer who may be over their credit limit, with no
+   * operator warning and — the durable half — no notifyCreditLimitExceeded -> notifyAdmins
+   * row. A credit control that leaves no trace is absent, not weakened.
+   *
+   * PRE-EXISTING, not a #611 regression: #611 fixed a DIFFERENT suppression (it had gated
+   * the success-path credit check behind a still-on-this-job test). Neither backstop ever
+   * reached the check, on main before #611 either.
+   *
+   * Confirmed 2026-09-07 by FALSIFICATION: with the call left on the success path this test
+   * fails with the production symptom — the 'Job created, but the crew/loader settings did
+   * not save' toast fires, and check_customer_credit_limit is never called at all.
+   */
+  it('still runs the credit check when the post-commit crew/loader write fails and the handler bails early', async () => {
+    // Flipped the moment save_job answers. The crew/loader `.update()` is the only
+    // from('jobs') call that happens after the commit, so this targets it without
+    // disturbing the new-job page's own lookups.
+    let jobCommitted = false;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return buildChain({ data: [{ id: 'cust-1', farm_name: 'Farm Alpha', is_active: true }], error: null });
+      }
+      if (table === 'jobs' && jobCommitted) {
+        // The real failure this backstop was written for: the crew row was deleted by
+        // another user, so the ground_crew_id FK rejects the update.
+        return buildRejectingChain(Object.assign(new Error('FK violation on ground_crew_id'), { code: '23503' }));
+      }
+      if (table === 'jobs') return buildChain({ data: JOB_B, error: null });
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'save_job') {
+        jobCommitted = true;
+        return Promise.resolve({ data: { job_id: 'job-created-2' }, error: null });
+      }
+      if (fn === 'check_customer_credit_limit') {
+        return Promise.resolve({
+          data: { exceeded: true, farm_name: 'Farm Alpha', outstanding_ar: 90000, credit_limit: 50000 },
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    mountAt('/jobs/new');
+    const option = await screen.findByRole('option', { name: 'Farm Alpha' });
+    const customerSelect = option.closest('select') as HTMLSelectElement;
+    await act(async () => { fireEvent.change(customerSelect, { target: { value: 'cust-1' } }); });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save Job/ })); });
+
+    // 1. We really are on the BACKSTOP path, not the ordinary success path. Without this the
+    //    test could pass through the success branch and prove nothing about the early return.
+    await waitFor(() => {
+      expect(mockToast.mock.calls.some(
+        (c) => c[0] === 'error' && String(c[1]).includes('crew/loader settings did not save'),
+      )).toBe(true);
+    });
+
+    // 2. The credit control still ran on the committed row — and still left its durable
+    //    record, which is the half that outlives a missed toast.
+    await waitFor(() => {
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'check_customer_credit_limit')).toBe(true);
+    });
+    await waitFor(() => expect(mockNotifyCreditLimit).toHaveBeenCalled());
+
+    // 3. Exactly ONE credit check for one committed job. Hoisting it above the early returns
+    //    must not also leave a second call on the path that falls through to success.
+    expect(mockRpc.mock.calls.filter((c) => c[0] === 'check_customer_credit_limit')).toHaveLength(1);
+    expect(mockNotifyCreditLimit).toHaveBeenCalledTimes(1);
   });
 });
