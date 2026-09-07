@@ -418,6 +418,44 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
   // Before this guard, previewing on one side of October 1 and then moving the date across it
   // left the OLD per-acre rate on screen while save charged the new one, so the breakdown the
   // operator approves was not the one billed (Codex push-proof review, 2026-09-04).
+  it('sends the transaction date to preview_field_app_invoice_split so it prices the same season Save will', async () => {
+    // CRX-SEC-001. The server used to pick the season from its own clock while Save picked it
+    // from the invoice date, so the per-acre rate on screen could differ from the rate billed.
+    // The server half is fixed in 20260906120000; this asserts the caller actually supplies the
+    // date, which is the half that lives here. Without it the RPC falls back to today's
+    // business date and the whole fix is inert on a backdated or reopened invoice.
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'derive_customer_shares_from_fields')).toBe(true),
+    );
+
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'preview_field_app_invoice_split')).toBe(true),
+    );
+
+    const previewCalls = mockRpc.mock.calls.filter((c) => c[0] === 'preview_field_app_invoice_split');
+    const previewCall = previewCalls[previewCalls.length - 1];
+    expect(previewCall?.[1]).toMatchObject({ p_invoice_date: '2026-10-01' });
+    // The date Preview prices at must be the SAME value Save stamps the invoice with; two
+    // different dates would put the two sides back on different seasons by another route.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    await waitFor(() =>
+      expect(mockRpc.mock.calls.some((c) => c[0] === 'save_field_app_invoice')).toBe(true),
+    );
+    const saveCalls = mockRpc.mock.calls.filter((c) => c[0] === 'save_field_app_invoice');
+    const saveCall = saveCalls[saveCalls.length - 1];
+    expect((saveCall?.[1] as { p_invoice: { invoice_date: string } }).p_invoice.invoice_date)
+      .toBe(previewCall?.[1].p_invoice_date);
+  });
+
   it('discards a rendered preview when the transaction date changes', async () => {
     await renderPage();
 

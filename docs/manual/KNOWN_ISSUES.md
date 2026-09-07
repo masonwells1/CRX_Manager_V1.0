@@ -1,15 +1,23 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-05 for the migration-ledger facts; 2026-09-04 for the F2 entry.** The
-ordering boundary is the newest applied authored NAME:
-**`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`;
-re-verified by a read-only ledger read on 2026-09-05: 998 rows, `max(version)` `20260904152221`).
-Note how little the counters tell you here: `max(version)` and the boundary row's own version are the
-same string, purely by coincidence of apply order, and both sat unchanged from 2026-09-04 to
-2026-09-05. F2 (`20260903160000_gate_number_generators_active_profile_role`) applied as ledger
+**Last verified: 2026-09-06 for the migration-ledger facts; 2026-09-04 for the F2 entry.** A
+read-only ledger read on 2026-09-06 shows **999 rows / 992 distinct names**, `max(version)`
+**`20260905185938`**.
+
+**The name-ordered boundary is one file behind reality — do not number a new migration off it.** A
+name-ordered query still returns **`20260904180000_invoice_season_follows_invoice_date`** (ledger
+version `20260904152221`), but `20260904185900_refuse_null_job_field_acres` was merged (`719faac73`,
+PR #606) and applied live on 2026-09-05 under the **unprefixed** ledger name
+`refuse_null_job_field_acres`, which name ordering cannot see. The TRUE authored high-water is
+`20260904185900`. Identity confirmed on 2026-09-06, not inferred: live `save_job` is one overload at
+body md5 `8acf34542105a90212ddb0a5e7c5d272`, that file's own candidate pin, and the live body carries
+its `JOB_ACRES_NOT_FINITE` refusal.
+
+F2 (`20260903160000_gate_number_generators_active_profile_role`) applied as ledger
 version `20260904023121` and was the boundary earlier in that sequence. Read
 ordering from the NAME — it is what
-the ordering guard compares and it moves far less often than the counters. Two further reading
+the ordering guard compares and it moves far less often than the counters — but check for an
+unprefixed ledger name before trusting it, as above. Two further reading
 traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
 reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
 because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …) sort above digits
@@ -593,7 +601,29 @@ priced, and widening it would have added untested surface to a deadline-bound mo
 fixing `JobDetail.tsx:1342` on its own merits**, ahead of the cosmetic ones. Tracked so the next
 person does not mistake the invoice-date sweep for a whole-app one.
 
-## OPEN 2026-09-04 — the field-app split PREVIEW prices from the UTC clock while SAVE prices from the invoice date
+## FIXED IN A CANDIDATE, NOT YET LIVE 2026-09-06 — the field-app split PREVIEW prices from the UTC clock while SAVE prices from the invoice date
+
+**Status as of 2026-09-06: the server half is written and container-proven, and is NOT applied live.**
+`supabase/migrations/20260906120000_preview_field_app_season_follows_invoice_date.sql` gives
+`preview_field_app_invoice_split` a fifth argument, `p_invoice_date date DEFAULT NULL`, and prices the
+application fee at the season the invoice is (or would be) filed under, reproducing
+`_save_field_app_invoice_impl_20260714`'s branch order exactly — an existing live member of the group
+or a single-customer edit prices at that row's STORED season; only a genuinely new invoice uses
+`compute_season(p_invoice_date)`. `src/pages/FieldApplicationInvoice.tsx` `handlePreview` now sends the
+same `transactionDate` it already sends to save. Proof:
+`scripts/smoke/prove-preview-field-app-season.mjs` → `PREVIEW_SEASON_PROOF_PASS`, which reproduces
+both windows as observed rate disagreements (1111c/acre quoted vs 2222c/acre charged) through the real
+installed functions before the candidate, shows every case agreeing after it, and catches three
+mutants — the fix removed, the stored season ignored, and the `anon` REVOKE dropped. Details in
+`docs/changelog.d/2026-09-06-preview-field-app-season-follows-invoice-date.md` and row 918 of
+`docs/reference/migration-history.md`.
+
+**This entry stays open until the migration is applied to live.** Until then production still behaves
+exactly as described below. Two things gate it: Mason's explicit approval immediately before a live
+apply, and the Codex CLI credit outage (exhausted until 2026-09-11), which blocks the exact-SHA proof
+`pr-merge-guard` requires for an agent merge. The original report follows unchanged.
+
+### The original report (2026-09-04)
 
 Raised by the Codex GitHub App (P1) on PR #599 and **verified against the live catalog on
 2026-09-04**, after `20260904180000_invoice_season_follows_invoice_date` was applied:
@@ -1708,7 +1738,18 @@ Keep this separate from the equal-unit exact-decimal fix, and replace the conver
 exact rational/decimal conversion in a focused follow-up.
 
 
-## OPEN 2026-09-04 — Server acreage refusal is written and proven, not yet applied
+## CLOSED 2026-09-05 — Server acreage refusal is merged and applied live
+
+**Status corrected 2026-09-06.** `20260904185900_refuse_null_job_field_acres.sql` merged as
+`719faac73` (PR #606) and was applied to production on 2026-09-05, registering in the ledger as
+version `20260905185938` under the unprefixed name `refuse_null_job_field_acres`. Confirmed
+read-only on 2026-09-06: live `save_job` is one overload at body md5
+`8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin — and the live body carries its
+`JOB_ACRES_NOT_FINITE` refusal. The "no live apply is authorized" line below is the pre-apply record
+and no longer describes production. The separate different-unit chemical conversion issue above
+remains open.
+
+### The original entry (2026-09-04, pre-apply)
 
 An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
 `null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every

@@ -47,6 +47,15 @@ supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql text eol
 # verbatim, so a CRLF smudge on a Windows checkout puts CR bytes in the installed
 # prosrc and the live md5 can never reproduce. Pin the prover too, as both peers are.
 scripts/smoke/prove-next-invoice-number-year-chicago.mjs text eol=lf
+# preview_field_app_invoice_split season -> invoice date (2026-09-06, CRX-SEC-001).
+# Same rule, same reason, and it bites BEFORE the apply. The migration's preflight
+# pins md5(prosrc) ca33fb97… for the live 4-argument body it replaces; on a Windows
+# checkout with core.autocrlf=true an unpinned file is smudged to CRLF, the body
+# PostgreSQL receives carries CR bytes, and PREFLIGHT_BODY_DRIFT aborts a correct
+# migration while reporting it as drift. The prover is pinned for the same reason and
+# additionally asserts the candidate contains no CR at all.
+supabase/migrations/20260906120000_preview_field_app_season_follows_invoice_date.sql text eol=lf
+scripts/smoke/prove-preview-field-app-season.mjs text eol=lf
 
 # The six migrations applied live on 2026-08-12 whose files were recovered from
 # the applying sessions' transcripts and landed afterwards. Same rule, same

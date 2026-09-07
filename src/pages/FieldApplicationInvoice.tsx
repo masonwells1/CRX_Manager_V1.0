@@ -1423,6 +1423,13 @@ export default function FieldApplicationInvoice() {
         // [2026-06-24] pass the invoice being edited so preview excludes deleted split
         // members exactly like save (group-aware). NULL for a new invoice = no exclusion.
         p_invoice_id: (id || null) as string,
+        // [2026-09-06 CRX-SEC-001] the SAME date this form sends to save_field_app_invoice, so a
+        // new invoice's application fee previews at the season the save will file it under. The
+        // server previously read its own clock here, which priced a reopened September invoice
+        // at next season's rate all year, and every invoice at the wrong rate for the five hours
+        // after 7pm Chicago on September 30. NULL only if the operator has cleared the date, and
+        // save refuses that case anyway.
+        p_invoice_date: (transactionDate || null) as string,
       });
       if (error) throw error;
       const result = assertRpcResult<PreviewFieldAppSplitResult>(data, 'preview_field_app_invoice_split');

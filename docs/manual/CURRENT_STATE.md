@@ -1,7 +1,7 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-05 for the migration ledger (read-only ledger read against project
-`rhyzpcqhnizqbxphqdkr`); schema shape re-read the same day by the live-introspection regeneration of
+**Last verified: 2026-09-06 for the migration ledger (read-only ledger read against project
+`rhyzpcqhnizqbxphqdkr`); schema shape re-read 2026-09-05 by the live-introspection regeneration of
 `.claude/schema-registry.json` merged as PR #601.** The registry regeneration that was outstanding
 here is **DONE**, and the note that it was "being reconciled by open PRs #601 and #602" is
 superseded: #601 merged, and #602 was closed as a byte-identical duplicate of it. The registry is
@@ -11,9 +11,18 @@ migrations previously listed here as unread by the registry are captured by that
 `20260903160000_gate_number_generators_active_profile_role` (`20260904023121`),
 `20260903230000_commission_report_snapshot_contract` (`20260904040643`),
 `20260904160000_invoice_date_fallbacks_chicago` (`20260904130047`), and
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
-ordering high-water is the newest applied authored NAME:
-**`20260904180000_invoice_season_follows_invoice_date`** (re-verified against live 2026-09-05).
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`).
+
+**The name-ordered high-water now UNDER-REPORTS by one file, and this is the important fact on this
+page.** A name-ordered query still returns **`20260904180000_invoice_season_follows_invoice_date`**,
+but the newest applied authored file is really **`20260904185900_refuse_null_job_field_acres`**,
+merged as `719faac73` (PR #606) and applied live on 2026-09-05 as ledger version `20260905185938`.
+It was registered under the bare name `refuse_null_job_field_acres`, with **no 14-digit prefix**, so
+name ordering cannot see it. A new migration must be numbered above the TRUE high-water
+`20260904185900`. Identity confirmed on 2026-09-06 rather than inferred: live `save_job` is one
+overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
+the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
+carries that file's `JOB_ACRES_NOT_FINITE` refusal.
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
@@ -22,9 +31,11 @@ high-water" rule compared against it silently skips files authored `20260831*` a
 durable way to state this boundary: it is what the ordering guard compares, and it changes far less
 often than the counters.
 
-For provenance, the 2026-09-05 read observed **998 ledger rows** (991 distinct names) and
-`max(version)` **`20260904152221`** — unchanged from the 2026-09-04 reading, which is itself worth
-noting: the counters can sit still across a day while the boundary NAME does not.
+For provenance, the 2026-09-06 read observed **999 ledger rows** (992 distinct names) and
+`max(version)` **`20260905185938`**. The 2026-09-05 read saw 998 rows / 991 names / `max(version)`
+`20260904152221`, unchanged from 2026-09-04 — so the counters can sit still across a day and then
+move, and here they moved while the name-ordered boundary did NOT, which is the reverse of the usual
+warning and exactly why the unprefixed row above is easy to miss.
 **Both are a point-in-time observation, not a standing fact.** Every apply by
 any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
 not evidence that something went wrong, and it should not be re-pinned on every apply.
@@ -55,19 +66,22 @@ reversed, #582 must be restamped after a fresh ledger read before any apply.
 
 The consequence still bites until all three owning PRs merge: `main` does not describe production,
 so any migration whose safety argument rests on "the live body equals the last committed body" must verify against
-**live**, not against disk. The local `20260904185900` save-job candidate pins the 2026-09-03 F06
-post-apply `pg_proc.prosrc` body and rechecks that exact pre-image at apply time rather than inferring
-it from migration filenames alone.
+**live**, not against disk. The `20260904185900` save-job migration pinned the 2026-09-03 F06
+post-apply `pg_proc.prosrc` body and rechecked that exact pre-image at apply time rather than inferring
+it from migration filenames alone; it has since been applied, so live `save_job` is now at ITS body
+md5 `8acf34542105a90212ddb0a5e7c5d272`, not F06's.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
 `20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
 file, the `save_job` re-emission (marker `chem_unit_invariant_v3`) and its client changes on `main`;
 the live apply followed separately and is now confirmed. Verified independently against production
-on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job` is at md5
+on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job` was at md5
 `18d08d5f40aea91fe13ac3e5a686c549` — the candidate body, which replaced the 20260820120000 body
 (`227ab7b6bc2023724adf6952a221d2a8`) — with exactly one overload, so no duplicate function was
-created. F06's earlier 990-row / `20260903025854` / `20260831212415` ledger figures were superseded
-first by the 993-row F06 capture and then by the current 998-row capture above.
+created. **That md5 is now historical:** `20260904185900_refuse_null_job_field_acres` applied live on
+2026-09-05 and replaced it with `8acf34542105a90212ddb0a5e7c5d272` (still one overload). F06's
+earlier 990-row / `20260903025854` / `20260831212415` ledger figures were superseded by the 993-row
+F06 capture, then the 998-row capture, and now the 999-row capture above.
 
 **The sequencing lesson outlives the fact.** For the window between that merge and that apply, this
 file correctly recorded F06 as merged but NOT applied: `main` carried the migration while production
