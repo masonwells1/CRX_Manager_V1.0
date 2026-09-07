@@ -946,6 +946,22 @@
         "billing"
       ]
     },
+    "create_inventory_hold": {
+      "chain": "smoke-create-inventory-hold-intent-binding.sql",
+      "container_only": true,
+      "container_prover": "prove-create-inventory-hold-intent-binding-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-create-inventory-hold-intent-binding-real-schema.mjs, never through run-smoke.mjs against the live database: the chain plants [SMOKE] auth.users, profiles, customer, product and inventory rows, which the LIVE-DATA GUARD correctly refuses. Codex push-proof HIGH 2026-09-05 (REQUIRES 20260905230000): the live create_inventory_hold read its idempotency receipt with a plain SELECT before the FOR UPDATE stock lock and wrote it with ON CONFLICT DO NOTHING after inserting the hold, so two overlapping same-key calls (a double-click, or a retry racing the original) both inserted a hold; the live BEFORE INSERT receipt guard (20260714230000/20260716160000) then rolled the loser back with IDEMPOTENCY_CONCURRENT_REPLAY_RETRY, leaving one hold but telling the losing caller its hold FAILED even though the winner created exactly that hold — a browser that reads that as a definitive refusal releases its key and the next click mints a new key and a second hold. The candidate renames the live body to _create_inventory_hold_intent_impl_20260905 (postgres-only EXECUTE) and installs a same-signature wrapper that requires the key, gates on an ACTIVE admin/sales_rep profile NULL-safely, fingerprints the request, calls check_idempotency_intent (per-key advisory lock) before any mutation, then binds the receipt. The chain proves: one keyed hold creates one row and one bound receipt; an identical retry (5 vs 5.0) replays the same hold_id and inserts nothing; a changed quantity, notes or expiry on the retained key is REFUSED with IDEMPOTENCY_INTENT_MISMATCH whose DETAIL carries the committed hold, and inserts nothing; a second actor reusing the key gets IDEMPOTENCY_ACTOR_MISMATCH; NULL and blank keys are refused with IDEMPOTENCY_KEY_REQUIRED before any work; a caller with NO profile row and a deactivated admin both get INSUFFICIENT_ROLE (the live body's v_role NOT IN let a missing profile through); unauthenticated gets AUTH_REQUIRED and a forged p_performed_by gets ACTOR_MISMATCH; a pre-migration receipt carrying neither binding column fails closed; cross-operation key reuse still raises; INSUFFICIENT_HOLD_INVENTORY and FORCE_REQUIRES_ADMIN are unchanged and leave neither a hold nor a receipt; an admin force with a reason still works, is receipted and replays identically; and the impl is not executable by anon, authenticated or service_role. The prover replays the 2026-07-27 baseline plus every later migration in a network-isolated Supabase PostgreSQL 17 container, asserts the baseline body hash matches the candidate's pin, proves the chain FAILS and a two-session same-key race against the live body leaves ONE hold with the loser ERRORING (IDEMPOTENCY_CONCURRENT_REPLAY_RETRY), applies the candidate, then proves the chain passes, the same race leaves ONE hold with BOTH sessions succeeding and returning the same hold_id and a receipt bound to the actor, and the candidate re-applies cleanly. Ends in SMOKE_PASS_ROLLBACK.",
+      "covers": [
+        "create_inventory_hold",
+        "_create_inventory_hold_intent_impl_20260905",
+        "check_idempotency_intent"
+      ],
+      "area": [
+        "idempotency",
+        "security",
+        "inventory"
+      ]
+    },
     "restore_quote_version_trust_boundary": {
       "chain": "smoke-quote-version-restore-trust.sql",
       "psql_only": true,

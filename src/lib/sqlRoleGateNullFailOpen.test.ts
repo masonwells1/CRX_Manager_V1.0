@@ -170,10 +170,16 @@ const KNOWN_UNGUARDED: Record<string, string> = {
   // means "caller is not changing the role", so skipping the value check on
   // NULL is fail-closed for this validation (nothing is written).
   'admin_update_profile|new_role': 'NULL new_role means no role change; the NOT IN is a value whitelist, not an auth gate',
-  // LATENT H1 in a PARKED migration (parked_010, inventory-hold shelved with the
-  // earmark engine 2026-06-14, never applied live). If this migration is ever
-  // revived, add `v_role IS NULL OR` BEFORE applying — then delete this entry.
-  'create_inventory_hold|v_role': 'parked/shelved migration, not live; must be NULL-guarded before any future apply',
+  // create_inventory_hold|v_role was listed here as "parked, never applied". The
+  // 2026-07-27 production schema dump proves the parked_010 body IS live. The
+  // public wrapper in 20260905230000 gates NULL-safely (NOT EXISTS ... is_active)
+  // before delegating, so the latest disk definition no longer trips the scan.
+  // Be precise about what that means: the fail-open `v_role NOT IN` gate still
+  // exists, renamed verbatim into _create_inventory_hold_intent_impl_20260905,
+  // which is never re-emitted on disk, so this scanner cannot see it any more.
+  // The compensating controls are the wrapper's own NULL-safe gate (pinned by
+  // src/lib/createInventoryHoldIntentBinding.test.ts) and the migration's
+  // postflight, which asserts the impl is executable by postgres only.
 };
 
 /**

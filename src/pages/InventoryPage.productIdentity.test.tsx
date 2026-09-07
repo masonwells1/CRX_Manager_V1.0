@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 import InventoryPage from './InventoryPage';
 
 const mocks = vi.hoisted(() => ({
@@ -84,6 +85,10 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: () => ({
     getKey: () => 'idem-1',
     resetKey: mocks.resetKey,
+    // executeDelete uses the scoped variants; without them a test that opens the
+    // retire confirmation dies with a TypeError before reaching its assertions.
+    getKeyFor: () => 'idem-1',
+    resetKeyFor: mocks.resetKey,
   }),
 }));
 
@@ -102,6 +107,12 @@ vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 describe('InventoryPage Product identity writers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // create_inventory_hold now runs through the REAL useUncertainMutationIntent,
+    // which freezes the request in IndexedDB before the RPC fires. jsdom has no
+    // IndexedDB, so give each test a fresh one (same shape as the hook's own test).
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    globalThis.indexedDB = new IDBFactory();
     mocks.from.mockImplementation((table: string) => {
       if (table === 'products') return query(siblings);
       return query([]);

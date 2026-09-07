@@ -50,6 +50,10 @@ describe('Stage B2 Product presentation adoption', () => {
     expect(source).toContain("supabase.rpc('manual_inventory_add'");
     expect(source).toContain('p_product_id: addProductId');
     expect(source).toContain("supabase.rpc('create_inventory_hold'");
-    expect(source).toContain('p_product_id: holdProductId');
+    // The hold request is frozen through useUncertainMutationIntent before it is
+    // sent (2026-09-05): the exact picked Product id enters the intent, and the
+    // RPC reads it back from the frozen request rather than from form state.
+    expect(source).toContain('productId: holdProductId');
+    expect(source).toContain('p_product_id: request.productId');
   });
 });

@@ -1,19 +1,25 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-05 for the migration ledger (read-only ledger read against project
-`rhyzpcqhnizqbxphqdkr`); schema shape re-read the same day by the live-introspection regeneration of
-`.claude/schema-registry.json` merged as PR #601.** The registry regeneration that was outstanding
-here is **DONE**, and the note that it was "being reconciled by open PRs #601 and #602" is
-superseded: #601 merged, and #602 was closed as a byte-identical duplicate of it. The registry is
-stamped `generated_at 2026-09-05` and carries `migrations_high_water` `20260904152221`. All five
-migrations previously listed here as unread by the registry are captured by that refresh —
-`20260903150100_ledger_backed_commission_history` (ledger version `20260903202611`), F2's
-`20260903160000_gate_number_generators_active_profile_role` (`20260904023121`),
-`20260903230000_commission_report_snapshot_contract` (`20260904040643`),
+**Last verified: 2026-09-06 for the migration ledger and the live `create_inventory_hold` surface
+(read-only production queries against project `rhyzpcqhnizqbxphqdkr`, 15:39-15:42 UTC); schema shape
+re-read 2026-09-05 by the live-introspection regeneration of `.claude/schema-registry.json` merged as
+PR #601.** The registry regeneration that was long outstanding here is **DONE**, and the note that it
+was "being reconciled by open PRs #601 and #602" is superseded: #601 merged, and #602 was closed as a
+byte-identical duplicate of it. The registry is stamped `generated_at 2026-09-05` and carries
+`migrations_high_water` `20260904152221`. All five migrations previously listed here as unread by the
+registry are captured by that refresh — `20260903150100_ledger_backed_commission_history` (ledger
+version `20260903202611`), F2's `20260903160000_gate_number_generators_active_profile_role`
+(`20260904023121`), `20260903230000_commission_report_snapshot_contract` (`20260904040643`),
 `20260904160000_invoice_date_fallbacks_chicago` (`20260904130047`), and
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
-ordering high-water is the newest applied authored NAME:
-**`20260904180000_invoice_season_follows_invoice_date`** (re-verified against live 2026-09-05).
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`).
+
+**One migration has applied since that registry refresh, so the registry's shape is one behind live
+again:** `refuse_null_job_field_acres` (ledger version `20260905185938`, applied 2026-09-05 18:59:38
+UTC), newly observed by the 2026-09-06 read — see the paragraph below. The current effective ordering
+high-water is still the newest applied authored NAME:
+**`20260904180000_invoice_season_follows_invoice_date`** (re-verified 2026-09-06, unchanged — that
+newer row was recorded WITHOUT its `20260904185900` timestamp prefix, so it does not move the
+authored-name boundary). Ledger row count at the 2026-09-06 read: 999 (point-in-time, not a fact).
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
@@ -55,9 +61,36 @@ reversed, #582 must be restamped after a fresh ledger read before any apply.
 
 The consequence still bites until all three owning PRs merge: `main` does not describe production,
 so any migration whose safety argument rests on "the live body equals the last committed body" must verify against
-**live**, not against disk. The local `20260904185900` save-job candidate pins the 2026-09-03 F06
+**live**, not against disk. The `20260904185900` save-job candidate pins the 2026-09-03 F06
 post-apply `pg_proc.prosrc` body and rechecks that exact pre-image at apply time rather than inferring
-it from migration filenames alone.
+it from migration filenames alone. **It is no longer a candidate: the 2026-09-06 read-only ledger
+query found it APPLIED LIVE as ledger name `refuse_null_job_field_acres`, version `20260905185938`
+(2026-09-05 18:59:38 UTC).** That apply was performed by the owning lane, not by this branch;
+`docs/reference/migration-history.md` row 916 still describes it as a local candidate and is stale
+until that lane updates it. Because the ledger recorded it without its timestamp prefix, the
+authored-name ordering boundary above did not move — read ordering from the NAME with care here.
+
+A second local candidate, `20260905230000_bind_create_inventory_hold_receipt_to_intent` (branch
+`claude/inventory-idempotency-key-reset-888161`, history row 923), is written and container-proven but
+**NOT applied and NOT merged** — its stamp is authored above PR #592's pending `20260905*` files, and
+deliberately clear of `20260905210000`, which PR #592 occupies with
+`20260905210000_repair_commission_history_label_snapshots.sql` (two migration files sharing one
+timestamp would have undefined apply order), and its safety argument pins the `create_inventory_hold` body by `prosrc`
+sha256 (`3c86421e…`, the body the checked-in 2026-07-27 production dump carries) and fails closed at
+apply time if the installed body differs. **Mason authorized a read-only live check on 2026-09-06 and
+every preflight condition was met**: exactly one `create_inventory_hold` overload, owner `postgres`,
+`plpgsql`, SECURITY DEFINER, `proconfig = {search_path=public, pg_temp}`, the full argument list with
+defaults equal to the pinned string, `md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` — the same
+4,046-character body whose sha256 is the pinned `3c86421e…` (md5 recomputed locally from the
+2026-07-27 dump for comparison, because the live-data guard's read-only allowlist has no
+`digest()`); the private impl name absent; `check_idempotency_intent`, `extensions.digest` and
+`pg_catalog.trim_scale` installed; both receipt-binding columns present; EXECUTE on the hold RPC
+held by `authenticated` and `service_role` and not `anon`; `check_idempotency_intent` executable by
+none of the three; and **zero** unexpired `create_inventory_hold` receipts of any kind, so
+`PREFLIGHT_LEGACY_RECEIPTS` would not fire at that moment. The pre-existing
+`section9_bind_idempotency_receipt_20260826` BEFORE INSERT trigger returns `NEW` unchanged for
+operations outside its AP/receiving list, so it does not touch hold receipts. No live write was made.
+See `docs/manual/KNOWN_ISSUES.md` (OPEN 2026-09-05, manual-hold same-key race).
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
 `20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
