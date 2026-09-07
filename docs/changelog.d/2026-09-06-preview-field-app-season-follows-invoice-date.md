@@ -206,10 +206,23 @@ remove the latter. That is the exact regression `20260624030000` had to correct 
 `20260624020000` did this same DROP+CREATE on this same function. Both revokes are present here, and
 the prover mutation-tests the `anon` one rather than trusting the comment.
 
+### The `-- STATUS: NOT APPLIED` header is load-bearing, not decoration
+
+The migration's second line carries `-- STATUS: NOT APPLIED`, and it must stay there until the
+migration is applied live. `validateParkedMigrationCrossReferences` requires the parked-header set and
+the ledger's `LOCAL CANDIDATE` set to be one-to-one **in both directions**, so a file registered as a
+candidate without the header fails the guard-hook regression suite — which is what happened on the
+first push of this branch: CI went red in two jobs (`Lint, Type Check, Test, Build` and `Phase 3C
+Containment (Windows)`), both on the same single assertion, because the ledger row was written before
+the header was. The header is not merely advisory: it is half of a cross-check that exists so an
+unapplied migration cannot quietly drop out of the candidate registry. Adding it changed the file's
+bytes and therefore its sha256, so the pin below and the ledger row were both re-recorded and the
+container proof was re-run against the new bytes rather than the pin being edited to match.
+
 ### Proof observed
 
 `node scripts/smoke/prove-preview-field-app-season.mjs` → **`PREVIEW_SEASON_PROOF_PASS`**, run against
-migration sha256 `7dcd5762efb8f428bcfbed959f7d1e4af32900dccdc9be0537e8c80b4f13d11d` and prover sha256
+migration sha256 `8114f85abf5b82f1186447576d4aa92f439444d6d5e56ffd9ab9bcb815649003` and prover sha256
 `2100cd4ce2e5c9c01085b4ff2edcdeeb3880da38ebd6b8dabf26ba4062921625` — recorded because a proof minted
 against earlier bytes is void, and the apply gate binds the proof to the transmitted file's hash. In a
 network-less `public.ecr.aws/supabase/postgres:17.6.1.143` container. It restores the schema baseline,

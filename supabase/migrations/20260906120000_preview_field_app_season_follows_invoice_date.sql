@@ -1,4 +1,7 @@
 -- 20260906120000_preview_field_app_season_follows_invoice_date.sql
+-- STATUS: NOT APPLIED
+-- (This status line goes stale at apply time; the ledger is authoritative.)
+--
 -- CRX-SEC-001: the field-application invoice PREVIEW priced the application fee from the
 -- server clock while SAVE prices it from the invoice's own season, so the per-acre rate Mason
 -- approves on the Customers tab could differ from the rate he is billed. Display-only (the
