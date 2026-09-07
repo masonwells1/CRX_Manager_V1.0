@@ -174,10 +174,12 @@ const GLOBAL_OPTS = String.raw`(?:\s+${OPT_TOKEN}(?:\s+${VAL_TOKEN})?)*`;
 //
 // This is a RULE, not a list. `foldCase` derives the classes from whatever name it
 // is given, so every current and future caller of `bin()` is covered without anyone
-// enumerating spellings — `gIT`, `GiT.CmD`, `gH.Ps1`, `SUPABASE.EXE`, `Vercel.Cmd`
-// and `RM.EXE` all match without appearing anywhere in this file or in the tests.
-// Enumerating them would be the name-listed carve-out that has already failed three
-// times in the comments above.
+// enumerating spellings. That was checked the only way it can be — by running the
+// decision function against mixed-case spellings deliberately kept OUT of both this
+// file and the test file, so nothing here could be matching them by having written
+// them down. They deny; a mixed-case benign command still allows. Enumerating
+// spellings instead would be the name-listed carve-out that has already failed
+// three times in the comments above, which is why no example is written here.
 const foldCase = (name) =>
   name.replace(/[A-Za-z]/g, (ch) => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
 const BIN_TAIL = String.raw`(?:\.[^\s'".\\/]*)?["']?`;
