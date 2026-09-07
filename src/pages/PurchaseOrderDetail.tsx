@@ -828,10 +828,35 @@ export default function PurchaseOrderDetail() {
       fetchPO();
       fetchReceivingHistory();
     } catch (err: unknown) {
-      if (getIdempotencyBindingRejection(err)) {
+      // A lost response leaves the reversal COMMITTED. The operator then edits
+      // the reason and retries, which re-sends the retained key with different
+      // input, so `check_idempotency_intent` answers IDEMPOTENCY_INTENT_MISMATCH
+      // and hands the committed receipt back in its DETAIL payload.
+      //
+      // Rotating the key on that receipt throws away the only proof the work
+      // happened AND guarantees the next attempt fails for an unrelated reason:
+      // `reverse_receiving_record` deletes the row (20260831160000...sql:195),
+      // so a fresh key hits `Receiving record not found`. Meanwhile neither
+      // refresh runs, so the already-reversed row stays on screen and clickable.
+      // Redeem the receipt instead — the same shape the receive path above uses.
+      //
+      // The record id is compared so a receipt belonging to a DIFFERENT record
+      // can never close this modal or claim this row was handled; only a receipt
+      // for the record actually on screen is allowed to stand in for success.
+      const receipt = getIdempotencyMismatchResult(err, 'reverse_receiving_record');
+      if (receipt && receipt.record_id === reverseRecord.id) {
         reverseIdem.resetKey();
+        toast('warning', 'That reversal already completed. The PO has been refreshed instead of reversing it twice.');
+        setReverseOpen(false);
+        setReverseRecord(null);
+        fetchPO();
+        fetchReceivingHistory();
+      } else {
+        if (getIdempotencyBindingRejection(err)) {
+          reverseIdem.resetKey();
+        }
+        toast('error', sanitizeError(err));
       }
-      toast('error', sanitizeError(err));
     }
     setReversing(false);
   };

@@ -211,6 +211,16 @@ export default function IntegrityCleanupPanel() {
             };
           }),
         );
+      } else {
+        // A normal Supabase failure arrives FULFILLED as { data: null, error },
+        // so the rejected-only Sentry loop above skips it and `negRes.data` is
+        // falsy — leaving the previously loaded negatives rendered as if they
+        // were current. These rows are clickable and each click writes an
+        // ABSOLUTE inventory quantity, so a stale one is not merely cosmetic.
+        // Clear them, the same way the unbilled section already handles its own
+        // fulfilled-with-error case below.
+        if (negRes.error) Sentry.captureException(negRes.error);
+        setNegatives([]);
       }
 
       if (overRes.data) {
@@ -386,6 +396,15 @@ export default function IntegrityCleanupPanel() {
       if (error) throw error;
       assertRpcResult(data, 'reconcile_negative_inventory');
       reconcileIdem.resetKeyFor(scope);
+      // Drop the reconciled row LOCALLY, before the refresh and independently of
+      // whether it succeeds. The receipt was just retired one line above, so
+      // until this row leaves the screen a second click mints a FRESH key and
+      // re-applies an absolute `quantity_available`, overwriting any stock
+      // movement since the first commit. Relying on `fetchAll()` to remove it
+      // was the gap: a normal Supabase `{ error }` on the negatives query is a
+      // FULFILLED promise, so `fetchAll` neither throws nor re-renders that
+      // section, and the stale row stayed clickable with no signal at all.
+      setNegatives((prev) => prev.filter((r) => r.id !== row.id));
       toast('success', `${row.product_name} reconciled to ${input.qty}`);
       // The mutation-success boundary ENDS here: the RPC is proven and its retry
       // receipt is already retired. The refresh below used to sit inside this

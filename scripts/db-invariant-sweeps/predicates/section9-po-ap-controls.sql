@@ -203,6 +203,30 @@ WHERE create_wrapper IS NULL
    OR create_wrapper !~
       'FROM public\.vendors v[[:space:]]+WHERE v\.id = p_vendor_id[[:space:]]+AND v\.deleted_at IS NULL[[:space:]]+FOR UPDATE'
    OR create_wrapper NOT LIKE '%FROM public.purchase_orders po%FOR UPDATE%'
+   -- The reason string above names a cumulative guard and intent binding, but
+   -- until these arms landed the predicate asserted NEITHER — only delegation,
+   -- the two FOR UPDATE locks, and the billable-status list on the delegated
+   -- impl. Both financial controls live in THIS wrapper body, so either could
+   -- have been deleted outright and the sweep would still have returned zero
+   -- rows: a green light that proved nothing about the thing it claimed to
+   -- prove. Every literal below is verified present in the applied body of
+   -- 20260831161000 (ledger 20260903024550).
+   --
+   -- strpos(...) = 0 rather than NOT LIKE: these token names are underscore
+   -- heavy and `_` is a LIKE single-character wildcard, so a LIKE pattern would
+   -- match names that are not these.
+   OR strpos(create_wrapper, 'check_idempotency_intent') = 0
+   OR strpos(create_wrapper, 'IDEMPOTENCY_RECEIPT_MISSING') = 0
+   OR strpos(create_wrapper, 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED') = 0
+   OR strpos(create_wrapper, 'PO_CUMULATIVE_BILLING_REASON_REQUIRED') = 0
+   -- Naming the two exception tokens alone is not enough: a body could raise
+   -- them from a condition that never fires. Pin the arithmetic that decides
+   -- WHEN they fire — the cumulative sum's composition, the source it is summed
+   -- from, and the 105%-of-PO threshold — so widening the gate is a red row
+   -- rather than a silent policy change.
+   OR strpos(create_wrapper, 'COALESCE(SUM(vb.total_cents), 0)::bigint') = 0
+   OR strpos(create_wrapper, 'v_cumulative_total := v_active_billed_total + v_candidate_total') = 0
+   OR strpos(create_wrapper, 'v_cumulative_total * 100 > v_po_total * 105') = 0
    OR (
      create_impl IS NULL
      AND (
@@ -246,6 +270,20 @@ WHERE update_wrapper IS NULL
         <= strpos(update_wrapper, 'FOR UPDATE')
    OR strpos(update_wrapper, 'check_period_open(p_bill_date)')
         <= strpos(update_wrapper, 'FOR UPDATE')
+   -- "preserve intent binding" was in the reason string but in none of the
+   -- assertions: the arm checked delegation, the row lock and the two period
+   -- checks only. check_idempotency_intent is what makes a replayed key answer
+   -- only the same actor with the same payload; deleting it would downgrade the
+   -- RPC to key-only replay (a different actor's edit returning someone else's
+   -- receipt) with the sweep still green. Verified present in the applied body
+   -- of 20260831233000. strpos(...) = 0 rather than NOT LIKE because `_` is a
+   -- LIKE single-character wildcard and these names are underscore-heavy.
+   OR strpos(update_wrapper, 'check_idempotency_intent') = 0
+   -- The binding is only real if the receipt is actually stamped with the actor
+   -- and fingerprint that a later replay is compared against, and if a missing
+   -- stamp is fatal rather than ignored.
+   OR strpos(update_wrapper, 'request_actor_id = v_actor') = 0
+   OR strpos(update_wrapper, 'IDEMPOTENCY_RECEIPT_MISSING') = 0
    OR (
      update_impl IS NULL
      AND (

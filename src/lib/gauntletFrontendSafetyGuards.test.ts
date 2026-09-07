@@ -110,8 +110,17 @@ describe('gauntlet caller-side safety guards', () => {
     expect(crawl).toContain("intentionalRedirectTo: '/integrity'");
     expect(crawl).toContain("status = 'intentional-redirect'");
     expect(crawl).toContain("r.status !== 'intentional-redirect'");
-    expect(crawl.indexOf("status = 'network-errors'"))
-      .toBeLessThan(crawl.indexOf("status = 'intentional-redirect'"));
+    // Assert BOTH markers exist before comparing their positions. `indexOf`
+    // returns -1 for a missing marker, and -1 is less than any real index, so
+    // deleting the `network-errors` classification entirely would leave this
+    // ordering assertion green — the guard would pass by being absent. The
+    // `intentional-redirect` marker is independently required by the
+    // `toContain` above; `network-errors` was not, which is the hole.
+    const networkErrorsAt = crawl.indexOf("status = 'network-errors'");
+    const intentionalRedirectAt = crawl.indexOf("status = 'intentional-redirect'");
+    expect(networkErrorsAt).toBeGreaterThanOrEqual(0);
+    expect(intentionalRedirectAt).toBeGreaterThanOrEqual(0);
+    expect(networkErrorsAt).toBeLessThan(intentionalRedirectAt);
   });
 
   // Regression guard for the Sol BLOCKERS verdict on ef82064a. This branch
