@@ -107,11 +107,23 @@ const GLOBAL_OPTS = String.raw`(?:\s+${OPT_TOKEN}(?:\s+${VAL_TOKEN})?)*`;
 //              the tail or the head of a longer word (`gitfoo`, `github-cli`).
 //   BIN_TAIL   what may sit between that name and the whitespace before the
 //              subcommand, and it is exactly two things:
-//                (a) an EXTENSION — a `.` followed by more of the same word. Any
-//                    extension, because "what follows the dot" is not a list.
+//                (a) an EXTENSION — a `.` followed by the LAST dot-segment of the
+//                    final path segment, so it contains no separator, no further
+//                    dot and no quote. Any such extension, because "what follows
+//                    the dot" is a shape, not a list: `.exe`, `.EXE`, `.cmd`,
+//                    `.bat`, `.ps1`, `.com` and whatever PATHEXT gains next all
+//                    match without being named.
 //                (b) a CLOSING QUOTE — a quoted command word ends with one, and
 //                    `"C:/Program Files/Git/bin/git.exe" push` is the ordinary
 //                    Windows spelling of a path that contains a space.
+//
+// Bounding the extension that way is also what keeps this LINEAR. A first draft
+// let the extension be any run of word chunks, which let it swallow the rest of
+// the command and then give it back one character at a time — at every one of the
+// many positions where `\bgit\b` can start. Measured, not reasoned about: a
+// 20,000-character `git.git.git…` string took 414ms to decide, against 0-2ms for
+// every realistic input. With the extension bounded there is nothing to give back,
+// and the same string decides in under a millisecond. The test file pins a ceiling.
 //
 // A PATH PREFIX is deliberately in this same class and needs no new syntax: a
 // path separator is a non-word character, so `\b` already opens on the final
@@ -133,7 +145,7 @@ const GLOBAL_OPTS = String.raw`(?:\s+${OPT_TOKEN}(?:\s+${VAL_TOKEN})?)*`;
 // denies. The UNQUOTED twin `grep git push.log` already denied before this change,
 // so this makes the guard consistent rather than newly blunt, and an extra denial
 // is the safe side for a deny set.
-const BIN_TAIL = String.raw`(?:\.${WORD_CHUNK}*)?["']?`;
+const BIN_TAIL = String.raw`(?:\.[^\s'".\\/]*)?["']?`;
 const bin = (name) => String.raw`\b${name}\b${BIN_TAIL}`;
 const git = (rest) => new RegExp(String.raw`${bin("git")}${GLOBAL_OPTS}\s+${rest}`);
 const gh = (rest) => new RegExp(String.raw`${bin("gh")}${GLOBAL_OPTS}\s+${rest}`);

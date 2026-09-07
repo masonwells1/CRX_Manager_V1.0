@@ -285,6 +285,25 @@ eq(autopilotDecision("Bash", { command: "grep git push.log" }), "deny", "…whos
   ok(Date.now() - t0 < 1000, "the option region does not backtrack catastrophically");
 }
 
+// The binary tail nests a starred run too, and `\bgit\b` can start at MANY
+// positions in a string like `git.git.git…`, so the same measurement is owed here
+// — and it caught something. A first draft let the extension be any run of word
+// chunks; it swallowed the rest of the command and gave it back one character at
+// a time, at every start position, and a 20,000-character input took 414ms to
+// decide (against 0-2ms for every realistic one). Bounding the extension to the
+// last dot-segment — no separator, no further dot, no quote, which is what an
+// extension actually is — leaves nothing to give back. Same input: under 1ms.
+{
+  const dots = "git.".repeat(5000) + " status";
+  const t0 = Date.now();
+  eq(autopilotDecision("Bash", { command: dots }), "allow", "a 20k-char repeated-dot string is not a command");
+  ok(Date.now() - t0 < 100, "the binary tail does not backtrack across start positions");
+  const longPath = `"${"a".repeat(100000)}/git.exe" status`;
+  const t1 = Date.now();
+  eq(autopilotDecision("Bash", { command: longPath }), "allow", "a 100k-char quoted binary path decides");
+  ok(Date.now() - t1 < 100, "…and does so without backtracking");
+}
+
 // ── overnight-arm handshake ──────────────────────────────────────────────
 ok(intentFresh(JSON.stringify({ created: new Date().toISOString() })), "fresh intent recognized");
 ok(!intentFresh(JSON.stringify({ created: new Date(Date.now() - 2 * 3600e3).toISOString() })), "stale intent ignored");
