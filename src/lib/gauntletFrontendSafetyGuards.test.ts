@@ -123,6 +123,48 @@ describe('gauntlet caller-side safety guards', () => {
     expect(networkErrorsAt).toBeLessThan(intentionalRedirectAt);
   });
 
+  // A lost reverse_receiving_record response leaves the reversal COMMITTED and
+  // the row DELETED server-side. The catch used to rotate the key and report an
+  // error, so the operator's retry hit "Receiving record not found" and neither
+  // refresh ran — the already-reversed row stayed on screen and clickable. The
+  // committed receipt arrives in the IDEMPOTENCY_INTENT_MISMATCH DETAIL; redeem
+  // it instead, and only when it belongs to the record actually on screen.
+  it('redeems the committed receipt when a receiving reversal response is lost', () => {
+    const page = source('src/pages/PurchaseOrderDetail.tsx');
+
+    expect(page).toContain(
+      "const receipt = getIdempotencyMismatchResult(err, 'reverse_receiving_record');",
+    );
+    // The id comparison is the whole safety of the branch: without it a receipt
+    // for a DIFFERENT record would close this modal and claim this row handled.
+    expect(page).toContain('if (receipt && receipt.record_id === reverseRecord.id) {');
+    // Redeeming means the screen is brought back in line with the server. If the
+    // refreshes are dropped the stale row survives, which is the original bug.
+    const branch = page.slice(page.indexOf('if (receipt && receipt.record_id === reverseRecord.id) {'));
+    const branchBody = branch.slice(0, branch.indexOf('} else {'));
+    expect(branchBody).toContain('setReverseOpen(false);');
+    expect(branchBody).toContain('fetchPO();');
+    expect(branchBody).toContain('fetchReceivingHistory();');
+  });
+
+  // Negative-inventory rows write an ABSOLUTE quantity_available, so a stale one
+  // left on screen is a second absolute write, not a cosmetic artifact. Two
+  // separate holes produced that: the reconciled row was only removed by the
+  // refresh, and a Supabase failure on the negatives query arrives FULFILLED as
+  // { data: null, error }, which the rejected-only Sentry loop never sees.
+  it('retires a reconciled negative-inventory row locally and clears the list when its query fails', () => {
+    const integrity = source('src/components/integrity/IntegrityCleanupPanel.tsx');
+
+    // Removed immediately after the receipt is retired, BEFORE the refresh, so a
+    // failed refresh cannot leave the row clickable.
+    expect(integrity).toMatch(
+      /reconcileIdem\.resetKeyFor\(scope\);\n(?:\s*\/\/.*\n)*\s*setNegatives\(\(prev\) => prev\.filter\(\(r\) => r\.id !== row\.id\)\);/,
+    );
+    // The fulfilled-with-error path must report and clear, not fall through.
+    expect(integrity).toContain('if (negRes.error) Sentry.captureException(negRes.error);');
+    expect(integrity).toContain('setNegatives([]);');
+  });
+
   // Regression guard for the Sol BLOCKERS verdict on ef82064a. This branch
   // removed six per-open resetKey() calls and replaced them with retained keys,
   // on the assumption that the server would answer a changed intent with
