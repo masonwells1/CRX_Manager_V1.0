@@ -7,7 +7,13 @@ ordering boundary is the newest applied authored NAME:
 **`20260904180000_invoice_season_follows_invoice_date`** (ledger version `20260904152221`, re-read
 2026-09-06 and unchanged; row count 999, `max(version)` `20260905185938` — that newest row is
 `refuse_null_job_field_acres`, the `20260904185900` file applied live on 2026-09-05 18:59:38 UTC
-WITHOUT its timestamp prefix, which is why it does not move the authored-name boundary). Read
+WITHOUT its timestamp prefix, which is why it does not move the authored-name boundary).
+Note how little the counters tell you here, and how differently they lie on different days. On
+2026-09-05 (998 rows, `max(version)` `20260904152221`) `max(version)` and the boundary row's own
+version were the same string, purely by coincidence of apply order, and both sat unchanged from
+2026-09-04. One day later `max(version)` had moved to a row that does not move the boundary at all.
+F2 (`20260903160000_gate_number_generators_active_profile_role`) applied as ledger version
+`20260904023121` and was the boundary earlier in that sequence. Read
 ordering from the NAME — it is what
 the ordering guard compares and it moves far less often than the counters. Two further reading
 traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
@@ -281,6 +287,90 @@ The remaining fractional historical rows described below are still tracked data 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## PARKED 2026-09-05 (WRITTEN, REVIEWED, PROVEN — NOT APPLIED) — invoice numbers take their year from UTC, so the last six hours of 31 December are numbered into the next year
+
+**Migration file:** `supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql`.
+**Deadline: 31 December 2026** — months out, which is why this is parked rather than rushed.
+**Mason applies it himself.** Nothing about it has been applied, and the standing hands-free
+migration allowance was deliberately not used.
+
+`public.next_invoice_number()` builds the year in an invoice number (`CS-2026-0007`) from a bare
+`now()`. The live database clock is UTC; the business runs America/Chicago. December is CST (UTC-6),
+so **midnight UTC on 1 January is 6 pm Chicago on 31 December** — for those six hours UTC has already
+rolled over and the business day has not. Verified read-only on live 2026-09-05: `2027-01-01 02:00
+UTC` is `2026-12-31 20:00` Chicago, UTC year 2027, Chicago year 2026.
+
+The same `v_year` feeds the advisory lock key, the `MAX()` scan for the highest number issued that
+year, and the number returned. **The defect is the wrong business-year LABEL**: work done on
+31 December 2026 is issued as `CS-2027-nnnn`, so anything reading the year out of an invoice number
+(year-end statements, per-year filters, an operator scanning a list) files it under the wrong year.
+**It is not a duplicate number** — the counter is one persistent sequence per prefix, not a per-year
+counter that restarts, `nextval()` is atomic and monotonic, and the reconciliation only ever advances
+it. An earlier revision of this entry claimed a "different counter" and a collision with the real
+first invoices of 2027; both halves were wrong and are withdrawn (caught by the exact-SHA review,
+confirmed read-only against live 2026-09-05). Same class as `20260904160000`
+and `20260904180000` (both applied live 2026-09-04) and the settled ~2026-07-10 rule: a bare
+`now()`/`CURRENT_DATE` on live is a bug wherever a business date is meant.
+
+**Before applying, two items go stale on their own** (both recorded in
+`docs/changelog.d/2026-09-05-next-invoice-number-year-chicago.md`):
+
+- `.claude/session-state/applied-migrations.json` was captured 2026-08-27 and misses every 2026-09
+  apply. The apply guard hard-refuses above 24h, which is correct, but a *partial* refresh would
+  misclassify three already-applied migrations as pending. Refresh it from a live ledger read first.
+- The `20260905090000` stamp was the correct next slot on 2026-09-05 (effective high-water by NAME
+  was `20260904180000`), but a parked file's timestamp perishes. Re-derive it immediately before
+  apply and expect renumbering.
+
+Also re-run `scripts/smoke/prove-next-invoice-number-year-chicago.mjs` (35/35 at parking time, real
+PostgreSQL 17 container) and confirm the live body still matches pin `b53499d0…` — a drifted body
+must be re-reviewed, and the migration refuses it anyway.
+
+**SIX SIBLING GENERATORS HAVE THE SAME DEFECT AND ARE NOT FIXED BY THAT FILE.** An earlier version of
+this entry — and of the migration header and changelog — claimed the other seven `next_%_number`
+generators "embed no year at all". That was **false**. The sweep asked which generators read a year
+from `now()`, and only `next_invoice_number` does; but six of the others read a year from
+`CURRENT_DATE`, and `current_setting('TimeZone')` on live is **UTC**, so `CURRENT_DATE` *is* the UTC
+calendar date — identical rollover, identical six-hour window (re-verified read-only 2026-09-05):
+
+| generator | year source | prefix |
+|---|---|---|
+| `next_application_record_number` | `extract(year FROM current_date)` | `APP-<year>-nnnn` |
+| `next_commission_payment_number` | `to_char(CURRENT_DATE, 'YYYY')` | `CP-<year>-nnnn` |
+| `next_cycle_count_number` | `EXTRACT(YEAR FROM CURRENT_DATE)` | `CC-<year>-nnnn` |
+| `next_job_number` | `extract(year FROM current_date)` | `JOB-<year>-nnnn` |
+| `next_po_number` | `extract(year FROM current_date)` | `PO-<year>-nnnn` |
+| `next_return_number` | `extract(year FROM current_date)` | `RET-<year>-nnnn` |
+
+Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
+its advisory lock key, its `MAX()` scan **and** its returned number, exactly as `next_invoice_number`
+does — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001`. As with
+`next_invoice_number`, that is a **wrong-year label, not a duplicate**: `next_job_number` takes
+`MAX(...) + 1` over rows already matching that year under an advisory lock (verified against live
+2026-09-05), so the real first job of 2027 simply becomes `JOB-2027-0002`. Nothing is overwritten;
+the December work is filed under the wrong year and consumes that year's first number.
+**Same 31 December 2026 deadline.**
+The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
+they were deliberately not bundled into the parked migration because that file is pinned to one
+function's body md5. **Do not close this family when `20260905090000` is applied.**
+
+The general lesson, worth more than the six fixes: **a sweep proves only the question it asked.**
+Searching for `now()` cannot clear `CURRENT_DATE`, and on a UTC server the two are the same bug.
+Sweep the *concept* — "where does a business date come from" — not one spelling of it.
+
+**Two review findings worth carrying forward as general lessons**, both from this file:
+
+- `md5(pg_proc.prosrc)` hashes only the text *between* the `$fn$` markers. Parameter names, types and
+  **defaults live outside it**, so a body pin matches perfectly while the declaration silently loses a
+  `DEFAULT`. PostgreSQL then refuses `CREATE OR REPLACE` ("cannot remove parameter defaults"), and the
+  repair it suggests — `DROP FUNCTION` — would restore the default `EXECUTE TO PUBLIC`. Pin
+  `pronargs`/`pronargdefaults`/`pg_get_expr(proargdefaults, 0)` alongside the body hash.
+- A **NULL `pg_proc.proacl` is the most open state, not the safest** — it means default privileges,
+  and the default for a function is `EXECUTE TO PUBLIC`. Any check shaped `IF acl IS NOT NULL AND …`
+  skips exactly the case it exists to catch. Use `has_function_privilege(role, oid, 'EXECUTE')`, which
+  also resolves EXECUTE reaching `anon` indirectly through role membership — invisible to a text match
+  on the ACL string.
 
 ## CLOSED 2026-09-05 — the one-use live-SQL-guard maintenance producer was retired unapplied (Mason's decision)
 

@@ -2,21 +2,24 @@
 
 **Last verified: 2026-09-06 for the migration ledger and the live `create_inventory_hold` surface
 (read-only production queries against project `rhyzpcqhnizqbxphqdkr`, 15:39-15:42 UTC); schema shape
-last re-read 2026-09-03 15:34 UTC by the live-introspection regeneration of
-`.claude/schema-registry.json` carried in PR #586 (F06 post-apply).** Six migrations
-have applied since that schema reading, so the registry's shape is now BEHIND live and a regeneration
-is outstanding — `20260903150100_ledger_backed_commission_history` (ledger version
-`20260903202611`), F2's `20260903160000_gate_number_generators_active_profile_role`
+re-read 2026-09-05 by the live-introspection regeneration of `.claude/schema-registry.json` merged as
+PR #601.** The registry regeneration that was long outstanding here is **DONE**, and the note that it
+was "being reconciled by open PRs #601 and #602" is superseded: #601 merged, and #602 was closed as a
+byte-identical duplicate of it. The registry is stamped `generated_at 2026-09-05` and carries
+`migrations_high_water` `20260904152221`. All five migrations previously listed here as unread by the
+registry are captured by that refresh — `20260903150100_ledger_backed_commission_history` (ledger
+version `20260903202611`), F2's `20260903160000_gate_number_generators_active_profile_role`
 (`20260904023121`), `20260903230000_commission_report_snapshot_contract` (`20260904040643`),
-`20260904160000_invoice_date_fallbacks_chicago` (`20260904130047`),
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`), and — newly observed by the
-2026-09-06 read — `refuse_null_job_field_acres` (`20260905185938`, applied 2026-09-05 18:59:38 UTC;
-see the paragraph below). Schema-registry updates are
-being reconciled by open PRs #601 and #602, not by this candidate. The current effective ordering
-high-water is the newest applied authored NAME:
-**`20260904180000_invoice_season_follows_invoice_date`** (re-verified 2026-09-06, unchanged — the
-newer row above was recorded WITHOUT its `20260904185900` timestamp prefix, so it does not move the
-authored-name boundary). Ledger row count at that read: 999 (point-in-time, not a fact).
+`20260904160000_invoice_date_fallbacks_chicago` (`20260904130047`), and
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`).
+
+**One migration has applied since that registry refresh, so the registry's shape is one behind live
+again:** `refuse_null_job_field_acres` (ledger version `20260905185938`, applied 2026-09-05 18:59:38
+UTC), newly observed by the 2026-09-06 read — see the paragraph below. The current effective ordering
+high-water is still the newest applied authored NAME:
+**`20260904180000_invoice_season_follows_invoice_date`** (re-verified 2026-09-06, unchanged — that
+newer row was recorded WITHOUT its `20260904185900` timestamp prefix, so it does not move the
+authored-name boundary). Ledger row count at the 2026-09-06 read: 999 (point-in-time, not a fact).
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
@@ -25,8 +28,10 @@ high-water" rule compared against it silently skips files authored `20260831*` a
 durable way to state this boundary: it is what the ordering guard compares, and it changes far less
 often than the counters.
 
-For provenance, the same read observed **998 ledger rows** (991 distinct names) and `max(version)`
-**`20260904152221`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
+For provenance, the 2026-09-05 read observed **998 ledger rows** (991 distinct names) and
+`max(version)` **`20260904152221`** — unchanged from the 2026-09-04 reading, which is itself worth
+noting: the counters can sit still across a day while the boundary NAME does not.
+**Both are a point-in-time observation, not a standing fact.** Every apply by
 any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
 not evidence that something went wrong, and it should not be re-pinned on every apply.
 
