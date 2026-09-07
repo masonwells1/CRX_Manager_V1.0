@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ghApiMergeRequest,
+  ghApiMutates,
   ghMergeRequest,
   mcpMergeRequest,
   proofSearchDirs,
@@ -138,6 +139,33 @@ ok(ghApiMergeRequest("gh api graphql -f query='mutation { mergePullRequest(input
 ok(ghApiMergeRequest("gh -R o/r api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge with global flags between gh and api still flagged — Codex round-5");
 eq(ghApiMergeRequest("gh -R o/r api -X PUT repos/o/r/pulls/7/merge"), { selector: "7", repo: "o/r", auto: false }, "REST merge with global flags between gh and api still parses");
 eq(ghApiMergeRequest("curl -X PUT api.github.com/repos/o/r/pulls/12/merge"), null, "curl is not a gh api call (denied by the hook's raw-REST rule instead)");
+
+// ── ghApiMutates (moved here from .codex/hooks/production-action-guard.mjs on
+// 2026-09-07, so the gh binary has exactly one definition) ───────────────────
+// The copy that lived in the Codex guard carried the one-item extension list
+// this file replaced with BIN_TAIL, AND a position-anchored `gh\s+api` that a
+// global flag walked straight past. Both directions are pinned.
+ok(ghApiMutates("gh api -X POST repos/o/r/issues/1/comments -f body=x"), "explicit POST mutates");
+ok(ghApiMutates("gh api -XPUT repos/o/r/contents/f.txt"), "attached -XPUT mutates");
+ok(ghApiMutates("gh api --method=DELETE repos/o/r/issues/1"), "--method=DELETE mutates");
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments -f body=x"), "field-bearing call defaults to POST");
+ok(ghApiMutates("gh api repos/o/r/merges -Fbase=main -Fhead=feature"), "attached -F short value counts as a field");
+ok(ghApiMutates("gh api graphql -f query='mutation { addComment(input: {}) }'"), "GraphQL mutation mutates");
+ok(ghApiMutates("gh.cmd api -X POST repos/o/r/issues/1/comments"), ".cmd is the same binary");
+ok(ghApiMutates("gh.ps1 api graphql -f query='mutation { x }'"), ".ps1 is the same binary");
+ok(ghApiMutates("C:\\Tools\\gh.bat api -X PATCH repos/o/r/issues/1"), "a full Windows path with any extension is the same binary");
+ok(ghApiMutates("gh -R o/r api -X POST repos/o/r/issues/1/comments"), "a global flag between gh and api no longer hides the call");
+ok(!ghApiMutates("gh api repos/o/r/pulls/12"), "a plain read does not mutate");
+ok(!ghApiMutates("gh api -X GET repos/o/r/pulls/12"), "explicit GET does not mutate");
+ok(!ghApiMutates("gh pr view 12"), "pr view is not an api call");
+// Pre-existing and unchanged by the move: a `-f`-bearing GraphQL call is an
+// HTTP POST whatever the document says, so a GraphQL READ is treated as
+// mutating. That over-blocks in the fail-closed direction; it is pinned here so
+// a later change to that behaviour is a deliberate one.
+ok(ghApiMutates("gh api graphql -f query='query { repository { id } }'"), "a field-bearing GraphQL read is still an HTTP POST (fail-closed)");
+ok(!ghApiMutates("gh api graphql"), "graphql with no fields and no method is not classified as mutating");
+ok(!ghApiMutates("ghost api -X POST repos/o/r/issues/1"), "a neighbouring binary is not gh");
+ok(!ghApiMutates("npm run build"), "unrelated command ignored");
 
 // ── mcpMergeRequest ──────────────────────────────────────────────────────────
 eq(mcpMergeRequest({ owner: "o", repo: "r", pull_number: 8 }), { selector: "8", repo: "o/r", auto: false }, "GitHub MCP spelling");

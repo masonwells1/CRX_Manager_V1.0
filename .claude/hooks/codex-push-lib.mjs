@@ -2184,6 +2184,54 @@ export function ghApiMergeRequest(command) {
   return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false } : null;
 }
 
+// Does this `gh api` call MUTATE? Moved here from
+// .codex/hooks/production-action-guard.mjs on 2026-09-07 so the gh binary is
+// modelled in exactly one place: that copy carried the one-item extension list
+// this file has now replaced with BIN_TAIL, so `gh.cmd api -X POST …` and
+// `gh.ps1 api graphql -f query=mutation` reached the connector ungated (measured
+// through the guard's own evaluateProductionAction before the move).
+//
+// The `api` subcommand is found by WORD SCAN, not by position, for the same
+// reason ghApiMergeRequest above already does: a global flag may sit between the
+// binary and the subcommand (`gh -R o/r api -X POST …`), and the old
+// position-anchored `gh\s+api` test did not see that form either.
+export function ghApiMutates(command) {
+  const text = String(command || "");
+  if (!GH_BIN_RE.test(text)) return false;
+  const words = splitShellArgs(text);
+  const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
+  if (apiIndex === -1) return false;
+  if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
+      /\bmutation\b/i.test(text)) {
+    return true;
+  }
+  let method = "GET";
+  let methodExplicit = false;
+  let hasFields = false;
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "-X" || word === "--method") {
+      method = String(words[index + 1] || "").toUpperCase();
+      methodExplicit = true;
+      index += 1;
+    } else if (word.startsWith("--method=")) {
+      method = word.slice("--method=".length).toUpperCase();
+      methodExplicit = true;
+    } else if (/^-X\S+/i.test(word)) {
+      method = word.slice(2).toUpperCase();
+      methodExplicit = true;
+    } else if (["-f", "-F", "--field", "--raw-field", "--input"].includes(word) ||
+               /^(?:--field|--raw-field|--input)=/.test(word) ||
+               /^-[fF]\S/.test(word)) {
+      // The /^-[fF]\S/ arm catches gh's attached short-value form
+      // (`-fquery=...`, `-Fbase=main`) — Codex round-5.
+      hasFields = true;
+    }
+  }
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) return true;
+  return !methodExplicit && hasFields; // gh defaults field-bearing API calls to POST
+}
+
 // MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses
 // pull_number/owner/repo; app-style connectors use pr_number/repository_full_name).
 export function mcpMergeRequest(toolInput = {}) {

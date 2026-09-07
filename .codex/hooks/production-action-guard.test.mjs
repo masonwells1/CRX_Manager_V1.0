@@ -1450,6 +1450,125 @@ try {
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
   }).blocked, true, "CHANGES_REQUESTED still denies - never merge over an unresolved objection");
 
+  // ── the gh binary is a SHAPE, not a one-item extension list (2026-09-07) ────
+  // This file carried its own copies of the gh parsers, each spelling the binary
+  // `gh(?:\.exe)?`. Measured through evaluateProductionAction at 358bfdbfa:
+  // `gh pr merge 625 --squash` and `gh.exe …` returned blocked:true, while
+  // `gh.cmd …`, `gh.ps1 …`, `gh.bat …`, `gh.com …`, `C:\Tools\gh.cmd …` and the
+  // quoted-path form ALL returned blocked:false — the merge gate (green
+  // pipeline, CHANGES_REQUESTED, risky-diff proof) never ran for them. `.cmd` is
+  // what Windows resolves `gh` to when the CLI ships a shim, and PATHEXT is
+  // user-configurable, so those are ordinary spellings of the same program.
+  //
+  // The copies are gone; the parsers now come from codex-push-lib.mjs, whose
+  // BIN_TAIL models an extension as a RULE (a dot-segment with no separator, no
+  // further dot, no quote) instead of naming members. Every assertion below
+  // fails against the pre-import guard and passes after.
+  //
+  // The PR here is CHANGES_REQUESTED, so reaching the gate at all is a denial:
+  // blocked:true proves the gate RAN, and cannot be satisfied by a bypass.
+  const objectedPrJson = JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" });
+  for (const command of [
+    "gh.cmd pr merge 123 --squash",
+    "gh.ps1 pr merge 123 --squash",
+    "gh.bat pr merge 123 --squash",
+    "gh.com pr merge 123 --squash",
+    "gh.CMD pr merge 123 --squash",
+    "GH.CMD PR MERGE 123",
+    "C:\\Tools\\gh.cmd pr merge 123 --squash",
+    "./gh.cmd pr merge 123 --squash",
+    '"C:\\Program Files\\GitHub CLI\\gh.cmd" pr merge 123 --squash',
+    "npm test&&gh.cmd pr merge 123 --squash",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    }).blocked, true, `any gh binary extension still reaches the merge gate: ${command}`);
+  }
+  // `--admin` is refused before the PR is even resolved, so the spelling must
+  // not be what decides whether that refusal happens (no runGh stub supplied).
+  const cmdAdmin = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh.cmd pr merge 123 --squash --admin" },
+    repoDir: risky.repo,
+    nowMs: now,
+  });
+  assert.equal(cmdAdmin.blocked, true, "--admin is refused whatever the binary spelling");
+  assert.match(String(cmdAdmin.reason || ""), /--admin/, "the .cmd --admin denial still names the flag");
+  // The gh api routes carried the same list, plus a POSITION-anchored `gh\s+api`
+  // that a global flag between the binary and the subcommand walked past. The
+  // shared parsers find `api` by word scan.
+  for (const command of [
+    "gh.cmd api -X PUT repos/crop/crx/contents/file.txt -f branch=main",
+    "gh.ps1 api -X POST repos/crop/crx/issues/1/comments -f body=x",
+    "gh.bat api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'",
+    "gh -R crop/crx api -X POST repos/crop/crx/issues/1/comments -f body=x",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+    }).blocked, true, `mutating gh api is gated whatever the spelling or flag order: ${command}`);
+  }
+  // ── and the benign boundary, because a guard that over-denies gets switched
+  // off. `-` is not `.`, so the extension tail never opens on a hyphenated
+  // neighbour; `\b` never matches inside a longer word. A throwing runGh makes
+  // an accidental trip into the merge gate fail loudly instead of passing.
+  for (const command of [
+    "gh-dash pr merge 1",
+    "ghq push",
+    "ghost pr merge 1",
+    "npm run ghpr",
+    "echo highlight pr merge",
+    "node scripts/ghost.mjs pr merge",
+    "gh pr view 123",
+    "gh.cmd pr view 123",
+    "gh pr list",
+    "npm run build",
+    "git log --oneline",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { throw new Error(`benign command entered the merge gate: ${command}`); },
+    }).blocked, false, `benign gh-adjacent command is unaffected: ${command}`);
+  }
+  // `gh pr merge --disable-auto` CANCELS a pending auto-merge; it lands nothing.
+  // The shared parser stands the gate down for it, which the local copy did not.
+  // Pinned deliberately: this is the one behaviour the import LOOSENS, and it is
+  // loosened for a command that cannot merge.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --disable-auto" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => { throw new Error("--disable-auto should not resolve a PR"); },
+  }).blocked, false, "--disable-auto cancels auto-merge and is not a landing");
+  // Backtracking is MEASURED, not assumed: a hook that can be stalled is a hook
+  // that can be timed out, and silence from a killed PreToolUse hook means ALLOW.
+  for (const pathological of [
+    `${"gh.".repeat(6000)}gh pr merge 1`,
+    `${"gh".repeat(10000)} pr merge 1`,
+    `gh${".gh".repeat(6000)} pr merge 1`,
+  ]) {
+    const started = process.hrtime.bigint();
+    evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: pathological },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `gh binary matching stays linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
+  }
+
   // ── a slow advisory lookup must not be able to starve a HARD denial ────────
   // Codex round 6 (PR #563). The Codex GitHub App lookup is advisory and
   // fail-open, and it costs up to four `gh` calls each capped at 10s against a

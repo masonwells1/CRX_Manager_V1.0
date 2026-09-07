@@ -8,9 +8,13 @@ import path from "node:path";
 import {
   contentIsRisky,
   extractPatchDestinations,
+  ghApiMergeRequest,
+  ghApiMutates,
+  ghMergeRequest,
   gitPushCwd,
   isGitPush,
   mainPushSource,
+  mcpMergeRequest,
   proofSearchDirs,
   proofValid,
   pullRequestReviewBlocked,
@@ -1060,142 +1064,22 @@ function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {
   return { blocked: false };
 }
 
-function shellWords(value) {
-  return String(value || "").match(/"[^"]*"|'[^']*'|\S+/g)?.map((word) => {
-    if ((word.startsWith('"') && word.endsWith('"')) || (word.startsWith("'") && word.endsWith("'"))) {
-      return word.slice(1, -1);
-    }
-    return word;
-  }) || [];
-}
-
-function ghMergeRequest(command) {
-  // Global flags may sit between `gh`, `pr`, and `merge` (`gh -R o/r pr merge`,
-  // `gh pr -R o/r merge` — Codex round-4). Require the gh binary, then scan the
-  // segment's words for `pr` followed later by `merge`; parse flags across the
-  // whole segment. Over-matching (e.g. `gh pr view merge-notes`) only routes a
-  // read through the gate, which fails safe.
-  const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i.test(text)) return null;
-  const words = shellWords(text);
-  const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
-  if (prIndex === -1) return null;
-  const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
-  if (mergeIndex === -1) return null;
-  // Lowercase: membership is tested against the normalized flag name below.
-  const valueFlags = new Set(["--repo", "-r", "--match-head-commit", "--subject", "--body"]);
-  let selector = "";
-  let repo = "";
-  let admin = false;
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index];
-    // Flag NAMES are matched with quotes and backslashes removed: the shell
-    // concatenates `--ad""min` and `--ad\min` into `--admin` before gh sees
-    // them, so comparing the raw word misses a flag gh honours (Codex bot P1 on
-    // PR #541). Values keep their original case; only the name is lowercased.
-    const stripped = word.replace(/["'\\]/g, "");
-    const lower = stripped.toLowerCase();
-    if (lower.startsWith("--repo=")) {
-      repo = stripped.slice("--repo=".length);
-      continue;
-    }
-    // `--admin` merges with administrator privileges, skipping main's required
-    // review. Mason turned "Include administrators" OFF on 2026-09-01 so HE can
-    // clear a stuck review by hand; that bypass travels with the same admin
-    // token Codex runs on, so the gate refuses the flag. Only an explicit
-    // ParseBool FALSE stands down — an unparseable value is treated as a bypass
-    // request and denied, which costs nothing because gh rejects it too.
-    if (lower === "--admin") {
-      admin = true;
-      continue;
-    }
-    if (lower.startsWith("--admin=")) {
-      const value = lower.slice("--admin=".length);
-      admin = !(value === "0" || value === "f" || value === "false");
-      continue;
-    }
-    if (valueFlags.has(lower)) {
-      const value = words[index + 1] || "";
-      if (lower === "--repo" || lower === "-r") repo = value;
-      index += 1;
-      continue;
-    }
-    if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
-  }
-  return { selector, repo, admin };
-}
-
-function ghApiMergeRequest(command) {
-  const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
-    return null;
-  }
-  if (/\sapi\s+graphql\b/i.test(text) && /\bmergePullRequest\b/i.test(text)) {
-    return { unsupportedGraphql: true };
-  }
-  const words = shellWords(command);
-  let method = "GET";
-  let endpoint = "";
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index];
-    if (word === "-X" || word === "--method") {
-      method = String(words[index + 1] || "").toUpperCase();
-      index += 1;
-      continue;
-    }
-    if (word.startsWith("--method=")) {
-      method = word.slice("--method=".length).toUpperCase();
-      continue;
-    }
-    if (/^-X\S+/i.test(word)) {
-      method = word.slice(2).toUpperCase();
-      continue;
-    }
-    const normalizedEndpoint = word
-      .replace(/^https:\/\/api\.github\.com\//i, "")
-      .replace(/^\//, "");
-    if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(normalizedEndpoint)) {
-      endpoint = normalizedEndpoint;
-    }
-  }
-  if (method !== "PUT" || !endpoint) return null;
-  const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
-  return match ? { selector: match[3], repo: `${match[1]}/${match[2]}` } : null;
-}
-
-function ghApiMutates(command) {
-  const text = String(command || "");
-  if (!/(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)\s+api\b/i.test(text)) {
-    return false;
-  }
-  if (/\sapi\s+graphql\b/i.test(text) && /\bmutation\b/i.test(text)) return true;
-  const words = shellWords(text);
-  let method = "GET";
-  let methodExplicit = false;
-  let hasFields = false;
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index];
-    if (word === "-X" || word === "--method") {
-      method = String(words[index + 1] || "").toUpperCase();
-      methodExplicit = true;
-      index += 1;
-    } else if (word.startsWith("--method=")) {
-      method = word.slice("--method=".length).toUpperCase();
-      methodExplicit = true;
-    } else if (/^-X\S+/i.test(word)) {
-      method = word.slice(2).toUpperCase();
-      methodExplicit = true;
-    } else if (["-f", "-F", "--field", "--raw-field", "--input"].includes(word) ||
-               /^(?:--field|--raw-field|--input)=/.test(word) ||
-               /^-[fF]\S/.test(word)) {
-      // The /^-[fF]\S/ arm catches gh's attached short-value form
-      // (`-fquery=...`, `-Fbase=main`) — Codex round-5.
-      hasFields = true;
-    }
-  }
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) return true;
-  return !methodExplicit && hasFields; // gh defaults field-bearing API calls to POST
-}
+// The gh command parsers (ghMergeRequest, ghApiMergeRequest, ghApiMutates) and
+// mcpMergeRequest are IMPORTED from .claude/hooks/codex-push-lib.mjs above.
+// Until 2026-09-07 this file carried its own copies, and codex-push-lib.mjs
+// recorded the follow-up in its own header: "production-action-guard should
+// import these instead of carrying its own copies." That duplication was not
+// cosmetic — it was a live merge-gate bypass. Each copy spelled the binary as a
+// one-item extension list, `gh(?:\.exe)?`, so `gh.cmd pr merge 625 --squash`,
+// `gh.ps1 …`, `gh.bat …` and `C:\Tools\gh.cmd pr merge 625` returned
+// `blocked: false` from evaluateProductionAction — measured, not read off the
+// pattern — while the plain and `.exe` spellings were gated. `.cmd` is what
+// Windows resolves `gh` to when the CLI ships a shim, and PATHEXT is
+// user-configurable, so those are ordinary invocations. There is now ONE
+// definition of what a gh command is (BIN_TAIL in codex-push-lib.mjs), which is
+// what AGENTS.md means by ".claude/hooks/ is the single source of truth for
+// shared guard logic": a fourth copy of the grammar would have inherited the
+// next list's omissions the same way.
 
 function githubToolIsReadOnly(toolName) {
   // App-style names keep a `github_` prefix on the leaf
@@ -1204,18 +1088,6 @@ function githubToolIsReadOnly(toolName) {
   const leaf = (String(toolName || "").split("__").pop() || "").replace(/^github_/i, "");
   return /^(?:get|list|search|read|resolve|download|check)_/i.test(leaf) ||
     /_(?:read|get|list|search)$/i.test(leaf);
-}
-
-function mcpMergeRequest(toolInput) {
-  // Key spellings differ per connector: the GitHub MCP uses pull_number/owner/repo,
-  // the Codex GitHub app uses pr_number/repository_full_name (Codex review 2026-07-13).
-  const selector = toolInput.pull_number ?? toolInput.pullNumber ?? toolInput.pullRequestNumber ??
-    toolInput.pr_number ?? toolInput.prNumber ?? toolInput.number ?? "";
-  const owner = toolInput.owner ?? toolInput.organization ?? "";
-  const repository = toolInput.repo ?? toolInput.repository ?? toolInput.repoName ??
-    toolInput.repository_full_name ?? toolInput.repositoryFullName ?? toolInput.full_name ?? "";
-  const repo = String(repository).includes("/") ? String(repository) : (owner && repository ? `${owner}/${repository}` : "");
-  return { selector: String(selector), repo };
 }
 
 function resolvePullRequest({ request, repoDir, runGh }) {
