@@ -29,6 +29,7 @@ caller to retry on the new body; ordinary direct and unrelated writes remain unc
 `20260905200500` was superseded before apply and is not a file.
 None changes an existing immutable ledger row. Refresh
 `.claude/schema-registry.json` only after a reviewed live apply.
+The registry regeneration once listed here as outstanding is **DONE**: PR #601 merged it and #602 was closed as a byte-identical duplicate, so the "being reconciled by open PRs #601 and #602" note is superseded. The registry is stamped `generated_at 2026-09-05` and carries `migrations_high_water` `20260904152221`.
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
@@ -44,6 +45,7 @@ not truncation) and `max(version)` **`20260904152221`**. The evening read after 
 observations, not standing facts.** Every apply by any lane moves them, so re-read live before
 relying on either; a stale count here is expected drift, not evidence that something went wrong,
 and it should not be re-pinned on every apply.
+Worth noting alongside: those counters sat unchanged from the 2026-09-04 reading through the 2026-09-05 afternoon one, so the counters can stand still across a day while the boundary NAME does not.
 
 **F2 number-generator gate is APPLIED LIVE and merged** at effective ledger version
 `20260904023121`. This refresh verified all eight generator security/grant shapes; the F2 entry in
