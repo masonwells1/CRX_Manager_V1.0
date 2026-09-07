@@ -704,32 +704,38 @@ INSERT INTO public.idempotency_keys (
 `);
       const blocked = sql(guard, { allowFailure: true });
       expectFailure(blocked, guardSpec.error, `${operation} legacy-receipt cutover`);
-    }
 
-    const representative = guardSpec.operations[0];
-    sql(`
+      // Every operation in the spec gets the expired- and bound-receipt cases, not just
+      // the first. These two blocks used to run once per guardSpec against
+      // `guardSpec.operations[0]`, so for the cycle-count spec
+      // (['update_cycle_count_item', 'complete_cycle_count']) the representative was
+      // always `update_cycle_count_item` and the intent-shaped `complete_cycle_count`
+      // payload below was unreachable dead code. The proof still exited 0, so the
+      // missing coverage was silent — exactly the gap this harness exists to close.
+      sql(`
 TRUNCATE public.idempotency_keys;
 INSERT INTO public.idempotency_keys (
   idempotency_key, operation, result, expires_at,
   request_actor_id, request_fingerprint
-) VALUES ('expired-${representative}', '${representative}', '{}'::jsonb, now() - interval '1 second', NULL, NULL);
+) VALUES ('expired-${operation}', '${operation}', '{}'::jsonb, now() - interval '1 second', NULL, NULL);
 `);
-    assert.equal(sql(guard).status, 0, `${representative} expired receipt blocked cutover`);
+      assert.equal(sql(guard).status, 0, `${operation} expired receipt blocked cutover`);
 
-    sql(`
+      sql(`
 TRUNCATE public.idempotency_keys;
 INSERT INTO public.idempotency_keys (
   idempotency_key, operation, result, expires_at,
   request_actor_id, request_fingerprint
 ) VALUES (
-  'bound-${representative}', '${representative}',
-  ${representative === 'complete_cycle_count'
+  'bound-${operation}', '${operation}',
+  ${operation === 'complete_cycle_count'
     ? `'${JSON.stringify({ _cycle_count_id: actor, _actor_id: actor, _expected_item_revision: null })}'::jsonb`
     : "'{}'::jsonb"},
   now() + interval '1 hour', '${actor}', 'bound-fingerprint'
 );
 `);
-    assert.equal(sql(guard).status, 0, `${representative} bound receipt blocked cutover`);
+      assert.equal(sql(guard).status, 0, `${operation} bound receipt blocked cutover`);
+    }
   }
   sql('TRUNCATE public.idempotency_keys;');
 }

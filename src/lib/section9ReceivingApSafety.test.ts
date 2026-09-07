@@ -190,7 +190,15 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
     expect(reports).toContain(
       "get_commission_balance_report', { p_as_of_date: todayInBusinessTz() }",
     );
-    expect(reports).toContain('Commission Balance is current-state only.');
+    expect(reports).toContain('Commission Balance is current-state only on this screen.');
+    // The original banner said historical cutoffs were disabled "until immutable
+    // payout history exists". That history DOES now exist: the ledger-backed
+    // commission history went live on 2026-09-03 and `commission_history_cutover`
+    // reports `first_supported_date = 2026-09-04` (read-only live check,
+    // 2026-09-06). The screen still only requests today, which is correct and safe,
+    // but the old sentence had become a false statement about the database. Pin the
+    // retraction so it cannot silently return.
+    expect(reports).not.toContain('until immutable payout history exists');
     // The banner alone let the date controls stay live while the report ignored
     // them, so the screen showed a historical cutoff it never applied. Pin the
     // disabling itself, not just the wording that describes it.

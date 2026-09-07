@@ -1151,7 +1151,7 @@ export default function Reports() {
           {dateFilterBar(handleFinancialCSV, financialTab === 'commission_balance')}
           {financialTab === 'commission_balance' && (
             <p className="text-xs text-secondary">
-              Commission Balance is current-state only. Shown as of today. Historical cutoffs are disabled until immutable payout history exists.
+              Commission Balance is current-state only on this screen. Shown as of today; the date filter does not apply. Dated history is recorded in the database from 4 September 2026 onward but is not yet available here.
             </p>
           )}
 
