@@ -1,17 +1,19 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-04 for the migration ledger (read-only production query against project
-`rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-03 15:34 UTC by the live-introspection
-regeneration of `.claude/schema-registry.json` carried in PR #586 (F06 post-apply).** Five migrations
-have applied since that schema reading, so the registry's shape is now BEHIND live and a regeneration
-is outstanding — `20260903150100_ledger_backed_commission_history` (ledger version
-`20260903202611`), F2's `20260903160000_gate_number_generators_active_profile_role`
-(`20260904023121`), `20260903230000_commission_report_snapshot_contract` (`20260904040643`),
+**Last verified: 2026-09-05 for the migration ledger (read-only ledger read against project
+`rhyzpcqhnizqbxphqdkr`); schema shape re-read the same day by the live-introspection regeneration of
+`.claude/schema-registry.json` merged as PR #601.** The registry regeneration that was outstanding
+here is **DONE**, and the note that it was "being reconciled by open PRs #601 and #602" is
+superseded: #601 merged, and #602 was closed as a byte-identical duplicate of it. The registry is
+stamped `generated_at 2026-09-05` and carries `migrations_high_water` `20260904152221`. All five
+migrations previously listed here as unread by the registry are captured by that refresh —
+`20260903150100_ledger_backed_commission_history` (ledger version `20260903202611`), F2's
+`20260903160000_gate_number_generators_active_profile_role` (`20260904023121`),
+`20260903230000_commission_report_snapshot_contract` (`20260904040643`),
 `20260904160000_invoice_date_fallbacks_chicago` (`20260904130047`), and
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). Schema-registry updates are
-being reconciled by open PRs #601 and #602, not by this candidate. The current effective ordering
-high-water is the newest applied authored NAME:
-**`20260904180000_invoice_season_follows_invoice_date`** (verified 2026-09-04).
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
+ordering high-water is the newest applied authored NAME:
+**`20260904180000_invoice_season_follows_invoice_date`** (re-verified against live 2026-09-05).
 
 Read ordering from the authored NAME, not from `version` — the two diverge, and
 `.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
@@ -20,8 +22,10 @@ high-water" rule compared against it silently skips files authored `20260831*` a
 durable way to state this boundary: it is what the ordering guard compares, and it changes far less
 often than the counters.
 
-For provenance, the same read observed **998 ledger rows** (991 distinct names) and `max(version)`
-**`20260904152221`**. **Both are a point-in-time observation, not a standing fact.** Every apply by
+For provenance, the 2026-09-05 read observed **998 ledger rows** (991 distinct names) and
+`max(version)` **`20260904152221`** — unchanged from the 2026-09-04 reading, which is itself worth
+noting: the counters can sit still across a day while the boundary NAME does not.
+**Both are a point-in-time observation, not a standing fact.** Every apply by
 any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
 not evidence that something went wrong, and it should not be re-pinned on every apply.
 
