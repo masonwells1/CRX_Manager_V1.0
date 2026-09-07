@@ -25,25 +25,170 @@ import path from "node:path";
 // branch/project lifecycle, and destructive file/db ops STAY blocked here.
 const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|merge_pull_request|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
 
+// `git` and `gh` accept GLOBAL OPTIONS BETWEEN the binary and the subcommand
+// (`git -C <dir> push`, `gh -R <owner>/<repo> pr merge`). A bare `git\s+push`
+// cannot span them, so those shapes were AUTO-APPROVED while armed — armed mode
+// did not actually prevent pushing or merging (found 2026-09-05, by running the
+// guard against a corpus rather than by reading it).
+//
+// The first fix ENUMERATED the option spellings (`-[cC]\s+\S+|--\S+` for git,
+// `-[RFf]\s+\S+|--repo\s+\S+|--\S+` for gh) and so inherited that list's
+// omissions — the name-listed-carve-out failure this repo keeps re-learning. Two
+// shapes walked straight through it, both reproduced by EXECUTION (2026-09-07):
+//
+//   git -C "C:/CRX Manager/wt" push …    `\S+` stops at the first space, and CRX
+//                                        worktrees sit under a path with a space
+//   gh -Rmasonwells1/CRX_Ma… pr merge …  `-[RFf]\s+` demanded a DETACHED value;
+//                                        attached short values are normal usage
+//
+// So the option region is described by SHAPE now, not by spelling. Two token
+// classes and nothing else:
+//
+//   OPT_TOKEN  a shell word STARTING WITH `-`. Everything after the dash is just
+//              "more word", so `--force`, `-Rowner/repo`, `--repo=owner/repo`,
+//              `--git-dir="C:/CRX Manager/.git"` and `-C"a b"` are one token each
+//              with no special case per spelling.
+//   VAL_TOKEN  a shell word NOT starting with `-`: an option's detached value.
+//
+// A shell word is a run of quoted sections (which MAY contain spaces),
+// backslash-escaped characters, and ordinary characters. That is what closes the
+// quoting hole for every option at once instead of for the ones someone listed.
+//
+// This is still not `.*`, and the benign controls are why. The region ends at the
+// first word that is neither an option nor an option's value — and that word is
+// the subcommand. `git commit -m "fix the push bug"` opens with `commit`, which is
+// not an OPT_TOKEN, so the region is EMPTY and the pattern then needs `push` where
+// `commit` stands; the `push` inside the quoted message is never reachable from
+// this `git`. Only a leading `-` opens the region at all. Both directions are
+// asserted in autopilot-lib.test.mjs, including the two bypasses above.
+//
+// KNOWN, MEASURED over-denial — the whole class, not one example. When a global
+// option does not consume a detached value (it takes none, or carries its value
+// attached), the SUBCOMMAND is the next bare word and can be consumed as that
+// option's value instead. The deny word two tokens later then matches:
+//
+//   git --no-pager log --grep push        `log` consumed as --no-pager's value
+//   git -C/x stash push -m w              `stash` consumed as -C/x's value
+//   git --git-dir=/x/.git stash push      same, attached long value
+//
+// A differential sweep of 1,728 generated commands (both binaries x 36 option
+// regions x 24 subcommand tails) put this at 43 benign commands newly denied
+// against 188 dangerous shapes newly closed. The common spellings are NOT among
+// the 43 — `git -C /x stash push -m w` and `git log --grep push` both stay
+// allowed, because a detached value or a non-option first word ends the region.
+//
+// Separating them needs per-option ARITY, which is another name list — the thing
+// that just failed twice here. For a DENY set an occasional extra denial is the
+// safe side of that trade, so it is taken deliberately and asserted below.
+//
+// `\s` (not `[^\S\r\n]`) is deliberate: these are DENY patterns, so treating a
+// newline as separation makes them broader, never narrower.
+const WORD_CHUNK = String.raw`(?:"[^"]*"|'[^']*'|\\[\s\S]|[^\s'"\\])`;
+const OPT_TOKEN = String.raw`-${WORD_CHUNK}*`;
+const VAL_TOKEN = String.raw`(?!-)${WORD_CHUNK}+`;
+const GLOBAL_OPTS = String.raw`(?:\s+${OPT_TOKEN}(?:\s+${VAL_TOKEN})?)*`;
+
+// The BINARY was the third axis of the same bug, and the widest one. `\bgit\b`
+// followed by `${GLOBAL_OPTS}\s+` requires whitespace immediately after the NAME,
+// so anything the shell still resolves to git — an extension, a closing quote —
+// ended the match before the subcommand was ever considered. Reproduced by
+// execution at e0bce4a82 (2026-09-07): `git.exe push origin HEAD`,
+// `git.exe push --force`, `git.exe reset --hard origin/main` and
+// `gh.exe pr merge 625 --squash` all returned "allow" while the bare spellings
+// denied. `.exe` is the NATIVE binary spelling on the platform this repo is
+// developed on, so this defeated the whole deny-set, not a corner of it.
+//
+// Listing the extensions (`\.exe|\.cmd|\.bat`) is the name-listed carve-out that
+// already failed twice in the option region above — PATHEXT is user-configurable
+// and `.com`, `.ps1`, a wrapper script with no extension at all, and whatever the
+// next shell adds are not in anyone's list. So the binary is described by SHAPE:
+//
+//   NAME       the exact command name, with `\b` on both sides, so it cannot be
+//              the tail or the head of a longer word (`gitfoo`, `github-cli`).
+//   BIN_TAIL   what may sit between that name and the whitespace before the
+//              subcommand, and it is exactly two things:
+//                (a) an EXTENSION — a `.` followed by the LAST dot-segment of the
+//                    final path segment, so it contains no separator, no further
+//                    dot and no quote. Any such extension, because "what follows
+//                    the dot" is a shape, not a list: `.exe`, `.EXE`, `.cmd`,
+//                    `.bat`, `.ps1`, `.com` and whatever PATHEXT gains next all
+//                    match without being named.
+//                (b) a CLOSING QUOTE — a quoted command word ends with one, and
+//                    `"C:/Program Files/Git/bin/git.exe" push` is the ordinary
+//                    Windows spelling of a path that contains a space.
+//
+// Bounding the extension that way is also what keeps this LINEAR. A first draft
+// let the extension be any run of word chunks, which let it swallow the rest of
+// the command and then give it back one character at a time — at every one of the
+// many positions where `\bgit\b` can start. Measured, not reasoned about: a
+// 20,000-character `git.git.git…` string took 414ms to decide, against 0-2ms for
+// every realistic input. With the extension bounded there is nothing to give back,
+// and the same string decides in under a millisecond. The test file pins a ceiling.
+//
+// A PATH PREFIX is deliberately in this same class and needs no new syntax: a
+// path separator is a non-word character, so `\b` already opens on the final
+// segment. `/usr/bin/git push`, `./git push`, `C:\Tools\git.exe push` and
+// `"C:/Program Files/Git/bin/git.exe" push` are all matched at the basename —
+// which is what the shell resolves too. That was verified by execution, not
+// assumed; the pre-fix library already denied the unquoted, extensionless path
+// forms for exactly this reason.
+//
+// It does NOT widen onto neighbours, and `\b` plus "an extension starts with a
+// dot" is why. `git-crypt push`, `git-lfs push`, `github-release push`,
+// `gitfoo push`, `npm run gitpush`, `gh-dash pr merge 1` and `ghq push` all stay
+// allowed: `-` is not `.`, so BIN_TAIL does not open, and the required whitespace
+// then lands on `-crypt`/`-lfs`/`-dash` instead of on the subcommand. Asserted in
+// both directions in autopilot-lib.test.mjs.
+//
+// KNOWN over-denial, same trade as the option region: a quoted word that ENDS in
+// `git`/`gh` now also satisfies BIN_TAIL's closing quote, so `grep "git" push.log`
+// denies. The UNQUOTED twin `grep git push.log` already denied before this change,
+// so this makes the guard consistent rather than newly blunt, and an extra denial
+// is the safe side for a deny set.
+const BIN_TAIL = String.raw`(?:\.[^\s'".\\/]*)?["']?`;
+const bin = (name) => String.raw`\b${name}\b${BIN_TAIL}`;
+const git = (rest) => new RegExp(String.raw`${bin("git")}${GLOBAL_OPTS}\s+${rest}`);
+const gh = (rest) => new RegExp(String.raw`${bin("gh")}${GLOBAL_OPTS}\s+${rest}`);
+
+// Every OTHER name-anchored rule below had the same binary hole, for the same
+// reason — the name is followed by a required `\s`, so an extension ends the match
+// before the dangerous subcommand is read. `supabase.exe db reset`,
+// `vercel.cmd deploy`, `npx.cmd supabase db reset` (npx.cmd IS the Windows npx)
+// and `rm.exe -rf` all walked through. They take the same shape rule rather than
+// a second, differently-shaped fix.
+//
+// `rmdir`, `dropdb` and `createdb` are deliberately NOT changed: they are bare
+// `\b…\b` word matches with nothing required after them, so `rmdir.exe` already
+// denied. Adding BIN_TAIL there would be noise, not safety. Asserted below.
+//
+// The `npx ` prefix is OPTIONAL in these three rules, which makes it inert: the
+// rule already matches from `supabase` onward, so `npx -y supabase db reset` and
+// `npx.cmd supabase db reset` denied before this change and deny after it —
+// verified by execution, not reasoned about. It is given the same shape only so
+// the three rules read consistently; do not mistake it for the thing doing the
+// work, which is the `supabase` anchor.
+const nameAnchored = (name, rest) => new RegExp(String.raw`${bin(name)}\s+${rest}`);
+const NPX = String.raw`(?:${bin("npx")}\s+)?`;
+
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
-  /git\s+push\b/,                                  // no unattended push — Mason reviews in the morning
-  /git\s+(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)/,
-  /git\s+reset\s+--hard\b/,
-  /git\s+clean\s+-[A-Za-z]*[fdx]/,
+  git(String.raw`push\b`),                         // no unattended push — Mason reviews in the morning
+  git(String.raw`(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)`),
+  git(String.raw`reset\s+--hard\b`),
+  git(String.raw`clean\s+-[A-Za-z]*[fdx]`),
   /--no-verify\b/,
-  /\brm\s+-[A-Za-z]*r[A-Za-z]*f|\brm\s+-[A-Za-z]*f[A-Za-z]*r/, // rm -rf / -fr
-  /\brmdir\b|\bdel\s+\/[sq]/i,
-  /git\s+worktree\s+remove\b/,
-  /git\s+branch\s+(?:-D|--delete\s+--force)\b/,
-  /git\s+filter-(?:branch|repo)\b/,
-  /(?:npx\s+)?supabase\s+db\s+(?:push|reset)\b/,
-  /(?:npx\s+)?supabase\s+migration\s+repair\b/,
-  /(?:npx\s+)?supabase\s+functions\s+deploy\b/,    // CLI edge deploy = same gate as the MCP tool
-  /\bgh\s+pr\s+merge\b/,                           // lands on main around the push guard
+  nameAnchored("rm", String.raw`(?:-[A-Za-z]*r[A-Za-z]*f|-[A-Za-z]*f[A-Za-z]*r)`), // rm -rf / -fr
+  new RegExp(String.raw`\brmdir\b|${bin("del")}\s+\/[sq]`, "i"),
+  git(String.raw`worktree\s+remove\b`),
+  git(String.raw`branch\s+(?:-D|--delete\s+--force)\b`),
+  git(String.raw`filter-(?:branch|repo)\b`),
+  new RegExp(String.raw`${NPX}${bin("supabase")}\s+db\s+(?:push|reset)\b`),
+  new RegExp(String.raw`${NPX}${bin("supabase")}\s+migration\s+repair\b`),
+  new RegExp(String.raw`${NPX}${bin("supabase")}\s+functions\s+deploy\b`), // CLI edge deploy = same gate as the MCP tool
+  gh(String.raw`pr\s+merge\b`),                    // lands on main around the push guard
   /\b(?:dropdb|createdb)\b/,
-  /\bvercel\s+(?:deploy|--prod|promote)\b/,
+  nameAnchored("vercel", String.raw`(?:deploy|--prod|promote)\b`),
   /(?:^|[\s;&|>])\.env\b/,                         // touching .env
   /(?:>>?|tee)\s+['"]?[^\s'";|&]*\.env\b/,         // writing to .env
 ];
