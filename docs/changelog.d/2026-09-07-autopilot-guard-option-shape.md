@@ -63,5 +63,23 @@ the option region and outside this PR's subject; it is unchanged from before eit
   options plus a non-matching subcommand decides in well under a millisecond, and the test asserts a
   1-second ceiling.
 
-This widens a deny-set only; nothing previously blocked becomes allowed. Autopilot is not armed in
-any worktree, so both bypasses were latent.
+## The one place it is narrower, checked rather than claimed
+
+The obvious claim to make here is "this widens a deny-set only". A differential sweep of 1,728
+generated commands over the option grammar says that is **not quite true**: 231 became denied and
+**36 became allowed**. All 36 are one thing — an unbalanced quote inside the option region
+(`git -C "a push`, `git -c a'b push`). The old `\S+` swallowed the stray quote as an ordinary
+character; the new word model treats a quote as opening a run, so the token stops there.
+
+They are not a hole, because they are not commands. Measured, not assumed: `bash -c` exits 2 with
+*unexpected EOF while looking for matching*, and PowerShell exits 1 with *The string is missing the
+terminator* — the shell refuses the string, so nothing is ever pushed. The balanced counterparts run
+in both shells and are denied.
+
+The rule underneath is that the guard models the shell's word splitting: if `push` sits inside a
+quoted run, the shell does not treat it as the subcommand either. Closing the last sliver would mean
+letting a lone quote count as an ordinary character too, which reintroduces the ambiguity the word
+model removed and starts denying `git -C "a push" status`. All three cases are asserted in the test
+file so this stays a deliberate property rather than a surprise in the next review.
+
+Autopilot is not armed in any worktree, so both bypasses were latent, never live.

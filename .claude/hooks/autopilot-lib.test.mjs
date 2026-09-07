@@ -128,6 +128,28 @@ eq(autopilotDecision("Bash", { command: "gh -R owner/repo pr view 1 --json merge
 eq(autopilotDecision("Bash", { command: 'gh pr comment 607 --body "ready to merge"' }), "allow", "a comment body naming merge stays allowed");
 eq(autopilotDecision("Bash", { command: "gh workflow list -R owner/repo" }), "allow", "a gh option AFTER the subcommand is not a global");
 
+// ── the ONE place the new region is NARROWER than the enumerated one ─────
+// A differential sweep of 1,728 generated commands over the option grammar found
+// 231 newly denied and 36 newly ALLOWED. All 36 are the same thing: an UNBALANCED
+// quote inside the option region (`git -C "a push`, `git -c a'b push`). The old
+// `\S+` swallowed the stray quote as an ordinary character; the new word model
+// treats a quote as opening a run, so the token stops there and the region ends.
+//
+// This is not a hole, because those strings are not commands. Measured, not
+// assumed: `bash -c` exits 2 with "unexpected EOF while looking for matching",
+// and PowerShell exits 1 with "The string is missing the terminator" — the shell
+// refuses to run them, so nothing is pushed. The balanced control runs in both.
+//
+// The rule underneath is that the guard models the SHELL'S word splitting: if
+// `push` sits inside a quoted run, the shell does not see it as the subcommand
+// either. Closing this last sliver would mean letting a lone quote also count as
+// an ordinary character, which reintroduces the ambiguity it was added to remove
+// and starts denying `git -C "a push" status`. Asserted here so it stays a
+// deliberate, re-checkable property rather than a surprise in the next review.
+eq(autopilotDecision("Bash", { command: 'git -c a"b push' }), "allow", "an unbalanced quote is not a runnable command (bash exits 2 before git runs)");
+eq(autopilotDecision("Bash", { command: "git -C 'a push origin main" }), "allow", "same, single-quoted");
+eq(autopilotDecision("Bash", { command: "git -C 'a b' push origin main" }), "deny", "the BALANCED counterpart — which shells DO run — is denied");
+
 // Linear, not exponential. The option region nests quantifiers, so prove it does
 // not backtrack catastrophically on a long non-matching command rather than
 // assuming it: each iteration's only real branch point ends the loop.
