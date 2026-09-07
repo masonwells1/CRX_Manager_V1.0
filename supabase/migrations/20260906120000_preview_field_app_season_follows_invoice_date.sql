@@ -141,18 +141,44 @@ BEGIN
       'PREFLIGHT_OWNER: preview_field_app_invoice_split is owned by %, not postgres. DROP+CREATE re-owns it to the applying role, which changes this SECURITY DEFINER function''s effective privileges over application_services. Investigate before applying.', v_owner;
   END IF;
 
-  -- The ACL is pinned HERE, above the replay branch, so it covers BOTH paths -- and the
-  -- placement is the whole point of this check. The DROP below destroys the installed ACL as
-  -- thoroughly as it destroys the body, and the GRANT/REVOKE block further down then restores
-  -- exactly the reviewed set, so a grant another lane added would be silently reverted while the
-  -- postflight -- which only ever sees the set this file just wrote -- reported OK. That is the
-  -- batch_apply_prepayments 2026-07-15 silent-revert class, one field over from the body.
+  -- SIGNATURE FIRST, and the ORDER here is a fix, not a preference.
   --
-  -- An earlier revision of this file pinned the ACL only INSIDE the replay branch. That guarded
-  -- the retry and left the real apply unguarded: live is on the 4-argument predecessor, so the
-  -- first and only intended apply takes the path BELOW the replay branch. The guarded path was
-  -- the rare one. Both signatures carry the same reviewed grantee set -- verified live 2026-09-06,
-  -- see the header -- so one literal covers both, and the message names which one it found.
+  -- The identity must be one of the two shapes this file knows: the 4-argument predecessor it
+  -- replaces, or the 5-argument candidate it re-applies. Identity, not pronargs, because a count
+  -- says nothing about the types or the NAMES -- a hypothetical (jsonb,jsonb,uuid,timestamptz)
+  -- would pass a count test and then be hashed against a pin belonging to a different function,
+  -- and a (jsonb,jsonb,uuid,uuid,timestamptz) would take the replay branch below and log a replay
+  -- notice that is simply untrue.
+  --
+  -- Why this runs BEFORE the ACL check: an earlier revision put the ACL check first, having just
+  -- hoisted it out of the replay branch to cover both paths. That shadowed this one in the exact
+  -- case it exists for. The realistic way live acquires a wrong-shaped function is another lane
+  -- doing its own DROP+CREATE -- and under Supabase's ALTER DEFAULT PRIVILEGES a freshly CREATEd
+  -- function re-acquires an anon grant, so the wrong shape and a drifted ACL arrive TOGETHER. With
+  -- the ACL check first, every realistic wrong-signature drift was reported as grant drift. Still
+  -- fail-closed, but the operator would have been sent to look at the wrong thing.
+  IF v_identity NOT IN ('preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid, p_invoice_date date)',
+                        'preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid)') THEN
+    RAISE EXCEPTION
+      'PREFLIGHT_SIGNATURE: expected either the 4-argument predecessor or the 5-argument candidate, found % (% arguments).', v_identity, v_nargs;
+  END IF;
+
+  -- The ACL is pinned HERE: after the shape is known to be one this file understands, and above
+  -- the replay branch so it covers BOTH paths with one check. The DROP below destroys the
+  -- installed ACL as thoroughly as it destroys the body, and the GRANT/REVOKE block further down
+  -- then restores exactly the reviewed set, so a grant another lane added would be silently
+  -- reverted while the postflight -- which only ever sees the set this file just wrote -- reported
+  -- OK. That is the batch_apply_prepayments 2026-07-15 silent-revert class, one field over.
+  --
+  -- An earlier revision pinned the ACL only INSIDE the replay branch. That guarded the retry and
+  -- left the real apply unguarded: live is on the 4-argument predecessor, so the first and only
+  -- intended apply takes the path BELOW the replay branch. The guarded path was the rare one. Both
+  -- signatures carry the same reviewed grantee set -- verified live 2026-09-06, see the header --
+  -- so one literal covers both, and the message names which one it found.
+  --
+  -- It stays BELOW PREFLIGHT_OWNER for a reason of its own: ALTER FUNCTION ... OWNER TO rewrites
+  -- the owner's ACL entry, so a re-owned function's grantee set no longer contains postgres.
+  -- Hoisting this any higher would report a re-owned function as grant drift.
   --
   -- aclexplode enumerates DIRECT grants only. That is exactly the right scope here, because a
   -- direct grant is precisely what the DROP destroys and what the GRANT/REVOKE block can restore;
@@ -165,16 +191,18 @@ BEGIN
     FROM pg_proc p, aclexplode(p.proacl) a
    WHERE p.oid = v_oid AND a.privilege_type = 'EXECUTE';
 
+  -- IS DISTINCT FROM, so the check fires in BOTH directions: an extra grantee and a MISSING one.
+  -- A missing one matters as much -- if another lane had already revoked service_role, this file
+  -- would silently grant it back and call that the reviewed posture.
   IF v_grantees IS DISTINCT FROM 'authenticated, postgres, service_role' THEN
     RAISE EXCEPTION
-      'PREFLIGHT_GRANT_DRIFT: % grants EXECUTE to %, not the reviewed set (authenticated, postgres, service_role). The DROP below would silently revert that change. Diff and re-review before applying.',
+      'PREFLIGHT_GRANT_DRIFT: % grants EXECUTE to %, not the reviewed set (authenticated, postgres, service_role). The DROP below would silently revert that difference, so this apply refuses instead. If the extra grantee is anon or PUBLIC, that is the 20260624020000 regression and the reviewed action is to REVOKE it and re-run this file, which restores exactly the reviewed posture. Any other difference: diff and re-review before applying.',
       v_identity,
       COALESCE(v_grantees, '(nothing -- proacl is NULL, so no direct grant exists and default privileges apply, which on this project means PUBLIC effectively holds EXECUTE)');
   END IF;
 
-  -- Replay: the candidate is already installed. Branch on the IDENTITY, not on pronargs -- a count
-  -- of 5 says nothing about the types, so a hypothetical (jsonb,jsonb,uuid,uuid,timestamptz)
-  -- overload would otherwise take this branch and log a replay notice that is simply untrue.
+  -- Replay: the candidate is already installed. The identity was validated above, so this is a
+  -- straight equality against the shape that means "already applied".
   IF v_identity = 'preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid, p_invoice_date date)' THEN
     -- The body MUST be pinned here, on this path, before the DROP below destroys it.
     --
@@ -194,16 +222,8 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Identity, not pronargs, for the same reason the replay branch above uses identity: a count of
-  -- 4 says nothing about the types or the names, so a hypothetical
-  -- (jsonb,jsonb,uuid,timestamptz) overload would pass a count test and then be hashed against a
-  -- pin belonging to a different function. Downstream PREFLIGHT_BODY_DRIFT would still refuse it,
-  -- but it would be reported as body drift rather than as the wrong signature.
-  IF v_identity <> 'preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid)' THEN
-    RAISE EXCEPTION
-      'PREFLIGHT_SIGNATURE: expected either the 4-argument predecessor or the 5-argument candidate, found % (% arguments).', v_identity, v_nargs;
-  END IF;
-
+  -- Everything from here is the 4-argument predecessor path: the identity was validated above and
+  -- the replay branch returned, so this can only be the shape whose body the pin below describes.
   IF md5(v_src) <> 'ca33fb973d86dbf3a2788dc11fbc49a5' THEN
     RAISE EXCEPTION
       'PREFLIGHT_BODY_DRIFT: live body md5 is %, not the reviewed pin ca33fb973d86dbf3a2788dc11fbc49a5. Applying over a drifted body would silently revert whatever changed it. Diff and re-review before applying.', md5(v_src);
@@ -560,7 +580,9 @@ DECLARE
   v_arguments text;
   v_volatile "char";
   v_lang     text;
-  v_rettype  text;
+  v_strict   boolean;
+  v_rettype  oid;
+  v_retset   boolean;
   v_extra    text;
   v_has_anon boolean;
   v_has_pub  boolean;
@@ -583,11 +605,13 @@ BEGIN
          COALESCE(array_to_string(p.proconfig, ','), '<none>'),
          p.provolatile,
          (SELECT l.lanname FROM pg_language l WHERE l.oid = p.prolang),
-         p.prorettype::regtype::text,
+         p.proisstrict,
+         p.prorettype,
+         p.proretset,
          md5(p.prosrc),
          p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
          pg_get_function_arguments(p.oid)
-    INTO v_oid, v_owner, v_secdef, v_config, v_volatile, v_lang, v_rettype, v_body_md5, v_signature, v_arguments
+    INTO v_oid, v_owner, v_secdef, v_config, v_volatile, v_lang, v_strict, v_rettype, v_retset, v_body_md5, v_signature, v_arguments
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'preview_field_app_invoice_split';
@@ -634,26 +658,44 @@ BEGIN
       'POSTFLIGHT_NOT_SECURITY_DEFINER: the replacement dropped SECURITY DEFINER, so it can no longer read the pricing tables its callers are gated out of.';
   END IF;
 
-  -- Volatility and language are declaration properties, so md5(prosrc) cannot see either -- the
-  -- same blind spot that made POSTFLIGHT_ARGUMENT_DEFAULTS necessary. STABLE is not cosmetic here:
-  -- it is what lets the planner treat this read-only pricing function as constant within a
-  -- statement, and a silent flip to VOLATILE would change plans and cost while every other check
-  -- in this block still passed. plpgsql is pinned because a language change would mean the body
-  -- this file hashes is being interpreted by something else entirely.
-  IF v_volatile <> 's' OR v_lang <> 'plpgsql' THEN
+  -- Execution properties. All three are declaration properties, so md5(prosrc) cannot see any of
+  -- them -- the same blind spot that made POSTFLIGHT_ARGUMENT_DEFAULTS necessary.
+  --   STABLE is what lets the planner treat this read-only pricing function as constant within a
+  --     statement; a silent flip to VOLATILE changes plans and cost while every other check passes.
+  --   plpgsql is pinned because a language change would mean the body this file hashes is being
+  --     interpreted by something else entirely.
+  --   NOT STRICT is the sharpest of the three. p_invoice_date is DEFAULT NULL, so EVERY 4-argument
+  --     caller reaches this function with a NULL argument -- and a STRICT function returns NULL
+  --     without executing at all. Adding STRICT would therefore delete the deploy-order fallback
+  --     this file's header promises, silently, returning no price rather than an error.
+  -- proparallel is deliberately NOT pinned: it changes only whether the planner may use a parallel
+  -- worker, never the result, and pinning properties nobody can state a failure for is how a guard
+  -- list stops being read.
+  IF v_volatile <> 's' OR v_lang <> 'plpgsql' OR v_strict THEN
     RAISE EXCEPTION
-      'POSTFLIGHT_VOLATILITY: expected a STABLE plpgsql function; found provolatile=% language=%.', v_volatile, v_lang;
+      'POSTFLIGHT_VOLATILITY: expected a STABLE, non-STRICT plpgsql function; found provolatile=% language=% proisstrict=%.', v_volatile, v_lang, v_strict;
   END IF;
 
-  -- The last declaration property nothing else here could see. The identity rendering above omits
-  -- the return type, pg_get_function_arguments omits it, and md5(prosrc) is blind to the whole
-  -- declaration -- so an edit changing RETURNS jsonb would pass every other check in this block
-  -- while the frontend, which reads .per_customer off the result, got something it cannot index.
+  -- The RESULT shape, which nothing else here could see: the identity rendering omits the return
+  -- type, pg_get_function_arguments omits it, and md5(prosrc) is blind to the whole declaration.
   -- Pinned separately from POSTFLIGHT_VOLATILITY rather than folded into it, so the abort names
   -- the property that actually changed instead of reporting a return type as a volatility fault.
-  IF v_rettype <> 'jsonb' THEN
+  --
+  -- BOTH halves are needed, and the second is the one review had to point out: prorettype alone
+  -- does not describe the result. RETURNS SETOF jsonb leaves prorettype = jsonb, leaves the
+  -- identity string, the argument rendering, the volatility, the search_path and md5(prosrc) all
+  -- unchanged -- and PostgREST renders a set-returning RPC as an ARRAY, so .per_customer becomes
+  -- unindexable. That is exactly the break this check was added to stop, and pinning only the type
+  -- would have missed it.
+  --
+  -- Compared as an OID, not as text. Every other rendering in this block was chosen to be
+  -- independent of the applying session's search_path (see POSTFLIGHT_SIGNATURE on regprocedure);
+  -- prorettype::regtype::text goes through a visibility check, so an OID comparison is the form
+  -- that matches this file's own rule. The text form is used only to REPORT.
+  IF v_rettype <> 'jsonb'::regtype OR v_retset THEN
     RAISE EXCEPTION
-      'POSTFLIGHT_RETURN_TYPE: the replacement returns %, not jsonb. Every caller indexes the result as jsonb.', v_rettype;
+      'POSTFLIGHT_RETURN_TYPE: expected a single jsonb value; found % (set-returning: %). Every caller indexes the result as a jsonb object, and PostgREST renders a set-returning RPC as an array.',
+      v_rettype::regtype::text, v_retset;
   END IF;
 
   -- Exact string, not a substring test. A substring test would accept
