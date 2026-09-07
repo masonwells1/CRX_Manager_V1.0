@@ -1393,7 +1393,12 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // declare p_idempotency_key, and use the canonical replay machinery, so they are
   // classified here rather than in the migration-only bucket.
   '_cancel_order_idem_impl_20260721',
+  '_cancel_return_intent_impl_20260812',
+  '_draw_down_quote_below_cost_impl_20260810',
+  '_price_order_below_cost_impl_20260810',
+  '_restore_quote_version_below_cost_impl_20260810',
   '_save_field_app_split_invoice_impl',
+  '_save_invoice_lineage_unaware_impl_20260827',
   '_save_purchase_order_ascii_identity_impl',
   'adjust_inventory',
   'allocate_payment',
@@ -2764,7 +2769,7 @@ function generatedMutatingRpcInventory(): Set<string> {
 }
 
 const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
-  // The live registry/type regeneration through 20260722064814 moved every
+  // The live registry/type regeneration through 20260903202611 moved every
   // former entry into
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
@@ -2777,56 +2782,6 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
 
-  // Private implementation behind the public cancel_return RPC. Direct
-  // EXECUTE is revoked, it declares p_idempotency_key, and it deliberately
-  // enforces the public 'cancel_return' cache namespace. Migration
-  // 20260827041500 re-emits it for exact inventory reversal, placing it in the
-  // pending-migration inventory while it remains absent from generated types.
-  '_cancel_return_intent_impl_20260812',
-
-  // Private implementation behind the public draw_down_quote RPC, so it is
-  // absent from the generated types by design. It declares p_idempotency_key
-  // text and owns the canonical check_idempotency/save_idempotency pair for the
-  // 'draw_down_quote' operation. The new public wrapper separately owns the
-  // actor/fingerprint replay check and receipt binding, then forwards the same
-  // key through this implementation — the test above re-asserts the full chain.
-  // Pre-apply-window entry: it enters the inventory because migration
-  // 20260816120000 is the FIRST on-disk CREATE of this function under its
-  // post-rename name. 20260812115237 renamed the original public body with
-  // ALTER FUNCTION ... RENAME TO and defined no body on disk, so the
-  // transitive-mutation walker could not see it until now. Move this to
-  // MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever becomes public.
-  '_draw_down_quote_below_cost_impl_20260810',
-
-  // Private implementation behind the public restore_quote_version RPC, so it
-  // is absent from the generated types by design. It declares
-  // p_idempotency_key text and owns the canonical
-  // check_idempotency('restore_quote_version') lookup plus the idempotency_keys
-  // cache write, asserting a single affected row.
-  // Pre-apply-window entry, exactly like the draw-down impl above: it enters
-  // the inventory because migration 20260826220000 is the FIRST on-disk CREATE
-  // of this function under its post-rename name. 20260812115237 renamed the
-  // original public body with ALTER FUNCTION ... RENAME TO and defined no body
-  // on disk, so the transitive-mutation walker could not see it until now.
-  // Move this to MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever
-  // becomes public — live grants on 2026-08-25 show no EXECUTE for anon,
-  // authenticated or service_role, and 20260826220000 re-asserts that shape.
-  '_restore_quote_version_below_cost_impl_20260810',
-
-  // Private implementations behind the public price_order and save_invoice
-  // RPCs, absent from the generated types by design (direct EXECUTE revoked
-  // to PUBLIC/anon/authenticated/service_role by 20260812115237 and
-  // 20260827041500 respectively; CREATE OR REPLACE keeps those ACLs). Both
-  // declare p_idempotency_key text and deliberately share their public
-  // wrapper's cache namespace ('price_order' / 'save_invoice'). Pre-apply-window
-  // entries, exactly like the draw-down impl above: migration 20260904160000
-  // (invoice_date fallbacks -> America/Chicago business day) is the FIRST
-  // on-disk CREATE of each under its post-rename name, because both were
-  // originally renamed with ALTER FUNCTION ... RENAME TO and had no on-disk
-  // body the transitive-mutation walker could see. Move either to
-  // MUTATING_RPCS_WITH_IDEMPOTENCY only if it ever becomes public.
-  '_price_order_below_cost_impl_20260810',
-  '_save_invoice_lineage_unaware_impl_20260827',
 ]);
 
 /**
@@ -2889,6 +2844,16 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
+  // The applied ledger migration moved both recorder helpers below the live
+  // registry high-water. The forward-only label and stale-recipient candidates
+  // re-emit them, so they are discovered again until those candidates apply.
+  // Both remain trigger-only (RETURNS trigger) and every non-owner EXECUTE grant
+  // is revoked; these narrow entries must be removed after the next truthful
+  // live registry refresh moves beyond the candidates.
+  record_commission_earned_state:
+    'local commission-label repair candidate re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission write owns the transaction',
+  record_commission_settlement_event:
+    'local stale-recipient guard re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission-payment status update owns the transaction',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',

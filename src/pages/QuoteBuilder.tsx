@@ -71,6 +71,7 @@ import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { preferredQuoteNotes } from '../lib/quoteNotes';
+import { adaptQuoteVersionList, type UnreadableQuoteVersion } from '../lib/quoteVersionAdapter';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import HelpTip from '../components/ui/HelpTip';
 import TransactionThread from '../components/ui/TransactionThread';
@@ -218,6 +219,26 @@ function makeEmptySection(order: number): LocalSection {
     field_id: null,
     items: [],
   };
+}
+
+/**
+ * Listing an unreadable saved version must not mean going quiet about it.
+ *
+ * A row the server never stamped as restorable is expected historical data — it predates the
+ * current snapshot shape — and reporting one on every page load would be noise. A row the server
+ * DID stamp is one the current writer produced, so failing this app's snapshot validation means
+ * either the stored snapshot is corrupt or the writer and the validator have drifted apart. That
+ * is silent from the user's side (the version simply reads as unavailable), so it has to be
+ * visible from ours. One report per load, not one per row.
+ */
+function reportUntrustworthyQuoteVersions(unreadable: UnreadableQuoteVersion[], quoteId: string) {
+  const anomalies = unreadable.filter((v) => v.server_trusted);
+  if (anomalies.length === 0) return;
+  Sentry.captureMessage('server-trusted quote version failed snapshot validation', {
+    level: 'error',
+    tags: { source: 'read', action: 'load_quote_versions' },
+    extra: { quoteId, versionNumbers: anomalies.map((v) => v.version_number) },
+  });
 }
 
 export default function QuoteBuilder() {
@@ -452,6 +473,8 @@ export default function QuoteBuilder() {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
   const [quoteVersions, setQuoteVersions] = useState<QuoteVersion[]>([]);
+  const [unreadableQuoteVersions, setUnreadableQuoteVersions] = useState<UnreadableQuoteVersion[]>([]);
+  const savedVersionCount = quoteVersions.length + unreadableQuoteVersions.length;
   const [selectedVersion, setSelectedVersion] = useState<QuoteVersion | null>(null);
   const [compareMode, setCompareMode] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
@@ -1114,7 +1137,14 @@ export default function QuoteBuilder() {
       Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
       toast('warning', 'Quote loaded, but version history could not be refreshed.');
     } else {
-      setQuoteVersions((versionsData || []) as QuoteVersion[]);
+      // Snapshots older than the current shape are listed, not hidden: see
+      // adaptQuoteVersionList. They are an expected part of the historical data, so they
+      // raise neither a toast nor a Sentry report on every load. A row the SERVER trusts that
+      // still fails validation is not that, and is reported.
+      const { versions, unreadable } = adaptQuoteVersionList(versionsData);
+      setQuoteVersions(versions);
+      setUnreadableQuoteVersions(unreadable);
+      reportUntrustworthyQuoteVersions(unreadable, quoteId);
     }
 
     setLoading(false);
@@ -2597,7 +2627,10 @@ export default function QuoteBuilder() {
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
-    setQuoteVersions((data || []) as QuoteVersion[]);
+    const { versions, unreadable } = adaptQuoteVersionList(data);
+    setQuoteVersions(versions);
+    setUnreadableQuoteVersions(unreadable);
+    reportUntrustworthyQuoteVersions(unreadable, quoteId);
   }, [quoteId]);
 
   const handleRestoreVersion = async (versionId: string) => {
@@ -3555,7 +3588,7 @@ export default function QuoteBuilder() {
               <HelpTip text="Reopens this quote to “sent” so it can be edited, re-sent, or converted again. Admin only. Blocked if an order was already created from an accepted quote." className="ml-1" />
             </>
           )}
-          {isEditing && quoteVersions.length > 0 && (
+          {isEditing && savedVersionCount > 0 && (
             <>
               <Button
                 variant="ghost"
@@ -3563,7 +3596,7 @@ export default function QuoteBuilder() {
                 showChevron={false}
                 onClick={() => setShowVersionHistory(!showVersionHistory)}
               >
-                Versions ({quoteVersions.length})
+                Versions ({savedVersionCount})
               </Button>
               <HelpTip text="Every time you send or revise, a snapshot is saved. You can compare versions side-by-side or restore an older version if needed." className="ml-1" />
             </>
@@ -3660,7 +3693,7 @@ export default function QuoteBuilder() {
         </Card>
       )}
 
-      {showVersionHistory && quoteVersions.length > 0 && (
+      {showVersionHistory && savedVersionCount > 0 && (
         <Card>
           <CardHeader title="Version" accent="History" />
           {/* Version list */}
@@ -3697,6 +3730,32 @@ export default function QuoteBuilder() {
                 </div>
               );
             })}
+            {/*
+              Saved versions whose snapshot this build cannot read. Listed at all so a quote whose
+              only versions are legacy still shows its history, and shown without an item count or
+              total because both would have to be read out of a snapshot that cannot be trusted.
+              Not selectable, so they reach neither the compare view nor restore.
+
+              Only rows the server itself treats as legacy are called an older format; a row the
+              server stamped as restorable says only that its details are unavailable, because
+              calling it old would be a guess. Those also raise a Sentry report — see
+              reportUntrustworthyQuoteVersions.
+            */}
+            {unreadableQuoteVersions.map((v) => (
+              <div key={v.id} className="py-3 px-3 flex items-center justify-between">
+                <div>
+                  <span className="font-medium text-secondary">v{v.version_number}</span>
+                  <span className="text-secondary text-sm ml-3">
+                    {new Date(v.sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  </span>
+                </div>
+                <div className="text-sm text-secondary italic">
+                  {v.server_trusted
+                    ? 'Details unavailable'
+                    : 'Saved in an older format · details unavailable'}
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Selected version details */}

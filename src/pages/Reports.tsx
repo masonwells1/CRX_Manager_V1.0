@@ -12,13 +12,14 @@ import { hasPageAccess } from '../lib/pagePermissions';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
-import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
+import { exportToCSV, fmtCSV, fmtDateCSV, fmtDateOnlyCSV } from '../lib/csvExport';
+import { formatExactUSD } from '../lib/money';
 import LogbookReport from '../components/reports/LogbookReport';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
 import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
-import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
+import { localToday, formatLocalDate, parseLocalDate, todayInBusinessTz } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 import {
   getAssignedRecognizedInvoiceCustomerIds,
@@ -26,7 +27,7 @@ import {
 } from '../lib/recognizedInvoiceCustomers';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
-  ChemicalHistoryRow, CommissionBalanceRow, InventoryCostRow,
+  ChemicalHistoryRow, CommissionBalanceRow, CommissionHistoryReportPayload, CommissionPaymentDetailRow, InventoryCostRow,
   YearEndSummaryData,
 } from '../types';
 
@@ -86,7 +87,30 @@ interface RevenueSummary {
 // ─── Date preset logic ─────────────────────────────────────────
 // Crop season = October 1 to September 30
 function getPresetDates(preset: string): { start: string; end: string } {
-  const now = new Date();
+  // Anchored to the America/Chicago BUSINESS day, never the viewer's own clock.
+  // These presets drive company-wide reports — including the commission history
+  // cutoff, whose RPC already rejects a future Chicago date — so "today" and
+  // "this season" must mean the same thing to an admin in Denver at 11:30pm as
+  // to one in Chicago, where it is already tomorrow. On September 30 that
+  // disagreement moves the SEASON, not just the end date: local Sep 30 / Chicago
+  // Oct 1 would open "This Season" on the season that just closed.
+  //
+  // parseLocalDate() rebuilds the Chicago Y-M-D at LOCAL midnight, so the season
+  // helpers (which read getMonth/getFullYear) and formatLocalDate() all round-trip
+  // that same business day.
+  const businessToday = todayInBusinessTz();
+  const now = parseLocalDate(businessToday);
+  // Day arithmetic goes through setDate rather than subtracting milliseconds:
+  // across a local DST spring-forward, `now - 30 * 86400000` lands at 23:00 on
+  // the previous day and formatLocalDate() then reports a date one day early.
+  const daysBefore = (days: number): string => {
+    // Clone the single captured business-day anchor. Sampling Chicago "today"
+    // again could straddle midnight and combine tomorrow's start with today's
+    // end, silently shortening the requested range by one day.
+    const d = new Date(now);
+    d.setDate(d.getDate() - days);
+    return formatLocalDate(d);
+  };
   switch (preset) {
     case 'this_season':
       return getSeasonDates(now);
@@ -98,14 +122,10 @@ function getPresetDates(preset: string): { start: string; end: string } {
       const s = computeSeason(now);
       return { start: seasonStartDate(s), end: formatLocalDate(now) };
     }
-    case 'last30': {
-      const d = new Date(now.getTime() - 30 * 86400000);
-      return { start: formatLocalDate(d), end: formatLocalDate(now) };
-    }
-    case 'last90': {
-      const d = new Date(now.getTime() - 90 * 86400000);
-      return { start: formatLocalDate(d), end: formatLocalDate(now) };
-    }
+    case 'last30':
+      return { start: daysBefore(30), end: formatLocalDate(now) };
+    case 'last90':
+      return { start: daysBefore(90), end: formatLocalDate(now) };
     default:
       return { start: '', end: '' };
   }
@@ -159,6 +179,42 @@ export default function Reports() {
   const [grossSalesGroupBy, setGrossSalesGroupBy] = useState<'product' | 'customer' | 'salesman'>('product');
   const [custBalanceData, setCustBalanceData] = useState<CustomerBalanceRow[]>([]);
   const [commBalanceData, setCommBalanceData] = useState<CommissionBalanceRow[]>([]);
+  const [commPaymentDetailData, setCommPaymentDetailData] = useState<CommissionPaymentDetailRow[]>([]);
+  const [commissionAsOfDate, setCommissionAsOfDate] = useState('');
+  const [commissionReportError, setCommissionReportError] = useState(false);
+  const [commissionReportLoading, setCommissionReportLoading] = useState(false);
+  const commissionRequestId = useRef(0);
+
+  // The route is shared with sales reps, but the historical commission ledger RPC is
+  // admin-only. Invalidate any in-flight admin response and leave the tab immediately if
+  // the current session loses admin access while this page is open.
+  useEffect(() => {
+    if (isAdmin || financialTab !== 'commission_balance') return;
+    commissionRequestId.current += 1;
+    setFinancialTab('pnl');
+    setCommBalanceData([]);
+    setCommPaymentDetailData([]);
+    setCommissionAsOfDate('');
+    setCommissionReportError(false);
+    setCommissionReportLoading(false);
+  }, [isAdmin, financialTab]);
+
+  // The cutoff the commission RPC would be asked for right now, derived exactly
+  // as fetchCommissionBalance derives it.
+  const commissionRequestedAsOf = (() => {
+    const businessToday = todayInBusinessTz();
+    return endDate && endDate < businessToday ? endDate : businessToday;
+  })();
+  // Exporting is only honest when the rows in state are a COMPLETED, error-free
+  // load of the cutoff currently selected. A failed refresh deliberately keeps
+  // the previous rows on screen behind a warning banner, and a pending refresh
+  // still shows the old cutoff's rows — a CSV carries neither the banner nor the
+  // cutoff, so it must not be produced in either state.
+  const commissionExportReady =
+    !commissionReportLoading
+    && !commissionReportError
+    && commissionAsOfDate !== ''
+    && commissionAsOfDate === commissionRequestedAsOf;
 
   // ─── OPERATIONAL data ───────────────────────────────────────
   const [chemHistoryData, setChemHistoryData] = useState<ChemicalHistoryRow[]>([]);
@@ -322,11 +378,54 @@ export default function Reports() {
   }, [endDate, toast]);
 
   const fetchCommissionBalance = useCallback(async () => {
-    const asOf = endDate || localToday();
-    const { data, error } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
-    if (error) { toast('error', `Commission balance failed: ${error.message}`); return; }
-    setCommBalanceData(assertRpcResult<CommissionBalanceRow[]>(data, 'get_commission_balance_report'));
-  }, [endDate, toast]);
+    if (!isAdmin) {
+      commissionRequestId.current += 1;
+      setCommBalanceData([]);
+      setCommPaymentDetailData([]);
+      setCommissionAsOfDate('');
+      setCommissionReportError(false);
+      setCommissionReportLoading(false);
+      return;
+    }
+    // The RPC's cutoff and future-date guard are Chicago-business-day based.
+    // A viewer in another timezone must not accidentally ask for Chicago tomorrow,
+    // and shared presets such as "This Season" may end after today.
+    const businessToday = todayInBusinessTz();
+    const asOf = endDate && endDate < businessToday ? endDate : businessToday;
+    const requestId = ++commissionRequestId.current;
+    setCommissionReportLoading(true);
+    setCommissionReportError(false);
+    try {
+      const { data: reportData, error: reportError } = await supabase.rpc('get_commission_history_report', { p_as_of_date: asOf });
+      if (requestId !== commissionRequestId.current) return;
+      if (reportError) {
+        setCommissionReportError(true);
+        toast('error', `Commission report failed: ${reportError.message}`);
+        return;
+      }
+      const report = assertRpcResult<CommissionHistoryReportPayload>(reportData, 'get_commission_history_report');
+      if (
+        report.as_of_date !== asOf
+        || !Array.isArray(report.balance_rows)
+        || !Array.isArray(report.payment_detail_rows)
+      ) {
+        throw new Error('get_commission_history_report returned an invalid payload');
+      }
+
+      setCommBalanceData(report.balance_rows);
+      setCommPaymentDetailData(report.payment_detail_rows);
+      setCommissionAsOfDate(asOf);
+      setCommissionReportError(false);
+    } catch (err) {
+      if (requestId !== commissionRequestId.current) return;
+      setCommissionReportError(true);
+      toast('error', `Commission report failed: ${sanitizeError(err)}`);
+    } finally {
+      if (requestId === commissionRequestId.current) {
+        setCommissionReportLoading(false);
+      }
+    }
+  }, [endDate, isAdmin, toast]);
 
   // ─── FINANCIAL parent fetcher ─────────────────────────────────
   const fetchFinancial = useCallback(async () => {
@@ -334,9 +433,9 @@ export default function Reports() {
     if (financialTab === 'pnl') await fetchPnL();
     if (financialTab === 'gross_sales') await fetchGrossSales();
     if (financialTab === 'customer_balance') await fetchCustomerBalance();
-    if (financialTab === 'commission_balance') await fetchCommissionBalance();
+    if (financialTab === 'commission_balance' && isAdmin) await fetchCommissionBalance();
     setLoading(false);
-  }, [financialTab, fetchPnL, fetchGrossSales, fetchCustomerBalance, fetchCommissionBalance]);
+  }, [financialTab, isAdmin, fetchPnL, fetchGrossSales, fetchCustomerBalance, fetchCommissionBalance]);
 
   // ─── OPERATIONAL sub-fetchers ───────────────────────────────
   const fetchChemHistory = useCallback(async () => {
@@ -520,7 +619,7 @@ export default function Reports() {
       return;
     }
     setMarkingPaid(true);
-    const today = localToday();
+    const today = todayInBusinessTz();
     // Hoisted out of the try: one click makes one call PER RECIPIENT, so a
     // refusal on the third recipient leaves the first two genuinely paid. The
     // catch below has to be able to say so instead of claiming nothing happened.
@@ -748,13 +847,13 @@ export default function Reports() {
       ], 'product_profitability');
     } else if (profitTab === 'commission') {
       exportToCSV(commissionData, [
-        { key: 'order_date', header: 'Date', format: fmtDateCSV },
+        { key: 'order_date', header: 'Date', format: fmtDateOnlyCSV },
         { key: 'recipient', header: 'Recipient' },
         { key: 'commission_amount', header: 'Commission', format: fmtCSV },
         { key: 'split_percentage', header: 'Split %', format: (v) => `${v}%` },
         { key: 'order_profit', header: 'Order Profit', format: fmtCSV },
         { key: 'status', header: 'Status' },
-        { key: 'paid_date', header: 'Paid Date', format: fmtDateCSV },
+        { key: 'paid_date', header: 'Paid Date', format: fmtDateOnlyCSV },
       ], 'commissions');
     } else if (profitTab === 'revenue') {
       exportToCSV(revenueData, [
@@ -794,15 +893,19 @@ export default function Reports() {
         { key: 'invoice_count', header: 'Invoices' },
         { key: 'oldest_unpaid_date', header: 'Oldest Unpaid', format: fmtDateCSV },
       ], 'customer_balance_listing');
-    } else if (financialTab === 'commission_balance') {
+    } else if (financialTab === 'commission_balance' && isAdmin) {
+      if (!commissionExportReady) {
+        toast('error', 'Commission export unavailable until the report finishes loading for the selected date.');
+        return;
+      }
       exportToCSV(commBalanceData as unknown as Record<string, unknown>[], [
         { key: 'recipient_name', header: 'Salesperson' },
-        { key: 'total_earned', header: 'Earned', format: fmtCSV },
-        { key: 'total_paid', header: 'Paid', format: fmtCSV },
-        { key: 'outstanding_balance', header: 'Outstanding', format: fmtCSV },
+        { key: 'total_earned', header: 'Earned', format: formatExactUSD },
+        { key: 'total_paid', header: 'Paid', format: formatExactUSD },
+        { key: 'outstanding_balance', header: 'Outstanding', format: formatExactUSD },
         { key: 'pending_count', header: 'Pending' },
         { key: 'paid_count', header: 'Paid Count' },
-      ], 'commission_balance');
+      ], `commission_balance_as_of_${commissionAsOfDate}`);
     }
     toast('success', 'Report exported');
   };
@@ -842,6 +945,25 @@ export default function Reports() {
       ], 'price_list');
     }
     toast('success', 'Report exported');
+  };
+
+  const handleCommissionPaymentDetailCSV = () => {
+    if (!isAdmin) return;
+    if (!commissionExportReady) {
+      toast('error', 'Payment detail export unavailable until the report finishes loading for the selected date.');
+      return;
+    }
+    exportToCSV(commPaymentDetailData as unknown as Record<string, unknown>[], [
+      { key: 'payment_number', header: 'Payment Number' },
+      { key: 'payment_date', header: 'Payment Date', format: fmtDateOnlyCSV },
+      { key: 'recipient_name', header: 'Recipient' },
+      { key: 'source_type', header: 'Source Type' },
+      { key: 'source_number', header: 'Source Number' },
+      { key: 'customer_name', header: 'Customer' },
+      { key: 'commission_order_date', header: 'Commission Date', format: fmtDateOnlyCSV },
+      { key: 'settled_amount', header: 'Settled Amount', format: formatExactUSD },
+    ], `commission_payment_detail_as_of_${commissionAsOfDate}`);
+    toast('success', 'Payment detail exported');
   };
 
   // ─── Column definitions ─────────────────────────────────────
@@ -914,11 +1036,21 @@ export default function Reports() {
 
   const commBalanceCols: Column<CommissionBalanceRow>[] = [
     { key: 'recipient_name', header: 'Salesperson', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.recipient_name}</span> },
-    { key: 'total_earned', header: 'Total Earned', sortable: true, render: (r) => <span className="font-mono">{fmt(r.total_earned)}</span> },
-    { key: 'total_paid', header: 'Total Paid', sortable: true, render: (r) => <span className="font-mono">{fmt(r.total_paid)}</span> },
-    { key: 'outstanding_balance', header: 'Outstanding', sortable: true, render: (r) => <span className={`font-mono font-bold ${r.outstanding_balance > 0 ? 'text-amber-600' : 'text-crx-green'}`}>{fmt(r.outstanding_balance)}</span> },
+    { key: 'total_earned', header: 'Total Earned', sortable: true, render: (r) => <span className="font-mono">{formatExactUSD(r.total_earned)}</span> },
+    { key: 'total_paid', header: 'Total Paid', sortable: true, render: (r) => <span className="font-mono">{formatExactUSD(r.total_paid)}</span> },
+    { key: 'outstanding_balance', header: 'Outstanding', sortable: true, render: (r) => <span className={`font-mono font-bold ${r.outstanding_balance > 0 ? 'text-amber-600' : 'text-crx-green'}`}>{formatExactUSD(r.outstanding_balance)}</span> },
     { key: 'pending_count', header: 'Pending', sortable: true },
     { key: 'paid_count', header: 'Paid', sortable: true },
+  ];
+
+  const commPaymentDetailCols: Column<CommissionPaymentDetailRow>[] = [
+    { key: 'payment_number', header: 'Payment #', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.payment_number}</span> },
+    { key: 'payment_date', header: 'Payment Date', sortable: true, render: (r) => parseLocalDate(r.payment_date).toLocaleDateString() },
+    { key: 'recipient_name', header: 'Recipient', sortable: true },
+    { key: 'source_number', header: 'Order / Job', sortable: true, render: (r) => `${r.source_type}: ${r.source_number}` },
+    { key: 'customer_name', header: 'Customer', sortable: true },
+    { key: 'commission_order_date', header: 'Commission Date', sortable: true, render: (r) => parseLocalDate(r.commission_order_date).toLocaleDateString() },
+    { key: 'settled_amount', header: 'Settled', sortable: true, render: (r) => <span className="font-mono font-medium">{formatExactUSD(r.settled_amount)}</span> },
   ];
 
   const chemHistoryCols: Column<ChemicalHistoryRow>[] = [
@@ -985,7 +1117,7 @@ export default function Reports() {
     { key: 'pnl', label: 'P&L' },
     { key: 'gross_sales', label: 'Gross Sales' },
     { key: 'customer_balance', label: 'Customer Balance' },
-    { key: 'commission_balance', label: 'Commission Balance' },
+    ...(isAdmin ? [{ key: 'commission_balance' as const, label: 'Commission Balance' }] : []),
   ];
 
   const operationalTabs: { key: OperationalTab; label: string }[] = [
@@ -996,7 +1128,7 @@ export default function Reports() {
   ];
 
   // ─── Date filter bar (shared across profitability/financial/operational)
-  const dateFilterBar = (onCSV: () => void) => (
+  const dateFilterBar = (onCSV: () => void, csvDisabled = false) => (
     <Card>
       <div className="flex flex-wrap items-end gap-3">
         <div>
@@ -1048,7 +1180,7 @@ export default function Reports() {
         )}
 
         <div className="ml-auto">
-          <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={onCSV}>
+          <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={onCSV} disabled={csvDisabled}>
             Export CSV
           </Button>
         </div>
@@ -1145,7 +1277,7 @@ export default function Reports() {
             ))}
           </div>
 
-          {dateFilterBar(handleFinancialCSV)}
+          {dateFilterBar(handleFinancialCSV, isAdmin && financialTab === 'commission_balance' && !commissionExportReady)}
 
           {/* P&L summary cards */}
           {financialTab === 'pnl' && pnlData.length > 0 && (
@@ -1162,14 +1294,57 @@ export default function Reports() {
             </div>
           )}
 
+          {isAdmin && financialTab === 'commission_balance' && commissionAsOfDate && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              Balance and payout detail shown through {parseLocalDate(commissionAsOfDate).toLocaleDateString()}.
+              {endDate > commissionAsOfDate && ' The selected range ends in the future, so this report is capped at today.'}
+            </div>
+          )}
+
+          {isAdmin && financialTab === 'commission_balance' && commissionReportError && (
+            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+              The selected commission report could not be loaded. Any results below are from the last successful run; empty tables are not a confirmed zero.
+            </div>
+          )}
+
           <Card padding={false}>
             <div className="p-5">
               {financialTab === 'pnl' && <DataTable data={pnlData as unknown as Record<string, unknown>[]} columns={pnlCols as unknown as Column<Record<string, unknown>>[]} emptyTitle="No P&L data" emptyDescription="Select a date range to generate P&L" loading={loading} />}
               {financialTab === 'gross_sales' && <DataTable data={grossSalesData as unknown as Record<string, unknown>[]} columns={grossSalesCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['group_name']} emptyTitle="No gross sales data" emptyDescription="Select a date range" loading={loading} />}
               {financialTab === 'customer_balance' && <DataTable data={custBalanceData as unknown as Record<string, unknown>[]} columns={custBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['farm_name']} emptyTitle="No outstanding balances" loading={loading} />}
-              {financialTab === 'commission_balance' && <DataTable data={commBalanceData as unknown as Record<string, unknown>[]} columns={commBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['recipient_name']} emptyTitle="No commission data" loading={loading} />}
+              {isAdmin && financialTab === 'commission_balance' && (
+                <>
+                  <h3 className="mb-4 text-base font-semibold text-nav-dark">Balance by salesperson</h3>
+                  <DataTable data={commBalanceData as unknown as Record<string, unknown>[]} columns={commBalanceCols as unknown as Column<Record<string, unknown>>[]} searchable searchKeys={['recipient_name']} emptyTitle="No commission data" loading={loading || commissionReportLoading} />
+                </>
+              )}
             </div>
           </Card>
+
+          {isAdmin && financialTab === 'commission_balance' && (
+            <Card padding={false}>
+              <div className="p-5">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold text-nav-dark">Payment reconciliation</h3>
+                    <p className="mt-1 text-sm text-secondary">Each posted payment is tied to the commission lines it settled as of the selected date.</p>
+                  </div>
+                  <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} showChevron={false} onClick={handleCommissionPaymentDetailCSV} disabled={!commissionExportReady || commPaymentDetailData.length === 0}>
+                    Export Payment Detail
+                  </Button>
+                </div>
+                <DataTable
+                  data={commPaymentDetailData as unknown as Record<string, unknown>[]}
+                  columns={commPaymentDetailCols as unknown as Column<Record<string, unknown>>[]}
+                  searchable
+                  searchKeys={['payment_number', 'recipient_name', 'source_number', 'customer_name']}
+                  emptyTitle="No posted commission payments"
+                  emptyDescription="Posted payment lines through the selected date will appear here."
+                  loading={loading || commissionReportLoading}
+                />
+              </div>
+            </Card>
+          )}
         </>
       )}
 

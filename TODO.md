@@ -85,11 +85,14 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 
 ## 🔧 2. Engineering — Now / Next (see the 2026-07-15 execution plan for the full board)
 
-> ### ⏰ DEADLINE ITEM — restore "as of a past date" commission reporting
+> ### ✅ COMPLETED LIVE — restore "as of a past date" commission reporting
 >
 > **Added 2026-09-03 at Mason's request.** He was asked directly whether he uses historical
 > commission dates and said **"Yes I want to be able to look at historical dates."** Deferred
-> deliberately ("we are not going to patch it now"), **not** dropped.
+> deliberately ("we are not going to patch it now"), then reopened for implementation on
+> 2026-09-03. Migration `20260903150100_ledger_backed_commission_history` was applied live the same
+> day as ledger version `20260903202611`; exact reports begin on `2026-09-04` Chicago time. The
+> reviewed source is awaiting merge through the protected PR path.
 >
 > **Must land BEFORE the first commission payout of the season** — Mason put that at *"probably a
 > few months out"* on 2026-09-03. Confirm the real date with him; don't assume.
@@ -100,22 +103,39 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > status, so a commission paid in July reported as "already paid" in a June run. The refusal is a
 > stopgap; restoring the capability properly is this item.
 >
-> **Why it is dated rather than "someday" — the window is open and closing.** Verified live
+> **Why it is dated rather than "someday" — the payout window is open and closing.** Verified live
 > 2026-09-03: **35 commissions (33 pending, 2 cancelled, 0 paid), 8 commission_payments (all
-> unposted), and 0 commission_payment_items.** Nothing has ever been paid, so there is no history
-> to reconstruct and nothing is lost by building it now. Build it after a season of payouts and
-> everything before that point is **permanently unrecoverable** — the data will never have existed.
+> unposted), and 0 commission_payment_items.** Nothing has ever been paid, so no payout history
+> needs reconstruction. However, earlier earned-state versions were never recorded and cannot be
+> reconstructed honestly. The migration therefore captures an opening observation at its real
+> cutover time and refuses every earlier date. Build it after a season of payouts and payout history
+> before that point is also **permanently unrecoverable**.
 >
-> **What already exists, so nobody scopes a rebuild:** the dated payment ledger is already there
-> and already the right shape. `commission_payments` has `payment_date`, `posted_at` and a
+> **What already exists, so nobody scopes a payout rewrite:** payment headers and immutable item
+> amounts are already there. `commission_payments` has `payment_date`, `posted_at` and a
 > `unposted|posted|voided` status; `commission_payment_items` links payments to commissions with
 > amounts. `create_/post_/void_commission_payment` are live, and so is
-> `src/pages/CommissionPayments.tsx`. **The gap is two missing dated columns and a report that
-> reads current status instead of the ledger — not a new subsystem.**
+> `src/pages/CommissionPayments.tsx`. The remaining gap requires durable event history: an immutable
+> cutover record, earned-state snapshots, signed post/void events, and reports that read those facts.
 >
-> **The two real gaps:** `commission_payments` has no `voided_at` (so a void's timing is
-> unrecoverable), and `commissions` has no `cancelled_at` (the 2 existing cancelled rows have
-> already lost their date — accept that, don't invent one).
+> **Candidate solution:** add `commission_payments.voided_at`/`voided_by`,
+> `commissions.cancelled_at` plus an exact bigint-cent pre-cancellation snapshot, an immutable
+> cutover record, and two append-only bigint-cent event ledgers. Runtime events use wall-clock
+> transition time; the report exposes aggregate and per-payment detail from the ledgers only. The
+> first supported cutoff is the first complete Chicago day after cutover. Earlier dates fail closed,
+> and the 2 existing cancelled rows enter the opening observation as excluded legacy states. The
+> apply day itself is deliberately unavailable in Reports until the next Chicago day. The 8 empty
+> `SEED-*` payment headers were already unpostable under the live posting function's empty-batch
+> guard; this migration leaves them unchanged. New payout creation fails immediately for a
+> negative item or a payment date before its commission's order date. Canonical zero-dollar
+> commissions remain settleable and change from pending to paid only when a signed settlement
+> event exists.
+>
+> **Proof/status 2026-09-03:** the first candidate's PostgreSQL 17 proof passed, but exact-SHA and
+> Claude reviews correctly rejected its backdated opening state. The corrected migration uses a real
+> immutable cutover and passed renewed PostgreSQL 17, exact-SHA, RLS, drift, and Claude review gates
+> before its guarded live apply. Postflight found 35 opening states (33 baseline, 2 legacy excluded),
+> zero settlement events, and no live `[E2E]` fixture writes. Source merge remains separate.
 >
 > Full spec, acceptance criteria, and the fallback if the window has closed:
 > `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md`.
@@ -130,8 +150,8 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 >
 > **Verified 2026-09-03:** `_post_commission_payment_intent_impl_20260809` and
 > `_void_commission_payment_intent_impl_20260809` already write `commission_payment_items` and
-> maintain `commissions.paid_date`. The payout-reconciliation data will already be captured
-> correctly — this is a reporting rewrite over existing capture, not new plumbing.
+> maintain `commissions.paid_date`. Those operational rows remain inputs, but stable reporting also
+> needs the candidate's immutable cutover and event ledgers; current mutable rows alone are not history.
 
 - **Gauntlet close-out (T3)** — most July-14/15 HIGHs verified applied live this pass
   (incl. the three commission/prepay-admin migrations, re-stamped as live versions
