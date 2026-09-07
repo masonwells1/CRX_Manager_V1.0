@@ -90,7 +90,10 @@ the prover mutation-tests the `anon` one rather than trusting the comment.
 
 ### Proof observed
 
-`node scripts/smoke/prove-preview-field-app-season.mjs` → **`PREVIEW_SEASON_PROOF_PASS`**, in a
+`node scripts/smoke/prove-preview-field-app-season.mjs` → **`PREVIEW_SEASON_PROOF_PASS`**, run against
+migration sha256 `96e8d6f6401e88edbea599a5bf3e6242568a03cb49ca803143ec3cd318ae0a83` and prover sha256
+`7001c167d94f3e2039ae571bfc9a2682ce8e7effee4e245dee17f1cdaaf1fa8b` — recorded because a proof minted
+against earlier bytes is void, and the apply gate binds the proof to the transmitted file's hash. In a
 network-less `public.ecr.aws/supabase/postgres:17.6.1.143` container. It restores the schema baseline,
 replays 58 ordered post-baseline migrations, installs production's byte-exact bodies, and applies
 `20260904160000` and `20260904180000` to reach the state production is in now.
@@ -106,19 +109,22 @@ replays 58 ordered post-baseline migrations, installs production's byte-exact bo
 - **After the candidate all cases agree**, on both sides of the boundary, including the settled edge
   case — a season-2026 invoice re-dated 2026-10-01 quotes and charges 1111c/acre, not 2222c.
 - **Re-apply is safe:** same single signature, same grants, same behaviour.
-- **Seven mutants, each of which MUST fail, and each did:** (a) the fix removed — still calls
-  `current_season()`, both windows mis-price again; (b) `v_price_season := v_new_season`, ignoring the
-  row's stored season — re-breaks the edited-across-the-boundary case (2222 vs 1111); (c) the body
-  pin pointed at a wrong md5 — the apply aborts at `PREFLIGHT_BODY_DRIFT` and changes nothing;
-  (d) the function handed to a different owner — the apply aborts at `PREFLIGHT_OWNER` before
-  dropping anything; (d2) a wrong **postflight** body pin on a re-apply — aborts at
+- **Eight mutants, each of which MUST fail by a NAMED abort, and each did:** (a) the fix removed —
+  still calls `current_season()`, both windows mis-price again; (b) `v_price_season := v_new_season`,
+  ignoring the row's stored season — re-breaks the edited-across-the-boundary case (2222 vs 1111);
+  (c) the body pin pointed at a wrong md5 — the apply aborts at `PREFLIGHT_BODY_DRIFT` and changes
+  nothing; (d) the function handed to a different owner — the apply aborts at `PREFLIGHT_OWNER`
+  before dropping anything; (e) a wrong **postflight** body pin on a re-apply — aborts at
   `POSTFLIGHT_BODY`, which matters because the replay path deliberately skips the preflight's pin,
   so this is the only thing stopping a re-apply from overwriting a body another lane patched;
-  (e) the `anon` REVOKE dropped — the apply aborts at `POSTFLIGHT_GRANT_ANON` and
-  rolls back completely, leaving live's access surface intact; (f) the `anon` REVOKE dropped
+  (f) `p_invoice_date` deleted from the `CREATE` and from the grant statements, so the migration
+  installs the old 4-argument shape while claiming to be this file — aborts at
+  `POSTFLIGHT_SIGNATURE`, which is what stops a silently-reverted signature from being reported as a
+  successful apply; (g) the `anon` REVOKE dropped — the apply aborts at `POSTFLIGHT_GRANT_ANON` and
+  rolls back completely, leaving live's access surface intact; (h) the `anon` REVOKE dropped
   **together with** its postflight check — the apply succeeds and grants empirically become
-  `anon=true`. (e) and (f) are a pair on purpose: (e) alone would only show that *something* refused
-  the apply, and (f) is what proves the REVOKE itself is what closes the grant. No mutant was ever
+  `anon=true`. (g) and (h) are a pair on purpose: (g) alone would only show that *something* refused
+  the apply, and (h) is what proves the REVOKE itself is what closes the grant. No mutant was ever
   written to `supabase/migrations/`.
 
   Worth recording because it nearly passed silently: the first version of mutant (c) replaced the

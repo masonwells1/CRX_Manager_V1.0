@@ -435,6 +435,7 @@ DECLARE
   v_secdef   boolean;
   v_config   text;
   v_body_md5 text;
+  v_signature text;
   v_has_anon boolean;
   v_has_pub  boolean;
   v_has_auth boolean;
@@ -454,8 +455,9 @@ BEGIN
          p.proowner::regrole::text,
          p.prosecdef,
          COALESCE(array_to_string(p.proconfig, ','), '<none>'),
-         md5(p.prosrc)
-    INTO v_oid, v_owner, v_secdef, v_config, v_body_md5
+         md5(p.prosrc),
+         p.oid::regprocedure::text
+    INTO v_oid, v_owner, v_secdef, v_config, v_body_md5, v_signature
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'preview_field_app_invoice_split';
@@ -463,6 +465,15 @@ BEGIN
   IF v_owner <> 'postgres' THEN
     RAISE EXCEPTION
       'POSTFLIGHT_OWNER: the replacement is owned by %, not postgres. See the preflight comment -- the column-level revoke on application_services.cost_per_acre_cents depends on this function being a postgres-owned SECURITY DEFINER.', v_owner;
+  END IF;
+
+  -- Counting signatures is not the same as checking WHICH signature. An edit that dropped
+  -- p_invoice_date from the CREATE would leave the count at 1 and the body md5 unchanged, so
+  -- every other check here would pass while the frontend got PGRST202 on every Preview -- the
+  -- exact outage this migration exists to make impossible. Assert the identity, not the count.
+  IF v_signature <> 'preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)' THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_SIGNATURE: the replacement installed %, not the 5-argument signature the frontend calls. Preview would fail with PGRST202 for every operator.', v_signature;
   END IF;
 
   IF NOT v_secdef THEN

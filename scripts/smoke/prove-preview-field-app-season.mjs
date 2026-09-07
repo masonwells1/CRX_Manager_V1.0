@@ -529,6 +529,24 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   assertAgrees(parityProbe('AFTER_REFUSED_REPLAY', { mode: 'new', invoiceDate: DATE_NEXT_SEASON, withDate: true }));
   log('PHASE 5a: the postflight body pin is load-bearing on the replay path -- a wrong pin aborts at POSTFLIGHT_BODY and changes nothing');
 
+  // PHASE 5b: the postflight signature check. Counting signatures is not checking WHICH one:
+  // an edit that dropped p_invoice_date would leave the count at 1 and the body md5 unchanged,
+  // so every other postflight check would pass while Preview failed with PGRST202 for everyone.
+  // Drop the parameter from the CREATE and the apply must refuse. The ACL statements name the
+  // 5-argument signature explicitly, so a naive version of this mutant aborts at the REVOKE
+  // before the postflight ever runs -- refused, but by a different guard, which would leave
+  // POSTFLIGHT_SIGNATURE untested. Rewrite the ACL signatures too, so the ONLY thing left to
+  // catch the arity change is the check under test, and assert on its name.
+  const abortedSig = applyMutant('drops-the-new-parameter', (sql) => sql
+    .replace(', p_invoice_date date DEFAULT NULL::date)', ')')
+    .replace("p_invoice_date, (now() AT TIME ZONE 'America/Chicago')::date", "(now() AT TIME ZONE 'America/Chicago')::date")
+    .replaceAll(`ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date)`, `ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid)`)
+    .replace(POSTFLIGHT_PIN, 'v_body_md5 <> v_body_md5'),
+  { mustFail: true });
+  assert.match(said(abortedSig), /POSTFLIGHT_SIGNATURE/, 'dropping the new parameter must be refused by the postflight signature check, by name');
+  assert.equal(previewSignatures(), afterSignatures, 'the refused apply must leave the 5-argument signature installed');
+  log('PHASE 5b: the postflight signature check is load-bearing -- dropping p_invoice_date aborts the apply and changes nothing');
+
   // ---- PHASE 6: mutations, each of which MUST be caught ------------------------------
   // The next two mutants change the BODY, so the postflight body pin proven in 5a would refuse
   // them before they could be observed misbehaving -- and the point of these two is the season
@@ -595,7 +613,7 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   assertAgrees(parityProbe('FINAL_CROSS_EDIT', { mode: 'reopen', createDate: DATE_IN_SEASON, invoiceDate: DATE_NEXT_SEASON, withDate: true }));
   log('PHASE 7: real candidate reinstalled over the mutants -- owner, grants, signature and behaviour back to live posture');
 
-  log('\nPREVIEW_SEASON_PROOF_PASS all phases, including all seven mutation phases, behaved as required');
+  log('\nPREVIEW_SEASON_PROOF_PASS all phases, including all eight mutation phases, behaved as required');
 } finally {
   docker(['rm', '-f', NAME], { allowFailure: true });
 }
