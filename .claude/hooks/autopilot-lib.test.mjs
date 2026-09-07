@@ -110,6 +110,35 @@ denyBash("RD /S /Q build", "cmd.exe switches are case-insensitive");
 denyBash("erase /s build", "`erase` is the documented cmd.exe alias of `del`");
 denyBash("del /f /s /q build", "PROVEN BYPASS: the old rule only read the token right after `del`");
 
+// ── binary-name spelling: EVERY head in the deny set was defeated ────────
+// On Windows an npm/winget-installed CLI is normally a `.cmd` shim (this is how
+// `gh.cmd` arises in practice) and every one of these returned ALLOW before the
+// fix — including `git.exe push`, which walks straight past "no unattended push".
+// Unlike an option letter, a NAME really is case-insensitive: the filesystem
+// resolves it that way, so folding it is correct rather than over-broad.
+denyBash("gh.cmd pr merge 123 --squash", "PROVEN BYPASS: gh.cmd defeats the merge rule");
+denyBash("gh.exe pr merge 123", "PROVEN BYPASS: gh.exe");
+denyBash("git.exe push origin main", "PROVEN BYPASS: git.exe defeats the no-unattended-push rule");
+denyBash("git.cmd push origin main", "PROVEN BYPASS: git.cmd");
+denyBash("git.exe reset --hard HEAD", "PROVEN BYPASS: git.exe hard reset");
+denyBash("git.exe clean -fd", "PROVEN BYPASS: git.exe clean");
+denyBash("git.exe branch -D x", "PROVEN BYPASS: git.exe force branch delete");
+denyBash("git.exe worktree remove ../x", "PROVEN BYPASS: git.exe worktree remove");
+denyBash("git.exe filter-branch --all", "PROVEN BYPASS: git.exe history rewrite");
+denyBash("vercel.cmd deploy --prod", "PROVEN BYPASS: vercel.cmd production deploy");
+denyBash("supabase.cmd db reset", "PROVEN BYPASS: supabase.cmd db reset");
+denyBash("supabase.cmd functions deploy send-email", "PROVEN BYPASS: supabase.cmd edge deploy");
+denyBash("supabase.cmd migration repair 123", "PROVEN BYPASS: supabase.cmd migration repair");
+denyBash("npx.cmd supabase db reset", "npx.cmd prefix");
+denyBash("GIT.EXE push origin main", "a binary NAME is case-insensitive on Windows");
+// The unsuffixed spellings must keep their prior verdicts.
+denyBash("git push origin main", "the plain spelling still denies");
+denyBash("gh pr merge 123 --squash", "the plain spelling still denies");
+allowBash("git status", "an ordinary git read stays allowed");
+allowBash("git.exe status", "a suffixed ordinary git read stays allowed");
+allowBash("gh pr view 123", "reading a PR stays allowed");
+allowBash("gh.cmd pr view 123", "reading a PR with the shim spelling stays allowed");
+
 // ── sibling rules with the same defect shape ─────────────────────────────
 // Each of these knew ONE spelling of a destructive option and missed the
 // documented equivalents.
