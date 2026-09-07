@@ -20,9 +20,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   classifyExtras,
+  commandTitle,
   gitEnvironment,
   isEntryPoint,
   previousManifest,
+  stripFrontmatter,
   writeExpected,
 } from "./sync-agent-workflows.mjs";
 
@@ -491,6 +493,74 @@ try {
       "a manifest entry that escapes the target root must never delete a file outside it",
     );
     rmSync(escapeRoot, { recursive: true, force: true });
+  }
+
+  // (k) A command file may open with YAML frontmatter (`model:` / `effort:`
+  //     routing, 2026-09-05). commandTitle() derives the Codex adapter's title,
+  //     and through it the adapter description, from the first `# ` heading. A
+  //     YAML comment inside the block has exactly that shape, so before the
+  //     frontmatter was stripped the comment became the title. The first case
+  //     below is RED on the old implementation.
+  {
+    const withComment = [
+      "---",
+      "# Read-only report: faster model at low effort.",
+      "model: sonnet",
+      "effort: low",
+      "---",
+      "",
+      "Show a quick dashboard.",
+      "",
+      "# Real Heading",
+      "",
+    ].join("\n");
+    assert.equal(
+      commandTitle(withComment, "demo-command"),
+      "Real Heading",
+      "a YAML comment inside frontmatter must not be read as the H1",
+    );
+
+    // No heading in the body: the fallback title-cases the file name, and the
+    // frontmatter comment still does not stand in for the missing H1.
+    const noHeading = "---\n# a comment\nmodel: sonnet\n---\n\nPlain prose only.\n";
+    assert.equal(commandTitle(noHeading, "demo-command"), "Demo Command");
+
+    // CRLF frontmatter (a checkout with autocrlf) is still recognized.
+    assert.equal(
+      commandTitle("---\r\n# c\r\nmodel: sonnet\r\n---\r\n\r\n# Windows Heading\r\n", "x"),
+      "Windows Heading",
+    );
+
+    // Only a block at the very START is frontmatter. A `---` rule later in the
+    // body is ordinary markdown and the text around it must survive.
+    const ruleInBody = "Intro paragraph.\n\n---\n\n# After Rule\n";
+    assert.equal(stripFrontmatter(ruleInBody), ruleInBody, "a body rule is not frontmatter");
+    assert.equal(commandTitle(ruleInBody, "x"), "After Rule");
+
+    // A file with no frontmatter at all is untouched, so every command that has
+    // none keeps the exact title it had before this change.
+    const plain = "First line.\n\n# Plain Heading\n";
+    assert.equal(stripFrontmatter(plain), plain);
+    assert.equal(commandTitle(plain, "x"), "Plain Heading");
+
+    // The two routed command files must keep resolving to the titles their
+    // generated .agents/ adapters already carry; otherwise --check goes red the
+    // moment frontmatter lands. Read from the real repo, not a fixture.
+    const commandsRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".claude", "commands");
+    for (const [name, expectedTitle] of [["status", "Status"], ["fleet", "Fleet"]]) {
+      const source = readFileSync(path.join(commandsRoot, `${name}.md`), "utf8");
+      assert.match(source, /^---\r?\n/, `${name}.md is expected to open with frontmatter`);
+      assert.equal(commandTitle(source, name), expectedTitle, `${name}.md adapter title must be unchanged by its frontmatter`);
+    }
+
+    // /parked is NOT routed. On an apply request it continues into the
+    // migration flow (risk assessment, /explain-migration, /migration-review,
+    // the apply itself), and docs/reference/claude-model-tuning.md forbids
+    // lowering effort on a migration path (Codex App P1 on PR #621). Pin that
+    // it carries no frontmatter so a later "tidy-up" cannot quietly re-route it.
+    const parked = readFileSync(path.join(commandsRoot, "parked.md"), "utf8");
+    assert.doesNotMatch(parked, /^---\r?\n/, "parked.md must not carry model/effort frontmatter");
+    assert.equal(commandTitle(parked, "parked"), "Parked");
   }
 } finally {
   rmSync(targetRoot, { recursive: true, force: true });

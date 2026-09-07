@@ -31,10 +31,22 @@ function walkFiles(root) {
   return output;
 }
 
-function commandTitle(markdown, fallback) {
+// A command file may open with a YAML frontmatter block (`model:` / `effort:`
+// routing, per docs/reference/claude-model-tuning.md). Only a block at the very
+// START of the file counts; a `---` rule further down is ordinary markdown.
+const LEADING_FRONTMATTER_RE = /^---\r?\n(?:[\s\S]*?\r?\n)?---(?:\r?\n|$)/;
+
+export function stripFrontmatter(markdown) {
+  return markdown.replace(LEADING_FRONTMATTER_RE, "");
+}
+
+export function commandTitle(markdown, fallback) {
+  // Frontmatter is metadata, not content: a YAML comment (`# ...`) inside the
+  // block would otherwise match the H1 pattern and become the adapter's title.
+  const withoutFrontmatter = stripFrontmatter(markdown);
   // A "# ..." line inside a ``` fence (e.g. a bash comment in an example) is not
   // a heading — strip fenced blocks before looking for the H1.
-  const withoutFences = markdown.replace(/```[\s\S]*?```/g, "");
+  const withoutFences = withoutFrontmatter.replace(/```[\s\S]*?```/g, "");
   const heading = withoutFences.match(/^#\s+(.+)$/m)?.[1]?.trim();
   return heading || fallback.split("-").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
 }

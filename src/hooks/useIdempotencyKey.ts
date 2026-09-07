@@ -10,7 +10,16 @@ import { generateIdempotencyKey } from '../lib/idempotency';
  * lets the server return the original result instead of duplicating the work.
  *
  * Call `getKey()` in your action handler. Call `resetKey()` after a confirmed
- * success or after the server proves the key is bound to a different payload.
+ * success, or after an authoritative reload of an EXISTING record has settled
+ * what the outstanding attempt did.
+ *
+ * A payload conflict does NOT authorize retirement. The key is a receipt, not
+ * just a retry token: `IDEMPOTENCY_PAYLOAD_CONFLICT` rejects the CHANGED payload
+ * while the ORIGINAL one still redeems the server's cached result. On a create,
+ * that cached result carries the id of a row that may already have committed,
+ * and it is the only deterministic way to learn the create's outcome — so
+ * retiring the key there can manufacture a duplicate record. Retain it instead;
+ * the cost is one unearned conflict dialog, which a reload clears.
  *
  * Pass `intentScope` when one mounted action can target different records or
  * payloads. One key is retained per scope without embedding the payload in the

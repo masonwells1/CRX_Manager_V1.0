@@ -3,7 +3,8 @@
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter } from 'react-router-dom';
+import { Suspense } from 'react';
+import { Link, MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter, useParams } from 'react-router-dom';
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
@@ -20,8 +21,28 @@ const {
   mockSendOrderConfirmedEmail,
   mockResetIdempotencyKey,
   quoteIdempotencyState,
+  quoteIdempotencyHandles,
+  sharedResetKeyFor,
 } = vi.hoisted(() => {
-  const quoteIdempotencyState = { generation: 0 };
+  // Generations are PER SCOPE, mirroring the real hook's per-scope Map. A single
+  // shared counter would let a reset on quote B change the key later handed back
+  // for quote A, which the real hook never does — a test written against that
+  // stub would be asserting a property of the mock, not of the page.
+  const quoteIdempotencyState = {
+    generations: new Map<string, number>(),
+    generationFor(scope: string) { return this.generations.get(scope) ?? 0; },
+    bump(scope: string) { this.generations.set(scope, this.generationFor(scope) + 1); },
+    reset() { this.generations.clear(); },
+  };
+  // One handle per scope, created once — see the useIdempotencyKey mock below for
+  // why identity stability is load-bearing rather than tidiness.
+  const mockResetIdempotencyKey = vi.fn((scope: string = '') => { quoteIdempotencyState.bump(scope); });
+  const sharedResetKeyFor = (scopeValue: string) => mockResetIdempotencyKey(scopeValue);
+  const quoteIdempotencyHandles = new Map<string, {
+    getKey: () => string;
+    resetKey: () => void;
+    resetKeyFor: (scopeValue: string) => void;
+  }>();
   return {
     mockFrom: vi.fn(),
     mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
@@ -33,8 +54,10 @@ const {
     mockNotifyLargeOrder: vi.fn(),
     mockTrackBusinessEvent: vi.fn(),
     mockSendOrderConfirmedEmail: vi.fn(),
-    mockResetIdempotencyKey: vi.fn(() => { quoteIdempotencyState.generation += 1; }),
+    mockResetIdempotencyKey,
     quoteIdempotencyState,
+    quoteIdempotencyHandles,
+    sharedResetKeyFor,
   };
 });
 
@@ -119,6 +142,13 @@ vi.mock('../lib/db', async () => {
   const { sanitizeError } = await vi.importActual<typeof import('../lib/errorSanitizer')>(
     '../lib/errorSanitizer',
   );
+  // Use the REAL assertRpcResult for the same reason. The stub `vi.fn((d) => d)` is a
+  // passthrough that never throws, which DELETES the ambiguous-reply path — an empty
+  // payload with no error — from every test in this file. That path is precisely what
+  // the F1 ordering exists to handle, so under the stub a screen that retires its
+  // idempotency key before checking the reply stays green. Import the real one so the
+  // defect can be expressed here at all (aliased-reset sweep, 2026-09-05).
+  const { assertRpcResult } = await vi.importActual<typeof import('../lib/db')>('../lib/db');
   const hasRpcCode = (error: { message?: string }, code: string) => (
     error.message === code
     || error.message?.startsWith(`${code}:`) === true
@@ -128,7 +158,7 @@ vi.mock('../lib/db', async () => {
     supabase: { from: mockFrom, rpc: mockRpc },
     supabaseUntyped: { from: mockFrom, rpc: mockRpc },
     checkMutationResult: vi.fn(),
-    assertRpcResult: vi.fn((d) => d),
+    assertRpcResult,
     hasRpcCode,
     RpcErrorCodes: {
       AUTH_REQUIRED: 'AUTH_REQUIRED', ACTOR_MISMATCH: 'ACTOR_MISMATCH',
@@ -164,10 +194,36 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({
-    getKey: () => `test-idem-key-${quoteIdempotencyState.generation}`,
-    resetKey: mockResetIdempotencyKey,
-  }),
+  // The mock MUST honour intentScope. A scope-blind stub returns one key for every
+  // quote, so a regression test for "quote B must not inherit A's unresolved key"
+  // would pass against a completely unscoped hook — it would prove a property of
+  // the mock rather than of the page. The real hook keys a Map by
+  // [operation, userId, intentScope]; this mirrors the scope half of that.
+  // The returned functions MUST be identity-stable per scope, as the real hook's
+  // useCallback ones are. A fresh object literal per render looks harmless and is
+  // not: `fetchQuote` takes `resetSaveQuoteIdempotencyKey` as a dependency, so an
+  // unstable identity re-creates it every render, re-runs the load effect, and the
+  // page loads forever — every test then sees only the skeleton. That is a defect
+  // in the mock, not in the page, and it is exactly the shape a mock must not
+  // introduce: it made a correct component look broken (#618 + #603 merge).
+  useIdempotencyKey: (_operation: string, _userId: string, intentScope = '') => {
+    const cached = quoteIdempotencyHandles.get(intentScope);
+    if (cached) return cached;
+    const handle = {
+      getKey: () => `test-idem-key-${intentScope}-${quoteIdempotencyState.generationFor(intentScope)}`,
+      resetKey: () => mockResetIdempotencyKey(intentScope),
+      // Retires a NAMED scope rather than the rendered one, as the real hook does.
+      // Without this the page could not retire the key of a quote it has left.
+      //
+      // Shared across every scope, because the real hook memoizes `resetKeyFor` on
+      // [operation, userId] alone — it does NOT move when the scope changes. A
+      // per-scope copy here would be stable within a scope and unstable across one,
+      // which is precisely the identity change `fetchQuote` must not see.
+      resetKeyFor: sharedResetKeyFor,
+    };
+    quoteIdempotencyHandles.set(intentScope, handle);
+    return handle;
+  },
 }));
 
 vi.mock('../hooks/useUnsavedChanges', () => ({
@@ -200,6 +256,10 @@ vi.mock('../components/ui/UnsavedChangesModal', () => ({ default: () => null }))
 
 import { preferredQuoteNotes } from '../lib/quoteNotes';
 import QuoteBuilder from './QuoteBuilder';
+// The REAL provider, not a stand-in. The hazard these tests cover is a property
+// of the real one: it is mounted above the route, so its approval dialog — and
+// the retry parked behind it — survive a navigation between quotes.
+import { BelowCostApprovalProvider } from '../contexts/BelowCostApprovalContext';
 
 function renderQuoteBuilder(id?: string) {
   const path = id ? `/quotes/${id}/edit` : '/quotes/new';
@@ -207,6 +267,22 @@ function renderQuoteBuilder(id?: string) {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/quotes/new" element={<QuoteBuilder />} />
+        <Route path="/quotes/:id/edit" element={<QuoteBuilder />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+/**
+ * Jump from one quote to another WITHOUT unmounting QuoteBuilder — the same reused
+ * instance production gets, because no `<x>/:id` route in src/App.tsx carries a
+ * `key` prop. A `<Link>` is used rather than `useNavigate`, which this file mocks.
+ */
+function renderQuoteBuilderWithQuoteSwitch(fromId: string, toId: string) {
+  return render(
+    <MemoryRouter initialEntries={[`/quotes/${fromId}/edit`]}>
+      <Link to={`/quotes/${toId}/edit`}>Jump to quote B</Link>
+      <Routes>
         <Route path="/quotes/:id/edit" element={<QuoteBuilder />} />
       </Routes>
     </MemoryRouter>,
@@ -342,7 +418,8 @@ describe('QuoteBuilder', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    quoteIdempotencyState.generation = 0;
+    quoteIdempotencyState.reset();
+    quoteIdempotencyHandles.clear();
     dirtyStates.length = 0;
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
@@ -662,6 +739,378 @@ describe('QuoteBuilder', () => {
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.anything());
   });
 
+  /**
+   * F1, ALIASED-RESET CLASS — driven through the real save handler rather than read
+   * off the source.
+   *
+   * `save_quote` answering `{ data: null, error: null }` is the AMBIGUOUS reply: no
+   * error came back, but the payload is empty, so this tab cannot tell whether the
+   * quote committed. assertRpcResult exists to reject exactly that. Retiring the key
+   * before that check — which is what main did, through the destructured rename the
+   * literal `resetKey()` sweep could not see — sends the operator's retry under a
+   * BRAND-NEW key. The server cannot recognise a key it has never seen, so it writes
+   * the quote a second time.
+   *
+   * The two assertions bind the PAIR: the key is not retired, AND the retry actually
+   * travels under the original key. Asserting only the first would still pass if the
+   * retry minted a fresh key some other way.
+   */
+  it('keeps the save_quote key when the reply is empty, so the retry replays instead of double-writing', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    // An empty success envelope on every attempt: the reply stays ambiguous, so the
+    // key must stay put no matter how many times the operator presses Save.
+    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_idempotency_key: `test-idem-key-${quote.id}-0`,
+    })));
+    expect(
+      mockResetIdempotencyKey,
+      'an empty save_quote reply is ambiguous — the key must survive it so a retry can replay',
+    ).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Save Draft'));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_quote');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_quote')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    expect(
+      new Set(saveKeys),
+      'every retry of an unresolved save must carry the SAME key, or the server writes the quote twice',
+    ).toEqual(new Set([`test-idem-key-${quote.id}-0`]));
+  });
+
+  /**
+   * The half of the ambiguous-reply space the test above does NOT cover.
+   *
+   * `{ data: null }` is rejected by assertRpcResult, which throws before the key is
+   * ever retired — so that test passes even against code that retires first and
+   * checks later. `{ data: {} }` is the reply that actually gets through:
+   * assertRpcResult rejects only a MISSING reply, so an empty object reaches the
+   * caller looking like a success that simply has no id in it.
+   *
+   * On an edit route the old code then read `result.quote_id || quoteId` and took the
+   * id straight off the URL, so the unverified save reported itself as confirmed AND
+   * its key was gone. On a create there is no URL id to borrow, so the retry minted a
+   * fresh key the server could not recognise and wrote the quote a second time.
+   */
+  it('keeps the save_quote key when the reply is an empty OBJECT, not just when it is missing', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation(() => Promise.resolve({ data: {}, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_idempotency_key: `test-idem-key-${quote.id}-0`,
+    })));
+    expect(
+      mockResetIdempotencyKey,
+      'an empty save_quote OBJECT is ambiguous — retiring the key here is what writes the quote twice',
+    ).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('came back without an ID'));
+
+    fireEvent.click(screen.getByText('Save Draft'));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_quote');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_quote')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    expect(new Set(saveKeys)).toEqual(new Set([`test-idem-key-${quote.id}-0`]));
+  });
+
+  /**
+   * Retaining the key is only half a retry. The server fingerprints the WHOLE request
+   * — `md5(quote_id || quote_payload || sections || performed_by)` in
+   * 20260812115236_quote_items_cost_at_quote_snapshot.sql:348 — and answers a replay
+   * whose fingerprint differs with IDEMPOTENCY_PAYLOAD_CONFLICT rather than the cached
+   * result. `expires_at` was built from `Date.now()` on every save, so the retry this
+   * page instructs the operator to perform sent a different millisecond every time and
+   * could never redeem the key it had just been told to keep.
+   *
+   * `Date.now` is forced to advance here on purpose. Two clicks in a real test run can
+   * land inside the same millisecond, and this test would then pass against the very
+   * bug it exists to catch.
+   *
+   * Covered on the EDIT path. The create path builds its payload from the same lines
+   * with the same frozen clock and differs only in the scope string (`'new'`), but
+   * driving a create to a save through this harness needs a customer and an item
+   * selected in the UI, so create is reasoned, not executed, here.
+   */
+  it('sends a byte-identical payload on the retry, not just an identical key', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    // First attempt is ambiguous, so the key is retained. Second attempt is the retry.
+    mockRpc
+      .mockImplementationOnce(() => Promise.resolve({ data: {}, error: null }))
+      .mockImplementation(() => Promise.resolve({
+        data: { quote_id: quote.id, row_version: 8 },
+        error: null,
+      }));
+
+    renderQuoteBuilder(quote.id);
+    await screen.findByText('Save Draft');
+
+    let clock = 1_800_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+      clock += 60_000;
+      return clock;
+    });
+
+    try {
+      fireEvent.click(screen.getByText('Save Draft'));
+      await waitFor(() => {
+        expect(mockRpc.mock.calls.filter(([name]) => name === 'save_quote').length).toBe(1);
+      });
+      expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByText('Save Draft'));
+      await waitFor(() => {
+        expect(mockRpc.mock.calls.filter(([name]) => name === 'save_quote').length).toBe(2);
+      });
+
+      const saves = mockRpc.mock.calls
+        .filter(([name]) => name === 'save_quote')
+        .map(([, args]) => args as {
+          p_idempotency_key: string;
+          p_quote_payload: Record<string, unknown>;
+          p_sections: unknown;
+        });
+
+      expect(saves[1].p_idempotency_key).toBe(saves[0].p_idempotency_key);
+      expect(
+        saves[1].p_quote_payload.expires_at,
+        'expires_at moved between attempts, so the server fingerprint cannot match',
+      ).toBe(saves[0].p_quote_payload.expires_at);
+      // Everything the server hashes, not only the field that regressed.
+      expect(saves[1].p_quote_payload).toEqual(saves[0].p_quote_payload);
+      expect(saves[1].p_sections).toEqual(saves[0].p_sections);
+
+      // The retry redeemed the receipt, so the key is finally retired.
+      await waitFor(() => expect(mockResetIdempotencyKey).toHaveBeenCalled());
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  /**
+   * Only ONE of this page's eleven dialog openers is a save_quote conflict.
+   *
+   * The other ten are lifecycle actions — decline, email, version restore, convert,
+   * book-as-order — that own no save_quote key at all. Recording the save scope at
+   * those sites made the dialog claim an origin it did not have, so the reload it
+   * offered retired a save_quote receipt whose own reply had never been validated.
+   */
+  it('does not let a decline-originated recovery reload release the save_quote key', async () => {
+    const quote = { id: 'quote-decline-key', quote_number: 'Q-decline-key', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Local note', footer_notes: '', status: 'sent', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: RECENT_QUOTE_CREATED_AT };
+    const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
+    const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
+    const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'quotes') {
+        return buildUpdateChain(
+          { data: quote, error: null },
+          { data: [{ ...quote, status: 'declined', row_version: 9 }], error: null },
+        );
+      }
+      const data = table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [];
+      return buildChain({ data, error: null });
+    });
+
+    renderQuoteBuilder(quote.id);
+    await screen.findByDisplayValue('Local note');
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Decline Quote' }));
+
+    fireEvent.click(await screen.findByText('Reload Quote'));
+    await waitFor(() => expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument());
+
+    expect(
+      mockResetIdempotencyKey,
+      'a decline owns no save_quote key, so the recovery reload it opens must retire none',
+    ).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The cost of F1 retention, paid for by scoping — raised by the gpt-5.6-sol review
+   * of dff631f1 as the QuoteBuilder mirror of a finding already fixed in
+   * CustomerDetail.
+   *
+   * Retaining the key past an ambiguous reply is the whole point of F1, but a
+   * page-wide key then OUTLIVES the quote it was minted for. QuoteBuilder does not
+   * remount when only `:id` changes, so quote B's save would go out under quote A's
+   * unresolved key. The server fingerprints the payload against the cached key and
+   * answers IDEMPOTENCY_PAYLOAD_CONFLICT — it fails closed, so there is no
+   * cross-quote write — but B gets a conflict dialog it did nothing to earn.
+   *
+   * The fix scopes the key to the quote the RPC actually targets. This test binds
+   * that: it deliberately reads the key OFF THE WIRE for B, so it fails if the scope
+   * argument is dropped (both quotes would then share `test-idem-key--0`).
+   */
+  it('does not hand quote B the unresolved key minted for quote A', async () => {
+    const { quote: quoteA, product, section, item } = makeQuoteFixture('draft', 7);
+    const quoteB = { ...quoteA, id: 'quote-b', quote_number: 'Q-b', header_notes: 'Quote B header' };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (quoteReads++ === 0 ? quoteA : quoteB)
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    // Ambiguous on every attempt, so A's key is still outstanding when B is opened.
+    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+
+    renderQuoteBuilderWithQuoteSwitch(quoteA.id, quoteB.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_idempotency_key: `test-idem-key-${quoteA.id}-0`,
+    })));
+    expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Jump to quote B' }));
+    await screen.findByDisplayValue('Quote B header');
+
+    fireEvent.click(screen.getByText('Save Draft'));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_quote');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_quote')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    const lastSaveKey = saveKeys[saveKeys.length - 1];
+    expect(
+      lastSaveKey,
+      "quote B must mint its OWN key — inheriting A's unresolved key earns B a conflict dialog it did not cause",
+    ).toBe(`test-idem-key-${quoteB.id}-0`);
+  });
+
+  /**
+   * The second-order cost of scoping the key, raised by the gpt-5.6-sol review of
+   * 5dad64e2 as a NEW interaction the scoping itself created.
+   *
+   * `reloadAfterStaleSave` releases the CURRENT render's scope. While one page-wide key
+   * existed that was always the right one. Once the key is scoped, the stale-save dialog
+   * — which stays open across a route change — can be recovered on a DIFFERENT quote:
+   * clicking Reload would then retire quote B's key and strand quote A's rejected one,
+   * so returning to A replays the same rejected key and re-opens the same conflict.
+   *
+   * The recovery is now bound to the quote that produced it. Retaining A's key is the
+   * safe direction: a retained key can still replay, a wrongly retired one cannot.
+   */
+  it('retires neither quote\'s key when A\'s conflict dialog is recovered after a route change', async () => {
+    const { quote: quoteA, product, section, item } = makeQuoteFixture('draft', 7);
+    const quoteB = { ...quoteA, id: 'quote-b', quote_number: 'Q-b', header_notes: 'Quote B header' };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (quoteReads++ === 0 ? quoteA : quoteB)
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'save_quote'
+        ? { data: null, error: { message: 'IDEMPOTENCY_PAYLOAD_CONFLICT' } }
+        : { data: null, error: null },
+    ));
+
+    renderQuoteBuilderWithQuoteSwitch(quoteA.id, quoteB.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+    // A's save is rejected, so A's recovery dialog opens.
+    expect(await screen.findByText('Reload Quote')).toBeInTheDocument();
+
+    // The operator navigates to B with that dialog still open, then recovers it.
+    fireEvent.click(screen.getByRole('link', { name: 'Jump to quote B' }));
+    await screen.findByDisplayValue('Quote B header');
+    fireEvent.click(screen.getByText('Reload Quote'));
+    await waitFor(() => expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument());
+
+    expect(
+      mockResetIdempotencyKey,
+      "recovering A's conflict must not retire quote B's key — B never had an unresolved save",
+    ).not.toHaveBeenCalledWith(quoteB.id);
+    // And it must not retire A's key either, even though A's dialog is what closed.
+    //
+    // An earlier revision did retire it, on the reasoning that a payload-rejected key
+    // can only ever be rejected again. That was a duplicate-write hazard: the key
+    // rejects the CHANGED payload, but replaying the ORIGINAL one returns the server's
+    // cached receipt, which on a create is the only way to learn the id of a row that
+    // may already have committed. Retiring it lets a later retry insert twice.
+    //
+    // Retaining costs one unearned conflict dialog on returning to A, which self-heals
+    // on A's own reload. That is the cheaper side of the trade, so this asserts the
+    // key survives.
+    expect(
+      mockResetIdempotencyKey,
+      "A's key is the receipt handle for a create that may have committed — recovery on another quote must not retire it",
+    ).not.toHaveBeenCalledWith(quoteA.id);
+  });
+
   it('recovers a legacy cached save after the migration boundary and releases its unusable key', async () => {
     const { quote, product, section, item } = makeQuoteFixture('draft', 7);
     mockFrom.mockImplementation((table: string) => buildChain({
@@ -692,7 +1141,7 @@ describe('QuoteBuilder', () => {
 
     expect(await screen.findByText('Reload Quote')).toBeInTheDocument();
     expect(mockRpc).toHaveBeenLastCalledWith('save_quote', expect.objectContaining({
-      p_idempotency_key: 'test-idem-key-0',
+      p_idempotency_key: `test-idem-key-${quote.id}-0`,
     }));
     expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Reload Quote'));
@@ -700,7 +1149,7 @@ describe('QuoteBuilder', () => {
     expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByText('Save Draft'));
     await waitFor(() => expect(mockRpc).toHaveBeenLastCalledWith('save_quote', expect.objectContaining({
-      p_idempotency_key: 'test-idem-key-1',
+      p_idempotency_key: `test-idem-key-${quote.id}-1`,
     })));
   });
 
@@ -1317,7 +1766,13 @@ describe('QuoteBuilder', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reload Quote' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Quote' })).not.toBeInTheDocument());
-    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(2);
+    // ONE release, not two. The version-action key is retired, because this reload is
+    // that action's own recovery. The save_quote key is NOT, because no save_quote
+    // conflict happened here — an email/version failure opened this dialog. The
+    // second release this once expected was the coupling CodeRabbit flagged at
+    // CustomerDetail:964: a lifecycle recovery retiring a whole-record save receipt
+    // whose own reply was never validated.
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
     await waitFor(() => expect(mockSendEmail).toHaveBeenCalledTimes(1));
@@ -1465,6 +1920,18 @@ describe('QuoteBuilder', () => {
   // all survive the navigation. These tests drive a real data router the same
   // way, with deliberately delayed loads, and mount the real page.
 
+  /**
+   * Suspends forever when the route names `on`. Rendered AFTER <QuoteBuilder/>
+   * inside a Suspense boundary, so QuoteBuilder's render for the new id has
+   * already run by the time this unwinds and React throws the attempt away.
+   */
+  const foreverPending = new Promise(() => {});
+  function SuspendForever({ on }: { on: string }) {
+    const { id } = useParams();
+    if (id === on) throw foreverPending;
+    return null;
+  }
+
   function openableGate() {
     let open!: () => void;
     const opened = new Promise<void>((resolve) => { open = resolve; });
@@ -1528,7 +1995,12 @@ describe('QuoteBuilder', () => {
   function renderQuoteSwitch(
     fixtures: ReturnType<typeof makeSwitchFixture>[],
     gates: Record<string, Promise<void>>,
-    options: { failSectionsFor?: string; loadPlan?: QuoteLoadPlan } = {},
+    options: {
+      failSectionsFor?: string;
+      loadPlan?: QuoteLoadPlan;
+      belowCostApproval?: boolean;
+      suspendOn?: string;
+    } = {},
   ) {
     const byId = new Map(fixtures.map((f) => [f.quote.id, f]));
     const loadCounts = new Map<string, number>();
@@ -1574,15 +2046,35 @@ describe('QuoteBuilder', () => {
           return { data: [], error: null };
       }
     }));
+    // A render React BEGINS and then throws away. `suspendOn` names the quote id
+    // whose render suspends and never resolves: QuoteBuilder is rendered first
+    // with the new id, then the sibling below suspends, so React discards the
+    // whole attempt and the PREVIOUS quote stays committed on screen. Production
+    // discards renders for its own reasons — an interrupted transition, an error
+    // retry — and this is the deterministic way to reproduce one. The scaffold
+    // creates the interruption; it never touches the ref under test.
+    const routeElement = options.suspendOn
+      ? (
+        <Suspense fallback={<div>route suspended</div>}>
+          <QuoteBuilder />
+          <SuspendForever on={options.suspendOn} />
+        </Suspense>
+      )
+      : <QuoteBuilder />;
     const router = createMemoryRouter(
       // `quotes/:id` is App.tsx's real pattern for a saved quote. Using it here
       // means both ids resolve to the SAME route, so React Router reuses the
       // element instead of remounting it — which is precisely the condition
       // these tests exist to cover.
-      [{ path: '/quotes/:id', element: <QuoteBuilder /> }],
+      [{ path: '/quotes/:id', element: routeElement }],
       { initialEntries: [`/quotes/${fixtures[0].quote.id}`] },
     );
-    render(<RouterProvider router={router} />);
+    // Mounted OUTSIDE the router, mirroring App.tsx's RootLayout: the provider
+    // sits above the route, so navigating between quotes neither unmounts the
+    // approval dialog nor abandons the retry waiting on it.
+    render(options.belowCostApproval
+      ? <BelowCostApprovalProvider><RouterProvider router={router} /></BelowCostApprovalProvider>
+      : <RouterProvider router={router} />);
     return router;
   }
 
@@ -1720,6 +2212,49 @@ describe('QuoteBuilder', () => {
     expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
   });
 
+  // Raised by the exact-SHA gpt-5.6-sol review of `a9793c311`, as a P2. The save
+  // guard reads the load serial, and the serial is a SHARED resource: a doomed load
+  // that takes a number on its way to rejecting itself supersedes whatever is
+  // legitimately in flight for the quote on screen. Refusing at the door is the
+  // only place that cannot burn one.
+  it('refuses a doomed reload at the door, without reading the database or taking a load serial', async () => {
+    const quoteA = makeSwitchFixture('quote-a', 'Q-AAA-1');
+    const quoteB = makeSwitchFixture('quote-b', 'Q-BBB-2');
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'save_quote'
+        ? { data: null, error: { message: 'QUOTE_STALE_WRITE' } }
+        : { data: null, error: null },
+    ));
+    const router = renderQuoteSwitch([quoteA, quoteB], {}, {
+      failSectionsFor: 'quote-b',
+      loadPlan: { 'quote-a': [{}, { quoteNumber: 'Q-AAA-RELOADED' }] },
+    });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await screen.findByRole('button', { name: /Reload Quote/i });
+
+    // Move to quote B. The reload dialog's closure still names quote A, so firing
+    // it now is a load for a quote the operator has left.
+    await goToQuote(router, 'quote-b');
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('Could not load the complete quote'),
+    ));
+
+    const readsBeforeDoomedReload = mockFrom.mock.calls.filter((c) => c[0] === 'quotes').length;
+    fireEvent.click(await screen.findByRole('button', { name: /Reload Quote/i }));
+    await flushPendingWork();
+
+    // The decisive check. The doomed load must turn round at the door: no read
+    // issued, so no serial consumed, so nothing legitimately in flight for the
+    // quote on screen can be superseded by it.
+    expect(mockFrom.mock.calls.filter((c) => c[0] === 'quotes').length)
+      .toBe(readsBeforeDoomedReload);
+    // And it still must not install, which is what the sibling test above pins.
+    expect(screen.queryAllByText('Q-AAA-RELOADED')).toHaveLength(0);
+  });
+
   it('refuses the save when a failed switch leaves quote A on screen under quote B address', async () => {
     const quoteA = makeSwitchFixture('quote-a', 'Q-AAA-1');
     const quoteB = makeSwitchFixture('quote-b', 'Q-BBB-2');
@@ -1744,5 +2279,397 @@ describe('QuoteBuilder', () => {
       expect.stringContaining('has not finished loading'),
     ));
     expect(mockRpc).not.toHaveBeenCalledWith('save_quote', expect.anything());
+  });
+
+  // ── ...and neither may a save's REPLY ──────────────────────────────────────
+  //
+  // The refusal above runs before the request is sent, so it cannot cover state
+  // written after the reply lands. `save_quote` installs the authoritative
+  // row-version token, the commission baseline and (for a create) `quoteId`, and
+  // its callers then clear dirty, toast and navigate. A route change during the
+  // round trip puts all of that on the wrong quote.
+
+  function withRowVersion(fixture: ReturnType<typeof makeSwitchFixture>, rowVersion: number) {
+    return { ...fixture, quote: { ...fixture.quote, row_version: rowVersion } };
+  }
+
+  /**
+   * The empty-reply branch sits ABOVE `editingSessionChanged()`, so it needed its own
+   * session check — raised as a P2 by the exact-SHA gpt-5.6-sol review of `451727ee9`.
+   *
+   * An ambiguous `{}` reply for quote A that lands after the operator has moved to
+   * quote B must still retain A's key, but it must not SAY anything: an unqualified
+   * "the save came back without an ID" toast over quote B reads as a failure of the
+   * quote on screen, which is the same route-reply leak the guard below exists to
+   * stop. Silence plus retention is the correct pair here.
+   */
+  it('stays silent about quote A empty reply once the operator has moved to quote B', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveReply = openableGate();
+    let saveCalls = 0;
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveCalls += 1;
+      if (saveCalls === 1) {
+        await saveReply.opened;
+        // The ambiguous reply: no error, and no receipt in it.
+        return { data: {}, error: null };
+      }
+      return { data: { quote_id: 'quote-b', row_version: 12 }, error: null };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {});
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(saveCalls).toBe(1));
+
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+
+    saveReply.open();
+    await flushPendingWork();
+
+    expect(
+      mockToast.mock.calls.map((c) => String(c[1])).join(' | '),
+      "quote A's ambiguous reply must not report a failure over quote B",
+    ).not.toMatch(/came back without an ID/);
+
+    // Retention is the other half of the pair: A's key must survive, unretired.
+    expect(mockResetIdempotencyKey).not.toHaveBeenCalledWith('quote-a');
+  });
+
+  it('drops a late save_quote reply for quote A rather than installing its token on quote B', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveReply = openableGate();
+    let saveCalls = 0;
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveCalls += 1;
+      if (saveCalls === 1) {
+        await saveReply.opened;
+        // Quote A's own authoritative token, one past the 3 it loaded with.
+        return { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+      }
+      return { data: { quote_id: 'quote-b', row_version: 12 }, error: null };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {});
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(saveCalls).toBe(1));
+
+    // Leave for quote B while quote A's save is still in flight.
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+
+    saveReply.open();
+    await flushPendingWork();
+
+    // Quote A's success is not quote B's.
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Quote saved as draft');
+
+    // The decisive check. Quote B's own token must still be the one it saves
+    // against — proving quote A's reply neither replaced it nor cleared it.
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_id: 'quote-b',
+      p_quote_payload: expect.objectContaining({ row_version_expected: 11 }),
+      // Generation 0 for quote B's OWN scope, not 1 for a shared one. #618 wrote
+      // this as `test-idem-key-1` because a page-wide key had to ROTATE off quote
+      // A's committed save before B could safely use it. #603 scopes the key per
+      // quote, so B never held A's key to begin with and there is nothing for A's
+      // save to rotate away from B. The hazard #618 was guarding against is gone
+      // rather than merely re-checked — but the assertion still binds it, because
+      // a regression to a page-wide key would hand B `test-idem-key--1` here.
+      p_idempotency_key: 'test-idem-key-quote-b-0',
+    })));
+  });
+
+  it('keeps quote A failed save off quote B, and says which quote failed', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveReply = openableGate();
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      await saveReply.opened;
+      return { data: null, error: { message: 'QUOTE_STALE_WRITE' } };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {});
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.anything()));
+
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+
+    saveReply.open();
+    await flushPendingWork();
+
+    // Quote A's stale-write recovery dialog must not appear over quote B, whose
+    // own record is untouched and has nothing to recover.
+    expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
+    // But the failure is not swallowed either: the operator left believing quote
+    // A saved, and it did not. The toast names it, because the page they are
+    // looking at is a different quote.
+    expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Q-AAA-1'));
+    // ...and it must not claim a rollback it cannot know about. A reply lost in
+    // transit after PostgreSQL committed arrives through this same error branch,
+    // which is exactly why the retry key is retained. Raised as a P2 on this branch.
+    const [, failureMessage] = mockToast.mock.calls.find(
+      (call) => call[0] === 'error' && String(call[1]).includes('Q-AAA-1'),
+    )!;
+    expect(failureMessage).not.toMatch(/were not stored|was not saved|no changes were/i);
+    expect(failureMessage).toMatch(/could not be confirmed/i);
+  });
+
+  // Raised by the exact-SHA gpt-5.6-sol review of this branch, as CRX-1/High.
+  // A route-only binding is not enough, because a route id is not unique over
+  // time: leave quote A for B and come back, and the id matches again. The reply
+  // would then be accepted into a DIFFERENT editing session of the same quote and
+  // report edits saved that were never sent. The load serial separates the two
+  // sessions, because returning to quote A re-runs its load.
+  it('drops a late save_quote reply for quote A after the operator left and came BACK to quote A', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveReply = openableGate();
+    let saveCalls = 0;
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveCalls += 1;
+      if (saveCalls === 1) {
+        await saveReply.opened;
+        // Quote A's own authoritative token, one past the 3 its FIRST load held.
+        return { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+      }
+      return { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {}, {
+      // The second load of quote A carries distinct content, so the test can tell
+      // which of the two editing sessions of the SAME quote is on screen.
+      loadPlan: { 'quote-a': [{}, { quoteNumber: 'Q-AAA-REOPENED' }] },
+    });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(saveCalls).toBe(1));
+
+    // Leave quote A with its save still in flight, then come straight back to it.
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+    await goToQuote(router, 'quote-a');
+    expect(await screen.findAllByText('Q-AAA-REOPENED')).not.toHaveLength(0);
+
+    saveReply.open();
+    await flushPendingWork();
+
+    // The reply belongs to the session the operator abandoned, so it may not
+    // report success over the freshly loaded one — that dirty-clear would mark
+    // edits made after the return as saved when they were never sent.
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Quote saved as draft');
+
+    // The decisive check. The reopened session loaded at version 3, so version 3
+    // is what it must still save against — proving the abandoned save's token
+    // was neither installed over it nor cleared.
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_id: 'quote-a',
+      p_quote_payload: expect.objectContaining({ row_version_expected: 3 }),
+    })));
+  });
+
+  // Raised by the exact-SHA gpt-5.6-sol review of `e403d00a3`, as a P2 — the
+  // shadow of this branch's own guard. `routeQuoteIdRef` was written DURING
+  // RENDER, so a render React began and then discarded moved it even though the
+  // previous quote was still the committed screen. The save guard reads that ref,
+  // so it would drop a VALID reply after the database had committed: the save
+  // succeeds, the data is right, and only the confirmation is suppressed — the
+  // operator saves again and lands in stale-write recovery on a money document.
+  it('accepts quote A save reply when a render for quote B was discarded before commit', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveReply = openableGate();
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      await saveReply.opened;
+      return { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {}, { suspendOn: 'quote-b' });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.anything()));
+
+    // Begin a navigation to quote B whose render never completes. Quote A is
+    // still what the operator is looking at, and its load never got superseded:
+    // passive effects do not run for a discarded render, so the load serial has
+    // not moved either. Only a render-time route write could have moved.
+    await goToQuote(router, 'quote-b');
+    expect(screen.getAllByText('Q-AAA-1')).not.toHaveLength(0);
+
+    saveReply.open();
+    await flushPendingWork();
+
+    // The decisive check. This save belongs to the quote still on screen, so its
+    // reply must be installed and confirmed, not discarded.
+    expect(mockToast).toHaveBeenCalledWith('success', 'Quote saved as draft');
+    // ...and the authoritative token it carried must be what the next save uses.
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_id: 'quote-a',
+      p_quote_payload: expect.objectContaining({ row_version_expected: 4 }),
+    })));
+  });
+
+  // Raised by the exact-SHA gpt-5.6-sol review of `d6b12058b`, as a P2. A payload
+  // conflict is not merely "unconfirmed": the server has bound this key to a
+  // DIFFERENT payload and can never accept the current one under it again. The
+  // in-route branch recovers through the reload dialog, which rotates the key —
+  // but that dialog cannot be shown for a quote the operator has left, so the
+  // moved-session return used to strand the key poisoned for the life of the
+  // component. The key is scoped by operation and user, not by record, so every
+  // later save of ANY quote repeated the same conflict.
+  it('retires a payload-conflicted key on the reopen, not on the conflict, and not on another quote', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const quoteC = withRowVersion(makeSwitchFixture('quote-c', 'Q-CCC-3'), 7);
+    const saveReply = openableGate();
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      await saveReply.opened;
+      return { data: null, error: { message: 'IDEMPOTENCY_PAYLOAD_CONFLICT' } };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB, quoteC], {}, {
+      loadPlan: { 'quote-a': [{}, { quoteNumber: 'Q-AAA-REOPENED' }] },
+    });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.anything()));
+
+    // Leave quote A, then let its conflict reply land.
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+    saveReply.open();
+    await flushPendingWork();
+
+    // Quote A's recovery dialog still may not open over quote B.
+    expect(screen.queryByRole('button', { name: /Reload Quote/i })).not.toBeInTheDocument();
+    // And the key is a RECEIPT as well as a retry token — it may stand for a save
+    // that committed and lost its reply — so the conflict alone must not retire
+    // it. #603 shipped that shortcut and reverted it the same day.
+    expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
+
+    // A complete authoritative load of a DIFFERENT quote must not count either:
+    // it resolves nothing about what happened to quote A. This step exists because
+    // without it the scoping half of the check is unprovable — the conflict lands
+    // after quote B has already finished loading, so quote B alone can never
+    // exercise it.
+    await goToQuote(router, 'quote-c');
+    expect(await screen.findAllByText('Q-CCC-3')).not.toHaveLength(0);
+    expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
+
+    // Reopening quote A IS the authoritative reload the receipt was waiting for.
+    await goToQuote(router, 'quote-a');
+    expect(await screen.findAllByText('Q-AAA-REOPENED')).not.toHaveLength(0);
+    expect(mockResetIdempotencyKey).toHaveBeenCalled();
+
+    // The decisive check: the next save carries a FRESH key, so it is no longer
+    // rejected by a key the server bound to an earlier payload.
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_id: 'quote-a',
+      // Generation 1 within quote A's OWN scope: the reopen retired A's key, and
+      // only A's. Scoped by #603, so the spelling carries the quote id.
+      p_idempotency_key: 'test-idem-key-quote-a-1',
+    })));
+  });
+
+  // ── ...and neither may an approval given while looking at another quote ────
+  //
+  // Raised by the exact-SHA gpt-5.6-sol review of `d6b12058b`, as a High. The
+  // below-cost dialog is GLOBAL and mounted above the route, so the send it is
+  // holding survives a navigation — and it names the product, never the quote.
+  // The operator can therefore be shown "approve this below-cost price" while
+  // looking at quote B and, by approving, write quote A.
+  const BELOW_COST_ERROR = {
+    message: 'BELOW_COST_REASON_REQUIRED: {"operation":"save_quote","product_name":"Roundup PowerMAX"}',
+  };
+
+  async function approveBelowCost() {
+    const reasonBox = await screen.findByLabelText(/Approval reason/i);
+    fireEvent.change(reasonBox, { target: { value: 'matched a competitor quote' } });
+    fireEvent.click(screen.getByRole('button', { name: /Approve and Retry/i }));
+    await flushPendingWork();
+  }
+
+  // The positive control for the test below. Without it, a broken dialog harness
+  // — no retry ever sent — would satisfy the refusal assertions perfectly.
+  it('sends the below-cost retry when the operator is still on the quote being approved', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    const saveArgs: unknown[] = [];
+    mockRpc.mockImplementation(async (name: string, args: unknown) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveArgs.push(args);
+      return saveArgs.length === 1
+        ? { data: null, error: BELOW_COST_ERROR }
+        : { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+    });
+    renderQuoteSwitch([quoteA, quoteB], {}, { belowCostApproval: true });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+
+    await approveBelowCost();
+
+    expect(saveArgs).toHaveLength(2);
+    expect(saveArgs[1]).toEqual(expect.objectContaining({ p_quote_id: 'quote-a' }));
+    expect(mockToast).toHaveBeenCalledWith('success', 'Quote saved as draft');
+  });
+
+  it('refuses the below-cost retry for quote A once the operator has moved to quote B', async () => {
+    const quoteA = withRowVersion(makeSwitchFixture('quote-a', 'Q-AAA-1'), 3);
+    const quoteB = withRowVersion(makeSwitchFixture('quote-b', 'Q-BBB-2'), 11);
+    let saveCalls = 0;
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name !== 'save_quote') return { data: null, error: null };
+      saveCalls += 1;
+      return saveCalls === 1
+        ? { data: null, error: BELOW_COST_ERROR }
+        : { data: { quote_id: 'quote-a', row_version: 4 }, error: null };
+    });
+    const router = renderQuoteSwitch([quoteA, quoteB], {}, { belowCostApproval: true });
+
+    expect(await screen.findAllByText('Q-AAA-1')).not.toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: /Save Draft/ }));
+    // Quote A's save is now parked on the dialog rather than on the network.
+    await screen.findByLabelText(/Approval reason/i);
+
+    await goToQuote(router, 'quote-b');
+    expect(await screen.findAllByText('Q-BBB-2')).not.toHaveLength(0);
+    // The dialog is still up, over quote B, and nothing on it says quote A —
+    // which is exactly why the approval it collects cannot be trusted to mean
+    // quote A. It names a product and a shortfall, and no record at all.
+    expect(screen.getByRole('button', { name: /Approve and Retry/i })).toBeInTheDocument();
+    expect(screen.queryAllByText(/Q-AAA-1/)).toHaveLength(0);
+
+    await approveBelowCost();
+
+    // The decisive check. The retry is never sent, so quote A is not written
+    // from consent the operator gave while looking at a different quote.
+    expect(saveCalls).toBe(1);
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Quote saved as draft');
+    // Not silent, either: they approved something, so they are told it did not
+    // apply and to which quote. Nothing was written on this path — the first
+    // attempt was rejected by PostgreSQL — so unlike the lost-reply message this
+    // one is entitled to say the quote was not saved.
+    expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Q-AAA-1'));
+    const [, refusalMessage] = mockToast.mock.calls.find(
+      (call) => call[0] === 'error' && String(call[1]).includes('Q-AAA-1'),
+    )!;
+    expect(refusalMessage).toMatch(/was not saved/i);
   });
 });
