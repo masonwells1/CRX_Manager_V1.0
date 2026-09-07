@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState , useCallback, useMemo, lazy, Suspense } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState , useCallback, useMemo, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, FlaskConical, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown, Map as MapIcon, ShieldAlert, CalendarClock, AlertTriangle, Sprout, Send } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -309,6 +309,48 @@ export default function JobDetail() {
   // While the guard is up, adoption waits; the settle tick forces one adoption
   // pass on the render that contains the fully-refetched state.
   const baselineSettleGuardRef = useRef(false);
+  // Cross-record stale-load guard.
+  // WHAT WAS WRONG: `jobs/:id` USED TO carry no `key` prop, so changing only the id did
+  // NOT remount this page — the previous job's in-flight loads kept running and installed
+  // THEIR record's values into the form now showing a different job, and the next save
+  // wrote them to the CURRENT route id.
+  // TODAY THE ROUTE IS KEYED: `JobDetailRoute` renders `<JobDetail key={id} />`, so a
+  // record change REMOUNTS instead. This ticket is KEPT for the two cases the remount does
+  // not cover: two overlapping loads of the SAME job inside one mount, and the direct
+  // unkeyed mounts the tests use. See the block at ~1980-2001 for exactly which guards the
+  // remount made redundant and which survived it.
+  // Every load run takes a generation ticket; a run whose ticket is no longer current
+  // installs nothing. This gates the CALL, not the record id, so two overlapping loads of
+  // the SAME job are still ordered by ticket.
+  const loadGenerationRef = useRef(0);
+  // The SECOND, independent operand. The ticket alone orders CALLS but does not bind a
+  // call to a RECORD, and several handlers (`handleStart`, `handleComplete`, the save
+  // path) `await` an RPC and then call `fetchJob()` from the closure of the render they
+  // started on. That call happens NOW, so it mints the CURRENT ticket for the OLD job —
+  // a ticket check would certify exactly the write it exists to reject. Comparing the id
+  // a fetch was STARTED for against the id the route is on NOW gives two operands with
+  // genuinely independent sources, so the pair cannot degenerate into a tautology.
+  const routeIdRef = useRef(id);
+  // Counts ROUTE COMMITS and nothing else. The mutation handlers below await network work
+  // and then write UI/form state — toasts, navigate(), and setIsDirty(false). Those writes
+  // are NOT covered by fetchJob's guard, because they happen before fetchJob is ever
+  // called: a stale handler resuming after the operator moved to another job marks THAT
+  // job clean, and the dirty effect only recomputes on [formSnapshot, loading,
+  // baselineSettleTick], so nothing restores it. The operator's unsaved edits then go
+  // silently when they navigate away, and the save-before-Start/Complete gates are down.
+  // (Codex round 4.)
+  //
+  // Deliberately NOT loadGenerationRef: that one is also bumped by fetchJob's per-call
+  // ticket, so a legitimate concurrent refetch would falsely mark a live handler stale.
+  // A route-commit count also distinguishes A -> B -> A, which an id comparison cannot:
+  // it bumps twice while the id compares equal to itself.
+  const routeEpochRef = useRef(0);
+  // Call at the START of a mutation handler, before its first await. The returned
+  // predicate reports whether the route is still the one the mutation began on.
+  const captureRouteEpoch = useCallback(() => {
+    const epoch = routeEpochRef.current;
+    return () => routeEpochRef.current === epoch;
+  }, []);
   const [baselineSettleTick, setBaselineSettleTick] = useState(0);
   const blocker = useUnsavedChanges(isDirty);
   // Field-app parity #16: allow a deep-link to a tab (e.g. the Jobs-list "Map / Logs"
@@ -1244,6 +1286,13 @@ export default function JobDetail() {
   // separate license-override confirmation round-trip, so an over-label job that ALSO needs
   // a license override still records its label-rate audit on the eventual save. Null when
   // there's no pending label override.
+  //
+  // Deliberately NOT paired with the job id it was raised for. Binding the reason to a job
+  // and re-checking that at confirm time was written and then removed: the route effect
+  // clears this ref and closes the prompt on every route commit, and the catch below refuses
+  // to raise one for a job the operator has left, so a confirm can only ever be reached on
+  // the job the prompt belongs to. A third check at the click would be unreachable — dead
+  // code that reads like a guarantee and can never be shown to hold. (Codex CRX-SEC-002.)
   const pendingOverrideReasonRef = useRef<string | null>(null);
   // §5: label max per product for the lines ON THIS JOB — fetched by product_id WITHOUT an
   // is_active filter (Codex P2), so a now-INACTIVE product on a saved job still gets its
@@ -1639,6 +1688,47 @@ export default function JobDetail() {
   }, [toast]);
 
   const fetchJob = useCallback(async () => {
+    // Ticket for THIS run (see loadGenerationRef). A post-save / post-start refetch
+    // issued while still on its own job shares the mounted run's ticket and proceeds
+    // normally; one issued after the operator has moved on is caught by the id binding
+    // below, since it carries the CURRENT ticket but the OLD job's id.
+    const startedForId = id;
+    // Reject an ALREADY-stale call before touching ANYTHING — before the ticket bump
+    // below and before the two synchronous baseline writes. A handler that awaited an
+    // RPC and is only now calling us would otherwise (a) null the baseline and raise
+    // the settle guard for the job currently on screen, then bail after its own await
+    // and never lower them again, and (b) burn a ticket, superseding the legitimate
+    // load that IS in flight for this route. Either way the damage is done before the
+    // first await, so ordering is the fix, not the check.
+    //
+    // (a) is Codex CRX-SEC-001: the dirty engine would never adopt a baseline for the
+    // job on screen — isDirty frozen false, the unsaved-changes prompt dead, and the
+    // "save before Start/Complete" gates bypassed, all while the page still LOOKS right.
+    //
+    // The ticket cannot serve as this test: it is claimed one line below, so at entry it
+    // would always equal itself. Only the route is an independent witness this early.
+    if (routeIdRef.current !== startedForId) return;
+    // Claim a UNIQUE ticket per CALL, not per route. Reading the ref without bumping it
+    // let every post-save / post-start / post-cancel refetch on one route share a single
+    // ticket, so none of them superseded any other and an older response could land on
+    // top of a newer one. The handlers each carry their own in-flight flag, so the same
+    // handler cannot double-fire — but two DIFFERENT handlers can overlap (Start Job in
+    // flight, then Cancel Job), which is exactly that race. (Codex round 2, finding 2.)
+    const generation = ++loadGenerationRef.current;
+    // The ticket carries this predicate: it catches a superseded load of the SAME record,
+    // where only call order separates the two runs in flight.
+    //
+    // The route clause is belt-and-braces and is NOT independently provable. An earlier
+    // version of this comment claimed it reddened the stale-handler test; that claim was
+    // wrong and has been retracted. Measured: removing this clause alone reddens nothing,
+    // and it still reddens nothing with the entry check above ALSO removed. The reason is
+    // structural — the layout effect writes loadGenerationRef and routeIdRef in the same
+    // commit, so a route change can never move one without the other, and the entry check
+    // rejects a stale-closure call before this predicate is ever consulted. Kept so the
+    // predicate stays correct if those two writes are ever decoupled; do not cite it as
+    // covered by a test.
+    const isCurrentLoad = () => loadGenerationRef.current === generation
+      && routeIdRef.current === startedForId;
     // Drop the baseline so the freshly-loaded form is re-adopted as clean once it
     // settles (also covers post-save refetches where loading stays false). The
     // settle guard defers adoption until this fetch's state has actually rendered.
@@ -1662,6 +1752,12 @@ export default function JobDetail() {
       .eq('id', id!)
       .single();
 
+    // Superseded — the operator is on a different job now. Install nothing. In
+    // particular do NOT fall into the not-found branch below: its toast and its
+    // redirect would fire against the job currently on screen. The newest run owns
+    // the baseline refs, so this run leaves them untouched.
+    if (!isCurrentLoad()) return;
+
     if (error || !data) {
       baselineSettleGuardRef.current = false;
       toast('error', 'Job not found');
@@ -1670,6 +1766,93 @@ export default function JobDetail() {
     }
 
     const j = data as unknown as JobDbRow;
+
+    // ---- Phase 1: finish every remaining round trip BEFORE installing anything. ----
+    //
+    // This function used to install the job onto the form here and THEN await two more
+    // reads. That left a window in which the form already showed this job's customer,
+    // date, notes and fields while a route change was still possible: navigating to
+    // /jobs/new inside it correctly abandoned the rest of the load, but the new-job branch
+    // only resets four pieces of state, so the customer, date, notes and field list stayed
+    // on the blank form — and saving it INSERTED a brand-new job carrying another
+    // customer's data, which then drove the field_billing_defaults split. A job billed to
+    // a customer who never ordered it.
+    //
+    // Gathering first and installing last removes the window instead of widening the reset
+    // list. A reset list has to be kept in step with ~30 setters by hand forever; this
+    // ordering cannot drift, because the invariant is simply "no await below this point".
+    // The last isCurrentLoad() check is therefore the real commit point. (Codex PR thread
+    // at JobDetail.tsx:1813, original_commit_id 9cee23cc7.)
+    //
+    // U16b: best-effort advisory before transfer. The transfer RPC remains the
+    // pricing authority; a failed read simply leaves the banner hidden.
+    const jobFields = j.job_fields || [];
+    const jobFieldIds = Array.from(new Set(jobFields.map((field) => field.field_id).filter(Boolean)));
+    let growerShareNames: string[] = [];
+    if (jobFieldIds.length > 0) {
+      const { data: growerShareRows, error: growerShareError } = await supabase
+        .from('field_billing_defaults')
+        .select('field_id')
+        .in('field_id', jobFieldIds)
+        .not('price_override_cents', 'is', null);
+      if (!isCurrentLoad()) return;
+      if (growerShareError) {
+        Sentry.captureException(growerShareError, { tags: { source: 'fetch', page: 'job-detail', context: 'grower_share_banner' } });
+      } else {
+        const overrideIds = new Set(
+          ((growerShareRows || []) as Array<{ field_id: string }>).map((row) => row.field_id),
+        );
+        growerShareNames = Array.from(new Set(
+          jobFields
+            .filter((field) => overrideIds.has(field.field_id))
+            .map((field) => field.field?.field_name || '')
+            .filter(Boolean),
+        ));
+      }
+    }
+
+    // Load saved shares; then SEED defaults for any field that has no saved
+    // shares (existing jobs created before this migration, or a field never
+    // touched), so the list/#26 split don't collapse to the primary customer
+    // (Codex). Defaults come from field_billing_defaults, else field owner 100%.
+    const savedShares: ShareRow[] = (j.job_field_shares || []).map((s) => ({
+      field_id: s.field_id,
+      customer_id: s.customer_id,
+      split_pct: s.split_pct?.toString() || '',
+      is_primary: s.is_primary,
+    }));
+    const fieldsWithShares = new Set(savedShares.map((s) => s.field_id));
+    const fieldsNeedingSeed = (j.job_fields || [])
+      .map((f) => f.field_id)
+      .filter((fid) => fid && !fieldsWithShares.has(fid));
+    if (fieldsNeedingSeed.length > 0) {
+      const { data: fbd } = await supabase
+        .from('field_billing_defaults')
+        .select('field_id, customer_id, split_pct, is_primary')
+        .in('field_id', fieldsNeedingSeed);
+      if (!isCurrentLoad()) return;
+      const fbdByField = new Map<string, { customer_id: string; split_pct: number; is_primary: boolean }[]>();
+      ((fbd || []) as { field_id: string; customer_id: string; split_pct: number; is_primary: boolean }[])
+        .forEach((d) => {
+          const list = fbdByField.get(d.field_id) ?? [];
+          list.push(d);
+          fbdByField.set(d.field_id, list);
+        });
+      for (const fid of fieldsNeedingSeed) {
+        const defs = fbdByField.get(fid);
+        if (defs && defs.length > 0) {
+          defs.forEach((d) => savedShares.push({ field_id: fid, customer_id: d.customer_id, split_pct: d.split_pct.toString(), is_primary: d.is_primary }));
+        } else if (j.customer_id) {
+          // No billing default on file — fall back to the job's customer at 100%
+          // (matches the server's derive_customer_shares_from_fields fallback).
+          savedShares.push({ field_id: fid, customer_id: j.customer_id, split_pct: '100', is_primary: true });
+        }
+      }
+    }
+
+    // ---- Phase 2: install. NOTHING below this line may await. ----
+    // Adding an await here re-opens the partial-install window described above; put any
+    // new round trip in phase 1, above the last isCurrentLoad() check.
     setJobNumber(j.job_number);
     setStatus(j.status);
     setCustomerId(j.customer_id);
@@ -1725,72 +1908,7 @@ export default function JobDetail() {
           sort_order: f.sort_order,
         }))
     );
-
-    // U16b: best-effort advisory before transfer. The transfer RPC remains the
-    // pricing authority; a failed read simply leaves the banner hidden.
-    const jobFields = j.job_fields || [];
-    const jobFieldIds = Array.from(new Set(jobFields.map((field) => field.field_id).filter(Boolean)));
-    if (jobFieldIds.length > 0) {
-      const { data: growerShareRows, error: growerShareError } = await supabase
-        .from('field_billing_defaults')
-        .select('field_id')
-        .in('field_id', jobFieldIds)
-        .not('price_override_cents', 'is', null);
-      if (growerShareError) {
-        Sentry.captureException(growerShareError, { tags: { source: 'fetch', page: 'job-detail', context: 'grower_share_banner' } });
-        setGrowerShareFieldNames([]);
-      } else {
-        const overrideIds = new Set(
-          ((growerShareRows || []) as Array<{ field_id: string }>).map((row) => row.field_id),
-        );
-        setGrowerShareFieldNames(Array.from(new Set(
-          jobFields
-            .filter((field) => overrideIds.has(field.field_id))
-            .map((field) => field.field?.field_name || '')
-            .filter(Boolean),
-        )));
-      }
-    } else {
-      setGrowerShareFieldNames([]);
-    }
-
-    // Load saved shares; then SEED defaults for any field that has no saved
-    // shares (existing jobs created before this migration, or a field never
-    // touched), so the list/#26 split don't collapse to the primary customer
-    // (Codex). Defaults come from field_billing_defaults, else field owner 100%.
-    const savedShares: ShareRow[] = (j.job_field_shares || []).map((s) => ({
-      field_id: s.field_id,
-      customer_id: s.customer_id,
-      split_pct: s.split_pct?.toString() || '',
-      is_primary: s.is_primary,
-    }));
-    const fieldsWithShares = new Set(savedShares.map((s) => s.field_id));
-    const fieldsNeedingSeed = (j.job_fields || [])
-      .map((f) => f.field_id)
-      .filter((fid) => fid && !fieldsWithShares.has(fid));
-    if (fieldsNeedingSeed.length > 0) {
-      const { data: fbd } = await supabase
-        .from('field_billing_defaults')
-        .select('field_id, customer_id, split_pct, is_primary')
-        .in('field_id', fieldsNeedingSeed);
-      const fbdByField = new Map<string, { customer_id: string; split_pct: number; is_primary: boolean }[]>();
-      ((fbd || []) as { field_id: string; customer_id: string; split_pct: number; is_primary: boolean }[])
-        .forEach((d) => {
-          const list = fbdByField.get(d.field_id) ?? [];
-          list.push(d);
-          fbdByField.set(d.field_id, list);
-        });
-      for (const fid of fieldsNeedingSeed) {
-        const defs = fbdByField.get(fid);
-        if (defs && defs.length > 0) {
-          defs.forEach((d) => savedShares.push({ field_id: fid, customer_id: d.customer_id, split_pct: d.split_pct.toString(), is_primary: d.is_primary }));
-        } else if (j.customer_id) {
-          // No billing default on file — fall back to the job's customer at 100%
-          // (matches the server's derive_customer_shares_from_fields fallback).
-          savedShares.push({ field_id: fid, customer_id: j.customer_id, split_pct: '100', is_primary: true });
-        }
-      }
-    }
+    setGrowerShareFieldNames(growerShareNames);
     setShareRows(savedShares);
 
     // F06 (2026-09-03): the stored `driver` comes back with the row, so a reloaded line
@@ -1849,20 +1967,109 @@ export default function JobDetail() {
     // initialLoadDone is armed by the loading-settle effect (rAF after loading=false).
   }, [id, toast, navigate]);
 
+  // Route invalidation runs in a LAYOUT effect, not the passive one below. Passive
+  // effects are deferred: React commits the new route's render and can yield to the
+  // event loop before they run, and a job-A response settling in that gap would still
+  // read the OLD routeIdRef, pass isCurrentLoad(), and install A's values on B's route
+  // — the original data-corruption outcome. Layout effects run synchronously inside the
+  // commit, so no promise continuation can interleave between the route changing and
+  // this ref being updated. (Codex round 2, finding 1.)
+  //
+  // setLoading(true) is the other half, and it is not cosmetic. `loading` is seeded once
+  // at mount (useState(!isNew)), so on a saved-job -> saved-job navigation it stayed
+  // false for the whole load window: the form kept rendering the PREVIOUS job's values,
+  // fully editable, with Save live — while `id`, which handleSave writes to, had already
+  // become the new job's. An operator saving in that window wrote one job's data onto
+  // another's row, which is the exact corruption this page-level guard exists to prevent.
+  // Gating on `loading` swaps the form for the skeleton until the new job's data lands.
+  //
+  // WHAT THE ROUTE-ID REMOUNT CHANGED (see src/components/JobDetailRoute.tsx). The route now keys
+  // this component by job id, so a job -> job navigation UNMOUNTS this instance and mounts a
+  // fresh one. Within one mount `id` can therefore never change. That makes parts of the
+  // machinery below redundant IN PRODUCTION, and saying so is the point — an unreachable guard
+  // that reads like a guarantee is worse than no guard:
+  //
+  //   - Redundant while the route stays keyed: every `routeIdRef` comparison (it can no longer
+  //     differ from `id`); the `setLoading(true)` below (a saved job now MOUNTS with loading
+  //     true, from useState(!isNew)); and the license-prompt close below (a fresh instance
+  //     starts with the prompt shut).
+  //   - Still load-bearing: the epoch counter, because leaving this page — to another job or
+  //     off JobDetail entirely — now always unmounts, and the cleanup below is what tells an
+  //     in-flight handler its record is gone. It is the guard that survived the remount, not
+  //     the one the remount replaced.
+  //   - Still load-bearing: the load-generation ticket and fetchJob's gather/install split,
+  //     which order two loads of the SAME job inside one mount. A remount cannot help there.
+  //
+  // All of it is KEPT deliberately. The tests below mount this component directly, WITHOUT the
+  // route's key, so they continue to exercise the redundant paths — that is what keeps them
+  // honest if the key is ever dropped, and JobDetailRoute.test.tsx pins the key itself so the
+  // two cannot silently diverge. Do not delete a guard here on the grounds that the remount
+  // covers it without first removing that pin and saying so out loud.
+  useLayoutEffect(() => {
+    loadGenerationRef.current += 1;
+    routeEpochRef.current += 1;
+    routeIdRef.current = id;
+    if (!isNew && id) setLoading(true);
+    // An open license-override prompt must not survive a route change. It is a modal whose
+    // confirm SAVES a job, so leaving it standing over the next record invites an admin to
+    // authorize an administrative override against a job nobody asked to override. Closing
+    // it here removes the window for a prompt already on screen; the gate in performSave's
+    // catch is what stops a LATE rejection raising one over the next job. (Codex
+    // CRX-SEC-002.)
+    pendingOverrideReasonRef.current = null;
+    setShowLicenseOverrideConfirm(false);
+    // Invalidate the route epoch on UNMOUNT as well as on the next route commit. Only the
+    // body above bumped it, and the body does not run when the page is left entirely, so
+    // after navigating AWAY from JobDetail a save or transfer still in flight saw
+    // stillOnThisJob() === true: it could toast, clear the dirty flag, or navigate() the
+    // operator off whatever page they had moved to, all from the closure of a page that is
+    // gone. The passive effect below already does exactly this for its own ticket, which is
+    // why the ticket was covered and the epoch was not. Re-running this effect fires the
+    // cleanup too, so a job -> job navigation bumps twice; the counter is only ever compared
+    // for equality, so an extra bump invalidates nothing that a single bump would not.
+    // (Codex CRX-SEC-001.)
+    return () => { routeEpochRef.current += 1; };
+  }, [id, isNew]);
+
   useEffect(() => {
-    // This component is reused across `jobs/:id`, so it does NOT remount when the
-    // route id alone changes. A slow reply for the job that was on screen when the
-    // effect started can therefore land after the operator has opened a different
-    // job. `cancelled` marks that the reply no longer describes what is on screen.
-    let cancelled = false;
     // Await lookups FIRST so every lookup-driven re-render happens before the job
     // rows are populated and dirty-tracking is armed — otherwise a late-landing
     // lookup re-render after arming would mark a freshly-opened job dirty.
+    // Take this run's ticket BEFORE any await, and before fetchJob captures it.
+    // With the route keyed, a job -> job move REMOUNTS and this effect runs fresh; in the
+    // tests' unkeyed direct mounts it re-runs instead. Either way, this effect running IS
+    // the "operator moved to another job" signal; the cleanup below bumps for unmount too.
+    // The layout effect above has already bumped and re-pointed routeIdRef for this
+    // commit; bumping again here is monotonic and harmless.
+    const generation = ++loadGenerationRef.current;
+    const isCurrentLoad = () => loadGenerationRef.current === generation;
+    // A superseded fetchJob bails without clearing the settle guard it raised, and
+    // the new-job branch below never calls fetchJob at all — so on job -> /jobs/new
+    // the guard would stick true, the dirty engine would never adopt a baseline,
+    // and the unsaved-changes prompt would silently stop protecting that form.
+    // The run starting HERE owns the guard: reset it before anyone awaits. Only
+    // fetchJob raises it, synchronously at entry — and its entry check rejects any
+    // call already bound to a different job, so nothing can raise it again on this
+    // job's behalf after this point. Both halves are needed: this reset alone does
+    // not help against a stale handler that calls fetchJob LATER, because the effect
+    // does not re-run when it does (Codex CRX-SEC-001).
+    baselineSettleGuardRef.current = false;
     (async () => {
       await loadLookups();
+      // Lookups are record-independent, so landing them late is harmless — but
+      // everything past this point is specific to ONE job, so a superseded run
+      // must stop here. Without this, the cancelled /jobs/new run would go on to
+      // clear the grower-share names, vessel and tank capacity of the job that is
+      // now on screen.
+      if (!isCurrentLoad()) return;
       if (!isNew && id) {
         await fetchJob();
       } else {
+        // `loading` is seeded once, at mount (useState(!isNew)), so arriving here
+        // from a saved job leaves it true — and the superseded fetchJob that would
+        // have cleared it now bails. A new job is never loading; say so explicitly
+        // or the page sits on its skeleton forever. No-op on a direct /jobs/new.
+        setLoading(false);
         setGrowerShareFieldNames([]);
         setLoaderVesselId(ASSIGNED_VEHICLE_VESSEL_VALUE);
         setTankCapacity('');
@@ -1879,16 +2086,23 @@ export default function JobDetail() {
         // number that is actually kept. So this is a preview, and the wording below
         // must not promise the operator that a number is being held for them.
         //
-        // Both UI effects are gated on `cancelled`: a preview or a failure notice
-        // for /jobs/new must never overwrite the number of, or raise a toast over,
-        // an existing job the operator opened while this was in flight. Sentry is
-        // NOT gated — a real server failure happened and is worth reporting even
-        // though the operator has moved on.
+        // MERGE 2026-09-06: main gated these UI effects on a `cancelled` boolean set
+        // in the effect cleanup. This branch already carries a stronger primitive for
+        // the same hazard — isCurrentLoad(), a generation ticket — so the invariant is
+        // expressed once, in that form, rather than carrying two mechanisms for one
+        // rule. A boolean only knows "this effect run was torn down"; the ticket also
+        // survives A -> B -> A navigation, where a remount re-arms a fresh
+        // `cancelled = false` while the first visit's reply is still in flight.
+        //
+        // Sentry stays UNGATED, exactly as main had it: a real server failure happened
+        // and is worth reporting even though the operator has moved on. That is the
+        // same partition this file applies to the save receipt — gate what lands on
+        // THIS page, never what merely records a fact.
         try {
           const { data, error } = await supabase.rpc('next_job_number');
           if (error) throw error;
           const previewedJobNumber = assertRpcResult<string>(data, 'next_job_number');
-          if (!cancelled) setJobNumber(previewedJobNumber);
+          if (isCurrentLoad()) setJobNumber(previewedJobNumber);
         } catch (err: unknown) {
           // Supabase errors are PLAIN OBJECTS, not Error instances, so
           // `new Error(String(err))` yields "[object Object]" and throws away the
@@ -1903,7 +2117,7 @@ export default function JobDetail() {
             err instanceof Error ? err : new Error(reportedMessage),
             { tags: { source: 'rpc', action: 'next_job_number' } },
           );
-          if (!cancelled) {
+          if (isCurrentLoad()) {
             toast(
               'error',
               hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)
@@ -1913,12 +2127,14 @@ export default function JobDetail() {
           }
         }
         const recipeParam = searchParams.get('recipe_id');
-        if (recipeParam && !cancelled) setRecipeId(recipeParam);
+        if (recipeParam && isCurrentLoad()) setRecipeId(recipeParam);
         // New job: loading is already false; the loading-settle effect arms
         // initialLoadDone after the first committed frame.
       }
     })();
-    return () => { cancelled = true; };
+    // Supersede this run on unmount as well as on re-run. The next run takes a
+    // fresh ticket with ++, so the counter stays monotonic either way.
+    return () => { loadGenerationRef.current += 1; };
   }, [id, fetchJob, isNew, loadLookups, searchParams, toast]);
 
   // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')
@@ -2291,7 +2507,11 @@ export default function JobDetail() {
       if (st.status === 'expired') {
         if (profile?.role === 'admin') {
           // §5: stash the label-override reason so confirming the license modal still
-          // records the audit (the modal's performSave(true) reads this ref).
+          // records the audit (the modal's performSave(true) reads this ref). This site
+          // needs no staleness gate: nothing above it in runJobSave awaits, and handleSave
+          // reaches runJobSave without awaiting either, so it runs in the click's own tick
+          // and the route cannot have moved underneath it. The post-await twin in
+          // performSave's catch is the one that can go stale, and it is gated there.
           pendingOverrideReasonRef.current = overrideReasonForAudit ?? null;
           setShowLicenseOverrideConfirm(true);
         } else {
@@ -2408,6 +2628,11 @@ export default function JobDetail() {
   };
 
   const performSave = async (licenseOverride: boolean, overrideReasonForAudit?: string) => {
+    // Bound to the route this save STARTED on — see captureRouteEpoch. Captured here
+    // rather than in handleSave because the expired-license override path calls
+    // performSave directly, and this is where the save actually begins. The job row is
+    // written for `id` either way; what this gates is the UI/form state afterwards.
+    const stillOnThisJob = captureRouteEpoch();
     // This belongs inside performSave, before any state change or payload/RPC work: the
     // expired-license override calls this function directly and must not bypass the same
     // finite, non-negative acreage boundary. Intentional blanks retain the established
@@ -2579,11 +2804,13 @@ export default function JobDetail() {
           if (overrideReasonForAudit) {
             await writeOverrideAudit(overrideReasonForAudit, isNew ? result.job_id : (id || null));
           }
-          setIsDirty(false);
-          if (isNew) {
-            navigate(`/jobs/${result.job_id}`);
-          } else {
-            await fetchJob();
+          if (stillOnThisJob()) {
+            setIsDirty(false);
+            if (isNew) {
+              navigate(`/jobs/${result.job_id}`);
+            } else {
+              await fetchJob();
+            }
           }
           setSaving(false);
           return;
@@ -2607,11 +2834,13 @@ export default function JobDetail() {
           if (overrideReasonForAudit) {
             await writeOverrideAudit(overrideReasonForAudit, isNew ? result.job_id : (id || null));
           }
-          setIsDirty(false);
-          if (isNew) {
-            navigate(`/jobs/${result.job_id}`);
-          } else {
-            await fetchJob();
+          if (stillOnThisJob()) {
+            setIsDirty(false);
+            if (isNew) {
+              navigate(`/jobs/${result.job_id}`);
+            } else {
+              await fetchJob();
+            }
           }
           setSaving(false);
           return;
@@ -2676,27 +2905,80 @@ export default function JobDetail() {
         })();
       }
 
-      toast('success', isNew ? 'Job created' : 'Job saved');
-      setIsDirty(false);
-      setSavedApplicatorId(applicatorId || null);
-      setSavedJobDate(jobDate);
+      // CRX-ENTITY-003. An earlier round of this PR gated this WHOLE block on
+      // stillOnThisJob(). That was too wide: the reasoning only ever applied to the
+      // statements that touch THIS page. The row COMMITS regardless, so gating the
+      // acknowledgement of a CREATE traded a visible wrong (yanked onto the new job) for
+      // a silent one (a job exists and nobody was told) — and a component-local
+      // idempotency key dies on unmount, so the operator's retry mints a DUPLICATE job.
+      //
+      // The partition test, stated precisely so it does not over-generalise. Ungate a
+      // statement only when BOTH hold: it touches no page state, AND it carries information
+      // the operator cannot otherwise recover. Both halves are load-bearing. The
+      // 'Job started' / 'Job completed' / 'Job cancelled' / invoice-created toasts further
+      // down touch no page state either and stay GATED on purpose: their RPCs refuse a
+      // replay (complete_job requires in_progress; transfer_job_to_invoice refuses
+      // 'Job already invoiced'), so a retry there yields an explanatory error, not a
+      // duplicate row. save_job with p_job_id NULL is the ONE site where the retry
+      // silently duplicates, which is what makes its receipt load-bearing rather than
+      // merely courteous.
+      const onThisJob = stillOnThisJob();
 
       if (isNew) {
-        navigate(`/jobs/${result.job_id}`);
+        // UNGATED — the create receipt. For a CREATE there is no record on screen to fall
+        // back on, so this toast is the only evidence the job exists. A late arrival names
+        // the CUSTOMER so it cannot be misread as a confirmation about whatever job is on
+        // screen now: SaveJobResult carries only { job_id } (:199), so the farm name already
+        // in this closure is the most identifying thing available without another round trip.
+        const createdForFarm = customers.find((c) => c.id === customerId)?.farm_name;
+        toast('success', onThisJob
+          ? 'Job created'
+          : `Job for ${createdForFarm || 'this customer'} created — find it in the jobs list`);
+        // UNGATED — warnIfOverCreditLimit touches NO JobDetail state. It writes a durable
+        // admin notification row (notifyCreditLimitExceeded -> notifyAdmins) and raises a
+        // toast from the app-level provider. Gating it silently skipped a credit control
+        // on an already-committed job; on main this warning always fired.
         void warnIfOverCreditLimit(customerId, toast);
-      } else {
-        await fetchJob();
+      } else if (onThisJob) {
+        // GATED — for an UPDATE the record is already known to exist, so a late "Job saved"
+        // carries no receipt, only the false impression that the job now on screen saved.
+        toast('success', 'Job saved');
+      }
+
+      // GATED — every statement below lands on THIS page. A stale success must not clear
+      // the CURRENT job's dirty flag, refetch over it, or navigate the operator off the
+      // job they are now editing and onto the one they left.
+      if (onThisJob) {
+        setIsDirty(false);
+        setSavedApplicatorId(applicatorId || null);
+        setSavedJobDate(jobDate);
+
+        if (isNew) {
+          navigate(`/jobs/${result.job_id}`);
+        } else {
+          await fetchJob();
+        }
       }
     } catch (err: unknown) {
       // Race: licenses changed since page load and the DB trigger fired.
       if (hasRpcCode(err, RpcErrorCodes.LICENSE_EXPIRED)) {
-        if (profile?.role === 'admin') {
-          // §5: the save was rejected (LICENSE_EXPIRED) — NOTHING committed — so carry the
-          // label-override reason into the license-override retry to record the audit then.
-          pendingOverrideReasonRef.current = overrideReasonForAudit ?? null;
-          setShowLicenseOverrideConfirm(true);
-        } else {
-          toast('error', "This applicator's license has expired — an admin can override if needed.");
+        // Same gate as the success path above, and for a sharper reason. This rejection can
+        // land AFTER the operator has moved to another job, and the prompt it raises is not
+        // cosmetic: confirming it calls performSave(true) from the CURRENT render, which
+        // saves whatever job is on screen NOW through the administrative license-override
+        // path — writing an override audit that reads as a deliberate override of a job
+        // nobody overrode. The six sibling sites in this handler were gated in an earlier
+        // round and this one was missed; a partly-gated handler is the same defect.
+        // (Codex CRX-SEC-002.)
+        if (stillOnThisJob()) {
+          if (profile?.role === 'admin') {
+            // §5: the save was rejected (LICENSE_EXPIRED) — NOTHING committed — so carry the
+            // label-override reason into the license-override retry to record the audit then.
+            pendingOverrideReasonRef.current = overrideReasonForAudit ?? null;
+            setShowLicenseOverrideConfirm(true);
+          } else {
+            toast('error', "This applicator's license has expired — an admin can override if needed.");
+          }
         }
       // `err instanceof Error && err.message.includes('SHARE_NOT_100')` was dead
       // on arrival here: save_job's refusal arrives as a plain PostgREST object,
@@ -2714,6 +2996,7 @@ export default function JobDetail() {
 
   const handleStart = async () => {
     if (!profile || !id) return;
+    const stillOnThisJob = captureRouteEpoch();
     setStarting(true);
     try {
       const idemKey = startJobIdem.getKey();
@@ -2726,8 +3009,21 @@ export default function JobDetail() {
       assertRpcResult(data, 'start_job');
       startJobIdem.resetKey();
       logActivity({ event: 'job_started', description: `Job ${jobNumber} started`, performedBy: profile.id });
-      toast('success', 'Job started');
-      await fetchJob();
+      // The start committed and the activity log above records it either way. Everything
+      // below writes to whatever job is on screen NOW: a success toast, and a refetch that
+      // reinstalls this job's server state over the form — discarding the operator's
+      // unsaved edits on the job they actually moved to. Its three neighbours
+      // (handleComplete, handleCancelJob, handleTransferToInvoice) were gated in round 4
+      // and this one was missed, even though the routeIdRef comment at the top of this
+      // file names handleStart as an example of the very shape it guards against.
+      // A -> B -> A defeats the other two operands here: routeIdRef is back to A so
+      // fetchJob's entry check passes, and fetchJob mints its own CURRENT ticket with
+      // ++ so the ticket check certifies it too. Only a route-COMMIT count rejects it.
+      // (Codex CRX-SEC-003.)
+      if (stillOnThisJob()) {
+        toast('success', 'Job started');
+        await fetchJob();
+      }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'start_job' } });
       toast('error', sanitizeError(err));
@@ -2736,6 +3032,7 @@ export default function JobDetail() {
   };
 
   const handleComplete = async () => {
+    const stillOnThisJob = captureRouteEpoch();
     setCompleting(true);
     try {
       // #68: after-the-fact completion — the office is recording a job that was
@@ -2765,10 +3062,15 @@ export default function JobDetail() {
       completeJobIdem.resetKey();
       const result = assertRpcResult<CompleteJobResult>(data, 'complete_job');
       if (profile) logActivity({ event: 'job_completed', description: `Job ${jobNumber} completed → App Record ${result.record_number}`, performedBy: profile.id });
-      toast('success', `Job completed! Application record ${result.record_number} created.`);
-      setShowCompleteModal(false);
-      setIsDirty(false);
-      await fetchJob();
+      // Completion committed; the activity log above records it either way. Everything
+      // below writes to whatever job is on screen NOW, so it is gated on that still
+      // being the job this completion started on.
+      if (stillOnThisJob()) {
+        toast('success', `Job completed! Application record ${result.record_number} created.`);
+        setShowCompleteModal(false);
+        setIsDirty(false);
+        await fetchJob();
+      }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'complete_job' } });
       // U12 Codex R5 #2: same translation as FieldView — a dispatch-only
@@ -2783,6 +3085,7 @@ export default function JobDetail() {
   };
 
   const handleCancelJob = async () => {
+    const stillOnThisJob = captureRouteEpoch();
     if (status !== 'scheduled' && status !== 'in_progress') {
       toast('error', `Cannot cancel a job in '${status}' status — only scheduled or in-progress jobs can be cancelled`);
       return;
@@ -2796,9 +3099,14 @@ export default function JobDetail() {
         .select();
       checkMutationResult(result, 'Cancel job');
       if (profile) logActivity({ event: 'job_cancelled', description: `Job ${jobNumber} cancelled`, performedBy: profile.id });
-      toast('success', 'Job cancelled');
-      setIsDirty(false);
-      await fetchJob();
+      // The cancel committed and is logged. Gate the on-screen half: a stale success
+      // toast would claim the job the operator is NOW looking at was cancelled, and the
+      // setIsDirty(false) would silently strip that job's unsaved-changes protection.
+      if (stillOnThisJob()) {
+        toast('success', 'Job cancelled');
+        setIsDirty(false);
+        await fetchJob();
+      }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'cancel_job' } });
       toast('error', sanitizeError(err));
@@ -2807,6 +3115,7 @@ export default function JobDetail() {
   };
 
   const handleTransferToInvoice = async () => {
+    const stillOnThisJob = captureRouteEpoch();
     setTransferring(true);
     try {
       const idemKey = transferJobIdem.getKey();
@@ -2818,15 +3127,19 @@ export default function JobDetail() {
       if (error) throw error;
       transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
-      setIsDirty(false);
-      if (result.split && (result.invoice_count ?? 0) > 1) {
-        // U7 multi-owner split: one payable invoice was created per field owner. Navigate to
-        // the anchor (primary owner) member; the invoice view links to the sibling invoices.
-        toast('success', `Created ${result.invoice_count} split invoices — one per field owner`);
-      } else {
-        toast('success', `Invoice ${result.invoice_number} created`);
+      // The invoice exists either way. Without this gate a stale transfer would clear the
+      // dirty flag of whatever job is on screen and then navigate the operator off it.
+      if (stillOnThisJob()) {
+        setIsDirty(false);
+        if (result.split && (result.invoice_count ?? 0) > 1) {
+          // U7 multi-owner split: one payable invoice was created per field owner. Navigate to
+          // the anchor (primary owner) member; the invoice view links to the sibling invoices.
+          toast('success', `Created ${result.invoice_count} split invoices — one per field owner`);
+        } else {
+          toast('success', `Invoice ${result.invoice_number} created`);
+        }
+        navigate(`/field-invoices/${result.invoice_id}`);
       }
-      navigate(`/field-invoices/${result.invoice_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
       if (hasRpcCode(err, RpcErrorCodes.BLEND_TICKET_ALREADY_BILLED)) {
