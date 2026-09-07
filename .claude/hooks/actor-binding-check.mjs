@@ -292,7 +292,51 @@ if (proposed.error) {
 const content = proposed.content;
 if (!content) out("allow");
 
-if (/--\s*actor-binding-check:\s*exempt/i.test(content)) {
+// The marker disables the ENTIRE guard, so it must be a real file-level SQL
+// comment rather than text that merely appears somewhere in the file.
+// `SELECT '-- actor-binding-check: exempt';` is string DATA: a migration that
+// stores that text must not be able to switch the guard off for the routines
+// that follow it. Only the header — the run of whitespace and comments before
+// the first executable token — is searched. Every real use in this repository
+// already puts the marker on line 1.
+const EXEMPT_MARKER_RE = /--\s*actor-binding-check:\s*exempt/i;
+function hasHeaderExemptMarker(text) {
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n" || ch === "\f" || ch === "\v") {
+      i++;
+      continue;
+    }
+    if (ch === "-" && text[i + 1] === "-") {
+      const nl = text.indexOf("\n", i + 2);
+      const end = nl === -1 ? text.length : nl;
+      if (EXEMPT_MARKER_RE.test(text.slice(i, end))) return true;
+      i = end;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { depth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      // An unterminated block comment swallows the rest of the file, so there
+      // is no trustworthy header left to read; fail closed and keep checking.
+      if (depth > 0) return false;
+      if (EXEMPT_MARKER_RE.test(text.slice(i, j))) return true;
+      i = j;
+      continue;
+    }
+    // First executable token — the header comment block is over.
+    return false;
+  }
+  return false;
+}
+
+if (hasHeaderExemptMarker(content)) {
   out("allow");
 }
 
@@ -3618,9 +3662,14 @@ try {
   }
   for (const altered of alteredSecurityModes) {
     if (altered.mode !== "DEFINER") continue;
+    // Same rule the CREATE-originated path uses: a rename, schema move, or drop
+    // between the elevation and the demotion breaks textual identity, so the
+    // later mode may belong to a DIFFERENT routine that merely reused the name.
+    // The originally elevated routine stays owner-privileged under its new name.
     const laterMode = alteredSecurityModes.findLast((candidate) =>
       candidate.index > altered.index &&
       routineAltersMatch(candidate, altered) &&
+      !identityChangeIndexes.some((index) => index > altered.index && index < candidate.index) &&
       (!hasRollbackControl || candidate.mode !== "INVOKER")
     );
     if (laterMode?.mode === "INVOKER") continue;

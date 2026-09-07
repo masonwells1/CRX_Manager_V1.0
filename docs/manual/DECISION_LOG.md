@@ -7,6 +7,32 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-06 — the exempt marker must be a header comment in PR #449; keep the broader cap
+
+**Source:** Mason's continuing direction to get PR #449 clean and mergeable, applied after the two
+still-open exact-SHA Codex findings on the PR were reproduced against the merged candidate.
+
+**Decision.** `-- actor-binding-check: exempt` disables the entire guard, so it is honored only inside
+the migration's leading comment block — the run of whitespace and `--` or `/* */` comments before the
+first executable token. Marker text stored as SQL string data, or written below the migration's SQL,
+no longer disarms the guard. An unterminated header block comment fails closed.
+
+**Boundary.** This is one bounded change to how the escape hatch is recognized. Every existing use in
+this repository already puts the marker on line 1, so no reviewed exemption is withdrawn. It does not
+add a SQL parser, widen actor-name or dataflow discovery, or change the broader best-effort cap.
+
+## 2026-09-06 — stop ALTER-originated final-mode tracking across identity changes in PR #449
+
+**Source:** Same direction and same reproduction session as the entry above.
+
+**Decision.** The 2026-09-04 rule that refuses to track a later `SECURITY INVOKER` across an
+intervening rename, schema move, or drop now also applies to routines elevated by
+`ALTER ... SECURITY DEFINER` with no readable CREATE body in the migration. A namesake replacement's
+demotion cannot clear definer evidence for a routine that was renamed away and stays owner-privileged.
+
+**Boundary.** This extends one existing test to a second code path; a demotion with no intervening
+identity change is still accepted. It does not model the catalog lifecycle or change the broader cap.
+
 ## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
 
 **Source:** Mason's decision on 2026-09-05, after the 2026-09-05 analysis recorded in `docs/manual/KNOWN_ISSUES.md`.

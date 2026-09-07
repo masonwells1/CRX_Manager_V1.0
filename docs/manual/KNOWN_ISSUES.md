@@ -1365,13 +1365,29 @@ predicates (`predicates/actor-forgery.sql`, `-fin-audit.sql`) are the **post-app
 live catalog, and are indifferent to how the file was written.
 
 **Status: capped as best-effort on 2026-09-01** — see the DECISION_LOG entry of the same date. PR #449
-replaces the old 213-line whole-write-only check with the hardened guard described here when it lands:
-supported Edit/MultiEdit changes are reconstructed against the full file with CRLF-safe handling, visible
+replaces the shorter guard that `main` runs today (235 lines, verified 2026-09-06, already carrying the
+narrow 2026-09-03 Edit/MultiEdit reconstruction maintenance) with the hardened guard described here when
+it lands: supported Edit/MultiEdit changes are reconstructed against the full file with CRLF-safe handling, visible
 actor forwarding to callables is refused, and the 19
 reproduced laundering channels plus the authorized non-first-`INTO`, `VALUES … INTO`, and final-security-mode repairs are covered. Until #449 is
-merged, `main` still runs the old guard; after it is merged, this paragraph describes the active hook. The
+merged, `main` still runs the shorter guard; after it is merged, this paragraph describes the active hook. The
 rewrite is still **not a boundary**, and no document should describe it as preventing actor forgery. The
 remaining gaps below and the non-`Write`/`Edit`/`MultiEdit` tool-path limit are why the cap remains operative.
+
+**Header-only exemption marker (authorized 2026-09-06).** The `-- actor-binding-check: exempt` marker
+switches the whole guard off, and until this repair the hook searched for it in the raw file text. A
+migration beginning `SELECT '-- actor-binding-check: exempt';` therefore disarmed the guard for every
+routine that followed, with the marker living in ordinary string DATA. The marker is now honored only
+inside the file's leading comment block — the run of whitespace and `--` / `/* */` comments before the
+first executable token — which is where every real use in this repository already puts it. An
+unterminated header block comment fails closed and the guard keeps checking.
+
+**ALTER-originated identity narrowing (authorized 2026-09-06).** The 2026-09-04 rule that stops
+final-security-mode tracking across a rename, schema move, or drop covered only routines with a readable
+CREATE in the same migration. A routine elevated by `ALTER ... SECURITY DEFINER`, renamed away, and then
+shadowed by a namesake replacement that is demoted to `SECURITY INVOKER` still read as demoted. The
+ALTER-only path now applies the same intervening-identity-change test, so the still-elevated routine is
+reported. Neither repair widens actor-name discovery, adds a SQL parser, or changes the broader cap.
 
 **Final-security-mode narrowing (authorized 2026-09-03).** A later
 `ALTER ... SECURITY INVOKER` no longer clears earlier definer evidence when executable SQL in the

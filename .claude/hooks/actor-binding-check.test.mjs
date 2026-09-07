@@ -3481,6 +3481,23 @@ for (const [label, identityChange] of [
   ok(isDeny(r), `${label} prevents a replacement demotion from clearing earlier definer evidence`);
 }
 
+// The same rule has to hold when the elevation arrives by ALTER and this
+// migration supplies no CREATE body: the elevated routine keeps owner rights
+// under its new name, so a namesake replacement's demotion proves nothing.
+r = runHook(
+  "ALTER FUNCTION public.alter_only_actor(uuid) SECURITY DEFINER;\n" +
+  "ALTER FUNCTION public.alter_only_actor(uuid) RENAME TO alter_only_actor_moved;\n" +
+  "ALTER FUNCTION public.alter_only_decoy(uuid) RENAME TO alter_only_actor;\n" +
+  "ALTER FUNCTION public.alter_only_actor(uuid) SECURITY INVOKER;"
+);
+ok(isDeny(r), "an ALTER-elevated definer renamed away cannot be cleared by a namesake demotion");
+
+r = runHook(
+  "ALTER FUNCTION public.alter_only_plain(uuid) SECURITY DEFINER;\n" +
+  "ALTER FUNCTION public.alter_only_plain(uuid) SECURITY INVOKER;"
+);
+ok(!isDeny(r), "an ALTER-elevated definer demoted with no intervening identity change stays allowed");
+
 r = runHook(
   fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")
     .replace("public.test_fn", "public.documented_demotion") +
@@ -3608,6 +3625,20 @@ ok(!isDeny(r), "SECDEF mutator with NO actor-shaped parameter is allowed");
 
 r = runHook("-- actor-binding-check: exempt\n" + fn(MUTATION));
 ok(!isDeny(r), "file-level exempt marker skips the check entirely");
+
+// The marker switches the WHOLE guard off, so only a real header comment may
+// carry it. Stored SQL text that merely spells the marker must not disarm it.
+r = runHook("SELECT '-- actor-binding-check: exempt';\n" + fn(MUTATION));
+ok(isDeny(r), "the exempt marker inside SQL string data does NOT disable the guard");
+
+r = runHook(fn(MUTATION) + "\n-- actor-binding-check: exempt\n");
+ok(isDeny(r), "the exempt marker below the migration's SQL is not a file-level marker");
+
+r = runHook("-- 20260807000000_test.sql\n-- notes\n-- actor-binding-check: exempt\n" + fn(MUTATION));
+ok(!isDeny(r), "the exempt marker is honored anywhere in the leading comment block");
+
+r = runHook("/* -- actor-binding-check: exempt */\n" + fn(MUTATION));
+ok(!isDeny(r), "a header block comment may carry the exempt marker");
 
 // Edit-tool payloads use new_string rather than content
 r = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")], {
