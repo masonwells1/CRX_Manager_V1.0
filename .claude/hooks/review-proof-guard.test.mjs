@@ -2,6 +2,8 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -685,5 +687,506 @@ for (const payload of [
 // The pattern below is the real thing: quoted, bracket-classed, and free of the
 // `|` that splits the segment.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } }).stdout, "");
+
+// ── 2026-09-04 usage audit: three false-positive classes narrowed, each pinned in
+// both directions so the deny side cannot quietly widen back or drift open. ──
+
+// (1) A NATIVE single-file Read against the state DIRECTORY. Reading a non-proof
+// file there (the intent flag, the review transcript, the autopilot flag) is what
+// the guards' own messages and the codex-review skill ask for; 33 such denials in
+// a fortnight. Only `Read`/`NotebookRead`, and only when the path resolves through
+// the OS to a REAL regular file whose real name is not a proof: exact-SHA
+// gpt-5.6-sol round 4 opened a proof through its Windows 8.3 alias
+// (`CODEX-~1.JSO`), so the exemption now canonicalizes before it opens. The
+// fixture is a real state directory on disk; the cases that need an alias ask the
+// OS for one and record a skip when the volume does not generate them.
+{
+  const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-read-"));
+  const stateDir = path.join(fixtureRoot, ".claude", "session-state");
+  mkdirSync(stateDir, { recursive: true });
+  const write = (name, body = "x") => { const p = path.join(stateDir, name); writeFileSync(p, body); return p; };
+  const intentFlag = write("OVERNIGHT-INTENT.flag");
+  const capture = write("codex-review-latest.txt", "VERDICT: CLEAN\n");
+  const autopilot = write("AUTOPILOT.on");
+  const notebook = write("notes.ipynb", "{}");
+  const proof = write("codex-review-0123abcd.json", "{\"verdict\":\"clean\"}");
+  const ledger = write("applied-source-ledger.json", "[]");
+  // Round 11 (HIGH): evidence the proof-NAME rule never listed. The migration
+  // reviewer proof is minted by scripts/write-apply-proofs.mjs and consumed by
+  // migration-apply-lib.mjs; the others are the same shape. All are JSON, and
+  // JSON in the state directory is evidence by shape — present and future
+  // producers alike — so each fails closed while a `.txt` reviewer CAPTURE
+  // (the human-readable transcript, not the proof) stays readable.
+  const migrationProof = write("migration-review-20260901120000_x.json", "{\"verdict\":\"clean\"}");
+  const migrationCodexProof = write("codex-review-mig-20260901120000_x.json", "{}");
+  const claudePushProof = write("claude-review-push.json", "{}");
+  const appliedSnapshot = write("applied-migrations.json", "[]");
+  const holdLatch = write("hold.json", "{}");
+  const unlistedJson = write("some-future-gate-proof.json", "{}");
+  const reviewerCapture = write("codex-review-mig-20260901120000_x-rls-security-reviewer-capture.txt", "FINAL_VERDICT: SHIP\n");
+  try {
+    for (const payload of [
+      { tool_name: "Read", tool_input: { file_path: intentFlag } },
+      { tool_name: "Read", tool_input: { file_path: capture } },
+      { tool_name: "Read", tool_input: { file_path: reviewerCapture } },
+      { tool_name: "Read", tool_input: { file_path: autopilot.replace(/\\/g, "/") } },
+      { tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: ".claude/session-state/OVERNIGHT-INTENT.flag" } },
+      { tool_name: "NotebookRead", tool_input: { notebook_path: notebook } },
+    ]) {
+      const result = run(payload);
+      assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+      assert.equal(result.stdout, "", `native single-file read of a real state-dir file must be allowed: ${JSON.stringify(payload.tool_input)}`);
+    }
+    // Fail closed on everything that is not "the one real file it names": the
+    // proof and the ledger by their real names (the basename rule), the proof
+    // through NotebookRead's own path field (round 4, minor: `notebook_path` was
+    // not a path candidate, so the NotebookRead cases never reached the guard),
+    // a file that does not exist, and the directory itself.
+    for (const payload of [
+      { tool_name: "Read", tool_input: { file_path: proof } },
+      { tool_name: "Read", tool_input: { file_path: ledger } },
+      { tool_name: "Read", tool_input: { file_path: migrationProof } },
+      { tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: ".claude/session-state/migration-review-20260901120000_x.json" } },
+      { tool_name: "Read", tool_input: { file_path: migrationCodexProof } },
+      { tool_name: "Read", tool_input: { file_path: claudePushProof } },
+      { tool_name: "Read", tool_input: { file_path: appliedSnapshot } },
+      { tool_name: "Read", tool_input: { file_path: holdLatch } },
+      { tool_name: "Read", tool_input: { file_path: unlistedJson } },
+      { tool_name: "NotebookRead", tool_input: { notebook_path: migrationProof } },
+      { tool_name: "NotebookRead", tool_input: { notebook_path: proof } },
+      { tool_name: "NotebookRead", tool_input: { notebook_path: ".claude/session-state/codex-review-abc.json" } },
+      { tool_name: "Read", tool_input: { file_path: path.join(stateDir, "does-not-exist.txt") } },
+      { tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: ".claude/session-state/does-not-exist.txt" } },
+      { tool_name: "Read", tool_input: { file_path: stateDir } },
+    ]) {
+      const result = run(payload);
+      assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+      assert.match(result.stdout, /"permissionDecision":"deny"/, `state-dir read must fail closed: ${JSON.stringify(payload.tool_input)}`);
+    }
+    // Windows 8.3 short aliases (round 4, HIGH). `dir /x` reports the alias the
+    // volume generated for each long name; a proof read through its alias — and
+    // through an aliased DIRECTORY component, which never spells `session-state`
+    // and so never entered the state-dir rule at all — must deny.
+    const shortNames = new Map();
+    if (process.platform === "win32") {
+      for (const dir of [stateDir, path.dirname(stateDir)]) {
+        const listing = spawnSync("cmd.exe", ["/c", "dir", "/x", dir], { encoding: "utf8" }).stdout || "";
+        for (const line of listing.split(/\r?\n/)) {
+          // `09/05/2026  08:19 AM                 2 CODEX-~1.JSO codex-review-0123abcd.json`
+          const m = /^\S+\s+\S+(?:\s+[AP]M)?\s+(?:<DIR>|[\d,]+)\s+(\S*~\d\S*)\s+(.+?)\s*$/.exec(line);
+          if (m) shortNames.set(path.join(dir, m[2]), path.join(dir, m[1]));
+        }
+      }
+    }
+    const proofAlias = shortNames.get(proof);
+    const stateDirAlias = shortNames.get(stateDir);
+    if (proofAlias) {
+      const aliasCases = [
+        { tool_name: "Read", tool_input: { file_path: proofAlias } },
+        { tool_name: "NotebookRead", tool_input: { notebook_path: proofAlias } },
+        { tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: path.relative(fixtureRoot, proofAlias) } },
+      ];
+      if (stateDirAlias) {
+        aliasCases.push({ tool_name: "Read", tool_input: { file_path: path.join(stateDirAlias, path.basename(proofAlias)) } });
+        aliasCases.push({ tool_name: "Read", tool_input: { file_path: path.join(stateDirAlias, path.basename(proof)) } });
+      }
+      for (const payload of aliasCases) {
+        const result = run(payload);
+        assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+        assert.match(result.stdout, /"permissionDecision":"deny"/, `proof read through an 8.3 alias must deny: ${JSON.stringify(payload.tool_input)}`);
+      }
+      // …while the SAME alias mechanism on a non-proof file stays allowed, so the
+      // deny above is the proof-file rule on the resolved name, not alias-phobia.
+      const flagAlias = shortNames.get(intentFlag);
+      if (flagAlias) {
+        assert.equal(run({ tool_name: "Read", tool_input: { file_path: flagAlias } }).stdout, "", "8.3 alias of a non-proof state-dir file resolves and is allowed");
+      }
+    } else if (process.platform === "win32" && shortNames.size > 0) {
+      // The volume DOES generate aliases (the directory got one) but the proof's
+      // was not found: the parser or the fixture broke, not the OS. Fail loudly
+      // rather than let the alias cases silently test nothing.
+      assert.fail("review-proof-guard.test: the volume reports 8.3 aliases but none was found for the fixture proof — the alias cases would silently test nothing");
+    } else {
+      // Not Windows, or a volume with 8.3 name generation turned off — the very
+      // mitigation KNOWN_ISSUES recommends. There is no alias to open, so the
+      // cases are skipped, not failed.
+      console.log("review-proof-guard.test: no 8.3 aliases on this volume — alias cases skipped");
+    }
+    // A HARD link is the same file under a second name, and realpath cannot see
+    // through it; inside the state directory a link count above one is refused as
+    // an alias. Creating one needs no privilege on NTFS. It is made on a SECOND
+    // proof so the symlink cases below can also cover a proof that carries one.
+    const linkedProof = write("codex-review-feedface.json", "{\"verdict\":\"clean\"}");
+    const hardLink = path.join(stateDir, "harmless-link.txt");
+    let hardLinked = false;
+    try { linkSync(linkedProof, hardLink); hardLinked = true; } catch { /* filesystem without hard links */ }
+    if (hardLinked) {
+      if (stateDirAlias) {
+        for (const tool_name of ["Read", "NotebookRead"]) {
+          const aliasPath = path.join(stateDirAlias, path.basename(hardLink));
+          const tool_input = tool_name === "Read" ? { file_path: aliasPath } : { notebook_path: aliasPath };
+          assert.match(run({ tool_name, tool_input }).stdout, /"permissionDecision":"deny"/, "hard-linked evidence through a short directory alias must deny");
+        }
+      }
+      assert.match(run({ tool_name: "Read", tool_input: { file_path: hardLink } }).stdout, /"permissionDecision":"deny"/, "proof read through a hard link inside the state dir must deny");
+      assert.match(run({ tool_name: "Read", tool_input: { file_path: linkedProof } }).stdout, /"permissionDecision":"deny"/, "the hard-linked proof itself still denies by name");
+    } else {
+      console.log("review-proof-guard.test: hard links unavailable on this filesystem — hard-link case skipped");
+    }
+    // A symlink is the same trick with a chosen name. Creating one needs a
+    // privilege on Windows; when the OS refuses, the case is recorded as skipped
+    // (Ubuntu CI runs it). Round 6 of the exact-SHA gpt-5.6-sol review: a symlink
+    // OUTSIDE the state directory to a proof that ALSO carries a hard link was
+    // allowed by a draft that classified the multi-link file as unresolvable
+    // before checking its name — so that exact shape is pinned here.
+    const symlinkAlias = path.join(stateDir, "harmless-alias.txt");
+    let symlinked = false;
+    try { symlinkSync(proof, symlinkAlias, "file"); symlinked = true; } catch { /* no privilege */ }
+    if (symlinked) {
+      assert.match(run({ tool_name: "Read", tool_input: { file_path: symlinkAlias } }).stdout, /"permissionDecision":"deny"/, "proof read through a symlink alias must deny");
+      const outside = path.join(fixtureRoot, "outside-alias.txt");
+      symlinkSync(proof, outside, "file");
+      assert.match(run({ tool_name: "Read", tool_input: { file_path: outside } }).stdout, /"permissionDecision":"deny"/, "proof read through a symlink OUTSIDE the state dir must deny");
+      if (hardLinked) {
+        const outsideToLinked = path.join(fixtureRoot, "outside-alias-linked.txt");
+        symlinkSync(linkedProof, outsideToLinked, "file");
+        assert.match(run({ tool_name: "Read", tool_input: { file_path: outsideToLinked } }).stdout, /"permissionDecision":"deny"/, "outside symlink to a HARD-LINKED proof must deny (round 6)");
+      }
+      const outsideToFlag = path.join(fixtureRoot, "outside-flag.txt");
+      symlinkSync(intentFlag, outsideToFlag, "file");
+      assert.equal(run({ tool_name: "Read", tool_input: { file_path: outsideToFlag } }).stdout, "", "outside symlink to a non-proof file stays allowed");
+    } else {
+      console.log("review-proof-guard.test: symlink creation refused by the OS — symlink alias cases skipped");
+    }
+    // The state DIRECTORY itself as a junction (Codex GitHub App review of the
+    // round-11 head, P1): realpath then strips `.claude/session-state` from every
+    // file under it, so a resolved-path test alone says "outside". A junction
+    // needs no privilege on Windows (`symlinkSync(..., "junction")`); on Linux it
+    // is a directory symlink. Membership is decided lexically, by the resolved
+    // path, and by the real location of the checkout's own state directory.
+    const junctionRoot = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-junction-"));
+    const externalDir = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-external-"));
+    let junctioned = false;
+    try {
+      mkdirSync(path.join(junctionRoot, ".claude"), { recursive: true });
+      writeFileSync(path.join(externalDir, "migration-review-20260901120000_x.json"), "{\"verdict\":\"clean\"}");
+      writeFileSync(path.join(externalDir, "OVERNIGHT-INTENT.flag"), "x");
+      symlinkSync(externalDir, path.join(junctionRoot, ".claude", "session-state"), "junction");
+      junctioned = true;
+    } catch { /* filesystem without junctions or directory symlinks */ }
+    try {
+      if (junctioned) {
+        // Hard links are their own capability: a volume may take a junction and
+        // still refuse `linkSync` (CodeRabbit review of e25605efd), so the link
+        // cases are gated on their own flag rather than on `junctioned`.
+        const externalHardLink = path.join(externalDir, "harmless-link.txt");
+        let externalHardLinked = false;
+        try {
+          linkSync(path.join(externalDir, "migration-review-20260901120000_x.json"), externalHardLink);
+          externalHardLinked = true;
+        } catch { /* filesystem without hard links */ }
+        if (externalHardLinked) {
+          for (const tool_name of ["Read", "NotebookRead"]) {
+            const tool_input = tool_name === "Read" ? { file_path: externalHardLink } : { notebook_path: externalHardLink };
+            assert.match(run({ tool_name, cwd: junctionRoot, tool_input }).stdout, /"permissionDecision":"deny"/, "hard-linked evidence through the external state-directory location must deny");
+          }
+        } else {
+          console.log("review-proof-guard.test: hard-link creation refused on the junction target — external hard-link cases skipped");
+        }
+        const viaJunction = path.join(junctionRoot, ".claude", "session-state", "migration-review-20260901120000_x.json");
+        for (const payload of [
+          { tool_name: "Read", tool_input: { file_path: viaJunction } },
+          { tool_name: "Read", cwd: junctionRoot, tool_input: { file_path: ".claude/session-state/migration-review-20260901120000_x.json" } },
+          { tool_name: "Read", cwd: junctionRoot, tool_input: { file_path: path.join(externalDir, "migration-review-20260901120000_x.json") } },
+          { tool_name: "NotebookRead", tool_input: { notebook_path: viaJunction } },
+        ]) {
+          const result = run(payload);
+          assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+          assert.match(result.stdout, /"permissionDecision":"deny"/, `evidence under a JUNCTIONED state dir must deny: ${JSON.stringify(payload.tool_input)}`);
+        }
+        assert.equal(run({ tool_name: "Read", tool_input: { file_path: path.join(junctionRoot, ".claude", "session-state", "OVERNIGHT-INTENT.flag") } }).stdout, "", "a flag read through the junctioned state dir stays allowed");
+        // The payload `cwd` BELOW the checkout root (Codex GitHub App review of
+        // 22e2be806, P1): probing `<cwd>/.claude/session-state` from `<repo>/src`
+        // finds nothing, membership rule 3 switches off, and the external name of
+        // the junction target reads as `clear`. The checkout's state directory is
+        // found by walking up from the working directory, so a read issued from
+        // any subdirectory is still this checkout's read.
+        const subdirCwd = path.join(junctionRoot, "src", "pages");
+        mkdirSync(subdirCwd, { recursive: true });
+        for (const payload of [
+          { tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: path.join(externalDir, "migration-review-20260901120000_x.json") } },
+          ...(externalHardLinked ? [{ tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: externalHardLink } }] : []),
+          { tool_name: "NotebookRead", cwd: subdirCwd, tool_input: { notebook_path: path.join(externalDir, "migration-review-20260901120000_x.json") } },
+        ]) {
+          const result = run(payload);
+          assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+          assert.match(result.stdout, /"permissionDecision":"deny"/, `evidence read by its external name from a SUBDIRECTORY cwd must deny: ${JSON.stringify(payload.tool_input)}`);
+        }
+        assert.equal(run({ tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: path.join(externalDir, "OVERNIGHT-INTENT.flag") } }).stdout, "", "a flag read by its external name from a subdirectory cwd stays allowed");
+        // A directory symlink INTO the state dir followed by `..` (Codex GitHub
+        // App review of e25605efd, P1): `path.resolve` collapses `alias/..`
+        // textually, so the guard examined `<tmp>/migration-review-x.json`
+        // (absent, "unresolvable", allowed) while a POSIX open() follows the
+        // symlink first and lands on the proof. The oracle is the operating
+        // system itself: the proof's bytes are read through the raw, unnormalized
+        // string, and the guard must deny exactly when that read returns the
+        // proof (Windows collapses `..` before consulting reparse points, so
+        // there the raw string opens nothing and the guard must stay quiet).
+        // `path.join` would normalize the `..` away, so the string is assembled
+        // by hand.
+        const aliasParent = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-alias-"));
+        try {
+          const stateSubdir = path.join(externalDir, "subdir");
+          mkdirSync(stateSubdir);
+          // One alias outside the checkout (named absolutely) and one inside it
+          // (named relative to the payload cwd, the checkout root).
+          const outsideAlias = path.join(aliasParent, "alias");
+          symlinkSync(stateSubdir, outsideAlias, "junction");
+          mkdirSync(path.join(junctionRoot, "src"), { recursive: true });
+          symlinkSync(stateSubdir, path.join(junctionRoot, "src", "alias"), "junction");
+          const proofBody = readFileSync(path.join(externalDir, "migration-review-20260901120000_x.json"), "utf8");
+          for (const [label, raw, cwd] of [
+            ["absolute", `${outsideAlias}${path.sep}..${path.sep}migration-review-20260901120000_x.json`, junctionRoot],
+            ["relative to the payload cwd", `src${path.sep}alias${path.sep}..${path.sep}migration-review-20260901120000_x.json`, junctionRoot],
+          ]) {
+            // What the OS opens for this exact string (Node hands it over unnormalized).
+            const osPath = path.isAbsolute(raw) ? raw : `${cwd}${path.sep}${raw}`;
+            let opened = null;
+            try { opened = readFileSync(osPath, "utf8"); } catch { opened = null; }
+            for (const tool_name of ["Read", "NotebookRead"]) {
+              const tool_input = tool_name === "Read" ? { file_path: raw } : { notebook_path: raw };
+              const result = run({ tool_name, cwd, tool_input });
+              assert.equal(result.status, 0, `hook should exit 0: ${tool_name} ${label}`);
+              if (opened === proofBody) {
+                assert.match(result.stdout, /"permissionDecision":"deny"/, `a symlink-then-\`..\` path that the OS opens as the proof must deny (${label}): ${raw}`);
+              } else {
+                assert.equal(result.stdout, "", `a symlink-then-\`..\` path the OS does not open as the proof stays allowed (${label}): ${raw}`);
+              }
+            }
+          }
+        } finally {
+          rmSync(aliasParent, { recursive: true, force: true });
+        }
+        // An NTFS stream qualifier on the name (Codex GitHub App review of
+        // b7c4b4b22, P1): `x.json::$DATA` opens x.json's default data stream on
+        // Windows while the spelled string no longer ends in `.json`. The guard
+        // resolves with `realpathSync.native`, which returns the file's final
+        // path WITHOUT the stream qualifier (GetFinalPathNameByHandle), so the
+        // resolved string ends in `.json` and the evidence and proof-name rules
+        // still fire. Oracle as above: the guard must deny whenever the OS opens
+        // the qualified string as the proof. On POSIX the qualified name is an
+        // ordinary absent file, and two name rules then decide by themselves:
+        // a name that lexically ENTERS `.claude/session-state` fails closed when
+        // it does not resolve (there is nothing to read from a missing file), and
+        // a name carrying a proof basename is denied before any resolution. Only
+        // an absent name outside the state directory with no proof basename
+        // stays quiet (Codex GitHub App review of 33994be9e, P1: the first draft
+        // expected silence for the state-directory case on POSIX).
+        writeFileSync(path.join(externalDir, "codex-review-abc.json"), "{\"verdict\":\"clean\"}");
+        for (const [label, plain, cwd] of [
+          ["evidence through the junctioned state dir", viaJunction, junctionRoot],
+          ["evidence by its external name", path.join(externalDir, "migration-review-20260901120000_x.json"), junctionRoot],
+          ["a push proof by its external name", path.join(externalDir, "codex-review-abc.json"), junctionRoot],
+        ]) {
+          const body = readFileSync(plain, "utf8");
+          for (const qualifier of ["::$DATA", "::$data"]) {
+            const raw = `${plain}${qualifier}`;
+            let opened = null;
+            try { opened = readFileSync(raw, "utf8"); } catch { opened = null; }
+            const entersStateDir = /[\\/]\.claude[\\/]session-state[\\/]/i.test(raw);
+            const namesProof = /codex-review-[\w-]+\.json/i.test(raw);
+            const mustDeny = opened === body || entersStateDir || namesProof;
+            for (const tool_name of ["Read", "NotebookRead"]) {
+              const tool_input = tool_name === "Read" ? { file_path: raw } : { notebook_path: raw };
+              const result = run({ tool_name, cwd, tool_input });
+              assert.equal(result.status, 0, `hook should exit 0: ${tool_name} ${label}${qualifier}`);
+              if (mustDeny) {
+                assert.match(result.stdout, /"permissionDecision":"deny"/, `a stream-qualified name must deny when the OS opens it as ${label} (opened=${opened === body}), when it enters the state dir (${entersStateDir}), or when it names a proof (${namesProof}): ${raw}`);
+              } else {
+                assert.equal(result.stdout, "", `a stream-qualified name the OS does not open, outside the state dir, naming no proof, stays allowed (${label}): ${raw}`);
+              }
+            }
+          }
+        }
+        if (process.platform === "win32") {
+          assert.equal(readFileSync(`${viaJunction}::$DATA`, "utf8"), readFileSync(viaJunction, "utf8"), "on Windows the ::$DATA form must have opened the proof, so the cases above exercised the deny branch");
+        }
+      } else {
+        console.log("review-proof-guard.test: junction/directory-symlink creation refused — junctioned state-dir cases skipped");
+      }
+    } finally {
+      rmSync(junctionRoot, { recursive: true, force: true });
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+// …and the PROOF-FILE rule still runs first for every tool, the ledger stays
+// unreadable, a native WRITER into the directory still denies, an MCP reader
+// keeps the deny because its name proves nothing about what it does, and a
+// directory-level Grep/Glob keeps the deny because it SELECTS files by pattern —
+// `Grep(path=session-state, pattern=verdict)` would read proof JSON line by line
+// while naming no proof basename (exact-SHA gpt-5.6-sol review, HIGH).
+for (const payload of [
+  { tool_name: "Read", tool_input: { file_path: ".claude/session-state/codex-review-abc.json" } },
+  { tool_name: "Read", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\applied-source-ledger.json" } },
+  { tool_name: "Grep", tool_input: { path: ".claude/session-state/claude-review-push.json" } },
+  { tool_name: "Grep", tool_input: { path: ".claude/session-state", pattern: "\"verdict\"" } },
+  { tool_name: "Grep", tool_input: { path: ".claude", pattern: "codex_ran", glob: "**/*.json" } },
+  { tool_name: "Grep", tool_input: { path: "C:\\repo\\.claude\\session-state" } },
+  { tool_name: "Glob", tool_input: { path: ".claude/session-state", pattern: "*.json" } },
+  { tool_name: "Glob", tool_input: { path: ".claude" } },
+  { tool_name: "LS", tool_input: { path: ".claude/session-state" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/session-state/OVERNIGHT-INTENT.flag", content: "x" } },
+  { tool_name: "Edit", tool_input: { file_path: ".claude/session-state/codex-review-latest.txt" } },
+  { tool_name: "mcp__filesystem__read_file", tool_input: { path: ".claude/session-state/codex-review-latest.txt" } },
+  { tool_name: "mcp__filesystem__read_file", tool_input: { path: ".claude/session-state" } },
+  { tool_name: "ReadAndDelete", tool_input: { file_path: ".claude/session-state/codex-review-latest.txt" } },
+]) {
+  const result = run(payload);
+  assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `must still deny: ${payload.tool_name} ${JSON.stringify(payload.tool_input)}`);
+}
+
+// (2) THIRD KNOWN OVER-BLOCK, pinned deliberately. The user's HOME `.claude`
+// (`~/.claude/projects`, the transcripts) is Claude Code's data directory, not a
+// checkout, yet a read-only `find … -exec du {} +` there is refused because
+// `.claude` reads as the repo ancestor (22 refusals in the 2026-09-04 usage
+// audit). Three exact-SHA gpt-5.6-sol rounds tried to carve that out and each
+// found a real bypass in the carve-out (all below, all denied). The carve-out was
+// withdrawn; these stay refused and the test records that as a choice.
+const HOME = (await import("node:os")).homedir().replace(/\\/g, "/").replace(/\/+$/, "");
+const HOME_WIN = HOME.replace(/\//g, "\\");
+const HOME_MSYS = (() => { const m = /^([A-Za-z]):(\/.*)?$/.exec(HOME); return m ? `/${m[1].toLowerCase()}${m[2] || ""}` : HOME; })();
+for (const command of [
+  `find ${HOME}/.claude/projects -name x.jsonl -exec du -m {} +`,
+  `find "${HOME_WIN}\\.claude\\projects" -maxdepth 2 -name "*.jsonl" -exec du -cm {} +`,
+  `find ${HOME_MSYS}/.claude/projects -mtime -14 -exec du -m {} +`,
+  "find ~/.claude/projects -name x -exec cat {} +",
+  `cd ${HOME}/.claude/projects && du -sm */ | sort -rn | head -12 && find . -name "*.jsonl" -maxdepth 2 -exec du -cm {} +`,
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `recorded over-block on the home .claude data dir: ${command}`);
+}
+// …the documented workaround — no `-exec`, no destructive verb — is allowed.
+for (const command of [
+  `find ${HOME}/.claude/projects -name x.jsonl | xargs du -m`,
+  `du -sm ${HOME}/.claude/projects`,
+  `ls -la ${HOME}/.claude/projects`,
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.equal(result.stdout, "", `read-only workaround must be allowed: ${command}`);
+}
+// …and every bypass the three rounds reproduced against the withdrawn carve-outs
+// stays denied: the worktrees child (each worktree carries its own
+// session-state) reached through `..`, through a space after the name, through
+// `./`, or through a glob; a bare or trailing-slash `~/.claude`; a protected
+// component after the prefix; a redirect that truncates the file the read
+// targets; rm/mv/-delete/-exec-writer forms; and the repo-relative forms.
+for (const command of [
+  `rm -rf ${HOME}/.claude/worktrees/old-wt`,
+  "rm -rf ~/.claude/worktrees/x/.claude/session-state",
+  `mv ${HOME}/.claude/worktrees/x /tmp/aside`,
+  // Second gpt-5.6-sol round: `worktrees` followed by a SPACE, a `.` segment, or
+  // a glob all reached the worktrees through the first cut's spelling exclusion.
+  "find ~/.claude/worktrees -exec cat {} +",
+  "find ~/.claude/./worktrees -exec cat {} +",
+  "find ~/.claude/worktr* -exec cat {} +",
+  `find ${HOME}/.claude/worktrees -name x.json -exec du {} +`,
+  `find ${HOME}/.claude/WORKTREES/x -exec cat {} +`,
+  // Not an allowlisted data folder → not masked, even for a reader.
+  `find ${HOME}/.claude/unknown-folder -exec cat {} +`,
+  `find ${HOME}/.claude/projects../worktrees -exec cat {} +`,
+  `find ${HOME}/.claude/projects/.hidden/x -exec cat {} +`,
+  "rm -rf ~/.claude",
+  `rm -rf "${HOME_WIN}\\.claude"`,
+  "rm -rf $HOME/.claude/",
+  "rm -rf ~/.claude/projects/../worktrees/x",
+  `find ${HOME}/.claude/projects/.. -depth -delete`,
+  `find ${HOME}/.claude/projects/../worktrees -name x -exec du {} +`,
+  "rm -rf ~/.claude/projects/../session-state",
+  `find ${HOME}/.claude/projects/../session-state -delete`,
+  `find ${HOME}/.claude/projects/x/.claude/session-state -name y -exec du {} +`,
+  "rm -rf $HOME/.claude/projects/old-session-dir",
+  `mv ${HOME}/.claude/projects/a ${HOME}/.claude/projects/b`,
+  "rm -f %USERPROFILE%/.claude/debug/x.log",
+  `find ${HOME}/.claude/projects -name x -delete`,
+  `find ${HOME}/.claude/projects -name x -exec rm {} +`,
+  `find ${HOME}/.claude/projects -name x -exec sh -c "rm {}" +`,
+  `find ${HOME}/.claude/projects -name x -exec du {} + -o -exec rm {} +`,
+  `find ${HOME}/.claude/projects -name x -exec du {} + -fprint ${HOME}/.claude/projects/out`,
+  `find ${HOME}/.claude/projects -name x -exec du {} +; rm -rf .claude/session-state`,
+  `find ${HOME}/.claude/projects -name x -exec du {} + && git clean -fdx`,
+  `find ${HOME}/.claude/projects -name x -exec du {} + > ${HOME}/.claude/projects/../session-state/out`,
+  // Third gpt-5.6-sol round: the shell truncates the target BEFORE the read runs.
+  "find ~/.claude/history.jsonl -exec cat {} + > ~/.claude/history.jsonl",
+  `find ${HOME}/.claude/projects -name x -exec cat {} + | tee ${HOME}/.claude/projects/x`,
+  "rm -rf .claude/session-state",
+  "find .claude/session-state -delete",
+  `echo x > ${HOME}/.claude/worktrees/x/.claude/session-state/forged.json`,
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `must still deny: ${command}`);
+}
+// The enforcement-surface check runs UNMASKED: the user-level guards under
+// `~/.claude/hooks` stay write-protected exactly as before.
+for (const command of [
+  `cp /tmp/evil ${HOME}/.claude/hooks/bash-safety.mjs`,
+  "tee ~/.claude/hooks/env-guard.mjs < /tmp/evil",
+  `rm -f ${HOME}/.claude/hooks/live-db-guard.mjs`,
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `user-level hooks stay protected: ${command}`);
+}
+assert.equal(run({ tool_name: "Bash", tool_input: { command: `cat ${HOME}/.claude/hooks/bash-safety.mjs` } }).stdout, "", "reading a user-level hook stays allowed");
+
+// (3) FOURTH KNOWN OVER-BLOCK, pinned deliberately. The WORD "function" inside a
+// quoted search pattern is refused on a guarded path because the quote-stripped
+// view turns it into a definition (8 refusals in the 2026-09-04 usage audit).
+// Three exact-SHA gpt-5.6-sol rounds rejected every narrowing tried (each
+// reproduced bypass is in the deny block below). Withdrawn; the workaround is a
+// bracket class, exactly as for the segment-split over-block above.
+for (const command of [
+  'grep -rn "export function" .claude/hooks/x.mjs',
+  'grep -n "function foo" .husky/pre-push',
+  "rg -n 'export function reviewProofPathMentioned' .claude/hooks/codex-push-lib.mjs",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `recorded over-block on the word function: ${command}`);
+}
+for (const command of [
+  'grep -rn "export [f]unction" .claude/hooks/x.mjs',
+  "rg -n 'export [f]unction reviewProofPathMentioned' .claude/hooks/codex-push-lib.mjs",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.stdout, "", `bracket-class workaround must be allowed: ${command}`);
+}
+for (const command of [
+  "function cat { cp /tmp/evil .husky/pre-push; }; cat .husky/pre-push",
+  "function cat() { cp /tmp/evil .husky/pre-push; }; cat .husky/pre-push",
+  "function cat\n{ cp /tmp/evil .husky/pre-push; }; cat .husky/pre-push",
+  // Everything the three rounds reproduced against the withdrawn narrowings: a
+  // comment, a block comment, or a scope prefix between `function` and the body;
+  // an escaped quote that defeats a quoted-span remover.
+  'x="a\\""; function cat { cp /tmp/evil "$1"; }; cat .husky/pre-push',
+  "function Get-Content # comment\n{ Copy-Item C:\\tmp\\evil $args[0] }\nGet-Content .husky/pre-push",
+  "function cat # one\n# two\n{ cp /tmp/evil .husky/pre-push; }; cat .husky/pre-push",
+  "function cat # comment\r\n{ cp /tmp/evil .husky/pre-push; }; cat .husky/pre-push",
+  "function Get-Content <#note#> { & .\\evil.ps1 }; Get-Content .husky/pre-push",
+  "function global:Get-Content <#note#> { & .\\evil.ps1 }; Get-Content .husky/pre-push",
+  "function script:cat { cp /tmp/evil .husky/pre-push }; cat .husky/pre-push",
+  "$'function' cat { cp /tmp/evil .husky/pre-push; }; cat .husky/pre-push",
+  'function cat { cp /tmp/evil ".husky/pre-push"; }; cat ".husky/pre-push"',
+  "function cat { cp /tmp/evil '.husky/pre-push'; }; cat '.husky/pre-push'",
+  'cat(){ cp /tmp/evil "$1"; }; cat .husky/pre-push',
+  "alias cat=cp; cat /tmp/evil .husky/pre-push",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `a real redefinition still denies: ${command}`);
+}
 
 console.log("OK - review proof guard checks passed.");

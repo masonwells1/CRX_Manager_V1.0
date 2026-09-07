@@ -277,6 +277,63 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-09-05 — a review proof can be read AND FORGED through the SHELL by its Windows 8.3 short name; the fix is a volume setting (Mason's) and, durably, authenticated proof content
+
+**Found by the fourth and fifth exact-SHA `gpt-5.6-sol` rounds on the review-proof-guard read
+narrowing (2026-09-05), then measured against `origin/main` unchanged.** Every long filename on
+this NTFS volume also answers to an 8.3 short alias: `.claude/session-state/CODEX-~1.JSO` IS
+`codex-review-<sha>.json`, and `.claude/SESSIO~1/` IS `session-state/`. The guard's shell branch
+matches protected NAMES in the command text, so `cat .claude/session-state/CODEX-~1.JSO` is
+allowed on `main` today (reproduced with the hook harness; `cat …/codex-review-<sha>.json` is
+denied). Worse, the fifth round spelled out the forge: a hard link made through the same alias
+(`mklink /H C:\tmp\x.json .claude\session-state\CODEX-~1.JSO`, allowed on `main` because no rule
+names `mklink` and the alias names nothing protected) gives the proof's bytes a harmless second
+name outside the state directory; a native `Write` to that name is allowed; the agent rewrites
+`base_sha`, the timestamp, the model, or the verdict; removes the link; and the push guard accepts
+the result, because proof validation trusts those fields and does not authenticate who wrote them.
+That defeats the expiry and moved-base re-review rules of the protected-review gate. It is
+reachable on `main` before and after the 2026-09-05 change.
+
+**What the 2026-09-05 change closes, and what it does not.** The NATIVE single-file readers
+(`Read`, `NotebookRead`) now resolve their target through the OS (`realpathSync.native`, which
+expands short names and follows symlinks) and re-run the proof-file rule on the real name; a
+state-directory file with more than one hard link is refused, and so is ANY `.json` there whether
+or not the proof-name rule lists it (round 11 found `migration-review-*.json` was never listed).
+Flags and `.txt` captures are the only things the exemption lets a native reader open. Membership
+in the directory is decided by the resolved path, by the lexical path the tool was given, and by
+the real location of this checkout's own state directory (a junctioned `session-state` strips the
+protected components from resolved paths — Codex App P1 on the round-11 head). Residual: a
+junctioned state directory belonging to a DIFFERENT checkout, read by its external name, is not
+this checkout's to know; the wrappers never junction what they write. The shell branch is
+NOT changed: it reasons about command text, an 8.3 token can also be hash-styled
+(`CO3F2A~1.JSO` once a prefix has collided four times), and a text rule for it would be one more
+round of the "command-text guard never converges" pattern this repository has already recorded
+three times on this guard.
+
+**Recommended fix — an owner action, not a guard edit.** Two separate steps, with different
+risk. (1) `fsutil 8dot3name set C: 1` (elevated prompt) stops Windows creating short names for
+NEW files on the volume; this is a policy toggle and is reversible (`set C: 0`). It does not remove
+the aliases existing files already have, so on its own it does not close the hole for the proofs
+already on disk. (2) `fsutil 8dot3name strip /s C:\CRX_Manager` removes the existing aliases under
+that folder. This step is NOT reversible: turning generation back on does not recreate the removed
+names, and Microsoft's reference for the command warns that programs which stored a short path
+(typically in the registry) can break; it tells you to back up first. Before running (2), run it
+with `/t` (test mode) to list what would change and any registry entries that mention a short
+name, keep the scope to the repository folder (never the whole volume), and take a restore point.
+With no aliases under the repository there is nothing for either branch to miss. An agent must not
+run either command: they change a system setting.
+
+**Durable fix — a design change, not a guard edit, deferred from this PR.** A file an agent can
+rename can be rewritten; a text rule over command strings cannot decide what a name resolves to.
+The proof needs an integrity boundary that survives an alternate filesystem name: authenticated
+proof content (the wrapper signs what it writes with a key the push guard verifies), or an
+OS-enforced location the agent's tools cannot write. Neither belongs in a read-narrowing PR; both
+change `scripts/write-codex-push-proof.mjs` and `codex-push-lib.mjs` together and need their own
+exact-SHA review. Until one lands, the GitHub side of the pipeline — the `ready-for-coderabbit`
+gate, the Codex GitHub App review, required CI — is the boundary a forged local proof cannot
+cross, which is the recorded "a PreToolUse hook is a speed bump, not a boundary" position. Treat
+any alias read or link in a transcript as a review-discipline violation.
+
 ## CLOSED 2026-09-05 — the one-use live-SQL-guard maintenance producer was retired unapplied (Mason's decision)
 
 **What it was.** `scripts/apply-live-testdata-maintenance-20260812.mjs`, the reviewed, blob-pinned
