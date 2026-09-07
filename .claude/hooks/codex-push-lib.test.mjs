@@ -1031,6 +1031,107 @@ assert.equal(
   "so the substitution check is still the thing that catches it",
 );
 
+// ── the binary is a SHAPE, not a list of extensions ──────────────────────────
+// `git(?:\.exe)?` was a one-item extension list, and every spelling below
+// returned isGitPush === false at 336f92e4d — so the guard exited before the
+// force, destination, risky-diff and Codex-proof checks. `.cmd` is what Windows
+// resolves `git` to when Git ships its shim and PATHEXT is user-configurable, so
+// these are ordinary invocations, not exotic ones. Verified by execution against
+// the pre-fix library, not by reading the pattern.
+for (const cmd of [
+  "git push origin HEAD:main",                            // was already seen
+  "git.exe push origin HEAD:main",                        // was already seen
+  "git.cmd push origin HEAD:main",
+  "git.ps1 push origin HEAD:main",
+  "git.com push origin HEAD:main",
+  "git.bat push origin HEAD:main",
+  "git.EXE push origin HEAD:main",
+  "git.cmd push --force origin main",
+  'git.cmd -C "C:/CRX Manager/wt" push origin HEAD:main', // extension AND a spaced -C path
+  "C:\\Tools\\git.cmd push origin main",
+  "/usr/bin/git.cmd push origin main",
+  '"C:/Program Files/Git/bin/git.cmd" push origin main',  // quoted path + extension
+  "npm test&&git.cmd push origin HEAD:main",              // extension after a separator
+]) {
+  assert.equal(isGitPush(cmd), true, `any binary extension is still a push: ${cmd}`);
+  assert.equal(eachPush(cmd).length, 1, `and is enumerated for per-push checks: ${cmd}`);
+}
+
+// The other direction, which is the half that decides whether the guard survives
+// contact with real work: a guard that over-denies gets switched off. `-` is not
+// `.`, so the extension tail never opens on a hyphenated neighbour, and `\b`
+// never even matches inside a longer word.
+for (const cmd of [
+  "git-crypt push",
+  "git-lfs push origin main",
+  "github-release push",
+  "gitfoo push",
+  "npm run gitpush",
+  'git commit -m "fix the push bug"',
+  "git status --short --branch",
+  "git log --grep push",
+  "echo digit push",
+  "cat legit push.txt",
+]) {
+  assert.equal(isGitPush(cmd), false, `a neighbouring command is not a push: ${cmd}`);
+}
+// PRE-EXISTING over-match, pinned rather than claimed as new: a bare `git` token
+// followed by a word starting `push` reads as a push whatever the surrounding
+// command is. It returned true before this change too (verified by execution
+// against the pre-fix library), so the shape fix neither caused it nor widened
+// it — and an extra denial is the safe side for a gate that demands a proof.
+assert.equal(
+  isGitPush("grep git push.log"), true,
+  "an unrelated command whose words happen to be `git push…` still over-matches (unchanged)",
+);
+
+// The two argv-walking parsers carried the SAME one-item list as a literal token
+// set, so they were blind to the same spellings independently of the regex.
+assert.equal(
+  gitSubcommandIsDynamic("git.cmd $verb origin main"), true,
+  "an uninspectable subcommand is seen through any binary extension",
+);
+assert.equal(
+  gitSubcommandIsDynamic("C:\\Tools\\git.ps1 %verb% origin main"), true,
+  "…including through a path prefix",
+);
+assert.deepEqual(
+  unknownGitGlobalOptions("git.cmd --namespace=x push origin main"), ["--namespace=x"],
+  "an unlisted global option is still reported through any binary extension",
+);
+assert.equal(
+  pushUsesExecPathOption("git.cmd --exec-path=/tmp/evil push origin main"), true,
+  "and --exec-path is still refused through any binary extension",
+);
+// Neither parser widens onto a neighbour: the basename is the name plus AT MOST
+// one dot-segment, so a second dot or a hyphen is not a git binary.
+assert.equal(
+  gitSubcommandIsDynamic("mine.git $verb origin main"), false,
+  "a file merely NAMED *.git is not the git binary",
+);
+assert.deepEqual(
+  unknownGitGlobalOptions("git-crypt --namespace=x push origin main"), [],
+  "and git-crypt is not git",
+);
+
+// Linear, not catastrophic. The extension is bounded (no dot, no separator, no
+// quote inside it) precisely so it cannot swallow the command and hand it back
+// one character at a time at every position the name can start. A first draft of
+// this shape elsewhere took 414ms on this input; measure, do not assume.
+for (const [label, input] of [
+  ["git.git.git…", "git." + "git.".repeat(5000) + " push"],
+  ["gitgitgit…", "git".repeat(6666) + " push"],
+  ["gh.gh.gh…", "gh." + "gh.".repeat(6000) + " pr merge 1"],
+]) {
+  const started = process.hrtime.bigint();
+  isGitPush(input);
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(
+    elapsedMs < 250,
+    `binary matching stays linear on ${label} (${input.length} chars): ${elapsedMs.toFixed(2)}ms`,
+  );
+}
+
 // ── round 19: the shell runs something other than the text we matched ────────
 // Three spellings Codex probed straight past every check in the file. The rule
 // is not "recognise these three" — it is that a command which only becomes a
