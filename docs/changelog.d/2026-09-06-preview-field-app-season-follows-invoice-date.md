@@ -68,11 +68,25 @@ parameter, so the caller had nothing to pass.
       does put 2026-09-30 in season 2026 and 2026-10-01 in season 2027 — if that rule ever moves,
       every claim below it is about a different calendar); `PREFLIGHT_MISSING` (the function this
       file REPLACES is actually there — a fresh `CREATE` would skip the body pin entirely);
-      `PREFLIGHT_OVERLOAD` (exactly one existing overload); `PREFLIGHT_OWNER` (`postgres`); `PREFLIGHT_SIGNATURE` (either the
-      4-argument predecessor or the 5-argument candidate); `PREFLIGHT_BODY_DRIFT` (the predecessor's
+      `PREFLIGHT_OVERLOAD` (exactly one existing overload); `PREFLIGHT_OWNER` (`postgres`);
+      `PREFLIGHT_GRANT_DRIFT` (the EXECUTE grantee set, on **both** paths — see below);
+      `PREFLIGHT_SIGNATURE` (the exact identity of either the 4-argument predecessor or the
+      5-argument candidate, argument names included); `PREFLIGHT_BODY_DRIFT` (the predecessor's
       reviewed body md5, so an apply over a body another lane changed is refused rather than
-      silently reverting it); and, on the replay path only, `PREFLIGHT_REPLAY_BODY_DRIFT` and
-      `PREFLIGHT_REPLAY_GRANT_DRIFT`.
+      silently reverting it); and, on the replay path only, `PREFLIGHT_REPLAY_BODY_DRIFT`.
+    - **The identity literal was checked against live, not just against the repo.** `md5(prosrc)`
+      covers only the text between the `$function$` markers, so it is blind to the whole
+      declaration — the same blind spot `POSTFLIGHT_ARGUMENT_DEFAULTS` and `POSTFLIGHT_VOLATILITY`
+      exist to cover. Tightening `PREFLIGHT_SIGNATURE` from "four arguments" to an exact identity
+      string therefore introduced a way to refuse a correct apply that a body-only read could not
+      rule out. Closed on 2026-09-06 by a read-only catalog read of `pg_proc` columns (no catalog
+      function calls, so the live-data guard permits it): `pronargs` 4, `proargnames`
+      `{p_locations, p_chemicals, p_application_service_id, p_invoice_id}`, `proargtypes`
+      `3802 3802 2950 2950` (jsonb, jsonb, uuid, uuid), owner `postgres`, `provolatile` `s`,
+      `prorettype` `jsonb`, `prosecdef` true, `proconfig` `{search_path=public, pg_temp}`, `proacl`
+      `{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}`. Live renders as
+      exactly the expected identity, and its grantee set is exactly the reviewed one, so neither
+      new literal will false-abort the intended apply. Recorded in the migration header too.
     - **Why the replay path needs its own body pin.** When the 5-argument candidate is already
       installed, the preflight returns early and the postflight's body pin cannot help: the
       postflight reads `prosrc` *after* `DROP` + `CREATE`, so on a replay it is reading this file's
@@ -81,18 +95,37 @@ parameter, so the caller had nothing to pass.
       made to the live 5-argument body — the `batch_apply_prepayments` silent-revert class of
       2026-07-15. The prover asserts not just that it aborts, but that the simulated patch is *still
       there* afterwards.
-    - `PREFLIGHT_REPLAY_GRANT_DRIFT` is the same argument one field over. The `DROP` destroys the
+    - `PREFLIGHT_GRANT_DRIFT` is the same argument one field over. The `DROP` destroys the
       installed ACL just as thoroughly as the body, and the `GRANT`/`REVOKE` block below then
       restores exactly the reviewed set — so a grant another lane added would be reverted and the
-      postflight, which only ever sees the reviewed set, would report OK. It pins the grantee set on
-      the replay path, before the `DROP`, and the prover likewise asserts the outside grant survives
-      the refusal.
+      postflight, which only ever sees the reviewed set, would report OK. The prover asserts the
+      outside grant SURVIVES the refusal, not merely that the apply aborted.
+    - **It guards both paths, and the first version did not.** This check was originally written
+      inside the replay branch, on the reasoning above. Review pointed out that the reasoning is
+      equally true of the 4-argument predecessor — and live is *on* the 4-argument predecessor, so
+      the first and only intended apply took the branch that had no ACL pin, while the rare retry
+      got the guard. It now sits above the replay branch and covers both. Both signatures carry the
+      same reviewed grantee set (confirmed against live, above), so one literal covers both, and the
+      abort names which identity it found so the two paths cannot be confused. The prover proves it
+      on each path separately.
+    - `POSTFLIGHT_RETURN_TYPE` pins `jsonb`. It is the last declaration property nothing else in the
+      file could see: the identity rendering omits the return type, `pg_get_function_arguments`
+      omits it, and `md5(prosrc)` is blind to the whole declaration — so an edit changing the return
+      type would have passed every other check while the frontend, which reads `.per_customer` off
+      the result, got something it cannot index.
     - **Ownership is established, not merely asserted.** An `ALTER FUNCTION … OWNER TO postgres`
       follows the `CREATE`. `DROP` + `CREATE` re-owns the function to whoever runs the migration, so
       without that line `POSTFLIGHT_OWNER` would abort a correct apply run by any other role — at
       the very end, after everything appeared to work. Three existing migrations here
       (`20260729125314`, `20260731001654`, `20260826221000`) use the same statement for the same
-      reason.
+      reason. Two consequences are recorded rather than left to be discovered: `POSTFLIGHT_OWNER`
+      can no longer fail on an unmutated run, because the `ALTER` forces the value it asserts — it
+      is now a check on that statement rather than on the applying role, and the prover has to
+      mutate the statement to make it fire at all; and the file now succeeds under applying roles it
+      would previously have refused, namely any role that may `SET ROLE postgres`. That is the
+      intended trade, but it is a real widening, and a role that may *not* `SET ROLE postgres` now
+      aborts with PostgreSQL's own "must be able to SET ROLE" instead of `POSTFLIGHT_OWNER`'s
+      explanation — same rollback, worse diagnosis.
     - `$postflight$`, reading the catalog back after the replacement: `POSTFLIGHT_OVERLOAD` (exactly
       one signature); `POSTFLIGHT_SIGNATURE`, compared against the full **named** identity
       `preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id
@@ -150,8 +183,8 @@ the prover mutation-tests the `anon` one rather than trusting the comment.
 ### Proof observed
 
 `node scripts/smoke/prove-preview-field-app-season.mjs` → **`PREVIEW_SEASON_PROOF_PASS`**, run against
-migration sha256 `f1d4d42dca4e876be255031388668a94c64245a5a094a4c21ce0f6941619ca3b` and prover sha256
-`bced67bd94e92ce87061956536c8be4db3e12d11654219c88ec49bb3a325a17a` — recorded because a proof minted
+migration sha256 `3848becc0b7127d556d2ebd276a2d3569fa39aca7743ee543db62ca103a2d959` and prover sha256
+`e04594413c8b0904a277baeb67098849871e0d6baad7697d1bb9d9a3618a0799` — recorded because a proof minted
 against earlier bytes is void, and the apply gate binds the proof to the transmitted file's hash. In a
 network-less `public.ecr.aws/supabase/postgres:17.6.1.143` container. It restores the schema baseline,
 replays 58 ordered post-baseline migrations, installs production's byte-exact bodies, and applies
@@ -184,11 +217,25 @@ those twenty. That is the right scope for this change and the wrong thing to gen
   save allocates a real `invoice_group_id` and one invoice per customer. The group is created in
   season, then reopened at a next-season date: both members keep their stored season and preview
   quotes each member's stored-season rate. This branch had **no test at all** until review caught it
-  — every other probe seeds one customer, so the loop could only ever reach the other two branches,
-  and a wrong join predicate here (a missing `deleted_at IS NULL`, a customer mismatch) would have
-  gone unnoticed.
-- **Twenty-two mutation phases, each of which MUST fail, and each did — nineteen refused at apply
-  time by a named abort, three caught behaviourally.** The distinction is deliberate and worth
+  — every other probe seeds one customer, so the loop could only ever reach the other two branches.
+- **Its first version was weaker than it read, and that was caught too.** It seeded both customers
+  identically and saved them in the same season, so the lookup under test returned the same answer
+  whether or not either of its join predicates was there. It proved the branch was *reached* and
+  returned a real season; it did not prove the branch read the right *row*. The fixture is now
+  asymmetric:
+  - Member B is stored one season ahead of A and has its own rate in that season, so the two members
+    must resolve to different prices. Drop `AND i.customer_id = v_customer_id` and the `LIMIT 1`
+    hands one arbitrary member's season to both — whichever row it picks, exactly one of the two
+    assertions fails. A deterministic catch, not a probabilistic one. The measured run: A stored in
+    season 2026 quotes 1111c/acre, B stored in season 2027 quotes 3333c/acre, and save charges each
+    the same.
+  - A soft-deleted sibling row for A, in a third season with a third rate, makes the correct answer
+    *depend* on `AND i.deleted_at IS NULL`. Stated honestly: that is not written up as a mutation
+    proof of the predicate, because the query has no `ORDER BY`, so deleting the predicate would
+    leave the lookup choosing arbitrarily between two rows and a mutant would be caught only about
+    half the time. A coin-flip assertion is worse than none.
+- **Twenty-five mutation phases, each of which MUST fail, and each did — twenty-two refused at
+  apply time by a named abort, three caught behaviourally.** The distinction is deliberate and worth
   stating plainly: no static guard can see a season-logic regression, so the three behavioural
   mutants install cleanly and are caught only by the parity probes and a grant read. Anyone reading
   this as "the migration refuses a wrong season" would be wrong.
@@ -198,8 +245,10 @@ those twenty. That is the right scope for this change and the wrong thing to gen
     with both signatures left exactly as found; nothing installed at all → `PREFLIGHT_MISSING`,
     creating nothing; the live 5-argument body patched by another lane and then re-applied →
     `PREFLIGHT_REPLAY_BODY_DRIFT`, **with the patch still in place afterwards**; an outside grant on
-    the installed function → `PREFLIGHT_REPLAY_GRANT_DRIFT`, **with that grant still in place
-    afterwards**; a wrong **postflight** body pin on a re-apply → `POSTFLIGHT_BODY`; `p_invoice_date`
+    the installed 5-argument function, and separately on the 4-argument predecessor live actually
+    carries → `PREFLIGHT_GRANT_DRIFT` both times, **with that grant still in place afterwards**
+    both times, each abort asserted to name the identity it found so the two paths cannot be
+    confused; a wrong **postflight** body pin on a re-apply → `POSTFLIGHT_BODY`; `p_invoice_date`
     deleted from the `CREATE`, the grant statements and the owner statement → `POSTFLIGHT_SIGNATURE`;
     every `DEFAULT` deleted while the types stay identical → `POSTFLIGHT_ARGUMENT_DEFAULTS`; the
     replacement re-owned → `POSTFLIGHT_OWNER`; `SECURITY INVOKER` →
@@ -208,7 +257,12 @@ those twenty. That is the right scope for this change and the wrong thing to gen
     4-argument `DROP` neutered so a second overload survives → `POSTFLIGHT_OVERLOAD`; `authenticated`
     revoked → `POSTFLIGHT_GRANT_LOST`; the `anon` REVOKE dropped → `POSTFLIGHT_GRANT_ANON`, rolling
     back completely; every ACL statement deleted → `POSTFLIGHT_GRANT_PUBLIC`; EXECUTE granted to a
-    third role → `POSTFLIGHT_GRANT_UNEXPECTED`, naming the grantee.
+    third role → `POSTFLIGHT_GRANT_UNEXPECTED`, naming the grantee; a 4-argument function carrying
+    the **wrong argument names** → `PREFLIGHT_SIGNATURE`, asserted also *not* to be reported as body
+    drift (the stub is put on the reviewed access surface first, because `PREFLIGHT_GRANT_DRIFT` now
+    runs ahead of it and a freshly created function carries Supabase's default `anon` grant, which
+    would abort at the wrong guard); and `RETURNS text` in place of `RETURNS jsonb` →
+    `POSTFLIGHT_RETURN_TYPE`.
   - **Caught behaviourally:** the fix removed — still calls `current_season()`, both windows
     mis-price again; `v_price_season := v_new_season`, ignoring the row's stored season —
     re-breaks the edited-across-the-boundary case (2222 vs 1111); the `anon` REVOKE dropped
@@ -216,20 +270,23 @@ those twenty. That is the right scope for this change and the wrong thing to gen
     `anon=true`. The `POSTFLIGHT_GRANT_ANON` mutant and this one are a pair on purpose: the first
     alone would only show that *something* refused the apply, and this one is what proves the REVOKE
     itself is what closes the grant.
-  - **Coverage, stated rather than implied.** Of the migration's twenty-one distinct abort labels,
-    **nineteen** are made to fire by name above. The three that are not, and why — because naming
-    only one exception, as an earlier revision of this file did, implies every other guard is
-    proven:
-    - `PREFLIGHT_SIGNATURE` — reaching it needs a 4-argument overload with the right arity and the
-      wrong names or types, which the repo has no source for. Such a shape is still refused by
-      `PREFLIGHT_BODY_DRIFT`, so it is fail-closed, but it would be reported as body drift rather
-      than as a signature change.
-    - `POSTFLIGHT_ACL_DEFAULT` — **unreachable on this project.** Supabase's
+  - **Coverage, stated rather than implied.** The migration carries **twenty-two** distinct abort
+    labels and **twenty-one** of them are made to fire by name above. Exactly one is not:
+    - `POSTFLIGHT_ACL_DEFAULT` — **unreachable on this project**, not merely untested. Supabase's
       `ALTER DEFAULT PRIVILEGES` materialises `proacl` on every newly created function, so a NULL
       ACL cannot occur. Deleting every ACL statement is caught by `POSTFLIGHT_GRANT_PUBLIC` instead,
       which is what the prover asserts.
-    - `POSTFLIGHT_GRANT_LOST`'s `service_role` arm — the `authenticated` arm is proven; this is the
-      same three lines against a different role name.
+
+    Separately, one **arm** of an otherwise-proven label is unexercised. That is a smaller claim
+    than an unproven label and is kept separate for that reason — folding the two together made an
+    earlier revision's arithmetic (twenty-one labels minus nineteen equals three) read as an error:
+    - `POSTFLIGHT_GRANT_LOST` raises from two places. The `authenticated` arm is proven; the
+      `service_role` arm is the same three lines against a different role name.
+
+    `PREFLIGHT_SIGNATURE` was on this list until 2026-09-06, on the grounds that the repo has no
+    source for a 4-argument overload with the wrong argument names. It does not need one: a trivial
+    stub with the same types and different names is enough, because the check reads the catalog and
+    not the body. It is now proven.
   - A measurement worth keeping from that last mutant: simply **deleting** `authenticated` from the
     `GRANT` does not abort, because the same default privileges already grant it. The explicit
     `GRANT` is belt-and-braces on this project rather than the thing conferring the privilege, so

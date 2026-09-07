@@ -49,11 +49,26 @@
 --   20260624020000 did this same DROP+CREATE. REVOKE ALL FROM PUBLIC does NOT remove the
 --   explicit anon grant, so both revokes below are required to restore the live posture. They
 --   remove no access the function had; only the would-be-new PUBLIC/anon grants are stripped.
+--
+-- live-catalog read, read-only, 2026-09-06, pg_proc columns only (no catalog function calls, so
+-- the live-data guard permits it). This is what the preflight literals below are pinned against,
+-- and it was taken because md5(prosrc) is blind to the DECLARATION -- the very gap
+-- POSTFLIGHT_ARGUMENT_DEFAULTS and POSTFLIGHT_VOLATILITY exist to cover -- so a body-only read
+-- could not tell whether PREFLIGHT_SIGNATURE's identity literal would match:
+--   pronargs     4
+--   proargnames  {p_locations, p_chemicals, p_application_service_id, p_invoice_id}
+--   proargtypes  3802 3802 2950 2950   (pg_type: 3802 = jsonb, 2950 = uuid)
+--   proowner     postgres        provolatile s        prorettype jsonb      prosecdef true
+--   proconfig    {search_path=public, pg_temp}
+--   md5(prosrc)  ca33fb973d86dbf3a2788dc11fbc49a5
+--   proacl       {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+-- So live renders as exactly the PREFLIGHT_SIGNATURE literal, and its EXECUTE grantee set is
+-- exactly the PREFLIGHT_GRANT_DRIFT literal. Neither will false-abort the intended apply.
 
 -- PREFLIGHT. The header above claims the live body hashes to ca33fb973d86dbf3a2788dc11fbc49a5,
 -- read read-only from production on 2026-09-06. That is a comment, not a guard: if another lane
 -- changed the live body between that read and this apply, DROP+CREATE would overwrite it in
--- silence, because this file re-emits the reviewed body verbatim plus four deltas. Pin it in the
+-- silence, because this file re-emits the reviewed body verbatim plus five deltas. Pin it in the
 -- same transaction that replaces it. Same shape as the sibling 20260904180000 on this code path.
 DO $preflight$
 DECLARE
@@ -126,6 +141,37 @@ BEGIN
       'PREFLIGHT_OWNER: preview_field_app_invoice_split is owned by %, not postgres. DROP+CREATE re-owns it to the applying role, which changes this SECURITY DEFINER function''s effective privileges over application_services. Investigate before applying.', v_owner;
   END IF;
 
+  -- The ACL is pinned HERE, above the replay branch, so it covers BOTH paths -- and the
+  -- placement is the whole point of this check. The DROP below destroys the installed ACL as
+  -- thoroughly as it destroys the body, and the GRANT/REVOKE block further down then restores
+  -- exactly the reviewed set, so a grant another lane added would be silently reverted while the
+  -- postflight -- which only ever sees the set this file just wrote -- reported OK. That is the
+  -- batch_apply_prepayments 2026-07-15 silent-revert class, one field over from the body.
+  --
+  -- An earlier revision of this file pinned the ACL only INSIDE the replay branch. That guarded
+  -- the retry and left the real apply unguarded: live is on the 4-argument predecessor, so the
+  -- first and only intended apply takes the path BELOW the replay branch. The guarded path was
+  -- the rare one. Both signatures carry the same reviewed grantee set -- verified live 2026-09-06,
+  -- see the header -- so one literal covers both, and the message names which one it found.
+  --
+  -- aclexplode enumerates DIRECT grants only. That is exactly the right scope here, because a
+  -- direct grant is precisely what the DROP destroys and what the GRANT/REVOKE block can restore;
+  -- a role reaching EXECUTE through membership in authenticated is unaffected by the DROP, so its
+  -- absence from this aggregate is correct rather than a gap. CASE, not COALESCE: grantee 0 is
+  -- PUBLIC and 0::oid::regrole::text renders as '-', never NULL.
+  SELECT string_agg(DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END, ', '
+                    ORDER BY CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END)
+    INTO v_grantees
+    FROM pg_proc p, aclexplode(p.proacl) a
+   WHERE p.oid = v_oid AND a.privilege_type = 'EXECUTE';
+
+  IF v_grantees IS DISTINCT FROM 'authenticated, postgres, service_role' THEN
+    RAISE EXCEPTION
+      'PREFLIGHT_GRANT_DRIFT: % grants EXECUTE to %, not the reviewed set (authenticated, postgres, service_role). The DROP below would silently revert that change. Diff and re-review before applying.',
+      v_identity,
+      COALESCE(v_grantees, '(nothing -- proacl is NULL, so no direct grant exists and default privileges apply, which on this project means PUBLIC effectively holds EXECUTE)');
+  END IF;
+
   -- Replay: the candidate is already installed. Branch on the IDENTITY, not on pronargs -- a count
   -- of 5 says nothing about the types, so a hypothetical (jsonb,jsonb,uuid,uuid,timestamptz)
   -- overload would otherwise take this branch and log a replay notice that is simply untrue.
@@ -144,21 +190,6 @@ BEGIN
       RAISE EXCEPTION
         'PREFLIGHT_REPLAY_BODY_DRIFT: the installed 5-argument body md5 is %, not this file''s candidate pin 83f6600412ced085d0876a3c7339ff12. Something changed it after this migration was applied; re-applying would silently overwrite that change. Diff and re-review before replaying.', md5(v_src);
     END IF;
-    -- Same argument, one field over. The DROP below also destroys the installed ACL, and the
-    -- GRANT/REVOKE block further down then restores exactly the reviewed set -- so a grant another
-    -- lane added would be reverted and the postflight, which only ever sees the reviewed set,
-    -- would report OK. Pin the grantee set on this path too, before the DROP.
-    SELECT string_agg(DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END, ', '
-                      ORDER BY CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END)
-      INTO v_grantees
-      FROM pg_proc p, aclexplode(p.proacl) a
-     WHERE p.oid = v_oid AND a.privilege_type = 'EXECUTE';
-
-    IF v_grantees IS DISTINCT FROM 'authenticated, postgres, service_role' THEN
-      RAISE EXCEPTION
-        'PREFLIGHT_REPLAY_GRANT_DRIFT: the installed 5-argument function grants EXECUTE to %, not the reviewed set (authenticated, postgres, service_role). The DROP below would silently revert that change. Diff and re-review before replaying.', COALESCE(v_grantees, '(nobody)');
-    END IF;
-
     RAISE NOTICE 'PREFLIGHT_OK: the 5-argument candidate is already installed and its body and grants still match this file''s pins; this apply is a replay.';
     RETURN;
   END IF;
@@ -496,6 +527,18 @@ $function$;
 -- this line POSTFLIGHT_OWNER would abort a correct apply run by any other role, at the very end,
 -- after everything appeared to work. Same statement 20260729125314, 20260731001654 and
 -- 20260826221000 use, for the same reason.
+--
+-- Two consequences worth stating rather than leaving to be discovered:
+--   * POSTFLIGHT_OWNER can no longer fail on an unmutated run of this file, because this line
+--     forces the value it asserts. It is now a check on THIS statement rather than on the applying
+--     role, and the prover has to mutate this line to make it fire at all. Recorded because a
+--     guard that cannot fail is exactly the shape this file spends its length guarding against.
+--   * This file now SUCCEEDS under applying roles that would previously have been refused -- any
+--     role that may SET ROLE postgres, not only postgres itself. That is the intended trade (the
+--     20260729015706 invariant needs a postgres-OWNED function, and this establishes it), but it
+--     is a real widening. A role that may NOT SET ROLE postgres now aborts here with PostgreSQL's
+--     own "must be able to SET ROLE" rather than with POSTFLIGHT_OWNER's explanation; same
+--     rollback, worse diagnosis.
 ALTER FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid, date) OWNER TO postgres;
 
 REVOKE ALL ON FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid, date) FROM PUBLIC;
@@ -517,6 +560,7 @@ DECLARE
   v_arguments text;
   v_volatile "char";
   v_lang     text;
+  v_rettype  text;
   v_extra    text;
   v_has_anon boolean;
   v_has_pub  boolean;
@@ -539,10 +583,11 @@ BEGIN
          COALESCE(array_to_string(p.proconfig, ','), '<none>'),
          p.provolatile,
          (SELECT l.lanname FROM pg_language l WHERE l.oid = p.prolang),
+         p.prorettype::regtype::text,
          md5(p.prosrc),
          p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
          pg_get_function_arguments(p.oid)
-    INTO v_oid, v_owner, v_secdef, v_config, v_volatile, v_lang, v_body_md5, v_signature, v_arguments
+    INTO v_oid, v_owner, v_secdef, v_config, v_volatile, v_lang, v_rettype, v_body_md5, v_signature, v_arguments
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'preview_field_app_invoice_split';
@@ -598,6 +643,17 @@ BEGIN
   IF v_volatile <> 's' OR v_lang <> 'plpgsql' THEN
     RAISE EXCEPTION
       'POSTFLIGHT_VOLATILITY: expected a STABLE plpgsql function; found provolatile=% language=%.', v_volatile, v_lang;
+  END IF;
+
+  -- The last declaration property nothing else here could see. The identity rendering above omits
+  -- the return type, pg_get_function_arguments omits it, and md5(prosrc) is blind to the whole
+  -- declaration -- so an edit changing RETURNS jsonb would pass every other check in this block
+  -- while the frontend, which reads .per_customer off the result, got something it cannot index.
+  -- Pinned separately from POSTFLIGHT_VOLATILITY rather than folded into it, so the abort names
+  -- the property that actually changed instead of reporting a return type as a volatility fault.
+  IF v_rettype <> 'jsonb' THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_RETURN_TYPE: the replacement returns %, not jsonb. Every caller indexes the result as jsonb.', v_rettype;
   END IF;
 
   -- Exact string, not a substring test. A substring test would accept
@@ -686,7 +742,11 @@ BEGIN
   -- regression, and which the prover mutation-tests by name -- would become unreachable and
   -- therefore unfalsifiable. Specific diagnoses first, catch-all last.
   -- CASE, not COALESCE. grantee 0 is PUBLIC, and 0::oid::regrole::text renders as '-', not NULL,
-  -- so a COALESCE(..., 'PUBLIC') label never fires and PUBLIC would be reported as '-'.
+  -- so a COALESCE(..., 'PUBLIC') label never fires and PUBLIC would be reported as '-'. Note that
+  -- the 'PUBLIC' arm here is nonetheless UNREACHABLE in practice: POSTFLIGHT_GRANT_PUBLIC above
+  -- aborts on grantee = 0 first, deliberately. It is kept so this expression stays identical to
+  -- the preflight's, and so a future reordering does not silently start printing '-'. Nobody
+  -- should try to mutation-prove it.
   --
   -- This arm reads aclexplode, so unlike the three checks above it sees only DIRECT grants: a
   -- future role reaching EXECUTE through membership in authenticated is not reported here. That is
