@@ -62,10 +62,24 @@ const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|
 // this `git`. Only a leading `-` opens the region at all. Both directions are
 // asserted in autopilot-lib.test.mjs, including the two bypasses above.
 //
-// Known, asserted over-denial: a valueless global option followed by the
-// subcommand can swallow that subcommand as its "value" (`git --no-pager log
-// --grep push` denies). Telling those apart needs per-option arity, i.e. another
-// name list — and for a DENY set an occasional extra denial is the safe side.
+// KNOWN, MEASURED over-denial — the whole class, not one example. When a global
+// option does not consume a detached value (it takes none, or carries its value
+// attached), the SUBCOMMAND is the next bare word and can be consumed as that
+// option's value instead. The deny word two tokens later then matches:
+//
+//   git --no-pager log --grep push        `log` consumed as --no-pager's value
+//   git -C/x stash push -m w              `stash` consumed as -C/x's value
+//   git --git-dir=/x/.git stash push      same, attached long value
+//
+// A differential sweep of 1,728 generated commands (both binaries x 36 option
+// regions x 24 subcommand tails) put this at 43 benign commands newly denied
+// against 188 dangerous shapes newly closed. The common spellings are NOT among
+// the 43 — `git -C /x stash push -m w` and `git log --grep push` both stay
+// allowed, because a detached value or a non-option first word ends the region.
+//
+// Separating them needs per-option ARITY, which is another name list — the thing
+// that just failed twice here. For a DENY set an occasional extra denial is the
+// safe side of that trade, so it is taken deliberately and asserted below.
 //
 // `\s` (not `[^\S\r\n]`) is deliberate: these are DENY patterns, so treating a
 // newline as separation makes them broader, never narrower.

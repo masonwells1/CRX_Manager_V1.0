@@ -128,6 +128,19 @@ eq(autopilotDecision("Bash", { command: "gh -R owner/repo pr view 1 --json merge
 eq(autopilotDecision("Bash", { command: 'gh pr comment 607 --body "ready to merge"' }), "allow", "a comment body naming merge stays allowed");
 eq(autopilotDecision("Bash", { command: "gh workflow list -R owner/repo" }), "allow", "a gh option AFTER the subcommand is not a global");
 
+// ── the over-denial class, measured and pinned ───────────────────────────
+// When a global option does not consume a detached value, the SUBCOMMAND is the
+// next bare word and gets consumed as that option's value instead, so a deny word
+// two tokens later matches. 43 benign commands out of a 1,728-command sweep land
+// here, against 188 dangerous shapes closed. Pinned so the boundary is visible:
+// the COMMON spellings are on the allowed side, which is what makes the trade
+// acceptable — an over-broad deny set gets disarmed by whoever it blocks.
+eq(autopilotDecision("Bash", { command: "git -C /x stash push -m wip" }), "allow", "the COMMON detached form of `stash push` stays allowed");
+eq(autopilotDecision("Bash", { command: "git log --grep push" }), "allow", "the COMMON form of a log search for the word stays allowed");
+eq(autopilotDecision("Bash", { command: "git -C /x log --grep push" }), "allow", "…and with a detached global option in front of it");
+eq(autopilotDecision("Bash", { command: "git --no-pager log --grep push" }), "deny", "ACCEPTED over-denial: a valueless global swallows `log`, so `push` matches");
+eq(autopilotDecision("Bash", { command: "git -C/x stash push -m wip" }), "deny", "ACCEPTED over-denial: an ATTACHED value leaves `stash` to be swallowed");
+
 // ── the ONE place the new region is NARROWER than the enumerated one ─────
 // A differential sweep of 1,728 generated commands over the option grammar found
 // 231 newly denied and 36 newly ALLOWED. All 36 are the same thing: an UNBALANCED
