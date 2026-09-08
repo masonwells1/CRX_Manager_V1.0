@@ -22,6 +22,8 @@ import {
   originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap, originMainForwardBlobPaths,
   createOwnDraftPathsReader,
+  isCodexImportDirtLine, classifyDirt, shortWorktreeName, describeDirt,
+  formatSiblingReport, groupUnknownReasons,
 } from "./worktree-awareness-lib.mjs";
 
 let pass = 0;
@@ -68,6 +70,91 @@ ok(!sibs.some((s) => normPath(s.path) === "c:/crx_manager"), "current not in sib
 
 // no siblings when only the current worktree exists
 eq(siblingsOf([entries[0]], "C:/CRX_Manager").length, 0, "solo → no siblings");
+
+// ── compact sibling report (2026-09-04) ──
+// Codex-import dirt is recognised by REGION (the `.agents/skills/source-command-*/`
+// prefix), labelled, and never dropped. Everything else is real dirt.
+ok(isCodexImportDirtLine("?? .agents/skills/source-command-ship/"), "untracked importer dir is importer dirt");
+ok(isCodexImportDirtLine("?? .agents/skills/source-command-ship/SKILL.md"), "file inside an importer dir is importer dirt");
+ok(isCodexImportDirtLine("?? .agents\\skills\\source-command-fleet\\SKILL.md"), "backslash path is importer dirt");
+ok(!isCodexImportDirtLine("?? .agents/skills/ship/SKILL.md"), "a real adapter is NOT importer dirt");
+ok(!isCodexImportDirtLine(" M .agents/skills/source-command-ship.md"), "near-miss shape (no dir) stays real dirt");
+ok(!isCodexImportDirtLine("?? docs/source-command-ship/SKILL.md"), "importer prefix outside .agents/skills stays real dirt");
+ok(!isCodexImportDirtLine(" M .claude/settings.local.json"), "settings.local is not importer dirt (cleanup has its own rule)");
+// Only UNTRACKED entries are the importer's litter; anything a person staged, edited, or
+// deleted under that folder is deliberate work (Codex App P2 on PR #613).
+ok(!isCodexImportDirtLine("A  .agents/skills/source-command-ship/SKILL.md"), "a STAGED file under an importer dir is real dirt");
+ok(!isCodexImportDirtLine(" M .agents/skills/source-command-ship/SKILL.md"), "a MODIFIED tracked file under an importer dir is real dirt");
+ok(!isCodexImportDirtLine(" D .agents/skills/source-command-ship/SKILL.md"), "a DELETED tracked file under an importer dir is real dirt");
+ok(!isCodexImportDirtLine("AM .agents/skills/source-command-ship/SKILL.md"), "staged-then-edited file under an importer dir is real dirt");
+eq(classifyDirt("?? .agents/skills/source-command-ship/\nA  .agents/skills/source-command-fleet/SKILL.md\n"), { total: 2, importer: 1, real: 1 }, "classifyDirt counts a staged importer-dir file as real");
+const mixedDirt = classifyDirt("?? .agents/skills/source-command-ship/\n?? .agents/skills/source-command-fleet/\n M src/App.tsx\n");
+eq(mixedDirt, { total: 3, importer: 2, real: 1 }, "classifyDirt splits importer dirt from real dirt");
+eq(classifyDirt(""), { total: 0, importer: 0, real: 0 }, "clean status → all zero");
+eq(classifyDirt("?? .agents/skills/source-command-ship/\r\n"), { total: 1, importer: 1, real: 0 }, "CRLF porcelain is classified the same");
+
+eq(shortWorktreeName("C:/CRX_Manager/.claude/worktrees/pr449-fix-abc123"), "pr449-fix-abc123", "harness worktree → last segment");
+eq(shortWorktreeName("C:/Users/mason/.codex/worktrees/pr449/CRX_Manager"), "pr449", "Codex worktree → parent of the repo-name leaf");
+eq(shortWorktreeName("C:\\CRX_Manager"), "CRX_Manager", "the main checkout keeps its own name");
+eq(shortWorktreeName("C:/CRX_Manager/.claude/worktrees/crx-manager-bug-backlog-3157a8"), "crx-manager-bug-backlog-3157a8", "a folder that merely STARTS with the repo name is its own name (live bug 2026-09-04)");
+eq(shortWorktreeName("C:/Users/mason/.codex/worktrees/pr449/CRX_Manager_V1.0"), "pr449", "the versioned repo-name leaf also defers to its parent");
+
+eq(describeDirt(null), "unreadable/absent", "null dirt → unreadable");
+eq(describeDirt({ total: 0, importer: 0, real: 0 }), "clean", "no dirt → clean");
+eq(describeDirt({ total: 3, importer: 0, real: 3 }), "3 dirty files", "real-only dirt keeps the old wording");
+eq(describeDirt({ total: 24, importer: 24, real: 0 }), "24 dirty files (all Codex-import skill dirs)", "importer-only dirt is labelled");
+eq(describeDirt({ total: 25, importer: 24, real: 1 }), "25 dirty files (24 Codex-import skill dirs, 1 real)", "mixed dirt shows both counts");
+
+const reportInput = [
+  { path: "C:/CRX_Manager/.claude/worktrees/unmerged-work", branchLabel: "claude/x", mergedLabel: "UNMERGED (not in origin/main)", dirt: { total: 0, importer: 0, real: 0 } },
+  { path: "C:/CRX_Manager/.claude/worktrees/merged-real-dirt", branchLabel: "claude/y", mergedLabel: "MERGED into origin/main", dirt: { total: 2, importer: 1, real: 1 } },
+  { path: "C:/CRX_Manager/.claude/worktrees/merged-importer-only", branchLabel: "claude/z", mergedLabel: "MERGED into origin/main", dirt: { total: 24, importer: 24, real: 0 } },
+  { path: "C:/Users/mason/.codex/worktrees/pr449/CRX_Manager", branchLabel: "(detached @ deadbeef)", mergedLabel: "MERGED into origin/main", dirt: { total: 0, importer: 0, real: 0 } },
+  { path: "C:/CRX_Manager/.claude/worktrees/unknown-state", branchLabel: "claude/w", mergedLabel: "merge-state unknown", dirt: { total: 0, importer: 0, real: 0 } },
+  { path: "C:/CRX_Manager/.claude/worktrees/gone", branchLabel: "claude/v", mergedLabel: "MERGED into origin/main", dirt: null },
+];
+const report = formatSiblingReport(reportInput);
+eq(report.length, 5, "four detailed entries plus one folded line");
+ok(report[0].includes("unmerged-work") && report[0].includes("UNMERGED"), "unmerged worktree keeps its full entry");
+ok(report[1].includes("merged-real-dirt") && report[1].includes("1 real"), "merged worktree with REAL dirt keeps its full entry");
+ok(report[2].includes("unknown-state"), "unknown merge state keeps its full entry");
+ok(report[3].includes("gone") && report[3].includes("unreadable/absent"), "unreadable checkout keeps its full entry");
+const folded = report[4];
+ok(folded.startsWith("  • 2 finished worktrees (in origin/main, no real changes; 1 carry only Codex-import skill dirs): "), `folded line counts and labels: ${folded}`);
+ok(folded.includes("merged-importer-only") && folded.includes("pr449"), "folded line still NAMES every folded worktree");
+ok(!folded.includes("unmerged-work"), "an unmerged worktree is never folded");
+// A detached HEAD folds only when origin/main provably contains it (exact-SHA
+// gpt-5.6-sol review of the first cut, MODERATE): a detached worktree holding
+// unique work, and a bare "detached" label that skipped the ancestry test, both
+// keep the detailed entry.
+for (const detached of [
+  { path: "C:/Users/mason/.codex/worktrees/unique/CRX_Manager", branchLabel: "(detached @ cafef00d)", mergedLabel: "UNMERGED (not in origin/main)", dirt: { total: 0, importer: 0, real: 0 } },
+  { path: "C:/Users/mason/.codex/worktrees/bare/CRX_Manager", branchLabel: "(detached @ deadbeef)", mergedLabel: "detached", dirt: { total: 0, importer: 0, real: 0 } },
+]) {
+  const lines = formatSiblingReport([detached]);
+  eq(lines.length, 1, `a detached worktree without proven ancestry gets one detailed entry: ${detached.mergedLabel}`);
+  ok(lines[0].includes(detached.mergedLabel) && !lines[0].includes("finished"), `…and is never called finished: ${lines[0]}`);
+}
+eq(formatSiblingReport([]), [], "no siblings → no lines");
+eq(formatSiblingReport([reportInput[0]]).length, 1, "a lone unmerged sibling → one detailed entry, no fold line");
+const allFinished = formatSiblingReport([reportInput[2], reportInput[3]]);
+eq(allFinished.length, 1, "only finished siblings → exactly one folded line");
+// Mutation pin: flipping ONE field moves a worktree between the two groups.
+eq(formatSiblingReport([{ ...reportInput[2], mergedLabel: "UNMERGED (not in origin/main)" }]).length, 1, "importer-only dirt does not fold an UNMERGED worktree");
+ok(formatSiblingReport([{ ...reportInput[2], mergedLabel: "UNMERGED (not in origin/main)" }])[0].includes("UNMERGED"), "…and it is reported as unmerged");
+ok(formatSiblingReport([{ ...reportInput[2], dirt: { total: 25, importer: 24, real: 1 } }])[0].includes("1 real"), "one real dirty file un-folds a merged worktree");
+
+const grouped = groupUnknownReasons([
+  "origin/main parked-state metadata is unreadable",
+  "C:/CRX_Manager/.claude/worktrees/a: branch-owned LOCAL CANDIDATE SQL is absent from this branch's own-draft diff",
+  "C:/CRX_Manager/.claude/worktrees/b: branch-owned LOCAL CANDIDATE SQL is absent from this branch's own-draft diff",
+  "C:/Users/mason/.codex/worktrees/c/CRX_Manager: branch-owned LOCAL CANDIDATE SQL sha256 does not match migration history",
+]);
+eq(grouped.length, 3, "three distinct reasons");
+eq(grouped[0], "origin/main parked-state metadata is unreadable", "a bare reason passes through unchanged");
+eq(grouped[1], "branch-owned LOCAL CANDIDATE SQL is absent from this branch's own-draft diff (2 worktrees: a, b)", "shared reason names both worktrees once");
+eq(grouped[2], "branch-owned LOCAL CANDIDATE SQL sha256 does not match migration history (1 worktree: c)", "Codex worktree is named by its parent folder");
+eq(groupUnknownReasons([]), [], "no reasons → no lines");
 
 // ── fleet helpers (shared with scripts/fleet-status.mjs) ──
 
