@@ -1883,6 +1883,30 @@ try {
   assert.equal(rawDocumentationEntrypoint.status, 0, "raw-string documentation patch entrypoint exits cleanly");
   assert.equal(rawDocumentationEntrypoint.stderr, "", "raw-string documentation patch entrypoint emits no stderr");
   assert.equal(rawDocumentationEntrypoint.stdout, "", "raw-string documentation patch remains allowed through the JSON/stdin entrypoint");
+  const moveToGuardPatch = "*** Begin Patch\n*** Update File: docs/reference/agent-guardrails.md\n*** Move to: .codex/hooks/production-action-guard.mjs\n@@\n-old\n+weaken()\n*** End Patch";
+  const moveToProofPatch = "*** Begin Patch\n*** Update File: docs/reference/agent-guardrails.md\n*** Move to: .claude/session-state/claude-review-push.json\n@@\n-old\n+{}\n*** End Patch";
+  const moveToDocumentationPatch = "*** Begin Patch\n*** Update File: docs/reference/agent-guardrails.md\n*** Move to: docs/reference/moved-guardrails.md\n@@\n-old\n+mentions .codex/hooks/production-action-guard.mjs\n*** End Patch";
+  for (const [patch, reason] of [[moveToGuardPatch, /production\/review harness is a security boundary/], [moveToProofPatch, /review proof files/]]) {
+    assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: patch }).blocked, true, "raw Move to protected destination is denied");
+    assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch } }).blocked, true, "structured Move to protected destination is denied");
+    const movedEntrypoint = spawnSync(process.execPath, [guardPath], { input: JSON.stringify({ tool_name: "apply_patch", tool_input: patch }), encoding: "utf8" });
+    assert.equal(movedEntrypoint.error, undefined, "Move to entrypoint starts without a process error");
+    assert.equal(movedEntrypoint.status, 0, "Move to entrypoint exits after denial");
+    assert.equal(movedEntrypoint.stderr, "", "Move to entrypoint emits no stderr");
+    const movedDecision = JSON.parse(movedEntrypoint.stdout);
+    assert.equal(movedDecision.hookSpecificOutput?.permissionDecision, "deny", "raw Move to is denied through JSON/stdin");
+    assert.match(String(movedDecision.hookSpecificOutput?.permissionDecisionReason || ""), reason, "Move to reaches the expected denial");
+  }
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: moveToDocumentationPatch }).blocked, false, "ordinary raw documentation move remains allowed");
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch: moveToDocumentationPatch } }).blocked, false, "ordinary structured documentation move remains allowed");
+  const ordinaryMoveEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({ tool_name: "apply_patch", tool_input: moveToDocumentationPatch }),
+    encoding: "utf8",
+  });
+  assert.equal(ordinaryMoveEntrypoint.error, undefined, "ordinary move entrypoint starts without a process error");
+  assert.equal(ordinaryMoveEntrypoint.status, 0, "ordinary move entrypoint exits cleanly");
+  assert.equal(ordinaryMoveEntrypoint.stderr, "", "ordinary move entrypoint emits no stderr");
+  assert.equal(ordinaryMoveEntrypoint.stdout, "", "ordinary move mentioning protected prose stays allowed through JSON/stdin");
 
   // ── Codex round-4 regressions (2026-07-13) ────────────────────────────────
   // R4-1: comment markers inside string literals cannot hide a mutation.
