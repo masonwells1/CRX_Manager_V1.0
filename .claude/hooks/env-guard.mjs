@@ -54,119 +54,26 @@ if (!content) out("allow");
 const inSrc = filePath.includes("/src/");
 const isFrontendFile = inSrc && /\.(ts|tsx|js|jsx)$/.test(filePath);
 
-// Remove JS/TS comments so the service_role scans judge CODE only. Until PR #605
-// (Codex gpt-5.6-sol High at 28bba740b, probe-confirmed) the two scans were instead
-// SUPPRESSED by a file-global "no // … service_role comment" test: one comment reading
-// "// never use service_role here" anywhere in the file, and a real
-// import.meta.env.SUPABASE_SERVICE_ROLE_KEY on the next line was allowed — the comment
-// meant to warn about the mistake was the exact string that hid it.
-//
-// A small state machine rather than a regex: string literals are tracked so a URL
-// ("https://…") or a "/* … */" inside quotes is never treated as a comment, and a
-// "//" only opens a line comment after start-of-line, whitespace, or one of ;{}), so a
-// regex literal such as /\/\// does not swallow the rest of its line. REGEX literals are
-// tracked too (CodeRabbit Major on 537625b59, probe-confirmed): without that state the
-// "/*" inside the character class of /[/*]/ — or the "/" + "*" of /a\/*b/ — opened a
-// block comment that never closed, and everything after it (the key lookup, the
-// 'service_role' literal) vanished before the scan. A "/" starts a regex when the previous
-// non-blank token cannot end an operand (start of file, an operator or opening bracket,
-// or an expression keyword such as return/typeof/case); after an identifier, number,
-// closing quote or "]" it is division. After ")" it is a regex only when that parenthesis
-// closed a control-flow head — if (…) /re/.test(x) — and division otherwise, so
-// "(total + fee) / 2; // 'service_role'" strips its comment instead of refusing
-// (CodeRabbit Major on 06f0039a2). Where the machine cannot tell (an unmatched paren) it
-// keeps MORE text: the worst wrong guess is a comment that survives and produces a refusal
-// Mason can read, never code that vanishes.
-const REGEX_PREFIX_KEYWORDS = new Set([
-  "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw",
-  "case", "do", "else", "yield", "await",
-]);
-const CONTROL_HEAD_KEYWORDS = new Set(["if", "while", "for", "with"]);
-function wordBefore(src, e) {
-  while (e >= 0 && /[ \t\r\n]/.test(src[e])) e -= 1;
-  let w = e;
-  while (w >= 0 && /[A-Za-z0-9_$]/.test(src[w])) w -= 1;
-  return src.slice(w + 1, e + 1);
-}
-function regexCanStart(src, i) {
-  let j = i - 1;
-  while (j >= 0 && /[ \t\r\n]/.test(src[j])) j -= 1;
-  if (j < 0) return true;
-  const prev = src[j];
-  if (/['"`]/.test(prev)) return false; // a closed string literal: division
-  if (/[A-Za-z0-9_$]/.test(prev)) {
-    let k = j;
-    while (k >= 0 && /[A-Za-z0-9_$]/.test(src[k])) k -= 1;
-    return REGEX_PREFIX_KEYWORDS.has(src.slice(k + 1, j + 1));
-  }
-  if (prev === "]") return false; // end of an index or array literal: division
-  if (prev === ")") {
-    // Walk back to the matching "(" (nesting counted). A regex follows ")" only when the
-    // parenthesis closed a control-flow head; after a call or a grouped expression the
-    // slash is division. An unmatched paren is doubt, and doubt keeps more text (regex).
-    let depth = 0;
-    let k = j;
-    for (; k >= 0; k -= 1) {
-      if (src[k] === ")") depth += 1;
-      else if (src[k] === "(") { depth -= 1; if (depth === 0) break; }
-    }
-    if (k < 0) return true;
-    return CONTROL_HEAD_KEYWORDS.has(wordBefore(src, k - 1));
-  }
-  return true;
-}
-function stripComments(src) {
-  let out = "";
-  let state = "code"; // code | sq | dq | bt | regex | line | block
-  let inClass = false;
-  for (let i = 0; i < src.length; i += 1) {
-    const ch = src[i];
-    const next = src[i + 1];
-    if (state === "line") {
-      if (ch === "\n") { state = "code"; out += ch; }
-      continue;
-    }
-    if (state === "block") {
-      if (ch === "*" && next === "/") { state = "code"; i += 1; out += " "; }
-      else if (ch === "\n") out += ch;
-      continue;
-    }
-    if (state === "regex") {
-      out += ch;
-      if (ch === "\\") { out += next ?? ""; i += 1; continue; }
-      if (ch === "\n") { state = "code"; inClass = false; continue; } // unterminated: it was division; text kept
-      if (inClass) { if (ch === "]") inClass = false; continue; }
-      if (ch === "[") { inClass = true; continue; }
-      if (ch === "/") state = "code";
-      continue;
-    }
-    if (state !== "code") {
-      out += ch;
-      if (ch === "\\") { out += next ?? ""; i += 1; continue; }
-      if ((state === "sq" && ch === "'") || (state === "dq" && ch === '"') || (state === "bt" && ch === "`")) state = "code";
-      continue;
-    }
-    if (ch === "'") { state = "sq"; out += ch; continue; }
-    if (ch === '"') { state = "dq"; out += ch; continue; }
-    if (ch === "`") { state = "bt"; out += ch; continue; }
-    if (ch === "/" && next === "/") {
-      const prev = i === 0 ? "\n" : src[i - 1];
-      if (/[\s;{}),]/.test(prev)) { state = "line"; i += 1; continue; }
-    }
-    if (ch === "/" && next === "*") { state = "block"; i += 1; continue; }
-    if (ch === "/" && regexCanStart(src, i)) { state = "regex"; inClass = false; out += ch; continue; }
-    out += ch;
-  }
-  return out;
-}
+// The service_role scans judge the RAW content, comments included. Three attempts to
+// strip comments first were each defeated by valid input during PR #605: the pre-605
+// code SUPPRESSED the scan whenever a "// … service_role" comment existed anywhere in
+// the file (Codex High at 28bba740b); a string/regex-aware stripper was opened by the
+// "/*" inside the character class /[/*]/ (CodeRabbit on 537625b59); the regex-aware one
+// was opened by JSX text — `<div>/*</div>` — (Codex High at fdce1aa53) and, by the same
+// mechanism, by a nested template literal (`${`/*`}`). Nothing short of a full TSX
+// parser can be sound here, and the cost of the sound choice is small: a comment that
+// merely names SUPABASE_SERVICE_ROLE_KEY or quotes 'service_role' is refused with a
+// message that says so, and the author rewords it (src/ carries no such comment today;
+// the JWT-literal scan below was always on the raw content). The failure mode is a
+// refusal Mason can read, never code that vanishes before the scan.
 
 if (isFrontendFile) {
-  const code = stripComments(content);
+  const code = content;
   const violations = [];
 
-  // An env-var lookup or any other CODE reference to the key. A comment may say the name.
+  // An env-var lookup or any other reference to the key, comments included (see above).
   if (/SUPABASE_SERVICE_ROLE_KEY/.test(code)) {
-    violations.push("SUPABASE_SERVICE_ROLE_KEY referenced in a src/ file (comments are not counted; this is code).");
+    violations.push("SUPABASE_SERVICE_ROLE_KEY referenced in a src/ file (comments count too — the scan is on the raw text; reword a comment that names it).");
   }
   // eyJ... is the JWT prefix all Supabase keys share; flag a long literal that looks like one.
   // Anon keys are also eyJ... but a long literal in source is suspicious regardless — use env vars.
@@ -176,7 +83,7 @@ if (isFrontendFile) {
   }
   // 'service_role' as a string value in code.
   if (/['"`]service_role['"`]/.test(code)) {
-    violations.push("'service_role' string literal in src/ — this role belongs only in Edge Functions.");
+    violations.push("'service_role' string literal in src/ — this role belongs only in Edge Functions (a comment quoting it is refused too; reword it).");
   }
 
   if (violations.length > 0) {

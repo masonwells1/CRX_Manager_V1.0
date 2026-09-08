@@ -205,6 +205,18 @@ for (const sample of samples) {
   if (read.stdout !== "") fail(`real hook: reading ${sample} with cat was NOT silent (stdout: ${read.stdout.slice(0, 120)})`);
 }
 
+// ---- 4b. non-canonical spellings of every protected sample (Codex High at fdce1aa53) ----
+// A traversal, a ./ prefix, a doubled separator or Windows separators must all reach the
+// same armed verdict as the canonical path; matching the raw spelling alone let
+// ".claude/worktrees/../hooks/review-proof-guard.mjs" through.
+for (const sample of samples) {
+  if (!settingsProtects(sample)) continue;
+  const spellings = [`./${sample}`, `zz/../${sample}`, sample.replace("/", "//"), sample.replace(/\//g, "\\")];
+  for (const spelled of spellings) {
+    if (!autopilotDenies(spelled)) fail(`armed autopilot AUTO-APPROVES "${spelled}" although its canonical path "${sample}" is protected`);
+  }
+}
+
 // ---- 5. every tracked top-level entry under .claude/ and .codex/ is decided ----
 const topLevel = new Set();
 for (const p of tracked) {

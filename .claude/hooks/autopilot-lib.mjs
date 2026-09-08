@@ -257,8 +257,16 @@ const DENY_PATH_RE = /(^|[\\/])\.env(\.|$)/i;
 const PROTECTED_SURFACE_RE = /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex|\.claude\/(?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts\/(?:(?:check|validate|verify)-[^/]*(?:\/[^/]*)*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
 
 export function protectedSurfacePath(filePath) {
-  const p = String(filePath || "").replace(/\\/g, "/");
-  return p !== "" && PROTECTED_SURFACE_RE.test(`/${p}`);
+  const raw = String(filePath || "").replace(/\\/g, "/");
+  if (raw === "") return false;
+  // Judged on BOTH the raw spelling and the canonical one (Codex gpt-5.6-sol High at
+  // fdce1aa53, probe-confirmed: ".claude/worktrees/../hooks/review-proof-guard.mjs"
+  // matched nothing raw, and armed autopilot auto-approved a rewrite of the guard).
+  // Either form hitting is a deny, and a path that still escapes the tree after
+  // normalisation is never auto-approved while armed: review-proof-guard cannot see
+  // where it lands, so the arm must not vouch for it.
+  const canon = canonicalToolPath(raw);
+  return PROTECTED_SURFACE_RE.test(`/${raw}`) || escapesTree(canon) || PROTECTED_SURFACE_RE.test(`/${canon}`);
 }
 
 // Canonical form of a tool path: backslashes folded and "." / ".." segments resolved, so
@@ -301,7 +309,7 @@ export function autopilotDecision(toolName, toolInput) {
   // notebook_path (CodeRabbit Major on 537625b59: it was unread, so an armed NotebookEdit
   // of a hook file judged an empty path and returned "allow").
   const filePath = input.file_path || input.notebook_path || input.path || input.filePath || "";
-  if (filePath && DENY_PATH_RE.test(String(filePath))) return "deny";
+  if (filePath && (DENY_PATH_RE.test(String(filePath)) || DENY_PATH_RE.test(canonicalToolPath(filePath)))) return "deny";
   if (protectedSurfacePath(filePath)) return "deny";
 
   return "allow";

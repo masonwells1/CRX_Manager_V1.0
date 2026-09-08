@@ -49,6 +49,14 @@ eq(autopilotDecision("NotebookEdit", { notebook_path: "notebooks/analysis.ipynb"
 eq(autopilotDecision("Write", { file_path: "C:\\CRX_Manager\\.claude\\settings.json" }), "deny", "absolute Windows path to settings.json denied");
 eq(autopilotDecision("Edit", { file_path: "C:/CRX_Manager/scripts/write-codex-push-proof.mjs" }), "deny", "absolute path to the proof minter denied");
 eq(autopilotDecision("Edit", { file_path: "scripts/check-docs.mjs" }), "deny", "check-* script denied");
+// Codex gpt-5.6-sol High at fdce1aa53: the surface was matched on the raw spelling only.
+eq(autopilotDecision("Edit", { file_path: ".claude/worktrees/../hooks/review-proof-guard.mjs" }), "deny", "PROVEN BYPASS: a traversal into .claude/hooks is judged on the canonical path");
+eq(autopilotDecision("Write", { file_path: ".claude//hooks/x.mjs" }), "deny", "repeated separators collapse before the match");
+eq(autopilotDecision("Write", { file_path: "./.husky/pre-push" }), "deny", "a ./ prefix normalises away");
+eq(autopilotDecision("Edit", { file_path: "C:\\CRX_Manager\\.claude\\worktrees\\wt\\..\\..\\hooks\\x.mjs" }), "deny", "absolute Windows traversal into hooks denied");
+eq(autopilotDecision("Write", { file_path: "docs/../.env.local" }), "deny", "a traversal onto an env file denied");
+eq(autopilotDecision("Write", { file_path: "../elsewhere/notes.md" }), "deny", "a path that escapes the tree is never auto-approved while armed");
+eq(autopilotDecision("Write", { file_path: "src/pages/../lib/x.ts" }), "allow", "an ordinary source path with a resolvable dot segment stays auto-approved");
 eq(autopilotDecision("mcp__some_server__put_file", { path: ".codex/hooks.json" }), "deny", "an MCP path field into .codex denied even when the tool name is not in DENY_TOOLNAME_RE");
 eq(autopilotDecision("Write", { file_path: ".claude/session-state/notes.md" }), "allow", "session-state stays auto-approved");
 eq(autopilotDecision("Edit", { file_path: "package-lock.json" }), "allow", "package-lock.json is deliberately outside the set");
