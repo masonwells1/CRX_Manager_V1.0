@@ -59,10 +59,23 @@ migrations are applied live with **no file on `main`**. Six belong to PR #535:
 `20260904180000_invoice_season_follows_invoice_date`, applied live and owned by open PR #599. Do not
 reconstruct any of these nine; land the owning PRs after their own review gates. PR #592 has already
 restamped its two NOT-YET-APPLIED files to `20260905020000_commission_history_report_replay_guard`
-and `20260905020100_repair_commission_history_label_snapshots`. The #582 candidate is deliberately
-`20260904185900`, after the live high-water and before those two pending commission migrations,
-matching Mason's explicit delivery priority of #582 before the commission report. If that order is
-reversed, #582 must be restamped after a fresh ledger read before any apply.
+and `20260905020100_repair_commission_history_label_snapshots`.
+
+**Corrected 2026-09-08 against a live `list_migrations` read.** An earlier version of this paragraph
+called `20260904185900` a pending "#582 candidate" sitting above the live high-water. Every clause of
+that is now stale:
+
+- `20260904185900_refuse_null_job_field_acres` does **not** belong to PR #582. It was added to `main`
+  by **PR #606** (`719faac73`, "fix(jobs): guard server-side field acreage"), it re-emits `save_job`,
+  and it is **already applied live** under ledger version `20260905185938`.
+- PR #582's own migration is `20260903150000_job_chemicals_persist_driver`, applied live under ledger
+  version `20260903153402`.
+- The effective live high-water is therefore **`20260905185938`**, not `20260904185900`.
+
+Re-read the ledger before stamping or applying anything new; do not infer ordering from filenames on
+disk. Note in particular that PR #592's restamped `20260905020000` and `20260905020100` sort **below**
+the current high-water, so their apply order must be re-checked against a fresh read by whoever lands
+that PR.
 
 The consequence still bites until all three owning PRs merge: `main` does not describe production,
 so any migration whose safety argument rests on "the live body equals the last committed body" must verify against
