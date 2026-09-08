@@ -34,7 +34,7 @@
 //     .codex/hooks/production-action-guard.mjs (SUPABASE_READ_ONLY_TOOLS).
 //   - Other connector UUIDs: a UUID whose settings entries name a leaf only
 //     Supabase has gets the complete Supabase policy; otherwise each tool
-//     needs its own exact settings entry (or a read-shaped name) or it is
+//     needs its own exact ask/deny settings entry or it is
 //     denied - the reinstalled-Supabase case (Codex P1 x3, PR #605).
 //
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
@@ -108,19 +108,10 @@ const SUPABASE_GATED_ELSEWHERE = new Set(["execute_sql", "apply_migration", "dep
 //      Vercel shares), the UUID is the Supabase connector and the COMPLETE
 //      Supabase policy applies: exact read-only allowlist passes, the three
 //      leaves other gates own pass to those gates, everything else is denied.
-//   2. OTHERWISE, PER-TOOL: a leaf passes only if the exact
-//      `mcp__<uuid>__<leaf>` ask/deny entry exists in a settings file, or it is on the
-//      Supabase read-only allowlist, or it is read-shaped by verb (get_/list_/
-//      search_/read_/find_/query_/...). EVERYTHING ELSE is denied: a single
-//      registered leaf never settles the other tools on that server, so a
-//      reinstalled Supabase connector with only `list_projects` listed still
-//      has `delete_project`, `future_write_tool`, `deploy_edge_function`
-//      denied (Codex probe on 68c1c32f0). The denial says how to register.
-// Registering is a settings.json edit requiring approval under PR #605's final
-// policy; a reinstalled Supabase connector must ALSO be added to
-// SUPABASE_TOOL_RE. Residual: a mutation deliberately named with a read verb
-// on an unidentified connector passes; no known connector does that. A
-// malformed settings file yields fewer registered entries, i.e. MORE denials.
+//   2. OTHERWISE: each tool requires an exact ask/deny entry. A read-looking
+//      name cannot establish behavior; one registered tool never settles others.
+// Registering is a settings edit requiring approval. A malformed settings file
+// yields fewer entries and therefore more denials.
 const UUID_SERVER_TOOL_RE = /^mcp__([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})__([\w-]+)$/i;
 const SUPABASE_SENSITIVE_LEAVES = new Set([
   "apply_migration", "deploy_edge_function", "execute_sql",
@@ -140,11 +131,6 @@ const SUPABASE_DISTINCTIVE_LEAVES = new Set(
   [...SUPABASE_READ_ONLY_TOOLS, ...SUPABASE_GATED_ELSEWHERE, ...SUPABASE_SENSITIVE_LEAVES]
     .filter((leaf) => !SUPABASE_SHARED_LEAVES.has(leaf)),
 );
-const READ_SHAPED_LEAF_RE = /^(?:get|list|search|read|find|query|describe|fetch|show|view|check|inspect|compare|validate|render|extract|convert|download|suggest|analy[sz]e|display|lookup|count|preview)(?:_|$)/i;
-// GitHub spells some reads with the verb LAST (pull_request_read, issue_read,
-// actions_get, actions_list); accept that shape too (GitHub Codex P2 on 3612eb3a1).
-const READ_SHAPED_SUFFIX_RE = /_(?:read|get|list)$/i;
-const isReadShaped = (leaf) => READ_SHAPED_LEAF_RE.test(leaf) || READ_SHAPED_SUFFIX_RE.test(leaf);
 const SETTINGS_UUID_LEAF_RE = /^mcp__([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})__([\w-]+)$/i;
 
 // { exact: Set<lower-cased entry>, byUuid: Map<uuid, Set<leaf>> } of every exact
@@ -247,8 +233,8 @@ if (!supabaseLeaf) {
     }
     const liveAction = SUPABASE_SENSITIVE_LEAVES.has(leafLower);
     const settled = gatedTierRegistered(toolName);
-    if (!settled && !SUPABASE_READ_ONLY_TOOLS.has(leafLower) && !isReadShaped(leaf)) {
-      const kind = liveAction ? "a Supabase live-action leaf (only an `ask` or `deny` entry settles it; an `allow` line does not count)" : "not a read-shaped tool";
+    if (!settled) {
+      const kind = liveAction ? "a Supabase live-action leaf (only an `ask` or `deny` entry settles it; an `allow` line does not count)" : "an unidentified connector tool (read-looking names do not establish read-only behavior)";
       out("block",
         `MCP TOOL GUARD (${toolName}): "${leaf}" is ${kind} and has no qualifying exact entry for connector UUID ${uuid} in any Claude settings file ` +
         "(repo .claude/settings.json, .claude/settings.local.json, ~/.claude/settings.json), so it is denied rather than left to the " +

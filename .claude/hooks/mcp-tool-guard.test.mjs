@@ -17,11 +17,13 @@ function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 
 function runHook(payload, cwd) {
-  return spawnSync(process.execPath, [path.join(__dirname, "mcp-tool-guard.mjs")], {
+  const result = spawnSync(process.execPath, [path.join(__dirname, "mcp-tool-guard.mjs")], {
     input: JSON.stringify(payload),
     encoding: "utf8",
     env: { ...process.env, CLAUDE_PROJECT_DIR: cwd || process.env.CLAUDE_PROJECT_DIR },
   });
+  assert.equal(result.status, 0, `hook must complete normally: ${result.stderr || result.stdout}`);
+  return result;
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
 
@@ -191,6 +193,8 @@ eq(r.stdout.trim(), "", "non-Supabase server with an unknown leaf is not matched
 // The Supabase connector UUID changes on reinstall. Sensitive leaves on ANY
 // UUID-shaped server are denied until that UUID is registered.
 const ALT_UUID = "mcp__0f1e2d3c-4b5a-4c6d-8e7f-a0b1c2d3e4f5__";
+r = runHook({ tool_name: ALT_UUID + "get_and_delete_project", tool_input: {} });
+ok(isDeny(r), "a read-looking mutation on an unidentified connector must be denied");
 r = runHook({ tool_name: ALT_UUID + "pause_project", tool_input: { project_id: "x" } });
 ok(isDeny(r), "pause_project on an unregistered connector UUID is denied");
 r = runHook({ tool_name: ALT_UUID + "deploy_edge_function", tool_input: { name: "send-email" } });
@@ -200,11 +204,11 @@ ok(isDeny(r), "apply_migration on an unregistered connector UUID is denied");
 r = runHook({ tool_name: ALT_UUID + "Execute_SQL", tool_input: { query: "select 1" } });
 ok(isDeny(r), "execute_sql on an unregistered connector UUID is denied (case-insensitive)");
 r = runHook({ tool_name: ALT_UUID + "list_projects", tool_input: {} });
-eq(r.stdout.trim(), "", "Supabase read-only leaf on an unregistered UUID passes through (harmless on any connector)");
+ok(isDeny(r), "an unregistered UUID cannot borrow Supabase read authority");
 r = runHook({ tool_name: ALT_UUID + "get_event", tool_input: { id: "1" } });
-eq(r.stdout.trim(), "", "read-shaped leaf (get_) on an unregistered UUID passes through");
+ok(isDeny(r), "read-looking get leaf requires registration");
 r = runHook({ tool_name: ALT_UUID + "search_files", tool_input: { q: "x" } });
-eq(r.stdout.trim(), "", "read-shaped leaf (search_) on an unregistered UUID passes through");
+ok(isDeny(r), "read-looking search leaf requires registration");
 // Codex probe 2026-09-05 (PR #605 head c3e2b3fd7): unknown or renamed mutations on a
 // reinstalled connector must NOT fall through to the classifier.
 r = runHook({ tool_name: ALT_UUID + "delete_project", tool_input: { project_id: "x" } });
@@ -225,7 +229,7 @@ eq(r.stdout.trim(), "", "deploy_to_vercel on the Vercel UUID has an exact settin
 r = runHook({ tool_name: VERCEL_UUID + "unpause_project", tool_input: { project_id: "x" } });
 ok(isDeny(r), "unpause_project on the Vercel UUID has no exact entry and is denied (per-tool registration)");
 r = runHook({ tool_name: VERCEL_UUID + "list_deployments", tool_input: {} });
-eq(r.stdout.trim(), "", "read-shaped leaf on the Vercel UUID passes");
+ok(isDeny(r), "unregistered read-looking Vercel UUID leaf requires registration");
 
 // Codex probe on 68c1c32f0: a reinstalled Supabase connector with ONLY list_projects
 // registered must still have its mutations denied. Fixture settings via CLAUDE_PROJECT_DIR.
@@ -240,7 +244,7 @@ function withProjectSettings(entries, fn) {
 const PARTIAL_UUID = "mcp__7a7a7a7a-1111-4222-8333-444444444444__";
 withProjectSettings({ allow: [PARTIAL_UUID + "list_projects"] }, (dir) => {
   r = runHook({ tool_name: PARTIAL_UUID + "list_projects", tool_input: {} }, dir);
-  eq(r.stdout.trim(), "", "the one exactly registered leaf passes");
+  ok(isDeny(r), "an allow-only read-looking leaf on an unidentified UUID requires approval registration");
   r = runHook({ tool_name: PARTIAL_UUID + "delete_project", tool_input: {} }, dir);
   ok(isDeny(r), "delete_project on a partially registered UUID is still denied");
   r = runHook({ tool_name: PARTIAL_UUID + "future_write_tool", tool_input: {} }, dir);
@@ -288,7 +292,7 @@ ok(isDeny(r), "deploy_edge_function on a Supabase-named server with no ask entry
 // too, so they must not fingerprint a UUID as Supabase. A GitHub-shaped UUID registered for
 // them keeps its ordinary read tools and its own ask-tier tools.
 const GH_UUID = "mcp__6d6d6d6d-1111-4222-8333-444444444444__";
-withProjectSettings({ allow: [GH_UUID + "list_branches", GH_UUID + "create_branch"], ask: [GH_UUID + "create_pull_request"] }, (dir) => {
+withProjectSettings({ allow: [GH_UUID + "list_branches", GH_UUID + "create_branch"], ask: ["create_pull_request", "get_file_contents", "pull_request_read", "list_branches", "search_code"].map((leaf) => GH_UUID + leaf) }, (dir) => {
   for (const leaf of ["get_file_contents", "pull_request_read", "list_branches", "search_code"]) {
     r = runHook({ tool_name: GH_UUID + leaf, tool_input: {} }, dir);
     eq(r.stdout.trim(), "", `${leaf}: GitHub-shaped UUID registered for shared branch leaves is NOT treated as Supabase`);
@@ -387,6 +391,19 @@ const hookSource = readFileSync(path.join(__dirname, "mcp-tool-guard.mjs"), "utf
 const mutatorAlternatives = hookSource.match(/^const DC_WRITE_RE = .*__\(([^)]+)\)/m);
 ok(mutatorAlternatives, "recognized filesystem mutator alternatives are discoverable");
 const permissionConfig = JSON.parse(readFileSync(path.join(__dirname, "../settings.json"), "utf8"));
+const localPermissions = JSON.parse(readFileSync(path.join(__dirname, "../settings.local.json"), "utf8")).permissions;
+ok(permissionConfig.permissions.ask.includes("mcp__Claude_Preview__preview_start"), "legacy preview launch requires approval");
+for (const perms of [permissionConfig.permissions, localPermissions]) {
+  ok(!perms.allow.includes("mcp__Claude_Preview") && !perms.allow.includes("mcp__Claude_Preview__preview_start"), "no conflicting legacy preview allow grant remains");
+}
+for (const tier of ["allow", "ask", "deny"]) {
+  withProjectSettings({ [tier]: [ALT_UUID + "get_and_delete_project"] }, (dir) => {
+    r = runHook({ tool_name: ALT_UUID + "get_and_delete_project", tool_input: {} }, dir);
+    eq(r.status, 0, "read-looking mutation evaluation completes normally");
+    if (tier === "allow") ok(isDeny(r), "a saved allow cannot authorize a disguised mutation");
+    else eq(r.stdout, "", `read-looking mutation defers to its exact ${tier} rule`);
+  });
+}
 for (const leaf of mutatorAlternatives[1].split("|")) {
   ok(permissionConfig.permissions.deny.includes(`mcp__Desktop_Commander__${leaf}`), `Desktop Commander ${leaf} is denied by settings`);
 }

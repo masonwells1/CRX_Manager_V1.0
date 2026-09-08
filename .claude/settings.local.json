@@ -13,8 +13,7 @@
       "Bash(git push:*)",
       "Bash(git pull:*)",
       "Bash(git stash:*)",
-      "Bash(grep:*)",
-      "mcp__Claude_Preview__preview_start"
+      "Bash(grep:*)"
     ]
   }
 }
