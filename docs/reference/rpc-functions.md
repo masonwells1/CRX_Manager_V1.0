@@ -375,6 +375,7 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 ### Auth & Security
 - `_is_admin_override()` — internal admin check for RLS policies
 - `handle_new_user()` — triggered on `auth.users` INSERT, auto-creates `profiles` row
+- `customer_document_path_has_metadata_for_actor(p_storage_path text)` → boolean — **parked row-923 Storage-policy helper, not live until its migration is explicitly applied.** Stable `SECURITY DEFINER` predicate used only to distinguish a genuinely metadata-free upload from a path whose metadata is hidden because it was soft-deleted. It returns metadata existence only to an admin or the active sales rep assigned to the path's customer, preventing cross-customer probing; direct EXECUTE is authenticated-only. Migration `20260908054649_revoke_deleted_customer_document_bytes.sql`.
 - `check_idempotency(p_key, p_operation)` — check if an idempotency key has been used. **LIVE (`20260714230000`, 2026-07-15):** takes a key-only transaction advisory lock so same-operation retries serialize and cross-operation reuse fails before business mutation. A trigger forces legacy inline-key concurrent losers to roll back.
 - `save_idempotency()` — persist an idempotency key result
 - `check_rate_limit()` — rate limiting check

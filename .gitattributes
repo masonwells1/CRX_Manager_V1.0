@@ -222,6 +222,11 @@ scripts/smoke/prove-document-dates-chicago.mjs text eol=lf
 scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf
 scripts/smoke/smoke-commission-report-snapshot-contract.sql text eol=lf
 scripts/smoke/prove-commission-history-label-repair.mjs text eol=lf
+# Customer-document Storage proof applies the migration file verbatim in a
+# disposable PostgreSQL container and mutation-tests that exact candidate.
+supabase/migrations/20260908054649_revoke_deleted_customer_document_bytes.sql text eol=lf
+scripts/smoke/smoke-customer-document-soft-delete-bytes.sql text eol=lf
+scripts/smoke/prove-customer-document-soft-delete-bytes.mjs text eol=lf
 # The invoice_date Chicago-fallback migration pins four live function bodies by md5 and
 # installs LF bodies; its prover reads it byte-for-byte. Pin both to LF on every platform.
 supabase/migrations/20260904160000_invoice_date_fallbacks_chicago.sql text eol=lf

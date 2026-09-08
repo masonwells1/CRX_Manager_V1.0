@@ -203,6 +203,19 @@
         "inventory"
       ]
     },
+    "customer_document_soft_delete_bytes": {
+      "chain": "smoke-customer-document-soft-delete-bytes.sql",
+      "container_only": true,
+      "container_prover": "prove-customer-document-soft-delete-bytes.mjs",
+      "description": "CONTAINER ONLY - proves the historical customer-document owner bypass exposes soft-deleted bytes, applies and exactly replays 20260908054649 verbatim, then requires uploader revocation on every subsequent request while preserving live-metadata reads and the five-minute metadata-free INSERT RETURNING bootstrap. Mutations prove predecessor-policy drift, a NULL policy expression, candidate-policy drift, same-signature helper drift, and a helper overload all fail closed. Terminal rollback in a network-isolated PostgreSQL 17 container.",
+      "covers": [
+        "customer_documents_objects_rep_select",
+        "customer_document_path_has_metadata_for_actor"
+      ],
+      "area": [
+        "security"
+      ]
+    },
     "supplier_pricing_phase1b": {
       "chain": "smoke-supplier-pricing-phase1b.sql",
       "description": "Supplier Pricing Phase 1b full chain: every mutator passes no-auth, anon, wrong-role, forged-actor, positive-control, and idempotent-replay probes; a reviewed vendor alias feeds a reusable comparable supplier link, a one-row quick quote stages and approves into append-only evidence, all five read RPCs return the linked/imported evidence, pack conversion identifies the correct cheapest normalized cost, and a correction supersedes rather than rewrites the original observation. Payload mismatch, link/history immutability, observation immutability, and zero Product cost/sell-price changes are asserted. Self-contained synthetic evidence with terminal rollback.",

@@ -1,14 +1,14 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-05 for the migration ledger (read-only `list_migrations` against project
+**Last verified: 2026-09-08 for the migration ledger (read-only SQL against project
 `rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-05 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
 migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
-ordering high-water is the newest applied row's effective stamp:
-**`20260905185938_refuse_null_job_field_acres`** (#606, applied live 2026-09-05 under a bare ledger
-name, so the stamp is synthesized from its version; verified live 2026-09-05 evening, 999 rows).
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current ledger has
+**1,000 rows / 993 distinct names**, live `max(version)` **`20260908045843`**, and authored-name
+ordering high-water **`20260906120000_preview_field_app_season_follows_invoice_date`**. The registry
+therefore remains an older schema snapshot; do not infer migration ordering from its version stamp.
 Six local commission follow-ups (`20260905200000` through `20260905210000`, with no `20260905200500` file) are not applied. The
 six-file set was restamped together above that row on 2026-09-05 evening, preserving its order;
 five had sorted below the new high-water and the ordering guard would have refused them.
@@ -41,7 +41,8 @@ often than the counters.
 For provenance, the **superseded 2026-09-05 afternoon read before #606 applied** observed **998
 ledger rows** (991 distinct names — the difference is duplicate names, from `count(distinct name)`,
 not truncation) and `max(version)` **`20260904152221`**. The evening read after #606 is the current
-999-row boundary capture stated above. **All counts and `max(version)` values are point-in-time
+999-row boundary captured in `docs/reference/migration-history.md`; it too is now superseded by the
+2026-09-08 read above. **All counts and `max(version)` values are point-in-time
 observations, not standing facts.** Every apply by any lane moves them, so re-read live before
 relying on either; a stale count here is expected drift, not evidence that something went wrong,
 and it should not be re-pinned on every apply.
@@ -51,8 +52,8 @@ Worth noting alongside: those counters sat unchanged from the 2026-09-04 reading
 `20260904023121`. This refresh verified all eight generator security/grant shapes; the F2 entry in
 `docs/manual/KNOWN_ISSUES.md` carries the detailed matrix.
 
-**Disk-vs-live drift, confirmed 2026-09-04 — NINE FILES OWNED BY OPEN PRs #535, #592, AND #599.** Nine
-migrations are applied live with **no file on `main`**. Six belong to PR #535:
+**Disk-vs-live drift, refreshed 2026-09-08 — eight known applied names still lack a file on
+`main`.** Six belong to open PR #535:
 `20260831160000_harden_receiving_reversal_and_ap_reporting`,
 `20260831161000_require_cumulative_po_bill_confirmation`,
 `20260831162000_fail_closed_historical_commission_balance`,
@@ -60,22 +61,14 @@ migrations are applied live with **no file on `main`**. Six belong to PR #535:
 `20260831233000_bind_section9_replays_to_intent`, and
 `20260831235900_serialize_gauntlet_write_boundaries`. **All six DO have files on PR #535's branch
 `codex/gauntlet-s9-safety-20260831`** — verified 2026-09-03 with `git ls-tree` against that branch,
-6/6 present. The other two are `20260903150100_ledger_backed_commission_history` and
-`20260903230000_commission_report_snapshot_contract`; both source files are on open PR #592's
-`codex/commission-history-migration-apply-20260903` branch. The ninth is
-`20260904180000_invoice_season_follows_invoice_date`, applied live and owned by open PR #599. Do not
-reconstruct any of these nine; land the owning PRs after their own review gates. PR #592 has already
-restamped its two NOT-YET-APPLIED files to `20260905020000_commission_history_report_replay_guard`
-and `20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: the
-six-file set now sits at `20260905200000` through `20260905210000`, with no `20260905200500`
-file, above the applied high-water and with the repair still last). The #606 candidate, the field-acreage guard first tracked
-as #582 (`20260904185900` on disk), was applied
-live on 2026-09-05 as ledger version `20260905185938` under the bare name
-`refuse_null_job_field_acres` — that row is now the ordering high-water, which is why the commission
-set had to move above it. The disk file still carries its authored stamp; row 916 of
-`docs/reference/migration-history.md` records that name mismatch for the #606 lane to reconcile.
+6/6 present. The seventh is `20260904180000_invoice_season_follows_invoice_date`, applied live and
+owned by open PR #599. The eighth is the newest authored ledger name,
+`20260906120000_preview_field_app_season_follows_invoice_date`, whose source reconciliation belongs
+to the separate invoice-preview lane. Do not reconstruct those files in unrelated work. PR #592
+merged on 2026-09-08, so its two applied commission-history files and all six parked commission
+follow-ups are now present on `main`; PR #606 likewise merged the authored field-acreage guard file.
 
-The consequence still bites until all three owning PRs merge: `main` does not describe production,
+The consequence still bites until the remaining owning lanes merge: `main` does not describe production,
 so any migration whose safety argument rests on "the live body equals the last committed body" must verify against
 **live**, not against disk. The local `20260904185900` save-job candidate pins the 2026-09-03 F06
 post-apply `pg_proc.prosrc` body and rechecks that exact pre-image at apply time rather than inferring

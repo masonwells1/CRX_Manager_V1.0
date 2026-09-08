@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-05 for the migration-ledger header; the F2 entry retains its separate
+**Last verified: 2026-09-08 for the migration-ledger header; the F2 entry retains its separate
 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
@@ -47,6 +47,21 @@ separate migrations and neither behavior is live.
 The final label-selection candidate replaces alphabetical historical-name selection with the latest
 earned-state label at the requested cutoff for both earned and paid-only balance rows; until it is
 separately approved and applied, production can still display an older salesperson name.
+
+**HIGH — customer-document soft delete does not yet revoke the uploader's byte access in live
+Storage.** The live `customer_documents_objects_rep_select` policy admits an assigned rep when either
+live metadata exists or `storage.objects.owner_id = auth.uid()`. The permanent owner branch was added
+to preserve Storage's metadata-free upload response, but it also lets the uploader continue reading
+the object after `customer_documents.deleted_at` hides the metadata row. Local candidate
+`20260908054649_revoke_deleted_customer_document_bytes.sql` narrows that exception to a five-minute,
+metadata-free bootstrap and uses an actor-scoped definer predicate so hidden soft-deleted metadata
+cannot be mistaken for no metadata. The Customer Documents UI also replaces 60-second signed bearer
+URLs with an authenticated Storage download, so a URL minted just before deletion cannot remain a
+future bypass; bytes a browser already downloaded cannot be recalled. Disposable PostgreSQL proof
+reproduces the old leak, observes revocation of every new server byte request under the candidate,
+and mutation-tests the policy. **Production remains
+exposed until this separately reviewed migration is explicitly approved and applied live; merging
+the source file does not change live access.**
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
 `20260903153402`.** It was the ordering boundary when this paragraph was written; later migrations
