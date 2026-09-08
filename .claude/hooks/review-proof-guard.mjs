@@ -785,6 +785,9 @@ if (shellTool) {
   //          <pm> update|up|upgrade                 npm >= 7 saves the new ranges
   //          <pm> pkg set|delete|fix, <pm> init, <pm> set-script
   //          <pm> version <bump> (and bare `yarn version`, which prompts and writes)
+  //          <pm> create, patch-commit, unplug, `yarn set`, `audit fix`, `dedupe|prune --save`
+  //          <pm> exec|x|dlx|workspace … <writing word>, and ANY subcommand the rule does
+  //          not know (fail closed, PM_READ_OR_RUN is the allowlist)
   //   allow: installing FROM the manifest (`npm install`, `npm ci`, `pnpm install`,
   //          `yarn`, `bun install`), `--no-save`, `-g`/`--global`, `npm run`,
   //          `npm test`, `npm pkg get`, bare `npm version` (prints), `npx`.
@@ -796,24 +799,34 @@ if (shellTool) {
   const PM_ADD_FAMILY = new Set(["install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add", "a", "link", "ln"]);
   const PM_REMOVE_FAMILY = new Set(["uninstall", "unlink", "remove", "rm", "r", "un"]);
   const PM_UPDATE_FAMILY = new Set(["update", "up", "upgrade", "udpate", "upgrade-interactive"]);
-  const PM_MANIFEST_EDITORS = new Set(["init", "innit", "set-script"]);
+  const PM_MANIFEST_EDITORS = new Set(["init", "innit", "create", "set-script", "patch-commit", "unplug"]);
   const PM_NO_MANIFEST_RE = /(?:^|\s)(?:--no-save|-g|--global|--location(?:=|\s+)global)(?=\s|$)/i;
   const PM_VALUE_OPTIONS = new Set(["--prefix", "--cwd", "--dir", "--directory", "-C", "--registry", "--cache", "--userconfig", "--globalconfig", "--location", "--workspace", "-w", "--filter", "-F"]);
   const PM_BOOLEAN_OPTIONS = new Set(["-g", "--global", "--no-save", "--silent", "-s", "--verbose", "--version", "-v", "--help", "-h"]);
-  const packageManagerWritesManifest = (segment) => {
-    const text = String(segment ?? "");
-    // Quotes are dropped and the text re-split so a manager hidden inside a quoted
-    // wrapper argument (`sh -c 'npm install x'`) is seen as its own tokens.
-    const tokens = text.replace(/["'`]/g, " ").split(/\s+/).filter(Boolean);
-    // Wrapper-agnostic head (Codex gpt-5.6-sol High on 8ac85002d): the manager may sit
-    // behind ANY launcher — `cmd /c`, `sh -c`, `powershell -Command`, `npx`, `env`,
-    // `command`, `nice`, `corepack`, a VAR=value prefix — and a launcher list would
-    // inherit its own omissions, so the head is the FIRST token anywhere in the segment
-    // that names a package manager. Known over-block, accepted on this file's standing
-    // rule: text that merely quotes such a command (`git commit -m "npm install x"`,
-    // `grep "npm add x"`) is refused too; reword it.
-    const i = tokens.findIndex((t) => PACKAGE_MANAGER_RE.test(t));
-    if (i < 0) return false;
+  // Subcommands that never write package.json. A subcommand that is in NEITHER this set
+  // NOR a writing family is REFUSED (fail closed) — Codex gpt-5.6-sol High on fc36b2d28:
+  // `npm audit fix` and `npm dedupe --save` were unknown to the rule and passed. A new
+  // read-only subcommand is added here deliberately, with its proof; an unknown one costs a
+  // refusal, never a silent manifest write.
+  const PM_READ_OR_RUN = new Set([
+    "run", "run-script", "rum", "urn", "test", "t", "tst", "start", "stop", "restart",
+    "ci", "clean-install", "ic", "install-clean", "isntall-clean", "install-ci-test", "cit", "clean-install-test", "sit", "install-test", "it",
+    "view", "v", "info", "show", "ls", "list", "ll", "la", "outdated", "ping", "whoami", "doctor", "help", "help-search",
+    "explain", "why", "fund", "search", "s", "se", "find", "root", "prefix", "bin", "docs", "home", "repo", "bugs", "issues",
+    "cache", "rebuild", "rb", "prune", "dedupe", "ddp", "find-dupes", "diff", "pack", "publish", "unpublish", "owner", "author",
+    "access", "deprecate", "undeprecate", "dist-tag", "dist-tags", "star", "unstar", "stars", "team", "org", "profile", "login",
+    "logout", "adduser", "add-user", "completion", "token", "hook", "sbom", "query", "audit", "config", "c", "get",
+    "licenses", "store", "fetch", "env", "setup", "server", "node", "plugin", "constraints", "stage", "check", "autoclean",
+    "policies", "import", "pm", "build", "info", "npm",
+  ]);
+  // Launcher subcommands run OTHER programs: what follows them is classified too (see
+  // PM_LAUNCHERS below), and a nested manager token is classified in its own right.
+  const PM_LAUNCHERS = new Set(["exec", "x", "explore", "dlx", "workspace", "workspaces", "w"]);
+  // `audit fix` rewrites overrides/dependencies; `dedupe`/`prune` write only under --save.
+  const PM_SAVE_SENSITIVE = new Set(["dedupe", "ddp", "find-dupes", "prune"]);
+  const isWritingWord = (t) => PM_ADD_FAMILY.has(t) || PM_REMOVE_FAMILY.has(t) || PM_UPDATE_FAMILY.has(t)
+    || PM_MANIFEST_EDITORS.has(t) || t === "pkg" || t === "version" || t === "audit";
+  const classifyFrom = (tokens, i) => {
     const manager = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
     const rest = tokens.slice(i + 1);
     let subIndex = 0;
@@ -831,17 +844,42 @@ if (shellTool) {
     // A competing save/global option may override an earlier exemption. Refuse
     // ambiguous combinations instead of assuming --no-save or -g always wins.
     const competingSave = tokens.some((t) => /^(?:--save(?:[=-]|$)|-[SDEO]$|--global=|--location(?:=|$))/.test(t));
-    const noManifest = PM_NO_MANIFEST_RE.test(text) && !competingSave;
+    const noManifest = PM_NO_MANIFEST_RE.test(tokens.join(" ")) && !competingSave;
     if (PM_MANIFEST_EDITORS.has(sub)) return true;
     if (sub === "pkg") return (positionals[0] || "").toLowerCase() !== "get";
     if (sub === "version") return manager === "yarn" || after.length > 0;
+    if (sub === "set") return manager === "yarn";                                       // `yarn set version` writes packageManager; npm/pnpm `set` is config
+    if (sub === "audit") return positionals.some((t) => t.toLowerCase() === "fix") || after.some((t) => /^--fix/i.test(t));
+    if (PM_SAVE_SENSITIVE.has(sub)) return competingSave;
     if (PM_REMOVE_FAMILY.has(sub)) return !noManifest;
     if (PM_UPDATE_FAMILY.has(sub)) return !noManifest;
     if (PM_ADD_FAMILY.has(sub)) return positionals.length > 0 && !noManifest;
+    if (PM_LAUNCHERS.has(sub)) return after.some((t) => !t.startsWith("-") && isWritingWord(t.toLowerCase()));
+    if (PM_READ_OR_RUN.has(sub)) return false;
+    return true;                                                                        // unknown subcommand: fail closed
+  };
+  const packageManagerWritesManifest = (segment) => {
+    const text = String(segment ?? "");
+    // Quotes are dropped and the text re-split so a manager hidden inside a quoted
+    // wrapper argument (`sh -c 'npm install x'`) is seen as its own tokens.
+    const tokens = text.replace(/["'`]/g, " ").split(/\s+/).filter(Boolean);
+    // Wrapper-agnostic and position-agnostic (Codex gpt-5.6-sol High on 8ac85002d and
+    // on fc36b2d28): the manager may sit behind ANY launcher — `cmd /c`, `sh -c`,
+    // `powershell -Command`, `npx`, `env`, `command`, `nice`, `corepack`, a VAR=value
+    // prefix, or another manager's `exec` — and a launcher list would inherit its own
+    // omissions, so EVERY token that names a package manager is classified, and one
+    // writing classification denies. Known over-block, accepted on this file's standing
+    // rule: text that merely quotes such a command (`git commit -m "npm install x"`,
+    // `grep "npm add x"`) is refused too; reword it. Accepted residual, beyond any
+    // lexical hook: arbitrary code (`npx <tool>`, `node -e`) can write any file — that
+    // is what the exact-SHA Codex review and the parity test stand for.
+    for (let i = 0; i < tokens.length; i += 1) {
+      if (PACKAGE_MANAGER_RE.test(tokens[i]) && classifyFrom(tokens, i)) return true;
+    }
     return false;
   };
   if (destructiveViews.some((v) => enforcementSegments(v).some(packageManagerWritesManifest))) {
-    deny("REVIEW PROOF GUARD: package-manager commands that rewrite package.json are blocked — `npm install <pkg>`, `npm uninstall`, `npm update`, `npm pkg set`, `npm version <bump>`, `npm init` and the pnpm/yarn/bun equivalents edit the scripts and dependency list that CI and husky run from without ever naming the file. Installing FROM the manifest stays allowed (`npm install`, `npm ci`, `pnpm install`, `yarn`), as do `--no-save`, `-g`, `npm run`, `npm test` and `npm pkg get`. Add or remove a dependency deliberately through Edit/Write on package.json, where the permission tiers in .claude/settings.json decide; package.json is a risky path that cannot merge without the exact-SHA Codex proof.");
+    deny("REVIEW PROOF GUARD: package-manager commands that rewrite package.json are blocked — `npm install <pkg>`, `npm uninstall`, `npm update`, `npm pkg set`, `npm version <bump>`, `npm init` and the pnpm/yarn/bun equivalents edit the scripts and dependency list that CI and husky run from without ever naming the file. Installing FROM the manifest stays allowed (`npm install`, `npm ci`, `pnpm install`, `yarn`), as do `--no-save`, `-g`, `npm run`, `npm test`, `npm pkg get`, `npm audit`, `npm ls`, `npm view`; a subcommand this rule does not know is refused rather than guessed. Add or remove a dependency deliberately through Edit/Write on package.json, where the permission tiers in .claude/settings.json decide; package.json is a risky path that cannot merge without the exact-SHA Codex proof.");
   }
 }
 

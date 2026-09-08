@@ -65,17 +65,18 @@ function gitLsFiles() {
 }
 
 // Claude Code permission-rule glob → anchored RegExp on a repo-relative path.
+// MEASURED, not assumed (PR #605 F3, five headless probes): a single `*` in a settings
+// pattern crosses `/` — `scripts/check-*` denied `scripts/check-probe/nested.txt` — so
+// `*` and `**` both model as `.*`. Modelling `*` as `[^/]*` (Codex gpt-5.6-sol Medium on
+// fc36b2d28) would shrink the settings-protected set and let a nested path that settings
+// protects but the hook misses slip through this test unreported.
 function globToRegExp(glob) {
   let re = "";
   for (let i = 0; i < glob.length; i += 1) {
     const ch = glob[i];
     if (ch === "*") {
-      if (glob[i + 1] === "*") {
-        re += ".*";
-        i += 1;
-      } else {
-        re += "[^/]*";
-      }
+      if (glob[i + 1] === "*") i += 1;
+      re += ".*";
     } else {
       re += ch.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
     }
@@ -163,6 +164,10 @@ for (const p of corpus) {
   } else if (h || f) {
     fail(`"${p}" is hard-denied for shell/path-field writers by review-proof-guard but has no settings ask entry — native Edit/Write/MultiEdit/NotebookEdit rewrite it silently under acceptEdits`);
   }
+  // `r` is deliberately one-directional: RISKY_PATH_RES is the merge-time review set and is
+  // a strict superset of the enforcement surface (migrations, edge functions, money and RLS
+  // code are risky without being native-editor protected), so "risky but no ask entry" is
+  // the designed state for most of the repo, not a divergence.
 }
 
 // ---- 4. the real hook, one sample per pattern: deny writes, stay silent on reads ----

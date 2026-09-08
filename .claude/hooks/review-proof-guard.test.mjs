@@ -226,6 +226,20 @@ allowed({ tool_name: "Bash", tool_input: { command: "npm ci" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm install --no-save left-pad" } });
 // A launcher in front of a from-manifest or non-manifest command stays silent.
 allowed({ tool_name: "Bash", tool_input: { command: "cmd /c npm ci" } });
+// Read-only and run subcommands stay silent, including the ones the fail-closed rule must know.
+allowed({ tool_name: "Bash", tool_input: { command: "npm audit" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm audit --json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm dedupe" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm prune" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm outdated" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm ls left-pad" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm view left-pad version" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm exec -- vitest run src/lib/rpcContracts.test.ts" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm config set fund false" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm whoami" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn workspaces list" } });
+allowed({ tool_name: "Bash", tool_input: { command: "pnpm dlx create-vite my-app" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm run build -- --prefix x" } });
 allowed({ tool_name: "Bash", tool_input: { command: "sh -c 'npm run build'" } });
 allowed({ tool_name: "Bash", tool_input: { command: "powershell -Command npm test" } });
 allowed({ tool_name: "Bash", tool_input: { command: "ls node_modules/.bin/npm" } });
@@ -705,6 +719,22 @@ for (const command of [
   "command npm install left-pad",
   "nice npm install left-pad",
   "cmd /c yarn add left-pad",
+  // Codex gpt-5.6-sol High on fc36b2d28: only the first manager token was classified, and an
+  // unknown subcommand read as "not a write". Every line was probe-confirmed silent before.
+  "npm exec -- npm pkg set scripts.probe=true",
+  "npm x -- npm install left-pad",
+  "npm exec -- sh -c \"npm install left-pad\"",
+  "npm audit fix",
+  "npm audit fix --force",
+  "npm dedupe --save",
+  "npm prune --save",
+  "npm create vite@latest",
+  "yarn set version stable",
+  "yarn workspace api add left-pad",
+  "pnpm --filter api add left-pad",
+  "pnpm patch-commit ./patches/left-pad",
+  "yarn unplug lodash",
+  "npm frobnicate left-pad",
   "npm --prefix . install left-pad",
   "npm --prefix help install left-pad",
   "npm --prefix=. install left-pad",
@@ -758,6 +788,13 @@ for (const command of [
   const ps = run({ tool_name: "PowerShell", tool_input: { command: "Set-Location C:\\repo; npm install left-pad" } });
   assert.equal(ps.status, 0);
   assert.match(ps.stdout, /package-manager commands that rewrite package\.json/);
+}
+
+// Nested single-`*` samples, real hook: the measured glob crosses `/`, and the shell regex was
+// widened to match (F3). These stay pinned so the parity model and the hook cannot drift apart.
+for (const nested of ["scripts/check-probe/nested.txt", ".claude/hooks/probe-dir/probe.mjs"]) {
+  const w = run({ tool_name: "Bash", tool_input: { command: `printf x > ${nested}` } });
+  assert.match(w.stdout, /"permissionDecision":"deny"/, `nested single-* path must be denied: ${nested}`);
 }
 
 // Near-misses must NOT be swept up: the path components are whole words.
