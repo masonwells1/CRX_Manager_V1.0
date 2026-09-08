@@ -53,11 +53,15 @@ test('fails closed for template expressions, computed calls, and indirect RPC ac
     '(client.rpc)(dynamicName);',
     "client[rpcKey]('dangerous_rpc');",
     "Reflect.get(client, 'rpc')('dangerous_rpc');",
+    'const dispatch = client[rpcKey];',
+    'dispatch(dynamicName);',
+    "const reflectedDispatch = Reflect.get(client, 'rpc');",
+    'reflectedDispatch(dynamicName);',
     'const { rpc } = client;',
     'rpc(dynamicName);',
   ].join('\n'));
   const sites = unresolvedApplicationRpcCallSites(snapshot);
-  assert.equal(sites.length, 7);
+  assert.equal(sites.length, 9);
   assert.ok(sites.some((site) => site.includes(':1')));
   assert.ok(sites.some((site) => site.includes(':3')));
   assert.ok(sites.some((site) => site.includes(':4')));
@@ -65,5 +69,7 @@ test('fails closed for template expressions, computed calls, and indirect RPC ac
   assert.ok(sites.some((site) => site.includes(':6')));
   assert.ok(sites.some((site) => site.includes(':7')));
   assert.ok(sites.some((site) => site.includes(':8')));
+  assert.ok(sites.some((site) => site.includes(':10')));
+  assert.ok(sites.some((site) => site.includes(':12')));
   assert.equal(applicationRpcCallSites('literal_rpc', snapshotFor('src/lib/call.ts', "(client.rpc)('literal_rpc')")).length, 1);
 });

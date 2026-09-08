@@ -399,6 +399,26 @@ test('fails closed for ACL suffixes, quoted semicolons, and routine ownership ch
   );
 });
 
+test('fails closed for routine attributes outside the fixed search_path or exact rename forms', () => {
+  const safe = definition('REVOKE ALL ON FUNCTION public.post_return_credit(uuid) FROM PUBLIC, anon;');
+  for (const attribute of [
+    'LEAKPROOF',
+    'NOT LEAKPROOF',
+    'IMMUTABLE',
+    'STABLE',
+    'VOLATILE',
+    'PARALLEL SAFE',
+    'PARALLEL RESTRICTED',
+    'COST 1',
+    'ROWS 1',
+    'DEPENDS ON EXTENSION pgcrypto',
+  ]) assert.deepEqual(
+    securityDefinerMissingAnonRevokes(`${safe}\nALTER FUNCTION public.post_return_credit(uuid) ${attribute};`),
+    ['unparseable-security-definer-sql'],
+    attribute,
+  );
+});
+
 test('fails closed when a BEGIN ATOMIC routine body contains an apparent revoke', () => {
   const atomicBody = `${definition()}
 CREATE PROCEDURE public.decoy_acl() LANGUAGE SQL BEGIN ATOMIC

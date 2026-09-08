@@ -415,7 +415,20 @@ function unsafeRoutineAlterConfiguration(sql) {
     if (/\bSECURITY\s+DEFINER\b/i.test(statement) || /\bRESET\b/i.test(statement)) return true;
     const setPath = /\bSET\s+search_path\s*(?:TO|=)\s+([\s\S]*)$/i.exec(statement);
     if (/\bSET\b/i.test(statement) && !setPath) return true;
-    if (!setPath) continue;
+    // A rename has its own exact lifecycle model below. Every other ALTER
+    // action is withheld from source-only proof unless it is the one fixed
+    // search_path form. Attributes such as LEAKPROOF, volatility, parallel
+    // safety, COST, and ROWS can alter execution or planner behavior without
+    // giving this guard enough catalog context to prove they are safe.
+    if (!setPath) {
+      const target = /^ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\s+(?:public\s*\.\s*)?(?:"(?:(?:"")|[^"])*"|[A-Za-z_][A-Za-z0-9_$]*)\s*\(/i.exec(statement);
+      if (!target) return true;
+      const args = balanced(statement, target[0].length - 1);
+      if (!args) return true;
+      const action = statement.slice(args.end).trim();
+      if (!/^RENAME\s+TO\s+(?:"(?:(?:"")|[^"])*"|[A-Za-z_][A-Za-z0-9_$]*)$/i.test(action)) return true;
+      continue;
+    }
     const entries = setPath[1].split(',').map((entry) => entry.trim().replace(/^'|'$/g, '').toLowerCase());
     // The CRX SECURITY DEFINER contract permits only this fixed, nonempty
     // path. Anything else may permit object shadowing under the owner role.

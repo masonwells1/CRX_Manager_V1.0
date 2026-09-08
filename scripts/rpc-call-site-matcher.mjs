@@ -36,12 +36,11 @@ function isRpcAccess(node) {
   return ts.isElementAccessExpression(node) && staticString(node.argumentExpression) === 'rpc';
 }
 
-function isDynamicComputedCall(node) {
+function isDynamicClientPropertyAccess(node) {
   return ts.isElementAccessExpression(node)
     && ts.isIdentifier(unwrapExpression(node.expression))
     && /^(?:client|supabase|db)$/i.test(unwrapExpression(node.expression).text)
-    && staticString(node.argumentExpression) === null
-    && directCallForAccess(node) !== null;
+    && staticString(node.argumentExpression) === null;
 }
 
 function isReflectGetCall(node) {
@@ -52,11 +51,10 @@ function isReflectGetCall(node) {
     && node.expression.name.text === 'get';
 }
 
-function isIndirectReflectGetCall(node) {
+function isIndirectReflectGetAccess(node) {
   return isReflectGetCall(node)
     && ts.isIdentifier(unwrapExpression(node.arguments[0]))
-    && /^(?:client|supabase|db)$/i.test(unwrapExpression(node.arguments[0]).text)
-    && directCallForAccess(node) !== null;
+    && /^(?:client|supabase|db)$/i.test(unwrapExpression(node.arguments[0]).text);
 }
 
 function directCallForAccess(access) {
@@ -99,7 +97,7 @@ function snapshotRpcUses(snapshot) {
           const routine = staticString(call.arguments[0]);
           uses.push({ file, text, index: node.getStart(source), routine, unresolved: routine === null });
         }
-      } else if (isDynamicComputedCall(node) || isIndirectReflectGetCall(node)) {
+      } else if (isDynamicClientPropertyAccess(node) || isIndirectReflectGetAccess(node)) {
         addUnresolved(node);
       } else if (
         ts.isBindingElement(node)
