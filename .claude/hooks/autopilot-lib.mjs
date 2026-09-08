@@ -303,6 +303,9 @@ export function intentFresh(content, nowMs) {
 // checks, session-state writes and the arm command pass; building/mutating waits
 // for the arm.
 const INTENT_ALLOW_TOOL_RE = /^(Read|Glob|Grep|TaskList|TaskGet|TaskCreate|TaskUpdate|WebFetch|WebSearch|AskUserQuestion|Skill)$/i;
+// Tools that mutate files by NAME rather than by native editor: an MCP filesystem
+// writer reached through an allow-list entry would otherwise run before the arm.
+const UNARMED_WRITER_RE = /(?:write|edit|create|put|append|move|rename|copy|delete|remove|unlink|trash)_(?:file|files|block|directory|dir|entry|entries)\b/i;
 const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|worktree\s+list)|ls|dir|cat|head|tail|grep|rg|find|echo|node\s+--version)\b/;
 
 // THERE IS DELIBERATELY NO SHELL ESCAPE HATCH HERE (Mason, 2026-09-01).
@@ -429,7 +432,14 @@ export function overnightGateDecision(toolName, toolInput, context = {}) {
     const writesViaRedirect = />|\btee\b/.test(cmd);
     return INTENT_ALLOW_BASH_RE.test(cmd) && !writesViaRedirect ? "allow-through" : "deny-until-armed";
   }
-  if (/^(Write|Edit|NotebookEdit)$/i.test(name)) {
+  // Anything the ARMED deny-set refuses certainly waits for the arm too (deploys,
+  // branch mutation, MCP file writers) — armed mode is the more permissive one.
+  if (DENY_TOOLNAME_RE.test(name)) return "deny-until-armed";
+  // EVERY native editor plus MCP file writers. GitHub Codex P2 on df8f2442a: this list
+  // read Write|Edit|NotebookEdit, so under acceptEdits a MultiEdit of ordinary source
+  // was auto-approved before the arm handshake completed. The regex is the same set
+  // the settings `ask` tier enumerates; a new editor name must be added to both.
+  if (/^(Write|Edit|MultiEdit|NotebookEdit)$/i.test(name) || UNARMED_WRITER_RE.test(name)) {
     const fp = String(input.file_path || input.path || "");
     return /session-state/.test(fp) ? "allow-through" : "deny-until-armed";
   }

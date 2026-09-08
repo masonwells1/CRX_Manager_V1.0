@@ -403,6 +403,18 @@ ok(intentFresh(JSON.stringify({ created: new Date().toISOString() })), "fresh in
 ok(!intentFresh(JSON.stringify({ created: new Date(Date.now() - 2 * 3600e3).toISOString() })), "stale intent ignored");
 ok(!intentFresh("not json"), "malformed intent ignored");
 eq(overnightGateDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "deny-until-armed", "edit blocked until armed");
+// GitHub Codex P2 on df8f2442a: MultiEdit was missing from the unarmed editor branch, and
+// acceptEdits auto-approves it — a hands-free run could mutate source before the arm.
+eq(overnightGateDecision("MultiEdit", { file_path: "src/pages/Foo.tsx", edits: [] }), "deny-until-armed", "PROVEN BYPASS: MultiEdit blocked until armed");
+eq(overnightGateDecision("Write", { file_path: "src/pages/Foo.tsx" }), "deny-until-armed", "write blocked until armed");
+eq(overnightGateDecision("NotebookEdit", { notebook_path: "notebooks/a.ipynb" }), "deny-until-armed", "notebook edit blocked until armed");
+eq(overnightGateDecision("MultiEdit", { file_path: ".claude/session-state/notes.md", edits: [] }), "allow-through", "MultiEdit of session-state passes like Edit does");
+eq(overnightGateDecision("mcp__filesystem__write_file", { path: "src/x.ts" }), "deny-until-armed", "MCP write_file blocked until armed");
+eq(overnightGateDecision("mcp__filesystem__edit_file", { path: "src/x.ts" }), "deny-until-armed", "MCP edit_file blocked until armed");
+eq(overnightGateDecision("mcp__filesystem__create_directory", { path: "src/new" }), "deny-until-armed", "MCP create_directory blocked until armed");
+eq(overnightGateDecision("mcp__github__push_files", { branch: "main" }), "deny-until-armed", "an armed-deny tool never passes unarmed either");
+eq(overnightGateDecision("mcp__filesystem__read_file", { path: "src/x.ts" }), "allow-through", "MCP read_file still passes before the arm");
+eq(overnightGateDecision("mcp__filesystem__list_directory", { path: "src" }), "allow-through", "MCP list_directory still passes before the arm");
 eq(overnightGateDecision("Bash", { command: "git add -A && git commit -m x" }), "deny-until-armed", "commit blocked until armed");
 eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "allow-through", "sql passes even before arm (Mason 2026-07-10)");
 eq(overnightGateDecision("mcp__x__deploy_edge_function", {}), "deny-until-armed", "deploy still blocked until armed");
