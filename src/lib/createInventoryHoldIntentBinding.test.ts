@@ -91,6 +91,12 @@ function hasIntentBindingContract(sql: string) {
     && sql.includes('POSTFLIGHT_ARGS')
     && sql.includes('POSTFLIGHT_BODY')
     && sql.includes('POSTFLIGHT_FORCE_NORMALIZATION')
+    // Re-run must pin the wrapper's exact body, not merely its marker: a later
+    // hotfix that kept calling check_idempotency_intent would otherwise be
+    // silently reverted by replaying this file (row 873's lesson).
+    && sql.includes('PREFLIGHT_WRAPPER_DRIFT')
+    && sql.includes("v_wrapper_pin text := '3089caa0f83369d8a58057505b3b5ac1b64a445262fd5fa5e441ef0f03b08314';")
+    && sql.includes('IF v_wrapper_sha <> v_wrapper_pin THEN')
     && sql.includes("v_helper_sig text := 'public.check_idempotency_intent(text,text,uuid,text)';")
     && sql.includes('p_force boolean DEFAULT false, p_force_reason text DEFAULT NULL::text, p_idempotency_key text DEFAULT NULL::text\';')
     && sql.includes('-- idempotency-body-check: exempt')
@@ -130,6 +136,9 @@ describe('create_inventory_hold receipt binding (20260905230000)', () => {
       ['p_performed_by, v_force, p_force_reason', 'p_performed_by, p_force, p_force_reason'],
       ['v_force boolean := COALESCE(p_force, false);', 'v_force boolean := p_force;'],
       ['POSTFLIGHT_FORCE_NORMALIZATION', 'POSTFLIGHT_SKIPPED'],
+      // Downgrading the replay pin back to a marker-only check must fail.
+      ['IF v_wrapper_sha <> v_wrapper_pin THEN', 'IF false THEN'],
+      ['PREFLIGHT_WRAPPER_DRIFT', 'PREFLIGHT_SKIPPED'],
       ['extensions.digest(', 'public.digest('],
       ['FROM PUBLIC, anon, authenticated, service_role;', 'FROM PUBLIC, anon;'],
       ['LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;', ''],

@@ -158,6 +158,12 @@ DECLARE
   v_body_label text;
   v_args       text;
   v_args_pin   text := 'p_product_id uuid, p_customer_id uuid, p_quantity numeric, p_hold_type text, p_expires_at date, p_notes text, p_performed_by uuid, p_force boolean DEFAULT false, p_force_reason text DEFAULT NULL::text, p_idempotency_key text DEFAULT NULL::text';
+  -- sha256 of THIS file's wrapper body, CRLF-normalized to LF so a CRLF
+  -- checkout and an LF checkout pin the same value. The constant lives in
+  -- this preflight block, NOT inside the wrapper body, so declaring it does
+  -- not change the value it pins.
+  v_wrapper_pin text := '3089caa0f83369d8a58057505b3b5ac1b64a445262fd5fa5e441ef0f03b08314';
+  v_wrapper_sha text;
 BEGIN
   -- Helpers first: the body hash below calls extensions.digest, so a missing
   -- helper must be reported by name, not by a raw "does not exist" error.
@@ -219,6 +225,22 @@ BEGIN
       RAISE EXCEPTION
         'PREFLIGHT_STATE: % exists but create_inventory_hold is not the intent wrapper. Investigate before re-running.',
         v_impl_sig;
+    END IF;
+    -- The marker alone is NOT enough to authorise the CREATE OR REPLACE below.
+    -- A later actor/authorisation/force/idempotency hotfix to the wrapper would
+    -- keep calling check_idempotency_intent, so a marker-only check would let a
+    -- replay of this file silently revert that hotfix. Pin the exact body: on a
+    -- re-run the installed wrapper must be byte-identical to the one this file
+    -- emits, or we refuse and let a human decide. Same lesson as row 873's
+    -- silent-clobber-on-replay fix, which pinned both ends.
+    v_wrapper_sha := encode(
+      extensions.digest(convert_to(replace(v_src, E'
+', E'
+'), 'UTF8'), 'sha256'), 'hex');
+    IF v_wrapper_sha <> v_wrapper_pin THEN
+      RAISE EXCEPTION
+        'PREFLIGHT_WRAPPER_DRIFT: create_inventory_hold is the intent wrapper but its body is %, not the % this file emits. It has been hotfixed since this migration was written; replaying would revert that fix. Investigate before re-running.',
+        v_wrapper_sha, v_wrapper_pin;
     END IF;
     v_body_oid := v_impl_oid;
     v_body_label := v_impl_sig;
