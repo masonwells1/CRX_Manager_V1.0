@@ -567,6 +567,13 @@ is the invalid-permission-key test from #569.
 
 ## OPEN 2026-09-02 — four tracked follow-ups on the CodeRabbit label gate shipped in #516
 
+**DORMANT since 2026-09-08.** The `ready-for-coderabbit` path these four items describe was
+retired that day — CodeRabbit does not answer the `github-actions[bot]` identity the workflow posts
+under, so the label yields no review at all (see the 2026-09-08 entry in `DECISION_LOG.md`). The
+workflow files are kept, not deleted, because the decision is re-tested every 7 days and one
+acknowledged bot-posted command reverses it. These items stay open and accurate; nobody should
+spend time fixing them while the path is unused, and anyone reviving the path must read them first.
+
 The gate landed on `main` as `f2307fbf9` with these four items knowingly open. They were recorded
 on the pull request and are lifted here so they do not live only in a PR comment. **None blocks
 the gate; none is a production-behaviour risk.** The gate is label-triggered, so the worst outcome

@@ -314,20 +314,25 @@ Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate
 CodeRabbit review was submitted. Say so rather than treating green as clean. This matters more
 since 2026-09-02, not less: Mason removed the required approving review from `main`, so a
 misleading green CodeRabbit status is no longer backstopped by a missing approval keeping the PR
-blocked. Nothing but this check stands between "CodeRabbit never actually ran" and a merge. Since
-2026-08-30 the normal trigger
-is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
-accidental duplicate. If CodeRabbit itself confirms a delivery failure or rate limit on the same
-frozen head, deliberately remove `coderabbit-review-requested`, **wait for the resulting reset run to
-finish**, and only then reapply `ready-for-coderabbit`; that is a paid retry, not the normal path.
-The wait is load-bearing rather than politeness: removing the marker fires an asynchronous
-`unlabeled` run that clears **both** labels, so a ready label reapplied while that run is still
-queued is cleared by it and nothing is posted. Confirm both labels are gone before relabelling. Never merge from the ordinary check row alone —
+blocked. Nothing but this check stands between "CodeRabbit never actually ran" and a merge.
+**Superseded 2026-09-08: the `ready-for-coderabbit` label is no longer the trigger.** From
+2026-08-30 to 2026-09-08 the label was the documented path; measurement on 2026-09-07 showed it
+does not work. Its workflow posts the command as `github-actions[bot]`, and CodeRabbit does not
+answer a bot-authored command — roughly 24 uses produced zero reviews, while the identical command
+from Mason's user account is answered in 5–11 seconds; on #535 the bot's command sat unanswered for
+104 minutes. The hourly `crx-hourly-coderabbit-slot` scheduled task now requests one review per hour
+under that account and picks the PR that needs it most. Reviews are rationed to roughly one grant
+per hour fleet-wide, so do **not** hand-post `@coderabbitai review` either: it collides with the job
+and consumes the slot another PR was waiting for. A review is not a merge requirement, so never
+stall a green landing waiting for one. This is an expected-value call, not a claim that a bot can
+never be heard — the scheduled task re-tests the label path every 7 days, and one acknowledged
+bot-posted command reverses it. Never merge from the ordinary check row alone —
 confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
 `CHANGES_REQUESTED` verdict. An approving review is not required (removed 2026-09-02); when one
-*does* exist, require the hidden marker SHA, that authenticated `APPROVED` review's `commit_id`, and
-the live PR head to match. The generic Actions-authored marker is dedupe evidence, not an
-independent trust identity.
+*does* exist, require that authenticated `APPROVED` review's `commit_id` and the live PR head to
+match. There is no hidden marker SHA to check on the hourly-job path — the authenticated review is
+the whole of the evidence, and a generic Actions-authored comment was never an independent trust
+identity.
 
 ---
 

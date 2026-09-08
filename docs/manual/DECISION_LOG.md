@@ -1,11 +1,41 @@
 # Decision Log
 
-Last verified: 2026-09-04
+Last verified: 2026-09-08
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-08 — the CodeRabbit review request moves to an hourly account-owned job; the label gate is retired
+
+**Source:** measurement on 2026-09-07 across the open PR fleet, recorded in
+`docs/changelog.d/2026-09-08-pr-merge-guard-coderabbit-request-path.md` and
+`docs/changelog.d/2026-09-08-landing-workflows-coderabbit-request-path.md`.
+
+**Decision:** Stop requesting CodeRabbit reviews with the `ready-for-coderabbit` label. An hourly
+scheduled task (`crx-hourly-coderabbit-slot`) posts exactly one `@coderabbitai review` per hour
+under Mason's user account and chooses the PR that needs it most.
+
+**Why:** the label's workflow posts the command as `github-actions[bot]`, and CodeRabbit does not
+answer a bot-authored command. Roughly 24 uses of that path produced zero reviews, while the
+identical command from Mason's account is answered in 5–11 seconds. The decisive case was #535,
+where the bot's command sat unanswered for 104 minutes and a command from the user account on the
+same PR was answered. This supersedes the 2026-08-30 decision below, which was correct about the
+problem it solved — hand-posting was easy to forget or repeat — but chose a poster identity that
+CodeRabbit ignores.
+
+**What this forbids/implies:** Do not apply `ready-for-coderabbit`. Do not hand-post
+`@coderabbitai review` either: reviews are rationed to roughly one grant per hour fleet-wide, so a
+second request collides with the job and consumes the slot another PR was waiting for. A CodeRabbit
+review is **not** a merge requirement — CI is the merge gate (see the 2026-09-02 entry) — so never
+stall a green landing waiting for one. `CHANGES_REQUESTED` still blocks and both agent merge gates
+still refuse to merge over it. There is no hidden gate-marker SHA on this path; when an approval
+exists, match that authenticated `APPROVED` review's `commit_id` to the live PR head.
+
+**Deliberately not permanent:** CodeRabbit documents no contract about comment-author identity, so
+this is an expected-value choice rather than a claim that a bot can never be heard. The scheduled
+task re-tests the label path every 7 days, and one acknowledged bot-posted command reverses this.
 
 ## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
 
@@ -865,7 +895,7 @@ ineffective — it blocks *reading* the file it protects while `node runner.mjs`
 execute it freely. It is coupled to the blob-pinned maintenance producer, so it is the next
 harness-focused task after this one, not a backlog item.
 
-## 2026-08-30 — A default-branch label gate posts the final CodeRabbit command once
+## 2026-08-30 — A default-branch label gate posts the final CodeRabbit command once (SUPERSEDED 2026-09-08)
 
 **Decision:** After the frozen candidate is current, green, and separately reviewed, the landing
 owner applies `ready-for-coderabbit`; a default-branch workflow validates that exact PR head and

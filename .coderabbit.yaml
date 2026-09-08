@@ -79,10 +79,12 @@ reviews:
   # enforces this rule, are parked in PR #441.
 
   auto_review:
-    # Do not spend a review on PR creation or work-in-progress pushes. Once the
-    # candidate is frozen, checks are green, and the separate Codex review is
-    # clean, apply `ready-for-coderabbit`. The trusted GitHub workflow validates
-    # that exact head and posts `@coderabbitai review` once.
+    # Do not spend a review on PR creation or work-in-progress pushes. Reviews
+    # are requested out of band by the hourly `crx-hourly-coderabbit-slot` task,
+    # which posts one command per hour under Mason's user account.
+    # Do NOT use the `ready-for-coderabbit` label: its workflow posts as
+    # `github-actions[bot]`, and CodeRabbit does not answer a bot-authored
+    # command (measured 2026-09-07 — ~24 uses, zero reviews).
     enabled: false
     auto_incremental_review: false
     drafts: false

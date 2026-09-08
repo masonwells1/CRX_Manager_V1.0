@@ -43,6 +43,35 @@ registry trails four migrations that arrived with #592; no SQL is touched here).
 
 **Documentation only.** No control flow, no guard behaviour, and no CI gate changed.
 
-Scope deliberately stops at these three files. `AGENTS.md` carries the same stale label-path text
-in its standing-policy section, but it is the hand-maintained shared contract and is flagged for
-Mason rather than rewritten as a side effect of this change.
+## Second Codex pass: the rest of the routed guidance
+
+Codex re-reviewed and raised a second P1 — the three workflow files were fixed, but four more
+places still routed agents down the dead path. Verified against source; correct again. Fixed here:
+
+- **`docs/workflows/SAFE_DEVELOPMENT_RULES.md`** — the landing checklist item. This one mattered
+  most: `AGENTS.md` requires loading this file for every multi-file, data, money, security,
+  migration, or production change, so it is the most-read landing instruction in the repo.
+- **`docs/reference/gotchas.md`** — marked the 2026-08-30 label trigger superseded, with the
+  measurement, and dropped the "hidden marker SHA" from the approval check (no such marker exists
+  on this path; the authenticated review was always the real evidence).
+- **`.coderabbit.yaml`** — the comment above `auto_review` only. **No configuration key changed**;
+  `enabled: false`, `auto_incremental_review: false`, and `drafts: false` are untouched.
+- **`docs/manual/DECISION_LOG.md`** — a new dated 2026-09-08 entry that supersedes 2026-08-30, and
+  a `(SUPERSEDED 2026-09-08)` marker on that older heading, following the convention already used
+  by the 2026-09-02 `overnight` pair. **The 2026-08-30 entry's body is not rewritten** — a decision
+  log records what was decided and when; editing it to say something it did not say would falsify
+  the record.
+- **`docs/manual/KNOWN_ISSUES.md`** — marked the four open label-gate follow-ups DORMANT rather
+  than closing them. They remain real for anyone reviving the path.
+
+**Correction to this entry's first draft:** it claimed `AGENTS.md` still carried the stale
+label-path text and flagged it for Mason. That was wrong, and it came from reading the main
+checkout, which is 36 commits behind. `AGENTS.md` on this branch is the lean 2026-09-04 contract
+and contains no `ready-for-coderabbit` reference at all — it delegates landing to
+`.claude/commands/ship.md`, which this change fixes. Nothing is owed there.
+
+**Deliberately NOT changed.** The dated entries under `docs/changelog.d/` from 2026-08-30 through
+2026-09-06 still describe the label path, because that is what shipped on those days; a changelog
+is a record, not current guidance. `.github/workflows/coderabbit-final-review.yml` and
+`.github/scripts/coderabbit-final-review.cjs` are kept and working — deleting them would destroy
+the 7-day re-test that can reverse this decision.
