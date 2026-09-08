@@ -37,6 +37,7 @@ const hookCwd = String(payload?.cwd || input.cwd || input.workdir || "");
 const pathCandidates = [
   input.file_path,
   input.filePath,
+  input.notebook_path,
   input.path,
   input.target,
   input.source,

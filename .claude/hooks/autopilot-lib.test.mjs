@@ -41,6 +41,11 @@ eq(autopilotDecision("Edit", { file_path: ".claude/hooks/review-proof-guard.mjs"
 eq(autopilotDecision("Write", { file_path: "package.json" }), "deny", "armed Write of package.json denied");
 eq(autopilotDecision("MultiEdit", { file_path: ".husky/pre-push" }), "deny", "armed MultiEdit of a husky hook denied");
 eq(autopilotDecision("NotebookEdit", { file_path: ".github/workflows/ci.yml" }), "deny", "armed NotebookEdit of a workflow denied");
+// CodeRabbit Major on 537625b59: NotebookEdit sends notebook_path, which the armed check never read.
+eq(autopilotDecision("NotebookEdit", { notebook_path: ".claude/hooks/x.mjs" }), "deny", "PROVEN BYPASS: armed NotebookEdit via notebook_path of a hook denied");
+eq(autopilotDecision("NotebookEdit", { notebook_path: "C:\\CRX_Manager\\.github\\workflows\\ci.yml" }), "deny", "armed NotebookEdit via absolute notebook_path of a workflow denied");
+eq(autopilotDecision("NotebookEdit", { notebook_path: ".env.local" }), "deny", "armed NotebookEdit via notebook_path of an env file denied");
+eq(autopilotDecision("NotebookEdit", { notebook_path: "notebooks/analysis.ipynb" }), "allow", "armed NotebookEdit of an ordinary notebook allowed");
 eq(autopilotDecision("Write", { file_path: "C:\\CRX_Manager\\.claude\\settings.json" }), "deny", "absolute Windows path to settings.json denied");
 eq(autopilotDecision("Edit", { file_path: "C:/CRX_Manager/scripts/write-codex-push-proof.mjs" }), "deny", "absolute path to the proof minter denied");
 eq(autopilotDecision("Edit", { file_path: "scripts/check-docs.mjs" }), "deny", "check-* script denied");
@@ -408,6 +413,7 @@ eq(overnightGateDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "deny-unti
 eq(overnightGateDecision("MultiEdit", { file_path: "src/pages/Foo.tsx", edits: [] }), "deny-until-armed", "PROVEN BYPASS: MultiEdit blocked until armed");
 eq(overnightGateDecision("Write", { file_path: "src/pages/Foo.tsx" }), "deny-until-armed", "write blocked until armed");
 eq(overnightGateDecision("NotebookEdit", { notebook_path: "notebooks/a.ipynb" }), "deny-until-armed", "notebook edit blocked until armed");
+eq(overnightGateDecision("NotebookEdit", { notebook_path: ".claude/session-state/scratch.ipynb" }), "allow-through", "session-state notebook edit passes the handshake via notebook_path");
 eq(overnightGateDecision("MultiEdit", { file_path: ".claude/session-state/notes.md", edits: [] }), "allow-through", "MultiEdit of session-state passes like Edit does");
 eq(overnightGateDecision("mcp__filesystem__write_file", { path: "src/x.ts" }), "deny-until-armed", "MCP write_file blocked until armed");
 eq(overnightGateDecision("mcp__filesystem__edit_file", { path: "src/x.ts" }), "deny-until-armed", "MCP edit_file blocked until armed");

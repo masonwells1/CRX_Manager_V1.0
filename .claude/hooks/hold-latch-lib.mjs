@@ -67,7 +67,7 @@ export function isBuildActionUnderHold(toolName, toolInput) {
   const input = toolInput || {};
 
   if (/^(Write|Edit|NotebookEdit|MultiEdit)$/i.test(name)) {
-    const fp = String(input.file_path || input.path || input.filePath || "");
+    const fp = String(input.file_path || input.notebook_path || input.path || input.filePath || "");
     if (fp && ALLOW_WRITE_PATH_RE.test(fp)) return false; // notes / plan / md are fine
     return true; // building source = blocked under hold
   }

@@ -139,6 +139,9 @@ function describeHookRun(r) {
 // Use this for EVERY assertion that expects the guard to allow. The diagnostics
 // are built only on failure, so the passing path stays as cheap as `ok`.
 function okAllow(r, m) {
+  // A hook that crashes or is killed emits no deny decision; that is not an allow
+  // (CodeRabbit Minor on 537625b59). Normal completion is part of the assertion.
+  if (r.status !== 0 || r.error) { ok(false, `${m}\n\n${describeHookRun(r)}`); return; }
   if (isDeny(r)) ok(false, `${m}\n\n${describeHookRun(r)}`);
   else ok(true, m);
 }

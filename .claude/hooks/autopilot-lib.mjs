@@ -275,8 +275,10 @@ export function autopilotDecision(toolName, toolInput) {
     }
   }
 
-  // Edit/Write/file tools
-  const filePath = input.file_path || input.path || input.filePath || "";
+  // Edit/Write/file tools. Every path field a native editor carries: NotebookEdit's is
+  // notebook_path (CodeRabbit Major on 537625b59: it was unread, so an armed NotebookEdit
+  // of a hook file judged an empty path and returned "allow").
+  const filePath = input.file_path || input.notebook_path || input.path || input.filePath || "";
   if (filePath && DENY_PATH_RE.test(String(filePath))) return "deny";
   if (protectedSurfacePath(filePath)) return "deny";
 
@@ -440,7 +442,7 @@ export function overnightGateDecision(toolName, toolInput, context = {}) {
   // was auto-approved before the arm handshake completed. The regex is the same set
   // the settings `ask` tier enumerates; a new editor name must be added to both.
   if (/^(Write|Edit|MultiEdit|NotebookEdit)$/i.test(name) || UNARMED_WRITER_RE.test(name)) {
-    const fp = String(input.file_path || input.path || "");
+    const fp = String(input.file_path || input.notebook_path || input.path || input.filePath || "");
     return /session-state/.test(fp) ? "allow-through" : "deny-until-armed";
   }
   // execute_sql / apply_migration intentionally omitted (Mason 2026-07-10): SQL and

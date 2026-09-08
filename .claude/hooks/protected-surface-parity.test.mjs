@@ -156,7 +156,9 @@ const isRisky = (p) => riskyFiles([p]).length > 0;
 // The MCP entry uses a neutral name: `write_file` itself is a tool-NAME deny in armed mode, so
 // it could never read as "allow" and would hide a path-set gap behind the name rule.
 const ARMED_EDITORS = ["Edit", "Write", "MultiEdit", "NotebookEdit", "mcp__some_server__put_file"];
-const armedInput = (tool, p) => (tool.startsWith("mcp__") ? { path: p } : { file_path: p });
+// NotebookEdit is probed through notebook_path, the field the editor actually sends
+// (CodeRabbit Major on 537625b59: the lib read only file_path/path/filePath).
+const armedInput = (tool, p) => (tool.startsWith("mcp__") ? { path: p } : tool === "NotebookEdit" ? { notebook_path: p } : { file_path: p });
 const autopilotDenies = (p) => ARMED_EDITORS.every((tool) => autopilotDecision(tool, armedInput(tool, p)) === "deny");
 const autopilotAllows = (p) => ARMED_EDITORS.every((tool) => autopilotDecision(tool, armedInput(tool, p)) === "allow");
 const isEnvFile = (p) => /(^|\/)\.env(\.|$)/i.test(p);

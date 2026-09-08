@@ -101,5 +101,17 @@ deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const re = /\\/
 allow("env-guard.mjs", "Write", { file_path: missingTs, content: "// SUPABASE_SERVICE_ROLE_KEY must never be read here\nconst k = import.meta.env.VITE_SUPABASE_ANON_KEY;" }, "Write: a comment-only mention of the key is fine");
 allow("env-guard.mjs", "MultiEdit", { file_path: missingTs, edits: [{ old_string: "a", new_string: "/* 'service_role' belongs in Edge Functions */\nconst role = 'authenticated';" }] }, "MultiEdit: a comment-only mention of the literal is fine");
 deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const s = \"see // docs\"; const k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;" }, "Write: a // inside a string does not hide the key lookup after it");
+// CodeRabbit Major on PR #605 at 537625b59 (probe-confirmed): stripComments had no regex
+// state, so the "/*" inside a character class opened a block comment that never closed
+// and everything after it vanished before the scan.
+deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const re = /[/*]/; const k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;" }, "PROVEN BYPASS: a /[/*]/ character class does not open a block comment before the key lookup");
+deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const re = /[/*]/;\nconst role = 'service_role';" }, "a /[/*]/ character class does not hide a service_role literal on the next line");
+deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const re = /a\\/*b/; const k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;" }, "an escaped slash followed by * inside a regex does not open a block comment");
+deny("env-guard.mjs", "Edit", { file_path: missingTs, old_string: "a", new_string: "function f() { return /[/*]/; }\nconst k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;" }, "a regex after the return keyword is a regex, not division then a comment");
+deny("env-guard.mjs", "Write", { file_path: missingTs, content: "if (x) /[/*]/.test(y);\nconst k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;" }, "a regex after a closing paren is treated as a regex (doubt keeps more text)");
+deny("env-guard.mjs", "MultiEdit", { file_path: missingTs, edits: [{ old_string: "a", new_string: "const re = /[/*]/; /* real comment */ const k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;" }] }, "MultiEdit: a class regex followed by a real comment still exposes the key lookup after it");
+allow("env-guard.mjs", "Write", { file_path: missingTs, content: "const x = a / b; /* 'service_role' lives in Edge Functions */\nconst k = import.meta.env.VITE_SUPABASE_ANON_KEY;" }, "division after an identifier is not a regex, so the real comment after it is still stripped");
+allow("env-guard.mjs", "Write", { file_path: missingTs, content: "const re = /[/*]/; // 'service_role' is banned here\nconst k = import.meta.env.VITE_SUPABASE_ANON_KEY;" }, "a class regex closes cleanly and the line comment after it is still stripped");
+allow("env-guard.mjs", "Write", { file_path: missingTs, content: "const re = /x\\/y/; /* 'service_role' */ const k = import.meta.env.VITE_SUPABASE_ANON_KEY;" }, "a regex with an escaped slash closes cleanly and the block comment after it is still stripped");
 
 console.log(`content-guards-multiedit: ${pass} assertions passed`);

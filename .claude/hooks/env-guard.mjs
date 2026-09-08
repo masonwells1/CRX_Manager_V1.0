@@ -64,12 +64,37 @@ const isFrontendFile = inSrc && /\.(ts|tsx|js|jsx)$/.test(filePath);
 // A small state machine rather than a regex: string literals are tracked so a URL
 // ("https://…") or a "/* … */" inside quotes is never treated as a comment, and a
 // "//" only opens a line comment after start-of-line, whitespace, or one of ;{}), so a
-// regex literal such as /\/\// does not swallow the rest of its line. Every branch
-// keeps MORE text on doubt: the failure mode of a wrong guess here is a comment that
-// survives and produces a refusal Mason can read, never code that vanishes.
+// regex literal such as /\/\// does not swallow the rest of its line. REGEX literals are
+// tracked too (CodeRabbit Major on 537625b59, probe-confirmed): without that state the
+// "/*" inside the character class of /[/*]/ — or the "/" + "*" of /a\/*b/ — opened a
+// block comment that never closed, and everything after it (the key lookup, the
+// 'service_role' literal) vanished before the scan. A "/" starts a regex when the previous
+// non-blank token cannot end an operand (start of file, an operator or opening bracket,
+// or an expression keyword such as return/typeof/case); after an identifier, number or
+// closing quote it is division. ")" and "]" are ambiguous and count as regex starts: on
+// doubt the machine keeps MORE text, so the worst wrong guess is a comment that survives
+// and produces a refusal Mason can read, never code that vanishes.
+const REGEX_PREFIX_KEYWORDS = new Set([
+  "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw",
+  "case", "do", "else", "yield", "await",
+]);
+function regexCanStart(src, i) {
+  let j = i - 1;
+  while (j >= 0 && /[ \t\r\n]/.test(src[j])) j -= 1;
+  if (j < 0) return true;
+  const prev = src[j];
+  if (/['"`]/.test(prev)) return false; // a closed string literal: division
+  if (/[A-Za-z0-9_$]/.test(prev)) {
+    let k = j;
+    while (k >= 0 && /[A-Za-z0-9_$]/.test(src[k])) k -= 1;
+    return REGEX_PREFIX_KEYWORDS.has(src.slice(k + 1, j + 1));
+  }
+  return true;
+}
 function stripComments(src) {
   let out = "";
-  let state = "code"; // code | sq | dq | bt | line | block
+  let state = "code"; // code | sq | dq | bt | regex | line | block
+  let inClass = false;
   for (let i = 0; i < src.length; i += 1) {
     const ch = src[i];
     const next = src[i + 1];
@@ -80,6 +105,15 @@ function stripComments(src) {
     if (state === "block") {
       if (ch === "*" && next === "/") { state = "code"; i += 1; out += " "; }
       else if (ch === "\n") out += ch;
+      continue;
+    }
+    if (state === "regex") {
+      out += ch;
+      if (ch === "\\") { out += next ?? ""; i += 1; continue; }
+      if (ch === "\n") { state = "code"; inClass = false; continue; } // unterminated: it was division; text kept
+      if (inClass) { if (ch === "]") inClass = false; continue; }
+      if (ch === "[") { inClass = true; continue; }
+      if (ch === "/") state = "code";
       continue;
     }
     if (state !== "code") {
@@ -96,6 +130,7 @@ function stripComments(src) {
       if (/[\s;{}),]/.test(prev)) { state = "line"; i += 1; continue; }
     }
     if (ch === "/" && next === "*") { state = "block"; i += 1; continue; }
+    if (ch === "/" && regexCanStart(src, i)) { state = "regex"; inClass = false; out += ch; continue; }
     out += ch;
   }
   return out;
