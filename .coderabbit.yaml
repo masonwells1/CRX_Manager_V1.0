@@ -174,10 +174,20 @@ reviews:
   # the Pro+ plan; this org is on Pro Plus (verified 2026-08-24).
   #
   # Approved by Mason 2026-08-24 when these produced a red X and withheld
-  # approval under the former zero-required-review rule. Mason's 2026-08-28
-  # protection change now requires a current approval, so an unresolved failed
-  # check blocks the merge-unlocking approval unless the author explicitly uses
-  # the documented "Ignore failed checks" override below.
+  # approval under the then-current zero-required-review rule.
+  #
+  # SUPERSEDED 2026-09-02: `required_pull_request_reviews` was removed from
+  # `main`, so no approval is required to merge and a failed check here can no
+  # longer block one by withholding it. What still binds: `request_changes_workflow`
+  # is on, so a failed check can drive CodeRabbit to a CHANGES_REQUESTED verdict,
+  # and BOTH agent merge gates hard-deny a merge over CHANGES_REQUESTED. That is
+  # the live enforcement path — not an approval requirement. The author's
+  # documented "Ignore failed checks" override below still applies.
+  # Do not restore a required-approval assumption here; read the real state with
+  # `gh api repos/masonwells1/CRX_Manager_V1.0/branches/main/protection`, and note
+  # that the `required_pull_request_reviews` SUB-resource returns a phantom
+  # `required_approving_review_count: 1` that does not reflect enforcement
+  # (verified 2026-09-02, after it misled two sessions).
   pre_merge_checks:
     # FALSE ON PURPOSE. False lets the PR AUTHOR override a failing check by
     # ticking "Ignore failed checks" in the Walkthrough comment. Mason authors
