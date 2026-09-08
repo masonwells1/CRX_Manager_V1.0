@@ -227,8 +227,159 @@ function unquoteShellArg(value) {
   return text;
 }
 
+// Split a command into argv WORDS the way a shell does: only UNQUOTED
+// whitespace separates words. The previous `/"[^"]*"|'[^']*'|\S+/g` scan treated
+// a quote as a word boundary as well, so `gh api "--method"=POST …` — one word
+// to every shell — arrived here as the two tokens `--method` and `=POST`, and no
+// `--method` comparison below ever saw the option. That was the last row of the
+// PR #630 bypass table still open after the keyword normalization: measured
+// blocked:false through evaluateProductionAction.
+//
+// The token TEXT is left as typed apart from the long-standing wrapping-quote
+// strip, because callers read values — remote URLs, Windows destination paths —
+// where the raw form is the correct one. Keyword comparisons pass each word
+// through shellArgvWord below to get the form the program actually receives.
+function splitShellWordsRaw(value) {
+  const text = String(value || "");
+  const words = [];
+  let current = "";
+  let started = false;
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (/\s/.test(char)) {
+      if (started) { words.push(current); current = ""; started = false; }
+      index += 1;
+      continue;
+    }
+    started = true;
+    // A backslash binds the next character into this word, so `\"` cannot open a
+    // quote context and `\ ` cannot end the word — matching POSIX. Consumed as a
+    // PAIR and kept verbatim: on Windows the same character is a path separator,
+    // and unescaping here would corrupt a destination path.
+    if (char === "\\" && index + 1 < text.length) {
+      current += text.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (char === "'") {
+      const close = text.indexOf("'", index + 1);
+      const end = close === -1 ? text.length : close + 1;
+      current += text.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (char === '"') {
+      let cursor = index + 1;
+      while (cursor < text.length && text[cursor] !== '"') {
+        cursor += text[cursor] === "\\" && cursor + 1 < text.length ? 2 : 1;
+      }
+      const end = cursor < text.length ? cursor + 1 : text.length;
+      current += text.slice(index, end);
+      index = end;
+      continue;
+    }
+    current += char;
+    index += 1;
+  }
+  if (started) words.push(current);
+  return words;
+}
+
+// The long-standing token view: words split correctly, wrapping quotes stripped,
+// everything else as typed. Callers that read VALUES (remote URLs, Windows
+// destination paths) use this, because the raw form is the correct one there.
 function splitShellArgs(value) {
-  return String(value || "").match(/"[^"]*"|'[^']*'|\S+/g)?.map(unquoteShellArg) || [];
+  return splitShellWordsRaw(value).map(unquoteShellArg);
+}
+
+// The argv a program actually receives. Applied to the RAW word, never on top of
+// unquoteShellArg: `-X 'P"OST'` unquotes to `P"OST`, and re-reading THAT would
+// treat the surviving literal quote as syntax and resolve it back to `POST` —
+// classifying a call as a POST that is not one. That double reading is the
+// second bug CodeRabbit warned about on PR #630, and it is avoided by computing
+// this view once, from the raw word.
+export function splitShellArgv(value) {
+  return splitShellWordsRaw(value).map(shellArgvWord);
+}
+
+// The argv word the SHELL hands the program, given the word as TYPED.
+//
+// splitShellArgs above strips the quotes that WRAP a whole token, and nothing
+// more. A shell removes quote and escape syntax wherever it appears, so
+// `me""rge`, `me''rge`, `"merge"`, `me\rge` and `"me"rge` all arrive at gh as
+// the single word `merge` — and a parser comparing the word as typed matches
+// none of them. Measured through evaluateProductionAction and the merge guard,
+// not read off a pattern: `gh pr me""rge 123 --squash` and
+// `gh api --met""hod=POST …` both returned blocked:false.
+//
+// This is NOT a blanket removal of quotes and backslashes. That would be a
+// second bug in the opposite direction (CodeRabbit, PR #630): `--method='P"OST'`
+// really does pass `P"OST` to gh, so erasing the quotes would read it as POST
+// and deny a call that is not a POST at all. Only syntax the shell CONSUMES is
+// removed; a quote or backslash that survives to the program survives here:
+//
+//   * outside quotes — `\` escapes the next character, `'` and `"` open a quote
+//     context and are themselves consumed;
+//   * inside single quotes — everything is literal until the closing `'`, `\`
+//     included (POSIX gives single quotes no escape at all);
+//   * inside double quotes — `\` escapes only `"`, `\`, `` ` `` and `$`;
+//     before anything else BOTH characters are literal, which is what keeps a
+//     double-quoted Windows path (`"C:\tmp\x.json"`) intact;
+//   * an UNTERMINATED quote runs to the end of the word rather than being
+//     dropped — the fail-closed reading, since the alternative is to stop
+//     recognising a keyword because a quote was left open.
+//
+// Backslash escapes are POSIX; PowerShell leaves `\` literal. Reading them as
+// escapes is therefore the fail-closed direction for keyword comparison — it can
+// only make a gate RUN on a word PowerShell would have left alone — and that is
+// why this is used for subcommands, option names and the HTTP method, never for
+// free-form values such as `--repo`, a body field, or a destination path, where
+// a Windows separator must survive verbatim.
+//
+// ghMergeRequest has done a blunt version of this inline for flag NAMES since
+// Codex's P1 on PR #541. That fix stopped at flag names: the `pr`/`merge`
+// subcommand words one line above it, and every keyword in the two `gh api`
+// parsers, kept comparing the raw word. Naming the normalization once is what
+// stops the next keyword inheriting the same omission.
+export function shellArgvWord(word) {
+  const text = String(word || "");
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === "\\") {
+      // A trailing backslash has nothing to escape; it reaches the program.
+      if (index + 1 >= text.length) { out += "\\"; break; }
+      out += text[index + 1];
+      index += 2;
+      continue;
+    }
+    if (char === "'") {
+      const close = text.indexOf("'", index + 1);
+      const end = close === -1 ? text.length : close;
+      out += text.slice(index + 1, end);
+      index = end + 1;
+      continue;
+    }
+    if (char === '"') {
+      index += 1;
+      while (index < text.length && text[index] !== '"') {
+        if (text[index] === "\\" && index + 1 < text.length && ['"', "\\", "`", "$"].includes(text[index + 1])) {
+          out += text[index + 1];
+          index += 2;
+          continue;
+        }
+        out += text[index];
+        index += 1;
+      }
+      index += 1; // step past the closing quote (or past the end, if unterminated)
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
 }
 
 // Resolve the repository directory selected by one or more `git -C` options.
@@ -2089,7 +2240,10 @@ const GH_BIN_RE = new RegExp(
 export function ghMergeRequest(command) {
   const text = String(command || "");
   if (!GH_BIN_RE.test(text)) return null;
-  const words = splitShellArgs(text);
+  // Every keyword below is compared against the word the SHELL produces, not the
+  // word as typed: `gh pr me""rge 123 --squash` reached gh as a plain merge and
+  // returned null here, so the whole merge gate never ran (measured).
+  const words = splitShellArgv(text);
   const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
   if (prIndex === -1) return null;
   const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
@@ -2105,12 +2259,14 @@ export function ghMergeRequest(command) {
   let admin = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
-    // Flag NAMES are matched with quotes and backslashes removed: the shell
-    // concatenates `--ad""min` and `--ad\min` into `--admin` before gh ever sees
-    // them, so a parser that compares the raw word misses the flag while gh
-    // honours it (Codex bot P1 on PR #541). Values keep their original case —
-    // only the name is lowercased.
-    const stripped = word.replace(/["'\\]/g, "");
+    // The shell concatenates `--ad""min` and `--ad\min` into `--admin` before gh
+    // ever sees them, so a parser that compares the raw word misses the flag
+    // while gh honours it (Codex bot P1 on PR #541). That was handled here by
+    // deleting every quote and backslash from the word; shellArgvWord above now
+    // does it for the whole argv, correctly — a quote that SURVIVES to gh
+    // (`--repo='o/"r'`) survives here too, where the blunt version erased it.
+    // Values keep their original case; only the name is lowercased.
+    const stripped = word;
     const lower = stripped.toLowerCase();
     if (lower.startsWith("--repo=")) { repo = stripped.slice("--repo=".length); continue; }
     // `--auto=false` asks gh NOT to auto-merge, so that command lands the PR
@@ -2162,7 +2318,7 @@ export function ghMergeRequest(command) {
 export function ghApiMergeRequest(command) {
   const text = String(command || "");
   if (!GH_BIN_RE.test(text)) return null;
-  const words = splitShellArgs(text);
+  const words = splitShellArgv(text);
   const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
   if (apiIndex === -1) return null;
   if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
@@ -2198,7 +2354,7 @@ export function ghApiMergeRequest(command) {
 export function ghApiMutates(command) {
   const text = String(command || "");
   if (!GH_BIN_RE.test(text)) return false;
-  const words = splitShellArgs(text);
+  const words = splitShellArgv(text);
   const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
   if (apiIndex === -1) return false;
   if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&

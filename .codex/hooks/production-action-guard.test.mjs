@@ -1569,6 +1569,148 @@ try {
     assert.ok(elapsedMs < 250, `gh binary matching stays linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
   }
 
+  // ── the SUBCOMMAND and OPTION words are shapes too (CodeRabbit, PR #630) ────
+  // The block above modelled the gh BINARY by shape. The words after it kept
+  // being compared as TYPED, and a shell removes quote and escape syntax from
+  // every word, not just the first. Measured through evaluateProductionAction
+  // before the fix — `blocked: false` on all of these, i.e. the merge gate and
+  // the mutating-API denial never ran, while the shell handed gh the ordinary
+  // command:
+  //
+  //   gh pr me""rge 123 --squash          gh api --met""hod=POST …
+  //   gh p""r merge 123 --squash          gh api "--method"=POST …
+  //   gh a""pi -X POST …                  gh api --meth\od=POST …
+  //                                       gh api -"X" POST …
+  //
+  // Two distinct defects, both fixed in codex-push-lib.mjs: splitShellArgs
+  // treated a quote as a WORD BOUNDARY (so `"--method"=POST`, one word to every
+  // shell, arrived as two tokens), and the words it produced were never resolved
+  // to the argv the program receives. The PR fixture is CHANGES_REQUESTED, so
+  // reaching the gate at all is a denial — blocked:true proves the gate RAN and
+  // cannot be satisfied by a bypass.
+  for (const command of [
+    "gh pr me\"\"rge 123 --squash",
+    "gh pr me''rge 123 --squash",
+    "gh p\"\"r merge 123 --squash",
+    "gh \"pr\" \"merge\" 123 --squash",
+    "gh pr me\\rge 123 --squash",
+    "gh.cmd pr me\"\"rge 123 --squash",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    }).blocked, true, `a quote/escape splice in the merge subcommand still reaches the gate: ${command}`);
+  }
+  for (const command of [
+    "gh api --met\"\"hod=POST repos/crop/crx/issues/1/comments",
+    "gh api --met''hod=POST repos/crop/crx/issues/1/comments",
+    "gh api \"--method\"=POST repos/crop/crx/issues/1/comments",
+    "gh api --meth\\od=POST repos/crop/crx/issues/1/comments",
+    "gh api -\"X\" POST repos/crop/crx/issues/1/comments",
+    "gh api -X PO\"\"ST repos/crop/crx/issues/1/comments",
+    "gh a\"\"pi -X POST repos/crop/crx/issues/1/comments",
+    "gh api repos/crop/crx/issues/1/comments -\"f\" body=x",
+    "gh api repos/crop/crx/issues/1/comments --fi\"\"eld body=x",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { throw new Error(`a mutating gh api call reached a lookup instead of a denial: ${command}`); },
+    }).blocked, true, `a quote/escape splice in a gh api option still reaches the gate: ${command}`);
+  }
+  // The OTHER direction, and the reason this is a shell-aware reading rather
+  // than "delete every quote and backslash": `--method='P"OST'` really does pass
+  // `P"OST` to gh. Erasing the quote would read it as POST and deny a call that
+  // is not one. A throwing runGh makes an accidental trip into a gate fail loudly.
+  for (const command of [
+    "gh api --method='P\"OST' repos/crop/crx/issues/1",
+    "gh api -X 'P\"OST' repos/crop/crx/issues/1",
+    "gh api repos/crop/crx/issues/1 --jq .title",
+    "gh api -X GET repos/crop/crx/issues/1",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { throw new Error(`a read-only gh api call entered a gate: ${command}`); },
+    }).blocked, false, `a quote that SURVIVES to gh is not read as syntax: ${command}`);
+  }
+  // `--disable-auto` stands the gate down; the splice must not smuggle a merge
+  // past it in either direction — the spliced spelling still cancels, nothing
+  // lands, and the gate still stands down.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --disable-a\"\"uto" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => { throw new Error("--disable-auto should not resolve a PR") },
+  }).blocked, false, "a spliced --disable-auto is still recognised as a cancellation");
+  // The same splice against the PUSH route. codex-push-guard.mjs has refused
+  // these since Codex's nineteenth 2026-07-30 review; this guard never imported
+  // the check, so `git push origin HEAD:m""ain` returned blocked:false here and
+  // the main-push gate did not run. Checked on the WHOLE command and BEFORE
+  // isGitPush, because `git p""ush` is not a push to isGitPush at all.
+  for (const command of [
+    "git push origin HEAD:m\"\"ain",
+    "git push origin HEAD:m''ain",
+    "git push origin HEAD:ma\\in",
+    "git p\"\"ush origin HEAD:main",
+    "git push origin \"HEAD:m\"ain",
+  ]) {
+    const spliced = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+    });
+    assert.equal(spliced.blocked, true, `a push hidden by shell composition is refused: ${command}`);
+    assert.match(
+      String(spliced.reason || ""),
+      /shell quoting or command substitution/,
+      `and it is refused by the composition check, not incidentally: ${command}`,
+    );
+  }
+  // Controls for that pair: ordinary pushes still route to the normal gates
+  // rather than to the composition refusal.
+  for (const command of ["git push origin HEAD:feature/x", "git push origin \"HEAD:main\""]) {
+    assert.doesNotMatch(
+      String(evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command },
+        repoDir: risky.repo,
+        nowMs: now,
+      }).reason || ""),
+      /shell quoting or command substitution/,
+      `an ordinarily-quoted push is not called a hidden one: ${command}`,
+    );
+  }
+  // Backtracking on the new word walk, for the same reason the block above
+  // measures it: a stalled PreToolUse hook is a timed-out hook, and silence
+  // means ALLOW. Unterminated quotes are the shape that can force a re-scan.
+  for (const pathological of [
+    `gh api ${'"'.repeat(20000)} -X POST repos/o/r/issues/1/comments`,
+    `gh api ${"'".repeat(20000)} -X POST repos/o/r/issues/1/comments`,
+    `gh pr merge 1 ${"\\\"".repeat(10000)}`,
+    `gh api ${'a""'.repeat(6000)} -X POST repos/o/r/issues/1/comments`,
+  ]) {
+    const started = process.hrtime.bigint();
+    evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: pathological },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `shell word splitting stays linear on adversarial quoting (${elapsedMs.toFixed(1)}ms)`);
+  }
+
   // ── a slow advisory lookup must not be able to starve a HARD denial ────────
   // Codex round 6 (PR #563). The Codex GitHub App lookup is advisory and
   // fail-open, and it costs up to four `gh` calls each capped at 10s against a

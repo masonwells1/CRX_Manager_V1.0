@@ -19,6 +19,7 @@ import {
   proofValid,
   pullRequestReviewBlocked,
   pushContextIsAmbiguous,
+  pushHiddenByShellComposition,
   pushIsForced,
   pushTargetsCurrentHead,
   pushUsesBulkMode,
@@ -1509,6 +1510,23 @@ export function evaluateProductionAction({
       `is not a recognised read-only operation, in: ${computedAccess.segment}. The guard cannot read a computed ` +
       "argument and does not know what this command does with one, so it is refused rather than gated. Spell " +
       "every argument literally, or read through a known reader (cat/Get-Content/grep/git diff/Where-Object …)."
+    );
+  }
+  // Checked on the WHOLE command and BEFORE isGitPush, because the point of the
+  // check is that isGitPush is reading text the shell will not execute:
+  // `git p""ush origin HEAD:main` is not a push to isGitPush, so a per-segment
+  // filter keyed on isGitPush never sees it. The Claude guard has refused these
+  // since Codex's nineteenth 2026-07-30 review; this side never got the check,
+  // so `git push origin HEAD:m""ain` and `HEAD:ma\in` returned blocked:false
+  // from evaluateProductionAction — the main-push gate did not run at all
+  // (measured on PR #630, not read off the parser). Shared helper, not a fourth
+  // copy: that duplication is what this whole change is removing.
+  if (pushHiddenByShellComposition(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: shell quoting or command substitution changes this push's meaning or reveals an " +
+      "additional push (for example `git p\"us\"h`, `HEAD:ma\"in\"`, `$(git push …)`, or a backtick). The gate reads " +
+      "command text, so analysing a spelling the shell rewrites would not prove the executed destination, force " +
+      "intent, or refspec. Write each push plainly: `git -C <repo> push <remote> <refspec>`."
     );
   }
   if (isGitPush(command) && pushContextIsAmbiguous(command)) {

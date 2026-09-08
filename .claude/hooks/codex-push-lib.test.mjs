@@ -11,6 +11,11 @@ import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   claudeProofValid,
   contentIsRisky,
+  shellArgvWord,
+  splitShellArgv,
+  ghApiMutates,
+  ghMergeRequest,
+  ghApiMergeRequest,
   describeRiskyContent,
   riskyContentMatches,
   sanitizeForMessage,
@@ -2631,6 +2636,105 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── the argv a shell actually produces (CodeRabbit, PR #630) ────────────────
+// Two separate defects lived here. splitShellArgs treated a QUOTE as a word
+// boundary, so `"--method"=POST` — one word to every shell — arrived as the two
+// tokens `--method` and `=POST`, and no comparison saw the option at all. And
+// the words it produced were never resolved to the form the program receives,
+// so `--met""hod=POST`, `--meth\od=POST` and `-"X" POST` matched nothing either.
+// Both made ghApiMutates return false while gh performed the POST.
+{
+  // Syntax the shell CONSUMES is removed...
+  for (const [typed, argv] of [
+    ["--method=POST", "--method=POST"],
+    ['--met""hod=POST', "--method=POST"],
+    ["--met''hod=POST", "--method=POST"],
+    ['"--method"=POST', "--method=POST"],
+    ["--meth\\od=POST", "--method=POST"],
+    ['"merge"', "merge"],
+    ['me""rge', "merge"],
+    ['--method="POST', "--method=POST"],   // unterminated quote: fail closed
+  ]) {
+    assert.equal(shellArgvWord(typed), argv, `shell-consumed syntax is removed: ${typed}`);
+  }
+  // ...and syntax that SURVIVES to the program is kept. Deleting every quote and
+  // backslash would be a second bug in the opposite direction: `--method='P"OST'`
+  // really does pass `P"OST`, which is not a POST.
+  for (const [typed, argv] of [
+    ["--method='P\"OST'", '--method=P"OST'],
+    ['--method="P\\"OST"', '--method=P"OST'],
+    ["--field=path='C:\\tmp'", "--field=path=C:\\tmp"],
+    ['"C:\\Program Files\\gh.exe"', "C:\\Program Files\\gh.exe"],
+    ['--body="a `b` $c"', "--body=a `b` $c"],
+  ]) {
+    assert.equal(shellArgvWord(typed), argv, `a literal quote or separator survives: ${typed}`);
+  }
+  // Only UNQUOTED whitespace separates words. `\ ` binds, a quoted span binds,
+  // and a quote never splits one word into two.
+  assert.deepEqual(splitShellArgv('gh api "--method"=POST repos/o/r/issues/1'),
+    ["gh", "api", "--method=POST", "repos/o/r/issues/1"], "a quote is not a word boundary");
+  assert.deepEqual(splitShellArgv('git -C "C:\\CRX Manager" push origin HEAD:main'),
+    ["git", "-C", "C:\\CRX Manager", "push", "origin", "HEAD:main"], "a quoted Windows path stays one word, separators intact");
+  assert.deepEqual(splitShellArgv("gh pr merge 1 --body 'a b'"),
+    ["gh", "pr", "merge", "1", "--body", "a b"], "quoted whitespace does not split a word");
+
+  // The classifiers, at the level the guards call them.
+  for (const command of [
+    'gh api --met""hod=POST repos/o/r/issues/1/comments',
+    'gh api "--method"=POST repos/o/r/issues/1/comments',
+    "gh api --meth\\od=POST repos/o/r/issues/1/comments",
+    'gh api -"X" POST repos/o/r/issues/1/comments',
+    'gh api -X PO""ST repos/o/r/issues/1/comments',
+    'gh a""pi -X POST repos/o/r/issues/1/comments',
+    'gh api repos/o/r/issues/1/comments --fi""eld body=x',
+  ]) {
+    assert.equal(ghApiMutates(command), true, `a spliced mutating gh api call is still mutating: ${command}`);
+  }
+  for (const command of [
+    "gh api --method='P\"OST' repos/o/r/issues/1",
+    "gh api -X 'P\"OST' repos/o/r/issues/1",
+    "gh api repos/o/r/issues/1",
+    "gh api repos/o/r/issues/1 --jq .title",
+    "gh api -X GET repos/o/r/issues/1",
+  ]) {
+    assert.equal(ghApiMutates(command), false, `a read, or a literal quote in the method, is not a mutation: ${command}`);
+  }
+  for (const command of [
+    'gh pr me""rge 123 --squash',
+    "gh pr me''rge 123 --squash",
+    'gh p""r merge 123 --squash',
+    'gh "pr" "merge" 123 --squash',
+    "gh pr me\\rge 123 --squash",
+  ]) {
+    assert.equal(ghMergeRequest(command)?.selector, "123", `a spliced merge still resolves its PR: ${command}`);
+  }
+  for (const command of [
+    "gh-dash pr merge 1", "ghq push", "ghost pr merge 1", "npm run ghpr",
+    "echo highlight pr merge", "gh pr view 123", "gh pr list",
+    'gh pr merge 123 --disable-a""uto',
+  ]) {
+    assert.equal(ghMergeRequest(command), null, `a benign neighbour still stands the merge gate down: ${command}`);
+  }
+  assert.equal(ghApiMergeRequest('gh api --met""hod=PUT repos/o/r/pulls/123/merge')?.selector, "123",
+    "a spliced REST merge resolves through the merge route rather than slipping past it");
+
+  // A stalled PreToolUse hook is a timed-out hook, and silence means ALLOW, so
+  // the word walk is measured on the shapes that could force a re-scan.
+  for (const pathological of [
+    `gh api ${'"'.repeat(40000)} -X POST repos/o/r/issues/1/comments`,
+    `gh api ${"'".repeat(40000)} -X POST repos/o/r/issues/1/comments`,
+    `gh api ${'a""'.repeat(12000)} -X POST repos/o/r/issues/1/comments`,
+    `gh pr merge 1 ${"\\\"".repeat(20000)}`,
+  ]) {
+    const started = process.hrtime.bigint();
+    splitShellArgv(pathological);
+    ghApiMutates(pathological);
+    ghMergeRequest(pathological);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `shell word splitting stays linear on adversarial quoting (${elapsedMs.toFixed(1)}ms)`);
   }
 }
 
