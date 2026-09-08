@@ -10,6 +10,9 @@
 //      nothing.
 //   3. codex-push-lib.mjs RISKY_PATH_RES — a diff touching one of these needs the
 //      exact-SHA independent review before it can merge.
+//   4. autopilot-lib.mjs PROTECTED_SURFACE_RE — armed autopilot must refuse, not
+//      auto-approve, a native Edit/Write on these (Codex gpt-5.6-sol High on PR #605 at
+//      28bba740b: `Edit .claude/hooks/x.mjs` returned `allow` while armed).
 //
 // PR #605 produced twelve review rounds and every one had the same shape: a path
 // named in one list and missing from another (MultiEdit/NotebookEdit; the
@@ -141,10 +144,22 @@ const pathRe = extractRegex(
 );
 const { riskyFiles } = await import(pathToFileURL(rel(".claude", "hooks", "codex-push-lib.mjs")).href);
 assert.equal(typeof riskyFiles, "function", "codex-push-lib.mjs must export riskyFiles");
+const { autopilotDecision } = await import(pathToFileURL(rel(".claude", "hooks", "autopilot-lib.mjs")).href);
+assert.equal(typeof autopilotDecision, "function", "autopilot-lib.mjs must export autopilotDecision");
 
 const shellHits = (p) => shellRe.test(` ${p}`);
 const pathHits = (p) => pathRe.test(`/${p}`);
 const isRisky = (p) => riskyFiles([p]).length > 0;
+// The armed-mode verdict for the same path through every native editor and the MCP
+// path field. `.env*` is autopilot's own older deny (DENY_PATH_RE) and is excluded from
+// the reverse direction because settings carries it under `deny`, not `ask`.
+// The MCP entry uses a neutral name: `write_file` itself is a tool-NAME deny in armed mode, so
+// it could never read as "allow" and would hide a path-set gap behind the name rule.
+const ARMED_EDITORS = ["Edit", "Write", "MultiEdit", "NotebookEdit", "mcp__some_server__put_file"];
+const armedInput = (tool, p) => (tool.startsWith("mcp__") ? { path: p } : { file_path: p });
+const autopilotDenies = (p) => ARMED_EDITORS.every((tool) => autopilotDecision(tool, armedInput(tool, p)) === "deny");
+const autopilotAllows = (p) => ARMED_EDITORS.every((tool) => autopilotDecision(tool, armedInput(tool, p)) === "allow");
+const isEnvFile = (p) => /(^|\/)\.env(\.|$)/i.test(p);
 
 // ---- 3. corpus: every tracked path plus one sample per pattern, both directions ----
 const tracked = gitLsFiles();
@@ -161,8 +176,11 @@ for (const p of corpus) {
     if (!h) fail(`"${p}" is native-editor protected (settings ask) but a shell write to it is NOT denied by review-proof-guard ENFORCEMENT_SURFACE_RE`);
     if (!f) fail(`"${p}" is native-editor protected (settings ask) but an MCP path-field write to it is NOT denied by review-proof-guard`);
     if (!r) fail(`"${p}" is native-editor protected (settings ask) but is NOT in codex-push-lib RISKY_PATH_RES, so its diff can merge without the exact-SHA review`);
+    if (!autopilotDenies(p)) fail(`"${p}" is native-editor protected (settings ask) but armed autopilot AUTO-APPROVES a native edit of it (autopilot-lib PROTECTED_SURFACE_RE)`);
   } else if (h || f) {
     fail(`"${p}" is hard-denied for shell/path-field writers by review-proof-guard but has no settings ask entry — native Edit/Write/MultiEdit/NotebookEdit rewrite it silently under acceptEdits`);
+  } else if (!isEnvFile(p) && !autopilotAllows(p)) {
+    fail(`"${p}" is refused by armed autopilot (PROTECTED_SURFACE_RE) but has no settings ask entry — the four lists no longer name the same surface`);
   }
   // `r` is deliberately one-directional: RISKY_PATH_RES is the merge-time review set and is
   // a strict superset of the enforcement surface (migrations, edge functions, money and RLS
@@ -214,6 +232,6 @@ if (failures.length) {
 }
 console.log(
   `protected-surface-parity ok: ${patterns.length} patterns × ${EDITORS.length} editors = ${patterns.length * EDITORS.length} ask entries; ` +
-    `${tracked.length} tracked paths agree across settings ask / review-proof-guard / RISKY_PATH_RES; ` +
+    `${tracked.length} tracked paths agree across settings ask / review-proof-guard / RISKY_PATH_RES / autopilot armed deny; ` +
     `${topLevel.size} top-level .claude|.codex entries decided (${OPEN_BY_DECISION.size} deliberately open)`,
 );

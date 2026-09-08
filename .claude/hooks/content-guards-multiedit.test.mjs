@@ -90,5 +90,16 @@ fs.writeFileSync(tsPath, "const k = import.meta.env.VITE_SUPABASE_ANON_KEY;\n");
 deny("env-guard.mjs", "MultiEdit", { file_path: tsPath, edits: [{ old_string: "VITE_SUPABASE_ANON_KEY", new_string: "SUPABASE_SERVICE_ROLE_KEY" }] }, "MultiEdit spliced onto disk swaps anon for service_role");
 // Rule 1 is path-based and unaffected: any .env write denies regardless of shape.
 deny("env-guard.mjs", "MultiEdit", { file_path: path.join(root, ".env"), edits: [{ old_string: "a", new_string: "b" }] }, "MultiEdit on .env");
+// Codex gpt-5.6-sol High on PR #605 at 28bba740b: a "never use service_role" comment
+// anywhere in the file used to suppress the real scan. Comments are stripped, not obeyed.
+const warnedThenUsed = "// never use service_role here\nconst k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;";
+deny("env-guard.mjs", "MultiEdit", { file_path: missingTs, edits: [{ old_string: "a", new_string: warnedThenUsed }] }, "MultiEdit: warning comment does not suppress the key lookup");
+deny("env-guard.mjs", "Write", { file_path: missingTs, content: warnedThenUsed }, "Write: warning comment does not suppress the key lookup");
+deny("env-guard.mjs", "Edit", { file_path: missingTs, old_string: "a", new_string: "/* service_role is banned */ const r = 'service_role';" }, "Edit: block comment does not suppress the literal");
+deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const u = 'https://x.co'; const k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;" }, "Write: a URL's // is not a comment opener");
+deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const re = /\\/\\//; const k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;" }, "Write: a regex literal's // is not a comment opener");
+allow("env-guard.mjs", "Write", { file_path: missingTs, content: "// SUPABASE_SERVICE_ROLE_KEY must never be read here\nconst k = import.meta.env.VITE_SUPABASE_ANON_KEY;" }, "Write: a comment-only mention of the key is fine");
+allow("env-guard.mjs", "MultiEdit", { file_path: missingTs, edits: [{ old_string: "a", new_string: "/* 'service_role' belongs in Edge Functions */\nconst role = 'authenticated';" }] }, "MultiEdit: a comment-only mention of the literal is fine");
+deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const s = \"see // docs\"; const k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;" }, "Write: a // inside a string does not hide the key lookup after it");
 
 console.log(`content-guards-multiedit: ${pass} assertions passed`);

@@ -241,6 +241,26 @@ const DENY_BASH_RES = [
 // Edit/Write targets that must never be auto-approved.
 const DENY_PATH_RE = /(^|[\\/])\.env(\.|$)/i;
 
+// The enforcement surface — the files that decide whether the commit, push, CI, review
+// and apply gates run at all. review-proof-guard.mjs hard-denies SHELL and MCP path-field
+// writes to these but deliberately exempts the native editors, whose only gate is the
+// settings.json `permissions.ask` prompt. A hook `allow` cannot disarm a settings `ask`
+// (measured 2026-09-06), so in practice the prompt still fires while armed — but autopilot
+// exists precisely so nobody is at the keyboard, and the one honest answer to a prompt in an
+// unattended run is a refusal, not a session that hangs or a rule that quietly changes
+// permission tiers. Codex gpt-5.6-sol High on PR #605 at 28bba740b: armed autopilot returned
+// `allow` for `Edit .claude/hooks/x.mjs` and `Write package.json`. Same literal as the
+// path-field regex in review-proof-guard.mjs; protected-surface-parity.test.mjs fails the
+// build if this set, the settings ask set, and the two guard regexes stop agreeing.
+// Judged on the path with backslashes folded to "/" and a leading "/" prepended, so an
+// absolute Windows path (C:\repo\.claude\hooks\x.mjs) and a repo-relative one decide alike.
+const PROTECTED_SURFACE_RE = /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex|\.claude\/(?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts\/(?:(?:check|validate|verify)-[^/]*(?:\/[^/]*)*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
+
+export function protectedSurfacePath(filePath) {
+  const p = String(filePath || "").replace(/\\/g, "/");
+  return p !== "" && PROTECTED_SURFACE_RE.test(`/${p}`);
+}
+
 export function autopilotDecision(toolName, toolInput) {
   const name = String(toolName || "");
   if (DENY_TOOLNAME_RE.test(name)) return "deny";
@@ -258,6 +278,7 @@ export function autopilotDecision(toolName, toolInput) {
   // Edit/Write/file tools
   const filePath = input.file_path || input.path || input.filePath || "";
   if (filePath && DENY_PATH_RE.test(String(filePath))) return "deny";
+  if (protectedSurfacePath(filePath)) return "deny";
 
   return "allow";
 }
@@ -431,4 +452,4 @@ export function flagActive(content, nowMs) {
   return { active: true, expires: data.expires };
 }
 
-export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, INTENT_FRESH_MS };
+export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, PROTECTED_SURFACE_RE, INTENT_FRESH_MS };

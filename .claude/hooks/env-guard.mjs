@@ -54,21 +54,69 @@ if (!content) out("allow");
 const inSrc = filePath.includes("/src/");
 const isFrontendFile = inSrc && /\.(ts|tsx|js|jsx)$/.test(filePath);
 
+// Remove JS/TS comments so the service_role scans judge CODE only. Until PR #605
+// (Codex gpt-5.6-sol High at 28bba740b, probe-confirmed) the two scans were instead
+// SUPPRESSED by a file-global "no // … service_role comment" test: one comment reading
+// "// never use service_role here" anywhere in the file, and a real
+// import.meta.env.SUPABASE_SERVICE_ROLE_KEY on the next line was allowed — the comment
+// meant to warn about the mistake was the exact string that hid it.
+//
+// A small state machine rather than a regex: string literals are tracked so a URL
+// ("https://…") or a "/* … */" inside quotes is never treated as a comment, and a
+// "//" only opens a line comment after start-of-line, whitespace, or one of ;{}), so a
+// regex literal such as /\/\// does not swallow the rest of its line. Every branch
+// keeps MORE text on doubt: the failure mode of a wrong guess here is a comment that
+// survives and produces a refusal Mason can read, never code that vanishes.
+function stripComments(src) {
+  let out = "";
+  let state = "code"; // code | sq | dq | bt | line | block
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (state === "line") {
+      if (ch === "\n") { state = "code"; out += ch; }
+      continue;
+    }
+    if (state === "block") {
+      if (ch === "*" && next === "/") { state = "code"; i += 1; out += " "; }
+      else if (ch === "\n") out += ch;
+      continue;
+    }
+    if (state !== "code") {
+      out += ch;
+      if (ch === "\\") { out += next ?? ""; i += 1; continue; }
+      if ((state === "sq" && ch === "'") || (state === "dq" && ch === '"') || (state === "bt" && ch === "`")) state = "code";
+      continue;
+    }
+    if (ch === "'") { state = "sq"; out += ch; continue; }
+    if (ch === '"') { state = "dq"; out += ch; continue; }
+    if (ch === "`") { state = "bt"; out += ch; continue; }
+    if (ch === "/" && next === "/") {
+      const prev = i === 0 ? "\n" : src[i - 1];
+      if (/[\s;{}),]/.test(prev)) { state = "line"; i += 1; continue; }
+    }
+    if (ch === "/" && next === "*") { state = "block"; i += 1; continue; }
+    out += ch;
+  }
+  return out;
+}
+
 if (isFrontendFile) {
-  // Look for the service_role token. Allow comments explaining "do not use service_role" — the
-  // pattern that's dangerous is an actual env-var lookup or string literal.
+  const code = stripComments(content);
   const violations = [];
 
-  if (/SUPABASE_SERVICE_ROLE_KEY/.test(content) && !/\/\/.*never.*service_role/i.test(content)) {
-    violations.push("SUPABASE_SERVICE_ROLE_KEY referenced in a src/ file.");
+  // An env-var lookup or any other CODE reference to the key. A comment may say the name.
+  if (/SUPABASE_SERVICE_ROLE_KEY/.test(code)) {
+    violations.push("SUPABASE_SERVICE_ROLE_KEY referenced in a src/ file (comments are not counted; this is code).");
   }
   // eyJ... is the JWT prefix all Supabase keys share; flag a long literal that looks like one.
   // Anon keys are also eyJ... but a long literal in source is suspicious regardless — use env vars.
+  // Judged on the RAW content: a commented-out key is still a key committed to source.
   if (/['"`]eyJ[A-Za-z0-9_-]{40,}['"`]/.test(content)) {
     violations.push("Hard-coded JWT-shaped literal (eyJ...) in source — keys must come from import.meta.env.");
   }
-  // 'service_role' as a string value (not a comment) — heuristic
-  if (/['"`]service_role['"`]/.test(content) && !/\/\/.*service_role/i.test(content)) {
+  // 'service_role' as a string value in code.
+  if (/['"`]service_role['"`]/.test(code)) {
     violations.push("'service_role' string literal in src/ — this role belongs only in Edge Functions.");
   }
 

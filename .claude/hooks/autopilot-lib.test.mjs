@@ -35,6 +35,20 @@ eq(autopilotDecision("Bash", { command: "git worktree remove ../x" }), "deny", "
 eq(autopilotDecision("Bash", { command: "echo SECRET >> .env" }), "deny", "write to .env denied");
 eq(autopilotDecision("Write", { file_path: "C:/CRX_Manager/.env.local" }), "deny", "Write .env.local denied");
 eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied");
+// PR #605 (Codex gpt-5.6-sol High at 28bba740b): the enforcement surface joins the armed
+// deny set. Every native editor, the MCP path field, relative and absolute Windows paths.
+eq(autopilotDecision("Edit", { file_path: ".claude/hooks/review-proof-guard.mjs" }), "deny", "armed Edit of a hook denied");
+eq(autopilotDecision("Write", { file_path: "package.json" }), "deny", "armed Write of package.json denied");
+eq(autopilotDecision("MultiEdit", { file_path: ".husky/pre-push" }), "deny", "armed MultiEdit of a husky hook denied");
+eq(autopilotDecision("NotebookEdit", { file_path: ".github/workflows/ci.yml" }), "deny", "armed NotebookEdit of a workflow denied");
+eq(autopilotDecision("Write", { file_path: "C:\\CRX_Manager\\.claude\\settings.json" }), "deny", "absolute Windows path to settings.json denied");
+eq(autopilotDecision("Edit", { file_path: "C:/CRX_Manager/scripts/write-codex-push-proof.mjs" }), "deny", "absolute path to the proof minter denied");
+eq(autopilotDecision("Edit", { file_path: "scripts/check-docs.mjs" }), "deny", "check-* script denied");
+eq(autopilotDecision("mcp__some_server__put_file", { path: ".codex/hooks.json" }), "deny", "an MCP path field into .codex denied even when the tool name is not in DENY_TOOLNAME_RE");
+eq(autopilotDecision("Write", { file_path: ".claude/session-state/notes.md" }), "allow", "session-state stays auto-approved");
+eq(autopilotDecision("Edit", { file_path: "package-lock.json" }), "allow", "package-lock.json is deliberately outside the set");
+eq(autopilotDecision("Edit", { file_path: "scripts/foo.mjs" }), "allow", "an ordinary script stays auto-approved");
+eq(autopilotDecision("Write", { file_path: "docs/changelog.d/2026-09-08-x.md" }), "allow", "a ledger entry stays auto-approved");
 
 // ── deny-set additions (2026-07-04): CLI deploy, PR merge, MCP write/exec ─
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
