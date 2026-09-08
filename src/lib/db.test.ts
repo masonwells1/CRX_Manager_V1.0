@@ -11,6 +11,7 @@ import {
   hasRpcCode,
   describePostInvoiceBlock,
   rpcAuthErrorMessage,
+  transferInvoiceErrorMessage,
   RpcErrorCodes,
 } from './db';
 
@@ -148,6 +149,27 @@ describe('rpcAuthErrorMessage', () => {
     expect(rpcAuthErrorMessage({ message: 'IDEMPOTENCY_ACTOR_MISMATCH' })).toBeNull();
     expect(rpcAuthErrorMessage({ message: 'Billing splits must total 100%' })).toBeNull();
     expect(rpcAuthErrorMessage(null)).toBeNull();
+  });
+});
+
+describe('transferInvoiceErrorMessage', () => {
+  it('tells a cached cutover caller to retry the same protected request', () => {
+    expect(transferInvoiceErrorMessage({
+      code: 'P0001',
+      message: 'TRANSFER_INVOICE_INTENT_CUTOVER_RETRY',
+    })).toBe('The invoice safety update finished during this transfer. Try Transfer to Invoice again — the app will safely reuse the same request.');
+  });
+
+  it('requires reconciliation before retrying an invalid server result', () => {
+    expect(transferInvoiceErrorMessage(new Error('TRANSFER_INVOICE_RESULT_INVALID')))
+      .toBe('The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.');
+    expect(transferInvoiceErrorMessage({ code: 'P0001', message: 'IDEMPOTENCY_RESULT_INVALID' }))
+      .toBe('The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.');
+  });
+
+  it('leaves unrelated transfer errors to the existing handlers', () => {
+    expect(transferInvoiceErrorMessage({ message: 'SPLIT_OVERRIDE_UNSUPPORTED' })).toBeNull();
+    expect(transferInvoiceErrorMessage(null)).toBeNull();
   });
 });
 

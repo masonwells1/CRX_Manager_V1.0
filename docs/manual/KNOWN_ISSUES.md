@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-05 for the migration-ledger header; the F2 entry retains its separate
+**Last verified: 2026-09-08 for the migration-ledger header; the F2 entry retains its separate
 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
@@ -18,18 +18,23 @@ and diverge, so reading the boundary off `version` gives a plausible wrong answe
 returns garbage, because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …)
 sort above digits — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` in
 that capture as a point-in-time observation, not a fact** — any lane applying a migration moves
-them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05.
+them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-08.
 The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
 
-Six local commission candidates (`20260905200000` through `20260905210000`, excluding superseded `20260905200500`) remain unapplied;
-the complete six-file set was restamped together on 2026-09-05 evening, after a #606 apply moved the
-live ordering boundary above most of the set, and the set's relative order was preserved during the
-restamp. This file deliberately does not name that boundary — re-read it from the live-ledger capture
+Seven local commission candidates remain unapplied: five older-stamp files (`20260905200000`,
+`20260905200200`, `20260905200300`, `20260905200400`, and `20260905200600`), transfer intent
+`20260908120000`, and tail repair `20260908130000`. The original six-file set (those five plus
+the repair) was restamped together on 2026-09-05 evening, after a #606 apply moved the live
+ordering boundary above most of the set. The live boundary has since moved again, so the five
+`20260905*` files now require a future coordinated restamp before any apply; preserve their
+relative order, keep transfer intent after the Chicago cutover, and keep the repair last. This
+file deliberately does not name that moving boundary — re-read it from the live-ledger capture
 in `docs/reference/migration-history.md` before any apply decision.
-The label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
+The label repair followed `20260905020100` -> `20260905190000` -> `20260905210000` before its
+final 2026-09-08 move to `20260908130000`, after the transfer wrapper so it still runs last. It
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
 now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes. The settlement-recipient guard closes the live case where a batch prepared for A
@@ -44,6 +49,10 @@ with `CHICAGO_DATE_CUTOVER_RETRY`, so a backend that resolved an old PL/pgSQL pl
 drain cannot commit a stale Chicago date after the unified cutover;
 `20260905200500` was superseded before apply, so the September 30 cutover cannot commit in two
 separate migrations and neither behavior is live.
+The parked transfer wrapper installs an owner-only receipt trigger before renaming the old body.
+Its table lock drains existing receipt writers; a cached pre-cutover body that reaches the insert
+afterward fails with `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` and rolls back so the caller can retry
+through the intent-bound wrapper. The live transfer function remains unchanged until an approved apply.
 The final label-selection candidate replaces alphabetical historical-name selection with the latest
 earned-state label at the requested cutoff for both earned and paid-only balance rows; until it is
 separately approved and applied, production can still display an older salesperson name.

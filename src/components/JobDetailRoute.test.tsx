@@ -19,14 +19,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
-const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
-  mockFrom: vi.fn(),
-  mockRpc: vi.fn(),
-  mockToast: vi.fn(),
-  mockNavigate: vi.fn(),
-}));
+const {
+  mockFrom,
+  mockRpc,
+  mockToast,
+  mockNavigate,
+  transferIdemState,
+  mockTransferResetKey,
+} = vi.hoisted(() => {
+  const state = { generation: 0 };
+  return {
+    mockFrom: vi.fn(),
+    mockRpc: vi.fn(),
+    mockToast: vi.fn(),
+    mockNavigate: vi.fn(),
+    transferIdemState: state,
+    mockTransferResetKey: vi.fn(() => { state.generation += 1; }),
+  };
+});
 
 const CHAIN_METHODS = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq',
   'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains',
@@ -64,7 +76,12 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => mockNavigate };
 });
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
+  useIdempotencyKey: (operation: string) => (operation === 'transfer_job_to_invoice'
+    ? {
+        getKey: () => `transfer-key-${transferIdemState.generation}`,
+        resetKey: mockTransferResetKey,
+      }
+    : { getKey: () => 'test-idem-key', resetKey: vi.fn() }),
 }));
 vi.mock('../hooks/usePageMeta', () => ({ usePageMeta: () => {} }));
 vi.mock('../hooks/useUnsavedChanges', () => ({
@@ -135,6 +152,7 @@ function mountAt(path: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  transferIdemState.generation = 0;
   mockRpc.mockResolvedValue({ data: null, error: null });
 });
 
@@ -203,5 +221,63 @@ describe('JobDetailRoute remounts per record', () => {
     expect(routeLine, "App.tsx has no `jobs/:id` route line").toBeTruthy();
     expect(routeLine).toContain('<JobDetailRoute />');
     expect(routeLine).not.toContain('<JobDetail />');
+  });
+});
+
+describe('JobDetail transfer intent recovery', () => {
+  const completedJob = makeJob({
+    id: 'job-transfer',
+    job_number: 'J-TRANSFER-3003',
+    status: 'completed',
+  });
+
+  const cases = [
+    {
+      token: 'TRANSFER_INVOICE_INTENT_CUTOVER_RETRY',
+      message: 'The invoice safety update finished during this transfer. Try Transfer to Invoice again — the app will safely reuse the same request.',
+    },
+    {
+      token: 'TRANSFER_INVOICE_RESULT_INVALID',
+      message: 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.',
+    },
+    {
+      token: 'IDEMPOTENCY_RESULT_INVALID',
+      message: 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.',
+    },
+  ] as const;
+
+  it.each(cases)('shows safe guidance and reuses the request key for $token', async ({ token, message }) => {
+    mockFrom.mockImplementation((table: string) => (table === 'jobs'
+      ? buildChain({ data: completedJob, error: null })
+      : buildChain({ data: [], error: null })));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'transfer_job_to_invoice'
+        ? { data: null, error: { code: 'P0001', message: token, details: null, hint: null } }
+        : { data: null, error: null },
+    ));
+
+    mountAt('/jobs/job-transfer');
+    await screen.findByRole('heading', { name: 'J-TRANSFER-3003' });
+
+    const confirmTransfer = async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Transfer to Invoice' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Transfer to Invoice' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Transfer to Invoice' }));
+    };
+
+    await confirmTransfer();
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', message));
+    expect(mockTransferResetKey).not.toHaveBeenCalled();
+
+    await confirmTransfer();
+    await waitFor(() => {
+      const transferCalls = mockRpc.mock.calls.filter(([name]) => name === 'transfer_job_to_invoice');
+      expect(transferCalls).toHaveLength(2);
+      const firstKey = (transferCalls[0][1] as { p_idempotency_key: string }).p_idempotency_key;
+      const secondKey = (transferCalls[1][1] as { p_idempotency_key: string }).p_idempotency_key;
+      expect(firstKey).toBeTruthy();
+      expect(secondKey).toBe(firstKey);
+    });
+    expect(mockTransferResetKey).not.toHaveBeenCalled();
   });
 });

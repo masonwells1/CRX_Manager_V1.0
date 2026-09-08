@@ -6,7 +6,7 @@ import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase, assertRpcResult, sanitizeError } from '../../lib/db';
+import { supabase, assertRpcResult, sanitizeError, transferInvoiceErrorMessage } from '../../lib/db';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { Sentry } from '../../lib/sentry';
 import { SkeletonCard } from '../ui/Skeleton';
@@ -208,7 +208,7 @@ export default function UnbilledApplicationsPanel() {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
         extra: { context: 'transfer_job_to_invoice', jobId: pendingJobInvoice.row.id },
       });
-      toast('error', sanitizeError(err));
+      toast('error', transferInvoiceErrorMessage(err) ?? sanitizeError(err));
     } finally {
       setCreatingInvoice(false);
     }

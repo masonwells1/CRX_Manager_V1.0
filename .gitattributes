@@ -205,7 +205,7 @@ scripts/smoke/prove-number-generator-gates.mjs text eol=lf
 # Keep the SQL and proof inputs byte-identical across Windows and Linux.
 supabase/migrations/20260903230000_commission_report_snapshot_contract.sql text eol=lf
 supabase/migrations/20260905200000_commission_history_report_replay_guard.sql text eol=lf
-supabase/migrations/20260905210000_repair_commission_history_label_snapshots.sql text eol=lf
+supabase/migrations/20260908130000_repair_commission_history_label_snapshots.sql text eol=lf
 supabase/migrations/20260905200200_refuse_stale_commission_payment_recipient.sql text eol=lf
 supabase/migrations/20260905200300_enforce_commission_payment_business_date.sql text eol=lf
 # 20260905200600 md5-pins its own installed balance-report body (postflight). It was the one
@@ -217,6 +217,9 @@ supabase/migrations/20260905200600_latest_commission_recipient_label.sql text eo
 # proofs read it byte-for-byte; a CRLF checkout would change body hashes and make the
 # candidate refuse itself.
 supabase/migrations/20260905200400_commission_dates_follow_chicago_business_day.sql text eol=lf
+supabase/migrations/20260908120000_bind_transfer_invoice_intent.sql text eol=lf
+scripts/smoke/prove-transfer-invoice-intent-binding-static.mjs text eol=lf
+scripts/smoke/prove-transfer-invoice-intent-binding.mjs text eol=lf
 scripts/smoke/prove-commission-dates-chicago.mjs text eol=lf
 scripts/smoke/prove-document-dates-chicago.mjs text eol=lf
 scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf

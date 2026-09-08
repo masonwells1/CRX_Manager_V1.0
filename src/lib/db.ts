@@ -297,6 +297,12 @@ export const RpcErrorCodes = {
   FIELD_SPLIT_NOT_100: 'FIELD_SPLIT_NOT_100',
   // transfer_job_to_invoice (U7) — a multi-owner job with zero billable acres
   SPLIT_NO_ACRES: 'SPLIT_NO_ACRES',
+  // transfer_job_to_invoice intent binding — a cached pre-cutover implementation
+  // must retry through the new wrapper, and every replay must retain the expected
+  // job result identity before the receipt is trusted.
+  TRANSFER_INVOICE_INTENT_CUTOVER_RETRY: 'TRANSFER_INVOICE_INTENT_CUTOVER_RETRY',
+  TRANSFER_INVOICE_RESULT_INVALID: 'TRANSFER_INVOICE_RESULT_INVALID',
+  IDEMPOTENCY_RESULT_INVALID: 'IDEMPOTENCY_RESULT_INVALID',
   // transfer_invoice_to_job (U7) — this invoice is one member of a multi-owner group;
   // return the job to scheduling by voiding each owner invoice instead
   JOB_BILLED_AS_GROUP: 'JOB_BILLED_AS_GROUP',
@@ -428,6 +434,25 @@ export function rpcAuthErrorMessage(err: unknown): string | null {
     || hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)
   ) {
     return 'Your sign-in could not be verified. Refresh the page and try again.';
+  }
+  return null;
+}
+
+/**
+ * Safe operator recovery for the two intent-wrapper failures that must not fall
+ * through to a raw PostgreSQL token. Neither branch rotates the idempotency key:
+ * the cutover case should retry the same request, while an invalid result must be
+ * reconciled from a fresh job read before the operator decides whether to retry.
+ */
+export function transferInvoiceErrorMessage(err: unknown): string | null {
+  if (hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_INTENT_CUTOVER_RETRY)) {
+    return 'The invoice safety update finished during this transfer. Try Transfer to Invoice again — the app will safely reuse the same request.';
+  }
+  if (
+    hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID)
+    || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RESULT_INVALID)
+  ) {
+    return 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
   }
   return null;
 }
