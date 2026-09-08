@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.1"
+    PostgrestVersion: "14.5"
   }
   public: {
     Tables: {
@@ -663,6 +663,79 @@ export type Database = {
         }
         Relationships: []
       }
+      below_cost_approvals: {
+        Row: {
+          actor_user_id: string
+          created_at: string
+          entity_id: string
+          entity_type: string
+          id: string
+          line_id: string
+          locked_unit_cost_cents: number
+          operation: string
+          product_id: string | null
+          quantity: number
+          reason: string
+          total_shortfall_cents: number
+          unit_price_cents: number
+          updated_at: string
+        }
+        Insert: {
+          actor_user_id: string
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          id?: string
+          line_id: string
+          locked_unit_cost_cents: number
+          operation: string
+          product_id?: string | null
+          quantity: number
+          reason: string
+          total_shortfall_cents: number
+          unit_price_cents: number
+          updated_at?: string
+        }
+        Update: {
+          actor_user_id?: string
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          id?: string
+          line_id?: string
+          locked_unit_cost_cents?: number
+          operation?: string
+          product_id?: string | null
+          quantity?: number
+          reason?: string
+          total_shortfall_cents?: number
+          unit_price_cents?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "below_cost_approvals_actor_user_id_fkey"
+            columns: ["actor_user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "below_cost_approvals_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "below_cost_approvals_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       blend_recipe_items: {
         Row: {
           created_at: string
@@ -1224,6 +1297,98 @@ export type Database = {
           },
         ]
       }
+      commission_earned_state_ledger: {
+        Row: {
+          amount_cents: number
+          commission_id: string
+          created_at: string
+          customer_name: string
+          effective_at: string
+          event_kind: string
+          id: number
+          is_earned: boolean
+          order_date: string
+          recipient_group_key: string
+          recipient_id: string | null
+          recipient_name: string
+          recorded_at: string
+          recorded_by: string | null
+          source_number: string
+          source_type: string
+        }
+        Insert: {
+          amount_cents: number
+          commission_id: string
+          created_at?: string
+          customer_name: string
+          effective_at: string
+          event_kind: string
+          id?: never
+          is_earned: boolean
+          order_date: string
+          recipient_group_key: string
+          recipient_id?: string | null
+          recipient_name: string
+          recorded_at?: string
+          recorded_by?: string | null
+          source_number: string
+          source_type: string
+        }
+        Update: {
+          amount_cents?: number
+          commission_id?: string
+          created_at?: string
+          customer_name?: string
+          effective_at?: string
+          event_kind?: string
+          id?: never
+          is_earned?: boolean
+          order_date?: string
+          recipient_group_key?: string
+          recipient_id?: string | null
+          recipient_name?: string
+          recorded_at?: string
+          recorded_by?: string | null
+          source_number?: string
+          source_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commission_earned_state_ledger_commission_id_fkey"
+            columns: ["commission_id"]
+            isOneToOne: false
+            referencedRelation: "commissions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commission_history_cutover: {
+        Row: {
+          created_at: string
+          cutover_at: string
+          first_supported_date: string
+          opening_commission_count: number
+          opening_commission_digest: string
+          singleton: boolean
+        }
+        Insert: {
+          created_at?: string
+          cutover_at: string
+          first_supported_date: string
+          opening_commission_count: number
+          opening_commission_digest: string
+          singleton?: boolean
+        }
+        Update: {
+          created_at?: string
+          cutover_at?: string
+          first_supported_date?: string
+          opening_commission_count?: number
+          opening_commission_digest?: string
+          singleton?: boolean
+        }
+        Relationships: []
+      }
       commission_payment_items: {
         Row: {
           amount: number
@@ -1280,6 +1445,8 @@ export type Database = {
           status: string
           total_amount: number
           updated_at: string
+          voided_at: string | null
+          voided_by: string | null
         }
         Insert: {
           created_at?: string
@@ -1297,6 +1464,8 @@ export type Database = {
           status?: string
           total_amount?: number
           updated_at?: string
+          voided_at?: string | null
+          voided_by?: string | null
         }
         Update: {
           created_at?: string
@@ -1314,6 +1483,8 @@ export type Database = {
           status?: string
           total_amount?: number
           updated_at?: string
+          voided_at?: string | null
+          voided_by?: string | null
         }
         Relationships: [
           {
@@ -1337,10 +1508,101 @@ export type Database = {
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "commission_payments_voided_by_fkey"
+            columns: ["voided_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      commission_settlement_events: {
+        Row: {
+          amount_cents: number
+          commission_id: string
+          commission_order_date: string
+          commission_payment_id: string
+          commission_payment_item_id: string
+          created_at: string
+          customer_name: string
+          effective_at: string
+          event_kind: string
+          id: number
+          payment_date: string
+          payment_number: string
+          recipient_group_key: string
+          recipient_id: string | null
+          recipient_name: string
+          source_number: string
+          source_type: string
+        }
+        Insert: {
+          amount_cents: number
+          commission_id: string
+          commission_order_date: string
+          commission_payment_id: string
+          commission_payment_item_id: string
+          created_at?: string
+          customer_name: string
+          effective_at: string
+          event_kind: string
+          id?: never
+          payment_date: string
+          payment_number: string
+          recipient_group_key: string
+          recipient_id?: string | null
+          recipient_name: string
+          source_number: string
+          source_type: string
+        }
+        Update: {
+          amount_cents?: number
+          commission_id?: string
+          commission_order_date?: string
+          commission_payment_id?: string
+          commission_payment_item_id?: string
+          created_at?: string
+          customer_name?: string
+          effective_at?: string
+          event_kind?: string
+          id?: never
+          payment_date?: string
+          payment_number?: string
+          recipient_group_key?: string
+          recipient_id?: string | null
+          recipient_name?: string
+          source_number?: string
+          source_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "commission_settlement_events_commission_id_fkey"
+            columns: ["commission_id"]
+            isOneToOne: false
+            referencedRelation: "commissions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commission_settlement_events_commission_payment_id_fkey"
+            columns: ["commission_payment_id"]
+            isOneToOne: false
+            referencedRelation: "commission_payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "commission_settlement_events_commission_payment_item_id_fkey"
+            columns: ["commission_payment_item_id"]
+            isOneToOne: false
+            referencedRelation: "commission_payment_items"
+            referencedColumns: ["id"]
+          },
         ]
       }
       commissions: {
         Row: {
+          cancelled_amount_cents: number | null
+          cancelled_at: string | null
           commission_amount: number
           created_at: string
           customer_id: string
@@ -1362,6 +1624,8 @@ export type Database = {
           status: string
         }
         Insert: {
+          cancelled_amount_cents?: number | null
+          cancelled_at?: string | null
           commission_amount?: number
           created_at?: string
           customer_id: string
@@ -1383,6 +1647,8 @@ export type Database = {
           status?: string
         }
         Update: {
+          cancelled_amount_cents?: number | null
+          cancelled_at?: string | null
           commission_amount?: number
           created_at?: string
           customer_id?: string
@@ -2279,6 +2545,7 @@ export type Database = {
           id: string
           item_revision: number
           initiated_by: string
+          item_revision: number
           notes: string | null
           started_at: string
           status: string
@@ -2292,6 +2559,7 @@ export type Database = {
           id?: string
           item_revision?: number
           initiated_by?: string
+          item_revision?: number
           notes?: string | null
           started_at?: string
           status?: string
@@ -2305,6 +2573,7 @@ export type Database = {
           id?: string
           item_revision?: number
           initiated_by?: string
+          item_revision?: number
           notes?: string | null
           started_at?: string
           status?: string
@@ -4023,6 +4292,8 @@ export type Database = {
           quoted_price_cents: number | null
           rate_per_acre: number | null
           rate_unit: string | null
+          return_credit_cogs_cents: number | null
+          return_credit_source_item_id: string | null
           sort_order: number
           total_applied: number | null
           total_applied_gl_lb: number | null
@@ -4055,6 +4326,8 @@ export type Database = {
           quoted_price_cents?: number | null
           rate_per_acre?: number | null
           rate_unit?: string | null
+          return_credit_cogs_cents?: number | null
+          return_credit_source_item_id?: string | null
           sort_order?: number
           total_applied?: number | null
           total_applied_gl_lb?: number | null
@@ -4087,6 +4360,8 @@ export type Database = {
           quoted_price_cents?: number | null
           rate_per_acre?: number | null
           rate_unit?: string | null
+          return_credit_cogs_cents?: number | null
+          return_credit_source_item_id?: string | null
           sort_order?: number
           total_applied?: number | null
           total_applied_gl_lb?: number | null
@@ -4132,6 +4407,13 @@ export type Database = {
             columns: ["product_id"]
             isOneToOne: false
             referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoice_items_return_credit_source_item_fk"
+            columns: ["return_credit_source_item_id"]
+            isOneToOne: false
+            referencedRelation: "invoice_items"
             referencedColumns: ["id"]
           },
         ]
@@ -8065,6 +8347,7 @@ export type Database = {
           acres: number | null
           actual_rate: number | null
           calc_mode: string | null
+          cost_at_quote_cents: number | null
           current_cost: number
           id: string
           net_margin: number
@@ -8089,6 +8372,7 @@ export type Database = {
           acres?: number | null
           actual_rate?: number | null
           calc_mode?: string | null
+          cost_at_quote_cents?: number | null
           current_cost?: number
           id?: string
           net_margin?: number
@@ -8113,6 +8397,7 @@ export type Database = {
           acres?: number | null
           actual_rate?: number | null
           calc_mode?: string | null
+          cost_at_quote_cents?: number | null
           current_cost?: number
           id?: string
           net_margin?: number
@@ -8349,6 +8634,7 @@ export type Database = {
           notes: string | null
           pdf_url: string | null
           quote_id: string
+          restore_trusted_at: string | null
           sent_at: string
           sent_by: string
           sent_method: string | null
@@ -8360,6 +8646,7 @@ export type Database = {
           notes?: string | null
           pdf_url?: string | null
           quote_id: string
+          restore_trusted_at?: string | null
           sent_at?: string
           sent_by: string
           sent_method?: string | null
@@ -8371,6 +8658,7 @@ export type Database = {
           notes?: string | null
           pdf_url?: string | null
           quote_id?: string
+          restore_trusted_at?: string | null
           sent_at?: string
           sent_by?: string
           sent_method?: string | null
@@ -8892,6 +9180,7 @@ export type Database = {
           quantity: number
           restock: boolean
           restocked: boolean
+          restocked_quantity: number | null
           return_id: string
           sort_order: number
           unit: string
@@ -8909,6 +9198,7 @@ export type Database = {
           quantity?: number
           restock?: boolean
           restocked?: boolean
+          restocked_quantity?: number | null
           return_id: string
           sort_order?: number
           unit?: string
@@ -8926,6 +9216,7 @@ export type Database = {
           quantity?: number
           restock?: boolean
           restocked?: boolean
+          restocked_quantity?: number | null
           return_id?: string
           sort_order?: number
           unit?: string
@@ -10694,12 +10985,32 @@ export type Database = {
               type: string
             }[]
           }
+      _allocated_cumulative_cents: {
+        Args: { p_cumulative_quantity: number; p_order_item_id: string }
+        Returns: number
+      }
+      _allocated_delivery_cents: {
+        Args: {
+          p_exclude_invoice_id?: string
+          p_order_item_id: string
+          p_quantity: number
+        }
+        Returns: number
+      }
       _apply_product_cost_basis_change_set_serialized_inner: {
         Args: {
           p_change_set_id: string
           p_idempotency_key?: string
           p_performed_by?: string
           p_request_fingerprint: string
+        }
+        Returns: Json
+      }
+      _approve_return_intent_impl_20260812: {
+        Args: {
+          p_approved_by: string
+          p_idempotency_key?: string
+          p_return_id: string
         }
         Returns: Json
       }
@@ -10711,6 +11022,15 @@ export type Database = {
         }
         Returns: Json
       }
+      _begin_below_cost_money_write: {
+        Args: { p_operation: string; p_payload: Json; p_performed_by: string }
+        Returns: undefined
+      }
+      _below_cost_reason_from_json: { Args: { p_value: Json }; Returns: string }
+      _below_cost_reason_from_text: {
+        Args: { p_value: string }
+        Returns: string
+      }
       _bind_completed_lifecycle_idempotency: {
         Args: {
           p_contract: string
@@ -10721,6 +11041,22 @@ export type Database = {
           p_response: Json
         }
         Returns: undefined
+      }
+      _bulk_import_order_below_cost_impl_20260810: {
+        Args: {
+          p_customer_id: string
+          p_idempotency_key?: string
+          p_items: Json
+          p_notes?: string
+          p_order_date: string
+          p_order_number: string
+          p_status: string
+          p_total_cost: number
+          p_total_margin_pct: number
+          p_total_price: number
+          p_total_profit: number
+        }
+        Returns: Json
       }
       _calculate_product_pricing: {
         Args: {
@@ -10767,6 +11103,15 @@ export type Database = {
         }
         Returns: Json
       }
+      _cancel_return_intent_impl_20260812: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_reason: string
+          p_return_id: string
+        }
+        Returns: Json
+      }
       _check_credit_limit: {
         Args: { p_additional_cents?: number; p_customer_id: string }
         Returns: undefined
@@ -10786,6 +11131,14 @@ export type Database = {
         Returns: Json
       }
       _complete_cycle_count_impl: {
+        Args: {
+          p_completed_by?: string
+          p_cycle_count_id: string
+          p_idempotency_key?: string
+        }
+        Returns: undefined
+      }
+      _complete_cycle_count_pre_revision_20260831: {
         Args: {
           p_completed_by?: string
           p_cycle_count_id: string
@@ -10832,6 +11185,15 @@ export type Database = {
         }
         Returns: Json
       }
+      _convert_quote_to_order_below_cost_impl_20260810: {
+        Args: {
+          p_expected_row_version?: number
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_quote_id: string
+        }
+        Returns: Json
+      }
       _convert_quote_to_order_owner_impl: {
         Args: {
           p_idempotency_key?: string
@@ -10851,6 +11213,19 @@ export type Database = {
           p_reference: string
         }
         Returns: string
+      }
+      _create_direct_order_below_cost_impl_20260810: {
+        Args: {
+          p_customer_id: string
+          p_customer_po_number?: string
+          p_idempotency_key?: string
+          p_items?: Json
+          p_notes?: string
+          p_order_date: string
+          p_order_name?: string
+          p_performed_by?: string
+        }
+        Returns: Json
       }
       _create_invoice_for_unbilled_delivery_idem_impl_20260721: {
         Args: {
@@ -10908,6 +11283,21 @@ export type Database = {
         }
         Returns: Json
       }
+      _create_return_intent_impl_20260812: {
+        Args: { p_idempotency_key?: string; p_items?: Json; p_return: Json }
+        Returns: Json
+      }
+      _create_rush_order_below_cost_impl_20260810: {
+        Args: {
+          p_customer_id: string
+          p_customer_po_number?: string
+          p_idempotency_key?: string
+          p_items?: Json
+          p_notes?: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
       _create_split_invoices_from_order_provenance_impl_20260719: {
         Args: {
           p_idempotency_key?: string
@@ -10924,6 +11314,33 @@ export type Database = {
           p_performed_by?: string
         }
         Returns: number
+      }
+      _draw_down_quote_below_cost_impl_20260810: {
+        Args: {
+          p_draws: Json
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_quote_id: string
+        }
+        Returns: Json
+      }
+      _draw_down_quote_intent_impl_20260819: {
+        Args: {
+          p_below_cost_reason?: string
+          p_draws: Json
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_quote_id: string
+        }
+        Returns: Json
+      }
+      _duplicate_quote_below_cost_impl_20260810: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_source_quote_id: string
+        }
+        Returns: Json
       }
       _format_pricing_dollars: { Args: { p_cents: number }; Returns: string }
       _format_pricing_margin_percent: {
@@ -10977,7 +11394,23 @@ export type Database = {
       }
       _is_admin_override: { Args: never; Returns: boolean }
       _is_dispatched_to_me: { Args: { p_job_id: string }; Returns: boolean }
+      _issue_return_credit_header_only_impl_20260825: {
+        Args: {
+          p_actor_id: string
+          p_idempotency_key?: string
+          p_return_id: string
+        }
+        Returns: Json
+      }
       _issue_return_credit_impl: {
+        Args: {
+          p_actor_id: string
+          p_idempotency_key?: string
+          p_return_id: string
+        }
+        Returns: Json
+      }
+      _issue_return_credit_intent_impl_20260812: {
         Args: {
           p_actor_id: string
           p_idempotency_key?: string
@@ -11034,6 +11467,15 @@ export type Database = {
         Args: { p_idempotency_key?: string; p_invoice_id: string }
         Returns: undefined
       }
+      _price_order_below_cost_impl_20260810: {
+        Args: {
+          p_idempotency_key?: string
+          p_items?: Json
+          p_order_id: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
       _product_cost_basis_row_required: {
         Args: {
           p_effect: Json
@@ -11055,12 +11497,46 @@ export type Database = {
         }
         Returns: Json
       }
+      _receive_return_impl_before_inventory_seed_20260825: {
+        Args: {
+          p_idempotency_key?: string
+          p_received_by: string
+          p_return_id: string
+        }
+        Returns: Json
+      }
+      _receive_return_intent_impl_20260812: {
+        Args: {
+          p_idempotency_key?: string
+          p_received_by: string
+          p_return_id: string
+        }
+        Returns: Json
+      }
       _recompute_po_on_order_for_products: {
         Args: { p_product_ids: string[] }
         Returns: undefined
       }
+      _reject_return_intent_impl_20260812: {
+        Args: {
+          p_idempotency_key?: string
+          p_rejected_by?: string
+          p_return_id: string
+        }
+        Returns: Json
+      }
       _require_auth: { Args: never; Returns: string }
       _resolve_product_cost_basis_row: { Args: { p_row: Json }; Returns: Json }
+      _restore_quote_version_below_cost_impl_20260810: {
+        Args: {
+          p_expected_row_version?: number
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_quote_id: string
+          p_version_id: string
+        }
+        Returns: Json
+      }
       _restore_quote_version_owner_impl: {
         Args: {
           p_idempotency_key?: string
@@ -11079,6 +11555,15 @@ export type Database = {
         Returns: undefined
       }
       _reverse_credit_memo_application: {
+        Args: {
+          p_actor: string
+          p_actor_role: string
+          p_application_id: string
+          p_reason: string
+        }
+        Returns: undefined
+      }
+      _reverse_credit_memo_application_status_impl_20260812: {
         Args: {
           p_actor: string
           p_actor_role: string
@@ -11113,11 +11598,19 @@ export type Database = {
         }
         Returns: Json
       }
+      _save_invoice_below_cost_impl_20260810: {
+        Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
+        Returns: string
+      }
       _save_invoice_governed_split_guard_impl_20260720: {
         Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
         Returns: string
       }
       _save_invoice_intent_impl_20260802: {
+        Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
+        Returns: string
+      }
+      _save_invoice_lineage_unaware_impl_20260827: {
         Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
         Returns: string
       }
@@ -11159,6 +11652,16 @@ export type Database = {
         }
         Returns: Json
       }
+      _save_quote_below_cost_impl_20260810: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_quote_id: string
+          p_quote_payload: Json
+          p_sections: Json
+        }
+        Returns: Json
+      }
       _section9_cancel_purchase_order_serialized: {
         Args: {
           p_idempotency_key?: string
@@ -11168,11 +11671,59 @@ export type Database = {
         }
         Returns: Json
       }
+      _section9_create_vendor_bill_cumulative_impl: {
+        Args: {
+          p_adjustment_cents?: number
+          p_bill_date?: string
+          p_bill_number?: string
+          p_due_date?: string
+          p_idempotency_key?: string
+          p_notes?: string
+          p_payment_terms?: string
+          p_purchase_order_id?: string
+          p_subtotal_cents?: number
+          p_vendor_id: string
+        }
+        Returns: string
+      }
+      _section9_create_vendor_bill_intent_impl_20260826: {
+        Args: {
+          p_adjustment_cents?: number
+          p_bill_date?: string
+          p_bill_number?: string
+          p_due_date?: string
+          p_idempotency_key?: string
+          p_notes?: string
+          p_payment_terms?: string
+          p_purchase_order_id?: string
+          p_subtotal_cents?: number
+          p_vendor_id: string
+        }
+        Returns: string
+      }
       _section9_delete_purchase_order_serialized: {
         Args: {
           p_idempotency_key?: string
           p_performed_by: string
           p_po_id: string
+        }
+        Returns: Json
+      }
+      _section9_receive_po_items_intent_impl_20260826: {
+        Args: {
+          p_allow_over_receive?: boolean
+          p_idempotency_key?: string
+          p_items: Json
+          p_performed_by: string
+        }
+        Returns: Json
+      }
+      _section9_receive_po_items_intent_impl_20260831: {
+        Args: {
+          p_allow_over_receive?: boolean
+          p_idempotency_key?: string
+          p_items: Json
+          p_performed_by: string
         }
         Returns: Json
       }
@@ -11184,6 +11735,30 @@ export type Database = {
           p_performed_by: string
         }
         Returns: Json
+      }
+      _section9_record_vendor_payment_intent_impl_20260826: {
+        Args: {
+          p_amount_cents: number
+          p_idempotency_key?: string
+          p_notes?: string
+          p_payment_date?: string
+          p_payment_method?: string
+          p_reference_number?: string
+          p_vendor_bill_id: string
+        }
+        Returns: string
+      }
+      _section9_record_vendor_payment_intent_impl_20260831: {
+        Args: {
+          p_amount_cents: number
+          p_idempotency_key?: string
+          p_notes?: string
+          p_payment_date?: string
+          p_payment_method?: string
+          p_reference_number?: string
+          p_vendor_bill_id: string
+        }
+        Returns: string
       }
       _section9_reverse_receiving_record_serialized: {
         Args: {
@@ -11212,6 +11787,54 @@ export type Database = {
         }
         Returns: Json
       }
+      _section9_update_vendor_bill_intent_impl_20260826: {
+        Args: {
+          p_adjustment_cents: number
+          p_bill_date: string
+          p_bill_id: string
+          p_due_date: string
+          p_idempotency_key?: string
+          p_notes: string
+          p_subtotal_cents: number
+        }
+        Returns: Json
+      }
+      _section9_update_vendor_bill_intent_impl_20260831: {
+        Args: {
+          p_adjustment_cents: number
+          p_bill_date: string
+          p_bill_id: string
+          p_due_date: string
+          p_idempotency_key?: string
+          p_notes: string
+          p_subtotal_cents: number
+        }
+        Returns: Json
+      }
+      _section9_void_vendor_bill_intent_impl_20260826: {
+        Args: {
+          p_idempotency_key?: string
+          p_reason?: string
+          p_vendor_bill_id: string
+        }
+        Returns: undefined
+      }
+      _section9_void_vendor_bill_intent_impl_20260831: {
+        Args: {
+          p_idempotency_key?: string
+          p_reason?: string
+          p_vendor_bill_id: string
+        }
+        Returns: undefined
+      }
+      _section9_void_vendor_payment_intent_impl_20260826: {
+        Args: {
+          p_idempotency_key?: string
+          p_payment_id: string
+          p_reason: string
+        }
+        Returns: Json
+      }
       _split_invoice_content_claim: {
         Args: { p_invoice_id: string }
         Returns: Json
@@ -11232,6 +11855,24 @@ export type Database = {
         Args: { p_actor: string; p_quote_id: string }
         Returns: undefined
       }
+      _unapply_return_credit_guard_impl_20260826: {
+        Args: {
+          p_credit_memo_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_reason: string
+        }
+        Returns: Json
+      }
+      _update_order_items_below_cost_impl_20260810: {
+        Args: {
+          p_idempotency_key?: string
+          p_items: Json
+          p_order_id: string
+          p_performed_by: string
+        }
+        Returns: Json
+      }
       _update_order_items_impl: {
         Args: {
           p_idempotency_key?: string
@@ -11251,6 +11892,14 @@ export type Database = {
         Returns: Json
       }
       _void_invoice_group_guard_impl_20260720: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_id: string
+          p_void_reason: string
+        }
+        Returns: undefined
+      }
+      _void_invoice_return_credit_guard_impl_20260826: {
         Args: {
           p_idempotency_key?: string
           p_invoice_id: string
@@ -11398,7 +12047,7 @@ export type Database = {
       }
       approve_return: {
         Args: {
-          p_approved_by: string
+          p_approved_by?: string
           p_idempotency_key?: string
           p_return_id: string
         }
@@ -11564,7 +12213,7 @@ export type Database = {
       cancel_return: {
         Args: {
           p_idempotency_key?: string
-          p_performed_by: string
+          p_performed_by?: string
           p_reason: string
           p_return_id: string
         }
@@ -11763,6 +12412,7 @@ export type Database = {
       }
       convert_quote_to_order: {
         Args: {
+          p_below_cost_reason?: string
           p_expected_row_version?: number
           p_idempotency_key?: string
           p_performed_by?: string
@@ -12104,6 +12754,7 @@ export type Database = {
       }
       draw_down_quote: {
         Args: {
+          p_below_cost_reason?: string
           p_draws: Json
           p_idempotency_key?: string
           p_performed_by?: string
@@ -12113,6 +12764,7 @@ export type Database = {
       }
       duplicate_quote: {
         Args: {
+          p_below_cost_reason?: string
           p_idempotency_key?: string
           p_performed_by: string
           p_source_quote_id: string
@@ -12275,10 +12927,30 @@ export type Database = {
           outstanding_balance: number
           paid_count: number
           pending_count: number
-          recipient_id: string
+          recipient_id: string | null
           recipient_name: string
           total_earned: number
           total_paid: number
+        }[]
+      }
+      get_commission_history_report: {
+        Args: { p_as_of_date: string }
+        Returns: Json
+      }
+      get_commission_payment_detail_report: {
+        Args: { p_as_of_date: string }
+        Returns: {
+          commission_id: string
+          commission_order_date: string
+          customer_name: string
+          payment_date: string
+          payment_id: string
+          payment_number: string
+          recipient_id: string | null
+          recipient_name: string
+          settled_amount: number
+          source_number: string
+          source_type: string
         }[]
       }
       get_customer_balance_listing: {
@@ -12741,6 +13413,18 @@ export type Database = {
         Args: { p_product_id: string }
         Returns: Json
       }
+      get_profitability_report: {
+        Args: { p_end_date?: string; p_group_by: string; p_start_date?: string }
+        Returns: {
+          group_key: string
+          margin_pct: number
+          order_count: number
+          total_cost: number
+          total_profit: number
+          total_revenue: number
+          units_sold: number
+        }[]
+      }
       get_program_completion: { Args: { p_season?: number }; Returns: Json }
       get_receiving_log: {
         Args: {
@@ -12938,7 +13622,7 @@ export type Database = {
       is_sales_rep: { Args: never; Returns: boolean }
       issue_return_credit: {
         Args: {
-          p_actor_id: string
+          p_actor_id?: string
           p_idempotency_key?: string
           p_return_id: string
         }
@@ -13463,7 +14147,7 @@ export type Database = {
       receive_return: {
         Args: {
           p_idempotency_key?: string
-          p_received_by: string
+          p_received_by?: string
           p_return_id: string
         }
         Returns: Json
@@ -13629,6 +14313,7 @@ export type Database = {
       }
       restore_quote_version: {
         Args: {
+          p_below_cost_reason?: string
           p_expected_row_version?: number
           p_idempotency_key?: string
           p_performed_by: string
@@ -14328,12 +15013,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -14357,11 +15042,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -14382,11 +15067,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -14407,11 +15092,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -14424,11 +15109,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }

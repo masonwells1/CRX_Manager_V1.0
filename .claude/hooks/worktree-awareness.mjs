@@ -23,6 +23,7 @@ import {
   originMainParkedMigrationGrepArgs, originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap as parseOriginMainSqlBlobMap,
   originMainForwardBlobPaths,
+  classifyDirt, formatSiblingReport, groupUnknownReasons,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -99,29 +100,41 @@ function mergedLabel(sha) {
 }
 
 // Memoized: the sibling list and the parked scan both ask, and this is one git spawn.
-const dirtyCache = new Map(); // wt path → count | null
-function dirtyCount(wtPath) {
-  if (dirtyCache.has(wtPath)) return dirtyCache.get(wtPath);
+const dirtCache = new Map(); // wt path → { total, importer, real } | null
+function dirtDetail(wtPath) {
+  if (dirtCache.has(wtPath)) return dirtCache.get(wtPath);
   let result = null;
   try {
     if (existsSync(wtPath)) {
       // -uall, not the default: a repo with status.showUntrackedFiles=no would report
       // an unwritten draft's checkout as CLEAN, and the clean path skips the untracked
       // scan — silently hiding pending work, the exact defect this file exists to fix.
-      result = git(["status", "--porcelain", "-uall"], wtPath).split("\n").filter((l) => l.trim()).length;
+      result = classifyDirt(git(["status", "--porcelain", "-uall"], wtPath));
     }
   } catch { result = null; }
-  dirtyCache.set(wtPath, result);
+  dirtCache.set(wtPath, result);
   return result;
 }
+// Total dirty-line count (all lines, importer dirs included) — the shape the
+// parked-draft reader expects. Derived from the same single git spawn.
+function dirtyCount(wtPath) {
+  const d = dirtDetail(wtPath);
+  return d === null ? null : d.total;
+}
 
-const lines = siblings.map((s) => {
-  const branch = s.detached ? `(detached @ ${(s.head || "").slice(0, 8)})` : (s.branch || "(no branch)");
-  const merged = s.detached ? "detached" : mergedLabel(s.head);
-  const dc = dirtyCount(s.path);
-  const dirty = dc === null ? "unreadable/absent" : `${dc} dirty file${dc === 1 ? "" : "s"}`;
-  return `  • ${s.path}\n      branch: ${branch} — ${merged} — ${dirty}`;
-});
+// Every not-finished worktree keeps its full two-line entry; provably finished
+// ones (merged/detached, no real changes) fold into one counted line that still
+// names each. See formatSiblingReport in the lib for the exact rule.
+const lines = formatSiblingReport(siblings.map((s) => ({
+  path: s.path,
+  branchLabel: s.detached ? `(detached @ ${(s.head || "").slice(0, 8)})` : (s.branch || "(no branch)"),
+  // A detached HEAD is judged by the same ancestry test as a branch: only a
+  // commit origin/main already contains is finished (exact-SHA gpt-5.6-sol
+  // review of the first cut, MODERATE — a bare "detached" label folded unique
+  // detached work as done).
+  mergedLabel: mergedLabel(s.head),
+  dirt: dirtDetail(s.path),
+})));
 
 // Cheap fleet summary: count loop ledgers + parked migrations across ALL worktrees
 // (current included), deduped by filename — a tracked ledger exists in every checkout
@@ -308,9 +321,11 @@ try {
       }
     }
   }
+  // One clause per DISTINCT reason (naming the worktrees that share it), not one
+  // per worktree — 55 identical clauses were ~10KB of every session's context.
   fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedPaths.size)}` +
     (mainline.state === "unknown" || fallbackUnknownReasons.size > 0
-      ? `\nPARKED STATE UNKNOWN: ${[mainline.state === "unknown" ? mainline.reason : "", ...fallbackUnknownReasons].filter(Boolean).join("; ")}. Do not treat the parked count as a clean zero.`
+      ? `\nPARKED STATE UNKNOWN: ${groupUnknownReasons([mainline.state === "unknown" ? mainline.reason : "", ...fallbackUnknownReasons].filter(Boolean)).join("; ")}. Do not treat the parked count as a clean zero.`
       : "");
 } catch { fleetLine = ""; }
 

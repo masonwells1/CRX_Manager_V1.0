@@ -131,6 +131,14 @@ supabase/migrations/20260903150000_job_chemicals_persist_driver.sql text eol=lf
 scripts/smoke/prove-save-job-persist-driver.mjs text eol=lf
 scripts/smoke/fixtures/save-job-persist-driver-tests.sql text eol=lf
 
+# Ledger-backed commission history. The guarded apply binds the migration's exact
+# bytes, and its isolated prover mutates the artifact to demonstrate fail-closed
+# behavior. Pin the candidate and its proof inputs so Windows and Linux execute
+# the same reviewed release evidence.
+supabase/migrations/20260903150100_ledger_backed_commission_history.sql text eol=lf
+scripts/smoke/prove-commission-history-as-of.mjs text eol=lf
+scripts/smoke/smoke-commission-history-as-of.sql text eol=lf
+
 # save_job missing/null acreage candidate. Its body md5 is both an apply-time
 # replay pin and a postflight assertion; both disposable provers, the focused
 # fixture, and the permanent parity chain therefore execute the same evidence
@@ -191,6 +199,29 @@ scripts/schema-baseline-acl.sql text eol=lf
 supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql text eol=lf
 scripts/smoke/prove-number-generator-gates.mjs text eol=lf
 
+# Commission-history snapshot and replay guard. The guard compares an md5 of
+# the SQL-language body installed by the preceding snapshot migration, while
+# the disposable prover streams both source files verbatim into PostgreSQL.
+# Keep the SQL and proof inputs byte-identical across Windows and Linux.
+supabase/migrations/20260903230000_commission_report_snapshot_contract.sql text eol=lf
+supabase/migrations/20260905200000_commission_history_report_replay_guard.sql text eol=lf
+supabase/migrations/20260905210000_repair_commission_history_label_snapshots.sql text eol=lf
+supabase/migrations/20260905200200_refuse_stale_commission_payment_recipient.sql text eol=lf
+supabase/migrations/20260905200300_enforce_commission_payment_business_date.sql text eol=lf
+# 20260905200600 md5-pins its own installed balance-report body (postflight). It was the one
+# parked commission file with no pin here; on a CRLF checkout the snapshot-contract prover
+# installed a CRLF body and the migration refused its own postflight (found 2026-09-05).
+supabase/migrations/20260905200600_latest_commission_recipient_label.sql text eol=lf
+# 20260905200400 atomically installs six md5-pinned, Chicago-date function bodies
+# (two commission helpers and four source-document writers). Both dedicated PG17
+# proofs read it byte-for-byte; a CRLF checkout would change body hashes and make the
+# candidate refuse itself.
+supabase/migrations/20260905200400_commission_dates_follow_chicago_business_day.sql text eol=lf
+scripts/smoke/prove-commission-dates-chicago.mjs text eol=lf
+scripts/smoke/prove-document-dates-chicago.mjs text eol=lf
+scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf
+scripts/smoke/smoke-commission-report-snapshot-contract.sql text eol=lf
+scripts/smoke/prove-commission-history-label-repair.mjs text eol=lf
 # The invoice_date Chicago-fallback migration pins four live function bodies by md5 and
 # installs LF bodies; its prover reads it byte-for-byte. Pin both to LF on every platform.
 supabase/migrations/20260904160000_invoice_date_fallbacks_chicago.sql text eol=lf

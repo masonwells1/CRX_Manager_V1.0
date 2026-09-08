@@ -2758,6 +2758,30 @@ export default function JobDetail() {
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
       const savedJobIdForNotify = isNew ? result.job_id : (id as string);
 
+      // Fires HERE — at the commit point — not on the success path further down, because two
+      // fallible sub-writes below (the crew/loader .update() and the override applicator
+      // assignment) each toast 'Job created, but …' and RETURN. The job row has already
+      // committed on those paths, so ending there left a job booked for a possibly
+      // over-limit customer with NO operator warning and, worse, no notifyCreditLimitExceeded
+      // -> notifyAdmins row. A credit control that leaves no trace is absent, not weakened.
+      // (Pre-existing: neither exit ever reached the check, on main before #611 either.)
+      //
+      // Placed above every exit rather than repeated at each one: one call site cannot
+      // double-fire and cannot be forgotten when a third exit is added. Same reasoning as
+      // notifyDisplacedApplicators above, and the same shape QuoteBuilder already uses.
+      //
+      // UNGATED by stillOnThisJob() — it touches NO JobDetail state and writes a durable row
+      // (#611 / CRX-ENTITY-003). Fire-and-forget: warnIfOverCreditLimit swallows its own
+      // errors, so it can never break the save that already committed.
+      //
+      // CREATE ONLY, deliberately. check_customer_credit_limit sums the customer's UNPAID
+      // INVOICES (migration 20260712130000) — jobs are not invoices, so an UPDATE cannot
+      // change the figure it computes. Running it per-update would mint a duplicate admin
+      // notification on every save for an over-limit customer and train admins to ignore it.
+      if (isNew) {
+        void warnIfOverCreditLimit(customerId, toast);
+      }
+
       // Field-app parity #6 + #10: persist the ground crew AND the loader-worksheet
       // inputs (carrier rate + per-job tank-capacity override) via a direct
       // .update(). save_job's contract is frozen (6 args, one overload) and never
@@ -2934,11 +2958,6 @@ export default function JobDetail() {
         toast('success', onThisJob
           ? 'Job created'
           : `Job for ${createdForFarm || 'this customer'} created — find it in the jobs list`);
-        // UNGATED — warnIfOverCreditLimit touches NO JobDetail state. It writes a durable
-        // admin notification row (notifyCreditLimitExceeded -> notifyAdmins) and raises a
-        // toast from the app-level provider. Gating it silently skipped a credit control
-        // on an already-committed job; on main this warning always fired.
-        void warnIfOverCreditLimit(customerId, toast);
       } else if (onThisJob) {
         // GATED — for an UPDATE the record is already known to exist, so a late "Job saved"
         // carries no receipt, only the false impression that the job now on screen saved.

@@ -186,25 +186,36 @@ describe('Section 9 receiving reversal and AP reporting safety', () => {
       "CASE WHEN cm.status <> 'cancelled' THEN cm.commission_amount ELSE 0 END",
     );
 
+    // The CLIENT half moved on. This suite used to pin the fail-closed stopgap:
+    // Reports.tsx called get_commission_balance_report with today only, disabled the
+    // date controls, and footnoted that dated history did not exist yet. PR #592
+    // replaced all of that on main with a real ledger-backed report
+    // (20260903150100), so those pins now describe a screen that is gone. The
+    // migration assertions above still hold — that file is on disk and unedited —
+    // and what the screen must guarantee is re-pinned here against the design that
+    // actually shipped, rather than deleted.
     const reports = source('src', 'pages', 'Reports.tsx');
+    // 1. The requested cutoff can never exceed the business day. The RPC's own
+    //    future-date guard is Chicago-based, so an end date past today would fail
+    //    the report outright rather than show more.
     expect(reports).toContain(
-      "get_commission_balance_report', { p_as_of_date: todayInBusinessTz() }",
+      "const asOf = endDate && endDate < businessToday ? endDate : businessToday;",
     );
-    expect(reports).toContain('Commission Balance is current-state only on this screen.');
-    // The original banner said historical cutoffs were disabled "until immutable
-    // payout history exists". That history DOES now exist: the ledger-backed
-    // commission history went live on 2026-09-03 and `commission_history_cutover`
-    // reports `first_supported_date = 2026-09-04` (read-only live check,
-    // 2026-09-06). The screen still only requests today, which is correct and safe,
-    // but the old sentence had become a false statement about the database. Pin the
-    // retraction so it cannot silently return.
+    expect(reports).toContain(
+      "supabase.rpc('get_commission_history_report', { p_as_of_date: asOf })",
+    );
+    // 2. The screen must never show a number under a cutoff the SERVER did not
+    //    confirm. The payload's as_of_date is checked against what was asked for,
+    //    and the displayed date comes from that confirmation.
+    expect(reports).toContain('report.as_of_date !== asOf');
+    expect(reports).toContain('setCommissionAsOfDate(asOf);');
+    // 3. The stopgap's own claims must not come back. Both were false statements
+    //    about the database by the time they were removed.
     expect(reports).not.toContain('until immutable payout history exists');
-    // The banner alone let the date controls stay live while the report ignored
-    // them, so the screen showed a historical cutoff it never applied. Pin the
-    // disabling itself, not just the wording that describes it.
-    expect(reports).toContain(
-      "dateFilterBar(handleFinancialCSV, financialTab === 'commission_balance')",
-    );
-    expect(reports).toContain('const dateFilterBar = (onCSV: () => void, datesDisabled = false) =>');
+    expect(reports).not.toContain('Commission Balance is current-state only on this screen.');
+    // 4. Export must be blocked until a confirmed cutoff exists, or a CSV could be
+    //    written under a date the report never actually answered for.
+    expect(reports).toContain('if (!commissionExportReady) {');
+    expect(reports).toContain('commissionAsOfDate === commissionRequestedAsOf');
   });
 });
