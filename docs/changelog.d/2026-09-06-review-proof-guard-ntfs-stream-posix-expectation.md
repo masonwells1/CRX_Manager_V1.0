@@ -5,8 +5,11 @@ POSIX for every `::$DATA` name the operating system does not open. The Codex
 GitHub App reproduced the failure on Linux: the qualified name is absent there,
 but a name that lexically enters `.claude/session-state` fails closed when it does
 not resolve (there is nothing to read from a missing file), and a name carrying a
-proof basename such as `codex-review-abc.json` is denied before any resolution.
-Both are deliberate guard rules, so the Ubuntu correction-guard chain in CI failed
+proof basename such as `codex-review-abc.json` is denied either way. The order is
+resolution FIRST: `realpathSync.native` and `statSync` run before the proof-name
+check, so an absent proof name is classified `unresolvable` rather than `proof`.
+Both classifications deny, which is why the observable behaviour is the same.
+These are deliberate guard rules, so the Ubuntu correction-guard chain in CI failed
 on the test, not on the guard.
 
 The test now expects a denial when the operating system opens the qualified name
