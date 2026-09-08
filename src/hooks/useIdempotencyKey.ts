@@ -76,5 +76,19 @@ export function useIdempotencyKey(operation: string, userId: string, intentScope
     keysRef.current.delete(scopedKey(scopeValue));
   }, [scopedKey]);
 
-  return { getKey, resetKey, getKeyFor, resetKeyFor };
+  // True when a key was minted for this scope and never retired — i.e. an
+  // attempt went out and its outcome was never confirmed.
+  //
+  // Read it, do NOT mint: a caller that wants to know whether an outstanding
+  // attempt exists must not create one by asking. getKeyFor would mint on miss
+  // and turn the question into a new intent. The use for this is a caller that
+  // finds the record already in the post-condition it was trying to reach and
+  // has to decide whether that is someone else's change (refuse) or its own
+  // lost response (replay the retained key and redeem the receipt).
+  const hasKeyFor = useCallback(
+    (scopeValue: string): boolean => keysRef.current.has(scopedKey(scopeValue)),
+    [scopedKey],
+  );
+
+  return { getKey, resetKey, getKeyFor, resetKeyFor, hasKeyFor };
 }
