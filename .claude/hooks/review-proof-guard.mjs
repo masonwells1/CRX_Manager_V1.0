@@ -798,6 +798,8 @@ if (shellTool) {
   const PM_UPDATE_FAMILY = new Set(["update", "up", "upgrade", "udpate", "upgrade-interactive"]);
   const PM_MANIFEST_EDITORS = new Set(["init", "innit", "set-script"]);
   const PM_NO_MANIFEST_RE = /(?:^|\s)(?:--no-save|-g|--global|--location(?:=|\s+)global)(?=\s|$)/i;
+  const PM_VALUE_OPTIONS = new Set(["--prefix", "--cwd", "--dir", "--directory", "-C", "--registry", "--cache", "--userconfig", "--globalconfig", "--location", "--workspace", "-w", "--filter", "-F"]);
+  const PM_BOOLEAN_OPTIONS = new Set(["-g", "--global", "--no-save", "--silent", "-s", "--verbose", "--version", "-v", "--help", "-h"]);
   const packageManagerWritesManifest = (segment) => {
     const text = String(segment ?? "");
     const tokens = (text.match(/(?:"[^"]*"|'[^']*'|\S)+/g) || []).map((t) => t.replace(/["']/g, ""));
@@ -807,12 +809,22 @@ if (shellTool) {
     if (i >= tokens.length || !PACKAGE_MANAGER_RE.test(tokens[i])) return false;
     const manager = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
     const rest = tokens.slice(i + 1);
-    const subIndex = rest.findIndex((t) => !t.startsWith("-"));
-    if (subIndex < 0) return false;                                                   // bare `yarn`, `npm --version`
+    let subIndex = 0;
+    while (subIndex < rest.length && rest[subIndex].startsWith("-")) {
+      const option = rest[subIndex];
+      const name = option.split("=")[0];
+      if (PM_VALUE_OPTIONS.has(name)) subIndex += option.includes("=") ? 1 : 2;
+      else if (PM_BOOLEAN_OPTIONS.has(option)) subIndex += 1;
+      else return true; // Unknown leading options cannot hide the subcommand.
+    }
+    if (subIndex >= rest.length) return false;                                        // bare `yarn`, `npm --version`
     const sub = rest[subIndex].toLowerCase();
     const after = rest.slice(subIndex + 1);
     const positionals = after.filter((t) => !t.startsWith("-"));
-    const noManifest = PM_NO_MANIFEST_RE.test(text);
+    // A competing save/global option may override an earlier exemption. Refuse
+    // ambiguous combinations instead of assuming --no-save or -g always wins.
+    const competingSave = tokens.some((t) => /^(?:--save(?:[=-]|$)|-[SDEO]$|--global=|--location(?:=|$))/.test(t));
+    const noManifest = PM_NO_MANIFEST_RE.test(text) && !competingSave;
     if (PM_MANIFEST_EDITORS.has(sub)) return true;
     if (sub === "pkg") return (positionals[0] || "").toLowerCase() !== "get";
     if (sub === "version") return manager === "yarn" || after.length > 0;

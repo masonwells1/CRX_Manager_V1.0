@@ -688,6 +688,14 @@ for (const command of [
 // path-qualified heads, `corepack`, a VAR=value prefix and a preceding `cd &&` all deny.
 for (const command of [
   "npm install left-pad",
+  "npm --prefix . install left-pad",
+  "npm --prefix help install left-pad",
+  "npm --prefix=. install left-pad",
+  "pnpm --dir . add left-pad",
+  "npm --unknown-option value install left-pad",
+  "npm install left-pad --no-save --save",
+  "npm install left-pad --no-save --save-dev",
+  "npm install left-pad -g --global=false",
   "npm i left-pad@1.3.0",
   "npm install --save-dev left-pad",
   "npm add left-pad",
