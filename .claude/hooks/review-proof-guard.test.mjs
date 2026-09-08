@@ -272,8 +272,21 @@ allowed({ tool_name: "Bash", tool_input: { command: "bun pm cache" } });
 allowed({ tool_name: "Bash", tool_input: { command: "bun pm hash" } });
 allowed({ tool_name: "Bash", tool_input: { command: "bun pm whoami" } });
 allowed({ tool_name: "Bash", tool_input: { command: "bun pm" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack enable" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack prepare pnpm@9 --activate" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack pnpm@9 install" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack pnpm@9 run build" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack --version" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm install -g npm@latest" } });
 allowed({ tool_name: "Bash", tool_input: { command: "git worktree list" } });
 allowed({ tool_name: "Bash", tool_input: { command: "git worktree list --porcelain" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh pr view 605" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh pr checks 605" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh api repos/o/r/contents/.claude/hooks/review-proof-guard.mjs" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh -R owner/repo run view 1 --log | grep .husky/pre-push" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh gist view deadbeef" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh auth status" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh gist clone deadbeef /tmp/scratch" } });
 allowed({ tool_name: "Bash", tool_input: { command: "git worktree list; cat .claude/hooks/review-proof-guard.mjs" } });
 allowed({ tool_name: "Bash", tool_input: { command: "cd /c/repo && npm ci && npm run build" } });
 allowed({ tool_name: "Bash", tool_input: { command: "node scripts/regenerate-schema-registry.mjs --from-introspection /tmp/introspection.json" } });
@@ -669,6 +682,16 @@ for (const command of [
   "git worktree frobnicate .claude/skills/probe",
   "cd repo && git worktree add --detach .claude/skills/probe 0123abc",
   "git -C repo worktree add --detach .claude/skills/probe 0123abc",
+  // GitHub Codex P1 on c94e16dc7: `gh` sat whole in the read-only set, but `gist clone` and
+  // `repo clone` materialise files at the named directory and `download --dir` writes into it.
+  "gh gist clone deadbeef .claude/skills/probe",
+  "gh repo clone owner/repo .claude/skills/probe",
+  "gh -R owner/repo repo clone owner/repo .claude/skills/probe",
+  "gh run download 123 --dir .claude/hooks",
+  "gh release download v1 --dir .github/workflows",
+  "gh repo fork owner/repo --clone -- .claude/skills/probe",
+  "gh frobnicate .claude/hooks/review-proof-guard.mjs",
+  "cd repo && gh gist clone deadbeef .claude/skills/probe",
   "git grep --open-files-in-pager=rm pattern -- .husky/pre-push",
   "git grep -O rm pattern -- .github/workflows/ci.yml",
   "git -c core.pager=rm log .husky/pre-push",
@@ -807,6 +830,16 @@ for (const command of [
   "bun remove left-pad",
   "bun install left-pad",
   // Codex gpt-5.6-sol High on cbd986732: `pm` is a namespace; what follows it is classified.
+  // GitHub Codex P1 on c94e16dc7: `corepack use pnpm@latest` writes packageManager into
+  // package.json and installs; `pnpm@latest` is the manager under a versioned descriptor.
+  "corepack use pnpm@latest",
+  "corepack up",
+  "corepack pnpm@latest add left-pad",
+  "corepack yarn@4.1.0 remove left-pad",
+  "npx pnpm@9 install left-pad",
+  "pnpm@latest install left-pad",
+  "corepack frobnicate",
+  "cmd /c corepack use npm@10",
   "bun pm pkg set scripts.test=x",
   "bun pm pkg delete scripts.lint",
   "bun pm pkg fix",

@@ -553,6 +553,33 @@ if (shellTool) {
     }
     return null;
   };
+  // `gh` is a NAMESPACE, not a reader. GitHub Codex P1 on c94e16dc7, probe-confirmed:
+  // `gh gist clone <gist> [<dir>]` and `gh repo clone <repo> [<dir>]` materialise files at
+  // the named directory, `gh run download --dir` / `gh release download --dir` write into
+  // it, `gh repo fork --clone` and `gh extension install` write too, yet the whole
+  // command sat in the read-only set. Only an allowlist of READ verbs (view, list,
+  // status, checks, diff, watch, browse, search) or a read-only command (`api`,
+  // `search`, `status`, `browse`, `auth status`, `help`) is vouched for; any other
+  // verb, including one this rule has never heard of, is a writer of the paths it
+  // names (fail closed). Global options that take a value (`-R/--repo`, `--hostname`)
+  // are skipped so they cannot pose as the command word.
+  const GH_READ_COMMANDS = new Set(["api", "search", "status", "browse", "help", "version", "--version", "--help"]);
+  const GH_READ_VERBS = new Set(["view", "list", "ls", "status", "checks", "diff", "watch", "browse", "search", "help"]);
+  const GH_VALUE_OPTIONS = new Set(["-R", "--repo", "--hostname"]);
+  const ghIsReadOnly = (segment) => {
+    const tokens = String(segment).replace(/["'`]/g, " ").split(/\s+/).filter(Boolean).slice(1);
+    let i = 0;
+    while (i < tokens.length && tokens[i].startsWith("-")) {
+      const name = tokens[i].split("=")[0];
+      if (GH_VALUE_OPTIONS.has(name) && !tokens[i].includes("=")) i += 2; else i += 1;
+    }
+    const command = (tokens[i] || "").toLowerCase();
+    if (command === "") return true;                                   // bare `gh`
+    if (GH_READ_COMMANDS.has(command)) return true;
+    if (command === "auth") return (tokens[i + 1] || "").toLowerCase() === "status";
+    const verb = (tokens.slice(i + 1).find((t) => !t.startsWith("-")) || "").toLowerCase();
+    return GH_READ_VERBS.has(verb);
+  };
   const enforcementSegmentIsReadOnly = (segment) => {
     const raw = (String(segment).trim().match(/^([\w.:\\/-]+)/) || [])[1];
     if (!raw) return false;
@@ -596,6 +623,7 @@ if (shellTool) {
     // rule. `--pre-glob` only selects which files `--pre` applies to, but it is
     // meaningless without `--pre` and refusing it costs nothing.
     if (head === "rg" && /(?:^|\s)--(?:pre|pre-glob|hostname-bin)(?:[=\s]|$)/i.test(segment)) return false;
+    if (head === "gh" && !ghIsReadOnly(segment)) return false;
     if (head === "git") {
       // GIT CAN BE TOLD TO RUN A PROGRAM, and a read-only SUBCOMMAND does not stop
       // it. Seventh-round P1s, both reproduced by the reviewer deleting
@@ -816,7 +844,15 @@ if (shellTool) {
   // the cheaper failure: a value-taking flag before the package name (`--registry
   // <url>`) reads as a positional; bare `pnpm update` / `yarn upgrade` are refused
   // even where the lockfile alone would change. Use `--no-save` or edit package.json.
-  const PACKAGE_MANAGER_RE = /^(?:.*[/\\])?(?:npm|pnpm|yarn|bun)(?:\.cmd|\.exe|\.ps1)?$/i;
+  // A versioned DESCRIPTOR (`pnpm@latest`, `yarn@4.1.0`) is the same manager: Corepack and
+  // npx accept it in place of the bare name (GitHub Codex P1 on c94e16dc7).
+  const PACKAGE_MANAGER_RE = /^(?:.*[/\\])?(?:npm|pnpm|yarn|bun)(?:\.cmd|\.exe|\.ps1)?(?:@[^\s/\\]+)?$/i;
+  // Corepack itself: `corepack use <desc>` assigns the release to package.json and installs;
+  // `corepack up` rewrites the same field. `enable`/`disable`/`prepare`/`hydrate`/`pack`/
+  // `cache`/`install` touch the shim store, not the manifest. A subcommand in neither set is
+  // refused (fail closed); a manager descriptor after `corepack` is classified as a manager.
+  const COREPACK_MANIFEST_WRITERS = new Set(["use", "up"]);
+  const COREPACK_READ_OR_RUN = new Set(["enable", "disable", "prepare", "hydrate", "pack", "cache", "install", "help", "--version", "-v", "--help", "-h"]);
   const PM_ADD_FAMILY = new Set(["install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add", "a", "link", "ln"]);
   const PM_REMOVE_FAMILY = new Set(["uninstall", "unlink", "remove", "rm", "r", "un"]);
   const PM_UPDATE_FAMILY = new Set(["update", "up", "upgrade", "udpate", "upgrade-interactive"]);
@@ -857,7 +893,7 @@ if (shellTool) {
   const isWritingWord = (t) => PM_ADD_FAMILY.has(t) || PM_REMOVE_FAMILY.has(t) || PM_UPDATE_FAMILY.has(t)
     || PM_MANIFEST_EDITORS.has(t) || t === "pkg" || t === "version" || t === "audit";
   const classifyFrom = (tokens, i) => {
-    const manager = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
+    const manager = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").replace(/@.*$/, "").toLowerCase();
     const rest = tokens.slice(i + 1);
     let subIndex = 0;
     while (subIndex < rest.length && rest[subIndex].startsWith("-")) {
@@ -904,13 +940,37 @@ if (shellTool) {
     // `grep "npm add x"`) is refused too; reword it. Accepted residual, beyond any
     // lexical hook: arbitrary code (`npx <tool>`, `node -e`) can write any file — that
     // is what the exact-SHA Codex review and the parity test stand for.
+    // A descriptor that is an ARGUMENT of a Corepack subcommand (`corepack prepare pnpm@9
+    // --activate`, `corepack use pnpm@latest`) is not a manager invocation of its own; it is
+    // judged by the Corepack rule below, not classified as if `pnpm@9 --activate` had been run.
+    const corepackArgs = new Set();
     for (let i = 0; i < tokens.length; i += 1) {
-      if (PACKAGE_MANAGER_RE.test(tokens[i]) && classifyFrom(tokens, i)) return true;
+      const base = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
+      if (base !== "corepack") continue;
+      const subIndex = tokens.findIndex((t, k) => k > i && !t.startsWith("-"));
+      if (subIndex < 0) continue;
+      const sub = tokens[subIndex].toLowerCase();
+      if (!COREPACK_MANIFEST_WRITERS.has(sub) && !COREPACK_READ_OR_RUN.has(sub)) continue;
+      for (let k = subIndex + 1; k < tokens.length; k += 1) {
+        if (/^(?:npm|pnpm|yarn|bun)@/i.test(tokens[k])) corepackArgs.add(k);
+      }
+    }
+    for (let i = 0; i < tokens.length; i += 1) {
+      if (!corepackArgs.has(i) && PACKAGE_MANAGER_RE.test(tokens[i]) && classifyFrom(tokens, i)) return true;
+      const base = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
+      if (base === "corepack") {
+        const next = tokens.slice(i + 1).find((t) => !t.startsWith("-")) || "";
+        const sub = next.toLowerCase();
+        if (sub === "") continue;                                   // `corepack --version`
+        if (COREPACK_MANIFEST_WRITERS.has(sub)) return true;
+        if (PACKAGE_MANAGER_RE.test(next)) continue;                // the descriptor is classified on its own turn
+        if (!COREPACK_READ_OR_RUN.has(sub)) return true;            // unknown subcommand: fail closed
+      }
     }
     return false;
   };
   if (destructiveViews.some((v) => enforcementSegments(v).some(packageManagerWritesManifest))) {
-    deny("REVIEW PROOF GUARD: package-manager commands that rewrite package.json are blocked — `npm install <pkg>`, `npm uninstall`, `npm update`, `npm pkg set`, `npm version <bump>`, `npm init` and the pnpm/yarn/bun equivalents edit the scripts and dependency list that CI and husky run from without ever naming the file. Installing FROM the manifest stays allowed (`npm install`, `npm ci`, `pnpm install`, `yarn`), as do `--no-save`, `-g`, `npm run`, `npm test`, `npm pkg get`, `npm audit`, `npm ls`, `npm view`; a subcommand this rule does not know is refused rather than guessed. Add or remove a dependency deliberately through Edit/Write on package.json, where the permission tiers in .claude/settings.json decide; package.json is a risky path that cannot merge without the exact-SHA Codex proof.");
+    deny("REVIEW PROOF GUARD: package-manager commands that rewrite package.json are blocked — `npm install <pkg>`, `npm uninstall`, `npm update`, `npm pkg set`, `npm version <bump>`, `npm init` and the pnpm/yarn/bun equivalents edit the scripts and dependency list that CI and husky run from without ever naming the file. Installing FROM the manifest stays allowed (`npm install`, `npm ci`, `pnpm install`, `yarn`), as do `--no-save`, `-g`, `npm run`, `npm test`, `npm pkg get`, `npm audit`, `npm ls`, `npm view`; a subcommand this rule does not know is refused rather than guessed. `corepack use`/`corepack up` and a versioned descriptor (`pnpm@latest add x`) are the same writes under another name. Add or remove a dependency deliberately through Edit/Write on package.json, where the permission tiers in .claude/settings.json decide; package.json is a risky path that cannot merge without the exact-SHA Codex proof.");
   }
 }
 
