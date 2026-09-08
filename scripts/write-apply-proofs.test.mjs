@@ -17,6 +17,10 @@ test('proof revocation occurs before the wrapper resolves a reviewer executable'
   assert.ok(revocation >= 0, 'the wrapper revokes stale proof files');
   assert.ok(executableLookup >= 0, 'the wrapper still resolves the trusted reviewer executable');
   assert.ok(revocation < executableLookup, 'stale proofs are revoked before a fallible review setup step');
+  const harnessBinding = source.indexOf('assertProofHarnessMatchesHead();');
+  assert.ok(harnessBinding > revocation && harnessBinding < executableLookup,
+    'every proof helper is bound to committed candidate bytes before review setup');
+  assert.match(source, /proof harness dependency differs from committed candidate bytes/);
   assert.ok(source.includes('authoritativeMainCommit()'), 'reviewer policy is resolved from the fixed authoritative GitHub remote');
   assert.ok(source.includes('local origin/main does not match authoritative GitHub main'), 'a stale or rewritten local tracking ref cannot supply reviewer policy');
   const reviewerCall = source.indexOf('const { verdict, error } = runCodexCharter');

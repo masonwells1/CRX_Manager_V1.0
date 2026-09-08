@@ -76,7 +76,7 @@ const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 // while terminating or subverting the hook at startup. Silent completion means
 // ALLOW, so that would bypass every production-action restriction, not merely
 // the Codex App review check this PR added.
-const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib|protected-git)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|migration-proof-(?:evidence-hash|reviewer-launch|file-state)|migration-security-definer-guard|migration-routine-references|rpc-call-site-matcher|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
 // The same set, spelled out, for the glob matcher below: a wildcard token has
@@ -90,11 +90,18 @@ export const PROTECTED_HARNESS_FILES = Object.freeze([
   ".claude/hooks/codex-bot-review-lib.mjs",
   ".claude/hooks/review-proof-guard.mjs",
   ".claude/hooks/live-testdata-lib.mjs",
+  ".claude/hooks/protected-git.mjs",
   ".codex/hooks/production-action-guard.mjs",
   ".codex/hooks/codex-hook-adapter.mjs",
   "scripts/run-claude-review.mjs",
   "scripts/write-codex-push-proof.mjs",
   "scripts/write-apply-proofs.mjs",
+  "scripts/migration-proof-evidence-hash.mjs",
+  "scripts/migration-proof-reviewer-launch.mjs",
+  "scripts/migration-proof-file-state.mjs",
+  "scripts/migration-security-definer-guard.mjs",
+  "scripts/migration-routine-references.mjs",
+  "scripts/rpc-call-site-matcher.mjs",
   "scripts/overnight-codex-gate.mjs",
   "scripts/apply-live-testdata-maintenance-20260812.mjs",
   "package.json",

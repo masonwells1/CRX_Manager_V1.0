@@ -36,10 +36,14 @@ function isRpcAccess(node) {
   return ts.isElementAccessExpression(node) && staticString(node.argumentExpression) === 'rpc';
 }
 
-function isDynamicClientPropertyAccess(node) {
+function isKnownClientReceiver(node, clientAliases) {
+  const receiver = unwrapExpression(node);
+  return ts.isIdentifier(receiver) && clientAliases.has(receiver.text);
+}
+
+function isDynamicClientPropertyAccess(node, clientAliases) {
   return ts.isElementAccessExpression(node)
-    && ts.isIdentifier(unwrapExpression(node.expression))
-    && /^(?:client|supabase|db)$/i.test(unwrapExpression(node.expression).text)
+    && isKnownClientReceiver(node.expression, clientAliases)
     && staticString(node.argumentExpression) === null;
 }
 
@@ -51,10 +55,9 @@ function isReflectGetCall(node) {
     && node.expression.name.text === 'get';
 }
 
-function isIndirectReflectGetAccess(node) {
+function isIndirectReflectGetAccess(node, clientAliases) {
   return isReflectGetCall(node)
-    && ts.isIdentifier(unwrapExpression(node.arguments[0]))
-    && /^(?:client|supabase|db)$/i.test(unwrapExpression(node.arguments[0]).text);
+    && isKnownClientReceiver(node.arguments[0], clientAliases);
 }
 
 function directCallForAccess(access) {
@@ -78,6 +81,7 @@ function snapshotRpcUses(snapshot) {
   for (const file of applicationSourceFiles(snapshot)) {
     const text = snapshot.text(file);
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind(file));
+    const clientAliases = new Set(['client', 'supabase', 'db']);
     const addUnresolved = (node) => uses.push({
       file,
       text,
@@ -90,6 +94,10 @@ function snapshotRpcUses(snapshot) {
       continue;
     }
     const visit = (node) => {
+      if (ts.isVariableDeclaration(node)
+        && ts.isIdentifier(node.name)
+        && node.initializer
+        && isKnownClientReceiver(node.initializer, clientAliases)) clientAliases.add(node.name.text);
       if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && isRpcAccess(node)) {
         const call = directCallForAccess(node);
         if (!call) addUnresolved(node);
@@ -97,7 +105,7 @@ function snapshotRpcUses(snapshot) {
           const routine = staticString(call.arguments[0]);
           uses.push({ file, text, index: node.getStart(source), routine, unresolved: routine === null });
         }
-      } else if (isDynamicClientPropertyAccess(node) || isIndirectReflectGetAccess(node)) {
+      } else if (isDynamicClientPropertyAccess(node, clientAliases) || isIndirectReflectGetAccess(node, clientAliases)) {
         addUnresolved(node);
       } else if (
         ts.isBindingElement(node)

@@ -114,6 +114,9 @@ function collectPaths(root, stateDir) {
     'scripts/rpc-call-site-matcher.mjs',
     'scripts/migration-proof-evidence-hash.mjs',
     'scripts/migration-proof-reviewer-launch.mjs',
+    // This helper controls proof revocation and the authorization file paths;
+    // bind it into the same immutable evidence hash as the producer.
+    'scripts/migration-proof-file-state.mjs',
     '.claude/hooks/protected-git.mjs',
     normal(path.join(relativeStateDir, 'applied-migrations.json')),
   ]);

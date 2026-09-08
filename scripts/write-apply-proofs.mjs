@@ -24,7 +24,7 @@
 //   the caller's say-so is assertion, not evidence. The subagent reviewers
 //   still run per /migration-review (their findings drive the fix loop); the
 //   machine verdict here is what makes the stamped proof evidence.
-import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -44,7 +44,7 @@ import { securityDefinerMissingAnonRevokes } from './migration-security-definer-
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
 import { routineReferencesIn } from './migration-routine-references.mjs';
 import { applicationRpcCallSites, unresolvedApplicationRpcCallSites } from './rpc-call-site-matcher.mjs';
-import { invalidateMigrationProofs } from './migration-proof-file-state.mjs';
+import { acquireMigrationProofLock, invalidateMigrationProofs } from './migration-proof-file-state.mjs';
 
 const rawArgs = process.argv.slice(2);
 
@@ -87,6 +87,39 @@ mkdirSync(stateDir, { recursive: true });
 // (Codex round-4 review of PR #142: a proof naming reviewers that never ran let
 // a hands-free apply pass the two-reviewer requirement on say-so).
 const REQUIRED_REVIEWERS = ['rls-security-reviewer', 'migration-drift-reviewer'];
+const PROOF_HARNESS_PATHS = [
+  '.claude/hooks/protected-git.mjs',
+  'scripts/write-codex-push-proof.mjs',
+  'scripts/write-apply-proofs.mjs',
+  'scripts/migration-proof-evidence-hash.mjs',
+  'scripts/migration-security-definer-guard.mjs',
+  'scripts/migration-proof-reviewer-launch.mjs',
+  'scripts/migration-routine-references.mjs',
+  'scripts/rpc-call-site-matcher.mjs',
+  'scripts/migration-proof-file-state.mjs',
+];
+
+// The production-action hook denies Codex edits to this list. Comparing the
+// on-disk bytes with HEAD also rejects an uncommitted filesystem replacement
+// before this producer can use it to launch or validate a review.
+function assertProofHarnessMatchesHead() {
+  const git = fixedGitExecutable();
+  for (const relative of PROOF_HARNESS_PATHS) {
+    const committed = spawnSync(git, ['--no-replace-objects', 'show', `HEAD:${relative}`], {
+      cwd: process.cwd(), encoding: 'buffer', shell: false, windowsHide: true,
+      env: protectedGitEnv(), timeout: GIT_CALL_TIMEOUT_MS,
+    });
+    if (committed.status !== 0 || !Buffer.isBuffer(committed.stdout)) {
+      throw new Error(`could not read committed proof harness dependency ${relative}`);
+    }
+    let onDisk;
+    try { onDisk = readFileSync(relative); }
+    catch { throw new Error(`proof harness dependency is missing from the working tree: ${relative}`); }
+    if (!onDisk.equals(committed.stdout)) {
+      throw new Error(`proof harness dependency differs from committed candidate bytes: ${relative}`);
+    }
+  }
+}
 
 // The candidate must never supply the instructions that decide whether it is
 // safe. Read both reviewer charters from protected origin/main with the same
@@ -503,10 +536,15 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe, evidence, cha
 
 for (const name of names) {
   const safe = name.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80);
+  let completed = false;
+  let proofLock;
+  try {
+    proofLock = acquireMigrationProofLock(stateDir, safe);
   // Revoke an earlier authorization before any setup or reviewer operation can
   // fail. A blocked re-review must fail closed instead of leaving old clean
   // proofs available to the apply guard.
   const { reviewerFile, codexFile } = invalidateMigrationProofs(stateDir, safe);
+  assertProofHarnessMatchesHead();
   let codexBin;
   try {
     codexBin = codexExecutable();
@@ -633,6 +671,16 @@ for (const name of names) {
     { encoding: 'utf8' },
   );
   console.log(`wrote ${codexFile} (all reviewer charters returned CLEAN machine verdicts from ${CODEX_REVIEW_MODEL}/${CODEX_REVIEW_EFFORT})`);
+  completed = true;
+  } catch (error) {
+    console.error(`ERROR: could not start or complete migration proof review for ${name}: ${error.message || error}. NO proofs minted.`);
+    exitCode = 1;
+  } finally {
+    // Any failed re-review revokes again, so a prior clean pair cannot remain
+    // usable after a later attempt was blocked or raised an exception.
+    if (!completed) invalidateMigrationProofs(stateDir, safe);
+    proofLock?.release();
+  }
 }
 
 process.exit(exitCode);
