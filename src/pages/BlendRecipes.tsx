@@ -411,7 +411,7 @@ export default function BlendRecipes() {
           throw duplicateError;
         }
         duplicateRecipeIdem.resetKeyFor(intentScope);
-        duplicateUnresolved.clear();
+        duplicateUnresolved.clear(intentScope);
       },
       toast,
       successMessage: 'Recipe duplicated',

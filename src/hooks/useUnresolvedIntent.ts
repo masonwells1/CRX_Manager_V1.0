@@ -30,38 +30,58 @@ import { isDefinitiveRpcRejection } from '../lib/idempotency';
  * this guard exists to protect.
  */
 export function useUnresolvedIntent() {
-  const scopeRef = useRef<string | null>(null);
-  // Mirrors the ref so a frozen form can render its own banner. The ref is what
-  // the guard reads: it is set synchronously, and two clicks can land inside one
+  // A SET of unresolved scopes, not one slot. Two operations on the same screen can
+  // be outstanding at once: the in-flight guards on these pages are keyed per row, so
+  // they stop a double-click on ONE row and nothing else. With a single slot the last
+  // callback to finish won — a success on row B called clear() and silently lifted
+  // row A's freeze, and an edited retry of A then minted a fresh key and re-applied
+  // work that may already have committed. CodeRabbit found that on BlendRecipes.
+  // Every unresolved scope now holds its own freeze until THAT scope is settled.
+  const scopesRef = useRef<Set<string>>(new Set());
+  // Mirrors the ref so a frozen form can render its own banner. The ref is what the
+  // guard reads: it is updated synchronously, and two clicks can land inside one
   // render window.
-  const [unresolvedScope, setUnresolvedScope] = useState<string | null>(null);
+  const [unresolvedScopes, setUnresolvedScopes] = useState<readonly string[]>([]);
+
+  const publish = useCallback((): void => {
+    setUnresolvedScopes([...scopesRef.current]);
+  }, []);
 
   const mark = useCallback((scope: string): void => {
-    scopeRef.current = scope;
-    setUnresolvedScope(scope);
-  }, []);
+    scopesRef.current.add(scope);
+    publish();
+  }, [publish]);
 
   /** Record the outcome of a failed attempt: uncertain ones freeze the payload. */
   const markIfUncertain = useCallback((scope: string, error: unknown): void => {
     if (isDefinitiveRpcRejection(error)) return;
-    scopeRef.current = scope;
-    setUnresolvedScope(scope);
-  }, []);
+    scopesRef.current.add(scope);
+    publish();
+  }, [publish]);
 
   /**
-   * Clear the freeze. Call ONLY after a confirmed success, a definitive refusal,
-   * or an authoritative reload that settled what the outstanding attempt did.
+   * Settle ONE outstanding attempt, named by its scope.
+   *
+   * The scope argument is required, and that is the guard rather than a formality:
+   * a caller may only lift the freeze it is itself responsible for. The previous
+   * signature took no argument and cleared everything, so a confirmed success on one
+   * row lifted the freeze on a DIFFERENT row whose outcome was still unknown. Making
+   * this parameter mandatory means the type-checker refuses any call site that cannot
+   * say which attempt it just settled.
+   *
+   * Call ONLY after a confirmed success, a definitive refusal, or an authoritative
+   * reload that settled what that outstanding attempt did.
    */
-  const clear = useCallback((): void => {
-    scopeRef.current = null;
-    setUnresolvedScope(null);
-  }, []);
+  const clear = useCallback((scope: string): void => {
+    scopesRef.current.delete(scope);
+    publish();
+  }, [publish]);
 
   /**
-   * Refuse an EDITED submission for as long as the earlier attempt is unresolved.
-   * A faithful retry -- the same scope -- is never refused: replaying the identical
-   * request redeems the receipt instead of repeating the work, and is the only safe
-   * way forward that does not require a reload.
+   * Refuse an EDITED submission for as long as an earlier attempt is unresolved.
+   * A faithful retry -- a scope that is itself unresolved -- is never refused:
+   * replaying the identical request redeems the receipt instead of repeating the
+   * work, and is the only safe way forward that does not require a reload.
    *
    * There is deliberately NO acknowledgement escape. Two earlier versions had one and
    * both were wrong in the same direction:
@@ -77,15 +97,22 @@ export function useUnresolvedIntent() {
    * The cost is that an operator with an unresolved attempt must reload before making
    * a DIFFERENT change on that screen. That is the correct instruction anyway: while
    * an attempt is unresolved nobody knows whether it applied, and a reload is what
-   * answers that. `clear()` lifts the freeze on a confirmed success, a definitive
-   * refusal, or a reload that settled the outstanding attempt.
+   * answers that. `clear(scope)` lifts the freeze on a confirmed success, a definitive
+   * refusal, or a reload that settled that attempt.
    */
   const refuseEdited = useCallback((scope: string): boolean => {
-    if (scopeRef.current === null || scopeRef.current === scope) return false;
-    return true;
+    if (scopesRef.current.size === 0) return false;
+    return !scopesRef.current.has(scope);
   }, []);
 
-  return { unresolvedScope, isFrozen: unresolvedScope !== null, mark, markIfUncertain, clear, refuseEdited };
+  return {
+    unresolvedScopes,
+    isFrozen: unresolvedScopes.length > 0,
+    mark,
+    markIfUncertain,
+    clear,
+    refuseEdited,
+  };
 }
 
 /** Shown when an edited payload is refused because an earlier attempt is unresolved. */

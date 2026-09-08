@@ -53,7 +53,7 @@ describe('useUnresolvedIntent', () => {
     act(() => result.current.mark('adjust:widget:10'));
     expect(result.current.refuseEdited('adjust:widget:25')).toBe(true);
 
-    act(() => result.current.clear());
+    act(() => result.current.clear('adjust:widget:10'));
     expect(result.current.isFrozen).toBe(false);
     // Nothing is unresolved, so nothing is refused.
     expect(result.current.refuseEdited('adjust:widget:99')).toBe(false);
@@ -70,7 +70,7 @@ describe('useUnresolvedIntent', () => {
     act(() => result.current.markIfUncertain('hold:widget:5', new TypeError('Failed to fetch')));
     expect(result.current.isFrozen).toBe(true);
 
-    act(() => result.current.clear());
+    act(() => result.current.clear('hold:widget:5'));
 
     // A PostgREST rejection with a real status DID answer: the work did not happen, so
     // the operator is free to edit and resend without a warning.
@@ -94,5 +94,53 @@ describe('useUnresolvedIntent', () => {
       result.current.mark('adjust:widget:10');
       expect(result.current.refuseEdited('adjust:widget:25')).toBe(true);
     });
+  });
+
+  it('keeps one row frozen when a DIFFERENT row succeeds', () => {
+    const { result } = renderHook(() => useUnresolvedIntent());
+
+    // The failure CodeRabbit found on BlendRecipes. The in-flight guard on these
+    // screens is keyed per row, so duplicating recipe B and recipe A overlap freely.
+    // A finishes ambiguously and freezes; B then finishes successfully. Under the
+    // previous single-slot design B's clear() wiped A's freeze, an edited retry of A
+    // sailed through refuseEdited, minted a fresh key, and created a second copy of a
+    // recipe that may already have been duplicated.
+    act(() => result.current.markIfUncertain('duplicate:A:v1', new TypeError('Failed to fetch')));
+    act(() => result.current.clear('duplicate:B:v1'));
+
+    expect(result.current.isFrozen).toBe(true);
+    // An edited retry of A is still refused, which is the whole point.
+    expect(result.current.refuseEdited('duplicate:A:v2')).toBe(true);
+    // A faithful retry of A is still allowed.
+    expect(result.current.refuseEdited('duplicate:A:v1')).toBe(false);
+
+    // Only settling A itself lifts A's freeze.
+    act(() => result.current.clear('duplicate:A:v1'));
+    expect(result.current.isFrozen).toBe(false);
+    expect(result.current.refuseEdited('duplicate:A:v2')).toBe(false);
+  });
+
+  it('holds every concurrently unresolved scope, and settles them one at a time', () => {
+    const { result } = renderHook(() => useUnresolvedIntent());
+
+    // Two rows can both end up unresolved: they were both already in flight.
+    act(() => {
+      result.current.markIfUncertain('duplicate:A:v1', new TypeError('Failed to fetch'));
+      result.current.markIfUncertain('duplicate:B:v1', new TypeError('Failed to fetch'));
+    });
+
+    // Each faithful retry is allowed; anything edited is refused.
+    expect(result.current.refuseEdited('duplicate:A:v1')).toBe(false);
+    expect(result.current.refuseEdited('duplicate:B:v1')).toBe(false);
+    expect(result.current.refuseEdited('duplicate:A:v2')).toBe(true);
+
+    act(() => result.current.clear('duplicate:A:v1'));
+    // B is still outstanding, so the screen stays frozen for everything but B.
+    expect(result.current.isFrozen).toBe(true);
+    expect(result.current.refuseEdited('duplicate:A:v1')).toBe(true);
+    expect(result.current.refuseEdited('duplicate:B:v1')).toBe(false);
+
+    act(() => result.current.clear('duplicate:B:v1'));
+    expect(result.current.isFrozen).toBe(false);
   });
 });

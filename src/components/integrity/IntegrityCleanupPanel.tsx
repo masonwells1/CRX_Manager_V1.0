@@ -411,7 +411,7 @@ export default function IntegrityCleanupPanel() {
       // Before resetKeyFor, deliberately: the next two statements are pinned as an
       // ADJACENT pair (retire the receipt, then drop the row from the screen), and
       // a line inserted between them would break that guard.
-      reconcileUnresolved.clear();
+      reconcileUnresolved.clear(scope);
       reconcileIdem.resetKeyFor(scope);
       // Drop the reconciled row LOCALLY, before the refresh and independently of
       // whether it succeeds. The receipt was just retired one line above, so

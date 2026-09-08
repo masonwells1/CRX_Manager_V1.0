@@ -747,6 +747,15 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       return;
     }
     if (step === 5) {
+      // handleUpload bails out when the signed-in profile has not loaded yet, but step 6
+      // is the progress screen: it has no Back button and its Next button is disabled, so
+      // advancing first strands the operator on "Importing field 0 of 0" with cancelling
+      // the whole dialog as the only way out. Check the same condition BEFORE the step
+      // changes, so the review step stays on screen and the import can be retried.
+      if (!profile) {
+        toast('error', 'Your account is still loading. Wait a moment and try again.');
+        return;
+      }
       setStep(6);
       handleUpload();
       return;

@@ -445,7 +445,7 @@ export default function InventoryPage() {
       throw holdError;
     }
     createHoldIdem.resetKeyFor(scope);
-    holdUnresolved.clear();
+    holdUnresolved.clear(scope);
   };
 
   const handleCreateHold = async () => {
@@ -757,7 +757,7 @@ export default function InventoryPage() {
         }
         assertRpcResult(data, 'adjust_inventory');
         adjustIdem.resetKeyFor(scope);
-        adjustUnresolved.clear();
+        adjustUnresolved.clear(scope);
       },
       toast,
       successMessage: `Adjusted by ${qty} units`,
