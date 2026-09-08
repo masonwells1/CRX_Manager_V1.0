@@ -43,9 +43,10 @@ in `PurchaseOrderDetail.tsx`.
    run inside the test that started it. In the mid-flight test this also means PO A's
    tail has fully played out before PO B's header is allowed to answer, which is the
    collision the test exists to stage.
-3. An `afterEach` **hard guard**: if `receive_po_items` was called in a test and its
-   success toast was not observed before the test returned, the test fails with a message
-   naming `awaitReceiveSettled()`. The guard unmounts the page first, because a throwing
+3. An `afterEach` **hard guard**: if `receive_po_items` answered in a test and the
+   receive handler had not settled before the test returned, the test fails with a message
+   naming `awaitReceiveSettled()`. (First written as "called" / "success toast observed";
+   see the Codex findings below for why both halves changed.) The guard unmounts the page first, because a throwing
    hook stops Testing Library's own cleanup hook and turns one clear failure into a
    cascade of "found multiple elements" in the tests that follow.
 
@@ -92,28 +93,46 @@ what happened here: the door screen for `fetchReceivingHistory` was the last gua
 added, and it carried this one. Treat both post-await route checks as deliberately kept
 and untested; do not delete either because "all tests stay green".
 
-### Codex review finding (PR #636, P2) — fixed
+### Codex review findings (PR #636, two P2s) — both fixed
 
-Codex pointed out that the guard keyed off "the receive RPC was **called**", so a test
-that deliberately parks `receive_po_items` and never answers it (the case the guard's own
-message said was allowed) would always be failed by the guard. Correct: the Vitest mock
-records the call at invocation, and a parked receive can never raise the success toast.
+**1. Called is not answered.** The guard keyed off "the receive RPC was **called**", so
+a test that deliberately parks `receive_po_items` and never answers it (the case the
+guard's own message said was allowed) would always be failed by the guard. Correct: the
+Vitest mock records the call at invocation. Fix: the harness `rpc` wrapper — the one
+place every mocked RPC passes through, including one a test re-mocks to hold open — now
+records when the receive RPC **answers**, and the guard keys off that. A parked receive
+has no tail to leak; only an answered one does.
 
-Fix, still test-file only: the harness `rpc` wrapper — the one place every mocked RPC
-passes through, including one a test re-mocks to hold open — now records when the
-receive RPC **answers**, and the guard keys off that. A parked receive has no tail to
-leak; only an answered one does. The guard message now says so.
+**2. Settled is not "success toast".** "Settled" was defined as the success toast having
+been raised, so a receive that legitimately ends another way — the page's
+`completedElsewhere` path raises a **warning** and no success toast; a failed RPC raises
+an **error** — could never satisfy the guard, and `awaitReceiveSettled()` could only time
+out. The suite's stand-in for `runCriticalAction` had the same blind spot: it had no
+`catch`, so a receive that threw became an unhandled rejection instead of the error toast
+the real helper raises. Fix: that stand-in now mirrors the real helper (a thrown action
+becomes an error toast) and, in `finally`, records that the receive handler **settled**
+— it encloses the whole handler, RPC through refetches and whichever toast, so its return
+is terminal completion independent of outcome. `receiveSettled()` and
+`awaitReceiveSettled()` read that flag; the success-toast string is no longer load-bearing
+in the harness.
 
-Proof:
+Both flags live on the hoisted `mocks.receive` object and are reset in `beforeEach`.
+Still test-file only.
 
-- Backwards: a temporary test that parks the receive for the whole test passes under
-  the new guard (12/12) and fails under the old condition (1 failed / 11 passed, the
+Proof (final harness):
+
+- Backwards, finding 1: a temporary test that parks the receive for the whole test
+  passes under the answered-based guard and fails under the called-based condition (the
   probe only).
+- Backwards, finding 2: a temporary test whose receive RPC answers with an error, then
+  waits for settle, passes under the final harness (13/13 with both probes) and fails
+  under the previous commit (`awaitReceiveSettled()` times out, plus an unhandled
+  rejection from the stand-in).
 - Forwards: with test 1's `awaitReceiveSettled()` removed under full-suite load, the
   guard still fails that test 3 of 3 times, and only that test.
 - File 3/3 green unloaded; `eslint` and `tsc --noEmit` clean.
-- Mutation table re-run against this version of the harness: identical result, 10 of
-  11 red on the same tests, the same single green row.
+- Mutation table re-run against the final harness: identical result, 10 of 11 red on
+  the same tests, the same single green row.
 
 ### Not verified
 

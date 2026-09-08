@@ -58,6 +58,10 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
   resetKey: vi.fn(),
   rpc: vi.fn(),
+  // Lifecycle of the receive in the CURRENT test. `answered`: the receive RPC
+  // has answered (not merely been called). `settled`: the whole receive
+  // handler has finished, whatever its outcome. Reset in beforeEach.
+  receive: { answered: false, settled: false },
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -81,10 +85,25 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
 vi.mock('../lib/criticalAction', () => ({
   runCriticalAction: async (options: {
     action: () => Promise<unknown>;
+    toast: (kind: 'success' | 'error' | 'info' | 'warning', message: string) => void;
     onSuccess?: (result: unknown) => void;
+    sentryTag?: string;
   }) => {
-    const result = await options.action();
-    options.onSuccess?.(result);
+    try {
+      const result = await options.action();
+      options.onSuccess?.(result);
+      return result;
+    } catch (error) {
+      // As the real helper does: a failed action becomes an error toast, not
+      // an unhandled rejection, so a receive that fails still settles.
+      options.toast('error', error instanceof Error ? error.message : String(error));
+      return undefined;
+    } finally {
+      // This wrapper encloses the WHOLE receive handler -- RPC, IndexedDB
+      // resolve, PDF import, refetches, and the success/warning/error toast --
+      // so its completion is "the receive settled", whatever the outcome was.
+      if (options.sentryTag === 'receive_po_items') mocks.receive.settled = true;
+    }
   },
 }));
 
@@ -419,33 +438,27 @@ async function loadPo(poId: string) {
   await release(`history:${poId}`);
 }
 
-const RECEIVE_SUCCESS_TOAST = 'Items received and inventory updated';
-
-// Set when the receive RPC has ANSWERED in the current test, not merely been
-// called. A receive whose RPC is parked forever has no tail to leak; only an
-// answered one does. Reset in beforeEach, recorded by the harness rpc wrapper.
-let receiveAnswered = false;
-
+/** The whole receive handler has finished in this test, whatever its outcome. */
 function receiveSettled() {
-  return mocks.toast.mock.calls.some(
-    ([kind, message]) => kind === 'success' && message === RECEIVE_SUCCESS_TOAST,
-  );
+  return mocks.receive.settled;
 }
 
 /**
- * Wait for a receive that has been allowed to complete to actually finish.
+ * Wait for a receive whose RPC has been allowed to answer to actually finish.
  *
  * The RPC answering is not the end of the receive: the handler then resolves
- * the durable intent in IndexedDB, dynamically imports the PDF module and only
- * then raises the success toast. Locally that tail lands inside the same
- * act() that released the RPC; on a loaded CI runner it lands AFTER the test
- * has returned. The toast mock is shared by every test in this file, so a
- * straggling success toast is then counted by the NEXT test -- and
+ * the durable intent in IndexedDB, dynamically imports the PDF module,
+ * refetches, and only then raises its toast. Locally that tail lands inside
+ * the same act() that released the RPC; on a loaded CI runner it lands AFTER
+ * the test has returned. The toast mock is shared by every test in this file,
+ * so a straggling toast is then counted by the NEXT test -- and
  * `submitReceive` reads any toast as "the receive reached an outcome", stops
  * sampling before the RPC has fired, and returns undefined. That is the flake
  * seen on PR #605 (run 34199500247, attempt 1). Every test that lets a receive
- * complete must observe this toast before it ends; the afterEach below
- * enforces it.
+ * answer must wait for the handler to settle before it ends; the afterEach
+ * below enforces it. "Settled" is the critical-action wrapper returning, so
+ * a receive that ends in a warning (completed elsewhere) or an error toast
+ * settles just like a successful one.
  */
 async function awaitReceiveSettled() {
   await waitFor(() => expect(receiveSettled()).toBe(true), { timeout: 5000 });
@@ -494,7 +507,7 @@ describe('PurchaseOrderDetail route-currency race', () => {
     // let the leak surface as a flake somewhere else in the file. A receive
     // whose RPC was called but never answered (parked for the whole test) is
     // fine: nothing runs after an answer that never comes.
-    if (receiveAnswered && !receiveSettled()) {
+    if (mocks.receive.answered && !receiveSettled()) {
       throw new Error(
         'The receive_po_items RPC answered in this test, but the test returned before '
           + 'the receive settled. Call awaitReceiveSettled() before the test ends (or '
@@ -507,7 +520,8 @@ describe('PurchaseOrderDetail route-currency race', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pending.length = 0;
-    receiveAnswered = false;
+    mocks.receive.answered = false;
+    mocks.receive.settled = false;
     window.localStorage.clear();
     window.sessionStorage.clear();
     // The receive path records a durable mutation intent in IndexedDB before it
@@ -547,7 +561,7 @@ describe('PurchaseOrderDetail route-currency race', () => {
         // opposed to being called). The afterEach guard keys off that.
         if (name === 'receive_po_items') {
           const markAnswered = () => {
-            receiveAnswered = true;
+            mocks.receive.answered = true;
           };
           Promise.resolve(result).then(markAnswered, markAnswered);
         }
