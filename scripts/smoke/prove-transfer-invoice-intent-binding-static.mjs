@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const migrations = path.join(root, 'supabase', 'migrations');
-const filename = '20260908120000_bind_transfer_invoice_intent.sql';
+const filename = '20260908130800_bind_transfer_invoice_intent.sql';
 const source = fs.readFileSync(path.join(migrations, filename), 'utf8');
 const wrapper = source.slice(source.indexOf('CREATE OR REPLACE FUNCTION public.transfer_job_to_invoice('));
 const bodyMd5 = (pattern, label) => {
@@ -51,7 +51,7 @@ for (const prerequisite of cohort) {
   assert(filename.slice(0, 14) > prerequisite.slice(0, 14), `${filename} must order after ${prerequisite}`);
   assert(fs.existsSync(path.join(migrations, prerequisite)), `missing commission prerequisite ${prerequisite}`);
 }
-assert(filename < '20260908130000_repair_commission_history_label_snapshots.sql', 'transfer wrapper must precede the tail repair');
+assert(filename < '20260908130900_repair_commission_history_label_snapshots.sql', 'transfer wrapper must precede the tail repair');
 
 assert.match(source, /md5\(v_public_src\).*85cd07a0a6b978cb066edab7df369fea/s, 'first apply pins Chicago preimage');
 assert.match(source, /md5\(p\.prosrc\).*edc73be809069669e8441eba7acf443d/s, 'helper body pin is present');

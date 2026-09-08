@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Upload,
   CheckCircle,
@@ -153,6 +153,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // Step 6: Upload progress
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
+  const uploadInFlightRef = useRef(false);
 
   // Step 7: Results
   // `created` counts every row that reached the database, INCLUDING rows counted as failed
@@ -183,6 +184,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   };
 
   const handleClose = () => {
+    // The import pipeline is intentionally not cancellable once it starts:
+    // closing would let the old session mutate a newly opened dialog and call
+    // onSuccess for the wrong session. Keep every dismissal path disabled
+    // until the current upload has reached its terminal result screen.
+    if (uploadInFlightRef.current) return;
     // Reset all state
     setStep(1);
     setFiles([]);
@@ -453,9 +459,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // ─── Step 6: Upload ─────────────────────────────────────────────────
 
   const handleUpload = async () => {
+    if (!profile || uploadInFlightRef.current) return;
     const validFields = parsedFields.filter((f) => f.isValid);
     if (validFields.length === 0) return;
 
+    uploadInFlightRef.current = true;
     setUploading(true);
     setUploadProgress({ current: 0, total: validFields.length });
 
@@ -503,12 +511,42 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           is_active: true,
         };
 
+        // A FRESH KEY PER CALL, deliberately -- the same thing `main` does.
+        //
+        // This screen ran three RPCs per row behind RETAINED, content-derived
+        // idempotency keys so a lost response could be replayed. Every version of that
+        // scheme was found to corrupt a DIFFERENT field, and the reason is structural
+        // rather than a bug to be patched out:
+        //
+        //   * Keyed on the payload alone, two rows with the same customer, name and
+        //     stated acreage but different ground share a key. save_field replays,
+        //     hands back the first row's id, and this row's boundary write overwrites
+        //     that field's map.
+        //   * Keyed on the payload AND the geometry, a corrected boundary changes the
+        //     key -- so re-importing one fixed row creates a SECOND field.
+        //
+        // Those two cases are textually identical: same customer, same name, same
+        // payload, different geometry. Nothing computable from the row can tell "this
+        // is a correction of that field" from "this is a different field", so no
+        // client-side identity is sound. Settled 2026-09-05 after two independent
+        // gpt-5.6-sol rounds, and re-confirmed here after CodeRabbit and the Codex bot
+        // each found a fresh corruption path in a fresh scheme.
+        //
+        // A per-call UUID means a retry DUPLICATES instead of replaying. That is the
+        // safer failure: a duplicate field is visible in the list and an admin can
+        // delete it, while a rewritten boundary is silent data loss on a field that
+        // imported correctly. The results screen already tells the operator not to
+        // re-import the whole file and which rows had an unknown outcome.
+        //
+        // The real fix is server-side: one atomic RPC creating field + boundary +
+        // override in a single transaction with actor- and payload-bound idempotency.
+        // That is a migration and it is Mason's call, tracked as an open follow-up.
         saveOutcome = 'unknown';
         const { data: fieldId, error: saveError, status: saveStatus } = await supabase.rpc('save_field', {
           p_field_id: (null as string | null) as string,
           p_field_payload: fieldPayload,
           p_billing_defaults: [],
-          p_performed_by: profile!.id,
+          p_performed_by: profile.id,
           p_idempotency_key: crypto.randomUUID(),
         });
 
@@ -526,8 +564,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             : `"${pf.field_name}": ${reason}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
           saveOutcome = 'committed';
-          // save_field has COMMITTED. Count the row as created before anything else can fail, so
-          // a later boundary or override failure still reports the field as existing.
+          // save_field has COMMITTED. Count the row as created before anything else can fail,
+          // so a later boundary or override failure still reports the field as existing.
+          //
+          // Every call carries a fresh key, so nothing here is ever a replay: two identical
+          // rows create two fields. That is the visible, recoverable failure this screen
+          // deliberately prefers — see the note on the save_field call above.
           created++;
           // Persist the boundary via the server-authoritative acreage RPC — it measures the
           // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
@@ -542,7 +584,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             const { data: bData, error: bErr, status: bStatus } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
               p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
-              p_performed_by: profile!.id,
+              p_performed_by: profile.id,
               p_idempotency_key: crypto.randomUUID(),
             });
             if (bErr) {
@@ -581,18 +623,32 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               if (!isAcreInBand(pf.stated_acres)) {
                 warnings.push(`"${pf.field_name}": the file's ${pf.stated_acres} ac is outside the allowed ${ACRE_BAND_MIN}–${ACRE_BAND_MAX} acre range — billing on the measured ${pf.full_acres} ac instead.`);
               } else {
+                // Same rule as save_field and the boundary: once the request is
+                // sent, the override may have committed, and only a response that
+                // proves PostgreSQL rolled back makes "billing on the measured
+                // acres" a true statement. Reporting a lost response as a plain
+                // failure told the operator the file's acreage was NOT applied
+                // when it may well have been -- and billable acres is the number
+                // the invoice multiplies.
+                let overrideUnknown = true;
                 try {
-                  const { data: ovData, error: ovErr } = await supabase.rpc('set_field_override_acres', {
+                  const { data: ovData, error: ovErr, status: ovStatus } = await supabase.rpc('set_field_override_acres', {
                     p_field_id: fieldId,
                     p_override_acres: pf.stated_acres,
-                    p_performed_by: profile!.id,
+                    p_performed_by: profile.id,
                     p_idempotency_key: crypto.randomUUID(),
                   });
-                  if (ovErr) throw ovErr;
+                  if (ovErr) {
+                    if (rpcDefinitelyRolledBack(ovStatus, ovErr)) overrideUnknown = false;
+                    throw ovErr;
+                  }
                   assertRpcResult(ovData, 'set_field_override_acres');
+                  overrideUnknown = false;
                 } catch (ovError: unknown) {
                   const msg = sanitizeError(ovError);
-                  warnings.push(`"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
+                  warnings.push(overrideUnknown
+                    ? `"${pf.field_name}": imported, but we never learned whether the file's ${pf.stated_acres} ac became the billable acres (${clampReason(msg)}). Check this field's billable acres before invoicing it.`
+                    : `"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
                 }
               }
             }
@@ -642,6 +698,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     setResults({ success, failed, created, unknownOutcome, errors, warnings });
     setStep(7);
     setUploading(false);
+    // main moved the parent refresh above (it now awaits onSuccess() for every row that
+    // reached the database, including unknown outcomes), so the old trailing onSuccess()
+    // call is gone. The in-flight latch still has to clear here or handleUpload/handleClose
+    // stay blocked for the life of the modal.
+    uploadInFlightRef.current = false;
   };
 
   // ─── Navigation ─────────────────────────────────────────────────────
@@ -666,6 +727,15 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       return;
     }
     if (step === 5) {
+      // handleUpload bails out when the signed-in profile has not loaded yet, but step 6
+      // is the progress screen: it has no Back button and its Next button is disabled, so
+      // advancing first strands the operator on "Importing field 0 of 0" with cancelling
+      // the whole dialog as the only way out. Check the same condition BEFORE the step
+      // changes, so the review step stays on screen and the import can be retried.
+      if (!profile) {
+        toast('error', 'Your account is still loading. Wait a moment and try again.');
+        return;
+      }
       setStep(6);
       handleUpload();
       return;
@@ -716,7 +786,14 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // ─── Render ─────────────────────────────────────────────────────────
 
   return (
-    <Modal open={open} onClose={handleClose} title="Import" accent="Fields" maxWidth="max-w-5xl">
+    <Modal
+      open={open}
+      onClose={handleClose}
+      closeDisabled={uploading}
+      title="Import"
+      accent="Fields"
+      maxWidth="max-w-5xl"
+    >
       <div className="space-y-4">
         {/* Step indicator */}
         <div className="flex items-center gap-1">
@@ -1124,7 +1201,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             )}
           </div>
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={handleClose}>
+            <Button variant="secondary" onClick={handleClose} disabled={uploading}>
               {step === 7 ? 'Close' : 'Cancel'}
             </Button>
             {step < 6 && (

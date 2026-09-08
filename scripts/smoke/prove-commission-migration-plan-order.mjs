@@ -3,7 +3,7 @@
  * Network-isolated PostgreSQL 17 proof that the parked commission migration set
  * survives SETTLED data in its REAL filename order.
  *
- * The defect this guards against: 20260908130000_repair_commission_history_label_snapshots
+ * The defect this guards against: 20260908130900_repair_commission_history_label_snapshots
  * (formerly 20260905020100, then 20260905190000) correctly refuses to run once any
  * commission payment has been posted, and the filename-ordered runner
  * (scripts/list-post-baseline-migrations.mjs) halts at the first failing file. At its
@@ -17,7 +17,7 @@
  * the five surviving files then stamped 20260905020000..185619 would each have been refused.
  * (The former standalone 020500 was superseded before apply by the unified 020400 cutover.)
  * The original six-file set was restamped on 2026-09-05; five remain at
- * 20260905200000..200600 while the deliberately-last repair is now 20260908130000.
+ * 20260905200000..200600 while the deliberately-last repair is now 20260908130900.
  * The LEDGER phase below proves the current names against the captured live boundary
  * and keeps the old names as a negative control.
  *
@@ -62,8 +62,8 @@ const REPLAY_GUARD = '20260905200000_commission_history_report_replay_guard.sql'
 const RECIPIENT_GUARD = '20260905200200_refuse_stale_commission_payment_recipient.sql';
 const PAYMENT_DATE_GUARD = '20260905200300_enforce_commission_payment_business_date.sql';
 const CHICAGO_DATE_CUTOVER = '20260905200400_commission_dates_follow_chicago_business_day.sql';
-const TRANSFER_INTENT = '20260908120000_bind_transfer_invoice_intent.sql';
-const REPAIR = '20260908130000_repair_commission_history_label_snapshots.sql';
+const TRANSFER_INTENT = '20260908130800_bind_transfer_invoice_intent.sql';
+const REPAIR = '20260908130900_repair_commission_history_label_snapshots.sql';
 const LABEL_FIX = '20260905200600_latest_commission_recipient_label.sql';
 const NEXT_INVOICE_YEAR = '20260905090000_next_invoice_number_year_chicago.sql';
 const PARKED_COMMISSION_NAMES = [

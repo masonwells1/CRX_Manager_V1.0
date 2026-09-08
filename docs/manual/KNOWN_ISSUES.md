@@ -1,6 +1,7 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-08 for the migration-ledger header; the F2 entry retains its separate
+**Last verified: 2026-09-08 for the migration-ledger header using read-only `list_migrations`;
+the F2 entry retains its separate
 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
@@ -22,19 +23,21 @@ them, so re-read live rather than trusting them. Only the ledger header was re-r
 The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
+remaining one-file disk-vs-live migration drift and its open owner PR #599.
 
 Seven local commission candidates remain unapplied: five older-stamp files (`20260905200000`,
 `20260905200200`, `20260905200300`, `20260905200400`, and `20260905200600`), transfer intent
-`20260908120000`, and tail repair `20260908130000`. The original six-file set (those five plus
+`20260908130800`, and tail repair `20260908130900`. The original six-file set (those five plus
 the repair) was restamped together on 2026-09-05 evening, after a #606 apply moved the live
 ordering boundary above most of the set. The live boundary has since moved again, so the five
 `20260905*` files now require a future coordinated restamp before any apply; preserve their
 relative order, keep transfer intent after the Chicago cutover, and keep the repair last. This
 file deliberately does not name that moving boundary — re-read it from the live-ledger capture
 in `docs/reference/migration-history.md` before any apply decision.
-The label repair followed `20260905020100` -> `20260905190000` -> `20260905210000` before its
-final 2026-09-08 move to `20260908130000`, after the transfer wrapper so it still runs last. It
+The label repair followed `20260905020100` -> `20260905190000` -> `20260905210000` ->
+`20260908130000` -> `20260908130900`; its final 2026-09-08 move keeps it after the
+`20260908130800` transfer wrapper so it still runs last and clears PR #535's separate parked
+`20260908120000` version. It
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
 now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes. The settlement-recipient guard closes the live case where a batch prepared for A
@@ -70,6 +73,15 @@ figures are likewise superseded. The caution it carried still stands on its own 
 merging changed the repository, and the apply that changed production was a separate act minutes
 later, so a merge must never be read as an apply — confirm each against live separately.
 
+**PR #535's last two Section 9 migrations were applied live on 2026-09-03**, before F06 and before
+this file's F06 entry was written: `20260831233000_bind_section9_replays_to_intent` at ledger version
+`20260903124710`, and `20260831235900_serialize_gauntlet_write_boundaries` at `20260903124741`. Both
+were applied under Mason's explicit per-migration in-chat approval, and both were verified against
+the live catalog afterwards rather than from the apply exit code. This is stated here because the
+ledger-row counters above have moved several times since and cannot be used to infer it: a counter
+read is a point-in-time observation, and these two applies are a fact about production that survives
+every later re-count.
+
 **Superseded 2026-09-01 ledger reading, kept for provenance.** A read-only capture recorded **980 ledger rows**
 and effective ordering high-water **`20260826222000`** (authored name
 `20260826222000_correct_ap_aging_due_date_buckets`). The two Section 9 AP migrations
@@ -85,6 +97,20 @@ capture above. `20260827113443` is history, not the current maximum. The 978-row
 authored NAME, never from `version` — the two diverge, which is why searching the ledger by version stamp
 finds neither Section 9 migration even though both are applied. This pass does not re-certify every issue
 narrative below or claim a fresh post-apply read of function bodies, grants, or operational counts.
+**SUPERSEDED 2026-09-03 — point-in-time: four of the six gauntlet migrations dated 20260831 in
+PR #535 were live at this reading. ALL SIX are live now; the current statement is the PR #535
+paragraph near the top of this file.**
+The sentence that stood here ("written, reviewed candidates and are not claimed live") is no longer
+true. A read-only capture on 2026-09-03 records **990 ledger rows** and effective ordering high-water
+**`20260831212415`** (authored name `20260831212415_guard_cycle_count_completion_revision`).
+`20260831160000`, `20260831161000`, `20260831162000` and `20260831212415` applied live on 2026-09-03
+as ledger versions `20260903023935`, `20260903024550`, `20260903025249` and `20260903025854`.
+`20260831233000` and `20260831235900` were still unapplied **when this 990-row capture was taken**;
+they applied later the same day at `20260903124710` and `20260903124741`, so **all six are now live** —
+see the PR #535 paragraph near the top of this file, which is the current statement. This block is
+kept as the point-in-time record of the 990-row read, not as current state. Read ordering from the
+authored NAME, not `version` — searching this ledger by version stamp finds none of them even though
+all are applied. See the now-resolved 2026-09-03 entry below for the historical source-on-branch-only consequence.
 The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
 that evidence supports the six pending return-credit candidates without superseding the newer ledger
 capture above.
@@ -318,6 +344,175 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## FIXED 2026-09-08 — receiving could record goods against the WRONG purchase order
+
+**Resolved on `main` and no longer live.** `src/pages/PurchaseOrderDetail.tsx` now carries a
+`routeIdRef` updated in a `useLayoutEffect` that also blanks `po`, `items` and the receiving history
+synchronously on every route change; each async load compares the id it was STARTED for against that
+live route id before writing state, and the submit path re-checks ownership before sending. Verified
+against the merged file on 2026-09-08, and `origin/main` no longer carries this entry at all.
+
+Kept as a record rather than deleted because the diagnosis below is the reusable part — it is the
+same async-load-without-a-record-guard shape that has appeared on several pages. The description is
+retained verbatim; only this header and the note above are new.
+
+**Original entry (2026-09-05, now resolved):** Severity BLOCKER, live in production at the time.
+**NOT introduced by PR #535** — `fetchPO` was byte-identical on `origin/main`. Found by an exact-SHA
+`gpt-5.6-sol` gate reviewing PR #535 (head `2ff8bdafc`).
+**Mason's call, 2026-09-05: fix it in its OWN session, not by widening #535.** That is what happened.
+
+`fetchPO` in `src/pages/PurchaseOrderDetail.tsx` (~line 191) is a `useCallback([id, toast])` that
+awaits the `purchase_orders` header query, calls `setPo`, then awaits a SECOND query for
+`purchase_order_items` and calls `setItems` — with **no check that `id` is still the current route**
+at any point. `fetchReceivingHistory` has the same shape. React Router reuses this component when
+only the `:id` param changes (the file's own comment says so), and the route effect clears neither
+`po` nor `items`.
+
+**The sequence:** open PO A (header resolved, item query still in flight) → navigate to PO B → B's
+header and items resolve → **A's older item query resolves LAST and overwrites `items` with A's
+lines while `po` stays B**. The screen shows B's PO number above A's line items. Receiving from that
+screen submits A's `po_item_id` values, and `receive_po_items` derives the affected PO **from the
+submitted item ids** — there is no `p_purchase_order_id` to cross-check — so the goods are recorded
+against A. The same race can file A's receiving history under B and produce a B-labelled PDF for an
+A record.
+
+**Why nothing existing catches it.** The durable intent scope and idempotency key prevent replaying
+one key twice; they do not verify that submitted item ids belong to the routed PO. The RPC has no
+expected-PO parameter. `VendorBillDetail.tsx` solves the analogous problem with an `activeBillIdRef`
+checked after every await — `PurchaseOrderDetail` simply never got that treatment.
+
+**Likelihood is low, impact is high:** it needs a fast navigation between two POs while a query is in
+flight, and live volume is small. It is an inventory-integrity defect, so it should be fixed next
+rather than backlogged indefinitely.
+
+**When fixing, copy the `activeBillIdRef` pattern but NOT its bug:** that guarded early return leaves
+the shared `loading` flag `true`, which wedges the page on a spinner (found in the same gate). A
+fetch-generation counter, where only the newest in-flight fetch owns the loading flags, avoids both
+defects. Consider also verifying payload item ids against the routed PO before submit as defence in
+depth. A server-side `p_purchase_order_id` cross-check would be strongest but is a NEW migration
+against an applied money/inventory RPC and needs Mason's explicit approval.
+
+---
+
+## OPEN (prevention rule) 2026-09-03 — a `LOCK TABLE` does not serialize the OLD body of the function a migration replaces
+
+**Severity: the specific instance is CLOSED and unrealised; the RULE is open and applies to every
+future migration of this shape.** Accepted by Mason on 2026-09-03 — see that date's entry in
+`docs/manual/DECISION_LOG.md` for the decision and its limits.
+
+`20260831160000` and `20260831233000` both take `LOCK TABLE public.idempotency_keys IN SHARE ROW
+EXCLUSIVE MODE` and then check for legacy unbound receipts before replacing
+`reverse_receiving_record` / the Section 9 RPCs. The exact-SHA `gpt-5.6-sol` review of PR #535
+returned a HIGH on this, correctly:
+
+**`SHARE ROW EXCLUSIVE` does not conflict with `ACCESS SHARE`.** The old function body's opening
+plain `SELECT` on `idempotency_keys` passes straight through the migration's lock. Only its final
+`INSERT` conflicts. So a legacy call already in flight can clear the migration's preflight, execute
+the entire old body — without the new closed-period, active-vendor-bill or audit-snapshot
+protections — delete the receiving record and its photos, and block only at the very end, resuming
+after the migration commits and leaving an unbound receipt that no later migration rechecks.
+
+**The rule.** A migration that replaces a function whose OLD body writes to a table the migration
+locks is NOT serialized against that old body. Everything the old body does before its first
+conflicting write runs unprotected. Moving the `LOCK TABLE` earlier in the file does not help.
+Such a migration needs a quiesced rollout: stop the relevant traffic, drain in-flight executions,
+apply, verify no unbound receipts or orphaned deletions appeared, then restore traffic — plus a
+concurrency proof exercising a legacy call that has already passed its receipt lookup when the
+migration starts.
+
+**Why the specific instance is closed.** The window was never entered. At both applies
+(2026-09-03 02:39Z and 12:47Z) there was zero application activity, verified three independent
+ways: `idempotency_keys` had 0 rows created that day against 52 total whose newest was 2026-08-18
+(the table is not purged, so this is real absence rather than missing evidence),
+`financial_audit_log` had 0 rows since 2026-09-02 12:00Z (226 total, newest 2026-08-19 06:00:00Z),
+and `receiving_records`' newest row is 2026-06-10 20:58:54Z out of 130, with nothing created after
+it. **Note the boundary before you think you have found a contradiction:** a
+`created_at >= '2026-06-10'` query returns 1, not 0, because the newest row falls on that date. The
+non-empty totals on all three tables are what make this real absence rather than missing
+instrumentation. Both migrations are applied and must not be edited.
+
+---
+
+## RESOLVED 2026-09-08 — six migrations applied live on 2026-09-03 now have files on `main`
+
+**Resolution:** PR #535 merged on 2026-09-08 and landed all six exact migration files on `main`.
+From 2026-09-03 until that merge, the files existed only on branch
+`codex/gauntlet-s9-safety-20260831`; live stayed healthy, but source control did not fully describe
+production. This entry originally listed four; the last two applied later the same day and are
+included here for provenance:
+
+| Authored name | Ledger version |
+|---|---|
+| `20260831160000_harden_receiving_reversal_and_ap_reporting` | `20260903023935` |
+| `20260831161000_require_cumulative_po_bill_confirmation` | `20260903024550` |
+| `20260831162000_fail_closed_historical_commission_balance` | `20260903025249` |
+| `20260831212415_guard_cycle_count_completion_revision` | `20260903025854` |
+| `20260831233000_bind_section9_replays_to_intent` | `20260903124710` |
+| `20260831235900_serialize_gauntlet_write_boundaries` | `20260903124741` |
+
+**Why live is healthy.** All six only added optional new capability. `origin/main` references none
+of the new parameters anywhere under `src/`, and the new `create_vendor_bill` overage parameters all
+carry defaults, so main's shorter call still binds. There is no live defect to repair and no
+user-visible symptom. The vendor-bill edit blocker recorded on the PR — which was conditional on the
+last two migrations not yet being applied — is **CLEARED**: both applied on 2026-09-03, and
+`update_vendor_bill` was verified live as a single 9-argument overload accepting
+`p_confirm_po_overage` and `p_po_overage_reason`, so the branch's call resolves.
+
+**Historical consequence while this was open.** PR #581's schema-registry refresh was parked behind
+#535 because the registry asserted a live high-water whose `20260831*` migrations had no file on
+`main`. PR #535's merge removed that ordering blocker; any registry refresh still follows its own
+current proof gates.
+
+**This is the FOURTH occurrence of this class.** See the CLOSED 2026-08-11 entry ("three migrations
+are live but their source files are not yet on `main`") and the CLOSED 2026-08-13 entry ("six
+migrations applied live on 2026-08-12 have no file on `main`"). The 2026-08-13 entry already records
+that the *prevention* gap stays open: nothing reconciles the live ledger against tracked migration
+files automatically. Each occurrence has been closed individually by landing the files; the
+recurrence itself is the standing finding, and a ledger-vs-tracked-files reconciliation check is the
+durable fix.
+
+**Closed by PR #535's 2026-09-08 merge**, which landed all six files under `supabase/migrations/`.
+
+---
+
+## RESOLVED 2026-09-02 — PR #535 removed six per-open `resetKey()` calls whose server-side replacement does not exist
+
+**What happened.** The gauntlet-s9 branch replaced six per-open `resetKey()` calls in
+`src/pages/InventoryPage.tsx` and `src/pages/PurchaseOrderDetail.tsx` with retained keys, on
+the stated assumption that a changed intent would come back as `IDEMPOTENCY_INTENT_MISMATCH`.
+One of the removed calls was the 2026-05-16 PR #59 fix that existed specifically so two
+products could not share a hold intent. The exact-SHA `gpt-5.6-sol` high-effort review of
+`ef82064a` returned BLOCKERS on the assumption, and the live catalog confirmed it.
+
+**Why it was real.** `create_inventory_hold`, `adjust_inventory`, `retire_inventory_item`,
+`save_purchase_order` and `cancel_purchase_order` carry no `request_actor_id` /
+`request_fingerprint` and never call `check_idempotency_intent`; `save_purchase_order` checks
+only that a cached receipt belongs to the same PO id. **None of the six `20260831` migrations
+adds that binding** — verified by searching all six for those five names (zero hits), so the
+gap would have survived the whole rollout. A lost response followed by the same dialog
+reopened on a different target would replay the earlier receipt, and the UI would report a
+hold, adjustment, retirement, PO edit or PO cancellation that PostgreSQL never performed.
+
+**Fix.** Each of the five derives its key from a payload fingerprint
+(`fingerprintIntentPayload` in `src/lib/idempotency.ts`) through `getKeyFor`/`resetKeyFor`, so
+an unchanged retry still replays while a changed target or value mints a fresh key.
+`reverse_receiving_record` deliberately keeps its retained key: migration `20260831160000`
+gives it genuine `check_idempotency_intent` actor+fingerprint binding — which is also why the
+database must roll out before that frontend merges.
+
+**The transferable lesson.** A diff that DELETES a guard reads like ordinary cleanup. This was
+caught only because the review compared against `main` rather than reading the new code alone;
+see the standing rule in `docs/reference/gotchas.md` about comparing guard behavior against
+`main`. Pinned by `src/lib/gauntletFrontendSafetyGuards.test.ts` ("scopes retained keys for the
+RPCs that replay on the key alone"), which was mutation-tested — reverting any of the five to a
+bare `getKey()` turns it red.
+
+**Second-order finding.** The two `*.productIdentity.test.tsx` suites mocked
+`useIdempotencyKey` with only `getKey`/`resetKey`. Once a component scoped its key, the
+undefined `getKeyFor` threw inside the click handler and the RPC never fired, so the test
+failed for a reason unrelated to its assertion. Both mocks now mirror the hook's full surface.
+
+---
 ## PARKED 2026-09-05 (WRITTEN, REVIEWED, PROVEN — NOT APPLIED) — invoice numbers take their year from UTC, so the last six hours of 31 December are numbered into the next year
 
 **Migration file:** `supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql`.
@@ -4156,7 +4351,7 @@ The table below records what was built, and is kept for reference; every row is 
 
 | Piece | File | State |
 | --- | --- | --- |
-| Migration — renames the three payout bodies to `_<name>_intent_impl_20260809` (money logic never retyped) and creates public wrappers that bind each receipt to `request_actor_id` + a SHA-256 `request_fingerprint`; adds the `check_idempotency_intent` helper | `supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql` | Written; proven in a disposable container |
+| Migration — renames the three payout bodies to `_<name>_intent_impl_20260809` (money logic never retyped) and creates public wrappers that bind each receipt to `request_actor_id` + a SHA-256 `request_fingerprint`; adds the `check_idempotency_intent` helper | `supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql` | Applied live 2026-08-11 as ledger version `20260811183437`; originally proven in a disposable container |
 | Rollback-only smoke chain | `scripts/smoke/smoke-commission-payout-intent-binding.sql` (registered in `scripts/smoke/smoke-specs.json` under `create_commission_payment`) | Passing |
 | Container proof — network-isolated throwaway PostgreSQL 17, prints `COMMISSION_PAYOUT_INTENT_BINDING_PROOF_PASS` | `scripts/smoke/prove-commission-payout-intent-binding.mjs` | Green |
 | Frontend — `getIdempotencyBindingRejection` maps the three refusals to plain-English warnings and retires the dead key in all three handlers | `src/lib/idempotency.ts`, `src/pages/CommissionPayments.tsx` | Done |
@@ -4169,7 +4364,7 @@ Two deliberate departures from the `20260803010917` reference pattern, both docu
 
 Mutation-tested (guard broken → test red → restored): the fingerprint comparison, the actor comparison, the legacy-receipt bridge, the frontend refusal branch, and the frontend key reset.
 
-**Both Codex reviews returned DO NOT SHIP on 2026-08-09 (sol and terra, independently). Every confirmed finding is fixed on this branch as of 2026-08-10; the branch is still not live and still needs a clean re-review plus Mason's explicit OK before the migration is applied.** What the reviews caught, and what changed:
+**Historical 2026-08-09 review record.** Both Codex reviews returned DO NOT SHIP (sol and terra, independently). At that time the branch was not live and still needed a clean re-review plus Mason's explicit approval. Every confirmed finding was fixed by 2026-08-10; PR #378 subsequently merged and the migration was applied and verified live on 2026-08-11 as recorded above. What the reviews caught, and what changed:
 
 - **A dead key trapped the operator.** `IDEMPOTENCY_RESULT_INVALID` and `IDEMPOTENCY_RECEIPT_MISSING` were not classified, so the UI left an unusable key in place and every retry failed the same way forever. They are now a third refusal kind, `'receipt'`, with their own wording, and the key is retired like the other two.
 - **The UI asserted something the database cannot prove.** On a pre-migration receipt the database knows only that the key is spent, not that the earlier request differed. The warning no longer claims a different payment was involved.

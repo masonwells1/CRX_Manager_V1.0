@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { assertWrappable } from '../../.claude/hooks/migration-wrappability-lib.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const migrationPath = path.join(root, 'supabase', 'migrations', '20260908120000_bind_transfer_invoice_intent.sql');
+const migrationPath = path.join(root, 'supabase', 'migrations', '20260908130800_bind_transfer_invoice_intent.sql');
 const name = `crx-transfer-intent-${process.pid}`;
 const image = 'postgres:17-alpine';
 const temp = mkdtempSync(path.join(os.tmpdir(), 'crx-transfer-intent-'));

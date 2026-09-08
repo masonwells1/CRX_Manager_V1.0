@@ -1,30 +1,34 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-08 for the migration ledger (read-only query against project
+**Last verified: 2026-09-08 for the migration ledger (read-only `list_migrations` against project
 `rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-05 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
 migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
 `20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
-ordering high-water is the newest applied row's authored name:
-**`20260906120000_preview_field_app_season_follows_invoice_date`** (ledger version
-`20260908045843`; verified live 2026-09-08, 1,000 rows / 993 distinct names).
+ordering high-water is the newest applied row's effective stamp:
+**`20260906120000_preview_field_app_season_follows_invoice_date`** (ledger version `20260908045843`,
+applied live 2026-09-08; verified live 2026-09-08, 1,000 ledger rows / 993 distinct names). It
+replaced `20260905185938_refuse_null_job_field_acres` (#606, applied live 2026-09-05 under a bare
+ledger name, so its stamp was synthesized from its version), which held the boundary until then.
+A candidate must now sort above the `20260906120000` name-stamp, not above the 09-05 row.
 Seven local commission follow-ups are not applied: five older-stamp candidates
 (`20260905200000`, `20260905200200`, `20260905200300`, `20260905200400`, and
-`20260905200600`), the transfer intent wrapper `20260908120000`, and the tail repair
-`20260908130000`. The original six-file set (the five older-stamp candidates plus the repair)
+`20260905200600`), the transfer intent wrapper `20260908130800`, and the tail repair
+`20260908130900`. The original six-file set (the five older-stamp candidates plus the repair)
 was restamped together above the prior 2026-09-05 boundary. The live boundary has since moved:
 the five `20260905*` candidates now sort below it and must be restamped together, preserving
 their dependency order, before any future apply. The transfer wrapper and repair sort above the
-current boundary but are not independently apply-ready because the wrapper requires the parked
-Chicago-date candidate first. This correction applies none of them.
+current boundary, and their latest restamp removes a version collision with the separate parked
+PR #535 migration at `20260908120000`; they are still not independently apply-ready because the
+wrapper requires the parked Chicago-date candidate first. This correction applies none of them.
 They harden snapshot replay, refuse a payment batch if its recipient became stale before posting,
 park an America/Chicago payout business-date guard, pair commission source-date inheritance with
 Chicago-based source document dates, make balance-report recipient labels follow the latest
 earned-state observation at the requested cutoff (including paid-only rows), and — last in the
 ordered plan on purpose — append corrected labels for 34 un-settled opening commission snapshots.
 That label repair followed the explicit rename chain `20260905020100` -> `20260905190000` ->
-`20260905210000` before its final 2026-09-08 move to `20260908130000`, after the new transfer
+`20260905210000` -> `20260908130000` -> `20260908130900`; its final move keeps it after the new transfer
 wrapper so the repair remains last. It refuses to run
 once any commission payment has been posted; running it last means such a refusal stops nothing
 else, whereas at its old position it would have halted the payout guard and the date fixes behind
@@ -58,26 +62,25 @@ Worth noting alongside: those counters sat unchanged from the 2026-09-04 reading
 `20260904023121`. This refresh verified all eight generator security/grant shapes; the F2 entry in
 `docs/manual/KNOWN_ISSUES.md` carries the detailed matrix.
 
-**Disk-vs-live drift, refreshed 2026-09-08 — SEVEN FILES OWNED BY OPEN PRs #535 AND #599; PR #592 IS RECONCILED.**
-Seven migrations are applied live with **no file on `main`**. Six belong to PR #535:
+**Disk-vs-live drift, refreshed 2026-09-08 — ONE FILE OWNED BY OPEN PR #599; PRs #535 AND #592 ARE RECONCILED.**
+PR #535 merged on 2026-09-08 and restored its six already-live migration files to `main`:
 `20260831160000_harden_receiving_reversal_and_ap_reporting`,
 `20260831161000_require_cumulative_po_bill_confirmation`,
 `20260831162000_fail_closed_historical_commission_balance`,
 `20260831212415_guard_cycle_count_completion_revision`,
 `20260831233000_bind_section9_replays_to_intent`, and
-`20260831235900_serialize_gauntlet_write_boundaries`. **All six DO have files on PR #535's branch
-`codex/gauntlet-s9-safety-20260831`** — verified 2026-09-03 with `git ls-tree` against that branch,
-6/6 present. The seventh is `20260904180000_invoice_season_follows_invoice_date`, applied live and
-owned by open PR #599. Do not reconstruct these seven; land their owning PRs after their own review
-gates. The two commission-history source files formerly missing from `main`,
+`20260831235900_serialize_gauntlet_write_boundaries`. The remaining known file gap is
+`20260904180000_invoice_season_follows_invoice_date`, applied live and owned by open PR #599.
+Do not reconstruct it; land its owning PR after its own review gates. The two commission-history
+source files formerly missing from `main`,
 `20260903150100_ledger_backed_commission_history` and
 `20260903230000_commission_report_snapshot_contract`, were reconciled when PR #592 merged on
 2026-09-08. That PR also carried two NOT-YET-APPLIED files originally named
 `20260905020000_commission_history_report_replay_guard` and
 `20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: five
 commission candidates sit at `20260905200000` through `20260905200600`, with no
-`20260905200500` file; the intent wrapper is `20260908120000` and the repair remains last at
-`20260908130000`). The five `20260905*` candidates are now below the 2026-09-08 live ordering
+`20260905200500` file; the intent wrapper is `20260908130800` and the repair remains last at
+`20260908130900`). The five `20260905*` candidates are now below the 2026-09-08 live ordering
 boundary and require a future coordinated restamp before apply. The #606 candidate, the field-acreage guard first tracked
 as #582 (`20260904185900` on disk), was applied
 live on 2026-09-05 as ledger version `20260905185938` under the bare name
@@ -85,7 +88,7 @@ live on 2026-09-05 as ledger version `20260905185938` under the bare name
 first commission restamp. The 2026-09-08 boundary has since moved again. The disk file still carries its authored stamp; row 916 of
 `docs/reference/migration-history.md` records that name mismatch for the #606 lane to reconcile.
 
-The residual consequence still bites until both open owning PRs merge: `main` does not fully describe production,
+The residual consequence still bites until open PR #599 merges: `main` does not fully describe production,
 so any migration whose safety argument rests on "the live body equals the last committed body" must verify against
 **live**, not against disk. The local `20260904185900` save-job candidate pins the 2026-09-03 F06
 post-apply `pg_proc.prosrc` body and rechecks that exact pre-image at apply time rather than inferring
@@ -139,6 +142,11 @@ migration is **applied live** and its schema marker exists. The schema-shape evi
 2026-08-27 capture and does not include a fresh post-apply read of the five routine bodies or their
 grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded, not promoted into post-apply
 proof.
+
+**PR #535 gauntlet chain — all six migrations APPLIED LIVE 2026-09-03.** `20260831160000`, `20260831161000`, `20260831162000` and `20260831212415` applied as ledger versions `20260903023935`, `20260903024550`, `20260903025249` and `20260903025854`; `20260831233000` and `20260831235900` applied as `20260903124710` and `20260903124741`. Live ledger **at that point: 992 rows** — the 2026-09-03 14:01 UTC pre-F06 boundary, superseded by the 993-row 15:34 UTC capture above and not to be used as the current figure. Each went through the full migration-apply gate with Mason's explicit in-chat approval and clean Codex drift + RLS reviews. Post-apply verification against the live catalog: `update_vendor_bill` is a single 9-argument overload accepting `p_confirm_po_overage`/`p_po_overage_reason`; `cycle_counts.item_revision` exists; `trg_bump_cycle_count_item_revision` is present on `cycle_count_items` and its body carries the `CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN` guard. **The frontend half of PR #535 has not merged yet** — until it does, `main` calls none of the new parameters, which is why live is healthy with the database ahead of the deployed app.
+
+The final sentence of the PR #535 paragraph above is historical and superseded: PR #535 merged on
+2026-09-08, bringing its reviewed frontend callers and six already-live migration files onto `main`.
 
 The prior header readings are retained as provenance: 977 rows / `20260826205935` / authored
 high-water `20260826150000` after the COMMENT-only apply, and before that 976 rows /

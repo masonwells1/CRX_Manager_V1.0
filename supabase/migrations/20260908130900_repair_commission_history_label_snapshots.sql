@@ -13,7 +13,7 @@
 -- from their canonical order/job/invoice/customer rows. It never updates an
 -- existing ledger or settlement row, and it does not alter commissions.
 --
--- ORDERING (renumbered 20260905020100 -> 20260905190000 -> 20260905210000 -> 20260908130000): this
+-- ORDERING (renumbered 20260905020100 -> 20260905190000 -> 20260905210000 -> 20260908130000 -> 20260908130900): this
 -- file runs LAST of the parked commission set on purpose. Its settled-data
 -- refusal below is correct, but the filename-ordered runner halts at the first
 -- failing file, so at its old position one posted payment before rollout would
