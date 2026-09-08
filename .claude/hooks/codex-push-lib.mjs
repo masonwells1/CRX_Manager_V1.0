@@ -194,9 +194,93 @@ export function pushHiddenByShellComposition(cmd) {
   const executedPushes = eachPush(unwrapped);
   if (executedPushes.length === 0) return false;
   if (executedPushes.length !== literalPushes.length) return true;
-  return executedPushes.some((push, index) =>
-    JSON.stringify(splitShellArgs(push.args)) !== JSON.stringify(splitShellArgs(literalPushes[index].args))
+  // The ARGS are compared word by word from the SAME split, not by re-splitting
+  // the unwrapped text. Deleting a quote from the whole command MANUFACTURES a
+  // word boundary that was never there: `git push "C:/scratch repo/repo.git"` is
+  // one destination word to every shell, and the unwrapped copy read it as two,
+  // so an ordinary local push was refused as a hidden one. Codex sol, 2026-09-08,
+  // finding 9; reproduced through the guard before this line changed. The helper
+  // has read it that way since 2026-07-30, so the Claude side refused it too —
+  // wiring the Codex side in only made the existing defect visible on both.
+  return literalPushes.some((push) =>
+    // Two signals, because the word-wise comparison alone cannot see the second.
+    // SUBSTITUTION: `git push $(cat ref) HEAD:main` has no quote or escape in any
+    // word, so every word reads back identically — yet the destination is decided
+    // at run time and no text analysis of it proves anything. The whole-command
+    // unwrap used to catch this incidentally by turning `$(){}` into whitespace;
+    // naming it is what keeps it after the comparison narrowed. Caught by the
+    // differential sweep over this file's other consumers, not by review.
+    SUBSTITUTION_PUNCTUATION_RE.test(push.args) ||
+    // REWRITING: a word whose quote/escape syntax means the parsers below are
+    // reading something other than what the shell will hand git.
+    splitShellWordsRaw(push.args).some((word) => shellCompositionWord(word) !== unquoteShellArg(word))
   );
+}
+
+// Text a shell computes rather than passes through: a variable, a substitution,
+// a subexpression, a brace group. In a push's ARGUMENTS this is never analysable
+// — the destination or refspec is not decided until the command runs.
+const SUBSTITUTION_PUNCTUATION_RE = /[$`(){}]/;
+
+// A drive-qualified absolute path (`C:\scratch\repo.git`, `\\server\share`) as a
+// push WORD. Its backslashes are separators, not escapes, and no shell rewriting
+// of them can produce a push to `main`: this token position is a destination or a
+// refspec, a local repository is not a GitHub branch, and no refspec starts with
+// a drive letter. Exempting it is what lets an ordinary Windows local-repo push
+// through the composition check while `git p\ush` and `HEAD:ma\in` still fail it.
+const WINDOWS_ABSOLUTE_PATH_RE = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+
+// What a shell CONSUMES from one word, for the composition comparison only —
+// deliberately shell-AGNOSTIC, unlike shellArgvWord below. The guard reads text
+// without knowing which shell will run it, so this consumes POSIX backslashes,
+// PowerShell backticks AND cmd.exe carets: any of the three could be the one that
+// rewrites the word. That makes it useless for reading a VALUE, and it is never
+// used for one — only to answer "does this word mean something else once a shell
+// has had it?".
+function shellCompositionWord(word) {
+  const text = String(word || "");
+  if (WINDOWS_ABSOLUTE_PATH_RE.test(unquoteShellArg(text))) return unquoteShellArg(text);
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if ((char === "\\" || char === "`" || char === "^") && index + 1 < text.length) {
+      out += text[index + 1];
+      index += 2;
+      continue;
+    }
+    if (char === "\\" || char === "`" || char === "^") { out += char; break; }
+    if (char === "'") {
+      // Single quotes are literal in POSIX and in PowerShell alike.
+      const close = text.indexOf("'", index + 1);
+      const end = close === -1 ? text.length : close;
+      out += text.slice(index + 1, end);
+      index = end + 1;
+      continue;
+    }
+    if (char === '"') {
+      index += 1;
+      while (index < text.length && text[index] !== '"') {
+        // Inside double quotes PowerShell consumes a backtick before anything,
+        // and POSIX consumes a backslash only before " \ ` $. A backslash before
+        // any other character is literal in BOTH — which is what keeps
+        // `"C:\scratch repo\repo.git"` intact.
+        if (text[index] === "`" && index + 1 < text.length) { out += text[index + 1]; index += 2; continue; }
+        if (text[index] === "\\" && index + 1 < text.length && ['"', "\\", "`", "$"].includes(text[index + 1])) {
+          out += text[index + 1];
+          index += 2;
+          continue;
+        }
+        out += text[index];
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
 }
 
 // EVERY push in the command, not just the first. `String.match` without /g and
@@ -2234,31 +2318,75 @@ const GH_BIN_RE = new RegExp(
   "i",
 );
 
+// The binary shape test, applied to the text AND to the argv the shell produces.
+// GH_BIN_RE needs a contiguous literal `gh`, so `g""h pr merge 123 --admin` — an
+// ordinary `gh` to every shell — matched nothing and the merge gate never ran
+// (Codex sol, 2026-09-08, finding 5). The words are resolved anyway one line
+// later; resolving them for the binary too is what stops the splice that PR #630
+// closed inside the subcommand from simply moving one word to the left.
+//
+// Still open, and named rather than half-covered: a gh invoked through ANOTHER
+// program's quoted argument (`cmd /c "gh pr merge 1"`, `bash -c 'gh pr merge 1'`,
+// `& "gh.exe" pr merge 1`) stays one argv word, so `pr` and `merge` are not
+// separate words to any parser here. Closing that means re-splitting a nested
+// command, which is a larger change than this one.
+function ghBinaryMentioned(text) {
+  return GH_BIN_RE.test(text) || GH_BIN_RE.test(splitShellArgv(text).join(" "));
+}
+
 // `gh pr merge` with global flags possibly between words (`gh -R o/r pr merge`).
 // Over-matching (e.g. `gh pr view merge-notes`) only routes a read through the
 // gate, which fails safe.
 export function ghMergeRequest(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return null;
+  if (!ghBinaryMentioned(text)) return null;
   // Every keyword below is compared against the word the SHELL produces, not the
   // word as typed: `gh pr me""rge 123 --squash` reached gh as a plain merge and
   // returned null here, so the whole merge gate never ran (measured).
   const words = splitShellArgv(text);
-  const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
+  // Options whose NEXT word is a value. Long names are matched lowercased (gh
+  // accepts them case-insensitively); short names are matched with their case
+  // intact, because gh's shorts are case-SENSITIVE and lowercasing conflates
+  // `-F` (`--body-file`) with `-f`. `-r` is not a gh flag and is kept only
+  // because consuming one extra word costs nothing.
+  const longValueFlags = new Set(["--repo", "--match-head-commit", "--subject", "--body", "--body-file"]);
+  const shortValueFlags = new Set(["-R", "-r", "-t", "-b", "-F"]);
+  const takesValue = (word) => longValueFlags.has(word.toLowerCase()) || shortValueFlags.has(word);
+  // Which words gh reads as an OPTION rather than as some option's VALUE. Every
+  // keyword test below asks this first, because a word in a value position is
+  // data: `gh pr merge 123 --body '--disable-auto' --admin --squash` performs an
+  // ADMINISTRATOR merge, and the flat `words.some(... === "--disable-auto")`
+  // scan that used to sit here stood the whole gate down on the body text
+  // (Codex sol, 2026-09-08, finding 2 — measured blocked:false end to end).
+  const isValue = new Array(words.length).fill(false);
+  for (let index = 0; index < words.length; index += 1) {
+    if (isValue[index]) continue;
+    if (takesValue(words[index]) && index + 1 < words.length) isValue[index + 1] = true;
+  }
+  const optionAt = (index) => !isValue[index];
+  const prIndex = words.findIndex((word, index) => optionAt(index) && word.toLowerCase() === "pr");
   if (prIndex === -1) return null;
-  const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
+  const mergeIndex = words.findIndex((word, index) =>
+    index > prIndex && optionAt(index) && word.toLowerCase() === "merge");
   if (mergeIndex === -1) return null;
   // `--disable-auto` cancels a pending auto-merge — it does not land anything,
-  // so the gate stands down for it.
-  if (words.some((word) => word.toLowerCase() === "--disable-auto")) return null;
-  // Lowercase: membership is tested against the normalized flag name below.
-  const valueFlags = new Set(["--repo", "-r", "--match-head-commit", "--subject", "--body", "-t", "-b"]);
+  // so the gate stands down for it. Only in an option position, and only when it
+  // is actually asking to disable: `--disable-auto=false` does the opposite.
+  if (words.some((word, index) => {
+    if (!optionAt(index)) return false;
+    const lower = word.toLowerCase();
+    if (lower === "--disable-auto") return true;
+    if (!lower.startsWith("--disable-auto=")) return false;
+    const value = lower.slice("--disable-auto=".length);
+    return value === "1" || value === "t" || value === "true";
+  })) return null;
   let selector = "";
   let repo = "";
   let auto = false;
   let admin = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
+    if (isValue[index]) continue;
     // The shell concatenates `--ad""min` and `--ad\min` into `--admin` before gh
     // ever sees them, so a parser that compares the raw word misses the flag
     // while gh honours it (Codex bot P1 on PR #541). That was handled here by
@@ -2299,15 +2427,41 @@ export function ghMergeRequest(command) {
       admin = !(value === "0" || value === "f" || value === "false");
       continue;
     }
-    if (valueFlags.has(lower)) {
+    if (takesValue(stripped)) {
+      // The value word itself is skipped by the isValue pass above, so this only
+      // has to read it — advancing the index here as well would step past the
+      // word AFTER the value.
       const value = words[index + 1] || "";
-      if (lower === "--repo" || lower === "-r") repo = value;
-      index += 1;
+      if (lower === "--repo" || stripped === "-R" || stripped === "-r") repo = value;
       continue;
     }
     if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
   return { selector, repo, auto, admin };
+}
+
+// gh parses with pflag, which accepts a short option in FOUR spellings: `-X PUT`
+// (separate), `-XPUT` (attached), `-X=PUT` (attached with an equals sign) and
+// `-iXPUT` (bundled behind boolean shorts such as `-i`/`--include`). The two
+// `gh api` parsers below recognised only the first two, so `-X=DELETE`,
+// `-iXDELETE` and `-iFbody=hello` all reported a plain GET and reached the
+// connector ungated (Codex sol, 2026-09-08, finding 1 — measured, and the
+// `-F body=x` / `-f body=x` / `--field body=x` spellings the same report listed
+// were already denied, before and after).
+//
+// Modelled by SHAPE, as the binary above is: walk the letters of a short cluster
+// and stop at the FIRST value-taking one, because everything after it is that
+// option's value, not more flags. Anything else in the cluster is a boolean.
+const GH_API_VALUE_SHORTS = "XFfHqtp";
+function ghApiShortCluster(word) {
+  if (!/^-[A-Za-z]/.test(word) || word.startsWith("--")) return null;
+  for (let index = 1; index < word.length; index += 1) {
+    const letter = word[index];
+    if (!GH_API_VALUE_SHORTS.includes(letter)) continue;
+    // The rest of the word is this option's value; empty means the NEXT word is.
+    return { letter, value: word.slice(index + 1).replace(/^=/, ""), attached: index + 1 < word.length };
+  }
+  return null;
 }
 
 // `gh api -X PUT repos/o/r/pulls/N/merge`, plus the GraphQL mergePullRequest
@@ -2317,7 +2471,7 @@ export function ghMergeRequest(command) {
 // the position-anchored `gh\s+api` regex let that exact form pass ungated).
 export function ghApiMergeRequest(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return null;
+  if (!ghBinaryMentioned(text)) return null;
   const words = splitShellArgv(text);
   const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
   if (apiIndex === -1) return null;
@@ -2329,15 +2483,49 @@ export function ghApiMergeRequest(command) {
   let endpoint = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
-    if (word === "-X" || word === "--method") { method = String(words[index + 1] || "").toUpperCase(); index += 1; continue; }
+    if (word === "--method") { method = String(words[index + 1] || "").toUpperCase(); index += 1; continue; }
     if (word.startsWith("--method=")) { method = word.slice("--method=".length).toUpperCase(); continue; }
-    if (/^-X\S+/i.test(word)) { method = word.slice(2).toUpperCase(); continue; }
+    const cluster = ghApiShortCluster(word);
+    if (cluster) {
+      if (cluster.letter === "X") {
+        method = String(cluster.attached ? cluster.value : words[index + 1] || "").toUpperCase();
+      }
+      if (!cluster.attached) index += 1;
+      continue;
+    }
     const normalizedEndpoint = word.replace(/^https:\/\/api\.github\.com\//i, "").replace(/^\//, "");
     if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(normalizedEndpoint)) endpoint = normalizedEndpoint;
   }
   if (method !== "PUT" || !endpoint) return null;
   const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
   return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false } : null;
+}
+
+// The gh analogue of pushHiddenByShellComposition. shellArgvWord models POSIX
+// quoting, which is the right reading for a value; it deliberately does not model
+// PowerShell's backtick or cmd.exe's caret, and those are live here — PowerShell
+// is the fleet's shell. ``gh pr me`rge 123 --admin --squash`` and
+// `cmd /c "gh api --met^hod=DELETE …"` reach the program as an ordinary merge and
+// an ordinary DELETE, while every parser above reads an unknown word (Codex sol,
+// 2026-09-08, finding 3).
+//
+// Only the backtick and the caret are removed here. Quotes are NOT: erasing a
+// quote is the blanket normalization CodeRabbit objected to on PR #630, and
+// `gh api --method='P"OST'` must keep reading as the non-POST it is. The caller
+// refuses rather than analyses, for the same reason the push side does — an
+// analysis of text the shell will not run proves nothing.
+export function ghHiddenByShellComposition(cmd) {
+  const text = String(cmd || "");
+  const unwrapped = text
+    .replace(/`\r?\n/g, "")
+    .replace(/\^\r?\n/g, "")
+    .replace(/`(?=[^\r\n])/g, "")
+    .replace(/\^(?=[^\r\n])/g, "");
+  if (unwrapped === text) return false;
+  const hidesMerge = Boolean(ghMergeRequest(unwrapped)) && !ghMergeRequest(text);
+  const hidesApiMerge = Boolean(ghApiMergeRequest(unwrapped)) && !ghApiMergeRequest(text);
+  const hidesMutation = ghApiMutates(unwrapped) && !ghApiMutates(text);
+  return hidesMerge || hidesApiMerge || hidesMutation;
 }
 
 // Does this `gh api` call MUTATE? Moved here from
@@ -2353,7 +2541,7 @@ export function ghApiMergeRequest(command) {
 // position-anchored `gh\s+api` test did not see that form either.
 export function ghApiMutates(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return false;
+  if (!ghBinaryMentioned(text)) return false;
   const words = splitShellArgv(text);
   const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
   if (apiIndex === -1) return false;
@@ -2366,22 +2554,28 @@ export function ghApiMutates(command) {
   let hasFields = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
-    if (word === "-X" || word === "--method") {
+    if (word === "--method") {
       method = String(words[index + 1] || "").toUpperCase();
       methodExplicit = true;
       index += 1;
     } else if (word.startsWith("--method=")) {
       method = word.slice("--method=".length).toUpperCase();
       methodExplicit = true;
-    } else if (/^-X\S+/i.test(word)) {
-      method = word.slice(2).toUpperCase();
-      methodExplicit = true;
-    } else if (["-f", "-F", "--field", "--raw-field", "--input"].includes(word) ||
-               /^(?:--field|--raw-field|--input)=/.test(word) ||
-               /^-[fF]\S/.test(word)) {
-      // The /^-[fF]\S/ arm catches gh's attached short-value form
-      // (`-fquery=...`, `-Fbase=main`) — Codex round-5.
+    } else if (["--field", "--raw-field", "--input"].includes(word) ||
+               /^(?:--field|--raw-field|--input)=/.test(word)) {
       hasFields = true;
+    } else {
+      // Every short spelling — separate, attached, `=`-attached and bundled
+      // behind booleans — resolves through one shape walk. `-f`/`-F` supply a
+      // field, which makes gh default the request from GET to POST.
+      const cluster = ghApiShortCluster(word);
+      if (!cluster) continue;
+      if (cluster.letter === "X") {
+        method = String(cluster.attached ? cluster.value : words[index + 1] || "").toUpperCase();
+        methodExplicit = true;
+      }
+      if (cluster.letter === "f" || cluster.letter === "F") hasFields = true;
+      if (!cluster.attached) index += 1;
     }
   }
   if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) return true;

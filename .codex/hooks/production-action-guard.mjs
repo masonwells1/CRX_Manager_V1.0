@@ -10,6 +10,7 @@ import {
   extractPatchDestinations,
   ghApiMergeRequest,
   ghApiMutates,
+  ghHiddenByShellComposition,
   ghMergeRequest,
   gitPushCwd,
   isGitPush,
@@ -1529,6 +1530,19 @@ export function evaluateProductionAction({
       "intent, or refspec. Write each push plainly: `git -C <repo> push <remote> <refspec>`."
     );
   }
+  // Same reasoning, same place, for gh: a backtick or caret escape is consumed
+  // before gh sees the word, so ``gh pr me`rge 1 --admin`` is an ordinary
+  // administrator merge that no parser below recognises as a merge at all.
+  // Whole command and before the segment loop, because a spliced merge verb is
+  // not a merge to ghMergeRequest either.
+  if (ghHiddenByShellComposition(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: a PowerShell backtick or cmd.exe caret escape changes which gh command this runs " +
+      "(for example ``gh pr me`rge 1`` or `gh api --met^hod=DELETE …`). The gate reads command text, so analysing " +
+      "a spelling the shell rewrites would not prove the subcommand or the HTTP method. Write the gh command " +
+      "plainly: `gh pr merge <n> …`, `gh api --method <VERB> <endpoint>`."
+    );
+  }
   if (isGitPush(command) && pushContextIsAmbiguous(command)) {
     return denied("CODEX PRODUCTION GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");
   }
@@ -1539,7 +1553,16 @@ export function evaluateProductionAction({
 
   // Split on single `|` too (Codex round-4): `git push a | git push b` runs
   // BOTH pushes in a shell pipeline, so every pipeline stage is a segment.
-  const commandSegments = command.split(/(?:&&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  //
+  // A single `&` is a separator as well, and was missing: POSIX runs the left
+  // side in the BACKGROUND and cmd.exe runs it first, so both sides execute
+  // either way. `gh api -X POST … & gh api -X GET user` reported a plain GET,
+  // because one rolling method was carried across the unsplit text and the later
+  // GET overwrote the POST; `git push origin HEAD:feature & git push origin
+  // HEAD:main` gated only the first push (Codex sol, 2026-09-08, finding 4 —
+  // both measured blocked:false end to end). `&&` still matches first: the
+  // alternation is ordered longest-first.
+  const commandSegments = command.split(/(?:&&|&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
   // Merge requests that cleared every hard gate; their advisory lookups run
   // together at the very end, after the push segments too (Codex round 8).
   const deferredAdvisories = [];

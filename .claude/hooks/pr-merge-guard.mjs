@@ -31,6 +31,7 @@ import {
   contentIsRisky,
   describeRiskyContent,
   ghApiMergeRequest,
+  ghHiddenByShellComposition,
   ghMergeRequest,
   mcpMergeRequest,
   proofSearchDirs,
@@ -72,7 +73,20 @@ const requests = [];
 if (GITHUB_MERGE_TOOL.test(toolName)) {
   requests.push(mcpMergeRequest(toolInput));
 } else if (typeof toolInput.command === "string" && toolInput.command) {
-  for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
+  // Refused before the segment scan, not analysed: a PowerShell backtick or a
+  // cmd.exe caret is consumed before gh sees the word, so ``gh pr me`rge 1
+  // --admin`` is an ordinary administrator merge that ghMergeRequest reads as an
+  // unknown word and this whole loop skips (Codex sol, 2026-09-08, finding 3).
+  // Same helper and same reasoning as the push side's composition refusal.
+  if (ghHiddenByShellComposition(toolInput.command)) {
+    deny("PR MERGE GATE: a PowerShell backtick or cmd.exe caret escape changes which gh command this runs (for example ``gh pr me`rge 1`` or `gh api --met^hod=PUT …/merge`). The gate reads command text, so analysing a spelling the shell rewrites would not prove the subcommand or the HTTP method. Write the gh command plainly: `gh pr merge <number> …`.");
+  }
+  // A single `&` separates commands too — POSIX backgrounds the left side, cmd
+  // runs it first, and either way BOTH run. Without it `gh pr merge 1 & gh pr
+  // merge 2` was one segment and only the first merge was resolved
+  // (Codex sol, 2026-09-08, finding 4). `&&` still matches first: ordered
+  // alternation, longest spelling leftmost.
+  for (const segment of toolInput.command.split(/(?:&&|&|\|\|?|;|\r?\n)/)) {
     // The mergePullRequest mutation is denied by NAME, whatever transport
     // carries it — `gh api graphql`, curl, Invoke-RestMethod, a fetch in a node
     // one-liner. Until 2026-09-01 only the `gh api graphql` spelling was caught

@@ -46,8 +46,15 @@ Measured through `evaluateProductionAction` at `e7c68e24d`, not read off the pat
 | `npm run build` (control) | false | false |
 
 The controls returning `false` are what make the table conclusive: `false` means "not
-blocked", not "the call errored". Every `true` in the "after" column was also checked
-for its REASON — merge-gate, `gh api` and composition denials, not incidental ones.
+blocked", not "the call errored". The `git push` rows were also checked for their
+REASON — the composition denial specifically, not an incidental one. The `gh` rows
+assert `blocked` only; the throwing `runGh` in those cases is what makes an accidental
+trip into some other gate fail loudly rather than pass quietly.
+
+`gh api --meth\od=POST` is a POSIX reading: bash consumes the backslash and really does
+send a POST, PowerShell leaves `P\OST` alone and gh rejects it. Reading `\` as an escape
+is the fail-closed direction for a KEYWORD — it can only make a gate run on a word
+PowerShell would have left alone — and it is never applied to a value.
 
 `blocked: false` on a `pr merge` line means the merge gate — green pipeline,
 `CHANGES_REQUESTED`, the `--admin` refusal, the exact-SHA risky-diff proof — never ran.
@@ -80,7 +87,6 @@ survived untouched. Partial compliance with a finding leaves the same bug.
   pushes since Codex's nineteenth 2026-07-30 review; this guard never got the check, and
   it is checked on the WHOLE command and BEFORE `isGitPush`, because `git p""ush` is not
   a push to `isGitPush` at all. Shared helper, not a fourth copy.
-
 ### This is a shell-aware reading, NOT "delete every quote and backslash"
 
 Blanket removal is a second bug in the opposite direction, and CodeRabbit named it:
@@ -91,14 +97,24 @@ as POST and deny a call that is not one. Only syntax the shell CONSUMES is remov
 - inside single quotes everything is literal, `\` included;
 - inside double quotes `\` escapes only `"`, `\`, `` ` `` and `$` — which is what keeps
   a double-quoted Windows path (`"C:\tmp\x.json"`) intact;
-- an unterminated quote runs to the end of the word rather than being dropped, the
-  fail-closed reading.
+- an unterminated quote runs to the end of the word rather than being dropped. That is
+  the SAFER reading, not a fail-closed one: no shell executes `gh pr "merge 123`, so it
+  is not a live bypass either way, and the parsers simply carry on with a best-effort
+  word rather than raising an invalid-input marker.
 
-The reading is applied to subcommands, option names and the HTTP method, never to
-free-form values (`--repo`, body fields, destination paths), where a Windows separator
-must survive verbatim. Backslash escapes are POSIX and PowerShell leaves `\` literal, so
-reading them as escapes can only make a gate RUN on a word PowerShell would have left
-alone — the fail-closed direction.
+`splitShellArgv` maps every word, values included — the two `gh api` parsers read
+endpoints and option values out of the same array. What the design constraint governs is
+which of those readings a KEYWORD comparison uses: the argv reading for subcommands,
+option names and the HTTP method; `splitShellArgs`, which strips only a wrapping quote,
+wherever a raw form must survive (`pushDestinationToken` and every other push helper,
+which is why a Windows destination path keeps its separators). Backslash escapes are
+POSIX and PowerShell leaves `\` literal, so reading them as escapes can only make a gate
+RUN on a word PowerShell would have left alone — the fail-closed direction.
+
+It is a limited dialect, not a general shell: it models POSIX quoting only. `` ` `` and
+`$` inside double quotes are returned literally, where bash would substitute. That is
+deliberate — a value is never resolved from it — and the escapes it does not model are
+handled separately, by refusal rather than analysis (below).
 
 **A second-order bug caught during the fix, and pinned:** applying the argv reading on
 top of `unquoteShellArg` re-interprets a surviving literal quote as syntax — `-X 'P"OST'`
@@ -121,16 +137,20 @@ directions.
 
 ### Proof
 
-- Every new assertion was run against the **pre-fix** snapshot `e7c68e24d` in a detached
-  worktree and fails there — the table above is that run's output, not a re-reading of
-  the patterns.
+- Every assertion added in this round was run against the **pre-fix** snapshot
+  `e7c68e24d` in a detached worktree; the ones that fail there are the table above.
+  Some rows are controls and pass in both — `gh api --method GET`,
+  `echo highlight "pr merge"` — which is what they are for, so "every new assertion
+  fails against the parent" would have been an overstatement.
+- Both hooks were run as real `PreToolUse` SUBPROCESSES with a real payload, on the
+  pre-fix checkout and this one, not only through the in-process entry points.
 - Backtracking measured, not assumed: a hook that can be stalled is a hook that can be
   timed out, and a killed `PreToolUse` hook emits nothing, which means ALLOW. On 20k-40k
   character adversarial inputs (unterminated quote runs, `a""` x12000, `\"` x20000) the
   word walk and all three parsers stay linear; the tests pin a 250 ms ceiling.
 - `node .claude/hooks/codex-push-lib.test.mjs`,
   `node .codex/hooks/production-action-guard.test.mjs`,
-  `node .claude/hooks/pr-merge-guard.test.mjs` (129 assertions),
+  `node .claude/hooks/pr-merge-guard.test.mjs`,
   `node .claude/hooks/guards.test.mjs` (168 assertions),
   `npm run test:agent-workflows` — all pass. Parity is unaffected: no hook added or
   removed on either side.

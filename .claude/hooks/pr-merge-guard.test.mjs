@@ -342,4 +342,23 @@ ok(
 );
 ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
 
+// ── the two 2026-09-08 Codex sol findings, pinned at their call sites ─────────
+// Both are wiring, not parsing: the shared helpers are exercised behaviourally in
+// codex-push-lib.test.mjs, and the end-to-end path here needs a real `gh`. Name
+// the SUBJECT of each call, not just the function — `ghHiddenByShellComposition`
+// applied to a single segment inside the loop would type-check, read as the fix,
+// and miss every case, because a spliced merge verb is not a merge to the parser
+// that produced that segment either.
+ok(
+  /if\s*\(\s*ghHiddenByShellComposition\(\s*toolInput\.command\s*\)\s*\)/.test(guardSource),
+  "the gh composition refusal runs on the WHOLE command, before the segment loop",
+);
+// A single `&` runs both sides — POSIX in the background, cmd sequentially — so
+// it must separate segments. Without it `gh pr merge 1 & gh pr merge 2` resolved
+// only PR 1 and the second merge ran ungated.
+ok(
+  /toolInput\.command\.split\(\/\(\?:&&\|&\|/.test(guardSource),
+  "a single & separates command segments, and && still matches first",
+);
+
 console.log(`pr-merge-guard: ${pass} assertions passed`);

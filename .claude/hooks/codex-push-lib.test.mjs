@@ -14,6 +14,7 @@ import {
   shellArgvWord,
   splitShellArgv,
   ghApiMutates,
+  ghHiddenByShellComposition,
   ghMergeRequest,
   ghApiMergeRequest,
   describeRiskyContent,
@@ -2735,6 +2736,145 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     ghMergeRequest(pathological);
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
     assert.ok(elapsedMs < 250, `shell word splitting stays linear on adversarial quoting (${elapsedMs.toFixed(1)}ms)`);
+  }
+}
+
+// ── Codex sol, 2026-09-08: the second round on the same change ────────────────
+// Every case below was measured through the guards before it was written, and
+// each names the finding it pins. Both directions, because a guard that starts
+// refusing ordinary work is a guard that gets switched off.
+{
+  // Finding 1 — gh parses with pflag, which accepts a short option separate,
+  // attached, `=`-attached, and BUNDLED behind booleans. Only the first two were
+  // recognised, so a DELETE arrived at the connector reading as a plain GET.
+  for (const command of [
+    "gh api -X=DELETE repos/o/r/issues/comments/1",
+    "gh api -iXDELETE repos/o/r/issues/comments/1",
+    "gh api -iFbody=hello repos/o/r/issues/1/comments",
+    "gh api -XPOST repos/o/r/issues/1/comments",
+    "gh api -X POST repos/o/r/issues/1/comments",
+    "gh api -fbody=hi repos/o/r/issues/1/comments",
+    "gh api -iF body=hello repos/o/r/issues/1/comments",
+  ]) {
+    assert.equal(ghApiMutates(command), true, `every pflag spelling of a mutating gh api call is a mutation: ${command}`);
+  }
+  // The same walk must not turn a READ into a mutation. `-q`/`-t`/`-H`/`-p` take
+  // values too, and their values must not be read as a method or a field.
+  for (const command of [
+    "gh api -i repos/o/r",
+    "gh api -q .title repos/o/r/pulls/1",
+    "gh api -H 'Accept: application/vnd.github+json' repos/o/r",
+    "gh api -t '{{.name}}' repos/o/r",
+    "gh api -X GET repos/o/r/pulls/1",
+    "gh api -XGET repos/o/r/pulls/1",
+    "gh api -X=GET repos/o/r/pulls/1",
+    "gh api --paginate repos/o/r/issues",
+  ]) {
+    assert.equal(ghApiMutates(command), false, `an ordinary read stays a read: ${command}`);
+  }
+  assert.equal(ghApiMergeRequest("gh api -iXPUT repos/o/r/pulls/123/merge")?.selector, "123",
+    "a bundled -X PUT still resolves through the REST merge route");
+
+  // Finding 2 — `--disable-auto` stands the merge gate down, and it was matched
+  // anywhere in the word list. As the VALUE of `--body`/`-t` it is data, and the
+  // command it was standing down was an ADMINISTRATOR merge.
+  for (const command of [
+    "gh pr merge 123 --body '--disable-auto' --admin --squash",
+    "gh pr merge 123 -t '--disable-auto' --admin --squash",
+    'gh pr merge 123 --subject "--disable-auto" --admin --squash',
+    "gh pr merge 123 --body-file --disable-auto --admin --squash",
+  ]) {
+    const request = ghMergeRequest(command);
+    assert.ok(request, `a merge whose body merely CONTAINS --disable-auto is still a merge: ${command}`);
+    assert.equal(request.admin, true, `and its --admin flag is still seen: ${command}`);
+  }
+  // The stand-down itself must survive, in every spelling that really disables.
+  for (const command of [
+    "gh pr merge 123 --disable-auto",
+    'gh pr merge 123 --disable-a""uto',
+    "gh pr merge 123 --disable-auto=true",
+  ]) {
+    assert.equal(ghMergeRequest(command), null, `a real --disable-auto still stands the gate down: ${command}`);
+  }
+  // `--disable-auto=false` asks gh NOT to disable, so it must not stand down.
+  assert.ok(ghMergeRequest("gh pr merge 123 --disable-auto=false --admin"),
+    "--disable-auto=false does not disable anything, so the gate still runs");
+  // A value must not be mistaken for the PR selector either.
+  assert.equal(ghMergeRequest("gh pr merge --body 456 123 --squash")?.selector, "123",
+    "the word after --body is its value, not the PR number");
+
+  // Finding 5 — the binary itself can carry the splice. `g""h` is an ordinary
+  // `gh` to every shell, and GH_BIN_RE needs a contiguous literal `gh`.
+  for (const command of ['g""h pr merge 123 --admin --squash', "g''h pr merge 123 --squash", 'g""h api -X POST repos/o/r/issues/1/comments']) {
+    assert.ok(ghMergeRequest(command) || ghApiMutates(command), `a spliced gh binary is still gh: ${command}`);
+  }
+
+  // Finding 3 — PowerShell's backtick and cmd.exe's caret are consumed before gh
+  // sees the word, and shellArgvWord models POSIX only, by design. The caller
+  // refuses these rather than analysing them.
+  for (const command of [
+    "gh pr me`rge 123 --admin --squash",
+    "g`h pr merge 123 --admin --squash",
+    "gh pr me^rge 123 --admin --squash",
+    "gh api --met`hod=DELETE repos/o/r/issues/comments/1",
+    "gh api --met^hod=DELETE repos/o/r/issues/comments/1",
+  ]) {
+    assert.equal(ghHiddenByShellComposition(command), true, `a backtick or caret escape hides this gh command: ${command}`);
+  }
+  // It must stay quiet on text it does not rewrite, and — the point CodeRabbit
+  // made on PR #630 — it must NOT be a blanket quote strip: `--method='P"OST'`
+  // really does pass P"OST, and erasing the quote would deny a non-POST.
+  for (const command of [
+    "gh pr view 123", "gh pr merge 123 --squash", "npm run build",
+    "gh api --method='P\"OST' repos/o/r", "gh api repos/o/r --jq .title",
+    "gh pr comment 1 --body 'see the merge notes'",
+  ]) {
+    assert.equal(ghHiddenByShellComposition(command), false, `an unrewritten command is not hidden: ${command}`);
+  }
+
+  // Finding 9 — my own regression. A Windows local-repo push is ordinary work,
+  // and the composition helper refused it: the whole-command unwrap deleted the
+  // quotes that held `C:\scratch repo\repo.git` together, so one destination word
+  // read back as two. It has read them that way since 2026-07-30, so the CLAUDE
+  // guard refused them too — wiring the Codex side in only made it visible.
+  for (const command of [
+    "git push C:\\scratch\\repo.git HEAD:feature",
+    'git push "C:\\scratch repo\\repo.git" HEAD:feature',
+    'git push "C:/scratch repo/repo.git" HEAD:feature',
+    "git push \\\\server\\share\\repo.git HEAD:feature",
+    "git -C C:\\CRX_Manager push origin HEAD:feature/x",
+  ]) {
+    assert.equal(pushHiddenByShellComposition(command), false, `an ordinary Windows-path push is not a hidden push: ${command}`);
+  }
+  // Narrowing that comparison must not cost either signal it carried. The second
+  // one — a destination decided at run time — has no quote or escape in any word,
+  // so the word-wise comparison alone reads it back as unchanged. Caught by the
+  // differential sweep over this file's other consumers, not by review.
+  for (const command of [
+    "git push $(cat ref) HEAD:main",
+    "git push `cat ref` HEAD:main",
+    "git push origin ('HEAD:m' + 'ain')",
+    'git push origin HEAD:m""ain',
+    "git p\\ush origin HEAD:main",
+    "git pu`sh origin HEAD:main",
+    "git pu^sh origin HEAD:main",
+  ]) {
+    assert.equal(pushHiddenByShellComposition(command), true, `a computed or rewritten push is still refused: ${command}`);
+  }
+
+  // The new helpers are hooks too: a stalled hook is a killed hook, and a killed
+  // PreToolUse hook emits nothing, which means ALLOW.
+  for (const pathological of [
+    `gh pr merge 1 ${"`".repeat(40000)}`,
+    `gh api ${"^".repeat(40000)} -X POST repos/o/r/issues/1/comments`,
+    `git push origin ${"\\".repeat(40000)}HEAD:main`,
+    `git push ${'"'.repeat(40000)} HEAD:main`,
+  ]) {
+    const started = process.hrtime.bigint();
+    ghHiddenByShellComposition(pathological);
+    pushHiddenByShellComposition(pathological);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `the composition readings stay linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
   }
 }
 

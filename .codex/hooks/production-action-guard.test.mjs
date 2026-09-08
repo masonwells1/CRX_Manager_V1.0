@@ -1711,6 +1711,92 @@ try {
     assert.ok(elapsedMs < 250, `shell word splitting stays linear on adversarial quoting (${elapsedMs.toFixed(1)}ms)`);
   }
 
+  // ── Codex sol, 2026-09-08: second round on the same change ─────────────────
+  // A backtick or caret escape is consumed before gh sees the word, so these are
+  // ordinary administrator merges and DELETEs that no parser recognised. The
+  // guard refuses rather than analyses, exactly as the push side does.
+  for (const command of [
+    "gh pr me`rge 123 --admin --squash",
+    "g`h pr merge 123 --admin --squash",
+    "gh pr me^rge 123 --admin --squash",
+    "gh api --met`hod=DELETE repos/o/r/issues/comments/1",
+    "gh api --met^hod=DELETE repos/o/r/issues/comments/1",
+  ]) {
+    const hidden = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { throw new Error("a hidden gh command must never reach a lookup"); },
+    });
+    assert.equal(hidden.blocked, true, `a gh command hidden by a backtick or caret is refused: ${command}`);
+    assert.match(
+      String(hidden.reason || ""),
+      /backtick or cmd\.exe caret/,
+      `and by the composition check, not incidentally: ${command}`,
+    );
+  }
+  // Both directions. The last of these is the case CodeRabbit raised on PR #630:
+  // `--method='P"OST'` really does pass P"OST, so it must NOT be read as a POST.
+  for (const command of [
+    "gh pr view 123",
+    "gh api repos/o/r/pulls/1 --jq .title",
+    "gh api --method='P\"OST' repos/o/r",
+    "git push origin HEAD:feature/x",
+  ]) {
+    assert.doesNotMatch(
+      String(evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command },
+        repoDir: risky.repo,
+        nowMs: now,
+        runGh: () => objectedPrJson,
+      }).reason || ""),
+      /backtick or cmd\.exe caret/,
+      `an unrewritten command is not called a hidden one: ${command}`,
+    );
+  }
+  // A single `&` separates commands: POSIX backgrounds the left side, cmd runs
+  // it first, and BOTH execute. One rolling HTTP method was carried across the
+  // unsplit text, so a later GET erased an earlier POST, and only the first of
+  // two pushes was gated.
+  // The second segment carries the offence in each case, so only segmentation
+  // can produce the denial: a rolling method that never split read the trailing
+  // GET, and a merge parser that never split resolved only the first PR.
+  for (const command of [
+    "gh api -X POST repos/o/r/issues/1/comments & gh api -X GET user",
+    "gh pr view 1 & gh pr merge 2 --admin --squash",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command },
+        repoDir: risky.repo,
+        nowMs: now,
+        runGh: () => objectedPrJson,
+      }).blocked,
+      true,
+      `both sides of a single-& chain are inspected: ${command}`,
+    );
+  }
+  // My own regression, found by Codex: an ordinary push to a local Windows
+  // repository is not a hidden push. The composition helper's whole-command
+  // unwrap deleted the quotes holding one destination word together.
+  for (const command of [
+    "git push C:\\scratch\\repo.git HEAD:feature",
+    "git push \"C:\\scratch repo\\repo.git\" HEAD:feature",
+    "git push \"C:/scratch repo/repo.git\" HEAD:feature",
+  ]) {
+    const ordinary = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    });
+    assert.equal(ordinary.blocked, false, `an ordinary local-repository push still runs: ${command}`);
+  }
+
   // ── a slow advisory lookup must not be able to starve a HARD denial ────────
   // Codex round 6 (PR #563). The Codex GitHub App lookup is advisory and
   // fail-open, and it costs up to four `gh` calls each capped at 10s against a
