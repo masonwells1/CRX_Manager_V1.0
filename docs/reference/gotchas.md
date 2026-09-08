@@ -326,11 +326,12 @@ per hour fleet-wide, so do **not** hand-post `@coderabbitai review` either: it c
 and consumes the slot another PR was waiting for. A review is not a merge requirement, so never
 stall a green landing waiting for one. This is an expected-value call, not a claim that a bot can
 never be heard — the scheduled task re-tests the label path every 7 days, and one acknowledged
-bot-posted command reverses it. Never merge from the ordinary check row alone —
-confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
-`CHANGES_REQUESTED` verdict. An approving review is not required (removed 2026-09-02); when one
-*does* exist, require that authenticated `APPROVED` review's `commit_id` and the live PR head to
-match. There is no hidden marker SHA to check on the hourly-job path — the authenticated review is
+bot-posted command reverses it. A missing review is **not** a reason to hold a green PR; an
+absent review and an unverified one are different things. Never merge over a
+`CHANGES_REQUESTED` verdict, and never treat the ordinary check row as evidence a review
+happened — whenever you rely on a CodeRabbit review, confirm it exists on the frozen candidate.
+An approving review is not required (removed 2026-09-02); when one *does* exist, require that
+authenticated `APPROVED` review's `commit_id` and the live PR head to match. There is no hidden marker SHA to check on the hourly-job path — the authenticated review is
 the whole of the evidence, and a generic Actions-authored comment was never an independent trust
 identity.
 

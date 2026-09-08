@@ -213,9 +213,12 @@ complete reread. An approving GitHub review is **NOT** required to merge: Mason 
 `required_pull_request_reviews` from `main` on 2026-09-02, so CI is the merge gate. A
 `CHANGES_REQUESTED` verdict still blocks, and both agent merge gates refuse to merge over one.
 Immediately before merge, verify live `main` protection still requires the branch current and
-every required check green, and confirm CodeRabbit actually reviewed the frozen candidate — a
-green status row is not review proof. When CodeRabbit HAS approved, its `commit_id` must equal
-the PR's final `headRefOid`. The Codex proof below remains an additional hard gate
+every required check green. **A CodeRabbit review is not a precondition for merging** — if the
+hourly job has not reached this PR, merge on green checks. But never treat CodeRabbit's status
+row as evidence that a review happened: it reports green when reviews are disabled entirely. So
+whenever you rely on a CodeRabbit review — to claim it reviewed this candidate, or to merge on
+its approval — confirm the review exists on this exact head, and when it HAS approved, its
+`commit_id` must equal the PR's final `headRefOid`. The Codex proof below remains an additional hard gate
 for risky money/RLS/migration diffs. Both run — neither replaces the other.
 
 **If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
