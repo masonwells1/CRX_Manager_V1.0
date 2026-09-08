@@ -317,9 +317,18 @@ BEGIN
        AND p.proname IN ('create_vendor_bill','get_ap_aging','update_vendor_bill')
   ) s;
   v_expected :=
-    'create_vendor_bill(p_vendor_id uuid, p_purchase_order_id uuid, p_bill_number text, p_bill_date date, p_due_date date, p_payment_terms text, p_subtotal_cents bigint, p_adjustment_cents bigint, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=uuid lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false'
+    -- p_confirm_po_overage / p_po_overage_reason were appended to both bill
+    -- routines by 20260831161000 (create) and 20260831233000 (update), applied
+    -- live 2026-09-03 as ledger 20260903024550 / 20260903124710. Until this
+    -- baseline names them, every run of this proof raises
+    -- SECTION9_AP_ROUTINE_IDENTITY_DRIFTED before any behavioral block executes,
+    -- so the drift guard becomes the thing that stops the proof rather than the
+    -- thing that protects it. Only the argument lists move: definer rights,
+    -- resolved search_path, return type, language and the grantee set are
+    -- unchanged by those migrations.
+    'create_vendor_bill(p_vendor_id uuid, p_purchase_order_id uuid, p_bill_number text, p_bill_date date, p_due_date date, p_payment_terms text, p_subtotal_cents bigint, p_adjustment_cents bigint, p_notes text, p_idempotency_key text, p_confirm_po_overage boolean, p_po_overage_reason text) secdef=true config=search_path=public, pg_temp returns=uuid lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false'
     ||';get_ap_aging(p_as_of_date date) secdef=true config=search_path=public, pg_temp returns=TABLE(vendor_id uuid, vendor_name text, current_amount bigint, days_1_30 bigint, days_31_60 bigint, days_61_90 bigint, over_90 bigint, total_outstanding bigint, bill_count integer) lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false'
-    ||';update_vendor_bill(p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint, p_bill_date date, p_due_date date, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=jsonb lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false';
+    ||';update_vendor_bill(p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint, p_bill_date date, p_due_date date, p_notes text, p_idempotency_key text, p_confirm_po_overage boolean, p_po_overage_reason text) secdef=true config=search_path=public, pg_temp returns=jsonb lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false';
   IF coalesce(v_actual,'<none>') <> v_expected THEN
     RAISE EXCEPTION 'SECTION9_AP_ROUTINE_IDENTITY_DRIFTED: %', coalesce(v_actual,'<none>');
   END IF;
