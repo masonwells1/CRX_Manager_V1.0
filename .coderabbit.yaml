@@ -35,8 +35,13 @@ reviews:
   # superseded and was describing protection settings that no longer exist.
   #
   # ONE EXCEPTION, and it is a security control rather than a merge convention:
-  # a SECURITY DEFINER migration in a forgeable-actor shape still needs a real
-  # CodeRabbit review before merge. `actor-binding-check.mjs` is capped as
+  # any SECURITY DEFINER migration that accepts a caller-supplied actor parameter
+  # (p_performed_by, p_actor*, p_user*, or an actor-shaped name such as
+  # p_target_id) still needs a real CodeRabbit review before merge — whether or
+  # not the body appears to bind it to auth.uid(). An apparent binding does not
+  # exclude it: the residual gaps are re-binding after a passing ACTOR_MISMATCH
+  # check, temp-table laundering, names outside the pattern, and cross-routine
+  # delegation. `actor-binding-check.mjs` is capped as
   # best-effort by the 2026-09-01 decision, and `docs/reference/agent-guardrails.md`
   # records that for the re-binding, laundering, naming-scope and cross-routine
   # gaps only the exact-SHA Codex proof and the CodeRabbit review stand. Do not

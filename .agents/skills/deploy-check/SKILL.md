@@ -154,9 +154,12 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    money/RLS/migration diffs and is always required for them, while CodeRabbit participates only
    when the hourly job has actually delivered a review. CodeRabbit never substitutes for the Codex
    proof, and a missing CodeRabbit review never holds a green PR — **except for one security
-   class.** A `SECURITY DEFINER` migration in a forgeable-actor shape (caller-supplied
-   `p_performed_by` / `p_actor*` / `p_user*`, or an actor-shaped name outside that pattern such as
-   `p_target_id`, not bound to `auth.uid()`) still needs a real CodeRabbit review before merge:
+   class.** Any `SECURITY DEFINER` migration that accepts a caller-supplied actor parameter
+   (`p_performed_by`, `p_actor*`, `p_user*`, or any actor-shaped name outside that pattern such as
+   `p_target_id`) still needs a real CodeRabbit review before merge — **whether or not the body
+   appears to bind it to `auth.uid()`**. An apparent binding does NOT exclude it; the documented
+   residual gaps are re-binding after a passing `ACTOR_MISMATCH` check, temp-table laundering,
+   names outside the pattern, and cross-routine delegation. Judge by the parameter's presence:
    `actor-binding-check.mjs` is capped as best-effort (2026-09-01), and
    `docs/reference/agent-guardrails.md` records that for the re-binding, laundering, naming-scope
    and cross-routine gaps only the exact-SHA Codex proof and the CodeRabbit review stand. Hold the

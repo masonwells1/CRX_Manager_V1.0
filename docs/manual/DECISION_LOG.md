@@ -32,10 +32,15 @@ review is **not** a merge requirement — CI is the merge gate (see the 2026-09-
 stall a green landing waiting for one. `CHANGES_REQUESTED` still blocks and both agent merge gates
 still refuse to merge over it.
 
-**One security exception, deliberately carved out.** A `SECURITY DEFINER` migration in a
-forgeable-actor shape (a caller-supplied `p_performed_by` / `p_actor*` / `p_user*`, or an
-actor-shaped name outside that pattern such as `p_target_id`, that the body does not bind to
-`auth.uid()`) still requires a real CodeRabbit review before merge. `actor-binding-check.mjs` was
+**One security exception, deliberately carved out.** Any `SECURITY DEFINER` migration that accepts
+a caller-supplied actor parameter (`p_performed_by`, `p_actor*`, `p_user*`, or any actor-shaped name
+outside that pattern such as `p_target_id`) still requires a real CodeRabbit review before merge —
+**whether or not the body appears to bind it to `auth.uid()`**. An apparent binding does not exclude
+it, because the documented residual gaps are exactly re-binding after a passing `ACTOR_MISMATCH`
+check (`p_performed_by := p_target_id;`), laundering through a temp table, actor-shaped names
+outside the name pattern, and cross-routine delegation to a private helper. The exception is defined
+by the parameter's presence, not by whether a binding check looks present — defining it the other
+way would have excluded re-binding, the very shape it exists for. `actor-binding-check.mjs` was
 capped as best-effort on 2026-09-01, and `docs/reference/agent-guardrails.md` records that for the
 re-binding, laundering, naming-scope and cross-routine gaps **only the exact-SHA Codex proof and
 the CodeRabbit review stand**. Making a review optional everywhere would have deleted one of the
