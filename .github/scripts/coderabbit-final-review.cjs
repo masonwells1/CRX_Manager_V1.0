@@ -5,6 +5,8 @@ const REQUESTED_LABEL = 'coderabbit-review-requested';
 const REVIEW_COMMAND = '@coderabbitai review';
 const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 const CODERABBIT_BOT_LOGIN = 'coderabbitai[bot]';
+const GITHUB_ACTIONS_APP_ID = 15368;
+const GATE_CHECK_NAME = 'final-review-gate';
 const RESET_ACTIONS = new Set([
   'synchronize',
   'closed',
@@ -514,11 +516,10 @@ async function collectReviewDecisionBlockers({
     // mergeability state all block here too. Refusing costs a relabel; posting
     // blind can spend a paid slot on a pull request that cannot merge.
     //
-    // Known cost, stated rather than hidden: a refusal leaves a red
-    // `final-review-gate` check run on this head, and a previous completed-failure
-    // run of this workflow still counts as a blocking check on later attempts at
-    // the same SHA, so a transient GraphQL error can require a new commit. That is
-    // a separate open defect in this gate, not a reason to fail open here.
+    // A refusal leaves a red `final-review-gate` check run on this head. The
+    // retry path below recognizes a completed historical result from this exact
+    // trusted gate, so the transient failure remains fail-closed without forcing
+    // an unrelated candidate commit merely to request the review again.
     core.warning(`Could not read the review decision: ${error.message}`);
     return [`could not read the pull request review decision (${error.message})`];
   }
@@ -571,6 +572,53 @@ async function attachRequiredWorkflowProvenance({
       core.warning(`Could not resolve workflow provenance for ${check.name}: ${error.message}`);
     }
   }));
+}
+
+// A failed earlier invocation of this gate leaves a completed check run on the
+// candidate SHA. Retrying the ready label starts a NEW invocation, so treating
+// that old gate result as an ordinary failed check wedges every retry forever.
+//
+// Do not identify it by job name: another workflow can call a job
+// `final-review-gate`. Instead ask Actions for THIS invocation's immutable
+// workflow identity, then only discount *completed* checks from that exact
+// workflow AND this exact gate job from the official GitHub Actions app. A
+// concurrent invocation remains in_progress and therefore blocks; so does a
+// same-name job from any other workflow, or a different job in this workflow.
+async function resolveTrustedGateWorkflowProvenance({
+  github, owner, repo, selfRunId, core,
+}) {
+  if (!isPositiveSafeInteger(selfRunId)) {
+    return { error: 'this workflow run id is missing or invalid' };
+  }
+
+  try {
+    const response = await github.rest.actions.getWorkflowRun({
+      owner, repo, run_id: Number(selfRunId),
+    });
+    const workflowId = response?.data?.workflow_id;
+    const workflowPath = response?.data?.path;
+    if (!isPositiveSafeInteger(workflowId) || !isNonBlankString(workflowPath)) {
+      return { error: 'this workflow run did not identify a trusted workflow' };
+    }
+    return { workflowId, workflowPath };
+  } catch (error) {
+    core.warning(`Could not resolve this gate workflow provenance: ${error.message}`);
+    return { error: error.message };
+  }
+}
+
+function isCompletedTrustedGateCheck(check, trustedGateWorkflow) {
+  // The checks/jobs APIs expose per-invocation database IDs, not a stable YAML
+  // job-key field. The workflow test therefore pins this trusted workflow to its
+  // sole job key; this runtime check binds the resulting check run to Actions,
+  // the exact workflow identity, and that job name.
+  return check
+    && typeof check === 'object'
+    && check.status === 'completed'
+    && Number(check.app?.id) === GITHUB_ACTIONS_APP_ID
+    && normalize(check.name) === GATE_CHECK_NAME
+    && Number(check.workflow_id) === Number(trustedGateWorkflow.workflowId)
+    && String(check.workflow_path || '') === String(trustedGateWorkflow.workflowPath);
 }
 
 function mergeabilityIsPending(pullRequest) {
@@ -922,8 +970,21 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config, core
     requiredChecks: config.requiredChecks,
     core,
   });
+  const trustedGateWorkflow = await resolveTrustedGateWorkflowProvenance({
+    github,
+    owner,
+    repo,
+    selfRunId,
+    core,
+  });
+  if (trustedGateWorkflow.error) {
+    return [`final-review-gate: workflow provenance could not be verified (${trustedGateWorkflow.error})`];
+  }
+  const retrySafeCheckRuns = Array.isArray(observedCheckRuns)
+    ? observedCheckRuns.filter((check) => !isCompletedTrustedGateCheck(check, trustedGateWorkflow))
+    : observedCheckRuns;
   return evaluateChecks({
-    checkRuns: observedCheckRuns,
+    checkRuns: retrySafeCheckRuns,
     statuses,
     requiredChecks: config.requiredChecks,
     ignoredChecks: config.ignoredChecks,
