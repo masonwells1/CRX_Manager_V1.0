@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { isDefinitiveRpcRejection } from '../lib/idempotency';
+import { getIdempotencyBindingRejection, isDefinitiveRpcRejection } from '../lib/idempotency';
 
 /**
  * Freezes an editable form whose last attempt has an UNKNOWN outcome.
@@ -54,7 +54,25 @@ export function useUnresolvedIntent() {
 
   /** Record the outcome of a failed attempt: uncertain ones freeze the payload. */
   const markIfUncertain = useCallback((scope: string, error: unknown): void => {
-    if (isDefinitiveRpcRejection(error)) return;
+    if (isDefinitiveRpcRejection(error)) {
+      // A positive refusal SETTLES this scope, including one frozen earlier by an
+      // ambiguous failure. A faithful retry carries the SAME key, so if the first
+      // attempt had committed the server would have replayed its stored receipt
+      // instead of evaluating the request again and refusing it on business grounds.
+      // An error at all means no replay happened; a business refusal means the work
+      // did not apply. The operator can edit and resend without reloading. Leaving
+      // the scope frozen was safe but stranded the screen until a reload. (Codex P2.)
+      //
+      // Binding rejections are excluded deliberately, and `isDefinitiveRpcRejection`
+      // does not exclude all of them: it filters IDEMPOTENCY_INTENT_MISMATCH,
+      // _RESULT_INVALID and _RECEIPT_MISSING by message, but an ACTOR mismatch still
+      // reads as a definitive P0001. That one is raised precisely BECAUSE an earlier
+      // request under this key committed, so unfreezing on it would be the exact
+      // mistake this guard exists to prevent. Check the binding classifier too.
+      if (getIdempotencyBindingRejection(error) !== null) return;
+      if (scopesRef.current.delete(scope)) publish();
+      return;
+    }
     scopesRef.current.add(scope);
     publish();
   }, [publish]);

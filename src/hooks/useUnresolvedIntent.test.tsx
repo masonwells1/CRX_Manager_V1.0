@@ -143,4 +143,73 @@ describe('useUnresolvedIntent', () => {
     act(() => result.current.clear('duplicate:B:v1'));
     expect(result.current.isFrozen).toBe(false);
   });
+
+  it('lifts a freeze when a faithful retry is positively refused', () => {
+    const { result } = renderHook(() => useUnresolvedIntent());
+
+    // Codex P2. The hold request's answer was lost, so the scope freezes.
+    act(() => result.current.markIfUncertain('hold:widget:5', new TypeError('Failed to fetch')));
+    expect(result.current.isFrozen).toBe(true);
+
+    // The operator retries the SAME payload. It carries the same key, so a commit
+    // would have replayed the stored receipt instead of being evaluated again. A
+    // business refusal therefore proves the original never applied.
+    act(() => result.current.markIfUncertain('hold:widget:5', {
+      code: 'P0001',
+      message: 'INSUFFICIENT_HOLD_INVENTORY',
+      details: null,
+      hint: null,
+    }));
+    expect(result.current.isFrozen).toBe(false);
+    // Settled, so an edited payload is free to go.
+    expect(result.current.refuseEdited('hold:widget:9')).toBe(false);
+  });
+
+  it('does NOT lift a freeze on an idempotency binding rejection', () => {
+    const { result } = renderHook(() => useUnresolvedIntent());
+
+    act(() => result.current.markIfUncertain('hold:widget:5', new TypeError('Failed to fetch')));
+
+    // An ACTOR mismatch reads as a definitive P0001, but it is raised precisely
+    // BECAUSE an earlier request under this key committed. Unfreezing on it would be
+    // the exact mistake the freeze exists to prevent.
+    act(() => result.current.markIfUncertain('hold:widget:5', {
+      code: 'P0001',
+      message: 'IDEMPOTENCY_ACTOR_MISMATCH',
+      details: null,
+      hint: null,
+    }));
+    expect(result.current.isFrozen).toBe(true);
+    expect(result.current.refuseEdited('hold:widget:9')).toBe(true);
+
+    // The same holds for the mismatch codes filtered by message.
+    act(() => result.current.markIfUncertain('hold:widget:5', {
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      code: 'P0001',
+      details: null,
+      hint: null,
+    }));
+    expect(result.current.isFrozen).toBe(true);
+  });
+
+  it('leaves OTHER frozen scopes alone when one is positively refused', () => {
+    const { result } = renderHook(() => useUnresolvedIntent());
+
+    act(() => {
+      result.current.markIfUncertain('duplicate:A:v1', new TypeError('Failed to fetch'));
+      result.current.markIfUncertain('duplicate:B:v1', new TypeError('Failed to fetch'));
+    });
+
+    act(() => result.current.markIfUncertain('duplicate:A:v1', {
+      code: 'P0001',
+      message: 'RECIPE_NAME_TAKEN',
+      details: null,
+      hint: null,
+    }));
+
+    // A settled A must not settle B.
+    expect(result.current.isFrozen).toBe(true);
+    expect(result.current.refuseEdited('duplicate:B:v1')).toBe(false);
+    expect(result.current.refuseEdited('duplicate:A:v2')).toBe(true);
+  });
 });
