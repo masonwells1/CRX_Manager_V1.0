@@ -1,4 +1,4 @@
-import { localToday } from './dateUtils';
+import { localToday, parseLocalDate } from './dateUtils';
 
 const FORMULA_LEADING_CHAR = /^[=+\-@\t\r]/;
 
@@ -72,4 +72,13 @@ export function fmtCSV(n: unknown): string {
 export function fmtDateCSV(d: unknown): string {
   if (!d) return '';
   return new Date(String(d)).toLocaleDateString();
+}
+
+/** Format PostgreSQL date-only values without interpreting them as UTC. */
+export function fmtDateOnlyCSV(d: unknown): string {
+  if (!d) return '';
+  const text = String(d);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text)
+    ? parseLocalDate(text).toLocaleDateString()
+    : fmtDateCSV(d);
 }
