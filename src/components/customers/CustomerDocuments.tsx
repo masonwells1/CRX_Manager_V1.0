@@ -3,6 +3,7 @@ import { AlertTriangle, Download, FileText, RefreshCw, Trash2, Upload } from 'lu
 import { useAuth } from '../../contexts/AuthContext';
 import { checkMutationResult, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
+import { downloadCustomerDocumentFile } from '../../lib/customerDocumentDownload';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import Badge from '../ui/Badge';
@@ -248,20 +249,7 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
   const handleDownload = async (document: CustomerDocumentRow) => {
     setDownloadingId(document.id);
     try {
-      const { data, error } = await supabase.storage
-        .from(DOCUMENT_BUCKET)
-        .createSignedUrl(document.storage_path, 60, { download: document.filename });
-      if (error) throw error;
-      if (!data?.signedUrl) throw new Error('Could not create a download link.');
-      // Anchor-click download instead of window.open: popup blockers (notably
-      // mobile Safari) silently swallow window.open after an awaited request.
-      const link = window.document.createElement('a');
-      link.href = data.signedUrl;
-      link.download = document.filename;
-      link.rel = 'noopener';
-      window.document.body.appendChild(link);
-      link.click();
-      link.remove();
+      await downloadCustomerDocumentFile(document.storage_path, document.filename);
     } catch (error: unknown) {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         extra: { context: 'CustomerDocuments.download', documentId: document.id },
