@@ -799,7 +799,8 @@ if (shellTool) {
   const PM_ADD_FAMILY = new Set(["install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add", "a", "link", "ln"]);
   const PM_REMOVE_FAMILY = new Set(["uninstall", "unlink", "remove", "rm", "r", "un"]);
   const PM_UPDATE_FAMILY = new Set(["update", "up", "upgrade", "udpate", "upgrade-interactive"]);
-  const PM_MANIFEST_EDITORS = new Set(["init", "innit", "create", "set-script", "patch-commit", "unplug"]);
+  // `trust` writes trustedDependencies into package.json (bun pm trust <pkg>).
+  const PM_MANIFEST_EDITORS = new Set(["init", "innit", "create", "set-script", "patch-commit", "unplug", "trust"]);
   const PM_NO_MANIFEST_RE = /(?:^|\s)(?:--no-save|-g|--global|--location(?:=|\s+)global)(?=\s|$)/i;
   const PM_VALUE_OPTIONS = new Set(["--prefix", "--cwd", "--dir", "--directory", "-C", "--registry", "--cache", "--userconfig", "--globalconfig", "--location", "--workspace", "-w", "--filter", "-F"]);
   const PM_BOOLEAN_OPTIONS = new Set(["-g", "--global", "--no-save", "--silent", "-s", "--verbose", "--version", "-v", "--help", "-h"]);
@@ -817,8 +818,16 @@ if (shellTool) {
     "access", "deprecate", "undeprecate", "dist-tag", "dist-tags", "star", "unstar", "stars", "team", "org", "profile", "login",
     "logout", "adduser", "add-user", "completion", "token", "hook", "sbom", "query", "audit", "config", "c", "get",
     "licenses", "store", "fetch", "env", "setup", "server", "node", "plugin", "constraints", "stage", "check", "autoclean",
-    "policies", "import", "pm", "build", "info", "npm",
+    "policies", "import", "build", "info", "npm",
+    // bun pm read-only leaves (bun pm ls / bin / cache / hash / whoami / view / untrusted).
+    "hash", "hash-string", "hash-print", "untrusted", "default-trusted",
   ]);
+  // `pm` is a NAMESPACE (bun pm pkg set, bun pm version, bun pm trust), not a subcommand.
+  // Codex gpt-5.6-sol High on cbd986732: it sat in PM_READ_OR_RUN, so `bun pm pkg set
+  // scripts.test=…` was "not a manifest write" while `npm pkg set` denied. What follows
+  // `pm` is now classified as if the manager had been invoked directly, so every rule
+  // above (pkg get vs set/delete/fix, version <bump>, trust, unknown → refuse) applies.
+  const PM_NAMESPACES = new Set(["pm"]);
   // Launcher subcommands run OTHER programs: what follows them is classified too (see
   // PM_LAUNCHERS below), and a nested manager token is classified in its own right.
   const PM_LAUNCHERS = new Set(["exec", "x", "explore", "dlx", "workspace", "workspaces", "w"]);
@@ -845,6 +854,7 @@ if (shellTool) {
     // ambiguous combinations instead of assuming --no-save or -g always wins.
     const competingSave = tokens.some((t) => /^(?:--save(?:[=-]|$)|-[SDEO]$|--global=|--location(?:=|$))/.test(t));
     const noManifest = PM_NO_MANIFEST_RE.test(tokens.join(" ")) && !competingSave;
+    if (PM_NAMESPACES.has(sub)) return after.length > 0 && classifyFrom([manager, ...after], 0);
     if (PM_MANIFEST_EDITORS.has(sub)) return true;
     if (sub === "pkg") return (positionals[0] || "").toLowerCase() !== "get";
     if (sub === "version") return manager === "yarn" || after.length > 0;

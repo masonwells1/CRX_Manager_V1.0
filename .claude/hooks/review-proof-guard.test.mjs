@@ -255,6 +255,13 @@ allowed({ tool_name: "Bash", tool_input: { command: "pnpm install --frozen-lockf
 allowed({ tool_name: "Bash", tool_input: { command: "yarn" } });
 allowed({ tool_name: "Bash", tool_input: { command: "yarn install --immutable" } });
 allowed({ tool_name: "Bash", tool_input: { command: "bun install" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm pkg get name" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm ls" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm bin" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm cache" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm hash" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm whoami" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm" } });
 allowed({ tool_name: "Bash", tool_input: { command: "cd /c/repo && npm ci && npm run build" } });
 allowed({ tool_name: "Bash", tool_input: { command: "node scripts/regenerate-schema-registry.mjs --from-introspection /tmp/introspection.json" } });
 allowed({ tool_name: "Bash", tool_input: { command: "node scripts/generate-caller-graph.mjs --live-json /tmp/live.json" } });
@@ -770,6 +777,17 @@ for (const command of [
   "bun add left-pad",
   "bun remove left-pad",
   "bun install left-pad",
+  // Codex gpt-5.6-sol High on cbd986732: `pm` is a namespace; what follows it is classified.
+  "bun pm pkg set scripts.test=x",
+  "bun pm pkg delete scripts.lint",
+  "bun pm pkg fix",
+  "bun pm version patch",
+  "bun pm trust left-pad",
+  "bun pm migrate",
+  "bun pm frobnicate",
+  "bun --cwd . pm pkg set scripts.test=x",
+  "cmd /c bun pm pkg set scripts.test=x",
+  "npm pm pkg set scripts.test=x",
   "FOO=1 npm install left-pad",
   "cd /c/repo && npm install left-pad",
   "rm -rf node_modules && npm install left-pad",
