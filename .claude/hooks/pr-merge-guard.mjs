@@ -139,10 +139,13 @@ if (requests.some((request) => request?.admin)) {
     "That override exists for Mason to use by hand on the PR page — an agent may never use it, whatever " +
     "the diff or the deadline. Use the ordinary merge instead: an approving review is NOT required " +
     "(removed 2026-09-02), so a green, up-to-date candidate with no `CHANGES_REQUESTED` verdict merges " +
-    "without `--admin`. If a review did ask for changes, resolve it first — apply the " +
-    "`ready-for-coderabbit` label and let the default-branch workflow post the review command once, " +
-    "then fix what it finds. Do not post `@coderabbitai review` by hand — that routes around the label " +
-    "gate. If the merge is still blocked, hand the PR to Mason and say why."
+    "without `--admin`. If a review did ask for changes, resolve it first — an hourly scheduled task " +
+    "requests one CodeRabbit review per hour under Mason's own account, and that is the path that " +
+    "works: CodeRabbit does not answer review commands posted by `github-actions[bot]`, so the " +
+    "`ready-for-coderabbit` label path yielded no reviews (measured 2026-09-07). Let that job spend " +
+    "the slot rather than posting `@coderabbitai review` yourself — reviews are rationed to roughly " +
+    "one grant per hour fleet-wide, so a second request collides with it and wastes the slot. " +
+    "If the merge is still blocked, hand the PR to Mason and say why."
   );
 }
 
@@ -337,10 +340,12 @@ function gateRequest(request) {
     process.stderr.write(
       `PR MERGE NOTICE: reviewDecision=${String(pr.reviewDecision || "").toUpperCase() || "<none>"} — merging ` +
       "without a current approval, which main no longer requires (Mason, 2026-09-02). If CodeRabbit has " +
-      "not reviewed this candidate, apply the `ready-for-coderabbit` label — the default-branch " +
-      "workflow revalidates this exact head and posts the review command once. Do not post " +
-      "`@coderabbitai review` by hand; that routes around the label gate. Read the review and fix " +
-      "what it finds first.\n"
+      "not reviewed this candidate, let the hourly review-slot job request it under Mason's own " +
+      "account — CodeRabbit does not answer commands posted by `github-actions[bot]`, so the " +
+      "`ready-for-coderabbit` label path yields no review (measured 2026-09-07). Do not post " +
+      "`@coderabbitai review` yourself; reviews are rationed to roughly one grant per hour " +
+      "fleet-wide, so a second request collides with that job and wastes the slot. Read the review " +
+      "and fix what it finds first.\n"
     );
   }
 
