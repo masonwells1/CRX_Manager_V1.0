@@ -22,9 +22,9 @@
  * Each guard gets its own test, so removing one guard turns exactly one test
  * red. A guard whose failure is carried by a neighbouring guard is untested.
  */
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 
 const harness = vi.hoisted(() => {
@@ -419,8 +419,39 @@ async function loadPo(poId: string) {
   await release(`history:${poId}`);
 }
 
+const RECEIVE_SUCCESS_TOAST = 'Items received and inventory updated';
+
+function receiveSettled() {
+  return mocks.toast.mock.calls.some(
+    ([kind, message]) => kind === 'success' && message === RECEIVE_SUCCESS_TOAST,
+  );
+}
+
+/**
+ * Wait for a receive that has been allowed to complete to actually finish.
+ *
+ * The RPC answering is not the end of the receive: the handler then resolves
+ * the durable intent in IndexedDB, dynamically imports the PDF module and only
+ * then raises the success toast. Locally that tail lands inside the same
+ * act() that released the RPC; on a loaded CI runner it lands AFTER the test
+ * has returned. The toast mock is shared by every test in this file, so a
+ * straggling success toast is then counted by the NEXT test -- and
+ * `submitReceive` reads any toast as "the receive reached an outcome", stops
+ * sampling before the RPC has fired, and returns undefined. That is the flake
+ * seen on PR #605 (run 34199500247, attempt 1). Every test that lets a receive
+ * complete must observe this toast before it ends; the afterEach below
+ * enforces it.
+ */
+async function awaitReceiveSettled() {
+  await waitFor(() => expect(receiveSettled()).toBe(true), { timeout: 5000 });
+}
+
 /** Drive the receive modal end to end and return the RPC arguments, if any. */
 async function submitReceive(quantity: string) {
+  // Only a toast raised by THIS receive means it reached an outcome. A toast
+  // that was already recorded before the click -- a straggler from a previous
+  // test's receive tail -- must not stop the sampling loop early.
+  const toastsBefore = mocks.toast.mock.calls.length;
   fireEvent.click(screen.getByRole('button', { name: /receive items/i }));
   const dialog = await screen.findByRole('dialog');
   fireEvent.change(within(dialog).getAllByRole('spinbutton')[0], { target: { value: quantity } });
@@ -437,7 +468,7 @@ async function submitReceive(quantity: string) {
   // exactly like a working one.
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const fired = mocks.rpc.mock.calls.some((call) => call[0] === 'receive_po_items');
-    if (fired || mocks.toast.mock.calls.length > 0) break;
+    if (fired || mocks.toast.mock.calls.length > toastsBefore) break;
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -446,6 +477,26 @@ async function submitReceive(quantity: string) {
 }
 
 describe('PurchaseOrderDetail route-currency race', () => {
+  afterEach(() => {
+    // Unmount first. Testing Library's own afterEach does this too, but a
+    // hook that throws stops the later hooks, and a page left mounted turns
+    // one clear failure into a cascade of "found multiple elements" in the
+    // tests that follow.
+    cleanup();
+    // A receive whose RPC answered but whose tail is still running when the
+    // test returns keeps writing -- toasts, refetches, parked queries -- into
+    // whichever test runs next. Refuse to end a test in that state rather than
+    // let the leak surface as a flake somewhere else in the file.
+    const receiveFired = mocks.rpc.mock.calls.some((call) => call[0] === 'receive_po_items');
+    if (receiveFired && !receiveSettled()) {
+      throw new Error(
+        'This test fired receive_po_items but returned before the receive settled. '
+          + 'Call awaitReceiveSettled() (or leave the RPC parked) before the test ends, '
+          + 'or its success toast lands in the next test and breaks submitReceive there.',
+      );
+    }
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     pending.length = 0;
@@ -512,6 +563,7 @@ describe('PurchaseOrderDetail route-currency race', () => {
       expect.objectContaining({ po_item_id: 'item-b1', quantity: 4 }),
     ]);
     expect(JSON.stringify(rpcCall![1])).not.toContain('item-a1');
+    await awaitReceiveSettled();
   });
 
   it("drops PO A's header when it resolves after PO B finished loading", async () => {
@@ -710,6 +762,7 @@ describe('PurchaseOrderDetail route-currency race', () => {
       completeReceive!();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    await awaitReceiveSettled();
     // Neither stale refetch may even reach the network: both are refused at the
     // door, because a call that gets that far has already taken the ticket the
     // live PO B fetch needs (see the two wedge tests below).
@@ -762,6 +815,7 @@ describe('PurchaseOrderDetail route-currency race', () => {
       completeReceive!();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    await awaitReceiveSettled();
 
     // A refused call must not have started a history query -- parking one would
     // mean it got past the door with the flag already raised.
@@ -812,6 +866,9 @@ describe('PurchaseOrderDetail route-currency race', () => {
       completeReceive!();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
+    // PO A's whole receive tail has run to its toast before PO B's header is
+    // allowed to answer, so the collision below is fully played out.
+    await awaitReceiveSettled();
 
     // PO B's header answers now. If its ticket survived, the fetch continues to
     // the line items; if the stale closure stole it, this response is dropped
