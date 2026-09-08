@@ -13,10 +13,16 @@ environment safety, and production readiness.
 Codex, and Mason alike. The landing path is:
 
 **push a branch → open a PR → finish required checks → freeze the candidate →
-apply `ready-for-coderabbit` → let the default-branch workflow post `@coderabbitai review` once →
-read and resolve that final review → merge with
-`--match-head-commit <reviewed-head-sha>`.** The **merge** is what deploys production via Vercel's
-git integration; Vercel's one-click rollback is the accepted safety net.
+merge with `--match-head-commit <frozen-head-sha>`.** CI is the merge gate; an approving review is
+not required. The **merge** is what deploys production via Vercel's git integration; Vercel's
+one-click rollback is the accepted safety net.
+
+**Do not request a CodeRabbit review with the `ready-for-coderabbit` label (measured 2026-09-07).**
+That label's workflow posts the command as `github-actions[bot]`, and CodeRabbit does not answer a
+bot-authored command — roughly 24 uses produced zero reviews. The hourly `crx-hourly-coderabbit-slot`
+task requests one review per hour under Mason's account. Reviews are rationed to about one grant per
+hour fleet-wide, so do not post `@coderabbitai review` by hand either; it collides with that job and
+wastes the slot for every other PR.
 
 Run this skill on the branch **before** opening the PR (and again before merging if the branch
 moved).
@@ -128,26 +134,21 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 2. Open a PR.
 3. Finish implementation, bring the branch up to date, and wait for required checks;
    **Vercel is a required check**.
-4. Freeze the candidate after the separate Codex review is clean, record its head SHA, then apply
-   **`ready-for-coderabbit`**. The default-branch workflow rechecks the exact head,
-   draft/conflict/auto-merge state, actor permission, required checks, and every reported
-   non-CodeRabbit check before posting exactly `@coderabbitai review` once with a hidden SHA marker.
-   The generic Actions-authored marker is dedupe evidence, not merge authorization. If it fails, it removes
-   the ready label and posts nothing; correct the named blocker and relabel. Read the resulting
-   review and fix every real issue; nitpicks may be dismissed with a one-line reason. If a fix or
-   base update creates a new commit, the workflow clears both state labels and deletes the
-   already-posted command whether or not the head moved (Actions-authored canonical commands only);
-   restart required checks,
-   rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy, freeze and record the
-   new SHA, and apply the ready label for one follow-up review. Never use `@coderabbitai resume`, and reserve
+4. Freeze the candidate after the separate Codex review is clean and record its head SHA.
+   **Do not apply `ready-for-coderabbit`, and do not post `@coderabbitai review` by hand** — see the
+   review-request note near the top of this file. If CodeRabbit has already reviewed this exact head,
+   read it and fix every real issue; nitpicks may be dismissed with a one-line reason. If it has not
+   reviewed, do not wait — a review is not a merge requirement. If a fix or base update creates a new
+   commit, restart required checks, rerun the exact-HEAD Codex proof when the corrected diff is
+   Codex-worthy, and freeze and record the new SHA. Never use `@coderabbitai resume`, and reserve
    `@coderabbitai full review` for a deliberately justified complete reread. An approving GitHub
    review is **NOT** required to merge: Mason removed `required_pull_request_reviews` from `main`
    on 2026-09-02, so CI is the merge gate. A `CHANGES_REQUESTED` verdict still blocks, and both
    agent merge gates refuse to merge over one. Before merge, verify live `main` protection still
    requires a current branch and every required check green; `enforce_admins` is off and no agent
-   may act on that exemption. Confirm CodeRabbit actually reviewed the frozen candidate, and when
-   it HAS approved, require the marker SHA, that authenticated approval's `commit_id`, and the
-   final `headRefOid` to match; recheck every reported check and auto-merge OFF.
+   may act on that exemption. When CodeRabbit HAS approved, require that authenticated approval's
+   `commit_id` and the final `headRefOid` to match; when it has not reviewed, that is not a
+   blocker — CI is the merge gate. Either way, recheck every reported check and auto-merge OFF.
    Ordinary green CodeRabbit or generic Actions status rows are insufficient. A separate exact-SHA
    `gpt-5.6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration
    diffs — both run, neither replaces the other.

@@ -191,19 +191,23 @@ Notes:
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
 clean, hand back to the landing flow in `AGENTS.md`: **push a branch → open a PR → finish checks →
-freeze the candidate commit → apply `ready-for-coderabbit` → resolve one CodeRabbit review → merge with
-`--match-head-commit <reviewed-head-sha>`**. Direct pushes to
+freeze the candidate commit → merge with
+`--match-head-commit <frozen-head-sha>`**. Direct pushes to
 `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
-**CodeRabbit (standing policy, automation updated 2026-08-30):** automatic reviews are disabled.
+**CodeRabbit (standing policy, automation updated 2026-09-08):** automatic reviews are disabled.
 Finish the Codex review first, bring the branch current and green, freeze the release-candidate
-commit, record its head SHA, then apply `ready-for-coderabbit`. The trusted default-branch workflow
-rechecks the exact head and PR/check state, records `coderabbit-review-requested`, and posts exactly
-`@coderabbitai review` once. If it fails, it removes the ready label and posts nothing; correct the
-named blocker and relabel. Read the review and fix any real issue before merging; nitpicks may be
-dismissed with a one-line reason. A fix or base update that changes the commit clears the workflow
-labels and requires restarted checks, a refreshed exact-HEAD Codex proof when the corrected diff is
-Codex-worthy, a newly frozen and recorded SHA, and one follow-up ready-label trigger. Never use
+commit, and record its head SHA. **Do not apply `ready-for-coderabbit`, and do not post
+`@coderabbitai review` by hand (measured 2026-09-07).** The label's workflow posts the command as
+`github-actions[bot]`, which CodeRabbit does not answer — roughly 24 uses produced zero reviews,
+while the same command from Mason's user account is answered in 5–11 seconds. The hourly
+`crx-hourly-coderabbit-slot` task requests one review per hour under that account, and reviews are
+rationed to about one grant per hour fleet-wide, so a hand-posted request collides with the job and
+wastes the slot for every other PR. If CodeRabbit has reviewed this exact head, fix any real issue
+before merging; nitpicks may be dismissed with a one-line reason. If it has not, do not wait — CI is
+the merge gate and an approving review is not required. A fix or base update that changes the commit
+requires restarted checks, a refreshed exact-HEAD Codex proof when the corrected diff is
+Codex-worthy, and a newly frozen and recorded SHA. Never use
 `@coderabbitai resume`, and reserve `@coderabbitai full review` for a deliberately justified
 complete reread. An approving GitHub review is **NOT** required to merge: Mason removed
 `required_pull_request_reviews` from `main` on 2026-09-02, so CI is the merge gate. A
