@@ -802,11 +802,18 @@ if (shellTool) {
   const PM_BOOLEAN_OPTIONS = new Set(["-g", "--global", "--no-save", "--silent", "-s", "--verbose", "--version", "-v", "--help", "-h"]);
   const packageManagerWritesManifest = (segment) => {
     const text = String(segment ?? "");
-    const tokens = (text.match(/(?:"[^"]*"|'[^']*'|\S)+/g) || []).map((t) => t.replace(/["']/g, ""));
-    let i = 0;
-    while (i < tokens.length && /^[A-Za-z_]\w*=/.test(tokens[i])) i += 1;        // VAR=value prefixes
-    if (i < tokens.length && /^(?:.*[/\\])?corepack(?:\.cmd|\.exe)?$/i.test(tokens[i])) i += 1;
-    if (i >= tokens.length || !PACKAGE_MANAGER_RE.test(tokens[i])) return false;
+    // Quotes are dropped and the text re-split so a manager hidden inside a quoted
+    // wrapper argument (`sh -c 'npm install x'`) is seen as its own tokens.
+    const tokens = text.replace(/["'`]/g, " ").split(/\s+/).filter(Boolean);
+    // Wrapper-agnostic head (Codex gpt-5.6-sol High on 8ac85002d): the manager may sit
+    // behind ANY launcher — `cmd /c`, `sh -c`, `powershell -Command`, `npx`, `env`,
+    // `command`, `nice`, `corepack`, a VAR=value prefix — and a launcher list would
+    // inherit its own omissions, so the head is the FIRST token anywhere in the segment
+    // that names a package manager. Known over-block, accepted on this file's standing
+    // rule: text that merely quotes such a command (`git commit -m "npm install x"`,
+    // `grep "npm add x"`) is refused too; reword it.
+    const i = tokens.findIndex((t) => PACKAGE_MANAGER_RE.test(t));
+    if (i < 0) return false;
     const manager = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
     const rest = tokens.slice(i + 1);
     let subIndex = 0;

@@ -387,6 +387,20 @@ for (const prefix of [SB_UUID, "mcp__other_supabase__", "mcp__supabase_prod__"])
 }
 // Pin permission coverage to the guard's recognized filesystem mutator set.
 // Adding a new recognized mutator without a matching deny must fail this check.
+// Codex gpt-5.6-sol Medium on 8ac85002d: tier registration is case-EXACT. A case variant of
+// a registered leaf has no settings entry of its own (settings matching is case-sensitive),
+// so it must not be treated as settled by the variant that does.
+const CASE_UUID = "mcp__9c9c9c9c-1111-4222-8333-444444444444__";
+withProjectSettings({ ask: [CASE_UUID + "pause_project"] }, (dir) => {
+  r = runHook({ tool_name: CASE_UUID + "pause_project", tool_input: { project_id: "x" } }, dir);
+  eq(r.status, 0, `exact-case registered leaf: hook must exit 0 (${r.stderr || ""})`);
+  eq(r.stdout, "", "the exact-case registered leaf defers to its ask entry");
+  r = runHook({ tool_name: CASE_UUID + "Pause_Project", tool_input: { project_id: "x" } }, dir);
+  ok(isDeny(r), "a case variant cannot borrow the registered leaf's ask entry");
+  r = runHook({ tool_name: CASE_UUID + "PAUSE_PROJECT", tool_input: { project_id: "x" } }, dir);
+  ok(isDeny(r), "an upper-case variant cannot borrow the registered leaf's ask entry");
+});
+
 const hookSource = readFileSync(path.join(__dirname, "mcp-tool-guard.mjs"), "utf8");
 const mutatorAlternatives = hookSource.match(/^const DC_WRITE_RE = .*__\(([^)]+)\)/m);
 ok(mutatorAlternatives, "recognized filesystem mutator alternatives are discoverable");

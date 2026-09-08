@@ -139,7 +139,7 @@ let settingsCache = null;
 function settingsMcpEntries() {
   if (settingsCache) return settingsCache;
   const exact = new Set();
-  const tiers = new Map(); // lower-cased entry -> Set of tiers it appears in
+  const tiers = new Map(); // EXACT-case entry -> Set of tiers it appears in (Codex Medium on 8ac85002d: a case variant must not borrow another variant's ask/deny registration)
   const found = new Map();
   const hookDir = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(hookDir, "..", "..");
@@ -160,10 +160,9 @@ function settingsMcpEntries() {
         for (const entry of Array.isArray(perms[tier]) ? perms[tier] : []) {
           const text = String(entry).trim();
           if (/^mcp__[\w-]+__[\w-]+$/i.test(text)) {
-            const lower = text.toLowerCase();
-            exact.add(lower);
-            if (!tiers.has(lower)) tiers.set(lower, new Set());
-            tiers.get(lower).add(tier);
+            exact.add(text.toLowerCase());
+            if (!tiers.has(text)) tiers.set(text, new Set());
+            tiers.get(text).add(tier);
           }
           const m = SETTINGS_UUID_LEAF_RE.exec(text);
           if (!m) continue;
@@ -191,7 +190,7 @@ function settingsMcpEntries() {
 // with no prompt at all - the very bypass the tier exists to prevent (GitHub
 // Codex P1 on PR #605 head 6de456ac5) - so it does NOT count.
 function gatedTierRegistered(name) {
-  const tiers = settingsMcpEntries().tiers.get(name.toLowerCase());
+  const tiers = settingsMcpEntries().tiers.get(name); // exact case: settings matching is case-sensitive, so a variant has no entry of its own
   return Boolean(tiers && (tiers.has("ask") || tiers.has("deny")));
 }
 

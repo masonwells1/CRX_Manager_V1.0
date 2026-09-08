@@ -224,6 +224,12 @@ allowed({ tool_name: "Bash", tool_input: { command: "npm run typecheck" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm install" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm ci" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm install --no-save left-pad" } });
+// A launcher in front of a from-manifest or non-manifest command stays silent.
+allowed({ tool_name: "Bash", tool_input: { command: "cmd /c npm ci" } });
+allowed({ tool_name: "Bash", tool_input: { command: "sh -c 'npm run build'" } });
+allowed({ tool_name: "Bash", tool_input: { command: "powershell -Command npm test" } });
+allowed({ tool_name: "Bash", tool_input: { command: "ls node_modules/.bin/npm" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npx vitest run src/lib/npm.test.ts" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm install -g corepack" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm uninstall --no-save left-pad" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm pkg get scripts" } });
@@ -688,6 +694,17 @@ for (const command of [
 // path-qualified heads, `corepack`, a VAR=value prefix and a preceding `cd &&` all deny.
 for (const command of [
   "npm install left-pad",
+  // Codex gpt-5.6-sol High on 8ac85002d: the manager behind a launcher. Every line was
+  // probe-confirmed silent before the fix.
+  "cmd /c npm install left-pad",
+  "npx npm install left-pad",
+  "powershell -Command npm install left-pad",
+  "sh -c 'npm install left-pad'",
+  "bash -c \"npm install left-pad\"",
+  "env npm install left-pad",
+  "command npm install left-pad",
+  "nice npm install left-pad",
+  "cmd /c yarn add left-pad",
   "npm --prefix . install left-pad",
   "npm --prefix help install left-pad",
   "npm --prefix=. install left-pad",
