@@ -1,5 +1,15 @@
--- PARKED — PR #535 follow-up. NOT APPLIED LIVE. Requires Mason's explicit approval
+-- PARKED - NOT APPLIED LIVE. PR #535 follow-up. Requires Mason's explicit approval
 -- immediately before it is applied.
+--
+-- The exact shape of that first line is load-bearing, not styling. The repository's
+-- parked-migration recognizer accepts "PARKED" followed directly by NOT APPLIED / DO
+-- NOT APPLY (separated only by /, - or an em dash), and every LOCAL CANDIDATE row in
+-- docs/reference/migration-history.md must map one-to-one onto a file whose header it
+-- recognizes. An earlier version of this header read "PARKED - PR #535 follow-up. NOT
+-- APPLIED LIVE.", which put the PR reference between the two halves the recognizer
+-- pairs, so this file was invisible to it and the guard-hook regression suite failed
+-- with "parked marker and LOCAL CANDIDATE history registry are not one-to-one".
+-- Keep NOT APPLIED LIVE immediately after PARKED.
 --
 -- idempotency-body-check: exempt
 -- complete_cycle_count is a WRAPPER. It performs the CHECKING half of idempotency
