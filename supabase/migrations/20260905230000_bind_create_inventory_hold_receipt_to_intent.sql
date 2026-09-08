@@ -337,6 +337,18 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_actor uuid := auth.uid();
+  -- Normalize the force flag ONCE, here, and use v_force for BOTH the
+  -- fingerprint and the delegated call. The wrapped body tests p_force with
+  -- bare `IF p_force` and `AND NOT p_force`, and a SQL/JSON NULL makes both
+  -- three-valued: `IF NULL` takes the ELSE path, so FORCE_REQUIRES_ADMIN and
+  -- FORCE_REQUIRES_REASON never fire, and `over_capacity AND NOT NULL` is NULL
+  -- rather than true, so INSUFFICIENT_HOLD_INVENTORY never raises. A sales rep
+  -- posting p_force: null could therefore book an unlimited over-capacity hold
+  -- with no admin authorization, no force reason, and no 'WARNING: ... admin
+  -- override' activity row. This wrapper is the only entrypoint `authenticated`
+  -- can reach (the impl is postgres-only after the rename above), so
+  -- normalizing here closes it without editing the wrapped body.
+  v_force boolean := COALESCE(p_force, false);
   v_fingerprint text;
   v_replay jsonb;
   v_result jsonb;
@@ -383,7 +395,7 @@ BEGIN
     'hold_type', p_hold_type,
     'expires_at', p_expires_at,
     'notes', p_notes,
-    'force', COALESCE(p_force, false),
+    'force', v_force,
     'force_reason', p_force_reason
   )::text, 'UTF8'), 'sha256'), 'hex');
 
@@ -403,7 +415,7 @@ BEGIN
   -- unchanged from the live body.
   v_result := public._create_inventory_hold_intent_impl_20260905(
     p_product_id, p_customer_id, p_quantity, p_hold_type, p_expires_at,
-    p_notes, p_performed_by, p_force, p_force_reason, p_idempotency_key
+    p_notes, p_performed_by, v_force, p_force_reason, p_idempotency_key
   );
 
   UPDATE public.idempotency_keys
@@ -476,6 +488,17 @@ BEGIN
      OR position('ACTOR_MISMATCH' IN v_src) = 0
      OR position('IDEMPOTENCY_RESULT_INVALID' IN v_src) = 0 THEN
     RAISE EXCEPTION 'POSTFLIGHT_BODY: the installed create_inventory_hold is not the intent wrapper.';
+  END IF;
+
+  -- The force flag must be normalized ONCE and both consumers must read the
+  -- normalized value. The wrapped body tests p_force with bare `IF p_force`
+  -- and `AND NOT p_force`, so an un-normalized SQL NULL silently skips the
+  -- admin/reason contract AND the capacity guard. Assert the declaration is
+  -- present and that no raw p_force survives at either consumer.
+  IF position('v_force boolean := COALESCE(p_force, false)' IN v_src) = 0
+     OR position('''force'', v_force' IN v_src) = 0
+     OR position('p_performed_by, v_force, p_force_reason' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FORCE_NORMALIZATION: create_inventory_hold does not normalize p_force before fingerprinting and delegating; a NULL force would bypass FORCE_REQUIRES_ADMIN and INSUFFICIENT_HOLD_INVENTORY.';
   END IF;
 
   SELECT prosrc INTO v_src FROM pg_proc WHERE oid = to_regprocedure(v_impl_sig);

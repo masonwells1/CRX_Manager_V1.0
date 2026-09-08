@@ -48,11 +48,20 @@ function hasIntentBindingContract(sql: string) {
     && wrapper.includes("AND role IN ('admin', 'sales_rep')")
     && !/v_role\s+NOT IN/.test(wrapper)
     && wrapper.includes("p_idempotency_key !~ '[^[:space:]]'")
+    // p_force must be normalized ONCE and BOTH consumers must read v_force.
+    // The wrapped body tests the flag with bare `IF p_force` / `AND NOT
+    // p_force`, so a raw SQL NULL reaching it skips FORCE_REQUIRES_ADMIN,
+    // FORCE_REQUIRES_REASON and INSUFFICIENT_HOLD_INVENTORY alike.
+    && wrapper.includes('v_force boolean := COALESCE(p_force, false);')
+    && wrapper.includes("'force', v_force,")
+    && wrapper.includes('p_performed_by, v_force, p_force_reason, p_idempotency_key')
+    && !/'force',\s*COALESCE\(p_force/.test(wrapper)
+    && !/p_performed_by,\s*p_force,/.test(wrapper)
     && wrapper.includes('p_idempotency_key COLLATE "C" !~ \'[!-~]\'')
     && wrapper.includes("encode(extensions.digest(convert_to(jsonb_build_object(")
     && ["'actor_id', v_actor", "'product_id', p_product_id", "'customer_id', p_customer_id",
       "'quantity', trim_scale(p_quantity)", "'hold_type', p_hold_type", "'expires_at', p_expires_at",
-      "'notes', p_notes", "'force', COALESCE(p_force, false)", "'force_reason', p_force_reason"]
+      "'notes', p_notes", "'force', v_force", "'force_reason', p_force_reason"]
       .every((field) => wrapper.includes(field))
     && wrapper.includes("p_idempotency_key, 'create_inventory_hold', v_actor, v_fingerprint")
     && wrapper.includes("AND operation = 'create_inventory_hold';")
@@ -81,6 +90,7 @@ function hasIntentBindingContract(sql: string) {
     && sql.includes('POSTFLIGHT_ACL')
     && sql.includes('POSTFLIGHT_ARGS')
     && sql.includes('POSTFLIGHT_BODY')
+    && sql.includes('POSTFLIGHT_FORCE_NORMALIZATION')
     && sql.includes("v_helper_sig text := 'public.check_idempotency_intent(text,text,uuid,text)';")
     && sql.includes('p_force boolean DEFAULT false, p_force_reason text DEFAULT NULL::text, p_idempotency_key text DEFAULT NULL::text\';')
     && sql.includes('-- idempotency-body-check: exempt')
@@ -113,7 +123,13 @@ describe('create_inventory_hold receipt binding (20260905230000)', () => {
       ['p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor', 'false'],
       ["'quantity', trim_scale(p_quantity)", "'quantity', 0"],
       ["'notes', p_notes", "'notes', NULL"],
-      ["'force', COALESCE(p_force, false)", "'force', false"],
+      ["'force', v_force,", "'force', false,"],
+      // Passing the RAW p_force to the wrapped body reopens the NULL-force
+      // bypass: `IF p_force` and `AND NOT p_force` are both NULL-blind, so a
+      // sales rep could force an over-capacity hold with no admin check.
+      ['p_performed_by, v_force, p_force_reason', 'p_performed_by, p_force, p_force_reason'],
+      ['v_force boolean := COALESCE(p_force, false);', 'v_force boolean := p_force;'],
+      ['POSTFLIGHT_FORCE_NORMALIZATION', 'POSTFLIGHT_SKIPPED'],
       ['extensions.digest(', 'public.digest('],
       ['FROM PUBLIC, anon, authenticated, service_role;', 'FROM PUBLIC, anon;'],
       ['LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;', ''],

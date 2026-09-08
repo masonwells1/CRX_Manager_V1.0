@@ -27,6 +27,10 @@
 --   * cross-operation key reuse still raises;
 --   * a refused stock check (INSUFFICIENT_HOLD_INVENTORY) and a non-admin force
 --     (FORCE_REQUIRES_ADMIN) are unchanged and leave no hold AND no receipt;
+--   * an EXPLICIT NULL force from a sales rep is refused on capacity and
+--     leaves no hold, no receipt and no admin-override activity row (before
+--     the wrapper normalized p_force, NULL skipped BOTH the admin contract
+--     and the capacity guard);
 --   * an admin force with a reason still works and is receipted;
 --   * the renamed body is not executable by anon/authenticated/service_role.
 --
@@ -323,8 +327,32 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%FORCE_REQUIRES_ADMIN%' THEN RAISE; END IF;
   END;
+  -- sales_rep with an EXPLICIT SQL NULL force: refused, exactly like false.
+  -- Before the wrapper normalized the flag this was the live hole: the wrapped
+  -- body tests it with bare `IF p_force` and `AND NOT p_force`, and NULL makes
+  -- both three-valued -- `IF NULL` takes the ELSE path so FORCE_REQUIRES_ADMIN
+  -- and FORCE_REQUIRES_REASON never fire, and `over_capacity AND NOT NULL` is
+  -- NULL rather than true so INSUFFICIENT_HOLD_INVENTORY never raises. A rep
+  -- could book an unlimited over-capacity hold with no admin authorization and
+  -- no 'WARNING: ... override' activity row. It must now raise on capacity.
+  BEGIN
+    PERFORM public.create_inventory_hold(
+      v_product, v_customer, 1000, 'manual', NULL, NULL, v_rep, NULL, NULL, 'smoke-hold-key-nullforce'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL force was accepted -- the rep booked an over-capacity hold';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%INSUFFICIENT_HOLD_INVENTORY%' THEN RAISE; END IF;
+  END;
+  -- ...and NULL force must fingerprint as false, not as a distinct request:
+  -- a retained key from a false-force call must still see NULL as identical.
+  SELECT count(*) INTO v_count FROM public.activity_feed
+   WHERE related_entity_type = 'inventory_hold'
+     AND description LIKE 'WARNING: Hold created with admin override%';
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: a NULL-force call left % override activity row(s)', v_count;
+  END IF;
   SELECT count(*) INTO v_count FROM public.idempotency_keys
-   WHERE idempotency_key IN ('smoke-hold-key-toomuch', 'smoke-hold-key-repforce');
+   WHERE idempotency_key IN ('smoke-hold-key-toomuch', 'smoke-hold-key-repforce', 'smoke-hold-key-nullforce');
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: a refused hold left % receipt(s) behind', v_count;
   END IF;
