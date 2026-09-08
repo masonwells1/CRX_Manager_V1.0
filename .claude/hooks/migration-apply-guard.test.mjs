@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck, stripCommentsQuoteAware } from "./live-testdata-lib.mjs";
@@ -108,6 +108,40 @@ function runHook(payload, projectDir) {
 }
 const isDeny = (r) => r.stdout.includes('"permissionDecision":"deny"');
 const sha = (s) => createHash("sha256").update(s).digest("hex");
+
+// ── why every ALLOW assertion has to print the hook's own words ─────────────
+// migration-apply-lib.mjs fails CLOSED by construction: it caps every git call
+// at GIT_CALL_TIMEOUT_MS and turns any throw — a timeout included — into one of
+// its ~30 distinct `return block(...)` sites. The overwhelming majority of this
+// suite's assertions are `ok(isDeny(r), ...)`, and a spurious fail-closed block
+// SATISFIES every one of them for the wrong reason. The handful of allow-
+// assertions are therefore the entire detection surface for a guard that has
+// started refusing when it should not.
+//
+// That makes their failure message load-bearing. Asserting the negated deny
+// predicate directly throws with the label alone: it says an allow was expected
+// and a deny arrived, and nothing about WHICH block fired — so the one signal
+// the suite has is the one signal that cannot be read. Observed 2026-09-07:
+// `Phase 3C Containment
+// (Windows)` on PR #592 at 4cb4cb674 failed the "restored fresh proofs allow
+// again" case and then passed on a re-run of the identical commit. Branch
+// content, every expiry window, leftover fixture state and local slowness were
+// all ruled out; the mechanism was never proven, because no deny reason was
+// printed. This helper is what makes the next occurrence self-explaining.
+function describeHookRun(r) {
+  const parts = [`hook exit status: ${r.status}${r.signal ? ` (signal ${r.signal})` : ""}`];
+  if (r.error) parts.push(`spawn error: ${r.error.message}`);
+  parts.push(`--- hook stdout ---\n${(r.stdout || "").trim() || "(empty)"}`);
+  const errText = (r.stderr || "").trim();
+  parts.push(`--- hook stderr ---\n${errText || "(empty)"}`);
+  return parts.join("\n");
+}
+// Use this for EVERY assertion that expects the guard to allow. The diagnostics
+// are built only on failure, so the passing path stays as cheap as `ok`.
+function okAllow(r, m) {
+  if (isDeny(r)) ok(false, `${m}\n\n${describeHookRun(r)}`);
+  else ok(true, m);
+}
 
 const BENIGN_SQL = "CREATE TABLE widgets (id bigint primary key); ALTER TABLE widgets ENABLE ROW LEVEL SECURITY;";
 const DESTRUCTIVE_SQL = "DROP TABLE customers;";
@@ -261,6 +295,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 2. Valid proof, unarmed, benign → allow.
     writeProof(stateDir, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
+    okAllow(r, "valid proof + benign migration → allowed");
     // PR #605 CodeRabbit F2 (2026-09-06): a silent pass must also be a clean exit — a crashed
     // hook prints nothing too, and without the status check it would satisfy this line.
     eq(r.status, 0, `valid proof + benign migration: hook must exit 0 (${r.stderr || ""})`);
@@ -300,7 +335,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeProof(stateDir, DESTRUCTIVE_SQL);
     writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
-    ok(!isDeny(r), "interactive session (no autopilot flag): destructive migration with proof is not hook-blocked");
+    okAllow(r, "interactive session (no autopilot flag): destructive migration with proof is not hook-blocked");
 
     // 5. ARMED + destructive + valid proof → DENIED (the 2026-07-13 carve-out).
     armAutopilot(stateDir, 8);
@@ -358,7 +393,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 6f. Fresh, content-bound, clean Sol/high proof → allowed (the point of arming).
     writeCodexProof(BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
-    ok(!isDeny(r), "ARMED run: reviewer proof + fresh content-bound clean Codex proof applies hands-free");
+    okAllow(r, "ARMED run: reviewer proof + fresh content-bound clean Codex proof applies hands-free");
 
     // 6g. Reviewer proof lacking queryHash → DENIED even with a good Codex
     //     proof (hands-free applies must be content-bound end to end).
@@ -391,7 +426,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r), "ARMED run: future-dated Codex proof is denied");
     writeCodexProof(BENIGN_SQL); // restore a good one so later sections start clean
     r = runHook(call(BENIGN_SQL), tmp);
-    ok(!isDeny(r), "ARMED run: restored fresh proofs allow again (sanity)");
+    okAllow(r, "ARMED run: restored fresh proofs allow again (sanity)");
 
     // 7. EXPIRED arm flag + destructive + proof → STILL DENIED (Codex R2 P1:
     //    a run that outlives its arming window fails CLOSED — the flag file
@@ -431,11 +466,12 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeProof(stateDir, DESTRUCTIVE_SQL);
     writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
-    ok(!isDeny(r), "flag deleted by explicit disarm → interactive rules apply again");
+    okAllow(r, "flag deleted by explicit disarm → interactive rules apply again");
     writeMigrationFile(tmp, MIG, BENIGN_SQL);
 
     // 8. Unrelated tools must receive NO decision, not an overriding allow.
     r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "DROP TABLE customers;" } }, tmp);
+    okAllow(r, "other tools pass through untouched");
     eq(r.status, 0, `unrelated tool: hook must exit 0 (${r.stderr || ""})`);
     eq(r.stdout, "", "other tools defer to their own permission checks");
     r = runHook({ tool_name: "mcp__permission_probe__write_marker", tool_input: {} }, tmp);
@@ -493,7 +529,7 @@ function armAutopilot(stateDir, hoursFromNow) {
         tool_name,
         tool_input: { project_id: CRX_PROJECT, name: MIG, query: PARKED },
       }, tmp);
-      ok(!isDeny(r), `${tool_name}: a genuine repository migration is allowed through the same gate`);
+      okAllow(r, `${tool_name}: a genuine repository migration is allowed through the same gate`);
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -575,7 +611,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       ({ tool_name: "mcp__supabase__apply_migration", cwd, tool_input: { project_id: CRX_PROJECT, name, query } });
 
     let r = runHook(callFrom(linked, BENIGN_SQL), primary);
-    ok(!isDeny(r), "a proof minted in the worktree the session is working in satisfies the gate");
+    okAllow(r, "a proof minted in the worktree the session is working in satisfies the gate");
 
     // Codex's blocker on the first version of this fix. Same proof, same
     // migration, same 30-minute window — only the session's checkout differs.
@@ -600,7 +636,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeAppliedSnapshot(nestedState);
     writeProof(nestedState, BENIGN_SQL);
     r = runHook(callFrom(nested, BENIGN_SQL), primary);
-    ok(!isDeny(r), "a worktree nested inside the primary checkout resolves to itself, not to its parent");
+    okAllow(r, "a worktree nested inside the primary checkout resolves to itself, not to its parent");
     git(["worktree", "remove", "--force", nested], primary);
 
     // Both cases below must SEED THE MIGRATION FILE, or source provenance refuses
@@ -643,7 +679,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeAppliedSnapshot(primaryState);
     writeFileSync(path.join(linkedState, "AUTOPILOT.on"), "not json at all");
     r = runHook(callFrom(linked, BENIGN_SQL), primary);
-    ok(!isDeny(r), "a flag Mason never armed here, sitting in the session's worktree, does not change the rule-set");
+    okAllow(r, "a flag Mason never armed here, sitting in the session's worktree, does not change the rule-set");
     ok(!/LAPSED/i.test(r.stdout), "worktree AUTOPILOT.on is not read as this checkout's authorization state");
 
     writeFileSync(path.join(primaryState, "AUTOPILOT.on"), "not json at all");
@@ -715,6 +751,27 @@ function armAutopilot(stateDir, hoursFromNow) {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// ── the convention above is enforced, not merely asked for ─────────────────
+// A comment saying "use okAllow" is soft scaffolding: the next allow-assertion
+// added here would silently lose its diagnostics again, and nothing would fail.
+// So the suite reads its own source and refuses the bare form. The pattern is
+// written with no exclusions — not even for comments — so nothing in this file
+// can carry an unenforced example of the shape it forbids.
+{
+  const selfSource = readFileSync(fileURLToPath(import.meta.url), "utf8");
+  const offenders = selfSource
+    .split("\n")
+    .map((line, i) => [i + 1, line])
+    .filter(([, line]) => /\bok\(\s*!isDeny\(/.test(line))
+    .map(([lineNo]) => lineNo);
+  eq(
+    offenders.length,
+    0,
+    `every allow-assertion must call okAllow(r, label) so a spurious deny prints the ` +
+    `guard's own refusal text; unconverted assertion(s) at line(s): ${offenders.join(", ")}`,
+  );
 }
 
 console.log(`migration-apply-guard: ${pass} assertions passed`);
