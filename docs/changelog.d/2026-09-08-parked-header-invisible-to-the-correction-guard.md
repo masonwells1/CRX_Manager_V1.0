@@ -5,7 +5,7 @@ header that the repository's own recognizer did not accept, so the file was invi
 the parked-migration scan while `docs/reference/migration-history.md` row 923 still
 declared it a LOCAL CANDIDATE. The guard-hook regression suite failed with:
 
-```
+```text
 parked marker and LOCAL CANDIDATE history registry are not one-to-one
 ```
 
@@ -14,7 +14,7 @@ parked marker and LOCAL CANDIDATE history registry are not one-to-one
 `hasExplicitParkedMigrationHeader` accepts `PARKED` followed **directly** by `NOT APPLIED`
 or `DO NOT APPLY`, separated only by `/`, `-` or an em dash. The header read:
 
-```
+```sql
 -- PARKED - PR #535 follow-up. NOT APPLIED LIVE. Requires Mason's explicit approval
 ```
 
