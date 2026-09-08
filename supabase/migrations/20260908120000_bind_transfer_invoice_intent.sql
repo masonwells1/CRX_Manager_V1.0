@@ -259,6 +259,52 @@ BEGIN
 END;
 $preflight$;
 
+-- Browser clients need SELECT for two schema-capability probes, but all receipt
+-- writes must remain owner-executed through reviewed SECURITY DEFINER RPCs.
+-- RLS does not govern TRUNCATE, so normalize every direct mutation/schema ACL
+-- before installing the cutover trigger. A later refusal rolls this back with
+-- the rest of the migration because the sanctioned runner uses one transaction.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+ON TABLE public.idempotency_keys
+FROM PUBLIC, anon, authenticated;
+
+DO $receipt_acl_preflight$
+BEGIN
+  IF EXISTS (
+       SELECT 1
+         FROM unnest(ARRAY['anon', 'authenticated']::text[]) AS browser_role(role_name)
+         CROSS JOIN unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']::text[]) AS forbidden(privilege_name)
+        WHERE has_table_privilege(browser_role.role_name, 'public.idempotency_keys', forbidden.privilege_name)
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM unnest(ARRAY['anon', 'authenticated']::text[]) AS browser_role(role_name)
+         CROSS JOIN unnest(ARRAY['INSERT', 'UPDATE', 'REFERENCES']::text[]) AS forbidden(privilege_name)
+        WHERE has_any_column_privilege(browser_role.role_name, 'public.idempotency_keys', forbidden.privilege_name)
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_class c,
+              LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) acl
+        WHERE c.oid = 'public.idempotency_keys'::regclass
+          AND acl.grantee = 0
+          AND acl.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER')
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_attribute a,
+              LATERAL aclexplode(a.attacl) acl
+        WHERE a.attrelid = 'public.idempotency_keys'::regclass
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND acl.grantee = 0
+          AND acl.privilege_type IN ('INSERT', 'UPDATE', 'REFERENCES')
+     ) THEN
+    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_PREFLIGHT: browser role retains direct idempotency receipt mutation privilege';
+  END IF;
+END;
+$receipt_acl_preflight$;
+
 CREATE OR REPLACE FUNCTION public.prevent_unwrapped_transfer_invoice_receipt_20260908()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -416,6 +462,38 @@ DECLARE
   v_cutover_guard regprocedure := to_regprocedure('public.prevent_unwrapped_transfer_invoice_receipt_20260908()');
   v_src text;
 BEGIN
+  IF EXISTS (
+       SELECT 1
+         FROM unnest(ARRAY['anon', 'authenticated']::text[]) AS browser_role(role_name)
+         CROSS JOIN unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']::text[]) AS forbidden(privilege_name)
+        WHERE has_table_privilege(browser_role.role_name, 'public.idempotency_keys', forbidden.privilege_name)
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM unnest(ARRAY['anon', 'authenticated']::text[]) AS browser_role(role_name)
+         CROSS JOIN unnest(ARRAY['INSERT', 'UPDATE', 'REFERENCES']::text[]) AS forbidden(privilege_name)
+        WHERE has_any_column_privilege(browser_role.role_name, 'public.idempotency_keys', forbidden.privilege_name)
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_class c,
+              LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) acl
+        WHERE c.oid = 'public.idempotency_keys'::regclass
+          AND acl.grantee = 0
+          AND acl.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER')
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_attribute a,
+              LATERAL aclexplode(a.attacl) acl
+        WHERE a.attrelid = 'public.idempotency_keys'::regclass
+          AND a.attnum > 0
+          AND NOT a.attisdropped
+          AND acl.grantee = 0
+          AND acl.privilege_type IN ('INSERT', 'UPDATE', 'REFERENCES')
+     ) THEN
+    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_POSTFLIGHT: browser role retains direct idempotency receipt mutation privilege';
+  END IF;
   IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = 'transfer_job_to_invoice') <> 1
      OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = '_transfer_job_to_invoice_intent_impl_20260908') <> 1
      OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = 'prevent_unwrapped_transfer_invoice_receipt_20260908') <> 1

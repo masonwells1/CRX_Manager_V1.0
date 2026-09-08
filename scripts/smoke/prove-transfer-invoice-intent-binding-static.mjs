@@ -63,6 +63,12 @@ assert.match(source, /pol\.polname = 'No direct client access to idempotency key
 assert.match(source, /browser_role\.rolname IN \('anon', 'authenticated'\)[\s\S]*elevated_role\.rolsuper OR elevated_role\.rolbypassrls[\s\S]*pg_has_role\(browser_role\.oid, elevated_role\.oid, 'MEMBER'\)/, 'browser roles cannot inherit or assume any superuser or RLS-bypass role');
 assert.match(source, /has_table_privilege\('anon', 'public\.idempotency_keys', 'INSERT'\)[\s\S]*has_table_privilege\('anon', 'public\.idempotency_keys', 'TRUNCATE'\)/, 'anon write ACL drift is rejected');
 assert.match(source, /acl\.grantee = 0[\s\S]*'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'/, 'PUBLIC write ACL drift is rejected');
+assert.match(source, /REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER\s+ON TABLE public\.idempotency_keys\s+FROM PUBLIC, anon, authenticated;/, 'browser receipt mutation privileges are revoked without removing SELECT');
+assert.equal(source.match(/browser_role\.role_name, 'public\.idempotency_keys', forbidden\.privilege_name/g)?.length, 4, 'effective browser table and column privileges are checked before cutover and at postflight');
+assert.equal(source.match(/acl\.privilege_type IN \('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'\)/g)?.length, 2, 'PUBLIC table privileges are checked before cutover and at postflight');
+assert.equal(source.match(/acl\.privilege_type IN \('INSERT', 'UPDATE', 'REFERENCES'\)/g)?.length, 2, 'PUBLIC column privileges are checked before cutover and at postflight');
+assert.equal(source.match(/browser role retains direct idempotency receipt mutation privilege/g)?.length, 2, 'browser receipt ACL boundary has independent preflight and postflight refusals');
+assert(source.indexOf('REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') < source.indexOf('CREATE TRIGGER trg_idempotency_keys_require_transfer_intent_20260908'), 'browser receipt ACL is normalized before the cutover trigger');
 assert.match(source, /CREATE TRIGGER trg_idempotency_keys_require_transfer_intent_20260908[\s\S]*BEFORE INSERT ON public\.idempotency_keys/, 'cutover trigger is installed on receipt insert');
 assert.match(source, /TRANSFER_INVOICE_INTENT_CUTOVER_RETRY/, 'stale cached implementations fail with a retry signal');
 assert(source.indexOf('CREATE TEMP TABLE crx_transfer_invoice_intent_transaction_guard') < source.indexOf('DO $preflight$'), 'transaction guard precedes preflight');

@@ -41,6 +41,11 @@ function sql(source) {
 function scalar(source) {
   return docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-Atqc', source]).stdout.trim();
 }
+function stageMigration(source) {
+  const stagedPath = path.join(temp, 'migration.sql');
+  writeFileSync(stagedPath, source, 'utf8');
+  docker(['cp', stagedPath, `${name}:/tmp/migration.sql`]);
+}
 async function ready() {
   for (let i = 0; i < 40; i += 1) {
     if (docker(['exec', name, 'pg_isready', '-U', 'postgres'], { allowFailure: true }).status === 0) return;
@@ -149,9 +154,7 @@ try {
     .replaceAll('edc73be809069669e8441eba7acf443d', fixtureHelperMd5)
     .replaceAll('71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8', fixtureHelperSha);
   assertWrappable(staged, path.basename(migrationPath));
-  const stagedPath = path.join(temp, 'migration.sql');
-  writeFileSync(stagedPath, staged, 'utf8');
-  docker(['cp', stagedPath, `${name}:/tmp/migration.sql`]);
+  stageMigration(staged);
 
   // The SQL enforces the sanctioned runner's one-transaction assumption.
   // Autocommit must fail before installing a guard or renaming the public RPC.
@@ -193,6 +196,22 @@ try {
   assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL"), 't');
   sql('REVOKE drifted_bypass FROM authenticated; DROP ROLE drifted_bypass');
 
+  // Direct revokes must fail closed if authenticated inherits a forbidden
+  // ledger privilege through any other role.
+  sql('CREATE ROLE drifted_receipt_writer; GRANT INSERT ON public.idempotency_keys TO drifted_receipt_writer; GRANT drifted_receipt_writer TO authenticated');
+  refused = docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql'], { allowFailure: true });
+  assert.match(refused.stderr, /browser role retains direct idempotency receipt mutation privilege/);
+  assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL"), 't');
+  sql('REVOKE drifted_receipt_writer FROM authenticated; REVOKE INSERT ON public.idempotency_keys FROM drifted_receipt_writer; DROP ROLE drifted_receipt_writer');
+
+  // A table-level revoke does not remove a column grant inherited through a
+  // different role.
+  sql('CREATE ROLE drifted_receipt_column_writer; GRANT UPDATE (request_fingerprint) ON public.idempotency_keys TO drifted_receipt_column_writer; GRANT drifted_receipt_column_writer TO authenticated');
+  refused = docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql'], { allowFailure: true });
+  assert.match(refused.stderr, /browser role retains direct idempotency receipt mutation privilege/);
+  assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL"), 't');
+  sql('REVOKE drifted_receipt_column_writer FROM authenticated; REVOKE UPDATE (request_fingerprint) ON public.idempotency_keys FROM drifted_receipt_column_writer; DROP ROLE drifted_receipt_column_writer');
+
   sql('CREATE ROLE drifted_receipt_owner; ALTER TABLE public.idempotency_keys OWNER TO drifted_receipt_owner');
   refused = docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql'], { allowFailure: true });
   assert.match(refused.stderr, /idempotency receipt owner, RLS, deny policy, role posture, or client write ACL drifted/);
@@ -218,7 +237,74 @@ try {
   refused = docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql'], { allowFailure: true });
   assert.match(refused.stderr, /private transfer implementation drifted/);
   sql('DROP FUNCTION public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)');
+
+  // Mutation proof: omitting any one forbidden privilege from the revoke must
+  // be detected before the transfer function is renamed.
+  const missingTruncateRevoke = staged.replace(
+    'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER',
+    'REVOKE INSERT, UPDATE, DELETE, REFERENCES, TRIGGER',
+  );
+  assert.notEqual(missingTruncateRevoke, staged);
+  stageMigration(missingTruncateRevoke);
+  refused = docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql'], { allowFailure: true });
+  assert.match(refused.stderr, /TRANSFER_INVOICE_INTENT_PREFLIGHT: browser role retains direct idempotency receipt mutation privilege/);
+  assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL"), 't');
+
+  // Mutation proof: the final assertion independently catches a privilege
+  // reintroduced after the preflight and rolls the entire transaction back.
+  const postflightPrivilegeDrift = staged.replace(
+    'DO $postflight$',
+    'GRANT TRUNCATE ON TABLE public.idempotency_keys TO authenticated;\n\nDO $postflight$',
+  );
+  assert.notEqual(postflightPrivilegeDrift, staged);
+  stageMigration(postflightPrivilegeDrift);
+  refused = docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql'], { allowFailure: true });
+  assert.match(refused.stderr, /TRANSFER_INVOICE_INTENT_POSTFLIGHT: browser role retains direct idempotency receipt mutation privilege/);
+  assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL"), 't');
+
+  stageMigration(staged);
   docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql']);
+
+  const forbiddenPrivileges = ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+  for (const role of ['anon', 'authenticated']) {
+    for (const privilege of forbiddenPrivileges) {
+      assert.equal(
+        scalar(`SELECT has_table_privilege('${role}', 'public.idempotency_keys', '${privilege}')`),
+        'f',
+        `${role} must not retain ${privilege} on the receipt ledger`,
+      );
+    }
+    for (const privilege of ['INSERT', 'UPDATE', 'REFERENCES']) {
+      assert.equal(
+        scalar(`SELECT has_any_column_privilege('${role}', 'public.idempotency_keys', '${privilege}')`),
+        'f',
+        `${role} must not retain column-level ${privilege} on the receipt ledger`,
+      );
+    }
+  }
+  assert.equal(scalar("SELECT has_table_privilege('authenticated', 'public.idempotency_keys', 'SELECT')"), 't');
+  assert.equal(scalar("SELECT has_table_privilege('anon', 'public.idempotency_keys', 'SELECT')"), 't');
+
+  sql("INSERT INTO public.idempotency_keys(idempotency_key, operation, result, expires_at) VALUES ('acl-proof', 'other_operation', '{}'::jsonb, now() + interval '1 hour')");
+  const forbiddenStatements = [
+    "INSERT INTO public.idempotency_keys(idempotency_key, operation) VALUES ('forged', 'other_operation')",
+    "UPDATE public.idempotency_keys SET result = '{\"forged\":true}'::jsonb WHERE idempotency_key = 'acl-proof'",
+    "DELETE FROM public.idempotency_keys WHERE idempotency_key = 'acl-proof'",
+    'TRUNCATE public.idempotency_keys',
+  ];
+  for (const statement of forbiddenStatements) {
+    const attempt = docker([
+      'exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1',
+      '-c', `SET ROLE authenticated; ${statement}`,
+    ], { allowFailure: true });
+    assert.notEqual(attempt.status, 0, `authenticated direct mutation unexpectedly succeeded: ${statement}`);
+    assert.match(attempt.stderr, /permission denied for table idempotency_keys/);
+    assert.equal(scalar("SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = 'acl-proof'"), '1');
+  }
+  docker([
+    'exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1',
+    '-c', 'SET ROLE authenticated; SELECT request_fingerprint FROM public.idempotency_keys LIMIT 1',
+  ]);
 
   // A transaction that cached the legacy body before cutover can reach its
   // receipt INSERT after the DDL commits. The permanent trigger must reject
