@@ -394,6 +394,8 @@ function makeHarness({
   checkRunsSequence = null,
   statusesSequence = null,
   resolvedWorkflowPath = '.github/workflows/ci.yml',
+  selfWorkflowId = 9999,
+  selfWorkflowPath = '.github/workflows/coderabbit-final-review.yml',
   resolvedWorkflowByRunId = null,
   liveLabelSequence = null,
   pullFailuresAt = [],
@@ -472,10 +474,13 @@ function makeHarness({
     },
     rest: {
       actions: {
-        getWorkflowRun: async ({ run_id: runId }) => {
+        getWorkflowRun: async ({ run_id: requestedRunId }) => {
           if (workflowRunFailure) throw new Error('workflow lookup failed');
-          if (resolvedWorkflowByRunId?.[runId]) {
-            return { data: resolvedWorkflowByRunId[runId] };
+          if (requestedRunId === runId) {
+            return { data: { workflow_id: selfWorkflowId, path: selfWorkflowPath } };
+          }
+          if (resolvedWorkflowByRunId?.[requestedRunId]) {
+            return { data: resolvedWorkflowByRunId[requestedRunId] };
           }
           return { data: { workflow_id: 4242, path: resolvedWorkflowPath } };
         },
@@ -725,6 +730,27 @@ function inProgressCheck(name, runId) {
   };
 }
 
+function completedWorkflowCheck({
+  name = 'final-review-gate',
+  conclusion = 'failure',
+  runId,
+  workflowId,
+  workflowPath,
+}) {
+  return {
+    id: runId,
+    app: { id: 15368 },
+    name,
+    status: 'completed',
+    conclusion,
+    created_at: '2026-08-30T11:59:00Z',
+    completed_at: '2026-08-30T12:00:00Z',
+    details_url: `https://github.com/masonwells1/FarmRx/actions/runs/${runId}/job/1`,
+    workflow_id: workflowId,
+    workflow_path: workflowPath,
+  };
+}
+
 test("the gate's own in-progress check does not block it", async () => {
   const harness = makeHarness({
     runId: 909090,
@@ -756,6 +782,52 @@ test('an in-progress check from a different run still blocks', async () => {
     result.status,
     'requested',
     'a still-running check belonging to a different run is a real blocker, whatever it is called',
+  );
+});
+
+test('a historical failed check from this gate does not block its retry', async () => {
+  const gatePath = '.github/workflows/coderabbit-final-review.yml';
+  const harness = makeHarness({
+    runId: 909090,
+    selfWorkflowId: 4242,
+    selfWorkflowPath: gatePath,
+    checkRuns: [
+      completedCheck('foundation'),
+      completedWorkflowCheck({
+        runId: 424242,
+        workflowId: 4242,
+        workflowPath: gatePath,
+      }),
+    ],
+  });
+  const result = await execute(harness);
+
+  assert.equal(
+    result.status,
+    'requested',
+    'an earlier failure of this control-plane gate records a spent attempt, not a candidate failure',
+  );
+  assert.deepEqual(harness.failures, []);
+});
+
+test('a historical failed check from another workflow still blocks', async () => {
+  const harness = makeHarness({
+    runId: 909090,
+    checkRuns: [
+      completedCheck('foundation'),
+      completedWorkflowCheck({
+        runId: 424242,
+        workflowId: 5151,
+        workflowPath: '.github/workflows/another-gate.yml',
+      }),
+    ],
+  });
+  const result = await execute(harness);
+
+  assert.notEqual(
+    result.status,
+    'requested',
+    'only the current trusted gate workflow is control-plane state; another failed workflow remains a candidate blocker',
   );
 });
 

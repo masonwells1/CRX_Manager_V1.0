@@ -880,8 +880,29 @@ async function reconcileLabelEvent({
 // name. A concurrent second run of this same workflow keeps its own id and is
 // still treated as a blocker, which is correct — that one really is a pending
 // check that has not finished.
+//
+// A prior COMPLETED failure from this same gate must also be excluded. It is the
+// record of an earlier attempt to request a CodeRabbit review, not a candidate
+// prerequisite; retaining it makes a transient gate failure permanent for a
+// frozen candidate. That broader exclusion is bound to the current workflow's
+// authoritative ID AND path obtained from this run, never the mutable job name.
+// If that identity cannot be read, the old run stays visible and blocks.
 async function collectCheckBlockers({ github, owner, repo, headSha, config, core, selfRunId = null }) {
-  const [checkRuns, statuses] = await Promise.all([
+  const selfWorkflowPromise = Number.isSafeInteger(Number(selfRunId)) && Number(selfRunId) > 0
+    ? github.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(selfRunId) })
+      .then((response) => {
+        const workflowId = Number(response?.data?.workflow_id);
+        const workflowPath = String(response?.data?.path || '');
+        return Number.isSafeInteger(workflowId) && workflowId > 0 && workflowPath
+          ? { workflowId, workflowPath }
+          : null;
+      })
+      .catch((error) => {
+        core.warning(`Could not resolve this gate workflow identity: ${error.message}`);
+        return null;
+      })
+    : Promise.resolve(null);
+  const [checkRuns, statuses, selfWorkflow] = await Promise.all([
     // NO mapFn. `checks.listForRef` returns a NAMESPACED list envelope
     // (`{ total_count, check_runs }`), and Octokit's paginate normalizes that
     // before the mapFn ever sees it: `normalizePaginatedListResponse` replaces
@@ -905,23 +926,31 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config, core
       github.rest.repos.listCommitStatusesForRef,
       { owner, repo, ref: headSha, per_page: 100 },
     ),
+    selfWorkflowPromise,
   ]);
-  // Drop THIS run's own check before anything evaluates it. Done here rather
-  // than in evaluateChecks so the shape guard there still sees the raw list and
-  // a malformed entry is still reported, not silently filtered away.
-  const observedCheckRuns = Array.isArray(checkRuns) && selfRunId !== null
-    ? checkRuns.filter((check) => !(
-      check && typeof check === 'object' && actionRunId(check.details_url) === Number(selfRunId)
-    ))
-    : checkRuns;
   await attachRequiredWorkflowProvenance({
     github,
     owner,
     repo,
-    checkRuns: observedCheckRuns,
+    checkRuns,
     requiredChecks: config.requiredChecks,
     core,
   });
+  // Drop this run and earlier runs from this exact gate before evaluation. Do it
+  // after provenance resolution so a historical check is excluded only when its
+  // workflow ID and path both match the trusted identity of the current run.
+  // The shape guard in evaluateChecks still receives every malformed entry.
+  const observedCheckRuns = Array.isArray(checkRuns) && selfRunId !== null
+    ? checkRuns.filter((check) => {
+      if (!check || typeof check !== 'object') return true;
+      if (actionRunId(check.details_url) === Number(selfRunId)) return false;
+      return !(
+        selfWorkflow
+        && Number(check.workflow_id) === selfWorkflow.workflowId
+        && String(check.workflow_path || '') === selfWorkflow.workflowPath
+      );
+    })
+    : checkRuns;
   return evaluateChecks({
     checkRuns: observedCheckRuns,
     statuses,
