@@ -70,12 +70,14 @@ that is now stale:
   and it is **already applied live** under ledger version `20260905185938`.
 - PR #582's own migration is `20260903150000_job_chemicals_persist_driver`, applied live under ledger
   version `20260903153402`.
-- The effective live high-water is therefore **`20260905185938`**, not `20260904185900`.
-
-Re-read the ledger before stamping or applying anything new; do not infer ordering from filenames on
-disk. Note in particular that PR #592's restamped `20260905020000` and `20260905020100` sort **below**
-the current high-water, so their apply order must be re-checked against a fresh read by whoever lands
-that PR.
+**The ordering boundary is unchanged by this correction**, and it is stated at the top of this page,
+not here: `20260905185938` is a **version**, not an authored name, so it is not the number a new
+migration must exceed. The authored-name high-water remains **`20260904185900`** — that row is
+registered under the bare name `refuse_null_job_field_acres` with no 14-digit prefix, which is why a
+name-ordered query cannot see it. Compare authored names to authored names; a "greater than
+high-water" rule pointed at a version silently skips files. PR #592's restamped `20260905020000` and
+`20260905020100` therefore sort correctly ABOVE the authored-name boundary and need no restamping on
+this account.
 
 The consequence still bites until all three owning PRs merge: `main` does not describe production,
 so any migration whose safety argument rests on "the live body equals the last committed body" must verify against
