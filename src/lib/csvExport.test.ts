@@ -57,6 +57,21 @@ describe('fmtDateCSV', () => {
   });
 });
 
+describe('fmtDateOnlyCSV', () => {
+  it('preserves the calendar day of a PostgreSQL date-only value in Chicago time', async () => {
+    vi.stubEnv('TZ', 'America/Chicago');
+    try {
+      const { fmtDateOnlyCSV } = await import('./csvExport');
+      // This proves the host is exercising the negative-offset failure mode:
+      // the former `new Date(dateOnly)` implementation returns 8/19 here.
+      expect(new Date('2026-08-20').toLocaleDateString()).toBe('8/19/2026');
+      expect(fmtDateOnlyCSV('2026-08-20')).toBe('8/20/2026');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe('formatCSVCell', () => {
   it('neutralizes formula-leading text values', () => {
     expect(formatCSVCell('=SUM(A1:A2)')).toBe('"\'=SUM(A1:A2)"');

@@ -446,7 +446,7 @@ export default function Returns() {
         toast('error', 'Failed to load return item details');
         setDetailItems([]);
       } else {
-        setDetailItems((data || []) as DetailReturnItem[]);
+        setDetailItems((data || []) as unknown as DetailReturnItem[]);
       }
     } catch (error) {
       if (requestId !== returnDetailRequestRef.current) return;
