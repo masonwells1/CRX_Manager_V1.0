@@ -1,8 +1,9 @@
 // Minimal, deterministic Git execution context for proof and apply gates.
 // These gates must never accept PATH, GIT_*, global-config, or replacement-object
 // overrides when deciding whether production work has been reviewed.
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 // Keep each subprocess comfortably below the shortest hook deadline. A timeout
@@ -51,14 +52,30 @@ export function parseAuthoritativeMainRef(output) {
 }
 
 export function authoritativeMainCommit({ execute = spawnSync } = {}) {
-  const result = execute(fixedGitExecutable(), [
-    '--no-replace-objects', 'ls-remote', '--refs', AUTHORITATIVE_MAIN_REMOTE, 'refs/heads/main',
-  ], {
-    encoding: 'utf8', timeout: GIT_CALL_TIMEOUT_MS, windowsHide: true, shell: false,
-    env: protectedGitEnv(), stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  if (result?.error || result?.status !== 0) {
-    throw new Error(`could not read authoritative main from GitHub: ${result?.error?.message || result?.stderr || result?.status || 'unknown failure'}`);
+  // Do not run ls-remote in this checkout. A repository-local url.*.insteadOf
+  // rule can otherwise rewrite even the literal GitHub URL above. A new,
+  // verified-empty directory has no local config; the ceiling stops Git from
+  // discovering a repository in one of its parents.
+  const isolatedDirectory = mkdtempSync(path.join(tmpdir(), 'crx-protected-git-'));
+  const isolatedCwd = realpathSync(isolatedDirectory);
+  try {
+    if (existsSync(path.join(isolatedCwd, '.git'))) {
+      throw new Error('could not create a non-repository directory for authoritative main lookup');
+    }
+    const env = protectedGitEnv();
+    env.GIT_CEILING_DIRECTORIES = isolatedCwd;
+    const result = execute(fixedGitExecutable(), [
+      '--no-replace-objects', 'ls-remote', '--refs', AUTHORITATIVE_MAIN_REMOTE, 'refs/heads/main',
+    ], {
+      cwd: isolatedCwd,
+      encoding: 'utf8', timeout: GIT_CALL_TIMEOUT_MS, windowsHide: true, shell: false,
+      env, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (result?.error || result?.status !== 0) {
+      throw new Error(`could not read authoritative main from GitHub: ${result?.error?.message || result?.stderr || result?.status || 'unknown failure'}`);
+    }
+    return parseAuthoritativeMainRef(result.stdout);
+  } finally {
+    rmSync(isolatedDirectory, { recursive: true, force: true, maxRetries: 3 });
   }
-  return parseAuthoritativeMainRef(result.stdout);
 }
