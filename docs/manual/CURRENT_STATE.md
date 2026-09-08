@@ -47,8 +47,8 @@ often than the counters.
 
 For provenance, the **superseded 2026-09-05 afternoon read before #606 applied** observed **998
 ledger rows** (991 distinct names — the difference is duplicate names, from `count(distinct name)`,
-not truncation) and `max(version)` **`20260904152221`**. The evening read after #606 is the current
-999-row boundary capture stated above. **All counts and `max(version)` values are point-in-time
+not truncation) and `max(version)` **`20260904152221`**. The evening read after #606 was the later
+999-row boundary capture, now superseded by the 1,000-row 2026-09-08 capture stated above. **All counts and `max(version)` values are point-in-time
 observations, not standing facts.** Every apply by any lane moves them, so re-read live before
 relying on either; a stale count here is expected drift, not evidence that something went wrong,
 and it should not be re-pinned on every apply.
@@ -99,8 +99,8 @@ on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job` 
 `18d08d5f40aea91fe13ac3e5a686c549` — the candidate body, which replaced the 20260820120000 body
 (`227ab7b6bc2023724adf6952a221d2a8`) — with exactly one overload, so no duplicate function was
 created. F06's earlier 990-row / `20260903025854` / `20260831212415` ledger figures were superseded
-first by the 993-row F06 capture, then by the 998-row afternoon capture, and finally by the current
-999-row evening capture at the top of this file.
+first by the 993-row F06 capture, then by the 998-row afternoon capture, then by the 999-row evening
+capture, and finally by the current 1,000-row 2026-09-08 capture at the top of this file.
 
 **The sequencing lesson outlives the fact.** For the window between that merge and that apply, this
 file correctly recorded F06 as merged but NOT applied: `main` carried the migration while production
