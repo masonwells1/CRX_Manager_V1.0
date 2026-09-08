@@ -90,6 +90,12 @@ fs.writeFileSync(tsPath, "const k = import.meta.env.VITE_SUPABASE_ANON_KEY;\n");
 deny("env-guard.mjs", "MultiEdit", { file_path: tsPath, edits: [{ old_string: "VITE_SUPABASE_ANON_KEY", new_string: "SUPABASE_SERVICE_ROLE_KEY" }] }, "MultiEdit spliced onto disk swaps anon for service_role");
 // Rule 1 is path-based and unaffected: any .env write denies regardless of shape.
 deny("env-guard.mjs", "MultiEdit", { file_path: path.join(root, ".env"), edits: [{ old_string: "a", new_string: "b" }] }, "MultiEdit on .env");
+// Codex gpt-5.6-sol High on d1bbf5ac6: Windows aliases of .env passed rule 1 (probe-confirmed).
+deny("env-guard.mjs", "MultiEdit", { file_path: path.join(root, ".env") + "::$DATA", edits: [{ old_string: "a", new_string: "b" }] }, "MultiEdit on .env::$DATA");
+deny("env-guard.mjs", "Edit", { file_path: path.join(root, ".env") + " ", old_string: "a", new_string: "b" }, "Edit on '.env ' (trailing space)");
+deny("env-guard.mjs", "Write", { file_path: path.join(root, ".env") + ".", content: "x" }, "Write on '.env.' (trailing period)");
+deny("env-guard.mjs", "Write", { file_path: "C:.env", content: "x" }, "Write on drive-relative C:.env");
+deny("env-guard.mjs", "Write", { file_path: ".env.local:evil", content: "x" }, "Write on a named stream of .env.local");
 // Codex gpt-5.6-sol High on PR #605 at 28bba740b: a "never use service_role" comment
 // anywhere in the file used to suppress the real scan. Comments are stripped, not obeyed.
 const warnedThenUsed = "// never use service_role here\nconst k = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;";

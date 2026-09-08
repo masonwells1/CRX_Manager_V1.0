@@ -12,6 +12,7 @@
 
 import { readFileSync } from "node:fs";
 import { judgedContent } from "./edit-splice-lib.mjs";
+import { canonicalToolPath } from "./autopilot-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -28,7 +29,13 @@ try {
   out("allow");
 }
 
-const filePath = (payload?.tool_input?.file_path || "").replace(/\\/g, "/");
+// Judge the path Windows would OPEN, not the spelling that arrived. Codex gpt-5.6-sol High on
+// d1bbf5ac6, probe-confirmed: `.env `, `C:.env` and `.env::$DATA` all passed rule 1 although
+// each opens .env (trailing space and period are stripped by the Win32 normaliser, a
+// drive-relative prefix lands on the current directory, `::$DATA` is the file's own stream).
+// canonicalToolPath() applies those rules; the raw spelling is kept only for the message.
+const rawPath = (payload?.tool_input?.file_path || "").replace(/\\/g, "/");
+const filePath = canonicalToolPath(rawPath) || rawPath;
 if (!filePath) out("allow");
 
 // RULE 1 — block any .env* file edit

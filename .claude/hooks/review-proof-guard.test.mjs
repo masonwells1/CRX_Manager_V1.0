@@ -50,6 +50,16 @@ for (const payload of [
   { tool_name: "Bash", tool_input: { command: "cp /tmp/evil .claude/hooks./review-proof-guard.mjs" } },
   { tool_name: "Bash", tool_input: { command: "printf x > .claude/settings.json." } },
   { tool_name: "Bash", tool_input: { command: "echo x > C:.claude\\hooks\\x.mjs" } },
+  // Codex gpt-5.6-sol High on d1bbf5ac6: NTFS alternate data streams and device prefixes open
+  // the real file; probe-confirmed silent before the fix.
+  { tool_name: "MultiEdit", tool_input: { file_path: ".claude/settings.json::$DATA", edits: [] } },
+  { tool_name: "Edit", tool_input: { file_path: "scripts/write-codex-push-proof.mjs::$DATA", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: "package.json::$DATA", content: "{}" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/hooks/x.mjs:evil", content: "x" } },
+  { tool_name: "NotebookEdit", tool_input: { notebook_path: ".claude/hooks/p.ipynb:s:$DATA" } },
+  { tool_name: "Edit", tool_input: { file_path: "\\\\?\\C:\\repo\\.claude\\settings.json", old_string: "a", new_string: "b" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".husky/pre-push::$DATA" } },
+  { tool_name: "Bash", tool_input: { command: "printf x > .claude/settings.json::$DATA" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/claude-review-push.json" } },
   { tool_name: "Bash", tool_input: { command: "echo {} > .claude/session-state/claude-review-push.json" } },
   { tool_name: "PowerShell", tool_input: { command: "Remove-Item .claude/session-state/codex-review-abc.json" } },
@@ -389,6 +399,7 @@ allowed({ tool_name: "Write", tool_input: { file_path: "C:/repo/.github/workflow
 allowed({ tool_name: "Edit", tool_input: { file_path: "src/pages/../lib/x.ts" } });
 allowed({ tool_name: "Write", tool_input: { file_path: "./docs/notes.md", content: "x" } });
 allowed({ tool_name: "Write", tool_input: { file_path: "docs/notes.md.", content: "x" } });
+allowed({ tool_name: "Write", tool_input: { file_path: "docs/notes.md::$DATA", content: "x" } });
 allowed({ tool_name: "Bash", tool_input: { command: "echo done. > docs/x.md" } });
 // DELIBERATELY REVERSED 2026-09-01. This line used to assert that an MCP move of
 // a hook file was ALLOWED — true when `guarded-surface-lock` existed to catch it.

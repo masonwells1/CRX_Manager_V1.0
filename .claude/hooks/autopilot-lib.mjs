@@ -283,8 +283,16 @@ export function canonicalToolPath(p) {
   // Win32 normaliser before the file system sees the name. The prefix is dropped and the
   // trailing characters trimmed here, so the surface match sees the file Windows opens.
   // A rooted drive (`C:/…`) is kept. `.` and `..` are left for normalize().
-  s = s.replace(/^[A-Za-z]:(?!\/)/, "");
-  s = s.split("/").map((seg) => (seg === "." || seg === ".." ? seg : seg.replace(/[. ]+$/, ""))).join("/");
+  // NTFS alternate data streams (Codex gpt-5.6-sol High on d1bbf5ac6, probe-confirmed:
+  // `package.json::$DATA` opens package.json): a colon inside a segment names a stream of
+  // that file, so the segment is cut at its first colon; the rooted drive segment `C:` is
+  // the one colon that is kept. A `\\?\` / `\\.\` device prefix before a drive is dropped.
+  s = s.replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, "").replace(/^[A-Za-z]:(?!\/)/, "");
+  s = s.split("/").map((seg, i) => {
+    if (seg === "." || seg === "..") return seg;
+    if (i === 0 && /^[A-Za-z]:$/.test(seg)) return seg;
+    return seg.replace(/:.*$/, "").replace(/[. ]+$/, "");
+  }).join("/");
   const n = path.posix.normalize(s);
   return n === "." ? "" : n;
 }

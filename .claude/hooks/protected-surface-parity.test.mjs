@@ -213,8 +213,9 @@ for (const sample of samples) {
 // ".claude/worktrees/../hooks/review-proof-guard.mjs" through.
 for (const sample of samples) {
   if (!settingsProtects(sample)) continue;
-  // Win32 aliases (Codex High on b2988f2da): a drive-relative prefix and a trailing period.
-  const spellings = [`./${sample}`, `zz/../${sample}`, sample.replace("/", "//"), `C:${sample}`, `${sample}.`, sample.replace(/\//g, "\\")];
+  // Win32 aliases (Codex High on b2988f2da): a drive-relative prefix and a trailing period;
+  // (Codex High on d1bbf5ac6): the NTFS default-stream suffix.
+  const spellings = [`./${sample}`, `zz/../${sample}`, sample.replace("/", "//"), `C:${sample}`, `${sample}.`, `${sample}::$DATA`, sample.replace(/\//g, "\\")];
   for (const spelled of spellings) {
     if (!autopilotDenies(spelled)) fail(`armed autopilot AUTO-APPROVES "${spelled}" although its canonical path "${sample}" is protected`);
   }

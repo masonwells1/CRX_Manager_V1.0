@@ -64,6 +64,13 @@ eq(autopilotDecision("Write", { file_path: ".claude/hooks./x.mjs" }), "deny", "a
 eq(autopilotDecision("Write", { file_path: ".claude/settings.json." }), "deny", "a trailing period on the file name is stripped before the match");
 eq(autopilotDecision("Write", { file_path: "scripts/check-docs.mjs " }), "deny", "a trailing space is stripped before the match");
 eq(autopilotDecision("Write", { file_path: "src/lib/x.ts." }), "allow", "an unprotected path with a trailing period stays auto-approved");
+// Codex gpt-5.6-sol High on d1bbf5ac6: NTFS alternate data streams open the real file. The raw-spelling
+// match already denied these (the protected prefix survives the suffix); the canonical form now agrees.
+eq(autopilotDecision("Write", { file_path: ".claude/hooks/x.mjs::$DATA" }), "deny", "the default-stream suffix is cut before the surface match");
+eq(autopilotDecision("Write", { file_path: "package.json::$DATA" }), "deny", "package.json through its default stream denied");
+eq(autopilotDecision("Edit", { file_path: ".claude/settings.json:evil" }), "deny", "a named stream of a protected file denied");
+eq(autopilotDecision("Edit", { file_path: "\\\\?\\C:\\repo\\.claude\\hooks\\x.mjs" }), "deny", "a device-prefixed rooted path denied");
+eq(autopilotDecision("Write", { file_path: "src/lib/x.ts::$DATA" }), "allow", "an unprotected path through its default stream stays auto-approved");
 eq(autopilotDecision("mcp__some_server__put_file", { path: ".codex/hooks.json" }), "deny", "an MCP path field into .codex denied even when the tool name is not in DENY_TOOLNAME_RE");
 eq(autopilotDecision("Write", { file_path: ".claude/session-state/notes.md" }), "allow", "session-state stays auto-approved");
 eq(autopilotDecision("Edit", { file_path: "package-lock.json" }), "allow", "package-lock.json is deliberately outside the set");

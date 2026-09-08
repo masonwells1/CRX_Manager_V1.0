@@ -747,10 +747,15 @@ if (shellTool) {
     // is the spelling the native editors send on this machine and the settings globs are
     // measured against it. Trailing periods and spaces are stripped from every segment
     // and a segment left empty is dropped — deliberately over-inclusive, which for a
-    // deny-guard can only over-block. Repeated separators still collapse first (seventh
+    // deny-guard can only over-block. NTFS ALTERNATE DATA STREAMS (Codex gpt-5.6-sol High on
+  // d1bbf5ac6, probe-confirmed: `package.json::$DATA`, `.claude/settings.json::$DATA` and
+  // `scripts/write-codex-push-proof.mjs::$DATA` resolve to the real files): a colon inside a
+  // segment names a stream of that file, so the segment is cut at its first colon (the
+  // rooted drive `C:` is handled before the walk and never reaches it); a `\\?\` or `\\.\`
+  // device prefix in front of a drive is dropped. Repeated separators still collapse first (seventh
   // gpt-5.6-sol round, P1: `rm -f .github//workflows/ci.yml` passed the whole chain), and
   // there is no early return any more: every spelling goes through the segment walk.
-    const p = String(input).trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+    const p = String(input).trim().replace(/\\/g, "/").replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, "").replace(/\/{2,}/g, "/");
     const drive = /^([a-zA-Z]:)(\/?)/.exec(p);
     const rooted = drive ? drive[2] === "/" : p.startsWith("/");
     const body = drive ? p.slice(drive[0].length) : p;
@@ -762,7 +767,7 @@ if (shellTool) {
         else if (!rooted) out.push("..");
         continue;
       }
-      const trimmed = seg.replace(/[. ]+$/, "");
+      const trimmed = seg.replace(/:.*$/, "").replace(/[. ]+$/, "");
       if (trimmed === "") continue;
       out.push(trimmed);
     }
@@ -1032,10 +1037,15 @@ const resolvePathCandidate = (value) => {
   // is the spelling the native editors send on this machine and the settings globs are
   // measured against it. Trailing periods and spaces are stripped from every segment
   // and a segment left empty is dropped — deliberately over-inclusive, which for a
-  // deny-guard can only over-block. Repeated separators still collapse first (seventh
+  // deny-guard can only over-block. NTFS ALTERNATE DATA STREAMS (Codex gpt-5.6-sol High on
+  // d1bbf5ac6, probe-confirmed: `package.json::$DATA`, `.claude/settings.json::$DATA` and
+  // `scripts/write-codex-push-proof.mjs::$DATA` resolve to the real files): a colon inside a
+  // segment names a stream of that file, so the segment is cut at its first colon (the
+  // rooted drive `C:` is handled before the walk and never reaches it); a `\\?\` or `\\.\`
+  // device prefix in front of a drive is dropped. Repeated separators still collapse first (seventh
   // gpt-5.6-sol round, P1: `rm -f .github//workflows/ci.yml` passed the whole chain), and
   // there is no early return any more: every spelling goes through the segment walk.
-  const p = String(value).trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+  const p = String(value).trim().replace(/\\/g, "/").replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, "").replace(/\/{2,}/g, "/");
   const drive = /^([a-zA-Z]:)(\/?)/.exec(p);
   const rooted = drive ? drive[2] === "/" : p.startsWith("/");
   const body = drive ? p.slice(drive[0].length) : p;
@@ -1047,7 +1057,7 @@ const resolvePathCandidate = (value) => {
       else if (!rooted) out.push("..");
       continue;
     }
-    const trimmed = seg.replace(/[. ]+$/, "");
+    const trimmed = seg.replace(/:.*$/, "").replace(/[. ]+$/, "");
     if (trimmed === "") continue;
     out.push(trimmed);
   }
@@ -1076,7 +1086,8 @@ if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todow
 // on ci.yml; this hook exempted the native editors because the prompt is their boundary, and
 // armed autopilot was the only place that canonicalised. The exemption is sound only when the
 // spelling IS the canonical path. A non-canonical spelling (a `.`/`..` segment, a repeated or
-// trailing separator, a drive-relative prefix, a trailing period or space in a segment) whose
+// trailing separator, a drive-relative prefix, a trailing period or space in a segment, an NTFS
+// stream suffix such as `::$DATA`, a `\\?\` device prefix) whose
 // canonical form is on the enforcement surface, or one that still
 // escapes the tree after resolution, is denied here in EVERY mode: re-issue with the canonical
 // path and the prompt fires. Backslashes are not counted as non-canonical — Windows spellings
