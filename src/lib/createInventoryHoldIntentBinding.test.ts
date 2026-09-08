@@ -91,11 +91,30 @@ function hasIntentBindingContract(sql: string) {
     && sql.includes('POSTFLIGHT_ARGS')
     && sql.includes('POSTFLIGHT_BODY')
     && sql.includes('POSTFLIGHT_FORCE_NORMALIZATION')
+    // CUTOVER RACE. The ACCESS EXCLUSIVE drain cannot stop a call that already
+    // resolved the OLD body and has not reached its receipt write yet: that body
+    // does auth, the stock check and the hold INSERT before it ever touches
+    // idempotency_keys. Such a call can resume after this migration commits and
+    // write an UNBOUND receipt. A BEFORE INSERT trigger, registered BEFORE the
+    // rename, makes that fail closed.
+    && wrapper.includes("set_config('crx.create_inventory_hold_intent'")
+    && wrapper.indexOf("set_config('crx.create_inventory_hold_intent'")
+      < wrapper.indexOf('public.check_idempotency_intent(')
+    && sql.includes('CREATE TRIGGER bind_create_inventory_hold_receipt_20260905')
+    && sql.includes('BEFORE INSERT ON public.idempotency_keys')
+    && sql.includes("NEW.operation IS DISTINCT FROM 'create_inventory_hold'")
+    && sql.includes("RAISE EXCEPTION 'CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT")
+    && sql.includes('CREATE_INVENTORY_HOLD_CONTEXT_MISMATCH')
+    && sql.includes('POSTFLIGHT_CUTOVER_TRIGGER')
+    && sql.includes('POSTFLIGHT_INTENT_CONTEXT')
+    // The trigger must exist before the old body stops being reachable.
+    && sql.indexOf('CREATE TRIGGER bind_create_inventory_hold_receipt_20260905')
+      < sql.indexOf(`RENAME TO ${implName};`)
     // Re-run must pin the wrapper's exact body, not merely its marker: a later
     // hotfix that kept calling check_idempotency_intent would otherwise be
     // silently reverted by replaying this file (row 873's lesson).
     && sql.includes('PREFLIGHT_WRAPPER_DRIFT')
-    && sql.includes("v_wrapper_pin text := '3089caa0f83369d8a58057505b3b5ac1b64a445262fd5fa5e441ef0f03b08314';")
+    && sql.includes("v_wrapper_pin text := '71fa8fafcfd04bf286678ab51c44c9fde05901a79b57ac563b165fecd0750d02';")
     && sql.includes('IF v_wrapper_sha <> v_wrapper_pin THEN')
     && sql.includes("v_helper_sig text := 'public.check_idempotency_intent(text,text,uuid,text)';")
     && sql.includes('p_force boolean DEFAULT false, p_force_reason text DEFAULT NULL::text, p_idempotency_key text DEFAULT NULL::text\';')
@@ -136,6 +155,15 @@ describe('create_inventory_hold receipt binding (20260905230000)', () => {
       ['p_performed_by, v_force, p_force_reason', 'p_performed_by, p_force, p_force_reason'],
       ['v_force boolean := COALESCE(p_force, false);', 'v_force boolean := p_force;'],
       ['POSTFLIGHT_FORCE_NORMALIZATION', 'POSTFLIGHT_SKIPPED'],
+      // Cutover-race mutations. Each one reopens the window in which an
+      // in-flight pre-cutover call lands an unbound receipt.
+      ['BEFORE INSERT ON public.idempotency_keys', 'AFTER INSERT ON public.idempotency_keys'],
+      ['CREATE TRIGGER bind_create_inventory_hold_receipt_20260905', 'CREATE TRIGGER unused_20260905'],
+      ["RAISE EXCEPTION 'CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT", "RAISE NOTICE 'CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT"],
+      ['CREATE_INVENTORY_HOLD_CONTEXT_MISMATCH', 'CONTEXT_OK'],
+      ['POSTFLIGHT_CUTOVER_TRIGGER', 'POSTFLIGHT_SKIPPED'],
+      ['POSTFLIGHT_INTENT_CONTEXT', 'POSTFLIGHT_SKIPPED'],
+      ["PERFORM set_config('crx.create_inventory_hold_intent'", "PERFORM pg_catalog.pg_backend_pid(); -- set_config removed ('crx.create_inventory_hold_intent'"],
       // Downgrading the replay pin back to a marker-only check must fail.
       ['IF v_wrapper_sha <> v_wrapper_pin THEN', 'IF false THEN'],
       ['PREFLIGHT_WRAPPER_DRIFT', 'PREFLIGHT_SKIPPED'],
@@ -183,6 +211,9 @@ describe('create_inventory_hold receipt binding (20260905230000)', () => {
       'IDEMPOTENCY_INTENT_MISMATCH', 'IDEMPOTENCY_ACTOR_MISMATCH', 'IDEMPOTENCY_KEY_REQUIRED',
       'IDEMPOTENCY_CROSS_OP_KEY_REUSE', 'INSUFFICIENT_ROLE', 'AUTH_REQUIRED', 'ACTOR_MISMATCH',
       'INSUFFICIENT_HOLD_INVENTORY', 'FORCE_REQUIRES_ADMIN', "RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'",
+      'CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT', 'CREATE_INVENTORY_HOLD_CONTEXT_MISMATCH',
+      "PERFORM public._create_inventory_hold_intent_impl_20260905(",
+      "'some_other_operation'",
     ]) {
       expect(smoke).toContain(token);
     }

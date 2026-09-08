@@ -32,7 +32,13 @@
 --     the wrapper normalized p_force, NULL skipped BOTH the admin contract
 --     and the capacity guard);
 --   * an admin force with a reason still works and is receipted;
---   * the renamed body is not executable by anon/authenticated/service_role.
+--   * the renamed body is not executable by anon/authenticated/service_role;
+--   * CUTOVER RACE: calling the renamed body DIRECTLY -- which is exactly what
+--     a call that resolved the old function before the swap and resumed after
+--     it does -- is refused with CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT and
+--     leaves no hold and no receipt; a STALE binding context cannot bind a
+--     different key (CREATE_INVENTORY_HOLD_CONTEXT_MISMATCH); and a receipt
+--     for an unrelated operation still inserts freely.
 --
 -- Always ends by raising SMOKE_PASS_ROLLBACK: nothing is ever committed.
 
@@ -278,10 +284,26 @@ BEGIN
   ----------------------------------------------------------------------------
   -- 8. Pre-migration receipt (no binding) fails closed; cross-op key reuse
   ----------------------------------------------------------------------------
+  -- This fixture stands for a row written BEFORE this migration existed, so
+  -- it has to be planted the way such a row got there: without the binding
+  -- trigger. Disabling it for exactly this INSERT is the only faithful way to
+  -- manufacture a legacy row now that the trigger refuses unbound receipts --
+  -- and the re-enable is asserted below, so a disabled trigger cannot leak
+  -- into the cutover case in section 11.
+  ALTER TABLE public.idempotency_keys DISABLE TRIGGER bind_create_inventory_hold_receipt_20260905;
   INSERT INTO public.idempotency_keys (idempotency_key, operation, result, expires_at)
   VALUES ('smoke-hold-key-legacy', 'create_inventory_hold',
           jsonb_build_object('hold_id', gen_random_uuid(), 'todays_free_before', 90, 'forced', false),
           now() + interval '1 hour');
+  ALTER TABLE public.idempotency_keys ENABLE TRIGGER bind_create_inventory_hold_receipt_20260905;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+     WHERE tgrelid = 'public.idempotency_keys'::regclass
+       AND tgname = 'bind_create_inventory_hold_receipt_20260905'
+       AND tgenabled = 'O'
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the binding trigger was not re-enabled after the legacy fixture';
+  END IF;
   BEGIN
     PERFORM public.create_inventory_hold(
       v_product, v_customer, 1, 'manual', NULL, NULL, v_rep, false, NULL, 'smoke-hold-key-legacy'
@@ -404,6 +426,70 @@ BEGIN
   END IF;
   IF NOT has_function_privilege('authenticated', 'public.create_inventory_hold(uuid,uuid,numeric,text,date,text,uuid,boolean,text,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: authenticated lost EXECUTE on create_inventory_hold';
+  END IF;
+
+  ----------------------------------------------------------------------------
+  -- 11. CUTOVER RACE: the old body cannot land an unbound receipt
+  --
+  -- The impl IS the pre-cutover body, byte for byte. Calling it directly with
+  -- no binding context reproduces exactly what an in-flight call that resolved
+  -- the old function and resumed after this migration committed would do. The
+  -- BEFORE INSERT trigger must refuse the receipt, and because the receipt
+  -- write is the last statement of that body, the refusal must roll the whole
+  -- call back -- no hold, no receipt.
+  ----------------------------------------------------------------------------
+  SELECT count(*) INTO v_count FROM public.inventory_holds WHERE product_id = v_product;
+  IF v_count <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: expected 2 holds before the cutover case, found %', v_count;
+  END IF;
+
+  -- (a) no context at all -- the pre-cutover call.
+  PERFORM set_config('crx.create_inventory_hold_intent', '', true);
+  BEGIN
+    PERFORM public._create_inventory_hold_intent_impl_20260905(
+      v_product, v_customer, 1, 'manual', NULL, NULL, v_admin, true, 'cutover', 'smoke-hold-key-cutover'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: the old body wrote an UNBOUND receipt after cutover';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT%' THEN RAISE; END IF;
+  END;
+
+  -- (b) a STALE context left in the transaction by an earlier bound call must
+  -- not bind a different key.
+  PERFORM set_config('crx.create_inventory_hold_intent', jsonb_build_object(
+    'operation', 'create_inventory_hold',
+    'idempotency_key', 'smoke-hold-key-force',
+    'actor_id', v_admin,
+    'fingerprint', 'stale'
+  )::text, true);
+  BEGIN
+    PERFORM public._create_inventory_hold_intent_impl_20260905(
+      v_product, v_customer, 1, 'manual', NULL, NULL, v_admin, true, 'cutover', 'smoke-hold-key-cutover2'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a stale binding context bound a different key';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%CREATE_INVENTORY_HOLD_CONTEXT_MISMATCH%' THEN RAISE; END IF;
+  END;
+  PERFORM set_config('crx.create_inventory_hold_intent', '', true);
+
+  SELECT count(*) INTO v_count FROM public.idempotency_keys
+   WHERE idempotency_key IN ('smoke-hold-key-cutover', 'smoke-hold-key-cutover2');
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: a refused cutover call left % receipt(s)', v_count;
+  END IF;
+  SELECT count(*) INTO v_count FROM public.inventory_holds WHERE product_id = v_product;
+  IF v_count <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: a refused cutover call left a hold behind (% rows)', v_count;
+  END IF;
+
+  -- A receipt for an operation this trigger does not own must still insert
+  -- freely: the guard is scoped, not a table-wide lock on idempotency_keys.
+  INSERT INTO public.idempotency_keys (idempotency_key, operation, result, expires_at)
+  VALUES ('smoke-hold-key-otherop', 'some_other_operation', '{}'::jsonb, now() + interval '1 hour');
+  SELECT count(*) INTO v_count FROM public.idempotency_keys
+   WHERE idempotency_key = 'smoke-hold-key-otherop';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the binding trigger blocked an unrelated operation''s receipt';
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

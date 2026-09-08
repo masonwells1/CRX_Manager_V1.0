@@ -107,6 +107,26 @@
 --   The ACCESS EXCLUSIVE lock queues every receipt-writing RPC for the few
 --   milliseconds of the swap, bounded by lock_timeout = 10s.
 --
+-- THIRD DEFECT (Codex review, 2026-09-07, HIGH — CUTOVER RACE): the ACCESS
+-- EXCLUSIVE lock above only drains transactions that have ALREADY touched
+-- idempotency_keys. It cannot stop a call that resolved the OLD
+-- create_inventory_hold body and has not reached its receipt write yet: that
+-- body authenticates, reads the profile, runs the stock check and INSERTs the
+-- hold all BEFORE its first receipt-table access, which sits at the very end
+-- behind `IF p_idempotency_key IS NOT NULL`. Such a call can block there,
+-- resume after this migration commits, and write an UNBOUND receipt — having
+-- used the old body's missing-profile and NULL-p_force bypasses. Renaming and
+-- revoking cannot stop an invocation already executing, and
+-- PREFLIGHT_LEGACY_RECEIPTS cannot see a FUTURE late insert. FIX: a BEFORE
+-- INSERT trigger on idempotency_keys, created BEFORE the rename, that requires
+-- transaction-local binding context naming this exact key and refuses anything
+-- else (CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT). Same remedy as the live
+-- Section 9 guard (20260826221000); a SEPARATE trigger on purpose, since
+-- editing that one would touch a function currently guarding live vendor-bill,
+-- vendor-payment and PO-receiving money receipts. Both triggers early-return
+-- for operations they do not own, and create_inventory_hold's body is the only
+-- writer of that operation's receipts anywhere in the repo.
+--
 -- PREFLIGHT: check_idempotency_intent(text,text,uuid,text),
 -- extensions.digest(bytea,text) and pg_catalog.trim_scale(numeric) installed;
 -- exactly one overload of create_inventory_hold in public; the private impl name
@@ -122,16 +142,26 @@
 -- the impl, and binds the receipt; ACL — impl executable by nobody but postgres;
 -- wrapper executable by authenticated and service_role, not anon, not PUBLIC;
 -- check_idempotency_intent itself still not executable by anon, authenticated
--- or service_role (the serialization guarantee rests on that).
+-- or service_role (the serialization guarantee rests on that); the wrapper
+-- publishes crx.create_inventory_hold_intent BEFORE it can reach a receipt
+-- write (position-checked, not merely present); the binding trigger is
+-- registered on idempotency_keys and its function rejects unbound receipts.
 -- ROLLBACK: a NEW forward migration that drops the wrapper and renames
 -- _create_inventory_hold_intent_impl_20260905 back to create_inventory_hold
--- (or re-emits the pinned body), then restores GRANT EXECUTE TO authenticated.
+-- (or re-emits the pinned body), then restores GRANT EXECUTE TO authenticated,
+-- and MUST also drop trigger bind_create_inventory_hold_receipt_20260905 —
+-- leaving it while restoring the old body would make every hold fail closed.
 -- PROOF: scripts/smoke/prove-create-inventory-hold-intent-binding-real-schema.mjs
 -- (network-disabled throwaway Supabase PostgreSQL 17 image on the checked-in
 -- 2026-07-27 baseline plus every later migration; two-session same-key race
 -- BEFORE the candidate leaves one hold and an ERROR for the loser, AFTER it
 -- leaves one hold and the same hold_id for both) and the rolled-back chain
--- scripts/smoke/smoke-create-inventory-hold-intent-binding.sql.
+-- scripts/smoke/smoke-create-inventory-hold-intent-binding.sql, whose section
+-- 11 calls the renamed body DIRECTLY with no binding context — exactly what an
+-- in-flight pre-cutover call does — and asserts it is refused leaving no hold
+-- and no receipt. Falsified 2026-09-07: with the trigger installed but its
+-- predicate neutered, that case reported SMOKE_FAIL: the old body wrote an
+-- UNBOUND receipt after cutover.
 -- ============================================================================
 
 -- The whole file runs in one transaction (psql -1 / the apply script). Holding
@@ -162,7 +192,7 @@ DECLARE
   -- checkout and an LF checkout pin the same value. The constant lives in
   -- this preflight block, NOT inside the wrapper body, so declaring it does
   -- not change the value it pins.
-  v_wrapper_pin text := '3089caa0f83369d8a58057505b3b5ac1b64a445262fd5fa5e441ef0f03b08314';
+  v_wrapper_pin text := '71fa8fafcfd04bf286678ab51c44c9fde05901a79b57ac563b165fecd0750d02';
   v_wrapper_sha text;
 BEGIN
   -- Helpers first: the body hash below calls extensions.digest, so a missing
@@ -318,6 +348,85 @@ END;
 $preflight$;
 
 -- ---------------------------------------------------------------------------
+-- Step 0b: close the CUTOVER RACE before anything is renamed.
+--
+-- The ACCESS EXCLUSIVE drain above only drains transactions that have already
+-- TOUCHED idempotency_keys. It cannot stop a call that already resolved the OLD
+-- create_inventory_hold body and has not reached its receipt write yet: that
+-- body authenticates, reads the profile, runs the stock check and INSERTs the
+-- hold all BEFORE its first receipt-table access, which sits at the very end
+-- behind `IF p_idempotency_key IS NOT NULL`. Such a call can block there,
+-- resume after this migration commits, and write an UNBOUND receipt -- having
+-- used the old body's missing-profile and NULL-p_force bypasses. Renaming and
+-- revoking cannot stop an invocation that is already executing, and the
+-- PREFLIGHT_LEGACY_RECEIPTS check above cannot see a FUTURE late insert.
+--
+-- Same remedy as the live Section 9 guard (20260826221000): require
+-- transaction-local binding context at INSERT time and reject a receipt that
+-- arrives without it. This is a SEPARATE trigger, deliberately: extending
+-- _section9_bind_idempotency_receipt_20260826 would edit a function currently
+-- guarding live vendor-bill, vendor-payment and PO-receiving money receipts,
+-- a far larger blast radius than this inventory change. Both triggers early-
+-- return for operations they do not own, so they are independent.
+--
+-- Created BEFORE the rename so there is no window in which the old body can
+-- write an unbound receipt. While this trigger exists and the old body is still
+-- installed, an old-body hold FAILS CLOSED rather than booking unreceipted.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public._bind_create_inventory_hold_receipt_20260905()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_context_text text;
+  v_context jsonb;
+BEGIN
+  -- Own ONLY this operation; every other receipt is somebody else's business.
+  IF NEW.operation IS DISTINCT FROM 'create_inventory_hold' THEN
+    RETURN NEW;
+  END IF;
+
+  v_context_text := current_setting('crx.create_inventory_hold_intent', true);
+  IF v_context_text IS NULL OR v_context_text = '' THEN
+    RAISE EXCEPTION 'CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT: a create_inventory_hold receipt was inserted without binding context. Only public.create_inventory_hold may write one; a pre-cutover invocation of the old body cannot.';
+  END IF;
+
+  BEGIN
+    v_context := v_context_text::jsonb;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION 'CREATE_INVENTORY_HOLD_INVALID_CONTEXT';
+  END;
+
+  -- The context must describe THIS row, so a stale context left in the
+  -- transaction by an earlier call cannot bind a different key.
+  IF v_context ->> 'operation' IS DISTINCT FROM NEW.operation
+     OR v_context ->> 'idempotency_key' IS DISTINCT FROM NEW.idempotency_key
+     OR COALESCE(v_context ->> 'actor_id', '') = ''
+     OR COALESCE(v_context ->> 'fingerprint', '') = '' THEN
+    RAISE EXCEPTION 'CREATE_INVENTORY_HOLD_CONTEXT_MISMATCH';
+  END IF;
+
+  NEW.request_actor_id := (v_context ->> 'actor_id')::uuid;
+  NEW.request_fingerprint := v_context ->> 'fingerprint';
+  RETURN NEW;
+END;
+$function$;
+
+ALTER FUNCTION public._bind_create_inventory_hold_receipt_20260905() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public._bind_create_inventory_hold_receipt_20260905()
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._bind_create_inventory_hold_receipt_20260905() TO postgres;
+
+DROP TRIGGER IF EXISTS bind_create_inventory_hold_receipt_20260905
+  ON public.idempotency_keys;
+CREATE TRIGGER bind_create_inventory_hold_receipt_20260905
+BEFORE INSERT ON public.idempotency_keys
+FOR EACH ROW
+EXECUTE FUNCTION public._bind_create_inventory_hold_receipt_20260905();
+
+-- ---------------------------------------------------------------------------
 -- Step 1: keep the live body, under a private name.
 -- ---------------------------------------------------------------------------
 DO $rename$
@@ -421,6 +530,19 @@ BEGIN
     'force_reason', p_force_reason
   )::text, 'UTF8'), 'sha256'), 'hex');
 
+  -- Publish the binding context BEFORE any receipt can be written. The
+  -- BEFORE INSERT trigger installed by this migration rejects any
+  -- create_inventory_hold receipt that arrives without it, which is what stops
+  -- an old-body call that was already in flight at cutover from landing an
+  -- unbound receipt. `true` = transaction-local, so it disappears on COMMIT or
+  -- ROLLBACK and cannot leak into the connection's next transaction.
+  PERFORM set_config('crx.create_inventory_hold_intent', jsonb_build_object(
+    'operation', 'create_inventory_hold',
+    'idempotency_key', p_idempotency_key,
+    'actor_id', v_actor,
+    'fingerprint', v_fingerprint
+  )::text, true);
+
   -- Takes pg_advisory_xact_lock on the key for the rest of this transaction.
   -- A racing same-key call waits here until this one commits, then replays.
   v_replay := public.check_idempotency_intent(
@@ -521,6 +643,38 @@ BEGIN
      OR position('''force'', v_force' IN v_src) = 0
      OR position('p_performed_by, v_force, p_force_reason' IN v_src) = 0 THEN
     RAISE EXCEPTION 'POSTFLIGHT_FORCE_NORMALIZATION: create_inventory_hold does not normalize p_force before fingerprinting and delegating; a NULL force would bypass FORCE_REQUIRES_ADMIN and INSUFFICIENT_HOLD_INVENTORY.';
+  END IF;
+
+  -- The cutover guard. The wrapper must publish binding context BEFORE it can
+  -- reach any receipt write, and the trigger must be registered on
+  -- idempotency_keys. Order matters: a set_config that landed AFTER the
+  -- delegated call would leave the impl's receipt unbound and the whole
+  -- function permanently broken, so assert position, not just presence.
+  IF position('set_config(''crx.create_inventory_hold_intent''' IN v_src) = 0
+     OR position('set_config(''crx.create_inventory_hold_intent''' IN v_src)
+        > position('public.check_idempotency_intent(' IN v_src) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_INTENT_CONTEXT: create_inventory_hold does not publish crx.create_inventory_hold_intent before it can write a receipt.';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_trigger t
+      JOIN pg_proc p ON p.oid = t.tgfoid
+     WHERE t.tgrelid = 'public.idempotency_keys'::regclass
+       AND NOT t.tgisinternal
+       AND t.tgname = 'bind_create_inventory_hold_receipt_20260905'
+       AND p.proname = '_bind_create_inventory_hold_receipt_20260905'
+  ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_CUTOVER_TRIGGER: bind_create_inventory_hold_receipt_20260905 is not registered on public.idempotency_keys; an in-flight pre-cutover call could still write an unbound receipt.';
+  END IF;
+
+  SELECT prosrc INTO v_src
+    FROM pg_proc
+   WHERE oid = to_regprocedure('public._bind_create_inventory_hold_receipt_20260905()');
+  IF position('CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT' IN v_src) = 0
+     OR position('CREATE_INVENTORY_HOLD_CONTEXT_MISMATCH' IN v_src) = 0
+     OR position('NEW.request_actor_id :=' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_CUTOVER_TRIGGER: the binding trigger function does not reject unbound receipts.';
   END IF;
 
   SELECT prosrc INTO v_src FROM pg_proc WHERE oid = to_regprocedure(v_impl_sig);
