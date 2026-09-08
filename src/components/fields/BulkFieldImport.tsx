@@ -564,7 +564,6 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             : `"${pf.field_name}": ${reason}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
           saveOutcome = 'committed';
-          // A field id already seen in this run means this row is byte-identical to an
           // save_field has COMMITTED. Count the row as created before anything else can fail,
           // so a later boundary or override failure still reports the field as existing.
           //
@@ -581,11 +580,6 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           // positively refuses it. Starting optimistic here would let the screen state an
           // unverified database condition as fact — and then invite an admin to act on it.
           let boundaryUnknown = true;
-          // Keyed by the field this boundary lands on and the geometry itself --
-          // NOT by the save_field scope. The field id is the strongest identity
-          // available here and it already exists, so correcting a rejected
-          // boundary changes THIS key and nothing upstream: the retry updates the
-          // field that was created rather than creating another one.
           try {
             const { data: bData, error: bErr, status: bStatus } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
@@ -659,20 +653,6 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               }
             }
             success++;
-            // The keys are deliberately NOT reset here.
-            //
-            // Retiring save_field's key on success defeated the duplicate check
-            // below outright: two byte-identical rows share one scope, so the
-            // first row's success retired the key and the second row minted a
-            // FRESH one, got a new field id back, and created the duplicate the
-            // check exists to prevent. It never fired in a normal import.
-            //
-            // Retaining the key is also the right rule on its own terms. Every
-            // scope here is content- or field-identity bound, so "already done"
-            // is exactly what a repeat means: same customer, same name, same
-            // payload is the same field, not a second one. A deliberate re-import
-            // after a reload still gets a fresh key, which is the only case where
-            // creating another field could be intended.
           }
         }
       } catch (err: unknown) {
