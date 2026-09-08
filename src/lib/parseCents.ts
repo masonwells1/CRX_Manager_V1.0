@@ -42,6 +42,40 @@ export function parseDollarsToCents(input: string): number | null {
 export const MONEY_PRECISION_MESSAGE = 'Enter an amount with no more than two decimal places.';
 
 /**
+ * Validate a form-entered dollar amount before parsing it into cents.
+ *
+ * A SHAPE + MAGNITUDE guard, complementary to (not a substitute for) the
+ * parsers' own refusal. Since 2026-09-03 both parsers return null rather than
+ * truncating, so `1.999` is already refused downstream; this guard additionally
+ * rejects input the parsers would silently normalise instead of refusing —
+ * currency symbols and separators (`$1.00`), a non-leading dash — and bounds
+ * the magnitude, which the parsers do not. Mutation forms run it first so an
+ * out-of-shape or unrepresentable amount never reaches a money RPC.
+ */
+export function isWholeCentDollarInput(
+  input: string,
+  options: { allowNegative?: boolean } = {},
+): boolean {
+  if (typeof input !== 'string') return false;
+  const value = input.trim();
+  if (!value) return false;
+
+  const unsignedDollars = String.raw`(?:\d+(?:\.\d{0,2})?|\.\d{1,2})`;
+  const pattern = options.allowNegative
+    ? new RegExp(`^-?${unsignedDollars}$`)
+    : new RegExp(`^${unsignedDollars}$`);
+  if (!pattern.test(value)) return false;
+
+  // The pattern bounds the DECIMAL places but not the digit count, so a large
+  // enough amount parses into a cents integer past Number.MAX_SAFE_INTEGER and
+  // silently loses precision — e.g. "90071992547409.93" becomes 9007199254740993,
+  // which JavaScript cannot represent exactly. That is precisely the
+  // exact-whole-cent rule this guard exists to enforce, so reject it here rather
+  // than let a rounded amount reach a money RPC.
+  return Number.isSafeInteger(parseDollarsToCentsSigned(value));
+}
+
+/**
  * Parse a dollar string into cents (integer), preserving leading minus signs
  * so negative inputs like "-50" parse to -5000.
  *

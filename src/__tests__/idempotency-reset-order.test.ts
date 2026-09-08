@@ -142,11 +142,14 @@ describe('F1 — the key survives until the reply is confirmed', () => {
  * A file now only excuses the reasons it declares, and each hit must independently
  * exhibit that reason:
  *
- *  - `recovery`  — the reset sits in an `if (error)` recovery branch. Two intended
+ *  - `recovery`  — the reset sits in an `if (error)` recovery branch. Three intended
  *    flavors: `getIdempotencyMismatchResult` returned a COMMITTED receipt (the outcome
  *    is known, so the key is properly retired and the app reopens the committed record
- *    rather than duplicating it), or `isDefinitiveRpcRejection` (server definitively
- *    refused, nothing committed). "Fixing" these breaks duplicate recovery.
+ *    rather than duplicating it), `isDefinitiveRpcRejection` (server definitively
+ *    refused, nothing committed), or `getIdempotencyBindingRejection` (the stored key
+ *    is bound to a different intent/actor, or its receipt is unusable — nothing
+ *    committed under it, so it must be retired for the retry to mint a fresh one).
+ *    "Fixing" these breaks duplicate recovery.
  *  - `throw-on-error` — the RPC RETURNS void and is called with `.throwOnError()`, so
  *    the promise rejects on any error and the reset is only reachable on success.
  *    There is no payload to assert.
@@ -162,9 +165,18 @@ const ALLOWED_REASONS: Record<string, Reason[]> = {
   'src/pages/Returns.tsx': ['recovery'],
   'src/pages/InvoiceDetail.tsx': ['recovery', 'throw-on-error'],
   'src/pages/CycleCounts.tsx': ['throw-on-error'],
+  // Both sites are `if (getIdempotencyBindingRejection(error)) idem.resetKeyFor(scope);`
+  // inside an `if (error)` branch that then rethrows — verified in source, not asserted.
+  'src/pages/InventoryPage.tsx': ['recovery'],
+  'src/components/receiving/ReceivingLogPanel.tsx': ['recovery'],
   'src/pages/FieldApplicationInvoice.tsx': ['throw-on-error'],
   'src/pages/Fields.tsx': ['throw-on-error'],
-  'src/pages/VendorBillDetail.tsx': ['throw-on-error'],
+  // Two DIFFERENT sites, two different reasons. The post-call reset is throw-on-error;
+  // the one in the catch is a getIdempotencyBindingRejection recovery. Before that
+  // marker was recognised, the recovery site was excused as 'throw-on-error' by the
+  // .throwOnError() call sitting above it in the window — a correct verdict reached
+  // for the wrong reason, which is the laundering this per-site scheme exists to stop.
+  'src/pages/VendorBillDetail.tsx': ['throw-on-error', 'recovery'],
   'src/pages/SupplierPricing.tsx': ['intent-rotation'],
   // JobDetail is pinned as known-unfixed AND declares intent-rotation: two of its
   // scanner hits are modal-opening buttons (Save as Recipe, Complete Job) that
@@ -333,11 +345,25 @@ function classify(lines: string[], lineNo: number): Reason | null {
   const exitsBranch = (arr: string[], from: number): boolean =>
     arr.slice(from + 1).some((l) => /^\s*(throw|return)\b/.test(l));
 
+  // `getIdempotencyBindingRejection` is the THIRD recovery flavor (added with the
+  // Section 9 / inventory scoping work): the server refused because the stored key
+  // is bound to a different intent, actor, or an unusable receipt
+  // (IDEMPOTENCY_INTENT_MISMATCH / ACTOR_MISMATCH / RESULT_INVALID / RECEIPT_MISSING —
+  // see getIdempotencyBindingRejection in src/lib/idempotency.ts). Nothing committed
+  // under that key, so retiring it is the correct recovery: the retry mints a fresh
+  // one. Leaving it unrecognised reported four correct sites as defects.
+  const RECOVERY_MARKER =
+    /getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection|committed[A-Za-z]*(Id|Result)/;
+
+  // A marker on the RESET'S OWN LINE — `if (marker(error)) idem.resetKeyFor(scope);` —
+  // is the strongest same-branch evidence available: there is no room between the two
+  // for a branch to open or close, so exitsBranch has nothing to rule out. classify()
+  // read only the lines ABOVE the reset, so this single-line guard form was
+  // unclassifiable and every instance of it read as a defect.
+  if (RECOVERY_MARKER.test(self)) return 'recovery';
+
   const aboveLines = above.split('\n');
-  const markerIdx = lastIndexMatching(
-    aboveLines,
-    /getIdempotencyMismatchResult|isDefinitiveRpcRejection|committed[A-Za-z]*(Id|Result)/,
-  );
+  const markerIdx = lastIndexMatching(aboveLines, RECOVERY_MARKER);
   if (markerIdx >= 0 && !exitsBranch(aboveLines, markerIdx)) return 'recovery';
 
   // Same rule for fire-and-forget: an exit between the call and the reset means they
