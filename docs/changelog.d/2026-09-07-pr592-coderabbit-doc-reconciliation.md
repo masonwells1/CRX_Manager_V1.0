@@ -56,12 +56,13 @@ installed its `todayInBusinessTz` spy before the initial commission request sett
 request's rerender could consume `mockReturnValueOnce('2026-09-30')` and leave the preset deriving
 from `2026-10-01`. It now awaits `CP-2026-0042` first, matching the neighbouring test.
 
-**Not addressed — left open deliberately.** The eighth finding, on
+**Originally left open, then addressed under the migration proof gate.** The eighth finding, on
 `supabase/migrations/20260905200000_commission_history_report_replay_guard.sql:59`, asks for the
 balance-report child contract to accept both known bodies. The mechanism is real: `20260905200600`
 replaces `get_commission_balance_report`, and that file's own preflight, plus `20260905200200` and
 `20260905210000`, all use two-value `md5(prosrc) IN (...)` pins for exactly this reason, making
-`20260905200000` the cohort's only single-value pin on a child a sibling replaces. It is not fixed
-here because changing a migration's pin re-opens the migration proof gates on a money PR
-mid-landing, and widening a guard as a review response is the wrong way to make that call. Tracked
-for a deliberate decision with its own proof.
+`20260905200000` the cohort's only single-value pin on a child a sibling replaces. This first pass
+did not change the migration because changing a money-path pin re-opens the migration proof gates.
+The later follow-up described in
+`docs/changelog.d/2026-09-07-pr592-replay-guard-successor-contract.md` makes the correction and adds
+the required post-`20260905200600` replay plus load-bearing body/comment pin mutations.

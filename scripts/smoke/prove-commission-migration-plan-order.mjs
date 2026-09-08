@@ -32,13 +32,17 @@
  *   PIN       narrowing the repair's settlement-recorder pin back to the single
  *             pre-200200 body makes it fail with ..._DRIFT after the guard — the
  *             widened pin is load-bearing, not decorative
+ *   REPLAY    after 200600 replaces the balance report, replaying 200000 succeeds;
+ *             removing either the successor body or comment pin makes it fail
  *   TAIL      once the settled data is gone the repair still applies AFTER the guard
  *             (post-200200 recorder body) and installs its own recorder body
  *   LEDGER    every parked file clears checkMigrationOrdering against the live applied
  *             high-water, and the pre-renumber names did not (negative control)
  *
- * Every parked 20260905* file is asserted wrappable (the real single-transaction
- * delivery path) before it is applied — asserted, never branched on.
+ * Every file in the six named parked commission candidates is asserted wrappable
+ * (the real single-transaction delivery path) before it is applied. The separate
+ * parked next-invoice-number prerequisite is also asserted wrappable here before
+ * this full-plan harness executes it; its independent prover owns its behavior.
  */
 
 import assert from 'node:assert/strict';
@@ -53,9 +57,20 @@ const BASE_PROVER = path.join(HERE, 'prove-commission-history-as-of.mjs');
 const LEDGER_MIGRATION = '20260903150100_ledger_backed_commission_history.sql';
 const REPLAY_GUARD = '20260905200000_commission_history_report_replay_guard.sql';
 const RECIPIENT_GUARD = '20260905200200_refuse_stale_commission_payment_recipient.sql';
+const PAYMENT_DATE_GUARD = '20260905200300_enforce_commission_payment_business_date.sql';
+const CHICAGO_DATE_CUTOVER = '20260905200400_commission_dates_follow_chicago_business_day.sql';
 const REPAIR = '20260905210000_repair_commission_history_label_snapshots.sql';
 const LABEL_FIX = '20260905200600_latest_commission_recipient_label.sql';
-const PARKED_PREFIX = '20260905';
+const NEXT_INVOICE_YEAR = '20260905090000_next_invoice_number_year_chicago.sql';
+const PARKED_COMMISSION_NAMES = [
+  REPLAY_GUARD,
+  RECIPIENT_GUARD,
+  PAYMENT_DATE_GUARD,
+  CHICAGO_DATE_CUTOVER,
+  LABEL_FIX,
+  REPAIR,
+];
+const WRAPPABLE_PLAN_NAMES = [...PARKED_COMMISSION_NAMES, NEXT_INVOICE_YEAR];
 
 // The newest APPLIED ledger row as read live on 2026-09-05 (#606, version 20260905185938,
 // recorded under a bare name; refresh-applied-migrations synthesizes <version>_<name>).
@@ -78,7 +93,10 @@ const SETTLEMENT_RECORDER_LIVE = 'feb0f260fd2ad9e2945f761e93e9a3dc';   // pre-20
 const SETTLEMENT_RECORDER_GUARD = '9054ce6c57f3e985e2b044385e07a6cd';  // installed by 200200
 const EARNED_RECORDER_LIVE = 'dc0577e8e694773e75a1c8099819ba6c';       // pre-repair
 const EARNED_RECORDER_REPAIRED = '5623b0d31181d357b303a36e563a77aa';   // installed by the repair
+const BALANCE_REPORT_LIVE = '3edbcba030a9d5d0a106eeb9bf5a6635';         // pre-200600
 const BALANCE_REPORT_LATEST_LABEL = 'a302d0f87ca84794ceb9c815a073f77f'; // installed by 200600
+const BALANCE_REPORT_LIVE_COMMENT_SQL = "Admin-only exact commission earned, paid, and outstanding balances from the immutable cutover''s first complete Chicago day through Chicago-today; earlier dates fail closed because pre-cutover earned-state history is unavailable.";
+const BALANCE_REPORT_LATEST_COMMENT = 'Admin-only exact commission earned, paid, and outstanding balances with the latest ledgered recipient label at the requested supported Chicago business-date cutoff.';
 
 const GENERATED = path.join(HERE, `.commission-migration-plan-order-${process.pid}.mjs`);
 const NAME = `crx-commission-plan-order-${process.pid}-${Date.now().toString(36)}`.toLowerCase();
@@ -153,7 +171,7 @@ if (existsSync(appliedSnapshot)) {
   const snapshot = JSON.parse(readFileSync(appliedSnapshot, 'utf8'));
   if (Array.isArray(snapshot.applied)) appliedNames = appliedNames.concat(snapshot.applied);
 }
-const parkedNames = trailingNames.filter((name) => name.startsWith(PARKED_PREFIX));
+const parkedNames = trailingNames.filter((name) => PARKED_COMMISSION_NAMES.includes(name));
 assert.equal(parkedNames.length, PRE_RENUMBER_NAMES.length,
   `parked set is ${parkedNames.length} files but the negative control lists ${PRE_RENUMBER_NAMES.length}; update PRE_RENUMBER_NAMES`);
 // Negative control first: the SAME guard against the SAME ledger refuses the old names.
@@ -179,7 +197,7 @@ console.log(`COMMISSION_PLAN_ORDER_LEDGER_PASS high_water=${ledgerHighWater} ref
 // The old order the defect lived in: the repair immediately after the replay guard.
 const oldOrderNames = [REPLAY_GUARD, REPAIR];
 for (const name of trailingNames) {
-  if (name.startsWith(PARKED_PREFIX) && !oldOrderNames.includes(name)) oldOrderNames.push(name);
+  if (PARKED_COMMISSION_NAMES.includes(name) && !oldOrderNames.includes(name)) oldOrderNames.push(name);
 }
 assert.equal(oldOrderNames.indexOf(REPAIR), 1, 'old-order reconstruction lost the defect position');
 assert.ok(oldOrderNames.indexOf(REPAIR) < oldOrderNames.indexOf(RECIPIENT_GUARD),
@@ -208,11 +226,13 @@ const continuation = `
   );
   const planOrderTrailing = ${JSON.stringify(trailing)};
   const planOrderOldOrder = ${JSON.stringify(oldOrderNames)};
+  const planOrderCommissionNames = new Set(${JSON.stringify(PARKED_COMMISSION_NAMES)});
+  const planOrderWrappableNames = new Set(${JSON.stringify(WRAPPABLE_PLAN_NAMES)});
   const planOrderSources = new Map();
   for (const local of planOrderTrailing) {
     const name = path.basename(local);
     const text = readFileSync(local, 'utf8').replace(/\\r\\n/g, '\\n');
-    if (name.startsWith(${JSON.stringify(PARKED_PREFIX)})) {
+    if (planOrderWrappableNames.has(name)) {
       // Asserted, never branched on: a parked file must take the real -1 path.
       planOrderAssertWrappable(text, name);
     }
@@ -238,6 +258,8 @@ const continuation = `
     'container does not start from the live settlement recorder body');
   assert.equal(earnedRecorderMd5(), ${JSON.stringify(EARNED_RECORDER_LIVE)},
     'container does not start from the live earned recorder body');
+  assert.equal(bodyMd5('public.get_commission_balance_report(date)'), ${JSON.stringify(BALANCE_REPORT_LIVE)},
+    'container does not start from the live balance report body');
 
   // Settled data: the base prover's real post/void scenario. Assert it rather than
   // assume it — if the base fixture ever stops leaving settlement history, this
@@ -251,16 +273,37 @@ const continuation = `
   assert.ok(settledPayments > 0, 'base prover left no posted/voided payment; seed settled data before walking the plan');
   console.log('COMMISSION_PLAN_ORDER_SETTLED_DATA settlement_events=' + settlementEvents + ' settled_payments=' + settledPayments);
 
-  // Files after the base candidate that are NOT part of the parked set (already
-  // live) are replayed first with per-file commits, exactly as a rebuild does.
+  // The inherited base fixture deliberately uses PostgreSQL CURRENT_DATE to
+  // reproduce the UTC/Chicago boundary bug. At a Chicago evening boundary that
+  // is tomorrow, and 200300 must correctly refuse it. This proof is about the
+  // settled-data ordering path, so normalize only the disposable fixture's
+  // payment date before walking the parked plan; 200300's own prover owns its
+  // future-date negative control.
+  psql(\`
+UPDATE public.commission_payments
+   SET payment_date = timezone('America/Chicago', statement_timestamp())::date
+ WHERE payment_date > timezone('America/Chicago', statement_timestamp())::date;
+\`);
+  assert.equal(scalar(\`
+    SELECT count(*)::text
+      FROM public.commission_payments
+     WHERE payment_date > timezone('America/Chicago', statement_timestamp())::date
+  \`), '0', 'fixture still contains a future Chicago payment date');
+  console.log('COMMISSION_PLAN_ORDER_FIXTURE_DATE_PASS future_payment_rows=0');
+
+  // Files after the base candidate that are NOT part of the parked commission
+  // set are replayed first with per-file commits, exactly as a rebuild does.
+  // Most are already live; NEXT_INVOICE_YEAR is a separately parked candidate
+  // whose wrappability was asserted above and whose behavior is proved by its
+  // dedicated prover.
   const planOrderParked = [];
   for (const local of planOrderTrailing) {
     const name = path.basename(local);
-    if (name.startsWith(${JSON.stringify(PARKED_PREFIX)})) { planOrderParked.push(name); continue; }
+    if (planOrderCommissionNames.has(name)) { planOrderParked.push(name); continue; }
     applySql(planOrderSources.get(name));
     console.log('COMMISSION_PLAN_ORDER_PREREQ_APPLIED ' + name);
   }
-  assert.deepEqual(planOrderParked, planOrderTrailing.map((l) => path.basename(l)).filter((n) => n.startsWith(${JSON.stringify(PARKED_PREFIX)})));
+  assert.deepEqual(planOrderParked, planOrderTrailing.map((l) => path.basename(l)).filter((n) => planOrderCommissionNames.has(n)));
 
   // ── CONTROL: the OLD order, one transaction. The repair refuses on settled data
   // before the recipient guard is reached; nothing after it runs. ──
@@ -304,6 +347,52 @@ const continuation = `
     'ROLLOUT: the payout business-date guard is not installed');
   console.log('COMMISSION_PLAN_ORDER_ROLLOUT_PASS applied=' + applied.length + ' refused_last=' + halted.name + ' recipient_guard_installed=true');
 
+  // ── REPLAY: 200000 must accept both reviewed child-report contracts. ──
+  const replayGuardText = planOrderSources.get(${JSON.stringify(REPLAY_GUARD)});
+  const replayAfterLabel = applySql(replayGuardText, { allowFailure: true });
+  const replayAfterLabelOutput = (replayAfterLabel.stdout || '') + (replayAfterLabel.stderr || '');
+  assert.equal(replayAfterLabel.status, 0,
+    'REPLAY: 200000 refused the reviewed post-200600 child contract:\\n' + replayAfterLabelOutput);
+  assert.equal(bodyMd5('public.get_commission_balance_report(date)'), ${JSON.stringify(BALANCE_REPORT_LATEST_LABEL)},
+    'REPLAY: 200000 changed the post-200600 balance report body');
+
+  const latestBodyPinFragment = ",\\n          '" + ${JSON.stringify(BALANCE_REPORT_LATEST_LABEL)} + "'";
+  assert.equal(replayGuardText.split(latestBodyPinFragment).length - 1, 2,
+    'REPLAY: expected one successor body pin in each dependency contract block');
+  const narrowedReplayBody = replayGuardText.split(latestBodyPinFragment).join('');
+  const narrowedReplayBodyResult = applySql(narrowedReplayBody, { allowFailure: true });
+  const narrowedReplayBodyOutput = (narrowedReplayBodyResult.stdout || '') + (narrowedReplayBodyResult.stderr || '');
+  assert.notEqual(narrowedReplayBodyResult.status, 0,
+    'REPLAY: removing the post-200600 body pin unexpectedly succeeded');
+  assert.match(narrowedReplayBodyOutput, /COMMISSION_HISTORY_REPORT_DEPENDENCY_DRIFT/,
+    'REPLAY: narrowed body pin failed for the wrong reason:\\n' + narrowedReplayBodyOutput);
+
+  const latestCommentPinFragment = ",\\n          '" + ${JSON.stringify(BALANCE_REPORT_LATEST_COMMENT)} + "'";
+  assert.equal(replayGuardText.split(latestCommentPinFragment).length - 1, 2,
+    'REPLAY: expected one successor comment pin in each dependency contract block');
+  const narrowedReplayComment = replayGuardText.split(latestCommentPinFragment).join('');
+  const narrowedReplayCommentResult = applySql(narrowedReplayComment, { allowFailure: true });
+  const narrowedReplayCommentOutput = (narrowedReplayCommentResult.stdout || '') + (narrowedReplayCommentResult.stderr || '');
+  assert.notEqual(narrowedReplayCommentResult.status, 0,
+    'REPLAY: removing the post-200600 comment pin unexpectedly succeeded');
+  assert.match(narrowedReplayCommentOutput, /COMMISSION_HISTORY_REPORT_DEPENDENCY_DRIFT/,
+    'REPLAY: narrowed comment pin failed for the wrong reason:\\n' + narrowedReplayCommentOutput);
+
+  const pairedCommentFragment = "ARRAY[\\n          '" + ${JSON.stringify(BALANCE_REPORT_LIVE_COMMENT_SQL)} + "',\\n          '" + ${JSON.stringify(BALANCE_REPORT_LATEST_COMMENT)} + "'\\n        ]::text[]";
+  const swappedCommentFragment = "ARRAY[\\n          '" + ${JSON.stringify(BALANCE_REPORT_LATEST_COMMENT)} + "',\\n          '" + ${JSON.stringify(BALANCE_REPORT_LIVE_COMMENT_SQL)} + "'\\n        ]::text[]";
+  assert.equal(replayGuardText.split(pairedCommentFragment).length - 1, 2,
+    'REPLAY: expected paired balance-report comment arrays in both dependency blocks');
+  const mismatchedReplayPair = replayGuardText.split(pairedCommentFragment).join(swappedCommentFragment);
+  const mismatchedReplayPairResult = applySql(mismatchedReplayPair, { allowFailure: true });
+  const mismatchedReplayPairOutput = (mismatchedReplayPairResult.stdout || '') + (mismatchedReplayPairResult.stderr || '');
+  assert.notEqual(mismatchedReplayPairResult.status, 0,
+    'REPLAY: accepting the successor body with the predecessor comment unexpectedly succeeded');
+  assert.match(mismatchedReplayPairOutput, /COMMISSION_HISTORY_REPORT_DEPENDENCY_DRIFT/,
+    'REPLAY: mismatched body/comment pair failed for the wrong reason:\\n' + mismatchedReplayPairOutput);
+  assert.equal(bodyMd5('public.get_commission_balance_report(date)'), ${JSON.stringify(BALANCE_REPORT_LATEST_LABEL)},
+    'REPLAY: refused pin mutations changed the post-200600 balance report body');
+  console.log('COMMISSION_PLAN_ORDER_REPLAY_PASS post_200600=true body_pin=load_bearing comment_pin=load_bearing contract_pair=load_bearing');
+
   // ── PIN: the widened settlement-recorder pin is load-bearing. ──
   const repairText = planOrderSources.get(${JSON.stringify(REPAIR)});
   const narrowedPin = repairText.replace(
@@ -334,7 +423,7 @@ COMMIT;\`);
   assert.equal(earnedRecorderMd5(), ${JSON.stringify(EARNED_RECORDER_REPAIRED)}, 'TAIL: the repair did not install its recorder');
   assert.equal(settlementRecorderMd5(), ${JSON.stringify(SETTLEMENT_RECORDER_GUARD)}, 'TAIL: the repair disturbed the recipient guard');
   console.log('COMMISSION_PLAN_ORDER_TAIL_PASS repair_applied_after_guard=true');
-  console.log('COMMISSION_MIGRATION_PLAN_ORDER_PROOF_PASS postgres=17 parked=' + planOrderParked.length + ' control=old_order_halts pin=load_bearing tail=applies');
+  console.log('COMMISSION_MIGRATION_PLAN_ORDER_PROOF_PASS postgres=17 parked=' + planOrderParked.length + ' control=old_order_halts replay=post_200600 pin=load_bearing tail=applies');
 `;
 
 let result;

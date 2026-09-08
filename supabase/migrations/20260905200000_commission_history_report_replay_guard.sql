@@ -3,7 +3,9 @@
 -- Harden the already-applied commission history snapshot RPC against shadow
 -- overloads and replay drift. This migration deliberately refuses unknown
 -- function, owner, security, search-path, body, comment, or ACL state rather
--- than overwriting it on an ordinary CREATE OR REPLACE replay.
+-- than overwriting it on an ordinary CREATE OR REPLACE replay. The child
+-- balance report has two reviewed contracts in this parked cohort: the live
+-- pre-20260905200600 body and the successor body installed by that later file.
 
 DO $commission_history_report_preflight$
 DECLARE
@@ -56,7 +58,10 @@ BEGIN
     VALUES
       (
         'get_commission_balance_report',
-        '3edbcba030a9d5d0a106eeb9bf5a6635',
+        ARRAY[
+          '3edbcba030a9d5d0a106eeb9bf5a6635',
+          'a302d0f87ca84794ceb9c815a073f77f'
+        ]::text[],
         ARRAY[
           'date'::regtype::oid,
           'uuid'::regtype::oid,
@@ -72,11 +77,14 @@ BEGIN
           'p_as_of_date', 'recipient_id', 'recipient_name', 'total_earned',
           'total_paid', 'outstanding_balance', 'pending_count', 'paid_count'
         ]::text[],
-        'Admin-only exact commission earned, paid, and outstanding balances from the immutable cutover''s first complete Chicago day through Chicago-today; earlier dates fail closed because pre-cutover earned-state history is unavailable.'
+        ARRAY[
+          'Admin-only exact commission earned, paid, and outstanding balances from the immutable cutover''s first complete Chicago day through Chicago-today; earlier dates fail closed because pre-cutover earned-state history is unavailable.',
+          'Admin-only exact commission earned, paid, and outstanding balances with the latest ledgered recipient label at the requested supported Chicago business-date cutoff.'
+        ]::text[]
       ),
       (
         'get_commission_payment_detail_report',
-        'c81b83a9175cc2398f348761d72929af',
+        ARRAY['c81b83a9175cc2398f348761d72929af']::text[],
         ARRAY[
           'date'::regtype::oid,
           'uuid'::regtype::oid,
@@ -97,7 +105,9 @@ BEGIN
           'recipient_id', 'recipient_name', 'commission_id', 'source_type',
           'source_number', 'customer_name', 'commission_order_date', 'settled_amount'
         ]::text[],
-        'Admin-only payment and settled-commission reconciliation detail from the immutable cutover''s first complete Chicago day through Chicago-today.'
+        ARRAY[
+          'Admin-only payment and settled-commission reconciliation detail from the immutable cutover''s first complete Chicago day through Chicago-today.'
+        ]::text[]
       )
   )
   SELECT count(*)
@@ -128,11 +138,13 @@ BEGIN
      AND p.prorows = 1000
      AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
      AND owner_role.rolname = 'postgres'
-     AND md5(p.prosrc) = e.body_md5
+     AND md5(p.prosrc) = ANY(e.body_md5)
      AND p.prosrc LIKE '%PERFORM public.require_admin()%'
      AND p.proacl::text IS NOT DISTINCT FROM
        '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'
-     AND obj_description(p.oid, 'pg_proc') IS NOT DISTINCT FROM e.function_comment;
+     AND obj_description(p.oid, 'pg_proc') = ANY(e.function_comment)
+     AND array_position(e.body_md5, md5(p.prosrc)) =
+         array_position(e.function_comment, obj_description(p.oid, 'pg_proc'));
 
   IF v_child_contract_count <> 2 THEN
     RAISE EXCEPTION
@@ -292,7 +304,10 @@ BEGIN
     VALUES
       (
         'get_commission_balance_report',
-        '3edbcba030a9d5d0a106eeb9bf5a6635',
+        ARRAY[
+          '3edbcba030a9d5d0a106eeb9bf5a6635',
+          'a302d0f87ca84794ceb9c815a073f77f'
+        ]::text[],
         ARRAY[
           'date'::regtype::oid,
           'uuid'::regtype::oid,
@@ -308,11 +323,14 @@ BEGIN
           'p_as_of_date', 'recipient_id', 'recipient_name', 'total_earned',
           'total_paid', 'outstanding_balance', 'pending_count', 'paid_count'
         ]::text[],
-        'Admin-only exact commission earned, paid, and outstanding balances from the immutable cutover''s first complete Chicago day through Chicago-today; earlier dates fail closed because pre-cutover earned-state history is unavailable.'
+        ARRAY[
+          'Admin-only exact commission earned, paid, and outstanding balances from the immutable cutover''s first complete Chicago day through Chicago-today; earlier dates fail closed because pre-cutover earned-state history is unavailable.',
+          'Admin-only exact commission earned, paid, and outstanding balances with the latest ledgered recipient label at the requested supported Chicago business-date cutoff.'
+        ]::text[]
       ),
       (
         'get_commission_payment_detail_report',
-        'c81b83a9175cc2398f348761d72929af',
+        ARRAY['c81b83a9175cc2398f348761d72929af']::text[],
         ARRAY[
           'date'::regtype::oid,
           'uuid'::regtype::oid,
@@ -333,7 +351,9 @@ BEGIN
           'recipient_id', 'recipient_name', 'commission_id', 'source_type',
           'source_number', 'customer_name', 'commission_order_date', 'settled_amount'
         ]::text[],
-        'Admin-only payment and settled-commission reconciliation detail from the immutable cutover''s first complete Chicago day through Chicago-today.'
+        ARRAY[
+          'Admin-only payment and settled-commission reconciliation detail from the immutable cutover''s first complete Chicago day through Chicago-today.'
+        ]::text[]
       )
   )
   SELECT count(*)
@@ -364,11 +384,13 @@ BEGIN
      AND p.prorows = 1000
      AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
      AND owner_role.rolname = 'postgres'
-     AND md5(p.prosrc) = e.body_md5
+     AND md5(p.prosrc) = ANY(e.body_md5)
      AND p.prosrc LIKE '%PERFORM public.require_admin()%'
      AND p.proacl::text IS NOT DISTINCT FROM
        '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'
-     AND obj_description(p.oid, 'pg_proc') IS NOT DISTINCT FROM e.function_comment;
+     AND obj_description(p.oid, 'pg_proc') = ANY(e.function_comment)
+     AND array_position(e.body_md5, md5(p.prosrc)) =
+         array_position(e.function_comment, obj_description(p.oid, 'pg_proc'));
 
   IF v_child_named_count <> 2 OR v_child_contract_count <> 2 THEN
     RAISE EXCEPTION

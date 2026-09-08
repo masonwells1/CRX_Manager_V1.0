@@ -34,8 +34,11 @@ twice returns `{ state: "unknown", paths: new Set() }` with reason
 disarms the ordering guard without failing anything. The merged file returns `known` with an empty
 reason, so that did not happen.
 
-No migration was applied, no live data changed, no migration SQL was edited, and the replay-guard
-finding on `20260905200000_commission_history_report_replay_guard.sql:59` remains open and unmodified.
+At this merge checkpoint, no migration was applied, no live data changed, no migration SQL was
+edited, and the replay-guard finding on
+`20260905200000_commission_history_report_replay_guard.sql:59` remained open and unmodified. It was
+addressed later under a fresh migration proof gate; see
+`docs/changelog.d/2026-09-07-pr592-replay-guard-successor-contract.md`.
 
 Verified on the merged tree: `tsc --noEmit` exit 0; full vitest suite 359 files / 5116 passed, 123
 skipped; `scripts/check-doc-drift.mjs` PASS; `scripts/check-ledger-update.mjs` exit 0;
