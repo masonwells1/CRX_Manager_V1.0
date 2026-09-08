@@ -157,6 +157,10 @@ ok(!classifySql("SELECT 1 -- DELETE FROM customers").block, "a commented-out DEL
 ok(!classifySql("-- insert into financial_audit_log is trigger-only\nSELECT 1").block, "audit-log prose in a comment does not block");
 // ...while everything the comments were hiding behind stays blocked:
 eq(classifySql("-- predicate (c): actor forgery\nSELECT cancel_order(42)").kind, "rpc-via-select", "a real RPC after a comment is still blocked");
+// ...and it must be the REAL call that triggered it, not the comment prose:
+// on the pre-2026-09-08 code this same case reported rpc-via-select for
+// `predicate()`, so asserting `kind` alone could not tell the two apart.
+ok(/cancel_order/.test(classifySql("-- predicate (c): actor forgery\nSELECT cancel_order(42)").reason), "the blocked RPC named is cancel_order, not the comment prose");
 eq(classifySql("/* note */ INSERT INTO financial_audit_log (x) VALUES (1)").kind, "audit-log-write", "a real audit-log write after a comment is still blocked");
 ok(classifySql("-- routine cleanup\nDELETE FROM customers WHERE id = 5").block, "a real DELETE after a comment is still blocked");
 // The strip must never swallow a real statement that follows a `--` or `/*`
@@ -172,8 +176,31 @@ ok(!classifySql("DELETE FROM customers WHERE id = 5 -- [E2E]").block, "[E2E] mar
 ok(!classifySql("SELECT pg_get_function_identity_arguments(oid) FROM pg_proc").block, "pg_get_function_identity_arguments is a read");
 ok(!classifySql("SELECT oidvectortypes(proargtypes) FROM pg_proc").block, "oidvectortypes is a read");
 ok(!classifySql("SELECT pg_get_triggerdef(oid) FROM pg_trigger").block, "pg_get_triggerdef is a read");
+ok(!classifySql("SELECT pg_get_function_arguments(oid) FROM pg_proc").block, "pg_get_function_arguments is a read");
+ok(!classifySql("SELECT pg_get_function_result(oid) FROM pg_proc").block, "pg_get_function_result is a read");
+ok(!classifySql("SELECT pg_get_ruledef(oid) FROM pg_rewrite").block, "pg_get_ruledef is a read");
+ok(!classifySql("SELECT pg_get_userbyid(relowner) FROM pg_class").block, "pg_get_userbyid is a read");
+// NB: the argument literals carry no `(` — a call-shaped name inside a string
+// literal still blocks, which is the documented, deliberately unchanged limit.
+ok(!classifySql("SELECT to_regprocedure('public.save_field')").block, "to_regprocedure is a read");
+ok(!classifySql("SELECT * FROM plpgsql_check_function_tb(oid) FROM pg_proc").block, "plpgsql_check_function_tb is a static analyser");
+ok(!classifySql("SELECT plpgsql_check_function(oid) FROM pg_proc").block, "plpgsql_check_function is a static analyser");
 // Adding those names must not have opened the default-deny scan generally.
 eq(classifySql("SELECT save_customer('{}'::jsonb)").kind, "rpc-via-select", "an unknown app function is still default-denied");
+
+// ── dollar-quote delimiters need a real token boundary (Codex BLOCKER, #639) ──
+// `foo$x$a` is ONE PostgreSQL identifier: `$` is a legal identifier
+// continuation character, so a dollar-quote cannot open there. Reading it as an
+// opener made indexOf find the "closing" tag inside a LATER string literal and
+// delete the real SQL between them, manufacturing a comment that the
+// 2026-09-08 strip then removed — hiding an executable DELETE.
+ok(classifySql("SELECT 1 AS foo$x$a, '$x$--'; DELETE FROM customers;").block, "$ inside an identifier cannot manufacture a line comment over a real DELETE");
+ok(classifySql("SELECT 1 AS foo$x$a, '$x$/*';\nDELETE FROM customers;\nSELECT '*/';").block, "$ inside an identifier cannot manufacture a block comment over a real DELETE");
+ok(classifySql("SELECT 1 AS n1$x$a, '$x$--'; UPDATE customers SET name = 'x';").block, "the same shape cannot hide an UPDATE");
+// A quoted identifier is copied verbatim, so a tag-shaped NAME cannot open one.
+ok(classifySql("SELECT \"$x$\", '$x$--'; DELETE FROM customers;").block, "a tag-shaped quoted identifier cannot manufacture a comment");
+// Genuine dollar-quoted bodies must still be recognized at a real boundary.
+ok(!classifySql("SELECT $x$ DELETE FROM customers $x$ AS body").block, "a genuine dollar-quoted body at a token boundary is still inert text");
 ok(classifySql('UPDATE public . "orders" SET notes = \'x\' WHERE id = 1').block, "spaced qualification still blocked");
 // Codex P1 round 4: live stock tables were missing from the lists.
 ok(classifySql("UPDATE inventory SET quantity = 0 WHERE id = 1").block, "raw UPDATE of inventory (live stock) blocked");

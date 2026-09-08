@@ -99,6 +99,23 @@ function stripTrailingComments(s) {
 // (not stripped) so a stray $$ inside them can't open a fake quote span that
 // swallows real statements. DO bodies are kept (they execute). An unterminated
 // dollar-quote leaves the rest untouched (fail closed).
+// A `$` that CONTINUES an identifier or a number is NOT a dollar-quote
+// delimiter. PostgreSQL reads `foo$x$a` as ONE identifier — `$` is a legal
+// identifier continuation character, and a dollar-quoted string "cannot
+// immediately follow an identifier or number without intervening whitespace"
+// (PostgreSQL lexical structure). Opening a quote there let the closing tag be
+// located by indexOf INSIDE a later string literal, deleting the real SQL
+// between the two: `SELECT 1 AS foo$x$a, '$x$--'; DELETE FROM customers;`
+// collapsed to `SELECT 1 AS foo --'; DELETE FROM customers;`, and the
+// 2026-09-08 comment strip then ate the DELETE (Codex BLOCKER on PR #639).
+// Declining to open can only leave MORE text visible to classification, which
+// is the fail-safe direction.
+const DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/;
+function openDollarTag(src, i) {
+  if (/[A-Za-z0-9_$]/.test(src[i - 1] || "")) return null;
+  return DOLLAR_TAG_RE.exec(src.slice(i, i + 66));
+}
+
 function stripDollarQuotedCore(sql, keepBody) {
   const src = String(sql || "");
   let out = "";
@@ -132,8 +149,15 @@ function stripDollarQuotedCore(sql, keepBody) {
       }
       out += src.slice(i, j); i = j; continue;
     }
+    if (ch === '"') {
+      // Quoted identifiers are copied VERBATIM: a `$`, `--` or `/*` inside one
+      // is part of the name, not a delimiter (`SELECT "$x$"` is a column).
+      let j = i + 1;
+      while (j < n && src[j] !== '"') j++;
+      out += src.slice(i, j + 1); i = j + 1; continue;
+    }
     if (ch === "$") {
-      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i, i + 66));
+      const tag = openDollarTag(src, i);
       if (tag) {
         const open = tag[0];
         const close = src.indexOf(open, i + open.length);
@@ -197,7 +221,7 @@ export function stripCommentsQuoteAware(sql) {
       out += src.slice(i, j + 1); i = j + 1; continue;
     }
     if (ch === "$") {
-      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i, i + 66));
+      const tag = openDollarTag(src, i);
       if (tag) {
         const open = tag[0];
         const close = src.indexOf(open, i + open.length);
@@ -293,9 +317,11 @@ const SQL_BUILTIN_FNS = new Set([
   "session_user", "pg_backend_pid", "txid_current", "pg_is_in_recovery",
   "obj_description", "col_description", "shobj_description",
   "pg_get_serial_sequence", "pg_get_functiondef", "pg_get_constraintdef",
-  // 2026-09-08: sibling pg_catalog DEFINITION FORMATTERS, omitted when the list
-  // was written. Each takes catalog oids and returns text; none can read table
-  // data or mutate anything. Their absence blocked the db-invariant-sweeps
+  // 2026-09-08: sibling pg_catalog DEFINITION FORMATTERS and NAME RESOLVERS,
+  // omitted when the list was written. They read catalog metadata only — mostly
+  // oid -> text, though pg_get_userbyid returns `name`, oidvectortypes takes an
+  // oidvector, and to_regprocedure takes text and returns regprocedure. None can
+  // read table data or mutate anything. Their absence blocked the db-invariant-sweeps
   // predicates (overloads / save-field-actor-binding / returns-lifecycle-rpc-owned)
   // even though pg_get_functiondef — strictly more revealing — was already trusted.
   "pg_get_function_identity_arguments", "pg_get_function_arguments",

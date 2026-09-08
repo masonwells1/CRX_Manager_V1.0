@@ -198,9 +198,13 @@ blocked too. Workarounds that preserve row selection are display/alias-only: giv
 a bare alias (`unnest(x) WITH ORDINALITY AS named` yields `named.named`), alias the recursive CTE's
 columns in its anchor SELECT instead of in a column list, order character classes so `(` never
 follows an identifier character (`[(\s]`, not `[\s(]`), separate `\M` from `(?:` with `\s*`, and use
-an `OFFSET 0` fence rather than `AS MATERIALIZED`. `pg_get_function_identity_arguments` is also
-missing from `SQL_BUILTIN_FNS` while its siblings (`pg_get_functiondef`, `pg_get_constraintdef`,
-`pg_get_indexdef`, `pg_get_viewdef`, `pg_get_expr`) are present.
+an `OFFSET 0` fence rather than `AS MATERIALIZED`.
+
+Updated 2026-09-08: `pg_get_function_identity_arguments` and its remaining siblings are now in
+`SQL_BUILTIN_FNS`, and the scan no longer reads comment prose as a function call, so 12 of the 29
+predicates clear the Claude live-data guard. The other 17 still block on call-shaped names inside
+**string literals**, which is unchanged and deliberate. Codex's own `production-action-guard.mjs`
+keeps a separate allowlist that has not been extended, so only 5 of the 12 clear on the Codex path.
 
 **Do not route a blocked read through Codex's write-enabled Supabase connector to get around this** —
 that is cross-tool permission laundering. Ask Mason for the scoped `REAL-DATA-OK` the guard's own
