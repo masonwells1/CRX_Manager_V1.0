@@ -1,4 +1,4 @@
-## 2026-09-08 — Make the PO route-currency race suite deterministic (straggling receive toast)
+## 2026-09-08 — Make the PO route-race suite deterministic (straggling receive toast)
 
 ### What was wrong
 
@@ -37,10 +37,11 @@ in `PurchaseOrderDetail.tsx`.
 
 1. `submitReceive` counts only toasts raised **after its own click** as an outcome. A
    toast recorded before the click can no longer end the sampling loop.
-2. A new `awaitReceiveSettled()` helper waits for the receive's own success toast. Every
-   test that lets a receive complete (four of them) now calls it before ending, so the
-   receive's whole tail — IndexedDB resolve, PDF import, refused refetches, toast — has
-   run inside the test that started it. In the mid-flight test this also means PO A's
+2. A new `awaitReceiveSettled()` helper waits for the receive handler to finish, whatever
+   its outcome (success, warning, or error toast; see the Codex findings below for how
+   "settled" was defined). Every test that lets a receive complete (four of them) now
+   calls it before ending, so the receive's whole tail — IndexedDB resolve, PDF import,
+   refused refetches, toast — has run inside the test that started it. In the mid-flight test this also means PO A's
    tail has fully played out before PO B's header is allowed to answer, which is the
    collision the test exists to stage.
 3. An `afterEach` **hard guard**: if `receive_po_items` answered in a test and the
@@ -118,6 +119,39 @@ in the harness.
 
 Both flags live on the hoisted `mocks.receive` object and are reset in `beforeEach`.
 Still test-file only.
+
+### CodeRabbit review findings (PR #636, three Minors) — all fixed
+
+1. **One record per receive, not one pair of flags per test.** With shared `answered` /
+   `settled` booleans, a test that ran two receives could end with the first one settled
+   and the second one answered but still running, and neither the guard nor
+   `awaitReceiveSettled()` would notice. No test in the file runs two receives today, so
+   this was latent, but the fix is small: the `runCriticalAction` stand-in now opens a
+   lifecycle record when a receive handler starts, the RPC wrapper marks that record
+   answered, and `finally` marks it settled. `awaitReceiveSettled()` waits for the newest
+   record specifically, and the `afterEach` guard fails the test if **any** record
+   answered without settling. The RPC wrapper also refuses a `receive_po_items` call that
+   arrives with no open record, so a receive can never go untracked.
+2. Changelog title said "route-currency race suite"; it is the route-race suite.
+3. Changelog item 2 still described `awaitReceiveSettled()` as waiting for the success
+   toast, which the Codex fix above had already made untrue. Reworded.
+
+Proof (per-record harness):
+
+- Backwards, finding 1: a temporary test that runs two receives — the first settles, the
+  second's RPC answers but its PDF step is made to hang — is failed by the new guard
+  (message naming `awaitReceiveSettled()`), and **passes** under the previous commit's
+  shared flags, which is the leak CodeRabbit described. Both Codex probes (parked
+  receive, error-outcome receive) still pass alongside it: 13 passed, 1 failed, exactly
+  the two-receive probe.
+- Forwards: with test 1's `awaitReceiveSettled()` removed under full-suite load, the guard
+  failed test 1 in 3 of 6 runs, and only that test; the other 3 runs were fully green
+  because the straggler happened to land inside the test body (the harmless case). Same
+  mechanism as before, noisier timing on this run.
+- File 3/3 green unloaded; `eslint` and `tsc --noEmit` clean; the rest of the suite (358
+  files, 5112 tests, this file excluded so it could serve as the load) green.
+- Mutation table re-run against the per-record harness: identical result, 10 of 11 red on
+  the same tests, the same single green row.
 
 Proof (final harness):
 

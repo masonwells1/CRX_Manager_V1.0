@@ -58,11 +58,19 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
   resetKey: vi.fn(),
   rpc: vi.fn(),
-  // Lifecycle of the receive in the CURRENT test. `answered`: the receive RPC
-  // has answered (not merely been called). `settled`: the whole receive
-  // handler has finished, whatever its outcome. Reset in beforeEach.
-  receive: { answered: false, settled: false },
+  // One lifecycle record per receive started in the CURRENT test, in start
+  // order. `answered`: that receive's RPC has answered (not merely been
+  // called). `settled`: that receive's whole handler has finished, whatever
+  // its outcome. Per receive, not per test, so a second receive in the same
+  // test cannot hide behind the first one having settled. Reset in beforeEach.
+  receive: { records: [] as Array<{ answered: boolean; settled: boolean }> },
 }));
+
+/** The receive currently running: the newest record that has not settled. */
+function currentReceive() {
+  const record = mocks.receive.records[mocks.receive.records.length - 1];
+  return record && !record.settled ? record : undefined;
+}
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
@@ -89,6 +97,12 @@ vi.mock('../lib/criticalAction', () => ({
     onSuccess?: (result: unknown) => void;
     sentryTag?: string;
   }) => {
+    // A receive gets its own lifecycle record the moment its handler starts;
+    // the RPC wrapper below marks it answered, and `finally` marks it settled.
+    const record = options.sentryTag === 'receive_po_items'
+      ? { answered: false, settled: false }
+      : undefined;
+    if (record) mocks.receive.records.push(record);
     try {
       const result = await options.action();
       options.onSuccess?.(result);
@@ -102,7 +116,7 @@ vi.mock('../lib/criticalAction', () => ({
       // This wrapper encloses the WHOLE receive handler -- RPC, IndexedDB
       // resolve, PDF import, refetches, and the success/warning/error toast --
       // so its completion is "the receive settled", whatever the outcome was.
-      if (options.sentryTag === 'receive_po_items') mocks.receive.settled = true;
+      if (record) record.settled = true;
     }
   },
 }));
@@ -438,9 +452,9 @@ async function loadPo(poId: string) {
   await release(`history:${poId}`);
 }
 
-/** The whole receive handler has finished in this test, whatever its outcome. */
+/** Every receive whose RPC answered in this test has finished, whatever its outcome. */
 function receiveSettled() {
-  return mocks.receive.settled;
+  return mocks.receive.records.every((record) => record.settled || !record.answered);
 }
 
 /**
@@ -461,7 +475,11 @@ function receiveSettled() {
  * settles just like a successful one.
  */
 async function awaitReceiveSettled() {
-  await waitFor(() => expect(receiveSettled()).toBe(true), { timeout: 5000 });
+  // Wait for THIS receive -- the newest one started -- not for "some receive
+  // has settled", so a second receive in a test cannot ride on the first.
+  const record = mocks.receive.records[mocks.receive.records.length - 1];
+  if (!record) throw new Error('awaitReceiveSettled() called before any receive started');
+  await waitFor(() => expect(record.settled).toBe(true), { timeout: 5000 });
 }
 
 /** Drive the receive modal end to end and return the RPC arguments, if any. */
@@ -507,7 +525,7 @@ describe('PurchaseOrderDetail route-currency race', () => {
     // let the leak surface as a flake somewhere else in the file. A receive
     // whose RPC was called but never answered (parked for the whole test) is
     // fine: nothing runs after an answer that never comes.
-    if (mocks.receive.answered && !receiveSettled()) {
+    if (!receiveSettled()) {
       throw new Error(
         'The receive_po_items RPC answered in this test, but the test returned before '
           + 'the receive settled. Call awaitReceiveSettled() before the test ends (or '
@@ -520,8 +538,7 @@ describe('PurchaseOrderDetail route-currency race', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pending.length = 0;
-    mocks.receive.answered = false;
-    mocks.receive.settled = false;
+    mocks.receive.records.length = 0;
     window.localStorage.clear();
     window.sessionStorage.clear();
     // The receive path records a durable mutation intent in IndexedDB before it
@@ -560,8 +577,12 @@ describe('PurchaseOrderDetail route-currency race', () => {
         // open, so this is the one place that can see the receive ANSWER (as
         // opposed to being called). The afterEach guard keys off that.
         if (name === 'receive_po_items') {
+          // The page never runs two receives at once, so the record that is
+          // still open when the RPC is called is this receive's own.
+          const record = currentReceive();
+          if (!record) throw new Error('receive_po_items was called outside the receive handler');
           const markAnswered = () => {
-            mocks.receive.answered = true;
+            record.answered = true;
           };
           Promise.resolve(result).then(markAnswered, markAnswered);
         }
