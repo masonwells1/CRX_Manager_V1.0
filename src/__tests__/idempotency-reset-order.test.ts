@@ -232,7 +232,6 @@ const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
   'src/pages/JobDetail.tsx': [
     'completeJobIdem.resetKey',
     'saveJobIdem.resetKey',
-    'transferJobIdem.resetKey',
   ],
   'src/pages/QuoteBuilder.tsx': [
     'closeAppliedIdem.resetKey',

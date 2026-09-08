@@ -159,7 +159,7 @@ BEGIN
     IF SQLERRM NOT LIKE 'SPLIT_OVERRIDE_UNSUPPORTED:%' THEN RAISE EXCEPTION 'SMOKE_FAIL: D expected SPLIT_OVERRIDE_UNSUPPORTED got %', SQLERRM; END IF;
   END;
   SELECT count(*) INTO v_n FROM invoices WHERE job_id=v_job4; IF v_n<>0 THEN RAISE EXCEPTION 'SMOKE_FAIL: D wrote % invoices', v_n; END IF;
-  SELECT status INTO v_status FROM jobs WHERE id=v_job4; IF v_status<>'completed' THEN RAISE EXCEPTION 'SMOKE_FAIL: D job status %', v_status; END IF;
+  SELECT status INTO v_status FROM jobs WHERE id=v_job4; IF v_status IS DISTINCT FROM 'completed' THEN RAISE EXCEPTION 'SMOKE_FAIL: D job status %', v_status; END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $smoke$;

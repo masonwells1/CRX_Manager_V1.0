@@ -1341,6 +1341,7 @@ export default function JobDetail() {
 
   // Transfer to invoice
   const [transferring, setTransferring] = useState(false);
+  const [transferReconciliationPending, setTransferReconciliationPending] = useState(false);
 
   // Confirm modals
   const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
@@ -1707,7 +1708,7 @@ export default function JobDetail() {
     //
     // The ticket cannot serve as this test: it is claimed one line below, so at entry it
     // would always equal itself. Only the route is an independent witness this early.
-    if (routeIdRef.current !== startedForId) return;
+    if (routeIdRef.current !== startedForId) return false;
     // Claim a UNIQUE ticket per CALL, not per route. Reading the ref without bumping it
     // let every post-save / post-start / post-cancel refetch on one route share a single
     // ticket, so none of them superseded any other and an older response could land on
@@ -1756,13 +1757,13 @@ export default function JobDetail() {
     // particular do NOT fall into the not-found branch below: its toast and its
     // redirect would fire against the job currently on screen. The newest run owns
     // the baseline refs, so this run leaves them untouched.
-    if (!isCurrentLoad()) return;
+    if (!isCurrentLoad()) return false;
 
     if (error || !data) {
       baselineSettleGuardRef.current = false;
       toast('error', 'Job not found');
       navigate('/jobs');
-      return;
+      return false;
     }
 
     const j = data as unknown as JobDbRow;
@@ -1795,7 +1796,7 @@ export default function JobDetail() {
         .select('field_id')
         .in('field_id', jobFieldIds)
         .not('price_override_cents', 'is', null);
-      if (!isCurrentLoad()) return;
+      if (!isCurrentLoad()) return false;
       if (growerShareError) {
         Sentry.captureException(growerShareError, { tags: { source: 'fetch', page: 'job-detail', context: 'grower_share_banner' } });
       } else {
@@ -1830,7 +1831,7 @@ export default function JobDetail() {
         .from('field_billing_defaults')
         .select('field_id, customer_id, split_pct, is_primary')
         .in('field_id', fieldsNeedingSeed);
-      if (!isCurrentLoad()) return;
+      if (!isCurrentLoad()) return false;
       const fbdByField = new Map<string, { customer_id: string; split_pct: number; is_primary: boolean }[]>();
       ((fbd || []) as { field_id: string; customer_id: string; split_pct: number; is_primary: boolean }[])
         .forEach((d) => {
@@ -1965,6 +1966,7 @@ export default function JobDetail() {
     baselineSettleGuardRef.current = false;
     setBaselineSettleTick((t) => t + 1);
     // initialLoadDone is armed by the loading-settle effect (rAF after loading=false).
+    return true;
   }, [id, toast, navigate]);
 
   // Route invalidation runs in a LAYOUT effect, not the passive one below. Passive
@@ -3144,8 +3146,8 @@ export default function JobDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
+      transferJobIdem.resetKey();
       // The invoice exists either way. Without this gate a stale transfer would clear the
       // dirty flag of whatever job is on screen and then navigate the operator off it.
       if (stillOnThisJob()) {
@@ -3161,8 +3163,23 @@ export default function JobDetail() {
       }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
+      const resultInvalid = hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID)
+        || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RESULT_INVALID);
       const intentRecovery = transferInvoiceErrorMessage(err);
-      if (intentRecovery) {
+      if (resultInvalid) {
+        setTransferReconciliationPending(true);
+        toast('error', intentRecovery!);
+        // A malformed result cannot authorize a blind retry. Keep the transfer
+        // control busy until an authoritative job reload settles whether the
+        // first attempt produced an invoice. Only that successful reconciliation
+        // retires the suspect receipt key and allows a new confirmed attempt.
+        if (stillOnThisJob() && await fetchJob() && stillOnThisJob()) {
+          transferJobIdem.resetKey();
+          setTransferReconciliationPending(false);
+        }
+      } else if (intentRecovery) {
+        // The cutover refusal committed nothing and explicitly asks for the same
+        // request again, so this is the one immediate same-key retry path.
         toast('error', intentRecovery);
       } else if (hasRpcCode(err, RpcErrorCodes.BLEND_TICKET_ALREADY_BILLED)) {
         // U6 #91b: a blend ticket for this job was already billed — invoicing the job
@@ -3739,7 +3756,12 @@ export default function JobDetail() {
             </div>
           )}
           {canTransfer && (
-            <Button variant="secondary" onClick={() => setShowTransferConfirm(true)} loading={transferring}>
+            <Button
+              variant="secondary"
+              onClick={() => setShowTransferConfirm(true)}
+              loading={transferring}
+              disabled={transferReconciliationPending}
+            >
               <FileText className="w-4 h-4" />
               Transfer to Invoice
             </Button>

@@ -6,7 +6,14 @@ import Button from '../ui/Button';
 import ConfirmModal from '../ui/ConfirmModal';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase, assertRpcResult, sanitizeError, transferInvoiceErrorMessage } from '../../lib/db';
+import {
+  supabase,
+  assertRpcResult,
+  hasRpcCode,
+  RpcErrorCodes,
+  sanitizeError,
+  transferInvoiceErrorMessage,
+} from '../../lib/db';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { Sentry } from '../../lib/sentry';
 import { SkeletonCard } from '../ui/Skeleton';
@@ -128,7 +135,9 @@ export default function UnbilledApplicationsPanel() {
   const [creatingInvoice, setCreatingInvoice] = useState(false);
   const [lastCreatedMessage, setLastCreatedMessage] = useState<string | null>(null);
   const [billNextReady, setBillNextReady] = useState(false);
+  const [reconciliationPendingJobIds, setReconciliationPendingJobIds] = useState<Set<string>>(() => new Set());
   const jobInvoiceKeysRef = useRef<Map<string, JobInvoiceKeyControls>>(new Map());
+  const reconciliationKeyResetsRef = useRef<Map<string, () => void>>(new Map());
 
   const registerJobInvoiceKeys = useCallback((jobId: string, controls: JobInvoiceKeyControls | null) => {
     if (controls) {
@@ -138,7 +147,7 @@ export default function UnbilledApplicationsPanel() {
     }
   }, []);
 
-  const fetchAll = useCallback(async () => {
+  const fetchAll = useCallback(async (): Promise<boolean> => {
     setLoading(true);
 
     const [jobsRes, ticketsRes] = await Promise.all([
@@ -165,16 +174,28 @@ export default function UnbilledApplicationsPanel() {
       Sentry.captureException(firstError, { tags: { source: 'fetch', page: 'unbilled-applications' } });
       toast('error', 'Failed to load unbilled applications');
       setLoading(false);
-      return;
+      return false;
     }
 
     setJobs(mapRows(jobsRes.data as RawRow[], 'job_number', 'job_date', 'total_price_cents'));
     setTickets(mapRows(ticketsRes.data as RawRow[], 'ticket_number', 'ticket_date'));
     setLoading(false);
+    return true;
   }, [toast]);
 
+  const refreshAndReconcile = useCallback(async () => {
+    if (!await fetchAll()) return false;
+
+    for (const retireReconciledKey of reconciliationKeyResetsRef.current.values()) {
+      retireReconciledKey();
+    }
+    reconciliationKeyResetsRef.current.clear();
+    setReconciliationPendingJobIds(new Set());
+    return true;
+  }, [fetchAll]);
+
   useEffect(() => {
-    fetchAll();
+    void fetchAll();
   }, [fetchAll]);
 
   const handleCreateInvoice = async () => {
@@ -208,7 +229,22 @@ export default function UnbilledApplicationsPanel() {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
         extra: { context: 'transfer_job_to_invoice', jobId: pendingJobInvoice.row.id },
       });
-      toast('error', transferInvoiceErrorMessage(err) ?? sanitizeError(err));
+      const resultInvalid = hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID)
+        || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RESULT_INVALID);
+      if (resultInvalid) {
+        const failedAttempt = pendingJobInvoice;
+        setPendingJobInvoice(null);
+        reconciliationKeyResetsRef.current.set(failedAttempt.row.id, failedAttempt.resetKey);
+        setReconciliationPendingJobIds((current) => new Set(current).add(failedAttempt.row.id));
+        toast('error', transferInvoiceErrorMessage(err)!);
+        // The row stays blocked if either authoritative list read fails. A
+        // successful automatic or operator-triggered refresh settles whether an
+        // invoice exists, retires the suspect receipt key, and requires a brand-
+        // new confirmation before another billing mutation can run.
+        await refreshAndReconcile();
+      } else {
+        toast('error', transferInvoiceErrorMessage(err) ?? sanitizeError(err));
+      }
     } finally {
       setCreatingInvoice(false);
     }
@@ -289,7 +325,7 @@ export default function UnbilledApplicationsPanel() {
           <Button variant="ghost" size="sm" onClick={() => navigate('/field-invoices')}>
             Field Invoices
           </Button>
-          <Button variant="secondary" size="sm" icon={<RefreshCw className="w-4 h-4" />} onClick={fetchAll}>
+          <Button variant="secondary" size="sm" icon={<RefreshCw className="w-4 h-4" />} onClick={() => { void refreshAndReconcile(); }}>
             Refresh
           </Button>
         </div>
@@ -375,7 +411,7 @@ export default function UnbilledApplicationsPanel() {
                             <CreateJobInvoiceButton
                               row={row}
                               profileId={profile.id}
-                              disabled={creatingInvoice}
+                              disabled={creatingInvoice || reconciliationPendingJobIds.has(row.id)}
                               onRequest={setPendingJobInvoice}
                               onRegister={registerJobInvoiceKeys}
                             />

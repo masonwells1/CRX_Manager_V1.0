@@ -46,15 +46,20 @@ const CHAIN_METHODS = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', '
   'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
   'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal'];
 
-function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
+function buildChainFromPromise(
+  promise: Promise<{ data: unknown; error: unknown }>,
+): Record<string, unknown> {
   const self: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => self;
   for (const m of CHAIN_METHODS) self[m] = method;
-  const promise = Promise.resolve(result);
   self.then = promise.then.bind(promise);
   self.catch = promise.catch.bind(promise);
   self.finally = promise.finally.bind(promise);
   return self;
+}
+
+function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
+  return buildChainFromPromise(Promise.resolve(result));
 }
 
 vi.mock('../lib/db', async (orig) => {
@@ -231,43 +236,35 @@ describe('JobDetail transfer intent recovery', () => {
     status: 'completed',
   });
 
-  const cases = [
-    {
-      token: 'TRANSFER_INVOICE_INTENT_CUTOVER_RETRY',
-      message: 'The invoice safety update finished during this transfer. Try Transfer to Invoice again — the app will safely reuse the same request.',
-    },
-    {
-      token: 'TRANSFER_INVOICE_RESULT_INVALID',
-      message: 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.',
-    },
-    {
-      token: 'IDEMPOTENCY_RESULT_INVALID',
-      message: 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.',
-    },
-  ] as const;
+  const confirmTransfer = async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Transfer to Invoice' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Transfer to Invoice' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Transfer to Invoice' }));
+  };
 
-  it.each(cases)('shows safe guidance and reuses the request key for $token', async ({ token, message }) => {
-    mockFrom.mockImplementation((table: string) => (table === 'jobs'
-      ? buildChain({ data: completedJob, error: null })
-      : buildChain({ data: [], error: null })));
+  it('allows the cutover refusal to retry immediately with the same request key', async () => {
+    let jobReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'jobs') return buildChain({ data: [], error: null });
+      jobReads += 1;
+      return buildChain({ data: completedJob, error: null });
+    });
     mockRpc.mockImplementation((name: string) => Promise.resolve(
       name === 'transfer_job_to_invoice'
-        ? { data: null, error: { code: 'P0001', message: token, details: null, hint: null } }
+        ? { data: null, error: { code: 'P0001', message: 'TRANSFER_INVOICE_INTENT_CUTOVER_RETRY', details: null, hint: null } }
         : { data: null, error: null },
     ));
 
     mountAt('/jobs/job-transfer');
     await screen.findByRole('heading', { name: 'J-TRANSFER-3003' });
 
-    const confirmTransfer = async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Transfer to Invoice' }));
-      const dialog = await screen.findByRole('dialog', { name: 'Transfer to Invoice' });
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Transfer to Invoice' }));
-    };
-
     await confirmTransfer();
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', message));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'The invoice safety update finished during this transfer. Try Transfer to Invoice again — the app will safely reuse the same request.',
+    ));
     expect(mockTransferResetKey).not.toHaveBeenCalled();
+    expect(jobReads).toBe(1);
 
     await confirmTransfer();
     await waitFor(() => {
@@ -278,6 +275,120 @@ describe('JobDetail transfer intent recovery', () => {
       expect(firstKey).toBeTruthy();
       expect(secondKey).toBe(firstKey);
     });
+    expect(mockTransferResetKey).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'TRANSFER_INVOICE_RESULT_INVALID',
+    'IDEMPOTENCY_RESULT_INVALID',
+  ])('reconciles the job before allowing a new confirmed request for %s', async (token) => {
+    let resolveReconciliation!: (result: { data: unknown; error: unknown }) => void;
+    const reconciliation = new Promise<{ data: unknown; error: unknown }>((resolve) => {
+      resolveReconciliation = resolve;
+    });
+    let jobReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'jobs') return buildChain({ data: [], error: null });
+      jobReads += 1;
+      return jobReads === 1
+        ? buildChain({ data: completedJob, error: null })
+        : buildChainFromPromise(reconciliation);
+    });
+    let transferAttempts = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name !== 'transfer_job_to_invoice') return Promise.resolve({ data: null, error: null });
+      transferAttempts += 1;
+      return Promise.resolve(transferAttempts === 1
+        ? { data: null, error: { code: 'P0001', message: token, details: null, hint: null } }
+        : { data: { job_id: 'job-transfer', invoice_id: 'invoice-1', invoice_number: 'INV-1' }, error: null });
+    });
+
+    mountAt('/jobs/job-transfer');
+    await screen.findByRole('heading', { name: 'J-TRANSFER-3003' });
+    await confirmTransfer();
+
+    const recoveryMessage = 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', recoveryMessage));
+    await waitFor(() => expect(jobReads).toBe(2));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'transfer_job_to_invoice')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Transfer to Invoice' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Transfer to Invoice' }));
+    expect(screen.queryByRole('dialog', { name: 'Transfer to Invoice' })).toBeNull();
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'transfer_job_to_invoice')).toHaveLength(1);
+
+    resolveReconciliation({ data: completedJob, error: null });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Transfer to Invoice' })).not.toBeDisabled());
+    expect(mockTransferResetKey).toHaveBeenCalledTimes(1);
+
+    await confirmTransfer();
+    await waitFor(() => {
+      const transferCalls = mockRpc.mock.calls.filter(([name]) => name === 'transfer_job_to_invoice');
+      expect(transferCalls).toHaveLength(2);
+      const firstKey = (transferCalls[0][1] as { p_idempotency_key: string }).p_idempotency_key;
+      const secondKey = (transferCalls[1][1] as { p_idempotency_key: string }).p_idempotency_key;
+      expect(firstKey).toBeTruthy();
+      expect(secondKey).not.toBe(firstKey);
+    });
+    expect(mockTransferResetKey).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes the transfer action when reconciliation shows the first attempt already invoiced the job', async () => {
+    let resolveReconciliation!: (result: { data: unknown; error: unknown }) => void;
+    const reconciliation = new Promise<{ data: unknown; error: unknown }>((resolve) => {
+      resolveReconciliation = resolve;
+    });
+    let jobReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'jobs') return buildChain({ data: [], error: null });
+      jobReads += 1;
+      return jobReads === 1
+        ? buildChain({ data: completedJob, error: null })
+        : buildChainFromPromise(reconciliation);
+    });
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'transfer_job_to_invoice'
+        ? { data: null, error: { code: 'P0001', message: 'TRANSFER_INVOICE_RESULT_INVALID', details: null, hint: null } }
+        : { data: null, error: null },
+    ));
+
+    mountAt('/jobs/job-transfer');
+    await screen.findByRole('heading', { name: 'J-TRANSFER-3003' });
+    await confirmTransfer();
+
+    await waitFor(() => expect(jobReads).toBe(2));
+    expect(mockTransferResetKey).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Transfer to Invoice' })).toBeDisabled();
+
+    resolveReconciliation({ data: { ...completedJob, status: 'invoiced' }, error: null });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Transfer to Invoice' })).toBeNull());
+    expect(mockTransferResetKey).toHaveBeenCalledTimes(1);
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'transfer_job_to_invoice')).toHaveLength(1);
+  });
+
+  it('keeps transfer blocked when the authoritative reconciliation read fails', async () => {
+    let jobReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'jobs') return buildChain({ data: [], error: null });
+      jobReads += 1;
+      return jobReads === 1
+        ? buildChain({ data: completedJob, error: null })
+        : buildChain({ data: null, error: { code: 'PGRST500', message: 'refresh failed' } });
+    });
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'transfer_job_to_invoice'
+        ? { data: null, error: { code: 'P0001', message: 'IDEMPOTENCY_RESULT_INVALID', details: null, hint: null } }
+        : { data: null, error: null },
+    ));
+
+    mountAt('/jobs/job-transfer');
+    await screen.findByRole('heading', { name: 'J-TRANSFER-3003' });
+    await confirmTransfer();
+
+    await waitFor(() => expect(jobReads).toBe(2));
+    expect(mockNavigate).toHaveBeenCalledWith('/jobs');
+    expect(screen.getByRole('button', { name: 'Transfer to Invoice' })).toBeDisabled();
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'transfer_job_to_invoice')).toHaveLength(1);
     expect(mockTransferResetKey).not.toHaveBeenCalled();
   });
 });

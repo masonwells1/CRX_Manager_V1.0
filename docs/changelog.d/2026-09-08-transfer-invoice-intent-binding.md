@@ -17,7 +17,7 @@ points, including corrupt cached-receipt failures.
 
 An offline static contract proof and a disposable PostgreSQL 17 behavioral proof
 cover unsafe-autocommit refusal, stale-body rollback, and replay paths. This entry
-does not claim a live migration apply or production test.
+does not claim a live migration apply.
 
 Refreshed the existing production rollback smoke for the currently deployed
 `transfer_job_to_invoice` behavior so it uses governed Product cost bases,
