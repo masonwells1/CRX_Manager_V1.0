@@ -73,7 +73,9 @@ const ApplicationRecords = lazy(() => import('./pages/ApplicationRecords'));
 const LotTrace = lazy(() => import('./pages/LotTrace'));
 const ProgramTracker = lazy(() => import('./pages/ProgramTracker'));
 const Jobs = lazy(() => import('./pages/Jobs'));
-const JobDetail = lazy(() => import('./pages/JobDetail'));
+// Routed through JobDetailRoute, which keys JobDetail by the job id so switching records
+// REMOUNTS the page instead of reusing it. See that file for what reuse leaked.
+const JobDetailRoute = lazy(() => import('./components/JobDetailRoute'));
 const DispatchBoard = lazy(() => import('./pages/DispatchBoard'));
 const FieldView = lazy(() => import('./pages/FieldView'));
 const MonthEndClose = lazy(() => import('./pages/MonthEndClose'));
@@ -124,6 +126,7 @@ function LegacyTabRedirect({ to, tab }: LegacyTabRedirectProps) {
   params.set('tab', tab);
   return <Navigate to={`${to}?${params.toString()}`} replace />;
 }
+
 
 /**
  * Headless component that records a Sentry navigation breadcrumb
@@ -286,7 +289,7 @@ const router = createBrowserRouter([
 
           // Admin + Sales Rep + Applicator (applicators need job access)
           { path: 'jobs', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><Jobs /></ProtectedRoute> },
-          { path: 'jobs/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><JobDetail /></ProtectedRoute> },
+          { path: 'jobs/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><JobDetailRoute /></ProtectedRoute> },
           { path: 'dispatch', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><DispatchBoard /></ProtectedRoute> },
           // Phone/mobile applicator field view (#38) — read-only "my jobs" cards.
           { path: 'field', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><FieldView /></ProtectedRoute> },

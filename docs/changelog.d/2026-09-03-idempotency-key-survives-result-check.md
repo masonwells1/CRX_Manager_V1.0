@@ -60,7 +60,8 @@ payload while the screen reports the edited one. Every site below clears that ba
 
 **Record scoping.** Retaining a key is unsafe if it can follow the user to a different
 record. Detail pages do **not** remount when the route id changes (every `<x>/:id` route
-in `src/App.tsx` is rendered without a `key` prop), so 9 keys are now record-scoped via
+in `src/App.tsx` **except `jobs/:id`**, which is keyed by id via `JobDetailRoute`, is
+rendered without a `key` prop), so 9 keys are now record-scoped via
 the hook's `intentScope` / `getKeyFor` — the same record retries under the same key, and
 each record gets its own. `InvoiceDetail`'s `saveIdem` was already record-scoped and was
 left alone.

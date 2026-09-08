@@ -10,12 +10,21 @@ const {
   customerIdempotencyState,
   dirtyStates,
 } = vi.hoisted(() => {
-  const customerIdempotencyState = { generation: 0 };
+  // Generations are PER SCOPE, mirroring the real hook's per-scope Map. One shared
+  // counter would let a reset on customer B change the key later handed back for
+  // customer A, which the real hook never does — an A → B → A test written against
+  // that stub would assert a property of the mock, not of the page.
+  const customerIdempotencyState = {
+    generations: new Map<string, number>(),
+    generationFor(scope: string) { return this.generations.get(scope) ?? 0; },
+    bump(scope: string) { this.generations.set(scope, this.generationFor(scope) + 1); },
+    reset() { this.generations.clear(); },
+  };
   return {
     mockFrom: vi.fn(),
     mockRpc: vi.fn(),
     mockToast: vi.fn(),
-    mockResetIdempotencyKey: vi.fn(() => { customerIdempotencyState.generation += 1; }),
+    mockResetIdempotencyKey: vi.fn((scope: string = '') => { customerIdempotencyState.bump(scope); }),
     customerIdempotencyState,
     dirtyStates: [] as boolean[],
   };
@@ -63,19 +72,35 @@ function customerQuery(nextCustomer: () => typeof original | typeof newer): Reco
   return chain;
 }
 
-vi.mock('../lib/db', () => ({
+vi.mock('../lib/db', async () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
-  assertRpcResult: vi.fn((value) => value),
+  // The REAL assertRpcResult, not a passthrough stub. `vi.fn((value) => value)` never
+  // throws, which DELETES the ambiguous-reply path — an empty payload with no error —
+  // from every test in this file. That path is exactly what the F1 reset ordering
+  // exists to handle, so under the stub a screen that retires its idempotency key
+  // before checking the reply stays green (aliased-reset sweep, 2026-09-05).
+  assertRpcResult: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).assertRpcResult,
   checkMutationResult: vi.fn(),
-  hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
+  // The REAL hasRpcCode, for the same reason as assertRpcResult above. The old stub
+  // matched a code appearing ANYWHERE in the message, which is more permissive than
+  // production: a message that merely mentions IDEMPOTENCY_PAYLOAD_CONFLICT in prose
+  // would take the conflict-recovery path here and not on a live screen.
+  hasRpcCode: (await vi.importActual<typeof import('../lib/db')>('../lib/db')).hasRpcCode,
   RpcErrorCodes: { CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
 }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ profile: { id: 'admin-1', role: 'admin', full_name: 'Admin' } }) }));
 vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({
-    getKey: () => `customer-stale-key-${customerIdempotencyState.generation}`,
-    resetKey: mockResetIdempotencyKey,
+  useIdempotencyKey: (_operation: string, _userId: string, intentScope = '') => ({
+    // The mock MUST honour intentScope. A scope-blind stub returns one key for every
+    // customer, so a regression test for "customer B must not inherit A's key" would
+    // pass against a completely unscoped hook — it would assert a property of the mock
+    // rather than of the page (aliased-reset sweep, 2026-09-05).
+    getKey: () => `customer-stale-key-${intentScope}-${customerIdempotencyState.generationFor(intentScope)}`,
+    resetKey: () => mockResetIdempotencyKey(intentScope),
+    // Retires a NAMED scope rather than the rendered one, as the real hook does.
+    // Without this the page could not retire the key of a customer it has left.
+    resetKeyFor: (scopeValue: string) => mockResetIdempotencyKey(scopeValue),
   }),
 }));
 vi.mock('../hooks/useUnsavedChanges', () => ({ useUnsavedChanges: (dirty: boolean) => { dirtyStates.push(dirty); return { state: 'unblocked', reset: vi.fn(), proceed: vi.fn() }; } }));
@@ -153,7 +178,7 @@ function renderDetailWithNewCustomerJump() {
 describe('CustomerDetail stale whole-record save', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    customerIdempotencyState.generation = 0;
+    customerIdempotencyState.reset();
     dirtyStates.length = 0;
     let customerReads = 0;
     mockFrom.mockImplementation((table: string) => {
@@ -235,7 +260,7 @@ describe('CustomerDetail stale whole-record save', () => {
 
     expect(await screen.findByRole('button', { name: 'Reload Customer' })).toBeInTheDocument();
     expect(mockRpc).toHaveBeenLastCalledWith('save_customer', expect.objectContaining({
-      p_idempotency_key: 'customer-stale-key-0',
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
     }));
     expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Reload Customer' }));
@@ -243,7 +268,7 @@ describe('CustomerDetail stale whole-record save', () => {
     expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
     await waitFor(() => expect(mockRpc).toHaveBeenLastCalledWith('save_customer', expect.objectContaining({
-      p_idempotency_key: 'customer-stale-key-1',
+      p_idempotency_key: 'customer-stale-key-customer-1-1',
     })));
   });
 
@@ -339,6 +364,118 @@ describe('CustomerDetail stale whole-record save', () => {
     })));
   });
 
+  /**
+   * F1, ALIASED-RESET CLASS — driven through the real save handler.
+   *
+   * `save_customer` answering `{ data: null, error: null }` is the AMBIGUOUS reply:
+   * nothing failed, but the payload is empty, so this tab cannot tell whether the
+   * customer committed. Retiring the key before assertRpcResult has accepted the reply
+   * — which is what main did, through a destructured rename the literal `resetKey()`
+   * sweep could not see — sends the retry under a BRAND-NEW key that the server has
+   * never seen and therefore cannot replay, writing the customer twice.
+   */
+  it('keeps the save_customer key when the reply is empty, so the retry replays instead of double-writing', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    renderDetail();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited farm' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
+    })));
+    expect(
+      mockResetIdempotencyKey,
+      'an empty save_customer reply is ambiguous — the key must survive it so a retry can replay',
+    ).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_customer');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_customer')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    expect(
+      new Set(saveKeys),
+      'every retry of an unresolved save must carry the SAME key, or the server writes the customer twice',
+    ).toEqual(new Set(['customer-stale-key-customer-1-0']));
+  });
+
+  it('keeps the save_customer key when the reply is an empty OBJECT, not just when it is missing', async () => {
+    // The test above proves `data: null`, which assertRpcResult REJECTS by throwing —
+    // so it never reached the line that retires the key. `{}` is the reply that
+    // actually gets through: assertRpcResult only rejects a MISSING reply, so an
+    // empty object arrives at the caller looking like a success with no id in it.
+    // That is the ambiguous answer — the customer may already be committed — and the
+    // retained key is the only thing that can still redeem the server's copy of it.
+    mockRpc.mockResolvedValue({ data: {}, error: null });
+
+    renderDetail();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited farm' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
+    })));
+    expect(
+      mockResetIdempotencyKey,
+      'an empty save_customer object is ambiguous — retiring the key here sends the retry under a key the server cannot replay, creating a second customer',
+    ).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_customer');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const saveKeys = mockRpc.mock.calls
+      .filter(([name]) => name === 'save_customer')
+      .map(([, args]) => (args as { p_idempotency_key: string }).p_idempotency_key);
+    expect(new Set(saveKeys)).toEqual(new Set(['customer-stale-key-customer-1-0']));
+  });
+
+  it('does not let a crop-originated recovery reload release the save_customer key', async () => {
+    // Crop buttons stay enabled while a save_customer is in flight, and a crop toggle
+    // opens the SAME recovery dialog a save conflict does. Recording the save scope
+    // there made the dialog lie about where it came from, so its reload retired a
+    // save_customer key whose own reply had never been validated. A crop write is a
+    // direct table update with no idempotency key of its own — there is nothing for
+    // its reload to retire.
+    let customerReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return customerQuery(() => {
+          customerReads += 1;
+          return customerReads <= 2
+            ? original
+            : ({ ...original, crops: ['corn'], row_version: 6 } as unknown as typeof original);
+        });
+      }
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'CUSTOMER_STALE_WRITE' } });
+
+    renderDetail();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'Corn' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload Customer' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Customer' })).not.toBeInTheDocument());
+    expect(
+      mockResetIdempotencyKey,
+      'the crop write owns no save_customer key, so its recovery reload must retire none',
+    ).not.toHaveBeenCalled();
+
+    // Prove the key genuinely survived rather than merely not being reset in a
+    // no-op: the next save must still carry generation 0 for this customer.
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited after crop reload' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
+    })));
+  });
+
   it('reloads the financials tab when the route switches customers without remounting the page', async () => {
     // The financials tab caches its fetch in a ref. CustomerDetail is not
     // remounted when only :id changes, so before this guard existed the tab
@@ -371,6 +508,135 @@ describe('CustomerDetail stale whole-record save', () => {
 
     expect(await screen.findByText('$5,678.00')).toBeInTheDocument();
     expect(screen.queryByText('$1,234.00')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The cost of F1 retention, paid for by scoping — raised by the gpt-5.6-sol review of
+   * this change (LOW) and fixed here rather than deferred.
+   *
+   * Keeping the key across an ambiguous reply is the whole point of F1. But this page
+   * does NOT remount when only `:id` changes, so an UNSCOPED retained key would be
+   * handed to the next customer: B's save would travel under A's unresolved key, the
+   * server would fingerprint a different payload against it and answer
+   * IDEMPOTENCY_PAYLOAD_CONFLICT. It fails closed — no cross-customer write — but B
+   * gets a conflict dialog it did nothing to earn.
+   *
+   * The key is now scoped by route id, which is sound HERE because the RPC targets the
+   * route record (`p_customer_id: (isNew ? null : id)`).
+   */
+  it('does not hand customer B the unresolved key minted for customer A', async () => {
+    // A's save comes back ambiguous — no error, empty payload — so A's key is RETAINED.
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 3, crops: [], default_commission_split: null }
+      : { id: 'customer-1', farm_name: 'Original Farm', row_version: 1, crops: [], default_commission_split: null });
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'customers') return query({ data: [], error: null });
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+      const settle = async (): Promise<QueryResult> => ({ data: record(requested), error: null });
+      chain.maybeSingle = () => settle();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => settle().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => settle().catch(reject);
+      chain.finally = (callback: () => void) => settle().finally(callback);
+      return chain;
+    });
+
+    renderDetailWithCustomerSwitch();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited A' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-customer-1-0',
+    })));
+    expect(mockResetIdempotencyKey, "A's key must survive its ambiguous reply").not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Jump to customer 2'));
+    await waitFor(() => expect(screen.queryByDisplayValue('Edited A')).not.toBeInTheDocument());
+
+    fireEvent.change(await screen.findByDisplayValue('Second Farm'), { target: { value: 'Edited B' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      const saves = mockRpc.mock.calls.filter(([name]) => name === 'save_customer');
+      expect(saves.length).toBeGreaterThan(1);
+    });
+    const lastSave = [...mockRpc.mock.calls].reverse().find(([name]) => name === 'save_customer');
+    expect(
+      (lastSave?.[1] as { p_idempotency_key: string }).p_idempotency_key,
+      "customer B must mint its OWN key — inheriting A's unresolved key earns B a conflict dialog it did not cause",
+    ).toBe('customer-stale-key-customer-2-0');
+  });
+
+  /**
+   * The SECOND-ORDER cost of that scoping, and the mirror of a defect already fixed in
+   * QuoteBuilder. Flagged by the Codex GitHub App at head 0cd47568 — the same reviewer
+   * that named the quote instance, on the file where the scoping was introduced FIRST.
+   *
+   * `reloadAfterStaleSave` releases the CURRENT render's scope. While one page-wide key
+   * existed that was always the right one. Once scoped, an operator whose save on
+   * customer A is rejected, who navigates to B with the dialog still open and clicks
+   * Reload, retires B's key and strands A's rejected one — so returning to A replays
+   * the rejected key and re-opens the same conflict.
+   */
+  it('retires neither customer\'s key when A\'s conflict dialog is recovered after a route change', async () => {
+    // A's save is REJECTED, so A's dialog opens and A's key is permanently unusable.
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'IDEMPOTENCY_PAYLOAD_CONFLICT' } });
+
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 3, crops: [], default_commission_split: null }
+      : { id: 'customer-1', farm_name: 'Original Farm', row_version: 1, crops: [], default_commission_split: null });
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'customers') return query({ data: [], error: null });
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+      const settle = async (): Promise<QueryResult> => ({ data: record(requested), error: null });
+      chain.maybeSingle = () => settle();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => settle().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => settle().catch(reject);
+      chain.finally = (callback: () => void) => settle().finally(callback);
+      return chain;
+    });
+
+    renderDetailWithCustomerSwitch();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Edited A' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    // A's recovery dialog opens.
+    expect(await screen.findByText('Reload Customer')).toBeInTheDocument();
+
+    // The operator navigates to B with that dialog still open, then recovers it.
+    fireEvent.click(screen.getByText('Jump to customer 2'));
+    await screen.findByDisplayValue('Second Farm');
+    fireEvent.click(screen.getByText('Reload Customer'));
+    await waitFor(() => expect(screen.queryByText('Reload Customer')).not.toBeInTheDocument());
+
+    expect(
+      mockResetIdempotencyKey,
+      "recovering A's conflict must not retire customer B's key — B never had an unresolved save",
+    ).not.toHaveBeenCalledWith('customer-2');
+    // And it must not retire A's key either, even though A's dialog is what closed.
+    //
+    // An earlier revision did retire it, on the reasoning that a payload-rejected key
+    // can only ever be rejected again. That was a duplicate-write hazard: the key
+    // rejects the CHANGED payload, but replaying the ORIGINAL one returns the server's
+    // cached receipt, which on a create is the only way to learn the id of a row that
+    // may already have committed. Retiring it lets a later retry insert twice.
+    //
+    // Retaining costs one unearned conflict dialog on returning to A, which self-heals
+    // on A's own reload. That is the cheaper side of the trade, so this asserts the
+    // key survives.
+    expect(
+      mockResetIdempotencyKey,
+      "A's key is the receipt handle for a create that may have committed — recovery on another customer must not retire it",
+    ).not.toHaveBeenCalledWith('customer-1');
   });
 
   it('ignores a slow snapshot for the previous customer that lands after the route moved on', async () => {
@@ -731,7 +997,10 @@ describe('CustomerDetail tab loads bind to a customer, not only to call order', 
 
   beforeEach(() => {
     vi.clearAllMocks();
-    customerIdempotencyState.generation = 0;
+    // #616 wrote `generation = 0` against the single-counter stub this branch
+    // replaced with a per-scope Map. Same intent, current shape: clear every
+    // scope's counter. Git merged both sides cleanly and TypeScript caught it.
+    customerIdempotencyState.reset();
     dirtyStates.length = 0;
   });
 
