@@ -38,6 +38,13 @@ guard correctly refuses it. The plan-order proof now normalizes only its disposa
 to Chicago-today before walking the cohort and asserts that no future payment remains. The dedicated
 business-date prover retains responsibility for the future-date refusal path.
 
+The exact-SHA adversarial review found the same inherited fixture issue in the standalone
+label-repair proof. That proof now normalizes its retained disposable payment before the
+business-date preflight and gives the later recipient-currentness scenario explicit Chicago
+commission and payment dates. A run during the affected Chicago-evening/UTC-next-day window now
+passes the full label-repair, stale-recipient, exact-cent settlement, and business-date mutation
+suite instead of failing on the fixture clock.
+
 The same review also found a documentation mismatch in row 915 of
 `docs/reference/migration-history.md`. Its apply-order narrative now identifies row 917 as the
 unrelated `20260905090000_next_invoice_number_year_chicago.sql` candidate and row 918 as

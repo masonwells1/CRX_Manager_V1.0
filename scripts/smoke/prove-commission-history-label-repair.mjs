@@ -71,6 +71,23 @@ UPDATE public.commission_payments
 SET LOCAL session_replication_role = origin;
 COMMIT;\`);
 
+  // The inherited base fixture deliberately uses PostgreSQL CURRENT_DATE to
+  // reproduce the UTC/Chicago boundary bug. During a Chicago evening that is
+  // tomorrow, so normalize only the disposable retained payment before the
+  // business-date guard's preflight. This prover owns the guard's explicit
+  // future-date negative control below.
+  psql(\`
+UPDATE public.commission_payments
+   SET payment_date = timezone('America/Chicago', statement_timestamp())::date
+ WHERE payment_date > timezone('America/Chicago', statement_timestamp())::date;
+\`);
+  assert.equal(scalar(\`
+    SELECT count(*)::text
+      FROM public.commission_payments
+     WHERE payment_date > timezone('America/Chicago', statement_timestamp())::date
+  \`), '0', 'label-repair fixture still contains a future Chicago payment date');
+  console.log('COMMISSION_HISTORY_LABEL_REPAIR_FIXTURE_DATE_PASS future_payment_rows=0');
+
   const beforeRepairLedgerCount = Number(scalar('SELECT count(*) FROM public.commission_earned_state_ledger;'));
   assert.ok(beforeRepairLedgerCount >= 3, 'base prover did not retain its opening observations');
 
@@ -496,12 +513,13 @@ INSERT INTO public.commissions (
 ) VALUES (
   '\${reassignedCommission}', '\${cutoverPreimage.order}', '\${cutoverPreimage.customer}',
   'Commission History Prover', '\${cutoverPreimage.admin}', 100, 12.34, 12.34,
-  CURRENT_DATE, 'pending'
+  timezone('America/Chicago', statement_timestamp())::date, 'pending'
 );
 INSERT INTO public.commission_payments (
   payment_number, recipient_id, total_amount, status, payment_date
 ) VALUES (
-  'RECIPIENT-GUARD-STALE-A', '\${cutoverPreimage.admin}', 12.34, 'unposted', CURRENT_DATE
+  'RECIPIENT-GUARD-STALE-A', '\${cutoverPreimage.admin}', 12.34, 'unposted',
+  timezone('America/Chicago', statement_timestamp())::date
 );
 INSERT INTO public.commission_payment_items (commission_payment_id, commission_id, amount)
 SELECT id, '\${reassignedCommission}', 12.34
@@ -514,7 +532,8 @@ UPDATE public.commissions
 INSERT INTO public.commission_payments (
   payment_number, recipient_id, total_amount, status, payment_date
 ) VALUES (
-  'RECIPIENT-GUARD-CURRENT-B', '\${reassignedRecipient}', 12.34, 'unposted', CURRENT_DATE
+  'RECIPIENT-GUARD-CURRENT-B', '\${reassignedRecipient}', 12.34, 'unposted',
+  timezone('America/Chicago', statement_timestamp())::date
 );
 INSERT INTO public.commission_payment_items (commission_payment_id, commission_id, amount)
 SELECT id, '\${reassignedCommission}', 12.34
