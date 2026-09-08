@@ -42,8 +42,8 @@ import { AUTHORITATIVE_MAIN_POLICY, authoritativeMainCommit, fixedGitExecutable,
 import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.mjs';
 import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
-import { routineReferencesIn } from './migration-routine-references.mjs';
-import { applicationRpcCallSites, unresolvedApplicationRpcCallSites } from './rpc-call-site-matcher.mjs';
+import { dynamicRoutineDdlIn, routineReferencesIn } from './migration-routine-references.mjs';
+import { applicationRpcAccessInventory, applicationRpcCallSites, unresolvedApplicationRpcCallSites } from './rpc-call-site-matcher.mjs';
 import { acquireMigrationProofLock, invalidateMigrationProofs } from './migration-proof-file-state.mjs';
 
 const rawArgs = process.argv.slice(2);
@@ -284,10 +284,19 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
   const routines = [...new Map(routineReferences.entries.flatMap(({ routines: found }) => found).map((routine) => [routine.key, routine])).values()];
   if (routines.length) {
     const history = [];
+    const dynamicHistory = [];
     for (const file of snapshot.paths('supabase/migrations/', (relative) => relative.endsWith('.sql'))) {
       const text = snapshot.text(file);
       const sourceReferences = routineReferencesIn(text);
       if (sourceReferences.error) throw new Error(`${file}: ${sourceReferences.error}`);
+      const dynamicRoutineDdl = dynamicRoutineDdlIn(text);
+      if (dynamicRoutineDdl.error) throw new Error(`${file}: ${dynamicRoutineDdl.error}`);
+      const affectedByDynamicDdl = dynamicRoutineDdl.entries.map(({ statement }) => routines.filter(({ key }) =>
+        new RegExp(`\\b${escapeRegExp(key)}\\b`, 'i').test(statement)).map(({ display }) => display)).filter((names) => names.length);
+      if (affectedByDynamicDdl.length) {
+        const affected = [...new Set(affectedByDynamicDdl.flat())].join(', ');
+        dynamicHistory.push(`${path.basename(file)} (${affected}):\n${dynamicRoutineDdl.entries.map(({ statement }) => statement.trim()).join('\n\n')}`);
+      }
       for (const { statement, routines: sourceRoutines } of sourceReferences.entries) {
         if (sourceRoutines.some((routine) => routines.some((candidate) => candidate.key === routine.key))) {
           history.push(`${path.basename(file)}:\n${statement.trim()}`);
@@ -304,6 +313,17 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
       history.length ? history.join('\n\n') : '(no matching routine history found)',
       '───────── END ROUTINE DEFINITION AND ACL HISTORY ─────────',
     );
+    if (dynamicHistory.length) {
+      parts.push(
+        '',
+        '───────── DYNAMIC_ROUTINE_DDL_UNVERIFIED ─────────',
+        'Catalog-derived or dynamically constructed routine DDL names one of the routines under review.',
+        'Source history cannot prove its effective pg_proc signature, body, overload, or ACL. This packet is',
+        'inspection-only: proof production must refuse it unless a proof-bound pg_proc snapshot is added.',
+        dynamicHistory.join('\n\n'),
+        '───────── END DYNAMIC_ROUTINE_DDL_UNVERIFIED ─────────',
+      );
+    }
   }
 
   // EXPOSURE + CALL SITES for every function this migration defines. The RLS charter
@@ -312,6 +332,7 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
   // tell them apart if the bundle shows the grants AND the calling function's guard
   // prologue. State facts only — never a suggested verdict.
   if (routines.length) {
+    const applicationInventory = applicationRpcAccessInventory(snapshot);
     const sections = [];
     for (const routine of routines) {
       const name = routine.key;
@@ -356,6 +377,16 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
       'section asserts no conclusion.',
       sections.join('\n\n'),
       '───────── END EXPOSURE AND CALL SITES ─────────',
+    );
+    parts.push(
+      '',
+      '───────── COMPLETE LITERAL APPLICATION RPC INVENTORY (facts only) ─────────',
+      'Every direct literal .rpc() access in production src/ and supabase/functions/. This is a complete',
+      'inventory, not a filter for routines named by the migration, so endpoint-name mismatches remain visible.',
+      applicationInventory.filter(({ unresolved }) => !unresolved).length
+        ? applicationInventory.filter(({ unresolved }) => !unresolved).map(({ routine, site }) => `ROUTINE ${routine}:\n${site}`).join('\n')
+        : '  (no literal application RPC call found)',
+      '───────── END COMPLETE LITERAL APPLICATION RPC INVENTORY ─────────',
     );
   }
 
@@ -585,6 +616,15 @@ for (const name of names) {
       `ERROR: ${name} cannot be reviewed while application RPC exposure is unverified: dynamic .rpc() routine-name call(s) exist. ` +
       'No proof minted; make the routine names literal or extend the trusted matcher before requesting a migration review.\n' +
       unresolvedApplicationSites.join('\n'),
+    );
+    exitCode = 1;
+    continue;
+  }
+  if (evidence.includes('DYNAMIC_ROUTINE_DDL_UNVERIFIED')) {
+    console.error(
+      `ERROR: ${name} has catalog-derived or dynamically constructed historical routine DDL. ` +
+      'Source-only evidence cannot prove the effective pg_proc signature, overload, body, or ACL. ' +
+      'No proof minted; attach a proof-bound pg_proc snapshot before requesting a migration review.',
     );
     exitCode = 1;
     continue;

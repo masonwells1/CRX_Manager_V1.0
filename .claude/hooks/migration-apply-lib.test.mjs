@@ -241,9 +241,35 @@ allows(evaluate(fixture()), "known-good interactive fixture is allowed");
   ok(git("checkout", "-q", "-b", "stale-candidate", oldHead).status === 0, "fixture candidate remains behind protected base");
   stampFixtureReviewerPolicy(root);
   denies(
-    evaluate(root, { reviewerPolicyCommit: undefined }),
+    evaluate(root, { reviewerPolicyCommit: git("rev-parse", "origin/main^{commit}").stdout.trim() }),
     "not evidence-bound",
     "a proof made from a candidate that does not contain protected origin/main is refused",
+  );
+}
+
+// A policy commit can remain an ancestor after main changes. That relationship
+// is useful to prove the candidate contains the reviewer charter, but it is not
+// enough to authorize a proof made under the old charter.
+{
+  const root = fixture();
+  makeOriginMain(root);
+  const git = (...args) => spawnSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-C", root, ...args], { encoding: "utf8", env: cleanEnv() });
+  const oldPolicy = git("rev-parse", "HEAD").stdout.trim();
+  ok(git("commit", "--allow-empty", "-m", "new reviewer policy").status === 0, "fixture advances the authoritative reviewer policy");
+  const currentPolicy = git("rev-parse", "HEAD").stdout.trim();
+  ok(git("update-ref", "refs/remotes/origin/main", currentPolicy).status === 0, "fixture updates origin/main to the current reviewer policy");
+  const stateDir = path.join(root, ".claude", "session-state");
+  const proofFile = path.join(stateDir, `migration-review-${SAFE}.json`);
+  const proof = JSON.parse(readFileSync(proofFile, "utf8"));
+  proof.reviewerPolicyAuthority = AUTHORITATIVE_MAIN_POLICY;
+  proof.reviewerPolicyCommit = oldPolicy;
+  proof.protectedBaseCommit = oldPolicy;
+  proof.evidenceHash = migrationProofEvidenceHash({ projectDir: root, stateDir, protectedBaseCommit: oldPolicy });
+  writeFileSync(proofFile, JSON.stringify(proof), "utf8");
+  denies(
+    evaluate(root, { reviewerPolicyCommit: currentPolicy }),
+    "bound to an older reviewer policy",
+    "a proof under an older but ancestor reviewer policy is refused",
   );
 }
 
@@ -691,18 +717,19 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     });
   };
 
-  // Gate passes → dry run stops before the network, exit 0.
+  // The file-bytes door independently resolves actual GitHub main. A synthetic
+  // fixture can no longer impersonate that policy just by writing origin/main,
+  // which is the point of the current-policy binding.
   const okRoot = fixture();
   mkdirSync(path.join(okRoot, "supabase", "migrations"), { recursive: true });
   writeFileSync(path.join(okRoot, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
   makeOriginMain(okRoot);
   stampFixtureReviewerPolicy(okRoot);
   const dry = runScript(okRoot);
-  ok(dry.status === 0, `dry run on a passing gate exits 0 (got ${dry.status}: ${dry.stderr})`);
-  ok(dry.stdout.includes("APPLY GATE PASSED"), "dry run reports the gate passed");
-  ok(dry.stdout.includes("DRY RUN"), "dry run says it is a dry run");
-  ok(!dry.stdout.includes("Transmitting"), "dry run does NOT transmit without --confirm");
-  ok(!dry.stdout.includes("APPLY OK"), "dry run does not report an apply");
+  ok(dry.status === 2, `a fixture policy cannot pass as current GitHub main (got ${dry.status}: ${dry.stderr})`);
+  ok(dry.stderr.includes("bound to an older reviewer policy"), "the file-bytes door rejects a stale fixture policy");
+  ok(!dry.stdout.includes("Transmitting"), "a policy-mismatched dry run does NOT transmit");
+  ok(!dry.stdout.includes("APPLY OK"), "a policy-mismatched dry run does not report an apply");
 
   // Gate refuses → the script refuses too, non-zero, and never reaches the network.
   const badRoot = fixture({ proof: null });
@@ -778,8 +805,10 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     ok(existsSync(path.join(aliasRoot, ".claude", "session-state", "applied-migrations.json")),
       "a refused aliased filename leaves the snapshot intact");
   }
-  // A real repository migration name still passes unchanged.
-  ok(dry.status === 0, "the canonical-name rule does not reject a real migration filename");
+  // A real repository migration name reaches the later current-policy gate;
+  // the canonical-name check itself must not be the reason it is refused.
+  ok(dry.status === 2 && !dry.stderr.includes("not a canonical migration name"),
+    "the canonical-name rule does not reject a real migration filename");
 
   // ROUND 7: the stamp-count rule closed a SHAPE, not the mechanism. A legacy
   // 8-digit name (`20260210_fix_rls_critical_issues`) aliased to
@@ -913,15 +942,16 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     ok(!res.stdout.includes("Transmitting"), "an out-of-tree copy never transmits");
     restoreFixtureLedgerAndEvidence(okRoot2);
     stampFixtureReviewerPolicy(okRoot2);
-    // Load-bearing pair: the repository file itself still applies, so the rule is
-    // about identity and not about refusing everything.
+    // The repository file clears source identity and reaches the independent
+    // current-policy gate; it must not be refused as an out-of-tree copy.
     const realFile = path.join(okRoot2, "supabase", "migrations", `${MIG}.sql`);
     const viaRepo = spawnSync(process.execPath, [scriptPath, realFile], {
       encoding: "utf8",
       env: cleanEnv({ CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" }),
     });
-    ok(viaRepo.status === 0, `the repository file itself still passes (got ${viaRepo.status}: ${viaRepo.stderr})`);
-    ok(viaRepo.stdout.includes("APPLY GATE PASSED"), "the repository file reaches and passes the gate");
+    ok(viaRepo.status === 2 && viaRepo.stderr.includes("bound to an older reviewer policy"),
+      `the repository file reaches the current-policy gate (got ${viaRepo.status}: ${viaRepo.stderr})`);
+    ok(!viaRepo.stderr.includes("it is not that file"), "the repository file is not rejected as an out-of-tree copy");
   }
 
   // SOURCE PROVENANCE THROUGH THE FILE-BYTES DOOR. This script takes a PATH, and
@@ -946,8 +976,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     ok(!res.stdout.includes("APPLY GATE PASSED"), "a parked file does not reach the gate's pass message");
 
     // The same bytes under the same name, moved into the permitted directory,
-    // apply normally — the rule is about location, and it must not be refusing
-    // everything. This is the honest way to ship a parked migration.
+    // clear the location check and reach the independent current-policy gate.
     mkdirSync(path.join(parkedRoot, "supabase", "migrations"), { recursive: true });
     const permittedFile = path.join(parkedRoot, "supabase", "migrations", `${MIG}.sql`);
     writeFileSync(permittedFile, SQL, "utf8");
@@ -958,8 +987,9 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       encoding: "utf8",
       env: cleanEnv({ CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" }),
     });
-    ok(moved.status === 0, `the same migration under supabase/migrations/ passes (got ${moved.status}: ${moved.stderr})`);
-    ok(moved.stdout.includes("APPLY GATE PASSED"), "the moved migration reaches the gate and passes it");
+    ok(moved.status === 2 && moved.stderr.includes("bound to an older reviewer policy"),
+      `the moved migration reaches the current-policy gate (got ${moved.status}: ${moved.stderr})`);
+    ok(!moved.stderr.includes("NOT A PERMITTED MIGRATION SOURCE"), "the moved migration clears the source-location rule");
   }
 }
 
@@ -1544,9 +1574,9 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   const snapshot = path.join(root, ".claude", "session-state", "applied-migrations.json");
   ok(existsSync(snapshot), "fixture starts with a snapshot present");
 
-  // --confirm with an unreachable endpoint: the gate passes, wrappability passes,
-  // the snapshot is invalidated, and transmission then fails. The snapshot must
-  // NOT come back.
+  // A synthetic fixture cannot pass the new live GitHub policy lookup. It must
+  // therefore leave its snapshot intact; the source-order assertion below proves
+  // that a real passed --confirm run still invalidates before transmission.
   const res = spawnSync(process.execPath, [
     path.resolve(__scriptsDir, "apply-migration-file.mjs"),
     path.join(root, "supabase", "migrations", `${MIG}.sql`),
@@ -1568,11 +1598,12 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       no_proxy: "",
     }),
   });
-  ok(res.stdout.includes("Invalidated the applied-migration snapshot"),
-    "the snapshot is invalidated before transmission");
-  ok(!existsSync(snapshot),
-    "after an apply attempt the stale snapshot is GONE — the next apply blocks on missing evidence");
-  ok(res.status !== 0, `a failed transmission exits non-zero (got ${res.status})`);
+  ok(res.status === 2 && res.stderr.includes("bound to an older reviewer policy"),
+    `a fixture cannot reach transmission under an impersonated policy (got ${res.status})`);
+  ok(existsSync(snapshot), "a policy-rejected run has not attempted an apply and retains its snapshot");
+  const applySource = readFileSync(path.resolve(__scriptsDir, "apply-migration-file.mjs"), "utf8");
+  ok(applySource.indexOf('APPLY GATE PASSED') < applySource.indexOf('rmSync(snapshotPath)'),
+    "after a real gate pass, snapshot invalidation is ordered before transmission setup");
 }
 
 // ── name normalization: tolerate .sql and paths, never tolerate an alias ─────

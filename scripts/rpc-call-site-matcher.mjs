@@ -48,6 +48,36 @@ function decodeEscape(text, index) {
   return { value: next, end: index + 2 };
 }
 
+// JavaScript permits Unicode escapes in identifier names, including a member
+// access such as `client.r\\u0070c(...)`. Decode only escapes that produce the
+// ASCII identifier alphabet this scanner intentionally accepts. Any malformed
+// or unsupported escape makes the whole file unresolved below; silently
+// skipping it would allow a direct RPC caller to disappear from the evidence.
+function consumeIdentifier(text, start) {
+  let index = start;
+  let value = '';
+  let first = true;
+  while (index < text.length) {
+    const char = text[index];
+    if ((first ? isIdentifierStart(char) : isIdentifierPart(char))) {
+      value += char;
+      index++;
+      first = false;
+      continue;
+    }
+    if (char === '\\') {
+      const escape = decodeEscape(text, index);
+      if (escape === null || !(first ? isIdentifierStart(escape.value) : isIdentifierPart(escape.value))) return null;
+      value += escape.value;
+      index = escape.end;
+      first = false;
+      continue;
+    }
+    break;
+  }
+  return first ? null : { value, end: index };
+}
+
 function consumeQuotedString(text, start, quote) {
   let value = '';
   for (let index = start + 1; index < text.length;) {
@@ -215,11 +245,11 @@ function tokenize(text) {
         index = template.end;
         continue;
       }
-      if (isIdentifierStart(char)) {
-        let finish = index + 1;
-        while (isIdentifierPart(text[finish])) finish++;
-        add('identifier', text.slice(index, finish), index, finish);
-        index = finish;
+      if (isIdentifierStart(char) || (char === '\\' && text[index + 1] === 'u')) {
+        const identifier = consumeIdentifier(text, index);
+        if (identifier === null) { failedAt = index; return text.length; }
+        add('identifier', identifier.value, index, identifier.end);
+        index = identifier.end;
         continue;
       }
       if (/[0-9]/.test(char)) {
@@ -365,7 +395,13 @@ function snapshotRpcUses(snapshot) {
 }
 
 export function applicationRpcAccessInventory(snapshot) {
-  return snapshotRpcUses(snapshot).map((use) => ({ file: use.file, index: use.index, routine: use.routine, unresolved: use.unresolved }));
+  return snapshotRpcUses(snapshot).map((use) => ({
+    file: use.file,
+    index: use.index,
+    routine: use.routine,
+    unresolved: use.unresolved,
+    site: lineSite(use.file, use.text, use.index),
+  }));
 }
 
 export function applicationRpcCallSites(name, snapshot) {

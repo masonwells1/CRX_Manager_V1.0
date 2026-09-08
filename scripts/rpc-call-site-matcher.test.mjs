@@ -127,3 +127,13 @@ test('recovers direct callers after an unparseable template without treating a d
   assert.equal(applicationRpcCallSites('actual_rpc', snapshot).length, 1);
   assert.equal(unresolvedApplicationRpcCallSites(snapshot).length, 1);
 });
+
+test('captures escaped rpc member names and fails closed for malformed identifier escapes', () => {
+  const escaped = snapshotFor('src/lib/call.ts', String.raw`client.r\u0070c('escaped_rpc');`);
+  assert.equal(applicationRpcCallSites('escaped_rpc', escaped).length, 1);
+  assert.deepEqual(unresolvedApplicationRpcCallSites(escaped), []);
+
+  const malformed = snapshotFor('src/lib/call.ts', String.raw`client.r\u00GGc('missing_rpc');`);
+  assert.equal(applicationRpcCallSites('missing_rpc', malformed).length, 0);
+  assert.equal(unresolvedApplicationRpcCallSites(malformed).length, 1);
+});

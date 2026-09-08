@@ -292,3 +292,27 @@ export function routineReferencesIn(sql) {
   }
   return { entries, error: null };
 }
+
+// A source-only history can inventory routine DDL only when each routine name
+// appears in a parseable top-level header. `pg_get_functiondef()` followed by
+// PL/pgSQL EXECUTE reconstructs a function body from the live catalog, so the
+// source file cannot tell a reviewer which overload or ACL it actually changed.
+// Return the complete statement rather than guessing a name: callers must stop
+// the proof flow (or attach a proof-bound pg_proc snapshot) before accepting a
+// review based on incomplete source history.
+export function dynamicRoutineDdlIn(sql) {
+  const statements = sqlStatements(sql);
+  if (!statements) return { entries: [], error: 'unterminated SQL while scanning dynamic routine DDL' };
+  const entries = [];
+  for (const statement of statements) {
+    const masked = maskComments(statement);
+    if (masked === null) return { entries: [], error: 'unterminated comment or quoted identifier while scanning dynamic routine DDL' };
+    const readsRoutineDefinition = /\bpg_get_functiondef\s*\(/i.test(masked);
+    // EXECUTE can be ordinary dynamic SQL. Treat it as routine DDL only where
+    // its statement also constructs a routine CREATE/ALTER/ACL operation.
+    const executesRoutineDdl = /\bEXECUTE\b/i.test(masked)
+      && /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?|ALTER\s+|GRANT\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+|REVOKE\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+)(?:FUNCTION|PROCEDURE|ROUTINE)\b/i.test(masked);
+    if (readsRoutineDefinition || executesRoutineDdl) entries.push({ statement });
+  }
+  return { entries, error: null };
+}

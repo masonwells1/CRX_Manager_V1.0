@@ -31,7 +31,7 @@ import { sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.m
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
 import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
-import { AUTHORITATIVE_MAIN_POLICY, fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from "./protected-git.mjs";
+import { AUTHORITATIVE_MAIN_POLICY, authoritativeMainCommit, fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from "./protected-git.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
@@ -318,7 +318,8 @@ export function evaluateMigrationApply({
   gitTrackedMigrations,
   originFetchAge,
   // Tests may pass null when their temporary repositories intentionally lack a
-  // protected origin/main policy ref. Real callers omit this and fail closed.
+  // protected origin/main policy ref. An explicit SHA is a test seam; real
+  // callers omit this and resolve authoritative GitHub main at apply time.
   reviewerPolicyCommit,
   // Defaults to TRUE so a caller that forgets it inherits the safe behaviour.
   // It was introduced (PR #470) opt-in for scripts/apply-migration-file.mjs only,
@@ -880,14 +881,22 @@ export function evaluateMigrationApply({
 
   let validProof = null;
   let validProofEvidenceHash = null;
+  let validProofCurrentPolicyMismatch = null;
   let contentMismatchedProof = null;
   let evidenceMismatchedProof = null;
   // The proof producer obtains this commit from the literal authoritative GitHub
-  // remote, never from local origin config. The apply side binds the exact same
-  // SHA into both proof fields and the evidence hash, then verifies this checkout
-  // contains that immutable commit. It deliberately does NOT re-read a mutable
-  // local remote-tracking ref while deciding whether the recorded proof is valid.
-  const requiresProtectedBase = reviewerPolicyCommit !== null;
+  // remote, never from local origin config. The apply side must independently
+  // resolve that remote again: accepting a policy commit merely because it is an
+  // ancestor of HEAD would let a recently changed reviewer charter be bypassed
+  // for the remainder of a 30-minute proof lifetime.
+  let requiredReviewerPolicyCommit = reviewerPolicyCommit;
+  if (requiredReviewerPolicyCommit === undefined) {
+    try { requiredReviewerPolicyCommit = authoritativeMainCommit(); }
+    catch (error) {
+      return block(`MIGRATION APPLY GUARD: could not resolve the current authoritative GitHub main reviewer policy (${error?.message || error}). Refusing to reuse a proof bound to an older policy.`);
+    }
+  }
+  const requiresProtectedBase = requiredReviewerPolicyCommit !== null;
   const freshCleanProofNames = [];
   for (const dir of authorizedProofDirs) {
     if (validProof) break;
@@ -960,8 +969,7 @@ export function evaluateMigrationApply({
               : data.reviewerPolicyAuthority !== AUTHORITATIVE_MAIN_POLICY ? 'reviewerPolicyAuthority does not name the fixed authoritative GitHub main policy'
                 : !/^[a-f0-9]{40}$/.test(proofPolicyCommit) ? 'reviewerPolicyCommit is not a full authoritative policy commit SHA'
                 : String(data.protectedBaseCommit || '').toLowerCase() !== proofPolicyCommit ? 'protectedBaseCommit does not match reviewerPolicyCommit'
-                  : reviewerPolicyCommit !== undefined && proofPolicyCommit !== String(reviewerPolicyCommit).toLowerCase() ? 'reviewerPolicyCommit does not match the required protected reviewer policy commit'
-                    : null;
+                  : null;
             if (requiresProtectedBase && !protectedBindingReason) try {
               execFileSync(fixedGitExecutable(), ["--no-replace-objects", "merge-base", "--is-ancestor", proofPolicyCommit, "HEAD"], {
                 cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], env: protectedGitEnv(),
@@ -985,6 +993,10 @@ export function evaluateMigrationApply({
             }
             validProof = { file: f, dir, data };
             validProofEvidenceHash = expectedEvidenceHash;
+            validProofCurrentPolicyMismatch = requiresProtectedBase
+              && proofPolicyCommit !== String(requiredReviewerPolicyCommit).toLowerCase()
+              ? 'reviewerPolicyCommit does not match the current authoritative reviewer policy commit'
+              : null;
             break;
           }
         }
@@ -1120,6 +1132,13 @@ export function evaluateMigrationApply({
           `A BLOCKERS verdict or a failed Codex run does NOT qualify — fix the findings or PARK the ` +
           `migration for Mason. Never self-certify.`);
       }
+    }
+    if (validProofCurrentPolicyMismatch) {
+      return block(
+        `MIGRATION APPLY GUARD: the reviewer proof for "${migName || "(unnamed)"}" is bound to an older reviewer policy ` +
+        `(${String(validProof.data.reviewerPolicyCommit || "(missing)")}), not the current authoritative GitHub main policy ` +
+        `(${String(requiredReviewerPolicyCommit || "(unavailable)")}). Re-run node scripts/write-apply-proofs.mjs against the CURRENT checkout; ` +
+        'an ancestor policy commit is not sufficient after a reviewer-charter update.');
     }
     return allow();
   }

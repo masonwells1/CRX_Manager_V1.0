@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { routineReferencesIn } from './migration-routine-references.mjs';
+import { dynamicRoutineDdlIn, routineReferencesIn } from './migration-routine-references.mjs';
 
 test('captures PostgreSQL routine names that regular expressions silently omit', () => {
   const result = routineReferencesIn(`
@@ -126,4 +126,26 @@ test('fails closed for schema-wide routine execute ACLs', () => {
     const result = routineReferencesIn(statement);
     assert.match(result.error || '', /schema-wide routine EXECUTE ACL/);
   }
+});
+
+test('identifies catalog-derived or dynamically constructed routine DDL for a fail-closed proof flow', () => {
+  const catalogDerived = dynamicRoutineDdlIn(`
+    DO $$ DECLARE definition text; BEGIN
+      definition := pg_get_functiondef('public.example()'::regprocedure);
+      EXECUTE definition;
+    END; $$;
+  `);
+  assert.equal(catalogDerived.error, null);
+  assert.equal(catalogDerived.entries.length, 1);
+
+  const constructed = dynamicRoutineDdlIn(`
+    DO $$ BEGIN
+      EXECUTE format('CREATE FUNCTION public.example() RETURNS void LANGUAGE sql AS %L', 'SELECT');
+    END; $$;
+  `);
+  assert.equal(constructed.error, null);
+  assert.equal(constructed.entries.length, 1);
+
+  const ordinaryDynamicSql = dynamicRoutineDdlIn(`DO $$ BEGIN EXECUTE 'SELECT 1'; END; $$;`);
+  assert.deepEqual(ordinaryDynamicSql, { entries: [], error: null });
 });

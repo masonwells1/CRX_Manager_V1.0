@@ -12,6 +12,7 @@ test('proof revocation occurs before the wrapper resolves a reviewer executable'
   const source = readFileSync(fileURLToPath(new URL('./write-apply-proofs.mjs', import.meta.url)), 'utf8');
   const revocation = source.indexOf('invalidateMigrationProofs(stateDir, safe)');
   const unresolvedExposureGate = source.indexOf('cannot be reviewed while application RPC exposure is unverified');
+  const dynamicHistoryGate = source.indexOf("has catalog-derived or dynamically constructed historical routine DDL");
   const executableLookup = source.indexOf('codexBin = codexExecutable()');
 
   assert.ok(revocation >= 0, 'the wrapper revokes stale proof files');
@@ -26,6 +27,8 @@ test('proof revocation occurs before the wrapper resolves a reviewer executable'
   const reviewerCall = source.indexOf('const { verdict, error } = runCodexCharter');
   assert.ok(unresolvedExposureGate >= 0 && unresolvedExposureGate < reviewerCall,
     'unresolved application RPC exposure blocks proof production before a reviewer process starts');
+  assert.ok(dynamicHistoryGate >= 0 && dynamicHistoryGate < reviewerCall,
+    'dynamic catalog-derived routine history blocks proof production before a reviewer process starts');
 });
 
 function printedEvidence(migration) {
@@ -51,6 +54,9 @@ test('evidence preserves unqualified functions and their frontend RPC callers', 
   assert.match(evidence, /ROUTINE DEFINITION AND ACL HISTORY of [^\n]*receive_po_items/);
   assert.match(evidence, /APPLICATION RPC CALL SITES of receive_po_items in src\/ and supabase\/functions\//);
   assert.match(evidence, /frontend RPC: src\/components\/receiving\/QuickReceivePanel\.tsx/);
+  assert.match(evidence, /COMPLETE LITERAL APPLICATION RPC INVENTORY/);
+  assert.match(evidence, /ROUTINE receive_po_items:/);
+  assert.match(evidence, /DYNAMIC_ROUTINE_DDL_UNVERIFIED/);
 });
 
 test('evidence includes source history for existing routines changed by ALTER', () => {
