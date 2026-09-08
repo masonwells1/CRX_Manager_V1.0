@@ -262,6 +262,9 @@ allowed({ tool_name: "Bash", tool_input: { command: "bun pm cache" } });
 allowed({ tool_name: "Bash", tool_input: { command: "bun pm hash" } });
 allowed({ tool_name: "Bash", tool_input: { command: "bun pm whoami" } });
 allowed({ tool_name: "Bash", tool_input: { command: "bun pm" } });
+allowed({ tool_name: "Bash", tool_input: { command: "git worktree list" } });
+allowed({ tool_name: "Bash", tool_input: { command: "git worktree list --porcelain" } });
+allowed({ tool_name: "Bash", tool_input: { command: "git worktree list; cat .claude/hooks/review-proof-guard.mjs" } });
 allowed({ tool_name: "Bash", tool_input: { command: "cd /c/repo && npm ci && npm run build" } });
 allowed({ tool_name: "Bash", tool_input: { command: "node scripts/regenerate-schema-registry.mjs --from-introspection /tmp/introspection.json" } });
 allowed({ tool_name: "Bash", tool_input: { command: "node scripts/generate-caller-graph.mjs --live-json /tmp/live.json" } });
@@ -640,6 +643,16 @@ for (const command of [
   // read-only: git runs whatever a config override or pager/diff helper names.
   // Both of these were reproduced by the reviewer DELETING .husky/pre-push.
   "git -c diff.external=rm diff --ext-diff -- .husky/pre-push",
+  // GitHub Codex P1 on 06f0039a2: `git worktree` sat whole in the read-only set, but
+  // `add`/`move` populate the path they are given and `remove` deletes it.
+  "git worktree add --detach .claude/skills/probe 0123abc",
+  "git worktree add .claude/hooks/probe HEAD",
+  "git worktree add -b feat .github/workflows main",
+  "git worktree move wt-a .claude/skills/probe",
+  "git worktree remove .claude/skills/probe",
+  "git worktree frobnicate .claude/skills/probe",
+  "cd repo && git worktree add --detach .claude/skills/probe 0123abc",
+  "git -C repo worktree add --detach .claude/skills/probe 0123abc",
   "git grep --open-files-in-pager=rm pattern -- .husky/pre-push",
   "git grep -O rm pattern -- .github/workflows/ci.yml",
   "git -c core.pager=rm log .husky/pre-push",

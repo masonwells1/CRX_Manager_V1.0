@@ -507,9 +507,22 @@ if (shellTool) {
     "rev-parse", "rev-list", "merge-base", "cherry", "describe", "shortlog", "name-rev",
     "remote", "branch", "tag", "fetch", "ls-remote", "reflog", "check-ignore", "var",
     "config", "help", "version", "count-objects", "verify-commit", "symbolic-ref",
-    // Staging/committing record content; they do not alter it.
+    // Staging/committing record content; they do not alter it. `worktree` is a
+    // NAMESPACE whose only reader is `list`; see the sub === "worktree" rule below.
     "add", "commit", "push", "worktree",
   ]);
+  // The action word after `git worktree` (options skipped), or null.
+  const gitWorktreeActionOf = (segment) => {
+    const tokens = String(segment).match(/(?:"[^"]*"|'[^']*'|\S)+/g) || [];
+    const w = tokens.findIndex((t) => t.replace(/["']/g, "").toLowerCase() === "worktree");
+    if (w < 0) return null;
+    for (let i = w + 1; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (token.startsWith("-")) continue;
+      return token.replace(/["']/g, "").toLowerCase();
+    }
+    return null;
+  };
   // KNOWN OVER-BLOCK, pinned in the tests rather than papered over: this splits on
   // `|` even inside quotes, so `grep -E "(a|b)" .husky/pre-push` becomes two
   // segments and the second one's head is `b)"`, which is not allowlisted, so an
@@ -622,6 +635,13 @@ if (shellTool) {
       // Pinned to the safe DESTINATION rather than enumerating unsafe ones: a value
       // that is exactly `.husky` is the only accepted target, so a spelling nobody
       // has thought of yet is refused by default instead of admitted by omission.
+      // `git worktree` is a NAMESPACE, not a reader. GitHub Codex P1 on 06f0039a2:
+      // `add` and `move` POPULATE the path they are given — `git worktree add --detach
+      // .claude/skills/probe <sha>` materialises a committed SKILL.md under a protected
+      // directory with no approval — and `remove` deletes it, yet the whole namespace
+      // sat in the read-only set. Only `list` is vouched for; every other action, and
+      // an unknown one, is a writer of the paths it names (fail closed).
+      if (sub === "worktree" && gitWorktreeActionOf(segment) !== "list") return false;
       if (sub === "config") {
         // A READ must actually be a read. `--type` is NOT a read flag — it is a
         // modifier that a SET also takes, so listing it would have let
