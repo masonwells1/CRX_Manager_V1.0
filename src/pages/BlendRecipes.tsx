@@ -14,6 +14,7 @@ import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { MONEY_PRECISION_MESSAGE, parseDollarsToCents } from '../lib/parseCents';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useUnresolvedIntent, UNRESOLVED_INTENT_MESSAGE } from '../hooks/useUnresolvedIntent';
 import { fingerprintIntentPayload } from '../lib/idempotency';
 import { Sentry } from '../lib/sentry';
 import UnitSelect from '../components/blendtickets/UnitSelect';
@@ -64,6 +65,7 @@ export default function BlendRecipes() {
   const { toast } = useToast();
   const saveRecipeIdem = useIdempotencyKey('save_blend_recipe', profile?.id || '');
   const duplicateRecipeIdem = useIdempotencyKey('save_blend_recipe', profile?.id || '');
+  const duplicateUnresolved = useUnresolvedIntent();
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   // Item units are a PICKER, not free text, so a recipe can no longer carry a unit the
@@ -381,19 +383,35 @@ export default function BlendRecipes() {
           duplicateItems,
         ])}`;
 
-        const { data, error } = await supabase.rpc('save_blend_recipe', {
-          p_recipe_id: null as unknown as string,
-          p_name: `${recipe.name} (Copy)`,
-          p_recipe_type: recipe.recipe_type,
-          p_items: duplicateItems,
-          p_description: recipe.description || undefined,
-          p_crop_type: recipe.recipe_type === 'crop_specific' ? recipe.crop_type || undefined : undefined,
-          p_timing: recipe.recipe_type === 'crop_specific' ? recipe.timing || undefined : undefined,
-          p_idempotency_key: duplicateRecipeIdem.getKeyFor(intentScope),
-        });
-        if (error) throw error;
-        assertRpcResult(data, 'save_blend_recipe');
+        // Binding the key to the snapshot fixes the stale-replay half, but it opens
+        // the opposite one: if this duplication commits and its response is lost,
+        // editing the SOURCE recipe changes the fingerprint, so the next duplication
+        // mints a fresh key. save_blend_recipe replays key-only and blend_recipes has
+        // no uniqueness constraint, so that retry creates a SECOND copy while the
+        // unobserved first copy stays. Refuse the changed snapshot once instead.
+        if (duplicateUnresolved.refuseOnce(intentScope)) {
+          throw new Error(UNRESOLVED_INTENT_MESSAGE);
+        }
+
+        try {
+          const { data, error } = await supabase.rpc('save_blend_recipe', {
+            p_recipe_id: null as unknown as string,
+            p_name: `${recipe.name} (Copy)`,
+            p_recipe_type: recipe.recipe_type,
+            p_items: duplicateItems,
+            p_description: recipe.description || undefined,
+            p_crop_type: recipe.recipe_type === 'crop_specific' ? recipe.crop_type || undefined : undefined,
+            p_timing: recipe.recipe_type === 'crop_specific' ? recipe.timing || undefined : undefined,
+            p_idempotency_key: duplicateRecipeIdem.getKeyFor(intentScope),
+          });
+          if (error) throw error;
+          assertRpcResult(data, 'save_blend_recipe');
+        } catch (duplicateError) {
+          duplicateUnresolved.markIfUncertain(intentScope, duplicateError);
+          throw duplicateError;
+        }
         duplicateRecipeIdem.resetKeyFor(intentScope);
+        duplicateUnresolved.clear();
       },
       toast,
       successMessage: 'Recipe duplicated',

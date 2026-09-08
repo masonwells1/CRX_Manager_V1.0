@@ -567,6 +567,45 @@ export default function CycleCounts() {
       return null;
     }
     if (countState.status !== 'in_progress') {
+      // A completed count is not automatically someone else's doing. If THIS client
+      // still holds an unretired completion key for this count and revision, the
+      // likeliest history is that our own complete_cycle_count committed and its
+      // response was lost — and the operator was then told their completed action
+      // failed. complete_cycle_count checks the receipt BEFORE it reads business
+      // state (see 20260831212415_guard_cycle_count_completion_revision.sql), and
+      // completion does not advance item_revision (verified: the impl never updates
+      // cycle_count_items), so the retained key still matches and redeems the
+      // original success instead of raising a conflict.
+      //
+      // Only attempt this for a count we could have completed. Any other status, or
+      // no retained key, means we have no standing to claim the outcome.
+      const replayScope = `complete:${activeCount.id}:${countState.item_revision}`;
+      if (
+        countState.status === 'completed'
+        && typeof countState.item_revision === 'number'
+        && completeCycleCountIdem.hasKeyFor(replayScope)
+      ) {
+        try {
+          await supabase.rpc('complete_cycle_count', {
+            p_cycle_count_id: activeCount.id,
+            p_completed_by: profile?.id,
+            p_idempotency_key: completeCycleCountIdem.getKeyFor(replayScope),
+            p_expected_item_revision: countState.item_revision,
+          }).throwOnError();
+          completeCycleCountIdem.resetKeyFor(replayScope);
+          if (isCurrentSession()) {
+            toast('success', `Cycle count ${activeCount.count_number} was already completed — the earlier attempt did go through.`);
+            closeDetail();
+          }
+          fetchCounts();
+          return null;
+        } catch (replayError) {
+          // The replay proved nothing, so fall through to the honest refusal below.
+          // Do NOT retire the key here: a failed replay leaves the outcome exactly as
+          // unknown as it was, and the key is the only handle on the receipt.
+          Sentry.captureException(replayError);
+        }
+      }
       toast('error', 'This cycle count is no longer in progress. Refresh before continuing.');
       return null;
     }
@@ -760,6 +799,14 @@ export default function CycleCounts() {
             await waitForAuthoritativeCountItems(stillCurrentSession);
             throw new Error(
               'Someone changed a counted quantity while this count was being completed. The list has been refreshed — review the updated quantities, then complete again.'
+            );
+          }
+          // Only a browser tab left open from before 20260908120000 shipped can omit
+          // the expected revision. Refreshing the list would not help it: the page
+          // itself is what is stale, so tell the operator to reload the app.
+          if (hasRpcCode(completionErr, RpcErrorCodes.CYCLE_COUNT_REVISION_REQUIRED)) {
+            throw new Error(
+              'This page is running an out-of-date version and cannot safely complete a count. Reload the page, then complete it again.'
             );
           }
           throw completionErr;

@@ -8,12 +8,34 @@ const migration = readFileSync(
 ).replace(/\r\n/g, '\n');
 
 const code = migration.replace(/^[ \t]*--.*$/gm, '');
+// 20260831212415 shipped both revision checks behind `IS NOT NULL`, so a caller that
+// omitted p_expected_item_revision skipped the staleness protection entirely. That is
+// closed by a LATER migration, which means the assertions on `code` describe a body
+// that is no longer the live one. Pin the successor too: without this the older file
+// keeps this suite green while nothing at all pins the refusal that replaced it.
+const successorMigration = readFileSync(
+  join(process.cwd(), 'supabase', 'migrations', '20260908120000_close_pr535_live_gaps.sql'),
+  'utf8',
+).replace(/\r\n/g, '\n');
+const successorCode = successorMigration.replace(/^[ \t]*--.*$/gm, '');
+// The installed BODY only. The proof block at the end of that file quotes
+// 'p_expected_item_revision IS NOT NULL' as the text it refuses to find, so a
+// whole-file assertion that the bypass is gone would be failed by the very check that
+// enforces it.
+const successorBody = successorMigration.slice(
+  successorMigration.indexOf('AS $function$'),
+  successorMigration.indexOf('$function$;'),
+);
 const page = readFileSync(
   join(process.cwd(), 'src', 'pages', 'CycleCounts.tsx'),
   'utf8',
 ).replace(/\r\n/g, '\n');
 const sharedTypes = readFileSync(
   join(process.cwd(), 'src', 'types', 'index.ts'),
+  'utf8',
+).replace(/\r\n/g, '\n');
+const sharedDb = readFileSync(
+  join(process.cwd(), 'src', 'lib', 'db.ts'),
   'utf8',
 ).replace(/\r\n/g, '\n');
 
@@ -103,6 +125,29 @@ describe('cycle count completion revision contract', () => {
     expect(code.trimEnd()).not.toMatch(/COMMIT;$/);
   });
 
+  it('refuses an omitted expected revision outright in the successor migration', () => {
+    // The refusal must be present AND the bypass gone. Either half alone passes over a
+    // body that carries both and still skips the comparison for a null argument.
+    expect(successorCode).toContain(
+      "RAISE EXCEPTION 'CYCLE_COUNT_REVISION_REQUIRED: complete_cycle_count requires p_expected_item_revision'",
+    );
+    expect(successorBody).not.toContain('p_expected_item_revision IS NOT NULL');
+    expect(successorBody.length).toBeGreaterThan(1000);
+    // The signature must not change: p_expected_item_revision keeps its DEFAULT, so a
+    // three-argument caller still resolves to this function and is then refused, rather
+    // than binding to some second overload with no revision check at all.
+    expect(successorCode).toContain('p_expected_item_revision bigint DEFAULT NULL');
+    expect(successorCode).toContain('CREATE OR REPLACE FUNCTION public.complete_cycle_count(');
+    // The proof must describe the database as FOUND, not just as this migration left
+    // it. A postcondition on text the same file just wrote proves nothing, so the
+    // pre-replace body hash check is the load-bearing half and is pinned here.
+    expect(successorCode).toMatch(/DO \$precond\$[\s\S]*md5\(v_src\)/);
+    // The operator-facing half: an out-of-date tab is the only caller that can trigger
+    // the new refusal, so it must reach a readable instruction, not a raw code.
+    expect(sharedDb).toContain("CYCLE_COUNT_REVISION_REQUIRED: 'CYCLE_COUNT_REVISION_REQUIRED'");
+    expect(page).toContain('RpcErrorCodes.CYCLE_COUNT_REVISION_REQUIRED');
+  });
+
   it('rejects an authoritative snapshot that changed before completion', () => {
     expect(code).toContain('IDEMPOTENCY_KEY_REQUIRED: complete_cycle_count requires p_idempotency_key');
     expect(code).toContain('p_expected_item_revision bigint DEFAULT NULL');
@@ -177,9 +222,14 @@ describe('cycle count completion revision contract', () => {
   // `latestItemRevisionRef` mutation with it.
   it('moves the ref at EVERY site that establishes a reviewed baseline', () => {
     const lines = page.split('\n');
+    // The key must be `item_revision` EXACTLY. The leading non-word boundary excludes
+    // `p_expected_item_revision:`, which is an RPC argument being SENT, not a baseline
+    // being established, and needs no paired ref write. Without the boundary the
+    // replay call in executeComplete reads as an unpaired baseline site and this guard
+    // fails on correct code — the way a guard gets deleted rather than fixed.
     const baselineSites = lines
       .map((line, i) => ({ line, i }))
-      .filter(({ line }) => /item_revision:\s*\w+\.item_revision/.test(line));
+      .filter(({ line }) => /(?:^|[^\w])item_revision:\s*\w+\.item_revision/.test(line));
 
     // The guard must have work to do; a regex that matches nothing always passes.
     expect(baselineSites.length).toBeGreaterThanOrEqual(3);
@@ -195,7 +245,7 @@ describe('cycle count completion revision contract', () => {
       // setActiveCount updater plus a short comment, far too narrow to be satisfied by
       // an unrelated ref mutation elsewhere in the function.
       .filter(({ line, i }) => {
-        const source = /item_revision:\s*(\w+\.item_revision)/.exec(line)?.[1];
+        const source = /(?:^|[^\w])item_revision:\s*(\w+\.item_revision)/.exec(line)?.[1];
         if (!source) return true;
         return !lines.slice(Math.max(0, i - 12), i + 10)
           .some((l) => l.includes('latestItemRevisionRef.current.set') && l.includes(source));

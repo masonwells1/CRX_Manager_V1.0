@@ -45,7 +45,7 @@ import {
 } from '../../lib/fieldImportCustomers';
 import type { Customer, ParsedImportField } from '../../types';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
-import { fingerprintIntentPayload } from '../../lib/idempotency';
+import { digestIntentPayload } from '../../lib/idempotency';
 
 
 interface BulkFieldImportProps {
@@ -480,10 +480,15 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     // request went out, so PostgreSQL may or may not have committed it. These must NOT be
     // presented as safe to re-import.
     let unknownOutcome = 0;
+    // Field ids already returned during THIS run. Two byte-identical rows now
+    // share one intent key, so the second redeems the first row's receipt and
+    // save_field returns the SAME id without creating anything. Counting that as
+    // a second creation would overstate the import; name it as the duplicate it is.
+    const createdFieldIds = new Set<string>();
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    for (const [fieldIndex, pf] of validFields.entries()) {
+    for (const pf of validFields) {
       // Once the request is sent the outcome is unknown until the server tells us
       // otherwise, so this starts pessimistic the moment save_field is called.
       let saveOutcome: 'not-sent' | 'committed' | 'rejected' | 'unknown' = 'not-sent';
@@ -516,18 +521,31 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           is_active: true,
         };
 
-        // The ordered import row keeps every retry of THIS row on the same
-        // server-side intent, while a neighboring row gets a distinct key.
-        // Position and name alone are not enough to identify the work: a lost
-        // save_field response leaves this key cached (handleClose resets the
-        // modal's state but not the hook's scoped keys, and Fields.tsx keeps
-        // the component mounted), so a later import carrying the same row
-        // index, customer and field name but a DIFFERENT boundary would replay
-        // the earlier field_id and overwrite that existing field instead of
-        // creating the requested one. Fingerprinting the payload the key was
-        // minted for makes changed content mint a fresh key, while a true retry
-        // of unchanged content still replays.
-        const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}:${fingerprintIntentPayload([
+        // Identify this row by its CONTENT, never by its position in the file.
+        //
+        // save_field replays on the key alone and receives p_field_id: null, so a
+        // key that does not survive a retry creates a DUPLICATE field. Position
+        // does not survive the two retries that actually happen:
+        //   * `fieldIndex` is the offset within the filtered `validFields`, so
+        //     fixing an EARLIER row renumbers every later row and mints new keys
+        //     for rows that never changed.
+        //   * `pf.index` is the source row, which is stable within one file but
+        //     not across files — re-importing one failed row on its own makes it
+        //     row 1, so it too would mint a new key and duplicate the field.
+        // Both were real: the first is CodeRabbit's finding on this line, the
+        // second is Codex P1 on the save_field call below.
+        //
+        // Content identity fixes both. The fingerprint still covers the full
+        // payload, geometry and stated acres, so genuinely different content
+        // mints a fresh key (the original reason position was not enough on its
+        // own) while an unchanged row replays its receipt from any file, at any
+        // position. Two byte-identical rows in one file now share a key on
+        // purpose; the duplicate-receipt check below keeps that from being
+        // counted as two fields.
+        // digestIntentPayload, not fingerprintIntentPayload: this serializes a
+        // COMPLETE field geometry, and the synchronous BigInt hash froze the tab
+        // for seconds per row on a large multi-part boundary (Codex P2 below).
+        const intentScope = `import:${pf.customer_id}:${pf.field_name}:${await digestIntentPayload([
           fieldPayload,
           pf.full_boundary_geojson,
           pf.stated_acres ?? null,
@@ -556,9 +574,20 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             : `"${pf.field_name}": ${reason}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
           saveOutcome = 'committed';
-          // save_field has COMMITTED. Count the row as created before anything else can fail, so
-          // a later boundary or override failure still reports the field as existing.
-          created++;
+          // A field id already seen in this run means this row is byte-identical to an
+          // earlier one and simply redeemed its receipt — no new field exists. Say so
+          // instead of counting a creation that did not happen. The boundary write below
+          // still runs: it shares the same key, so it replays a success and genuinely
+          // retries a boundary the earlier row failed to persist.
+          const committedFieldId = String(fieldId);
+          if (createdFieldIds.has(committedFieldId)) {
+            warnings.push(`"${pf.field_name}": identical to an earlier row in this file (same customer, name, boundary and acres); imported once, not twice.`);
+          } else {
+            createdFieldIds.add(committedFieldId);
+            // save_field has COMMITTED. Count the row as created before anything else can fail, so
+            // a later boundary or override failure still reports the field as existing.
+            created++;
+          }
           // Persist the boundary via the server-authoritative acreage RPC — it measures the
           // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
           // legacy boundary/centroid in sync, and sets measured_acres (the billable default).

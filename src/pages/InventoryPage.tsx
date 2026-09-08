@@ -16,6 +16,7 @@ import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useUnresolvedIntent, UNRESOLVED_INTENT_MESSAGE } from '../hooks/useUnresolvedIntent';
 import {
   UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
@@ -95,6 +96,11 @@ export default function InventoryPage() {
   const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
   const retireIdem = useIdempotencyKey('retire_inventory_item', profile?.id || '');
   const createHoldIdem = useIdempotencyKey('create_inventory_hold', profile?.id || '');
+  // Both of these RPCs replay on the key alone, and both live behind a modal that
+  // stays open and editable when a response is lost. Without these, editing the
+  // form after an unknown outcome mints a new key and applies the work twice.
+  const adjustUnresolved = useUnresolvedIntent();
+  const holdUnresolved = useUnresolvedIntent();
   const releaseHoldIdem = useIdempotencyKey('release_inventory_hold', profile?.id || '');
   const manualAddIdem = useIdempotencyKey('manual_inventory_add', profile?.id || '');
   const { toast } = useToast();
@@ -412,22 +418,34 @@ export default function InventoryPage() {
     if (!profile) return;
     const qty = parseFloat(holdQty);
     const scope = holdIntentScope(force, forceReason);
+    // A hold whose outcome was never confirmed may already be reserving stock.
+    // Editing the product, customer, quantity or expiry would mint a new key and
+    // reserve it a SECOND time, so refuse the edited submission — not the retry.
+    if (holdUnresolved.refuseOnce(scope)) throw new Error(UNRESOLVED_INTENT_MESSAGE);
     const idemKey = createHoldIdem.getKeyFor(scope);
-    const { data, error } = await supabase.rpc('create_inventory_hold', {
-      p_product_id: holdProductId,
-      p_customer_id: (holdCustomerId || null) as string,
-      p_quantity: qty,
-      p_hold_type: 'manual',
-      p_expires_at: (holdExpires || null) as string,
-      p_notes: (holdNotes || null) as string,
-      p_performed_by: profile.id,
-      p_force: force,
-      p_force_reason: forceReason ?? undefined,
-      p_idempotency_key: idemKey,
-    });
-    if (error) throw error;
-    assertRpcResult(data, 'create_inventory_hold');
+    try {
+      const { data, error } = await supabase.rpc('create_inventory_hold', {
+        p_product_id: holdProductId,
+        p_customer_id: (holdCustomerId || null) as string,
+        p_quantity: qty,
+        p_hold_type: 'manual',
+        p_expires_at: (holdExpires || null) as string,
+        p_notes: (holdNotes || null) as string,
+        p_performed_by: profile.id,
+        p_force: force,
+        p_force_reason: forceReason ?? undefined,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      assertRpcResult(data, 'create_inventory_hold');
+    } catch (holdError) {
+      // INSUFFICIENT_HOLD_INVENTORY is a definitive server refusal, so it clears
+      // rather than freezes — markIfUncertain classifies it, this catch does not.
+      holdUnresolved.markIfUncertain(scope, holdError);
+      throw holdError;
+    }
     createHoldIdem.resetKeyFor(scope);
+    holdUnresolved.clear();
   };
 
   const handleCreateHold = async () => {
@@ -720,6 +738,10 @@ export default function InventoryPage() {
         // reopened dialog on a DIFFERENT item cannot replay this receipt and
         // report a stock change that never happened.
         const scope = `adjust:${fingerprintIntentPayload([selectedId, qty, adjustNote || null])}`;
+        // An earlier adjustment whose outcome was never confirmed may already have
+        // moved this stock. Changing the quantity or note would mint a new key and
+        // apply a SECOND delta on top of it, so refuse the edit rather than the retry.
+        if (adjustUnresolved.refuseOnce(scope)) throw new Error(UNRESOLVED_INTENT_MESSAGE);
         const idemKey = adjustIdem.getKeyFor(scope);
         const { data, error } = await supabase.rpc('adjust_inventory', {
           p_inventory_id: selectedId,
@@ -730,10 +752,12 @@ export default function InventoryPage() {
         });
         if (error) {
           if (getIdempotencyBindingRejection(error)) adjustIdem.resetKeyFor(scope);
+          adjustUnresolved.markIfUncertain(scope, error);
           throw error;
         }
         assertRpcResult(data, 'adjust_inventory');
         adjustIdem.resetKeyFor(scope);
+        adjustUnresolved.clear();
       },
       toast,
       successMessage: `Adjusted by ${qty} units`,

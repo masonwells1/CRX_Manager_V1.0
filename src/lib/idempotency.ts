@@ -56,6 +56,36 @@ export function fingerprintIntentPayload(value: unknown): string {
   return hash.toString(16).padStart(16, '0');
 }
 
+/**
+ * Async, collision-resistant equivalent of fingerprintIntentPayload.
+ *
+ * fingerprintIntentPayload walks every UTF-8 byte doing 64-bit BigInt
+ * multiplications on the UI thread. That is fine for a small form payload, but
+ * a bulk import fingerprints a COMPLETE field geometry per row, and a large
+ * multi-part boundary near the 25 MB import ceiling froze the browser for
+ * seconds before the request was even sent. SubtleCrypto hashes natively and
+ * off the main thread, and SHA-256 also retires the 64-bit collision caveat
+ * documented on fingerprintIntentPayload for key-only RPCs.
+ *
+ * Falls back to the synchronous FNV digest only where SubtleCrypto is absent
+ * (a non-secure context, or a test environment without webcrypto). The two
+ * digests are deliberately prefixed so they can never be mistaken for each
+ * other: a scope must not change meaning based on which branch produced it.
+ */
+export async function digestIntentPayload(value: unknown): Promise<string> {
+  const encoded = new TextEncoder().encode(JSON.stringify(value) ?? 'undefined');
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return `f${fingerprintIntentPayload(value)}`;
+  try {
+    const digest = await subtle.digest('SHA-256', encoded);
+    return `s${Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')}`;
+  } catch {
+    // A refusal here is environmental, never payload-dependent, so the fallback
+    // stays stable for the life of the page and a retry still matches its key.
+    return `f${fingerprintIntentPayload(value)}`;
+  }
+}
+
 type IdempotencyMismatchDetail = {
   operation?: string;
   result?: Record<string, unknown>;

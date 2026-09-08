@@ -40,15 +40,34 @@ describe('gauntlet caller-side safety guards', () => {
   it('keeps bulk field-import RPC intents stable per imported row and refuses re-entry', () => {
     const component = source('src/components/fields/BulkFieldImport.tsx');
     expect(component).toContain('uploadInFlightRef.current');
-    // The scope must bind the row's CONTENT, not just its position and name.
-    // A lost save_field response keeps the key cached while the modal stays
-    // mounted, so a position-only scope would let a later import of different
-    // geometry replay the earlier field_id and overwrite that field.
+    // The scope must bind the row's CONTENT, and ONLY its content.
+    //
+    // A lost save_field response keeps the key cached while the modal stays mounted,
+    // so a scope that did not cover the geometry would let a later import of
+    // different geometry replay the earlier field_id and overwrite that field. That
+    // is why content is in the scope, and it still is.
+    //
+    // Position came OUT. `fieldIndex` renumbers whenever an earlier row is dropped as
+    // invalid, and it does not survive re-importing one corrected row in a new file
+    // at all. So a position-bearing scope minted a FRESH key for an unchanged row on
+    // exactly the retry the retained key exists to serve, and save_field replayed on
+    // the key alone would have created the field a second time. Content identity is
+    // stable across both. Deny the old form outright so it cannot creep back.
     expect(component).toContain(
-      'const intentScope = `import:${fieldIndex}:${pf.customer_id}:${pf.field_name}:${fingerprintIntentPayload([',
+      'const intentScope = `import:${pf.customer_id}:${pf.field_name}:${await digestIntentPayload([',
     );
+    expect(component).not.toContain('import:${fieldIndex}');
     expect(component).toContain('pf.full_boundary_geojson,');
     expect(component).toContain('pf.stated_acres ?? null,');
+    // digestIntentPayload, not fingerprintIntentPayload: the payload hashed here is a
+    // complete field boundary, and the synchronous 64-bit hash is neither
+    // collision-resistant nor cheap enough to run on the UI thread for one. A
+    // collision between two different boundaries would replay the wrong field_id.
+    expect(component).not.toContain('fingerprintIntentPayload(');
+    // Two byte-identical rows in one file now share a scope on purpose, so the count
+    // of created fields has to come from the committed ids, not from the loop.
+    expect(component).toContain('const createdFieldIds = new Set<string>();');
+    expect(component).toContain('if (createdFieldIds.has(committedFieldId)) {');
     expect(component).toContain('saveFieldIdem.getKeyFor(intentScope)');
     expect(component).toContain('setBoundaryIdem.getKeyFor(intentScope)');
     expect(component).toContain('setOverrideAcresIdem.getKeyFor(intentScope)');
