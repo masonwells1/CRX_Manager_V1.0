@@ -1855,6 +1855,34 @@ try {
     toolName: "apply_patch",
     toolInput: { patch: "*** Update File: .codex/hooks/production-action-guard.mjs\n+weaken()" },
   }).blocked, true, "patch whose destination is the guard itself is denied");
+  const rawProtectedPatch = "*** Begin Patch\n*** Update File: .codex/hooks/production-action-guard.mjs\n@@\n-old\n+weaken()\n*** End Patch";
+  const rawDocumentationPatch = "*** Begin Patch\n*** Update File: docs/reference/agent-guardrails.md\n@@\n-old\n+The protected destination is .codex/hooks/production-action-guard.mjs.\n*** End Patch";
+  assert.equal(evaluateProductionAction({
+    toolName: "apply_patch",
+    toolInput: rawProtectedPatch,
+  }).blocked, true, "raw-string apply_patch cannot rewrite the production harness");
+  assert.equal(evaluateProductionAction({
+    toolName: "apply_patch",
+    toolInput: rawDocumentationPatch,
+  }).blocked, false, "raw-string documentation patch mentioning a protected path remains allowed");
+  const rawProtectedEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({ tool_name: "apply_patch", tool_input: rawProtectedPatch }),
+    encoding: "utf8",
+  });
+  assert.equal(rawProtectedEntrypoint.error, undefined, "raw-string protected patch entrypoint starts without a process error");
+  assert.equal(rawProtectedEntrypoint.status, 0, "raw-string protected patch entrypoint exits cleanly after denial");
+  assert.equal(rawProtectedEntrypoint.stderr, "", "raw-string protected patch entrypoint emits no stderr");
+  const rawProtectedDecision = JSON.parse(rawProtectedEntrypoint.stdout);
+  assert.equal(rawProtectedDecision.hookSpecificOutput?.permissionDecision, "deny", "raw-string protected patch is denied through the JSON/stdin entrypoint");
+  assert.match(String(rawProtectedDecision.hookSpecificOutput?.permissionDecisionReason || ""), /production\/review harness is a security boundary/, "raw-string protected patch reaches the harness-boundary denial rather than an unexpected guard error");
+  const rawDocumentationEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({ tool_name: "apply_patch", tool_input: rawDocumentationPatch }),
+    encoding: "utf8",
+  });
+  assert.equal(rawDocumentationEntrypoint.error, undefined, "raw-string documentation patch entrypoint starts without a process error");
+  assert.equal(rawDocumentationEntrypoint.status, 0, "raw-string documentation patch entrypoint exits cleanly");
+  assert.equal(rawDocumentationEntrypoint.stderr, "", "raw-string documentation patch entrypoint emits no stderr");
+  assert.equal(rawDocumentationEntrypoint.stdout, "", "raw-string documentation patch remains allowed through the JSON/stdin entrypoint");
 
   // ── Codex round-4 regressions (2026-07-13) ────────────────────────────────
   // R4-1: comment markers inside string literals cannot hide a mutation.

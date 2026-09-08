@@ -1443,7 +1443,8 @@ export function evaluateProductionAction({
   // Classify patch payloads by their DESTINATION headers, not the whole body —
   // documentation patches legitimately mention guard/proof paths in prose
   // (Codex round-5 false positive).
-  const patchDestinations = [toolInput.patch, toolInput.diff, toolInput.input, toolInput.changes]
+  const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
+  const patchDestinations = [rawPatchBody, toolInput.patch, toolInput.diff, toolInput.input, toolInput.changes]
     .flatMap((payloadText) => extractPatchDestinations(payloadText));
   if ([...pathCandidates, ...patchDestinations].some((candidate) => reviewProofPathMentioned(candidate))) {
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
