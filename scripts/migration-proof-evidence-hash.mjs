@@ -68,11 +68,11 @@ function decodeTrackedGitPaths(output) {
   return text ? text.slice(0, -1).split('\0') : [];
 }
 
-export function trackedEvidencePaths(root, prefixes, predicate, { execute = execFileSync } = {}) {
+export function reviewableEvidencePaths(root, prefixes, predicate, { execute = execFileSync } = {}) {
   const rootReal = realpathSync(root);
   let output;
   try {
-    output = execute(fixedGitExecutable(), ['--no-replace-objects', '-C', root, 'ls-files', '-z', '--', ...prefixes], {
+    output = execute(fixedGitExecutable(), ['--no-replace-objects', '-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...prefixes], {
       encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: GIT_CALL_TIMEOUT_MS,
       windowsHide: true, shell: false, env: protectedGitEnv(), stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -85,7 +85,7 @@ export function trackedEvidencePaths(root, prefixes, predicate, { execute = exec
       return prefixes.flatMap((prefix) => safeWalk(rootReal, path.join(root, prefix), predicate)
         .map((file) => normal(path.relative(root, file))));
     }
-    throw new Error(`could not enumerate trusted Git-tracked migration-proof evidence: ${error.message || error}`);
+    throw new Error(`could not enumerate trusted Git reviewable migration-proof evidence: ${error.message || error}`);
   }
   return decodeTrackedGitPaths(output).map(normal).map((relative) => {
     if (!relative || !prefixes.some((prefix) => relative.startsWith(prefix))) {
@@ -114,11 +114,12 @@ function collectPaths(root, stateDir) {
     'scripts/rpc-call-site-matcher.mjs',
     'scripts/migration-proof-evidence-hash.mjs',
     'scripts/migration-proof-reviewer-launch.mjs',
+    '.claude/hooks/protected-git.mjs',
     normal(path.join(relativeStateDir, 'applied-migrations.json')),
   ]);
-  for (const file of trackedEvidencePaths(root, ['supabase/migrations/'], (relative) => relative.endsWith('.sql'))) inputs.add(file);
-  for (const file of trackedEvidencePaths(root, ['src/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
-  for (const file of trackedEvidencePaths(root, ['supabase/functions/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
+  for (const file of reviewableEvidencePaths(root, ['supabase/migrations/'], (relative) => relative.endsWith('.sql'))) inputs.add(file);
+  for (const file of reviewableEvidencePaths(root, ['src/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
+  for (const file of reviewableEvidencePaths(root, ['supabase/functions/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
   return { rootReal, paths: [...inputs].sort() };
 }
 

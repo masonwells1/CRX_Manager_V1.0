@@ -38,7 +38,7 @@ import {
   codexReviewerEnvironment,
   safeReviewCaptureText,
 } from './write-codex-push-proof.mjs';
-import { fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from '../.claude/hooks/protected-git.mjs';
+import { AUTHORITATIVE_MAIN_POLICY, authoritativeMainCommit, fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from '../.claude/hooks/protected-git.mjs';
 import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.mjs';
 import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
@@ -95,12 +95,14 @@ const REQUIRED_REVIEWERS = ['rls-security-reviewer', 'migration-drift-reviewer']
 // being auto-loaded as candidate-controlled instructions.
 function trustedReviewerPolicy() {
   const git = fixedGitExecutable();
-  const base = spawnSync(git, ['--no-replace-objects', 'rev-parse', 'origin/main^{commit}'], {
+  const commit = authoritativeMainCommit();
+  const localBase = spawnSync(git, ['--no-replace-objects', 'rev-parse', 'origin/main^{commit}'], {
     cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
     env: protectedGitEnv(), timeout: GIT_CALL_TIMEOUT_MS,
   });
-  const commit = String(base.stdout || '').trim();
-  if (base.status !== 0 || !/^[a-f0-9]{40}$/i.test(commit)) throw new Error('could not resolve protected origin/main reviewer policy');
+  if (localBase.status !== 0 || String(localBase.stdout || '').trim().toLowerCase() !== commit) {
+    throw new Error(`local origin/main does not match authoritative GitHub main (${commit})`);
+  }
   const containsBase = spawnSync(git, ['--no-replace-objects', 'merge-base', '--is-ancestor', commit, 'HEAD'], {
     cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
     env: protectedGitEnv(), timeout: GIT_CALL_TIMEOUT_MS,
@@ -607,6 +609,7 @@ for (const name of names) {
     timestamp: ts,
     reviewers: REQUIRED_REVIEWERS,
     reviewerEvidence: 'each reviewer charter executed by the trusted Codex CLI with a terminal machine verdict; see codex-review-mig-*-capture.txt',
+    reviewerPolicyAuthority: AUTHORITATIVE_MAIN_POLICY,
     reviewerPolicyCommit: reviewerPolicy.commit,
     protectedBaseCommit: reviewerPolicy.commit,
     findings: 'clean',

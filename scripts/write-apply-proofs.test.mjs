@@ -17,6 +17,8 @@ test('proof revocation occurs before the wrapper resolves a reviewer executable'
   assert.ok(revocation >= 0, 'the wrapper revokes stale proof files');
   assert.ok(executableLookup >= 0, 'the wrapper still resolves the trusted reviewer executable');
   assert.ok(revocation < executableLookup, 'stale proofs are revoked before a fallible review setup step');
+  assert.ok(source.includes('authoritativeMainCommit()'), 'reviewer policy is resolved from the fixed authoritative GitHub remote');
+  assert.ok(source.includes('local origin/main does not match authoritative GitHub main'), 'a stale or rewritten local tracking ref cannot supply reviewer policy');
   const reviewerCall = source.indexOf('const { verdict, error } = runCodexCharter');
   assert.ok(unresolvedExposureGate >= 0 && unresolvedExposureGate < reviewerCall,
     'unresolved application RPC exposure blocks proof production before a reviewer process starts');

@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck, stripCommentsQuoteAware } from "./live-testdata-lib.mjs";
 import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
-import { fixedGitExecutable } from "./protected-git.mjs";
+import { AUTHORITATIVE_MAIN_POLICY, fixedGitExecutable } from "./protected-git.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -174,6 +174,7 @@ function writeProof(stateDir, query, extra = {}) {
     queryHash: sha(query),
     evidenceHash: proofEvidenceHash(stateDir, protectedBaseCommit),
     reviewerPolicyCommit: protectedBaseCommit,
+    reviewerPolicyAuthority: AUTHORITATIVE_MAIN_POLICY,
     protectedBaseCommit,
     ...extra,
   }));
@@ -320,17 +321,17 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeProof(stateDir, BENIGN_SQL, { reviewerPolicyCommit: undefined });
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "reviewer proof missing its protected policy commit is denied");
-    ok(r.stdout.includes('reviewerPolicyCommit does not match'), "missing reviewerPolicyCommit refusal names the protected policy binding");
+    ok(r.stdout.includes('reviewerPolicyCommit'), "missing reviewerPolicyCommit refusal names the protected policy binding");
     writeProof(stateDir, BENIGN_SQL, { reviewerPolicyCommit: "0".repeat(40) });
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "reviewer proof bound to a different protected policy commit is denied");
-    ok(r.stdout.includes('reviewerPolicyCommit does not match'), "mismatched reviewerPolicyCommit refusal names the protected policy binding");
+    ok(r.stdout.includes('protectedBaseCommit does not match reviewerPolicyCommit'), "mismatched reviewerPolicyCommit refusal names the protected policy binding");
     writeProof(stateDir, BENIGN_SQL);
 
     writeProof(stateDir, BENIGN_SQL, { protectedBaseCommit: undefined });
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "reviewer proof missing its protected base commit is denied");
-    ok(r.stdout.includes('protectedBaseCommit does not match'), "missing protectedBaseCommit refusal names the protected base binding");
+    ok(r.stdout.includes('protectedBaseCommit does not match reviewerPolicyCommit'), "missing protectedBaseCommit refusal names the protected base binding");
     writeProof(stateDir, BENIGN_SQL);
 
     writeProof(stateDir, BENIGN_SQL, { queryHash: undefined });

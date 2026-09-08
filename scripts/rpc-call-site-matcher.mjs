@@ -36,6 +36,29 @@ function isRpcAccess(node) {
   return ts.isElementAccessExpression(node) && staticString(node.argumentExpression) === 'rpc';
 }
 
+function isDynamicComputedCall(node) {
+  return ts.isElementAccessExpression(node)
+    && ts.isIdentifier(unwrapExpression(node.expression))
+    && /^(?:client|supabase|db)$/i.test(unwrapExpression(node.expression).text)
+    && staticString(node.argumentExpression) === null
+    && directCallForAccess(node) !== null;
+}
+
+function isReflectGetCall(node) {
+  return ts.isCallExpression(node)
+    && ts.isPropertyAccessExpression(node.expression)
+    && ts.isIdentifier(node.expression.expression)
+    && node.expression.expression.text === 'Reflect'
+    && node.expression.name.text === 'get';
+}
+
+function isIndirectReflectGetCall(node) {
+  return isReflectGetCall(node)
+    && ts.isIdentifier(unwrapExpression(node.arguments[0]))
+    && /^(?:client|supabase|db)$/i.test(unwrapExpression(node.arguments[0]).text)
+    && directCallForAccess(node) !== null;
+}
+
 function directCallForAccess(access) {
   let parent = access.parent;
   while (
@@ -76,6 +99,8 @@ function snapshotRpcUses(snapshot) {
           const routine = staticString(call.arguments[0]);
           uses.push({ file, text, index: node.getStart(source), routine, unresolved: routine === null });
         }
+      } else if (isDynamicComputedCall(node) || isIndirectReflectGetCall(node)) {
+        addUnresolved(node);
       } else if (
         ts.isBindingElement(node)
         && ts.isObjectBindingPattern(node.parent)

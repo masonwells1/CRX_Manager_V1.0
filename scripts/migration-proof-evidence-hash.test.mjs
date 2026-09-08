@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { captureMigrationProofEvidence, trackedEvidencePaths } from './migration-proof-evidence-hash.mjs';
+import { captureMigrationProofEvidence, reviewableEvidencePaths } from './migration-proof-evidence-hash.mjs';
 import { unresolvedApplicationRpcCallSites } from './rpc-call-site-matcher.mjs';
 
 test('the proof snapshot retains every repository source used by the evidence renderer', () => {
@@ -17,22 +17,38 @@ test('the proof snapshot retains every repository source used by the evidence re
   assert.equal(snapshot.has('docs/reference/migration-history.md'), true);
   assert.equal(snapshot.has('src/types/index.ts'), true);
   assert.equal(snapshot.has('scripts/rpc-call-site-matcher.mjs'), true);
+  assert.equal(snapshot.has('.claude/hooks/protected-git.mjs'), true);
   assert.ok(snapshot.paths('supabase/migrations/', (relative) => relative.endsWith('.sql')).length > 0);
   assert.ok(snapshot.paths('src/', (relative) => /\.(?:ts|tsx)$/.test(relative)).length > 0);
   assert.ok(snapshot.paths('supabase/functions/', (relative) => /\.(?:ts|tsx)$/.test(relative)).length > 0);
   assert.deepEqual(unresolvedApplicationRpcCallSites(snapshot), [], 'current production source has no unresolvable dynamic RPC name calls');
 });
 
-test('the proof snapshot excludes untracked application files', () => {
+test('the proof snapshot includes non-ignored untracked application files', () => {
   const root = process.cwd();
   const probeDir = mkdtempSync(path.join(root, 'src', '.migration-proof-untracked-'));
   const relativeProbe = path.relative(root, path.join(probeDir, 'scratch.ts')).replaceAll('\\', '/');
   try {
     writeFileSync(path.join(probeDir, 'scratch.ts'), "client.rpc('unreviewed_local_scratch')", 'utf8');
     const snapshot = captureMigrationProofEvidence({ projectDir: root, stateDir: path.join(root, '.claude', 'session-state') });
-    assert.equal(snapshot.paths('src/').includes(relativeProbe), false);
+    assert.equal(snapshot.paths('src/').includes(relativeProbe), true);
   } finally {
     rmSync(probeDir, { recursive: true, force: true });
+  }
+});
+
+test('changing the protected Git boundary invalidates migration proof evidence', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'migration-proof-protected-git-'));
+  try {
+    const helper = path.join(root, '.claude', 'hooks', 'protected-git.mjs');
+    mkdirSync(path.dirname(helper), { recursive: true });
+    writeFileSync(helper, 'export const policy = "first";\n', 'utf8');
+    const first = captureMigrationProofEvidence({ projectDir: root }).evidenceHash;
+    writeFileSync(helper, 'export const policy = "second";\n', 'utf8');
+    const second = captureMigrationProofEvidence({ projectDir: root }).evidenceHash;
+    assert.notEqual(second, first);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -55,7 +71,7 @@ test('non-Git test fixtures retain project-relative evidence paths', () => {
   }
 });
 
-test('tracked evidence uses the fixed Git boundary and rejects malformed or timed-out output', () => {
+test('reviewable evidence uses the fixed Git boundary and rejects malformed or timed-out output', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'migration-proof-trusted-git-'));
   const originalGitDir = process.env.GIT_DIR;
   try {
@@ -67,20 +83,23 @@ test('tracked evidence uses the fixed Git boundary and rejects malformed or time
       invocation = { binary, args, options };
       return Buffer.from('src/caller.ts\0', 'utf8');
     };
-    assert.deepEqual(trackedEvidencePaths(root, ['src/'], () => true, { execute }), ['src/caller.ts']);
+    assert.deepEqual(reviewableEvidencePaths(root, ['src/'], () => true, { execute }), ['src/caller.ts']);
     assert.match(invocation.binary, /git(?:\.exe)?$/i);
     assert.deepEqual(invocation.args.slice(0, 2), ['--no-replace-objects', '-C']);
+    assert.ok(invocation.args.includes('--cached'));
+    assert.ok(invocation.args.includes('--others'));
+    assert.ok(invocation.args.includes('--exclude-standard'));
     assert.equal(invocation.options.timeout, 1500);
     assert.equal(invocation.options.env.GIT_DIR, undefined);
     assert.throws(
-      () => trackedEvidencePaths(root, ['src/'], () => true, { execute: () => Buffer.from([0xff, 0x00]) }),
+      () => reviewableEvidencePaths(root, ['src/'], () => true, { execute: () => Buffer.from([0xff, 0x00]) }),
       /not valid UTF-8/,
     );
     const timeout = new Error('timed out');
     timeout.code = 'ETIMEDOUT';
     assert.throws(
-      () => trackedEvidencePaths(root, ['src/'], () => true, { execute: () => { throw timeout; } }),
-      /could not enumerate trusted Git-tracked migration-proof evidence/,
+      () => reviewableEvidencePaths(root, ['src/'], () => true, { execute: () => { throw timeout; } }),
+      /could not enumerate trusted Git reviewable migration-proof evidence/,
     );
   } finally {
     if (originalGitDir === undefined) delete process.env.GIT_DIR;

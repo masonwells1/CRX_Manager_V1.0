@@ -31,7 +31,7 @@ import { sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.m
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
 import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
-import { fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from "./protected-git.mjs";
+import { AUTHORITATIVE_MAIN_POLICY, fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from "./protected-git.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
@@ -879,30 +879,15 @@ export function evaluateMigrationApply({
   const MAX_AGE_MS = PROOF_MAX_AGE_MS;
 
   let validProof = null;
+  let validProofEvidenceHash = null;
   let contentMismatchedProof = null;
   let evidenceMismatchedProof = null;
-  let activeEvidenceHash = null;
-  let protectedReviewerPolicyCommit = reviewerPolicyCommit ?? null;
-  if (reviewerPolicyCommit === undefined) try {
-    protectedReviewerPolicyCommit = execFileSync(fixedGitExecutable(), ["--no-replace-objects", "rev-parse", "origin/main^{commit}"], {
-      cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], env: protectedGitEnv(),
-    }).trim();
-  } catch { /* an unverifiable protected policy never authorizes an apply */ }
+  // The proof producer obtains this commit from the literal authoritative GitHub
+  // remote, never from local origin config. The apply side binds the exact same
+  // SHA into both proof fields and the evidence hash, then verifies this checkout
+  // contains that immutable commit. It deliberately does NOT re-read a mutable
+  // local remote-tracking ref while deciding whether the recorded proof is valid.
   const requiresProtectedBase = reviewerPolicyCommit !== null;
-  let protectedBaseIsCurrent = !requiresProtectedBase;
-  if (requiresProtectedBase && /^[a-f0-9]{40}$/i.test(String(protectedReviewerPolicyCommit || ""))) try {
-    execFileSync(fixedGitExecutable(), ["--no-replace-objects", "merge-base", "--is-ancestor", protectedReviewerPolicyCommit, "HEAD"], {
-      cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], env: protectedGitEnv(),
-    });
-    protectedBaseIsCurrent = true;
-  } catch { /* a stale or detached candidate never authorizes a proof */ }
-  try {
-    activeEvidenceHash = migrationProofEvidenceHash({
-      projectDir: activeProofRoot,
-      stateDir: activeProofStateDir,
-      protectedBaseCommit: protectedReviewerPolicyCommit,
-    });
-  } catch { /* unreadable active evidence is never a valid proof */ }
   const freshCleanProofNames = [];
   for (const dir of authorizedProofDirs) {
     if (validProof) break;
@@ -970,13 +955,28 @@ export function evaluateMigrationApply({
             // migration-only hash would let any of those inputs move after a
             // clean verdict. This is required in every mode: Mason's presence
             // is authorization, not a reason to accept stale evidence.
-            const expectedEvidenceHash = activeEvidenceHash;
-            const protectedBindingReason = !requiresProtectedBase ? null
-              : !protectedReviewerPolicyCommit ? 'the protected reviewer policy commit is unavailable'
-                : !protectedBaseIsCurrent ? 'the protected reviewer policy commit is not an ancestor of this checkout'
-                  : data.reviewerPolicyCommit !== protectedReviewerPolicyCommit ? 'reviewerPolicyCommit does not match the protected reviewer policy commit'
-                    : data.protectedBaseCommit !== protectedReviewerPolicyCommit ? 'protectedBaseCommit does not match the protected reviewer policy commit'
-                      : null;
+            const proofPolicyCommit = String(data.reviewerPolicyCommit || '').toLowerCase();
+            let protectedBindingReason = !requiresProtectedBase ? null
+              : data.reviewerPolicyAuthority !== AUTHORITATIVE_MAIN_POLICY ? 'reviewerPolicyAuthority does not name the fixed authoritative GitHub main policy'
+                : !/^[a-f0-9]{40}$/.test(proofPolicyCommit) ? 'reviewerPolicyCommit is not a full authoritative policy commit SHA'
+                : String(data.protectedBaseCommit || '').toLowerCase() !== proofPolicyCommit ? 'protectedBaseCommit does not match reviewerPolicyCommit'
+                  : reviewerPolicyCommit !== undefined && proofPolicyCommit !== String(reviewerPolicyCommit).toLowerCase() ? 'reviewerPolicyCommit does not match the required protected reviewer policy commit'
+                    : null;
+            if (requiresProtectedBase && !protectedBindingReason) try {
+              execFileSync(fixedGitExecutable(), ["--no-replace-objects", "merge-base", "--is-ancestor", proofPolicyCommit, "HEAD"], {
+                cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], env: protectedGitEnv(),
+              });
+            } catch {
+              protectedBindingReason = 'the protected reviewer policy commit is not an ancestor of this checkout';
+            }
+            let expectedEvidenceHash = null;
+            try {
+              expectedEvidenceHash = migrationProofEvidenceHash({
+                projectDir: activeProofRoot,
+                stateDir: activeProofStateDir,
+                protectedBaseCommit: requiresProtectedBase ? proofPolicyCommit : null,
+              });
+            } catch { /* unreadable active evidence is never a valid proof */ }
             if (!data.evidenceHash || !expectedEvidenceHash || data.evidenceHash !== expectedEvidenceHash || protectedBindingReason) {
               if (!evidenceMismatchedProof) evidenceMismatchedProof = {
                 file: f, dir, data, expectedEvidenceHash, protectedBindingReason,
@@ -984,6 +984,7 @@ export function evaluateMigrationApply({
               continue;
             }
             validProof = { file: f, dir, data };
+            validProofEvidenceHash = expectedEvidenceHash;
             break;
           }
         }
@@ -1073,7 +1074,7 @@ export function evaluateMigrationApply({
         let candidate = null;
         try { candidate = JSON.parse(readFileSync(path.join(dir, `codex-review-mig-${safeName}.json`), "utf8")); } catch { continue; }
         if (!candidate) continue;
-        const candidateEvidenceHash = activeEvidenceHash;
+        const candidateEvidenceHash = validProofEvidenceHash;
         if (!codexProof) {
           codexProof = candidate;
           codexProofEvidenceHash = candidateEvidenceHash;

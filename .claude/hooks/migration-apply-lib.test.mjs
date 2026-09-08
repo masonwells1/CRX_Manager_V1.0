@@ -23,6 +23,7 @@ import path from "node:path";
 import { evaluateMigrationApply, normalizeMigName, resolveMigrationSource, originFetchAgeMs } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
+import { AUTHORITATIVE_MAIN_POLICY } from "./protected-git.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // .claude/hooks/ → repo root → scripts/
@@ -38,7 +39,7 @@ function denies(verdict, fragment, m) {
   pass++;
 }
 function allows(verdict, m) {
-  assert.equal(verdict.decision, "allow", `${m} — expected allow, got block: ${String(verdict.reason).slice(0, 300)}`);
+  assert.equal(verdict.decision, "allow", `${m} — expected allow, got block: ${String(verdict.reason)}`);
   pass++;
 }
 
@@ -198,6 +199,7 @@ function stampFixtureReviewerPolicy(root) {
     if (!existsSync(file)) continue;
     const proof = JSON.parse(readFileSync(file, "utf8"));
     proof.reviewerPolicyCommit = reviewerPolicyCommit;
+    proof.reviewerPolicyAuthority = AUTHORITATIVE_MAIN_POLICY;
     proof.protectedBaseCommit = reviewerPolicyCommit;
     writeFileSync(file, JSON.stringify(proof), "utf8");
   }
