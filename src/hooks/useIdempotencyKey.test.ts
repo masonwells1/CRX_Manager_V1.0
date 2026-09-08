@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useIdempotencyKey } from './useIdempotencyKey';
+import { fingerprintIntentPayload } from '../lib/idempotency';
 
 describe('useIdempotencyKey', () => {
   it('returns the same key on repeated getKey calls (retry-safe)', () => {
@@ -155,5 +156,33 @@ describe('useIdempotencyKey', () => {
     let newKey: string;
     act(() => { newKey = result.current.getKey(); });
     expect(newKey!).not.toBe(attemptKey!);
+  });
+
+  // Reproduces the BulkFieldImport P1. The modal stays mounted and its scoped
+  // keys survive handleClose, so an unresolved save_field key is still cached
+  // when a later import runs. A scope built only from row position, customer
+  // and field name would hand that stale key to different content, and the
+  // server would replay the earlier field_id over the requested new field.
+  it('mints a fresh key when a payload-bound scope changes, and replays when it does not', () => {
+    const { result } = renderHook(() => useIdempotencyKey('save_field', 'user-1'));
+    const scopeFor = (boundary: unknown) =>
+      `import:0:cust-1:North 40:${fingerprintIntentPayload([{ field_name: 'North 40' }, boundary, null])}`;
+
+    const originalBoundary = { type: 'Polygon', coordinates: [[[0, 0], [0, 1], [1, 1], [0, 0]]] };
+    const differentBoundary = { type: 'Polygon', coordinates: [[[9, 9], [9, 8], [8, 8], [9, 9]]] };
+
+    // First attempt; its response is lost, so the key is deliberately NOT reset.
+    let lostKey: string;
+    act(() => { lostKey = result.current.getKeyFor(scopeFor(originalBoundary)); });
+
+    // A genuine retry of the same row must reuse the key so the server replays.
+    let retryKey: string;
+    act(() => { retryKey = result.current.getKeyFor(scopeFor(originalBoundary)); });
+    expect(retryKey!).toBe(lostKey!);
+
+    // A later import of DIFFERENT geometry at the same row must not.
+    let newIntentKey: string;
+    act(() => { newIntentKey = result.current.getKeyFor(scopeFor(differentBoundary)); });
+    expect(newIntentKey!).not.toBe(lostKey!);
   });
 });

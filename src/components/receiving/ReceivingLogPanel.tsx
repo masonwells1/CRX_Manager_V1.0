@@ -21,6 +21,7 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { supabase, sanitizeError, assertRpcResult } from '../../lib/db';
+import { getIdempotencyBindingRejection } from '../../lib/idempotency';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { Sentry } from '../../lib/sentry';
 import HelpTip from '../ui/HelpTip';
@@ -185,18 +186,57 @@ export default function ReceivingLogPanel() {
     await runCriticalAction({
       action: async () => {
         const ids = selectedRows.map((r) => r.id);
+        const completedScopes: string[] = [];
         // C5 fix: must call reverse_receiving_record() per item to undo inventory changes.
         // Direct .delete() bypasses the inventory rollback and leaves phantom stock.
-        for (const id of ids) {
-          const idemKey = reverseRecIdem.getKey();
-          const { data, error } = await supabase.rpc('reverse_receiving_record', {
-            p_record_id: id,
-            p_reason: 'Bulk deleted from receiving log',
-            p_idempotency_key: idemKey,
-          });
-          if (error) throw new Error(`Failed to reverse record ${id}: ${error.message}`);
-          assertRpcResult(data, 'reverse_receiving_record');
-          reverseRecIdem.resetKey();
+        try {
+          for (const id of ids) {
+            const reason = 'Bulk deleted from receiving log';
+            const intentScope = JSON.stringify({ recordId: id, reason });
+            const idemKey = reverseRecIdem.getKeyFor(intentScope);
+            const { data, error } = await supabase.rpc('reverse_receiving_record', {
+              p_record_id: id,
+              p_reason: reason,
+              p_idempotency_key: idemKey,
+            });
+            if (error) {
+              if (getIdempotencyBindingRejection(error)) {
+                reverseRecIdem.resetKeyFor(intentScope);
+              }
+              throw new Error(
+                `Reversed ${completedScopes.length} of ${ids.length} record(s), then failed on record ${id}: ${error.message}`
+              );
+            }
+            assertRpcResult(data, 'reverse_receiving_record');
+            completedScopes.push(intentScope);
+          }
+        } catch (bulkErr) {
+          // Each row commits its own inventory reversal independently, so a
+          // refusal partway through (closed accounting period, active vendor
+          // bill) leaves the EARLIER rows already reversed. The refresh only
+          // ran from onSuccess, so those rows stayed on screen as if they still
+          // existed. Refresh here too, so the log reflects what actually
+          // committed. Selection and the completed keys are left intact on
+          // purpose: an unchanged retry replays the committed rows from their
+          // stored receipts and continues at the row that failed.
+          // Awaited in its own non-throwing block: an un-awaited refresh let
+          // runCriticalAction finish and re-enable the controls while the reversed
+          // rows were still on screen, and a refresh rejection became an unhandled
+          // one that replaced the real reversal error.
+          if (completedScopes.length > 0) {
+            try {
+              await fetchData();
+            } catch (refreshErr) {
+              Sentry.captureException(refreshErr);
+            }
+          }
+          throw bulkErr;
+        }
+        // Retire only after the whole selection succeeds. If a later row
+        // fails, completed rows must retain their keys so the retry replays
+        // their stored result and can continue to the failed row.
+        for (const intentScope of completedScopes) {
+          reverseRecIdem.resetKeyFor(intentScope);
         }
       },
       toast,

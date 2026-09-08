@@ -11,8 +11,9 @@ import { ArrowLeft } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import ReasonModal from '../components/ui/ReasonModal';
 import { useToast } from '../components/ui/Toast';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import {
   UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
@@ -21,7 +22,12 @@ import {
 } from '../hooks/useUncertainMutationIntent';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
-import { MONEY_PRECISION_MESSAGE, parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
+import {
+  MONEY_PRECISION_MESSAGE,
+  isWholeCentDollarInput,
+  parseDollarsToCents,
+  parseDollarsToCentsSigned,
+} from '../lib/parseCents';
 import { centsToDollarInput, formatCents as fmt } from '../lib/money';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import type { Vendor, PurchaseOrder } from '../types';
@@ -41,6 +47,8 @@ export default function NewVendorBill() {
       p_subtotal_cents: number;
       p_adjustment_cents: number;
       p_notes?: string;
+      p_confirm_po_overage: boolean;
+      p_po_overage_reason?: string;
     };
   }>({
     operation: 'create_vendor_bill',
@@ -49,6 +57,14 @@ export default function NewVendorBill() {
     getIntentIdentity: (intent) => intent.args,
   });
   const [saving, setSaving] = useState(false);
+  const [overageMessage, setOverageMessage] = useState<string | null>(null);
+  // Separate from overageMessage on purpose. overageMessage OPENS ReasonModal, whose
+  // confirm path calls handleSave(true, reason). That path cannot work while a pending
+  // intent survives — beginIntent() returns the stale intent verbatim, so
+  // p_confirm_po_overage never reaches the server and the operator loops through a
+  // reason prompt that is guaranteed to be refused. This one only renders a banner: it
+  // states the blocker and offers no confirmation control.
+  const [overageBlockedMessage, setOverageBlockedMessage] = useState<string | null>(null);
 
   // Lookups
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -141,7 +157,7 @@ export default function NewVendorBill() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (confirmPoOverage = false, poOverageReason = '') => {
     if (createBillIntent.isForeignIntentLocked) {
       toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
       return;
@@ -152,14 +168,28 @@ export default function NewVendorBill() {
     }
     if (!vendorId) { toast('error', 'Select a vendor'); return; }
     if (!billNumber.trim()) { toast('error', 'Enter a bill number'); return; }
-    if (!subtotalDollars || Number(subtotalDollars) <= 0) { toast('error', 'Enter a valid amount'); return; }
+    if (!isWholeCentDollarInput(subtotalDollars)) {
+      toast('error', 'Enter the subtotal in dollars with no more than two decimal places');
+      return;
+    }
+    if (!isWholeCentDollarInput(adjustmentDollars || '0', { allowNegative: true })) {
+      toast('error', 'Enter the adjustment in dollars with no more than two decimal places');
+      return;
+    }
 
     const subtotalCents = parseDollarsToCents(subtotalDollars);
     if (subtotalCents === null) { toast('error', `Subtotal: ${MONEY_PRECISION_MESSAGE}`); return; }
+    if (subtotalCents <= 0) { toast('error', 'Enter a valid amount'); return; }
     // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
     const adjustmentCents = parseDollarsToCentsSigned(adjustmentDollars || '0');
     if (adjustmentCents === null) { toast('error', `Adjustment: ${MONEY_PRECISION_MESSAGE}`); return; }
 
+    // Clear the blocking banner only once a real attempt is starting, so it survives
+    // a validation bounce and disappears when the retry actually reaches the server.
+    // Deliberately AFTER the parse/precision refusals above: those are validation
+    // bounces too, and clearing the banner there would drop the explanation while
+    // the pending request that caused it is still unresolved.
+    setOverageBlockedMessage(null);
     setSaving(true);
     try {
 
@@ -170,7 +200,7 @@ export default function NewVendorBill() {
       // the sign of the bill total even when the subtotal is positive.
       const totalCents = subtotalCents + adjustmentCents;
       if (totalCents <= 0) {
-        toast('error', `Bill total must be positive. Subtotal + adjustment = ${(totalCents / 100).toFixed(2)}.`);
+        toast('error', `Bill total must be positive. Subtotal + adjustment = ${fmt(totalCents)}.`);
         setSaving(false);
         return;
       }
@@ -180,19 +210,23 @@ export default function NewVendorBill() {
       dueDateObj.setDate(dueDateObj.getDate() + paymentTermsDays);
       const computedDueDate = formatLocalDate(dueDateObj);
 
-      const request = await createBillIntent.beginIntent({
-        args: {
-          p_vendor_id: vendorId,
-          p_purchase_order_id: purchaseOrderId || undefined,
-          p_bill_number: billNumber.trim(),
-          p_bill_date: billDate,
-          p_due_date: computedDueDate,
-          p_payment_terms: paymentTerms || undefined,
-          p_subtotal_cents: subtotalCents,
-          p_adjustment_cents: adjustmentCents,
-          p_notes: notes || undefined,
-        },
-      });
+      const request = createBillIntent.unresolvedIntent
+        ? await createBillIntent.beginIntent(createBillIntent.unresolvedIntent)
+        : await createBillIntent.beginIntent({
+            args: {
+              p_vendor_id: vendorId,
+              p_purchase_order_id: purchaseOrderId || undefined,
+              p_bill_number: billNumber.trim(),
+              p_bill_date: billDate,
+              p_due_date: computedDueDate,
+              p_payment_terms: paymentTerms || undefined,
+              p_subtotal_cents: subtotalCents,
+              p_adjustment_cents: adjustmentCents,
+              p_notes: notes || undefined,
+              p_confirm_po_overage: confirmPoOverage,
+              p_po_overage_reason: poOverageReason || undefined,
+            },
+          });
       const idemKey = createBillIntent.getIdempotencyKey();
 
       const { data, error } = await supabase.rpc('create_vendor_bill', {
@@ -200,6 +234,46 @@ export default function NewVendorBill() {
         p_idempotency_key: idemKey,
       });
 
+      if (hasRpcCode(error, RpcErrorCodes.PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED)) {
+        // 22023 is a definitive rejection, so classifyFailure normally DELETES the
+        // pending record and the confirmed retry below mints a fresh intent that
+        // carries p_confirm_po_overage/p_po_overage_reason. That delete can fail —
+        // another tab holding a live claim is one cause, an unreachable durable store
+        // is another; the record then
+        // survives, beginIntent() returns that stale intent verbatim (it ignores the
+        // intent argument whenever a pending record exists), the confirmation fields
+        // never reach the server, and the operator re-triggers this same branch
+        // forever with no way to tell why. Say so instead of looping in silence.
+        //
+        // Read the survivor through getUnresolvedIntent(), NOT the unresolvedIntent
+        // state field: that field still holds its render-time value inside this
+        // handler, so it is null on the first failure and this branch would never
+        // run. classifyFailure() also cannot be distinguished by its return value
+        // here — it reports 'definitive' both when it deleted the record and when
+        // another claimant kept it alive.
+        await createBillIntent.classifyFailure(error);
+        if (createBillIntent.getUnresolvedIntent()) {
+          // Banner, NOT setOverageMessage: opening ReasonModal here would collect a
+          // reason that beginIntent() then discards, so every confirmation returns to
+          // this same branch. Nothing the operator can type here helps until the
+          // pending request clears.
+          //
+          // Do NOT name a peer tab as the cause. getUnresolvedIntent() proves only that
+          // the intent survived; it survives equally when durable storage cannot release
+          // the record, and there is then no other tab to go and close. Naming an
+          // unverified cause sends the operator on an errand that cannot help.
+          setOverageBlockedMessage(
+            'A pending request for this bill could not be cleared, so the overage confirmation '
+            + 'cannot be attached yet. If this bill is open in another tab, finish or close it; '
+            + 'otherwise reload this page and try again.',
+          );
+          return;
+        }
+        setOverageMessage(
+          'The exact server total shows this bill would raise active billing above 105% of the purchase order. Enter a reason to confirm the overage.',
+        );
+        return;
+      }
       if (error) {
         const receipt = getIdempotencyMismatchResult(error, 'create_vendor_bill');
         if (typeof receipt?.bill_id === 'string') {
@@ -415,14 +489,35 @@ export default function NewVendorBill() {
             : 'The last response was uncertain. These fields are locked so a second bill cannot be created. Retry this exact bill to reconcile it.'}
         </div>
       )}
+      {overageBlockedMessage && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          {overageBlockedMessage}
+        </div>
+      )}
       <div className="flex justify-end gap-3">
         <Button variant="ghost" disabled={createBillIntent.isIntentLocked} onClick={() => navigate('/accounts-payable/bills')}>
           Cancel
         </Button>
-        <Button onClick={handleSave} loading={saving} disabled={createBillIntent.isForeignIntentLocked || createBillIntent.isRetryExpired}>
+        <Button onClick={() => void handleSave()} loading={saving} disabled={createBillIntent.isForeignIntentLocked || createBillIntent.isRetryExpired}>
           {createBillIntent.isIntentLocked ? 'Retry Exact Bill' : 'Create Bill'}
         </Button>
       </div>
+
+      <ReasonModal
+        open={overageMessage !== null}
+        onClose={() => setOverageMessage(null)}
+        onConfirm={(reason) => {
+          setOverageMessage(null);
+          void handleSave(true, reason);
+        }}
+        title="Confirm PO billing overage"
+        message={overageMessage || ''}
+        confirmLabel="Create Bill"
+        variant="warning"
+        loading={saving}
+        placeholder="Why should cumulative billing exceed the PO total?"
+        minLength={5}
+      />
     </div>
   );
 }
