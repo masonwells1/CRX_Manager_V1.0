@@ -2,6 +2,8 @@
 -- STATUS: NOT APPLIED
 -- (This status line goes stale at apply time; the ledger is authoritative.)
 --
+-- ordering-guard: ahead-of-pending 20260905090000_next_invoice_number_year_chicago (PR #614) is parked pending a fresh container proof AND a forward renumber. It is ALREADY below the live authored high-water 20260905185938, so it is unappliable under its present name whether or not this file is applied -- verified 2026-09-08 by executing checkMigrationOrdering() read-only against both orderings, which refused B before A (20260905090000 < 20260905185938) and after A alike. Stepping over it therefore costs it nothing; its renumber is #614's to do and is required regardless.
+--
 -- CRX-SEC-001: the field-application invoice PREVIEW priced the application fee from the
 -- server clock while SAVE prices it from the invoice's own season, so the per-acre rate Mason
 -- approves on the Customers tab could differ from the rate he is billed. Display-only (the
