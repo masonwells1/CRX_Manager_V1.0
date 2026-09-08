@@ -250,6 +250,12 @@ allowed({ tool_name: "Bash", tool_input: { command: "npm install --no-save left-
 allowed({ tool_name: "Bash", tool_input: { command: "cmd /c npm ci" } });
 // Read-only and run subcommands stay silent, including the ones the fail-closed rule must know.
 allowed({ tool_name: "Bash", tool_input: { command: "npm audit" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn constraints" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn constraints --json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm run lint -- --fix" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm test -- --fix" } });
+allowed({ tool_name: "Bash", tool_input: { command: "pnpm run format:fix" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn run fix" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm audit --json" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm dedupe" } });
 allowed({ tool_name: "Bash", tool_input: { command: "npm prune" } });
@@ -854,6 +860,15 @@ for (const command of [
   "pnpm@latest install left-pad",
   "corepack frobnicate",
   "cmd /c corepack use npm@10",
+  // GitHub Codex P1: `yarn constraints --fix` persists changed workspace manifests, yet
+  // `constraints` sat in the read/run allowlist; the FIX rule is now the class.
+  "yarn constraints --fix",
+  "yarn constraints --fix --json",
+  "corepack yarn@4.14.1 constraints --fix",
+  "yarn@4 constraints --fix",
+  "cd packages/app && yarn constraints --fix",
+  "npm pkg fix",
+  "npm audit --fix",
   "bun pm pkg set scripts.test=x",
   "bun pm pkg delete scripts.lint",
   "bun pm pkg fix",

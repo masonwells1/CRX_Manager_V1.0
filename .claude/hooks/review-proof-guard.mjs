@@ -840,6 +840,7 @@ if (shellTool) {
   //          <pm> pkg set|delete|fix, <pm> init, <pm> set-script
   //          <pm> version <bump> (and bare `yarn version`, which prompts and writes)
   //          <pm> create, patch-commit, unplug, `yarn set`, `audit fix`, `dedupe|prune --save`
+  //          <pm> <any non-script subcommand> fix|--fix (`yarn constraints --fix`)
   //          <pm> exec|x|dlx|workspace … <writing word>, and ANY subcommand the rule does
   //          not know (fail closed, PM_READ_OR_RUN is the allowlist)
   //   allow: installing FROM the manifest (`npm install`, `npm ci`, `pnpm install`,
@@ -895,6 +896,10 @@ if (shellTool) {
   const PM_LAUNCHERS = new Set(["exec", "x", "explore", "dlx", "workspace", "workspaces", "w"]);
   // `audit fix` rewrites overrides/dependencies; `dedupe`/`prune` write only under --save.
   const PM_SAVE_SENSITIVE = new Set(["dedupe", "ddp", "find-dupes", "prune"]);
+  // Script runners hand their arguments to the project's own script: `npm run lint -- --fix`
+  // and `npm test -- --fix` are the script's flags, not the manager's, so the FIX rule
+  // below does not read them.
+  const PM_SCRIPT_RUNNERS = new Set(["run", "run-script", "rum", "urn", "test", "t", "tst", "start", "stop", "restart"]);
   const isWritingWord = (t) => PM_ADD_FAMILY.has(t) || PM_REMOVE_FAMILY.has(t) || PM_UPDATE_FAMILY.has(t)
     || PM_MANIFEST_EDITORS.has(t) || t === "pkg" || t === "version" || t === "audit";
   const classifyFrom = (tokens, i) => {
@@ -921,7 +926,14 @@ if (shellTool) {
     if (sub === "pkg") return (positionals[0] || "").toLowerCase() !== "get";
     if (sub === "version") return manager === "yarn" || after.length > 0;
     if (sub === "set") return manager === "yarn";                                       // `yarn set version` writes packageManager; npm/pnpm `set` is config
-    if (sub === "audit") return positionals.some((t) => t.toLowerCase() === "fix") || after.some((t) => /^--fix/i.test(t));
+    // A subcommand asked to FIX rewrites what it checks. GitHub Codex P1 on 6e3f1bd36's
+    // diff: `yarn constraints --fix` persists every changed workspace manifest (Yarn 4
+    // documents --fix as automatically fixing unambiguous issues), yet `constraints` sat
+    // in the read/run allowlist and the FIX check below was written for `audit` alone.
+    // The rule is now the class: a `fix` word or `--fix*` flag after ANY non-script-runner
+    // subcommand (`audit fix`, `constraints --fix`, `pkg fix`) is a manifest write.
+    // `npm config fix` over-blocks (it writes .npmrc); accepted on this file's standing rule.
+    if (!PM_SCRIPT_RUNNERS.has(sub) && (positionals.some((t) => t.toLowerCase() === "fix") || after.some((t) => /^--fix/i.test(t)))) return true;
     if (PM_SAVE_SENSITIVE.has(sub)) return competingSave;
     if (PM_REMOVE_FAMILY.has(sub)) return !noManifest;
     if (PM_UPDATE_FAMILY.has(sub)) return !noManifest;
