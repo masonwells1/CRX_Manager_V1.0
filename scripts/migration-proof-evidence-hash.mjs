@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from '../.claude/hooks/protected-git.mjs';
 
 const normal = (value) => value.replaceAll('\\', '/');
 
@@ -52,29 +53,48 @@ function safeWalk(rootReal, root, predicate) {
   return files;
 }
 
-function trackedPaths(rootReal, root, prefixes, predicate) {
+function decodeTrackedGitPaths(output) {
+  if (!Buffer.isBuffer(output)) throw new Error('trusted Git did not return raw evidence bytes');
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(output);
+  } catch {
+    throw new Error('trusted Git returned evidence paths that are not valid UTF-8');
+  }
+  if (!Buffer.from(text, 'utf8').equals(output)) {
+    throw new Error('trusted Git evidence-path UTF-8 round-trip did not preserve its raw bytes');
+  }
+  if (text && !text.endsWith('\0')) throw new Error('trusted Git returned an unterminated zero-delimited evidence path list');
+  return text ? text.slice(0, -1).split('\0') : [];
+}
+
+export function trackedEvidencePaths(root, prefixes, predicate, { execute = execFileSync } = {}) {
+  const rootReal = realpathSync(root);
   let output;
   try {
-    output = execFileSync('git', ['-C', root, 'ls-files', '-z', '--', ...prefixes], {
-      encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    output = execute(fixedGitExecutable(), ['--no-replace-objects', '-C', root, 'ls-files', '-z', '--', ...prefixes], {
+      encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: GIT_CALL_TIMEOUT_MS,
+      windowsHide: true, shell: false, env: protectedGitEnv(), stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
     // The migration-apply guard's isolated filesystem fixtures are deliberately
     // not Git repositories. They cannot mint production proof because the real
     // wrapper separately requires a protected origin/main policy; retain their
     // hermetic safe-walk behavior without weakening a real checkout's allowlist.
-    if (/not a git repository/i.test(String(error.message || error))) {
+    if (/not a git repository/i.test(String(error.stderr || error.message || error))) {
       return prefixes.flatMap((prefix) => safeWalk(rootReal, path.join(root, prefix), predicate)
         .map((file) => normal(path.relative(root, file))));
     }
     throw new Error(`could not enumerate trusted Git-tracked migration-proof evidence: ${error.message || error}`);
   }
-  return output.toString('utf8').split('\0').filter(Boolean).map(normal).filter((relative) => {
-    if (!prefixes.some((prefix) => relative.startsWith(prefix))) {
+  return decodeTrackedGitPaths(output).map(normal).map((relative) => {
+    if (!relative || !prefixes.some((prefix) => relative.startsWith(prefix))) {
       throw new Error(`Git returned an evidence path outside the trusted roots: ${relative}`);
     }
-    return predicate(relative);
-  });
+    const stat = safeStat(rootReal, path.resolve(root, relative));
+    if (!stat.isFile()) throw new Error(`Git returned a non-file migration-proof evidence path: ${relative}`);
+    return relative;
+  }).filter(predicate);
 }
 
 function collectPaths(root, stateDir) {
@@ -96,9 +116,9 @@ function collectPaths(root, stateDir) {
     'scripts/migration-proof-reviewer-launch.mjs',
     normal(path.join(relativeStateDir, 'applied-migrations.json')),
   ]);
-  for (const file of trackedPaths(rootReal, root, ['supabase/migrations/'], (relative) => relative.endsWith('.sql'))) inputs.add(file);
-  for (const file of trackedPaths(rootReal, root, ['src/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
-  for (const file of trackedPaths(rootReal, root, ['supabase/functions/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
+  for (const file of trackedEvidencePaths(root, ['supabase/migrations/'], (relative) => relative.endsWith('.sql'))) inputs.add(file);
+  for (const file of trackedEvidencePaths(root, ['src/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
+  for (const file of trackedEvidencePaths(root, ['supabase/functions/'], (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative))) inputs.add(file);
   return { rootReal, paths: [...inputs].sort() };
 }
 

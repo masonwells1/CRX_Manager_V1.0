@@ -1,6 +1,4 @@
-function escapeRegExp(value) {
-  return String(value).replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
-}
+import ts from 'typescript';
 
 function applicationSourceFiles(snapshot) {
   return [
@@ -16,92 +14,92 @@ function lineSite(file, text, index) {
   return `  ${source} RPC: ${file}:${line}\n    ${excerpt}`;
 }
 
-function codeMask(text) {
-  const mask = new Uint8Array(text.length);
-  for (let index = 0; index < text.length; index += 1) {
-    const current = text[index];
-    const next = text[index + 1];
-    if (current === '/' && next === '/') {
-      while (index < text.length && text[index] !== '\n') index += 1;
-      continue;
-    }
-    if (current === '/' && next === '*') {
-      index += 2;
-      while (index < text.length && !(text[index] === '*' && text[index + 1] === '/')) index += 1;
-      index += 1;
-      continue;
-    }
-    if (current === "'" || current === '"' || current === '`') {
-      const quote = current;
-      index += 1;
-      while (index < text.length) {
-        if (text[index] === '\\') { index += 2; continue; }
-        if (text[index] === quote) break;
-        index += 1;
-      }
-      continue;
-    }
-    mask[index] = 1;
-  }
-  return mask;
+function staticString(node) {
+  if (!node) return null;
+  const literal = unwrapExpression(node);
+  return ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal) ? literal.text : null;
 }
 
-function isStaticRpcLiteral(text, index) {
-  const quote = text[index];
-  if (quote !== "'" && quote !== '"' && quote !== '`') return false;
-  for (let cursor = index + 1; cursor < text.length; cursor += 1) {
-    if (text[cursor] === '\\') { cursor += 1; continue; }
-    if (quote === '`' && text.startsWith('${', cursor)) return false;
-    if (text[cursor] === quote) return true;
-  }
-  return false;
+function unwrapExpression(node) {
+  let current = node;
+  while (
+    ts.isParenthesizedExpression(current)
+    || ts.isAsExpression(current)
+    || ts.isTypeAssertionExpression(current)
+    || ts.isNonNullExpression(current)
+  ) current = current.expression;
+  return current;
 }
 
-// Surface only literal application .rpc('routine_name') call sites. Routine
-// names are PostgreSQL identifiers, not regular expressions: quoting their
-// text prevents `$`, `[`, `^`, and other valid identifier characters from
-// changing the evidence query itself.
-export function applicationRpcCallSites(name, snapshot) {
-  const files = applicationSourceFiles(snapshot);
-  // JavaScript permits whitespace and comments around a call, optional calls,
-  // bracket property access, and static template literals. Treat each of
-  // those as a literal caller; interpolated names intentionally remain
-  // unprovable rather than being guessed from their template source.
-  const trivia = '(?:\\s|/\\*[\\s\\S]*?\\*/|//[^\\r\\n]*(?:\\r\\n?|\\n|$))*';
-  const routineName = escapeRegExp(name);
-  const rpc = new RegExp(
-    `(?:\\.\\s*rpc|\\[\\s*(?:'rpc'|"rpc")\\s*\\])${trivia}(?:\\?\\.)?${trivia}\\(${trivia}(?:'${routineName}'|"${routineName}"|\`${routineName}\`)`,
-    'g',
-  );
-  const sites = [];
-  for (const file of files) {
-    const text = snapshot.text(file);
-    const mask = codeMask(text);
-    for (const match of text.matchAll(rpc)) {
-      if (mask[match.index]) sites.push(lineSite(file, text, match.index));
-    }
-  }
-  return sites;
+function isRpcAccess(node) {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text === 'rpc';
+  return ts.isElementAccessExpression(node) && staticString(node.argumentExpression) === 'rpc';
 }
 
-// A dynamic routine-name argument cannot prove which PostgreSQL routine is
-// called. Keep those sites separate from literal matches so an empty literal
-// match is never presented as evidence that application exposure is absent.
-export function unresolvedApplicationRpcCallSites(snapshot) {
-  const trivia = '(?:\\s|/\\*[\\s\\S]*?\\*/|//[^\\r\\n]*(?:\\r\\n?|\\n|$))*';
-  const rpcStart = new RegExp(
-    `(?:\\.\\s*rpc|\\[\\s*(?:'rpc'|"rpc")\\s*\\])${trivia}(?:\\?\\.)?${trivia}\\(${trivia}`,
-    'g',
-  );
-  const sites = [];
+function directCallForAccess(access) {
+  let parent = access.parent;
+  while (
+    ts.isParenthesizedExpression(parent)
+    || ts.isAsExpression(parent)
+    || ts.isTypeAssertionExpression(parent)
+    || ts.isNonNullExpression(parent)
+  ) parent = parent.parent;
+  if (!ts.isCallExpression(parent) || unwrapExpression(parent.expression) !== access) return null;
+  return parent;
+}
+
+function scriptKind(file) {
+  return file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+}
+
+function snapshotRpcUses(snapshot) {
+  const uses = [];
   for (const file of applicationSourceFiles(snapshot)) {
     const text = snapshot.text(file);
-    const mask = codeMask(text);
-    for (const match of text.matchAll(rpcStart)) {
-      if (!mask[match.index]) continue;
-      const argumentIndex = match.index + match[0].length;
-      if (!isStaticRpcLiteral(text, argumentIndex)) sites.push(lineSite(file, text, match.index));
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind(file));
+    const addUnresolved = (node) => uses.push({
+      file,
+      text,
+      index: node.getStart(source),
+      routine: null,
+      unresolved: true,
+    });
+    if (source.parseDiagnostics.length) {
+      for (const diagnostic of source.parseDiagnostics) addUnresolved({ getStart: () => diagnostic.start || 0 });
+      continue;
     }
+    const visit = (node) => {
+      if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && isRpcAccess(node)) {
+        const call = directCallForAccess(node);
+        if (!call) addUnresolved(node);
+        else {
+          const routine = staticString(call.arguments[0]);
+          uses.push({ file, text, index: node.getStart(source), routine, unresolved: routine === null });
+        }
+      } else if (
+        ts.isBindingElement(node)
+        && ts.isObjectBindingPattern(node.parent)
+        && ((node.propertyName && staticString(node.propertyName) === 'rpc')
+          || (!node.propertyName && ts.isIdentifier(node.name) && node.name.text === 'rpc'))
+      ) addUnresolved(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
   }
-  return sites;
+  return uses;
+}
+
+// Surface literal application RPC calls only. Every indirect, dynamic, or
+// unparsable access is reported separately and blocks proof production.
+export function applicationRpcCallSites(name, snapshot) {
+  const literalName = String(name);
+  return snapshotRpcUses(snapshot)
+    .filter((use) => !use.unresolved && use.routine === literalName)
+    .map((use) => lineSite(use.file, use.text, use.index));
+}
+
+export function unresolvedApplicationRpcCallSites(snapshot) {
+  return snapshotRpcUses(snapshot)
+    .filter((use) => use.unresolved)
+    .map((use) => lineSite(use.file, use.text, use.index));
 }

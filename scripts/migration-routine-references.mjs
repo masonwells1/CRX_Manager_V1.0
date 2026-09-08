@@ -153,7 +153,7 @@ function consumeParenthesized(text, start) {
 }
 
 function maskComments(text) {
-  const chars = [...text];
+  const chars = Array.from({ length: text.length }, (_, index) => text[index]);
   for (let cursor = 0; cursor < text.length; cursor += 1) {
     if (text[cursor] === "'" || ((text[cursor] === 'e' || text[cursor] === 'E') && text[cursor + 1] === "'")) {
       const literal = consumeSingleQuoted(text, cursor);
@@ -261,6 +261,7 @@ function consumeRoutineTarget(text, start, { signatureRequired }) {
 
 const ROUTINE_HEADER = /^(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b|ALTER\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b|(?:GRANT|REVOKE)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+(?:FUNCTION|PROCEDURE|ROUTINE)\b)/i;
 const GRANT_OR_REVOKE_HEADER = /^(?:GRANT|REVOKE)\b/i;
+const SCHEMA_WIDE_ROUTINE_ACL = /^(?:GRANT|REVOKE)\s+(?:ALL(?:\s+PRIVILEGES)?|EXECUTE)\s+ON\s+ALL\s+(?:FUNCTIONS|PROCEDURES|ROUTINES)\s+IN\s+SCHEMA\b/i;
 
 export function routineReferencesIn(sql) {
   const statements = sqlStatements(sql);
@@ -271,6 +272,9 @@ export function routineReferencesIn(sql) {
     if (masked === null) return { entries: [], error: 'unterminated comment or quoted identifier while parsing routine references' };
     const start = skipTrivia(masked, 0);
     if (start === null) return { entries: [], error: 'unterminated comment while parsing routine references' };
+    if (SCHEMA_WIDE_ROUTINE_ACL.test(masked.slice(start))) {
+      return { entries: [], error: `schema-wide routine EXECUTE ACL cannot be safely attributed: ${statement.trim().slice(0, 160)}` };
+    }
     const header = ROUTINE_HEADER.exec(masked.slice(start));
     if (!header) continue;
     const grantOrRevoke = GRANT_OR_REVOKE_HEADER.test(header[0]);

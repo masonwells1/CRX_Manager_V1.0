@@ -43,3 +43,23 @@ client.rpc(\`dangerous_\${suffix}\`, {});`);
   assert.match(sites[0], /src\/lib\/call\.ts:3/);
   assert.match(sites[1], /src\/lib\/call\.ts:5/);
 });
+
+test('fails closed for template expressions, computed calls, and indirect RPC access', () => {
+  const snapshot = snapshotFor('src/lib/call.ts', [
+    'const alias = client.rpc;',
+    'alias(dynamicName);',
+    'const message = `${client.rpc(dynamicName)}`;',
+    'client[`rpc`](dynamicName);',
+    '(client.rpc)(dynamicName);',
+    'const { rpc } = client;',
+    'rpc(dynamicName);',
+  ].join('\n'));
+  const sites = unresolvedApplicationRpcCallSites(snapshot);
+  assert.equal(sites.length, 5);
+  assert.ok(sites.some((site) => site.includes(':1')));
+  assert.ok(sites.some((site) => site.includes(':3')));
+  assert.ok(sites.some((site) => site.includes(':4')));
+  assert.ok(sites.some((site) => site.includes(':5')));
+  assert.ok(sites.some((site) => site.includes(':6')));
+  assert.equal(applicationRpcCallSites('literal_rpc', snapshotFor('src/lib/call.ts', "(client.rpc)('literal_rpc')")).length, 1);
+});

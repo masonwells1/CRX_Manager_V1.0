@@ -46,23 +46,14 @@ import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { fixedGitExecutable, protectedGitEnv } from "../.claude/hooks/protected-git.mjs";
+
+export { fixedGitExecutable } from "../.claude/hooks/protected-git.mjs";
 
 const SCRIPT_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)));
 const FALLBACK_ROOT = path.resolve(SCRIPT_DIR, "..");
 
 // ── git helpers ──────────────────────────────────────────────────────────────
-// Exported so the test suite's CONTROL run can drive the SAME binary without the
-// wrapper's isolation — proving the isolation is what blocks a hostile filter,
-// not an incidental difference in which Git was launched.
-export function fixedGitExecutable() {
-  const candidates = process.platform === "win32"
-    ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
-    : ["/usr/bin/git", "/usr/local/bin/git"];
-  const executable = candidates.find((candidate) => existsSync(candidate));
-  if (!executable) throw new Error("A fixed trusted Git executable is required to build the sanitized review workspace.");
-  return executable;
-}
-
 // Every Git call this wrapper makes runs under ONE minimal environment, so an
 // ambient global/system Git configuration can never steer the process that
 // decides whether a push is trustworthy. Global and system config, the system
@@ -79,22 +70,7 @@ export function fixedGitExecutable() {
 // test suite proves both halves: that the filter never runs here, and — via a
 // control run without this isolation — that the same filter really can run.
 function trustedGitEnv() {
-  const env = {};
-  for (const name of ["SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE"]) {
-    if (process.env[name]) env[name] = process.env[name];
-  }
-  env.GIT_NO_REPLACE_OBJECTS = "1";
-  env.GIT_CONFIG_NOSYSTEM = "1";
-  env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
-  env.GIT_TERMINAL_PROMPT = "0";
-  env.GCM_INTERACTIVE = "never";
-  env.GIT_OPTIONAL_LOCKS = "0";
-  env.GIT_ATTR_NOSYSTEM = "1";
-  const systemPath = process.platform === "win32"
-    ? path.join(env.SystemRoot || env.WINDIR || "C:\\Windows", "System32")
-    : "/usr/bin:/bin";
-  env.PATH = `${path.dirname(fixedGitExecutable())}${path.delimiter}${systemPath}`;
-  return env;
+  return protectedGitEnv();
 }
 
 // Ownership: FAIL CLOSED, deliberately. trustedGitEnv() discards the user's

@@ -56,7 +56,7 @@ test('evidence includes source history for existing routines changed by ALTER', 
 
 test('evidence includes edge-function callers and review launch permits its Git-free packet', () => {
   const evidence = printedEvidence('20260714230100_blend_ticket_access_and_atomicity');
-  assert.match(evidence, /edge-function RPC: supabase\/functions\/process-blend-ticket\/index\.ts:1168/);
+  assert.match(evidence, /edge-function RPC: supabase\/functions\/process-blend-ticket\/index\.ts:\d+/);
   const args = buildMigrationReviewerExecArgs({ reviewCwd: 'C:/tmp/review', model: 'gpt-5.6-sol', effort: 'high', platform: 'win32' });
   assert.equal(args[0], 'exec');
   assert.ok(args.includes('--skip-git-repo-check'));

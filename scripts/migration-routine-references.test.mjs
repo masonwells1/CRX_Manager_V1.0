@@ -108,3 +108,22 @@ test('does not end an escape string at a backslash-escaped quote', () => {
     ['escape_string_quote', 'escape_string_quote'],
   );
 });
+
+test('preserves UTF-16 offsets while masking comments', () => {
+  const result = routineReferencesIn(`
+    /* 🚜 comment */ CREATE FUNCTION public.utf16_offset() RETURNS void LANGUAGE sql AS $$ SELECT; $$;
+  `);
+  assert.equal(result.error, null);
+  assert.deepEqual(result.entries.flatMap(({ routines }) => routines.map(({ key }) => key)), ['utf16_offset']);
+});
+
+test('fails closed for schema-wide routine execute ACLs', () => {
+  for (const statement of [
+    'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated;',
+    'REVOKE ALL PRIVILEGES ON ALL PROCEDURES IN SCHEMA public FROM anon;',
+    'GRANT EXECUTE ON ALL ROUTINES IN SCHEMA public TO PUBLIC;',
+  ]) {
+    const result = routineReferencesIn(statement);
+    assert.match(result.error || '', /schema-wide routine EXECUTE ACL/);
+  }
+});

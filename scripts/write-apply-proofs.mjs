@@ -36,9 +36,9 @@ import {
   codexReviewProofVerdict,
   CODEX_VERDICT_TOKEN,
   codexReviewerEnvironment,
-  fixedGitExecutable,
   safeReviewCaptureText,
 } from './write-codex-push-proof.mjs';
+import { fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from '../.claude/hooks/protected-git.mjs';
 import { captureMigrationProofEvidence } from './migration-proof-evidence-hash.mjs';
 import { securityDefinerMissingAnonRevokes } from './migration-security-definer-guard.mjs';
 import { buildMigrationReviewerExecArgs } from './migration-proof-reviewer-launch.mjs';
@@ -88,25 +88,6 @@ mkdirSync(stateDir, { recursive: true });
 // a hands-free apply pass the two-reviewer requirement on say-so).
 const REQUIRED_REVIEWERS = ['rls-security-reviewer', 'migration-drift-reviewer'];
 
-function protectedGitEnv() {
-  const env = {};
-  for (const name of ['SystemRoot', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR']) {
-    if (process.env[name]) env[name] = process.env[name];
-  }
-  env.GIT_NO_REPLACE_OBJECTS = '1';
-  env.GIT_CONFIG_NOSYSTEM = '1';
-  env.GIT_CONFIG_GLOBAL = process.platform === 'win32' ? 'NUL' : '/dev/null';
-  env.GIT_TERMINAL_PROMPT = '0';
-  env.GCM_INTERACTIVE = 'never';
-  env.GIT_OPTIONAL_LOCKS = '0';
-  env.GIT_ATTR_NOSYSTEM = '1';
-  const systemPath = process.platform === 'win32'
-    ? path.join(env.SystemRoot || env.WINDIR || 'C:\\Windows', 'System32')
-    : '/usr/bin:/bin';
-  env.PATH = `${path.dirname(fixedGitExecutable())}${path.delimiter}${systemPath}`;
-  return env;
-}
-
 // The candidate must never supply the instructions that decide whether it is
 // safe. Read both reviewer charters from protected origin/main with the same
 // fixed Git binary used by the push-proof snapshotter. Reviewer children run
@@ -116,13 +97,13 @@ function trustedReviewerPolicy() {
   const git = fixedGitExecutable();
   const base = spawnSync(git, ['--no-replace-objects', 'rev-parse', 'origin/main^{commit}'], {
     cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
-    env: protectedGitEnv(),
+    env: protectedGitEnv(), timeout: GIT_CALL_TIMEOUT_MS,
   });
   const commit = String(base.stdout || '').trim();
   if (base.status !== 0 || !/^[a-f0-9]{40}$/i.test(commit)) throw new Error('could not resolve protected origin/main reviewer policy');
   const containsBase = spawnSync(git, ['--no-replace-objects', 'merge-base', '--is-ancestor', commit, 'HEAD'], {
     cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
-    env: protectedGitEnv(),
+    env: protectedGitEnv(), timeout: GIT_CALL_TIMEOUT_MS,
   });
   if (containsBase.status !== 0) throw new Error(`candidate HEAD does not contain protected origin/main (${commit})`);
   const charters = new Map();
@@ -130,7 +111,7 @@ function trustedReviewerPolicy() {
     const relative = `.claude/agents/${reviewer}.md`;
     const result = spawnSync(git, ['--no-replace-objects', 'show', `${commit}:${relative}`], {
       cwd: process.cwd(), encoding: 'utf8', shell: false, windowsHide: true,
-      env: protectedGitEnv(),
+      env: protectedGitEnv(), timeout: GIT_CALL_TIMEOUT_MS,
     });
     if (result.status !== 0 || !result.stdout) throw new Error(`could not read protected reviewer charter ${relative}`);
     charters.set(reviewer, String(result.stdout));
@@ -152,7 +133,11 @@ function trustedReviewerPolicy() {
 // Scope both to the tables this migration actually names: the full registry is
 // ~240KB and src/types/index.ts is ~127KB, which would crowd out the migration.
 function tablesNamedIn(sql, registryColumns) {
-  return Object.keys(registryColumns).filter((t) => new RegExp(`\\b${t}\\b`).test(sql));
+  return Object.keys(registryColumns).filter((t) => new RegExp(`\\b${escapeRegExp(t)}\\b`).test(sql));
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
 }
 
 function pascalCase(snake) {
@@ -175,7 +160,8 @@ function tsCandidateNames(table) {
 // Pull a whole `export interface X { ... }` by brace balance (nested object types
 // survive) or a single-line `export type X = ...;` alias.
 function extractTsDeclaration(ts, name) {
-  const iface = new RegExp(`export\\s+interface\\s+${name}\\b[^{]*\\{`).exec(ts);
+  const escapedName = escapeRegExp(name);
+  const iface = new RegExp(`export\\s+interface\\s+${escapedName}\\b[^{]*\\{`).exec(ts);
   if (iface) {
     const open = ts.indexOf('{', iface.index);
     let depth = 0;
@@ -188,7 +174,7 @@ function extractTsDeclaration(ts, name) {
     }
     return null;
   }
-  const alias = new RegExp(`export\\s+type\\s+${name}\\b[^\\n]*`).exec(ts);
+  const alias = new RegExp(`export\\s+type\\s+${escapedName}\\b[^\\n]*`).exec(ts);
   return alias ? alias[0] : null;
 }
 
@@ -367,7 +353,7 @@ function buildEmbeddedEvidence(migRelPath, snapshot) {
       const names = tsCandidateNames(table);
       // Exact alias anchored on the table name itself needs no guessing at all.
       const anchored = new RegExp(
-        `export\\s+type\\s+(\\w+)\\s*=\\s*Database\\['public'\\]\\['Tables'\\]\\['${table}'\\]`,
+        `export\\s+type\\s+(\\w+)\\s*=\\s*Database\\['public'\\]\\['Tables'\\]\\['${escapeRegExp(table)}'\\]`,
       ).exec(ts);
       const declared = [...ts.matchAll(/export\s+(?:interface|type)\s+(\w+)/g)].map((m) => m[1]);
       // Exact name first. Prefix matches are a FALLBACK only — used when no exact
@@ -456,10 +442,14 @@ function hashSql(sql) {
 }
 
 if (printEvidenceOnly) {
+  const packets = [];
   for (const name of names) {
     const snapshot = captureMigrationProofEvidence({ projectDir: process.cwd(), stateDir });
-    console.log(buildEmbeddedEvidence(path.posix.join('supabase', 'migrations', `${name}.sql`), snapshot));
+    packets.push(buildEmbeddedEvidence(path.posix.join('supabase', 'migrations', `${name}.sql`), snapshot));
   }
+  await new Promise((resolve, reject) => {
+    process.stdout.write(`${packets.join('\n')}\n`, (error) => (error ? reject(error) : resolve()));
+  });
   process.exit(0);
 }
 

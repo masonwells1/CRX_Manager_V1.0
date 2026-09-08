@@ -31,7 +31,7 @@ import { sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.m
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
 import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
-import { fixedGitExecutable } from "../../scripts/write-codex-push-proof.mjs";
+import { fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from "./protected-git.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
@@ -49,26 +49,7 @@ export const MAIN_REF_MAX_AGE_MS = PROOF_MAX_AGE_MS;
 // nothing, and a PreToolUse hook that emits nothing does NOT deny. Long git
 // timeouts are therefore a fail-open on a live migration apply, not a courtesy.
 // (CodeRabbit, PR #502.)
-export const GIT_CALL_TIMEOUT_MS = 1_500;
-
-function protectedGitEnv() {
-  const env = {};
-  for (const name of ["SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR"]) {
-    if (process.env[name]) env[name] = process.env[name];
-  }
-  env.GIT_NO_REPLACE_OBJECTS = "1";
-  env.GIT_CONFIG_NOSYSTEM = "1";
-  env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
-  env.GIT_TERMINAL_PROMPT = "0";
-  env.GCM_INTERACTIVE = "never";
-  env.GIT_OPTIONAL_LOCKS = "0";
-  env.GIT_ATTR_NOSYSTEM = "1";
-  const systemPath = process.platform === "win32"
-    ? path.join(env.SystemRoot || env.WINDIR || "C:\\Windows", "System32")
-    : "/usr/bin:/bin";
-  env.PATH = `${path.dirname(fixedGitExecutable())}${path.delimiter}${systemPath}`;
-  return env;
-}
+export { GIT_CALL_TIMEOUT_MS } from "./protected-git.mjs";
 
 /**
  * Milliseconds since this checkout last fetched from origin, or null when that
@@ -990,11 +971,16 @@ export function evaluateMigrationApply({
             // clean verdict. This is required in every mode: Mason's presence
             // is authorization, not a reason to accept stale evidence.
             const expectedEvidenceHash = activeEvidenceHash;
-            if (!data.evidenceHash || !expectedEvidenceHash || data.evidenceHash !== expectedEvidenceHash
-              || (requiresProtectedBase && (!protectedBaseIsCurrent || !protectedReviewerPolicyCommit
-                || data.reviewerPolicyCommit !== protectedReviewerPolicyCommit
-                || data.protectedBaseCommit !== protectedReviewerPolicyCommit))) {
-              if (!evidenceMismatchedProof) evidenceMismatchedProof = { file: f, dir, data, expectedEvidenceHash };
+            const protectedBindingReason = !requiresProtectedBase ? null
+              : !protectedReviewerPolicyCommit ? 'the protected reviewer policy commit is unavailable'
+                : !protectedBaseIsCurrent ? 'the protected reviewer policy commit is not an ancestor of this checkout'
+                  : data.reviewerPolicyCommit !== protectedReviewerPolicyCommit ? 'reviewerPolicyCommit does not match the protected reviewer policy commit'
+                    : data.protectedBaseCommit !== protectedReviewerPolicyCommit ? 'protectedBaseCommit does not match the protected reviewer policy commit'
+                      : null;
+            if (!data.evidenceHash || !expectedEvidenceHash || data.evidenceHash !== expectedEvidenceHash || protectedBindingReason) {
+              if (!evidenceMismatchedProof) evidenceMismatchedProof = {
+                file: f, dir, data, expectedEvidenceHash, protectedBindingReason,
+              };
               continue;
             }
             validProof = { file: f, dir, data };
@@ -1021,7 +1007,7 @@ export function evaluateMigrationApply({
       `MIGRATION APPLY GUARD: the reviewer proof for "${migName || "(unnamed)"}" is not evidence-bound — ` +
       `proofs require "evidenceHash" to match every repository input and reviewer charter that the ` +
       `verdict saw (expected: ${evidenceMismatchedProof.expectedEvidenceHash || "(unreadable evidence)"}; ` +
-      `received: ${proofHash || "(missing)"}). Re-run node scripts/write-apply-proofs.mjs against the ` +
+      `received: ${proofHash || "(missing)"}; ${evidenceMismatchedProof.protectedBindingReason || "no protected-base mismatch"}). Re-run node scripts/write-apply-proofs.mjs against the ` +
       `CURRENT checkout; never edit proof JSON by hand.`);
   }
 
