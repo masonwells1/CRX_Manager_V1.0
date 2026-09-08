@@ -89,7 +89,7 @@ try {
 
   // ── generated-column-check.mjs: registry file missing entirely ──────────
   const dirD = path.join(tmpRoot, "d");
-  const hooksD = scaffoldIsolatedHook(dirD, ["generated-column-check.mjs"], null);
+  const hooksD = scaffoldIsolatedHook(dirD, ["generated-column-check.mjs", "edit-splice-lib.mjs"], null);
   r = runCopiedHook(hooksD, "generated-column-check.mjs", {
     tool_name: "Write",
     tool_input: { file_path: "supabase/migrations/20990101000000_x.sql", content: "UPDATE invoices SET balance_cents = 0;" },
@@ -100,7 +100,7 @@ try {
 
   // ── generated-column-check.mjs: unparseable registry ─────────────────────
   const dirE = path.join(tmpRoot, "e");
-  const hooksE = scaffoldIsolatedHook(dirE, ["generated-column-check.mjs"], "not json at all");
+  const hooksE = scaffoldIsolatedHook(dirE, ["generated-column-check.mjs", "edit-splice-lib.mjs"], "not json at all");
   r = runCopiedHook(hooksE, "generated-column-check.mjs", {
     tool_name: "Write",
     tool_input: { file_path: "supabase/migrations/20990101000000_x.sql", content: "UPDATE invoices SET balance_cents = 0;" },
@@ -110,7 +110,7 @@ try {
 
   // ── generated-column-check.mjs: healthy registry -> no warning ───────────
   const dirF = path.join(tmpRoot, "f");
-  const hooksF = scaffoldIsolatedHook(dirF, ["generated-column-check.mjs"], JSON.stringify({
+  const hooksF = scaffoldIsolatedHook(dirF, ["generated-column-check.mjs", "edit-splice-lib.mjs"], JSON.stringify({
     generated_columns: [{ table: "invoices", column: "balance_cents", expression: "total_cents - paid_cents" }],
   }));
   r = runCopiedHook(hooksF, "generated-column-check.mjs", {

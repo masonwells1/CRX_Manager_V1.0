@@ -6,10 +6,12 @@
 // Rules:
 //   - Only inspect .ts/.tsx files inside src/
 //   - Skip node_modules/, supabase/migrations/, *.test/spec.tsx?
-//   - If no content visible, allow (fail-open)
+//   - Judge the FULL post-edit file (Write content, or Edit/MultiEdit spliced onto disk)
+//   - If no content visible at all, allow (fail-open)
 //   - Block: parseFloat() on a *cents variable
 
 import { readFileSync } from "node:fs";
+import { judgedContent } from "./edit-splice-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -36,7 +38,10 @@ const excluded = /node_modules\/|supabase\/migrations\//.test(filePath);
 
 if (!isTs || isTest || !inSrc || excluded) out("allow");
 
-const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
+// Full post-edit file for Edit/MultiEdit, the Write content otherwise — a MultiEdit
+// `edits[]` array used to read as empty content here and this guard allowed it
+// (Codex gpt-5.6-sol High on PR #605 at 233dbf3c8; probe-confirmed).
+const { content } = judgedContent(filePath, payload?.tool_input);
 if (!content) out("allow");
 
 const violations = [];

@@ -4,6 +4,7 @@
 // ENABLE ROW LEVEL SECURITY and define at least one CREATE POLICY.
 
 import { readFileSync } from "node:fs";
+import { judgedContent } from "./edit-splice-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -25,7 +26,10 @@ if (!filePath || !filePath.endsWith(".sql") || !filePath.includes("supabase/migr
   out("allow");
 }
 
-const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
+// Full post-edit file for Edit/MultiEdit, the Write content otherwise — a MultiEdit
+// `edits[]` array used to read as empty content here and this guard allowed it
+// (Codex gpt-5.6-sol High on PR #605 at 233dbf3c8; probe-confirmed).
+const { content } = judgedContent(filePath, payload?.tool_input);
 if (!content) out("allow");
 
 if (/--\s*rls-check:\s*exempt/i.test(content)) {

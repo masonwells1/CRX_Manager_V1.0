@@ -4,6 +4,7 @@
 // which is a GENERATED column — Postgres rejects every call (commit a419da8).
 
 import { readFileSync } from "node:fs";
+import { judgedContent } from "./edit-splice-lib.mjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -37,7 +38,10 @@ const isSql = filePath.endsWith(".sql") && filePath.includes("supabase/migration
 const isTs = /\.tsx?$/.test(filePath) && filePath.includes("/src/") && !/\.(test|spec)\.tsx?$/.test(filePath);
 if (!isSql && !isTs) out("allow");
 
-const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
+// Full post-edit file for Edit/MultiEdit, the Write content otherwise — a MultiEdit
+// `edits[]` array used to read as empty content here and this guard allowed it
+// (Codex gpt-5.6-sol High on PR #605 at 233dbf3c8; probe-confirmed).
+const { content } = judgedContent(filePath, payload?.tool_input);
 if (!content) out("allow");
 
 if (/(?:--|\/\/)\s*generated-column-check:\s*exempt/.test(content)) out("allow");

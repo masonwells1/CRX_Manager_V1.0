@@ -6,9 +6,12 @@
 //   2. Pasting a SUPABASE_SERVICE_ROLE_KEY value (or any "service_role" literal)
 //      into ANY file under src/ — service_role must NEVER ship to the frontend.
 //
-// Rules match the existing hook style: fail-open if no content visible.
+// Rules match the existing hook style: fail-open if no content visible at all; the
+// content judged is the FULL post-edit file (Write content, or Edit/MultiEdit spliced
+// onto the on-disk file).
 
 import { readFileSync } from "node:fs";
+import { judgedContent } from "./edit-splice-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -42,7 +45,10 @@ if (isEnvFile && !isExample) {
 }
 
 // RULE 2 — block service_role literals in frontend code
-const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
+// Full post-edit file for Edit/MultiEdit, the Write content otherwise — a MultiEdit
+// `edits[]` array used to read as empty content here and this guard allowed it
+// (Codex gpt-5.6-sol High on PR #605 at 233dbf3c8; probe-confirmed).
+const { content } = judgedContent(filePath, payload?.tool_input);
 if (!content) out("allow");
 
 const inSrc = filePath.includes("/src/");
