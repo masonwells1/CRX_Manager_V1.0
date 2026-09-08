@@ -200,3 +200,42 @@ export function adaptQuoteVersionList(rows: QuoteVersionRow[] | null | undefined
 
   return { versions, unreadable };
 }
+
+/**
+ * One saved version as the history list renders it: either a readable snapshot or a row whose
+ * snapshot this build refused to trust. The discriminant is what lets a single ordered list
+ * carry both shapes without the caller re-deriving which is which.
+ */
+export type QuoteVersionHistoryEntry =
+  | { readable: true; version: QuoteVersion }
+  | { readable: false; version: UnreadableQuoteVersion };
+
+/**
+ * Interleave the readable and unreadable saved versions back into one newest-first list.
+ *
+ * `adaptQuoteVersionList` splits the server's single version_number-descending result into two
+ * arrays because the two render differently. Rendering those arrays one after the other puts
+ * EVERY unreadable row below EVERY readable one, so a quote with an unreadable v3 above a
+ * readable v2 and v1 displays as v2, v1, v3 — a version history in the wrong order, which is
+ * exactly the claim the list is there to make (Codex on #592). Merge them back by version
+ * number so the displayed order is the saved order again, whichever bucket a row landed in.
+ *
+ * `sent_at` then `id` break ties only so the order is total and stable; `version_number` is
+ * unique per quote, so those tie-breaks are not expected to decide anything in practice.
+ */
+export function orderedQuoteVersionHistory(list: QuoteVersionList): QuoteVersionHistoryEntry[] {
+  const entries: QuoteVersionHistoryEntry[] = [
+    ...list.versions.map((version) => ({ readable: true as const, version })),
+    ...list.unreadable.map((version) => ({ readable: false as const, version })),
+  ];
+
+  return entries.sort((a, b) => {
+    if (a.version.version_number !== b.version.version_number) {
+      return b.version.version_number - a.version.version_number;
+    }
+    if (a.version.sent_at !== b.version.sent_at) {
+      return a.version.sent_at < b.version.sent_at ? 1 : -1;
+    }
+    return a.version.id < b.version.id ? 1 : -1;
+  });
+}

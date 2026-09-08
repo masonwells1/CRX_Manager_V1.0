@@ -71,7 +71,7 @@ import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { preferredQuoteNotes } from '../lib/quoteNotes';
-import { adaptQuoteVersionList, type UnreadableQuoteVersion } from '../lib/quoteVersionAdapter';
+import { adaptQuoteVersionList, orderedQuoteVersionHistory, type UnreadableQuoteVersion } from '../lib/quoteVersionAdapter';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import HelpTip from '../components/ui/HelpTip';
 import TransactionThread from '../components/ui/TransactionThread';
@@ -475,6 +475,13 @@ export default function QuoteBuilder() {
   const [quoteVersions, setQuoteVersions] = useState<QuoteVersion[]>([]);
   const [unreadableQuoteVersions, setUnreadableQuoteVersions] = useState<UnreadableQuoteVersion[]>([]);
   const savedVersionCount = quoteVersions.length + unreadableQuoteVersions.length;
+  // One newest-first list, not readable-then-unreadable: see orderedQuoteVersionHistory. The two
+  // state arrays stay separate because everything else (restore, compare, the Sentry report) may
+  // only ever see the readable ones.
+  const orderedVersionHistory = useMemo(
+    () => orderedQuoteVersionHistory({ versions: quoteVersions, unreadable: unreadableQuoteVersions }),
+    [quoteVersions, unreadableQuoteVersions],
+  );
   const [selectedVersion, setSelectedVersion] = useState<QuoteVersion | null>(null);
   const [compareMode, setCompareMode] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
@@ -3698,7 +3705,37 @@ export default function QuoteBuilder() {
           <CardHeader title="Version" accent="History" />
           {/* Version list */}
           <div className="divide-y divide-gray-100">
-            {quoteVersions.map((v) => {
+            {orderedVersionHistory.map((entry) => {
+              if (!entry.readable) {
+                /*
+                  Saved versions whose snapshot this build cannot read. Listed at all so a quote whose
+                  only versions are legacy still shows its history, and shown without an item count or
+                  total because both would have to be read out of a snapshot that cannot be trusted.
+                  Not selectable, so they reach neither the compare view nor restore.
+
+                  Only rows the server itself treats as legacy are called an older format; a row the
+                  server stamped as restorable says only that its details are unavailable, because
+                  calling it old would be a guess. Those also raise a Sentry report - see
+                  reportUntrustworthyQuoteVersions.
+                */
+                const u = entry.version;
+                return (
+                  <div key={u.id} className="py-3 px-3 flex items-center justify-between">
+                    <div>
+                      <span className="font-medium text-secondary">v{u.version_number}</span>
+                      <span className="text-secondary text-sm ml-3">
+                        {new Date(u.sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <div className="text-sm text-secondary italic">
+                      {u.server_trusted
+                        ? 'Details unavailable'
+                        : 'Saved in an older format · details unavailable'}
+                    </div>
+                  </div>
+                );
+              }
+              const v = entry.version;
               const itemCount = v.snapshot_data?.sections?.reduce(
                 (sum, s) => sum + (s.items?.length || 0), 0
               ) || 0;
@@ -3730,32 +3767,6 @@ export default function QuoteBuilder() {
                 </div>
               );
             })}
-            {/*
-              Saved versions whose snapshot this build cannot read. Listed at all so a quote whose
-              only versions are legacy still shows its history, and shown without an item count or
-              total because both would have to be read out of a snapshot that cannot be trusted.
-              Not selectable, so they reach neither the compare view nor restore.
-
-              Only rows the server itself treats as legacy are called an older format; a row the
-              server stamped as restorable says only that its details are unavailable, because
-              calling it old would be a guess. Those also raise a Sentry report — see
-              reportUntrustworthyQuoteVersions.
-            */}
-            {unreadableQuoteVersions.map((v) => (
-              <div key={v.id} className="py-3 px-3 flex items-center justify-between">
-                <div>
-                  <span className="font-medium text-secondary">v{v.version_number}</span>
-                  <span className="text-secondary text-sm ml-3">
-                    {new Date(v.sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                  </span>
-                </div>
-                <div className="text-sm text-secondary italic">
-                  {v.server_trusted
-                    ? 'Details unavailable'
-                    : 'Saved in an older format · details unavailable'}
-                </div>
-              </div>
-            ))}
           </div>
 
           {/* Selected version details */}

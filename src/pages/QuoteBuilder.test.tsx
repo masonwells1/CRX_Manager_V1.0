@@ -639,6 +639,96 @@ describe('QuoteBuilder', () => {
     expect(screen.queryByRole('button', { name: /Restore/i })).not.toBeInTheDocument();
   });
 
+  it('keeps version history in saved order when a newer version is unreadable', async () => {
+    // Codex on #592: the page rendered every readable version and then every unreadable one, so
+    // a quote whose NEWEST version is unreadable displayed it underneath the older readable
+    // ones — v2, v1, v3 — and the history claimed an order the data does not have.
+    const { quote, product, section, item } = makeQuoteFixture('sent', 7);
+    const versionRow = (
+      id: string,
+      versionNumber: number,
+      sentAt: string,
+      snapshotData: unknown,
+    ) => ({
+      id,
+      quote_id: quote.id,
+      version_number: versionNumber,
+      sent_by: 'profile-1',
+      sent_at: sentAt,
+      sent_method: null,
+      snapshot_data: snapshotData,
+      pdf_url: null,
+      notes: null,
+      restore_trusted_at: null,
+    });
+    // The legacy shape the strict validator refuses: quote fields at the top level, no `quote` key.
+    const unreadableSnapshot = {
+      quote_number: 'Q-version-order',
+      customer_id: 'customer-1',
+      customer_name: 'Farm',
+      tier: 1,
+      valid_days: 30,
+      header_notes: null,
+      footer_notes: null,
+      commission_split: null,
+      totals: { total_price: 4321 },
+      sections: [],
+    };
+    const readableSnapshot = (totalPrice: number) => ({
+      quote: {
+        quote_number: 'Q-version-order',
+        customer_id: 'customer-1',
+        tier: 1,
+        status: 'sent',
+        total_price: totalPrice,
+        total_cost: 0,
+        total_profit: totalPrice,
+        total_margin_pct: 100,
+        valid_days: 30,
+        expires_at: null,
+        header_notes: null,
+        footer_notes: null,
+        is_planned: false,
+        commission_split: null,
+      },
+      sections: [],
+    });
+
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', email: 'grower@example.com', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : table === 'quote_versions'
+                  // The server returns one version_number-descending sequence; the newest is the
+                  // one this build cannot read.
+                  ? [
+                      versionRow('version-3', 3, '2026-03-16T15:44:00.000Z', unreadableSnapshot),
+                      versionRow('version-2', 2, '2026-03-16T15:43:00.000Z', readableSnapshot(200)),
+                      versionRow('version-1', 1, '2026-03-16T15:42:00.000Z', readableSnapshot(100)),
+                    ]
+                  : [],
+      error: null,
+    }));
+
+    renderQuoteBuilder(quote.id);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Versions \(3\)/ }));
+
+    // Guard the fixture: if all three landed in one bucket the ordering claim would be vacuous.
+    expect(await screen.findByText(/Saved in an older format/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Saved in an older format/)).toHaveLength(1);
+
+    expect(screen.getAllByText(/^v\d+$/).map((node) => node.textContent))
+      .toEqual(['v3', 'v2', 'v1']);
+  });
+
   it('reports an unreadable version the server stamped as restorable instead of calling it old', async () => {
     // restore_trusted_at is set only by the current writer, so a row carrying it should always
     // parse. One that does not is corruption or writer/validator drift — the user sees the same

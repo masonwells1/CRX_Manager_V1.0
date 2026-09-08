@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { adaptQuoteVersionList, adaptQuoteVersionRow, adaptQuoteVersionRows, type QuoteVersionRow } from './quoteVersionAdapter';
+import { adaptQuoteVersionList, adaptQuoteVersionRow, adaptQuoteVersionRows, orderedQuoteVersionHistory, type QuoteVersionRow } from './quoteVersionAdapter';
 
 function validRow(): QuoteVersionRow {
   return {
@@ -125,28 +125,28 @@ describe('quote version row adapter', () => {
   });
 });
 
-describe('quote version list split', () => {
-  function legacyFlatRow(): QuoteVersionRow {
-    // The shape the original frontend writer saved: no `quote` key, totals at the top level.
-    // Two rows in this shape exist in production.
-    const row = validRow();
-    row.id = 'version-legacy';
-    row.version_number = 1;
-    row.snapshot_data = {
-      quote_number: 'Q-legacy',
-      customer_id: 'customer-1',
-      customer_name: 'Customer',
-      tier: 1,
-      valid_days: 30,
-      header_notes: null,
-      footer_notes: null,
-      commission_split: null,
-      totals: { total_price: 100 },
-      sections: [],
-    };
-    return row;
-  }
+function legacyFlatRow(): QuoteVersionRow {
+  // The shape the original frontend writer saved: no `quote` key, totals at the top level.
+  // Two rows in this shape exist in production.
+  const row = validRow();
+  row.id = 'version-legacy';
+  row.version_number = 1;
+  row.snapshot_data = {
+    quote_number: 'Q-legacy',
+    customer_id: 'customer-1',
+    customer_name: 'Customer',
+    tier: 1,
+    valid_days: 30,
+    header_notes: null,
+    footer_notes: null,
+    commission_split: null,
+    totals: { total_price: 100 },
+    sections: [],
+  };
+  return row;
+}
 
+describe('quote version list split', () => {
   it('keeps an unreadable snapshot in the list instead of dropping the row', () => {
     const readable = validRow();
     const { versions, unreadable } = adaptQuoteVersionList([readable, legacyFlatRow()]);
@@ -204,7 +204,10 @@ describe('quote version list split', () => {
   it('lists unreadable versions in the page without an item count or total', () => {
     const page = readFileSync('src/pages/QuoteBuilder.tsx', 'utf8');
 
-    expect(page).toContain('unreadableQuoteVersions.map');
+    // One ordered list, not readable-then-unreadable. Rendering the two state arrays in
+    // sequence is what put a newer unreadable version below older readable ones.
+    expect(page).toContain('orderedVersionHistory.map');
+    expect(page).not.toContain('unreadableQuoteVersions.map');
     expect(page).toContain('Saved in an older format');
     // The anomaly path must stay wired: listing a row the server trusts must not silence it.
     expect(page).toContain('reportUntrustworthyQuoteVersions');
@@ -213,3 +216,82 @@ describe('quote version list split', () => {
     expect(page.match(/savedVersionCount/g)?.length).toBeGreaterThanOrEqual(3);
   });
 });
+describe('orderedQuoteVersionHistory', () => {
+  const readable = (id: string, versionNumber: number, sentAt: string): QuoteVersionRow => {
+    const row = validRow();
+    row.id = id;
+    row.version_number = versionNumber;
+    row.sent_at = sentAt;
+    return row;
+  };
+  const unreadableRow = (id: string, versionNumber: number, sentAt: string): QuoteVersionRow => {
+    const row = legacyFlatRow();
+    row.id = id;
+    row.version_number = versionNumber;
+    row.sent_at = sentAt;
+    row.restore_trusted_at = null;
+    return row;
+  };
+  const numbers = (list: ReturnType<typeof orderedQuoteVersionHistory>) => (
+    list.map((entry) => entry.version.version_number)
+  );
+
+  it('puts a newer UNREADABLE version above older readable ones', () => {
+    // The defect Codex found on #592: the page rendered every readable version and then every
+    // unreadable one, so this set displayed as v2, v1, v3 — a version history out of order.
+    const list = adaptQuoteVersionList([
+      unreadableRow('version-3', 3, '2026-09-05T03:00:00Z'),
+      readable('version-2', 2, '2026-09-05T02:00:00Z'),
+      readable('version-1', 1, '2026-09-05T01:00:00Z'),
+    ]);
+
+    // Guard the fixture: if these ever landed in one bucket the ordering claim would be vacuous.
+    expect(list.versions).toHaveLength(2);
+    expect(list.unreadable).toHaveLength(1);
+
+    expect(numbers(orderedQuoteVersionHistory(list))).toEqual([3, 2, 1]);
+  });
+
+  it('marks each entry with the shape the row actually has', () => {
+    const list = adaptQuoteVersionList([
+      unreadableRow('version-2', 2, '2026-09-05T02:00:00Z'),
+      readable('version-1', 1, '2026-09-05T01:00:00Z'),
+    ]);
+
+    const ordered = orderedQuoteVersionHistory(list);
+
+    expect(ordered.map((entry) => entry.readable)).toEqual([false, true]);
+    expect(ordered[0].version.id).toBe('version-2');
+    expect(ordered[1].version.id).toBe('version-1');
+  });
+
+  it('interleaves rather than grouping when the buckets alternate', () => {
+    const list = adaptQuoteVersionList([
+      readable('version-4', 4, '2026-09-05T04:00:00Z'),
+      unreadableRow('version-3', 3, '2026-09-05T03:00:00Z'),
+      readable('version-2', 2, '2026-09-05T02:00:00Z'),
+      unreadableRow('version-1', 1, '2026-09-05T01:00:00Z'),
+    ]);
+
+    expect(numbers(orderedQuoteVersionHistory(list))).toEqual([4, 3, 2, 1]);
+  });
+
+  it('keeps a single-bucket history in its existing newest-first order', () => {
+    const allReadable = adaptQuoteVersionList([
+      readable('version-2', 2, '2026-09-05T02:00:00Z'),
+      readable('version-1', 1, '2026-09-05T01:00:00Z'),
+    ]);
+    const allUnreadable = adaptQuoteVersionList([
+      unreadableRow('version-2', 2, '2026-09-05T02:00:00Z'),
+      unreadableRow('version-1', 1, '2026-09-05T01:00:00Z'),
+    ]);
+
+    expect(numbers(orderedQuoteVersionHistory(allReadable))).toEqual([2, 1]);
+    expect(numbers(orderedQuoteVersionHistory(allUnreadable))).toEqual([2, 1]);
+  });
+
+  it('returns nothing for an empty history', () => {
+    expect(orderedQuoteVersionHistory({ versions: [], unreadable: [] })).toEqual([]);
+  });
+});
+
