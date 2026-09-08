@@ -59,11 +59,14 @@ const mocks = vi.hoisted(() => ({
   resetKey: vi.fn(),
   rpc: vi.fn(),
   // One lifecycle record per receive started in the CURRENT test, in start
-  // order. `answered`: that receive's RPC has answered (not merely been
-  // called). `settled`: that receive's whole handler has finished, whatever
-  // its outcome. Per receive, not per test, so a second receive in the same
-  // test cannot hide behind the first one having settled. Reset in beforeEach.
-  receive: { records: [] as Array<{ answered: boolean; settled: boolean }> },
+  // order. `called`: that receive's RPC has been invoked. `answered`: it has
+  // answered (not merely been called). `settled`: that receive's whole handler
+  // has finished, whatever its outcome. Per receive, not per test, so a second
+  // receive in the same test cannot hide behind the first one having settled.
+  // Reset in beforeEach.
+  receive: {
+    records: [] as Array<{ called: boolean; answered: boolean; settled: boolean }>,
+  },
 }));
 
 /** The receive currently running: the newest record that has not settled. */
@@ -100,7 +103,7 @@ vi.mock('../lib/criticalAction', () => ({
     // A receive gets its own lifecycle record the moment its handler starts;
     // the RPC wrapper below marks it answered, and `finally` marks it settled.
     const record = options.sentryTag === 'receive_po_items'
-      ? { answered: false, settled: false }
+      ? { called: false, answered: false, settled: false }
       : undefined;
     if (record) mocks.receive.records.push(record);
     try {
@@ -452,9 +455,17 @@ async function loadPo(poId: string) {
   await release(`history:${poId}`);
 }
 
-/** Every receive whose RPC answered in this test has finished, whatever its outcome. */
+/**
+ * Every receive started in this test is in a state that cannot leak into the
+ * next test: its handler has finished, whatever the outcome, or its RPC was
+ * called and deliberately never answered (parked), so nothing runs after it.
+ * A receive that started but has not even called the RPC yet is still doing
+ * its pre-RPC work (the IndexedDB intent write) and is NOT safe.
+ */
 function receiveSettled() {
-  return mocks.receive.records.every((record) => record.settled || !record.answered);
+  return mocks.receive.records.every(
+    (record) => record.settled || (record.called && !record.answered),
+  );
 }
 
 /**
@@ -488,6 +499,9 @@ async function submitReceive(quantity: string) {
   // that was already recorded before the click -- a straggler from a previous
   // test's receive tail -- must not stop the sampling loop early.
   const toastsBefore = mocks.toast.mock.calls.length;
+  // Likewise only an RPC call made by THIS receive counts: with two receives in
+  // one test, the first one's call must not stop the loop or be returned here.
+  const rpcCallsBefore = mocks.rpc.mock.calls.length;
   fireEvent.click(screen.getByRole('button', { name: /receive items/i }));
   const dialog = await screen.findByRole('dialog');
   fireEvent.change(within(dialog).getAllByRole('spinbutton')[0], { target: { value: quantity } });
@@ -503,13 +517,17 @@ async function submitReceive(quantity: string) {
   // single tick reads "not yet" as "never", which would let a broken guard look
   // exactly like a working one.
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const fired = mocks.rpc.mock.calls.some((call) => call[0] === 'receive_po_items');
+    const fired = mocks.rpc.mock.calls
+      .slice(rpcCallsBefore)
+      .some((call) => call[0] === 'receive_po_items');
     if (fired || mocks.toast.mock.calls.length > toastsBefore) break;
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
-  return mocks.rpc.mock.calls.find((call) => call[0] === 'receive_po_items');
+  return mocks.rpc.mock.calls
+    .slice(rpcCallsBefore)
+    .find((call) => call[0] === 'receive_po_items');
 }
 
 describe('PurchaseOrderDetail route-currency race', () => {
@@ -527,10 +545,10 @@ describe('PurchaseOrderDetail route-currency race', () => {
     // fine: nothing runs after an answer that never comes.
     if (!receiveSettled()) {
       throw new Error(
-        'The receive_po_items RPC answered in this test, but the test returned before '
-          + 'the receive settled. Call awaitReceiveSettled() before the test ends (or '
-          + 'leave the RPC parked and never answer it), or its success toast lands in '
-          + 'the next test and breaks submitReceive there.',
+        'A receive started in this test (its RPC answered, or it had not even called the '
+          + 'RPC yet), but the test returned before the receive settled. Call '
+          + 'awaitReceiveSettled() before the test ends (or leave the RPC parked and never '
+          + 'answer it), or its tail lands in the next test and breaks submitReceive there.',
       );
     }
   });
@@ -581,6 +599,7 @@ describe('PurchaseOrderDetail route-currency race', () => {
           // still open when the RPC is called is this receive's own.
           const record = currentReceive();
           if (!record) throw new Error('receive_po_items was called outside the receive handler');
+          record.called = true;
           const markAnswered = () => {
             record.answered = true;
           };

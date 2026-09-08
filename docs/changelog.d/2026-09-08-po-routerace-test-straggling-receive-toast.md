@@ -153,6 +153,42 @@ Proof (per-record harness):
 - Mutation table re-run against the per-record harness: identical result, 10 of 11 red on
   the same tests, the same single green row.
 
+### CodeRabbit round two (head 3072f4718, two Minors) — both fixed
+
+1. **A receive that had not yet called the RPC was treated as safe.** The guard only knew
+   "answered" and "settled", so a handler still doing its pre-RPC work (the IndexedDB
+   intent write) when the test returned looked like a parked receive and was waved
+   through; `beforeEach` then cleared its record and its tail ran in the next test.
+   Fix: each record also carries `called`, set by the RPC wrapper. A record is safe only
+   if it settled, or if it was called and deliberately never answered. Neither-called-
+   nor-settled now fails the test.
+2. **`submitReceive` matched any earlier receive call.** Its "did the RPC fire" sample and
+   its return value looked at every `receive_po_items` call in the test, so with two
+   receives the second call would stop on, and return, the first one's payload (the
+   two-receive probe above had to clear the mock by hand to get around this). Fix: the
+   helper snapshots the RPC call count before its click, like it already did for toasts,
+   and only looks at calls made after it.
+
+Proof (round-two harness, `NEW`, against the round-one harness at `3072f4718`, `OLD`):
+
+- Backwards, finding 1: a temporary test that starts a receive handler directly through
+  the `runCriticalAction` stand-in with an action that never resolves and never calls the
+  RPC. `NEW` fails it with the guard message; `OLD` passes it (the leak CodeRabbit named).
+- Backwards, finding 2: a temporary test that runs two receives to completion and asserts
+  the second `submitReceive()` returns the second RPC call with quantity 2. `NEW` passes;
+  `OLD` fails with "expected [receive_po_items, …] not to be [receive_po_items, …]", the
+  first call handed back twice.
+- The round-one two-receive probe and both Codex probes are unchanged in behaviour on
+  `NEW` (16 tests: 14 pass, the 2 guard probes fail as designed).
+- File 3/3 green unloaded; `tsc --noEmit -p tsconfig.app.json` (the pre-push config) and
+  `eslint` clean.
+- Forwards: test 1 without its `awaitReceiveSettled()`, under full-suite load, was failed
+  by the guard in 4 of 9 runs (message "A receive started in this test…"), only that test,
+  and the other runs were fully green (straggler landed inside the test body).
+- Mutation table re-run against the round-two harness: identical, 10 of 11 red on the
+  same tests, the same single green row.
+- The rest of the suite (371 files, 5214 tests, this file excluded as the load) green.
+
 Proof (final harness):
 
 - Backwards, finding 1: a temporary test that parks the receive for the whole test
