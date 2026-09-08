@@ -169,7 +169,8 @@ Report any HIGH or CRITICAL findings.
 
 If every step ran and passed: report PASS, and name what this audit did **not** cover (E2E,
 live smokes, reviewer subagents) so it is not mistaken for a ship verdict. Landing still follows
-the branch → PR → checks → CodeRabbit → merge flow in `AGENTS.md`.
+the branch → PR → green required checks → merge flow in `AGENTS.md`; CI is the merge gate and a
+CodeRabbit review is not required.
 If any step was skipped or a tool was unavailable: report INCOMPLETE and name the gap.
 If anything fails: list each issue and ask the user whether to fix them.
 

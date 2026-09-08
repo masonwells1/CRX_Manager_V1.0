@@ -140,7 +140,7 @@ Add one prevention action, strongest first: a **regression test that FAILS on th
 
 ## Morning handoff (what Mason reads)
 
-`REPORT.md`, top to bottom: per cycle — what **Codex found**, what **Claude confirmed vs refuted**, what was **auto-fixed** (green — already committed, Codex-reviewed, green toolchain), and what's **parked** (yellow — plain-English explanation + validation proof + Codex note). Nothing needs rolling back — every green fix is a local commit on a non-prod branch; one PR from the hunt branch lands the ones he likes — Vercel check passing, and CodeRabbit's review read and resolved (fix each real issue; dismiss nitpicks with a one-line reason) before merge.
+`REPORT.md`, top to bottom: per cycle — what **Codex found**, what **Claude confirmed vs refuted**, what was **auto-fixed** (green — already committed, Codex-reviewed, green toolchain), and what's **parked** (yellow — plain-English explanation + validation proof + Codex note). Nothing needs rolling back — every green fix is a local commit on a non-prod branch; one PR from the hunt branch lands the ones he likes — Vercel check passing, and, **if** the hourly review-slot job has delivered a CodeRabbit review on that head, its review read and resolved (fix each real issue; dismiss nitpicks with a one-line reason) before merge. A CodeRabbit review is not required to merge — CI is the gate — so do not hold a green PR waiting for one.
 
 ## Final response each cycle (keep it short for Mason)
 
