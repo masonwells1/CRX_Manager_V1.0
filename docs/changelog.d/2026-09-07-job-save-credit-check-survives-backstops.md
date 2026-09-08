@@ -61,6 +61,15 @@ Fixed: the shared `checkMutationResult` mock now mirrors the real checker's erro
 shape, and the now-unused rejecting-chain helper is gone. Re-falsified after the change:
 still 1 failed / 9 passed on the reverted page, failing on the credit assertion.
 
+Second CodeRabbit pass (APPROVED, with one minor): the exact-once assertions guarding against
+a double-fire lived only on the backstop test, so a duplicate call re-added to the SUCCESS
+block would not have been caught — the success test only asserted `toHaveBeenCalled()`. The
+same two assertions now sit on the ordinary-create test as well. Falsified by injecting a
+second `warnIfOverCreditLimit` call into the success block: both tests fail on the count.
+
+Codex (`gpt-5.6-sol`, high effort) reviewed the exact candidate SHA and returned CLEAN —
+READY FOR APPROVAL, no blocker or high-severity findings.
+
 ### Not verified
 
 Not exercised against live Supabase — the proof is the mocked page-level path, not a real

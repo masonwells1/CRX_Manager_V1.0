@@ -665,6 +665,11 @@ describe('JobDetail cross-record stale-load guard', () => {
       expect(mockRpc.mock.calls.some((c) => c[0] === 'check_customer_credit_limit')).toBe(true);
     });
     await waitFor(() => expect(mockNotifyCreditLimit).toHaveBeenCalled());
+    // Exactly once on the ORDINARY create too, not just on the backstop path below. The
+    // check has a single call site by design; a second one re-added to the success block
+    // would double-notify admins for one job, and only this assertion would catch it.
+    expect(mockRpc.mock.calls.filter((c) => c[0] === 'check_customer_credit_limit')).toHaveLength(1);
+    expect(mockNotifyCreditLimit).toHaveBeenCalledTimes(1);
 
     // 3. And the page the operator is on NOW is untouched: no redirect onto the new job,
     //    which is the wrong this PR's guard exists to prevent. Both halves at once.
