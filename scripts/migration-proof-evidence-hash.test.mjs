@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { captureMigrationProofEvidence, reviewableEvidencePaths } from './migration-proof-evidence-hash.mjs';
-import { unresolvedApplicationRpcCallSites } from './rpc-call-site-matcher.mjs';
+import { applicationRpcAccessInventory, unresolvedApplicationRpcCallSites } from './rpc-call-site-matcher.mjs';
 
 test('the proof snapshot retains every repository source used by the evidence renderer', () => {
   const root = process.cwd();
@@ -22,6 +22,31 @@ test('the proof snapshot retains every repository source used by the evidence re
   assert.ok(snapshot.paths('src/', (relative) => /\.(?:ts|tsx)$/.test(relative)).length > 0);
   assert.ok(snapshot.paths('supabase/functions/', (relative) => /\.(?:ts|tsx)$/.test(relative)).length > 0);
   assert.deepEqual(unresolvedApplicationRpcCallSites(snapshot), [], 'current production source has no unresolvable dynamic RPC name calls');
+
+  // This independent textual inventory catches a future matcher regression that
+  // drops a receiver name before it reaches the proof evidence. The matcher must
+  // account for every direct `.rpc` token present in production source.
+  const lineAt = (source, index) => source.slice(0, index).split(/\r?\n/).length;
+  const matchedSites = new Set(applicationRpcAccessInventory(snapshot).map(({ file, index }) => `${file}:${lineAt(snapshot.text(file), index)}`));
+  const missing = [];
+  const productionSources = [
+    ...snapshot.paths('src/', (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative)),
+    ...snapshot.paths('supabase/functions/', (relative) => /\.(?:ts|tsx)$/.test(relative) && !/\.(?:test|spec)\.(?:ts|tsx)$/.test(relative)),
+  ];
+  for (const relative of productionSources) {
+    const source = snapshot.text(relative);
+    for (const match of source.matchAll(/\.\s*rpc\b/g)) {
+      const line = lineAt(source, match.index);
+      const lineStart = source.lastIndexOf('\n', match.index) + 1;
+      const lineEnd = source.indexOf('\n', match.index);
+      const sourceLine = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
+      // This inventory intentionally ignores standalone documentation comments;
+      // comment/string boundary behavior belongs to the matcher unit tests above.
+      if (/^\s*(?:\/\/|\/\*|\*)/.test(sourceLine)) continue;
+      if (!matchedSites.has(`${relative}:${line}`)) missing.push(`${relative}:${line}`);
+    }
+  }
+  assert.deepEqual(missing, [], 'every direct production .rpc access is represented in the proof matcher inventory');
 });
 
 test('the proof snapshot includes non-ignored untracked application files', () => {

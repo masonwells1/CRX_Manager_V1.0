@@ -20,16 +20,52 @@ test('matches literal RPC routine names containing regular-expression characters
   }
 });
 
-test('matches valid literal RPC call syntax beyond a direct dot call', () => {
+test('matches literal calls from every receiver and decodes JavaScript string escapes', () => {
   const snapshot = snapshotFor('src/lib/call.ts', `
 client.rpc ('dangerous_rpc');
-client.rpc /* explanatory comment */ ('dangerous_rpc');
-client.rpc?.(\`dangerous_rpc\`);
-client['rpc']('dangerous_rpc');
-client["rpc"]?.( "dangerous_rpc" );`);
+supabaseUntyped.rpc /* explanatory comment */ ('dangerous\\x5frpc');
+api.rpc?.(\`dangerous_rpc\`);
+service['rpc']('dangerous_rpc');
+other["rpc"]?.( "dangerous_rpc" );`);
   const sites = applicationRpcCallSites('dangerous_rpc', snapshot);
   assert.equal(sites.length, 5);
   assert.equal(unresolvedApplicationRpcCallSites(snapshotFor('src/lib/call.ts', `client.rpc('dangerous_rpc')`)).length, 0);
+});
+
+test('does not treat strings, comments, or regular expressions as executable RPC access', () => {
+  const snapshot = snapshotFor('src/lib/call.ts', `
+const url = "https://example.test/api.rpc('not_a_call')";
+const matcher = /client\\.rpc\\('not_a_call'\\)/;
+// supabase.rpc('comment_only');
+/* supabaseUntyped.rpc('block_comment_only'); */
+supabaseUntyped.rpc('actual_rpc');`);
+  assert.equal(applicationRpcCallSites('actual_rpc', snapshot).length, 1);
+  assert.equal(applicationRpcCallSites('not_a_call', snapshot).length, 0);
+  assert.deepEqual(unresolvedApplicationRpcCallSites(snapshot), []);
+});
+
+test('handles apostrophes in TSX prose without losing a following RPC call', () => {
+  const snapshot = snapshotFor('src/lib/call.tsx', `<p>This customer's saved view is ready.</p>; supabaseUntyped.rpc('actual_rpc');`);
+  assert.equal(applicationRpcCallSites('actual_rpc', snapshot).length, 1);
+  assert.deepEqual(unresolvedApplicationRpcCallSites(snapshot), []);
+});
+
+test('handles multiline TSX attribute literals without losing a following RPC call', () => {
+  const snapshot = snapshotFor('src/lib/call.tsx', `<input className="one\n  two" />; supabaseUntyped.rpc('actual_rpc');`);
+  assert.equal(applicationRpcCallSites('actual_rpc', snapshot).length, 1);
+  assert.deepEqual(unresolvedApplicationRpcCallSites(snapshot), []);
+});
+
+test('handles optional chaining inside a TSX template expression', () => {
+  const snapshot = snapshotFor('src/lib/call.tsx', "<QuickTaskModal prefillContent={`Customer: ${customer?.farm_name || 'Unknown'}`} />; supabaseUntyped.rpc('actual_rpc');");
+  assert.equal(applicationRpcCallSites('actual_rpc', snapshot).length, 1);
+  assert.deepEqual(unresolvedApplicationRpcCallSites(snapshot), []);
+});
+
+test('handles a nested template expression without desynchronizing later source', () => {
+  const snapshot = snapshotFor('src/lib/call.tsx', "const message = `outer ${condition ? `inner ${value}` : ''}`; supabaseUntyped.rpc('actual_rpc');");
+  assert.equal(applicationRpcCallSites('actual_rpc', snapshot).length, 1);
+  assert.deepEqual(unresolvedApplicationRpcCallSites(snapshot), []);
 });
 
 test('reports variable and interpolated RPC routine names as unresolved exposure', () => {
@@ -78,4 +114,16 @@ test('fails closed for template expressions, computed calls, and indirect RPC ac
   assert.ok(sites.some((site) => site.includes(':14')));
   assert.ok(sites.some((site) => site.includes(':16')));
   assert.equal(applicationRpcCallSites('literal_rpc', snapshotFor('src/lib/call.ts', "(client.rpc)('literal_rpc')")).length, 1);
+});
+
+test('fails closed for an RPC-looking call inside a template interpolation', () => {
+  const snapshot = snapshotFor('src/lib/call.tsx', "const message = `${supabaseUntyped.rpc('hidden_rpc')}`;");
+  assert.equal(applicationRpcCallSites('hidden_rpc', snapshot).length, 0);
+  assert.equal(unresolvedApplicationRpcCallSites(snapshot).length, 1);
+});
+
+test('recovers direct callers after an unparseable template without treating a dynamic name as literal', () => {
+  const snapshot = snapshotFor('src/lib/call.tsx', "const broken = `unterminated; supabaseUntyped.rpc('actual_rpc'); client.rpc(dynamicName);");
+  assert.equal(applicationRpcCallSites('actual_rpc', snapshot).length, 1);
+  assert.equal(unresolvedApplicationRpcCallSites(snapshot).length, 1);
 });
