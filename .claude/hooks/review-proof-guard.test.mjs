@@ -28,6 +28,16 @@ function allowed(payload) {
 for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/session-state/claude-review-push.json", content: "{}" } },
   { tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\codex-review-abc.json" } },
+  // GitHub Codex P1 on ac5758f03: the settings `ask` glob matches the spelling it is given, so a
+  // native edit through a dot segment or a doubled separator reached a protected file with no
+  // prompt. Non-canonical spellings of the enforcement surface deny in every mode.
+  { tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.github\\scripts\\..\\workflows\\ci.yml", old_string: "a", new_string: "b" } },
+  { tool_name: "MultiEdit", tool_input: { file_path: ".github/scripts/../workflows/ci.yml", edits: [] } },
+  { tool_name: "Write", tool_input: { file_path: ".claude//hooks/review-proof-guard.mjs", content: "x" } },
+  { tool_name: "Write", tool_input: { file_path: "./.claude/settings.json", content: "{}" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/hooks/", content: "{}" } },
+  { tool_name: "NotebookEdit", tool_input: { notebook_path: ".claude/commands/../hooks/probe.ipynb" } },
+  { tool_name: "Edit", tool_input: { file_path: "../elsewhere/notes.md", old_string: "a", new_string: "b" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/claude-review-push.json" } },
   { tool_name: "Bash", tool_input: { command: "echo {} > .claude/session-state/claude-review-push.json" } },
   { tool_name: "PowerShell", tool_input: { command: "Remove-Item .claude/session-state/codex-review-abc.json" } },
@@ -341,6 +351,12 @@ allowed({ tool_name: "Bash", tool_input: { command: "rm a*.log" } });
 allowed({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/review-proof-guard.mjs", content: "// edit" } });
 allowed({ tool_name: "Write", tool_input: { file_path: ".claude/settings.json", content: "{}" } });
 allowed({ tool_name: "Edit", tool_input: { file_path: ".claude/hooks/stop-wrap.mjs" } });
+// Canonical spellings (Windows separators included) stay with the settings prompt, and a
+// non-canonical spelling of an UNPROTECTED path is nobody's business here.
+allowed({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\hooks\\stop-wrap.mjs" } });
+allowed({ tool_name: "Write", tool_input: { file_path: "C:/repo/.github/workflows/ci.yml", content: "x" } });
+allowed({ tool_name: "Edit", tool_input: { file_path: "src/pages/../lib/x.ts" } });
+allowed({ tool_name: "Write", tool_input: { file_path: "./docs/notes.md", content: "x" } });
 // DELIBERATELY REVERSED 2026-09-01. This line used to assert that an MCP move of
 // a hook file was ALLOWED — true when `guarded-surface-lock` existed to catch it.
 // With the lock deleted, that is exactly the "silently rewrite a guard, then run

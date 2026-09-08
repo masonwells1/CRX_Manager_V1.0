@@ -936,34 +936,37 @@ if (shellTool) {
 // third thing lost in that port, so the list is spelled out here rather than
 // inferred. Name-matched, never shape-matched: a tool that both reads and writes
 // must not appear below.
-if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todowrite)$/i.test(toolName)) {
-  // Dot segments are resolved here too. Second review round, HIGH: an MCP write to
-  // `.claude/commands/../hooks/review-proof-guard.mjs` was probe-confirmed ALLOW —
-  // the intermediate directory exists, so the filesystem lands on the real hook.
-  const resolvePathCandidate = (value) => {
-    // Repeated separators collapse here too. The reviewer only demonstrated the
-    // shell channel, but this resolver had the identical early return, so an MCP or
-    // tool-input write to `.claude//hooks/review-proof-guard.mjs` would have slipped
-    // the path-field rule the same way. Fixing one channel and not the other leaves
-    // the same defect reachable.
-    const p = String(value).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "");
-    if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
-    const isAbsolute = p.startsWith("/");
-    const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
-    const out = [];
-    for (const seg of (drive ? (drive[2] || "") : p).split("/")) {
-      if (seg === "" || seg === ".") continue;
-      if (seg === "..") {
-        if (out.length && out[out.length - 1] !== "..") out.pop();
-        else if (!isAbsolute && !drive) out.push("..");
-        continue;
-      }
-      out.push(seg);
+// The enforcement surface as a path-field regex (shared by the non-native rule below and the
+// native-editor canonical-spelling rule after it).
+const ENFORCEMENT_PATH_FIELD_RE = /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex|\.claude\/(?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts\/(?:(?:check|validate|verify)-[^/]*(?:\/[^/]*)*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
+// Dot segments are resolved here too. Second review round, HIGH: an MCP write to
+// `.claude/commands/../hooks/review-proof-guard.mjs` was probe-confirmed ALLOW —
+// the intermediate directory exists, so the filesystem lands on the real hook.
+const resolvePathCandidate = (value) => {
+  // Repeated separators collapse here too. The reviewer only demonstrated the
+  // shell channel, but this resolver had the identical early return, so an MCP or
+  // tool-input write to `.claude//hooks/review-proof-guard.mjs` would have slipped
+  // the path-field rule the same way. Fixing one channel and not the other leaves
+  // the same defect reachable.
+  const p = String(value).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
+  const isAbsolute = p.startsWith("/");
+  const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
+  const out = [];
+  for (const seg of (drive ? (drive[2] || "") : p).split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length && out[out.length - 1] !== "..") out.pop();
+      else if (!isAbsolute && !drive) out.push("..");
+      continue;
     }
-    const joined = out.join("/");
-    if (drive) return `${drive[1]}/${joined}`;
-    return isAbsolute ? `/${joined}` : joined;
-  };
+    out.push(seg);
+  }
+  const joined = out.join("/");
+  if (drive) return `${drive[1]}/${joined}`;
+  return isAbsolute ? `/${joined}` : joined;
+};
+if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todowrite)$/i.test(toolName)) {
   // The `scripts/(check|validate|verify)-` arm crosses "/" explicitly (PR #605, CodeRabbit F3,
   // decided "widen" 2026-09-06) so it reads the same as the shell regex above and the measured
   // settings-glob behaviour. The earlier `[^/]*` form already caught nested paths as a prefix
@@ -971,11 +974,37 @@ if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todow
   // behaviour change here; the behaviour change lives in codex-push-lib.mjs RISKY_PATH_RES.
   const enforcementPathHit = pathCandidates.some((candidate) => {
     if (candidate == null) return false;
-    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex|\.claude\/(?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts\/(?:(?:check|validate|verify)-[^/]*(?:\/[^/]*)*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i
+    return ENFORCEMENT_PATH_FIELD_RE
       .test(`/${resolvePathCandidate(candidate)}`);
   });
   if (enforcementPathHit) {
     deny("REVIEW PROOF GUARD: this tool would write to .husky, .github/workflows, .claude/hooks, .claude/agents, .claude/commands, .claude/skills, .claude/workflows, .claude/launch.json, .claude/schema-registry.json, .claude/caller-graph.json, .codex, .coderabbit.yaml, package.json, or the check/validate/proof/parity scripts through a path field. These decide whether the commit, push, CI, and review gates run at all. Use native Edit/Write for a deliberate change; enforcement-surface changes require an exact-SHA independent review before merge.");
+  }
+}
+// GitHub Codex P1 on ac5758f03 (`settings.json:216`), probe-confirmed: the native editors are
+// gated by the settings `ask` globs, and a glob matches the SPELLING it is given, so
+// `Edit $ROOT/.github/scripts/../workflows/ci.yml` prompted nothing while the filesystem landed
+// on ci.yml; this hook exempted the native editors because the prompt is their boundary, and
+// armed autopilot was the only place that canonicalised. The exemption is sound only when the
+// spelling IS the canonical path. A non-canonical spelling (a `.`/`..` segment, a repeated or
+// trailing separator) whose canonical form is on the enforcement surface, or one that still
+// escapes the tree after resolution, is denied here in EVERY mode: re-issue with the canonical
+// path and the prompt fires. Backslashes are not counted as non-canonical — Windows spellings
+// are what the editors send on this machine, and the globs are measured against them.
+if (/^(?:write|edit|notebookedit|multiedit)$/i.test(toolName)) {
+  const nonCanonicalProtected = pathCandidates.some((candidate) => {
+    if (candidate == null) return false;
+    const folded = String(candidate).replace(/\\/g, "/");
+    const canonical = resolvePathCandidate(candidate);
+    // A relative path that still begins with `..` after resolution leaves the tree the hook
+    // was given, whether or not the spelling was already canonical; it is never a native
+    // edit this repository can vouch for.
+    if (/^\.\.(?:\/|$)/.test(canonical)) return true;
+    if (folded === canonical) return false;
+    return ENFORCEMENT_PATH_FIELD_RE.test(`/${canonical}`);
+  });
+  if (nonCanonicalProtected) {
+    deny("REVIEW PROOF GUARD: this native edit names a protected enforcement path through a non-canonical spelling (a `..` or `.` segment, a repeated or trailing separator), or a relative path that leaves the tree. The protected-path prompt matches the spelling it is given, so it would not fire. Re-issue the edit with the canonical path (for example `.github/workflows/ci.yml`, not `.github/scripts/../workflows/ci.yml`) and answer the prompt.");
   }
 }
 if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {

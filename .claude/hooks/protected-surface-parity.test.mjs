@@ -140,7 +140,9 @@ const shellRe = extractRegex(
 const pathRe = extractRegex(
   guardSrc,
   "path-field enforcement regex",
-  /return \/(\(\?:\^\|\\\/\)\(\?:\\\.husky.+?)\/([a-z]*)\s*\n\s*\.test\(/,
+  // Hoisted to a named constant alongside the native-editor canonical-spelling rule
+  // (GitHub Codex P1 on ac5758f03); same lazy match up to the `/flags;` ending its line.
+  /const ENFORCEMENT_PATH_FIELD_RE =\s*\/(.+?)\/([a-z]*);[ \t]*$/m,
 );
 const { riskyFiles } = await import(pathToFileURL(rel(".claude", "hooks", "codex-push-lib.mjs")).href);
 assert.equal(typeof riskyFiles, "function", "codex-push-lib.mjs must export riskyFiles");
@@ -215,6 +217,17 @@ for (const sample of samples) {
   for (const spelled of spellings) {
     if (!autopilotDenies(spelled)) fail(`armed autopilot AUTO-APPROVES "${spelled}" although its canonical path "${sample}" is protected`);
   }
+  // GitHub Codex P1 on ac5758f03: outside autopilot the native editors are gated only by the
+  // settings prompt, which matches the spelling it is given. The real hook must deny a native
+  // edit through any spelling that is not the canonical path (backslashes excepted: that is
+  // the spelling the editors send on Windows and the globs are measured against it).
+  for (const spelled of spellings.slice(0, 3)) {
+    if (spelled === sample) continue; // a slash-less sample has no doubled-separator spelling
+    const r = runGuard({ tool_name: "Edit", tool_input: { file_path: spelled, old_string: "a", new_string: "b" } });
+    if (!/"permissionDecision":"deny"/.test(r.stdout)) fail(`real hook: Edit "${spelled}" (canonical "${sample}") was NOT denied (stdout: ${r.stdout.slice(0, 120) || "<silent>"})`);
+  }
+  const canon = runGuard({ tool_name: "Edit", tool_input: { file_path: sample, old_string: "a", new_string: "b" } });
+  if (canon.status !== 0 || canon.stdout !== "") fail(`real hook: canonical Edit "${sample}" must stay silent for the settings prompt (status ${canon.status}, stdout: ${canon.stdout.slice(0, 120)})`);
 }
 
 // ---- 5. every tracked top-level entry under .claude/ and .codex/ is decided ----
