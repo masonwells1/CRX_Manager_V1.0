@@ -344,8 +344,9 @@ function gateRequest(request) {
       "account — CodeRabbit does not answer commands posted by `github-actions[bot]`, so the " +
       "`ready-for-coderabbit` label path yields no review (measured 2026-09-07). Do not post " +
       "`@coderabbitai review` yourself; reviews are rationed to roughly one grant per hour " +
-      "fleet-wide, so a second request collides with that job and wastes the slot. Read the review " +
-      "and fix what it finds first.\n"
+      "fleet-wide, so a second request collides with that job and wastes the slot. If a review " +
+      "DOES exist on this head, read it and fix what it finds first. If none exists, that is not " +
+      "a blocker — CI is the merge gate; do not wait for one.\n"
     );
   }
 

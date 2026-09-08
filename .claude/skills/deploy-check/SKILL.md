@@ -1,6 +1,6 @@
 ---
 name: deploy-check
-description: Pre-merge checklist for CRX Manager — verifies a branch is safe to land. Since `main` is protected (2026-07-14), landing means branch → PR → checks → CodeRabbit → merge, and the merge is what deploys production via Vercel. Use before opening or merging a PR, or before applying migrations to Supabase.
+description: Pre-merge checklist for CRX Manager — verifies a branch is safe to land. Since `main` is protected (2026-07-14), landing means branch → PR → green required checks → merge, and the merge is what deploys production via Vercel. CI is the merge gate; a CodeRabbit review is not required. Use before opening or merging a PR, or before applying migrations to Supabase.
 ---
 
 # Pre-Deployment Check
