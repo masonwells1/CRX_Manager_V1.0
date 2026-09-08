@@ -1,0 +1,393 @@
+-- Keep field-application preview pricing on the same season as save.
+-- New invoices price from their submitted invoice date; edits price from the row's
+-- stored season and never re-season an issued invoice.
+
+DO $preflight$
+DECLARE
+  v_count integer;
+  v_hash text;
+  v_identity text;
+BEGIN
+  SELECT count(*), min(md5(p.prosrc)), min(pg_get_function_identity_arguments(p.oid))
+    INTO v_count, v_hash, v_identity
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = 'preview_field_app_invoice_split';
+
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'PREFLIGHT_OVERLOAD: expected exactly one preview_field_app_invoice_split, found %', v_count;
+  END IF;
+  IF v_identity NOT IN (
+    'p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid',
+    'p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid, p_invoice_date date'
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_SIGNATURE: unexpected preview identity %', v_identity;
+  END IF;
+  IF (v_identity = 'p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid'
+      AND v_hash <> 'ca33fb973d86dbf3a2788dc11fbc49a5')
+     OR
+     (v_identity = 'p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid, p_invoice_id uuid, p_invoice_date date'
+      AND v_hash <> 'f97633f2881b4299fc9f8c57c7e24ed6') THEN
+    RAISE EXCEPTION 'PREFLIGHT_BODY_DRIFT: preview body hash is %', v_hash;
+  END IF;
+END
+$preflight$;
+
+DROP FUNCTION IF EXISTS public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid);
+DROP FUNCTION IF EXISTS public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid, date);
+
+CREATE FUNCTION public.preview_field_app_invoice_split(p_locations jsonb, p_chemicals jsonb, p_application_service_id uuid DEFAULT NULL::uuid, p_invoice_id uuid DEFAULT NULL::uuid, p_invoice_date date DEFAULT NULL::date)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_field_ids         uuid[];
+  v_applied_acres_map jsonb := '{}'::jsonb;
+  v_loc               jsonb;
+  v_shares            jsonb;
+  v_customers         jsonb;
+  v_customer          jsonb;
+  v_customer_id       uuid;
+  v_customer_tier     int;
+  v_app_service       record;
+  v_per_customer      jsonb := '[]'::jsonb;
+  v_customer_lines    jsonb;
+  v_grand_total       bigint := 0;
+  v_chem              jsonb;
+  v_share_row         jsonb;
+  v_chem_qty_a        numeric;
+  v_chem_qty_b        numeric;
+  v_share_acres       numeric;
+  v_field_override    bigint;
+  v_unit_price        bigint;
+  v_qi_price          numeric;
+  v_extended          bigint;
+  v_fee_rate          bigint;
+  v_fee_acres         numeric;
+  v_fee_extended      bigint;
+  v_customer_total    bigint;
+  v_rate              numeric;
+  v_ta_unit           text;       -- PARKED-010: rate unit of the applied amount
+  v_inv_unit          text;       -- PARKED-010: product's sold/pricing unit
+  v_form              text;       -- PARKED-010: product_form (liquid/dry)
+  v_priced_qty        numeric;    -- PARKED-010: applied qty converted into the pricing unit
+  v_group_id          uuid;
+  v_new_invoice_season integer;
+  v_rate_season       integer;
+  v_skipped_customer_ids uuid[] := '{}';
+  v_surcharge_acres   numeric;
+  v_surcharge_cents   bigint;
+BEGIN
+  -- PARKED-007 (codex-driven cycle 5 #1 HIGH): in-body role gate — without it
+  -- ANY authenticated role (applicator, driver, etc.) can call this SECDEF
+  -- function with arbitrary field_ids and receive private customer pricing
+  -- and split detail. RLS doesn't apply (we're SECDEF), the EXECUTE grant to
+  -- `authenticated` widens beyond billing roles. Mirrors the save side's gate.
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'AUTH_REQUIRED' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF NOT (is_admin() OR is_sales_rep()) THEN
+    RAISE EXCEPTION 'INSUFFICIENT_ROLE: only admins or sales reps can preview field-app invoice splits'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  FOR v_loc IN SELECT * FROM jsonb_array_elements(p_locations)
+  LOOP
+    v_field_ids := array_append(v_field_ids, (v_loc->>'field_id')::uuid);
+    v_applied_acres_map := v_applied_acres_map || jsonb_build_object(
+      v_loc->>'field_id',
+      GREATEST(COALESCE((v_loc->>'applied_acres')::numeric, 0), 0)
+    );
+  END LOOP;
+
+  IF v_field_ids IS NULL THEN
+    RETURN jsonb_build_object('per_customer', '[]'::jsonb, 'grand_total_cents', 0, 'customer_count', 0);
+  END IF;
+
+  v_shares    := derive_customer_shares_from_fields(v_field_ids, v_applied_acres_map);
+  v_customers := v_shares -> 'customers';
+
+  IF p_invoice_id IS NOT NULL THEN
+    SELECT invoice_group_id
+      INTO v_group_id
+      FROM invoices
+     WHERE id = p_invoice_id;
+    IF v_group_id IS NOT NULL THEN
+      SELECT COALESCE(array_agg(DISTINCT d.customer_id), '{}') INTO v_skipped_customer_ids
+        FROM invoices d
+       WHERE d.invoice_group_id = v_group_id
+         AND d.deleted_at IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM invoices l
+            WHERE l.invoice_group_id = v_group_id
+              AND l.customer_id = d.customer_id
+              AND l.deleted_at IS NULL
+         );
+    END IF;
+  END IF;
+
+  -- Save files a newly-created group member under the submitted invoice date's
+  -- season. Existing members keep their stored season, even in a mixed-season group.
+  v_new_invoice_season := compute_season(
+    COALESCE(p_invoice_date, (now() AT TIME ZONE 'America/Chicago')::date)
+  );
+
+  IF p_application_service_id IS NOT NULL THEN
+    SELECT * INTO v_app_service FROM application_services WHERE id = p_application_service_id;
+    IF NOT FOUND OR NOT v_app_service.is_active THEN
+      RAISE EXCEPTION 'Application service not found or inactive: %', p_application_service_id;
+    END IF;
+  END IF;
+
+  FOR v_customer IN SELECT * FROM jsonb_array_elements(v_customers)
+  LOOP
+    v_customer_id    := (v_customer->>'customer_id')::uuid;
+    IF v_customer_id = ANY(v_skipped_customer_ids) THEN CONTINUE; END IF;
+    v_rate_season := v_new_invoice_season;
+    IF p_invoice_id IS NOT NULL THEN
+      SELECT i.season
+        INTO v_rate_season
+        FROM invoices i
+       WHERE i.deleted_at IS NULL
+         AND i.customer_id = v_customer_id
+         AND (
+           i.id = p_invoice_id
+           OR (v_group_id IS NOT NULL AND i.invoice_group_id = v_group_id)
+         )
+       ORDER BY (i.id = p_invoice_id) DESC, i.created_at, i.id
+       LIMIT 1;
+      IF NOT FOUND THEN
+        v_rate_season := v_new_invoice_season;
+      END IF;
+    END IF;
+    v_customer_tier  := COALESCE((v_customer->>'tier')::int, 1);
+    v_customer_total := 0;
+    v_customer_lines := '[]'::jsonb;
+
+    FOR v_share_row IN
+      SELECT * FROM jsonb_array_elements(v_shares -> 'rows') AS value
+      WHERE (value->>'customer_id')::uuid = v_customer_id
+        AND (value->>'price_override_cents') IS NOT NULL
+    LOOP
+      v_share_acres    := (v_share_row->>'share_acres')::numeric;
+      v_field_override := (v_share_row->>'price_override_cents')::bigint;
+      v_extended := ROUND(v_field_override * v_share_acres)::bigint;
+      v_customer_lines := v_customer_lines || jsonb_build_object(
+        'kind', 'grower_share',
+        'description', (v_share_row->>'field_name') || ' grower share @ $' ||
+                       (v_field_override / 100.0)::numeric(12,2) || '/ac',
+        'quantity', v_share_acres,
+        'unit_price_cents', v_field_override,
+        'extended_cents', v_extended
+      );
+      v_customer_total := v_customer_total + v_extended;
+    END LOOP;
+
+    FOR v_chem IN SELECT * FROM jsonb_array_elements(p_chemicals)
+    LOOP
+      v_chem_qty_a := 0;
+      v_chem_qty_b := 0;
+      v_rate := COALESCE((v_chem->>'rate_per_acre')::numeric, 0);
+      FOR v_share_row IN
+        SELECT * FROM jsonb_array_elements(v_shares -> 'rows') AS value
+        WHERE (value->>'customer_id')::uuid = v_customer_id
+      LOOP
+        v_share_acres := (v_share_row->>'share_acres')::numeric;
+        IF (v_share_row->>'price_override_cents') IS NOT NULL THEN
+          v_chem_qty_a := v_chem_qty_a + (v_rate * v_share_acres);
+        ELSE
+          v_chem_qty_b := v_chem_qty_b + (v_rate * v_share_acres);
+        END IF;
+      END LOOP;
+
+      IF v_chem_qty_b > 0 THEN
+        v_unit_price := NULL;
+        IF v_chem ? 'manual_override' AND (v_chem->>'manual_override')::boolean = true
+           AND (v_chem->>'unit_price_cents') IS NOT NULL THEN
+          v_unit_price := (v_chem->>'unit_price_cents')::bigint;
+        END IF;
+        IF v_unit_price IS NULL AND (v_chem->>'product_id') IS NOT NULL THEN
+          SELECT qi.price_per_unit INTO v_qi_price
+            FROM quote_items qi
+            JOIN quote_sections qs ON qs.id = qi.section_id
+           WHERE qi.product_id = (v_chem->>'product_id')::uuid
+             AND qs.field_id   = ANY(v_field_ids)
+           ORDER BY qi.id LIMIT 1;
+          IF v_qi_price IS NOT NULL THEN v_unit_price := ROUND(v_qi_price * 100)::bigint; END IF;
+        END IF;
+        IF v_unit_price IS NULL AND (v_chem->>'product_id') IS NOT NULL THEN
+          SELECT CASE v_customer_tier
+            WHEN 1 THEN COALESCE(ROUND(p.tier1_price * 100), 0)
+            WHEN 2 THEN COALESCE(ROUND(p.tier2_price * 100), ROUND(p.tier1_price * 100), 0)
+            WHEN 3 THEN COALESCE(ROUND(p.tier3_price * 100), ROUND(p.tier1_price * 100), 0)
+            ELSE COALESCE(ROUND(p.tier1_price * 100), 0)
+          END INTO v_unit_price FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+        END IF;
+        v_unit_price := COALESCE(v_unit_price, 0);
+
+        -- PARKED-010 (preview parity with save_field_app_invoice): the applied amount is in the
+        -- RATE unit but v_unit_price is per the product's SOLD unit; convert before pricing so this
+        -- on-page customer-split preview shows the same dollars the saved invoice will (not ~128x).
+        v_ta_unit  := COALESCE(NULLIF(v_chem->>'rate_unit', ''), NULLIF(v_chem->>'unit_size', ''));
+        v_inv_unit := NULL;
+        v_form     := NULL;
+        IF (v_chem->>'product_id') IS NOT NULL THEN
+          SELECT p.inventory_unit, p.product_form::text INTO v_inv_unit, v_form
+            FROM products p WHERE p.id = (v_chem->>'product_id')::uuid;
+        END IF;
+        v_priced_qty := field_app_priced_quantity(v_chem_qty_b, v_ta_unit, COALESCE(v_inv_unit, v_ta_unit), v_form);
+        -- Unconvertible units (save blocks with FIELD_APP_UNIT_UNCONVERTIBLE): preview the line at
+        -- $0 rather than the old ~128x figure or crashing the preview.
+        v_priced_qty := CASE WHEN v_priced_qty IS NULL THEN 0 ELSE ROUND(v_priced_qty, 4) END;
+        v_extended := ROUND(v_unit_price * v_priced_qty)::bigint;
+        v_customer_lines := v_customer_lines || jsonb_build_object(
+          'kind', 'chemical', 'description', v_chem->>'description',
+          'quantity', v_priced_qty,
+          'unit_price_cents', v_unit_price, 'extended_cents', v_extended
+        );
+        v_customer_total := v_customer_total + v_extended;
+      END IF;
+    END LOOP;
+
+    IF p_application_service_id IS NOT NULL THEN
+      SELECT car.rate_per_acre_cents INTO v_fee_rate
+        FROM customer_application_rates car
+       WHERE car.customer_id = v_customer_id
+         AND car.application_service_id = p_application_service_id
+         AND car.season = v_rate_season LIMIT 1;
+      IF v_fee_rate IS NULL THEN v_fee_rate := v_app_service.default_rate_per_acre_cents; END IF;
+      SELECT COALESCE(SUM((value->>'share_acres')::numeric), 0) INTO v_fee_acres
+        FROM jsonb_array_elements(v_shares -> 'rows') AS value
+       WHERE (value->>'customer_id')::uuid = v_customer_id
+         AND (value->>'price_override_cents') IS NULL;
+      IF v_fee_rate > 0 AND v_fee_acres > 0 THEN
+        v_fee_extended := ROUND(v_fee_rate * v_fee_acres)::bigint;
+        v_customer_lines := v_customer_lines || jsonb_build_object(
+          'kind', 'service_fee', 'description', v_app_service.name,
+          'quantity', v_fee_acres, 'unit_price_cents', v_fee_rate,
+          'extended_cents', v_fee_extended
+        );
+        v_customer_total := v_customer_total + v_fee_extended;
+      END IF;
+    END IF;
+
+    SELECT COALESCE(SUM((value->>'share_acres')::numeric), 0) INTO v_surcharge_acres
+      FROM jsonb_array_elements(v_shares -> 'rows') AS value
+     WHERE (value->>'customer_id')::uuid = v_customer_id
+       AND (value->>'price_override_cents') IS NULL;
+
+    v_surcharge_cents := compute_fuel_surcharge_cents(v_surcharge_acres, v_customer_total);
+
+    IF v_surcharge_cents > 0 THEN
+      v_customer_lines := v_customer_lines || jsonb_build_object(
+        'kind', 'fuel_surcharge', 'description', 'Fuel Surcharge',
+        'quantity', 1, 'unit_price_cents', v_surcharge_cents,
+        'extended_cents', v_surcharge_cents
+      );
+      v_customer_total := v_customer_total + v_surcharge_cents;
+    END IF;
+
+    v_per_customer := v_per_customer || jsonb_build_object(
+      'customer_id',   v_customer_id,
+      'customer_name', v_customer->>'customer_name',
+      'is_primary',    COALESCE((v_customer->>'is_primary')::boolean, false),
+      'tier',          v_customer_tier,
+      'total_cents',   v_customer_total,
+      'lines',         v_customer_lines
+    );
+    v_grand_total := v_grand_total + v_customer_total;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'per_customer',      v_per_customer,
+    'grand_total_cents', v_grand_total,
+    'customer_count',    jsonb_array_length(v_per_customer),
+    'shares_detail',     v_shares
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid, date)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.preview_field_app_invoice_split(jsonb, jsonb, uuid, uuid, date)
+  TO authenticated, service_role;
+
+DO $postflight$
+DECLARE
+  v_count integer;
+  v_def text;
+  v_prosecdef boolean;
+  v_provolatile "char";
+  v_proparallel "char";
+  v_proisstrict boolean;
+  v_proleakproof boolean;
+  v_proretset boolean;
+  v_procost real;
+  v_pronargdefaults smallint;
+  v_prorettype regtype;
+  v_proconfig text[];
+BEGIN
+  SELECT count(*), min(p.prosrc)
+    INTO v_count, v_def
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = 'preview_field_app_invoice_split';
+
+  IF v_count <> 1 OR to_regprocedure('public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)') IS NULL THEN
+    RAISE EXCEPTION 'POSTFLIGHT_SIGNATURE: expected only the five-argument preview function';
+  END IF;
+  SELECT p.prosecdef, p.provolatile, p.proparallel, p.proisstrict, p.proleakproof,
+         p.proretset, p.procost, p.pronargdefaults, p.prorettype::regtype, p.proconfig
+    INTO v_prosecdef, v_provolatile, v_proparallel, v_proisstrict, v_proleakproof,
+         v_proretset, v_procost, v_pronargdefaults, v_prorettype, v_proconfig
+    FROM pg_proc p
+   WHERE p.oid = 'public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)'::regprocedure;
+  IF NOT v_prosecdef
+     OR v_provolatile <> 's'
+     OR v_proparallel <> 'u'
+     OR v_proisstrict
+     OR v_proleakproof
+     OR v_proretset
+     OR v_procost <> 100
+     OR v_pronargdefaults <> 3
+     OR v_prorettype <> 'jsonb'::regtype
+     OR v_proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp'] THEN
+    RAISE EXCEPTION 'POSTFLIGHT_ATTRS: preview function attributes/defaults changed';
+  END IF;
+  IF (
+    SELECT md5(p.prosrc)
+      FROM pg_proc p
+     WHERE p.oid = 'public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)'::regprocedure
+  ) <> 'f97633f2881b4299fc9f8c57c7e24ed6' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_BODY: preview body hash does not match the reviewed candidate';
+  END IF;
+  IF v_def !~ 'car\.season = v_rate_season' OR v_def ~ 'car\.season = current_season\(\)' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_SEASON_SOURCE: preview rate lookup is not bound to v_rate_season';
+  END IF;
+  IF v_def !~ 'i\.customer_id = v_customer_id'
+     OR v_def !~ 'i\.invoice_group_id = v_group_id'
+     OR v_def !~ 'IF NOT FOUND THEN' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_EDIT_SEASON: preview does not resolve each customer member season';
+  END IF;
+  IF v_def !~ 'America/Chicago' OR v_def !~ 'COALESCE\(p_invoice_date' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_NEW_SEASON: preview lacks the Chicago invoice-date fallback';
+  END IF;
+  IF has_function_privilege('anon', 'public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)', 'EXECUTE')
+     OR EXISTS (
+       SELECT 1
+         FROM pg_proc p
+        WHERE p.oid = 'public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)'::regprocedure
+          AND EXISTS (SELECT 1 FROM unnest(p.proacl) acl WHERE acl::text LIKE '=%')
+     ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_GRANT: anonymous execution is allowed';
+  END IF;
+  IF NOT has_function_privilege('authenticated', 'public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_GRANT: expected authenticated/service_role execution';
+  END IF;
+END
+$postflight$;

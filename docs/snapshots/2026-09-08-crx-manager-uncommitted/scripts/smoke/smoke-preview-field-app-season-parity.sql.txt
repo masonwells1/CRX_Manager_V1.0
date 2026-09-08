@@ -1,0 +1,143 @@
+-- Rolled-back business-chain proof for preview_field_app_invoice_split's date/season contract.
+-- Distinct customer rates and a third default rate prevent a lookup miss from false-greening.
+DO $smoke$
+DECLARE
+  v_admin uuid;
+  v_sfx text := substr(gen_random_uuid()::text, 1, 8);
+  v_a uuid; v_b uuid; v_c uuid;
+  v_field uuid;
+  v_service uuid;
+  v_group uuid;
+  v_anchor uuid;
+  v_locations jsonb;
+  v_preview jsonb;
+  v_save jsonb;
+  v_season integer := current_season();
+  v_old_date date;
+  v_new_date date;
+  v_rate bigint;
+  v_saved_rate bigint;
+  v_customer uuid;
+  v_expected bigint;
+BEGIN
+  IF to_regprocedure('public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)') IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_PREREQ: five-argument preview_field_app_invoice_split is not installed';
+  END IF;
+
+  v_old_date := make_date(v_season, 9, 30);
+  v_new_date := make_date(v_season, 10, 1);
+  IF compute_season(v_old_date) <> v_season OR compute_season(v_new_date) <> v_season + 1 THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: expected October 1 season boundary';
+  END IF;
+
+  SELECT id INTO v_admin FROM profiles WHERE role = 'admin' AND is_active ORDER BY created_at LIMIT 1;
+  IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no active admin'; END IF;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+
+  INSERT INTO customers (farm_name, assigned_tier) VALUES
+    ('[SMOKE] Preview season A ' || v_sfx, 1),
+    ('[SMOKE] Preview season B ' || v_sfx, 1),
+    ('[SMOKE] Preview season C ' || v_sfx, 1);
+  SELECT id INTO v_a FROM customers WHERE farm_name = '[SMOKE] Preview season A ' || v_sfx;
+  SELECT id INTO v_b FROM customers WHERE farm_name = '[SMOKE] Preview season B ' || v_sfx;
+  SELECT id INTO v_c FROM customers WHERE farm_name = '[SMOKE] Preview season C ' || v_sfx;
+
+  INSERT INTO fields (field_name, customer_id, total_acres)
+  VALUES ('[SMOKE] Preview season field ' || v_sfx, v_a, 100)
+  RETURNING id INTO v_field;
+  INSERT INTO field_billing_defaults (field_id, customer_id, split_pct, is_primary) VALUES
+    (v_field, v_a, 60, true),
+    (v_field, v_b, 40, false);
+  INSERT INTO application_services
+    (name, default_rate_per_acre_cents, cost_per_acre_cents, is_active, created_by)
+  VALUES ('[SMOKE] Preview season service ' || v_sfx, 9999, 1, true, v_admin)
+  RETURNING id INTO v_service;
+
+  INSERT INTO customer_application_rates
+    (customer_id, application_service_id, rate_per_acre_cents, season, created_by) VALUES
+    (v_a, v_service, 1101, v_season, v_admin),
+    (v_a, v_service, 2101, v_season + 1, v_admin),
+    (v_b, v_service, 1102, v_season, v_admin),
+    (v_b, v_service, 2102, v_season + 1, v_admin),
+    (v_c, v_service, 1103, v_season, v_admin),
+    (v_c, v_service, 2103, v_season + 1, v_admin);
+
+  v_locations := jsonb_build_array(jsonb_build_object(
+    'field_id', v_field, 'map_number', 1, 'total_acres', 100,
+    'planted_acres', NULL, 'applied_acres', 100, 'crop_type', NULL,
+    'wind_direction', NULL, 'sort_order', 0
+  ));
+
+  -- New-invoice previews must follow the submitted date on both sides of October 1.
+  v_preview := preview_field_app_invoice_split(v_locations, '[]'::jsonb, v_service, NULL, v_old_date);
+  SELECT (line->>'unit_price_cents')::bigint INTO v_rate
+    FROM jsonb_array_elements(v_preview->'per_customer') customer,
+         jsonb_array_elements(customer->'lines') line
+   WHERE (customer->>'customer_id')::uuid = v_a AND line->>'kind' = 'service_fee';
+  IF v_rate <> 1101 THEN RAISE EXCEPTION 'SMOKE_FAIL(new-old): expected 1101, got %', v_rate; END IF;
+
+  v_preview := preview_field_app_invoice_split(v_locations, '[]'::jsonb, v_service, NULL, v_new_date);
+  SELECT (line->>'unit_price_cents')::bigint INTO v_rate
+    FROM jsonb_array_elements(v_preview->'per_customer') customer,
+         jsonb_array_elements(customer->'lines') line
+   WHERE (customer->>'customer_id')::uuid = v_a AND line->>'kind' = 'service_fee';
+  IF v_rate <> 2101 THEN RAISE EXCEPTION 'SMOKE_FAIL(new-next): expected 2101, got %', v_rate; END IF;
+
+  -- Create a real two-member group in the old season.
+  v_save := save_field_app_invoice(
+    NULL, jsonb_build_object('invoice_date', v_old_date::text, 'header_notes', '[SMOKE] preview season'),
+    v_locations, '[]'::jsonb, v_admin, v_service, 'smoke-preview-season-create-' || v_sfx
+  );
+  v_group := (v_save->>'invoice_group_id')::uuid;
+  SELECT id INTO v_anchor FROM invoices
+   WHERE invoice_group_id = v_group AND customer_id = v_a AND deleted_at IS NULL;
+
+  -- Add C across the boundary. A/B are existing old-season members; C is new.
+  UPDATE field_billing_defaults SET split_pct = 30
+   WHERE field_id = v_field AND customer_id IN (v_a, v_b);
+  INSERT INTO field_billing_defaults (field_id, customer_id, split_pct, is_primary)
+  VALUES (v_field, v_c, 40, false);
+
+  v_preview := preview_field_app_invoice_split(v_locations, '[]'::jsonb, v_service, v_anchor, v_new_date);
+  FOR v_customer, v_expected IN
+    SELECT * FROM (VALUES (v_a, 1101::bigint), (v_b, 1102::bigint), (v_c, 2103::bigint)) expected(customer_id, rate)
+  LOOP
+    SELECT (line->>'unit_price_cents')::bigint INTO v_rate
+      FROM jsonb_array_elements(v_preview->'per_customer') customer,
+           jsonb_array_elements(customer->'lines') line
+     WHERE (customer->>'customer_id')::uuid = v_customer AND line->>'kind' = 'service_fee';
+    IF v_rate IS DISTINCT FROM v_expected THEN
+      RAISE EXCEPTION 'SMOKE_FAIL(mixed-preview): customer % expected %, got %', v_customer, v_expected, v_rate;
+    END IF;
+  END LOOP;
+
+  -- Save the same edit and compare each previewed rate with the authoritative invoice item.
+  PERFORM save_field_app_invoice(
+    v_anchor, jsonb_build_object('invoice_date', v_new_date::text, 'header_notes', '[SMOKE] mixed season edit'),
+    v_locations, '[]'::jsonb, v_admin, v_service, 'smoke-preview-season-edit-' || v_sfx
+  );
+  FOR v_customer, v_expected IN
+    SELECT * FROM (VALUES (v_a, 1101::bigint), (v_b, 1102::bigint), (v_c, 2103::bigint)) expected(customer_id, rate)
+  LOOP
+    SELECT ii.unit_price_cents INTO v_saved_rate
+      FROM invoices i
+      JOIN invoice_items ii ON ii.invoice_id = i.id AND ii.is_application_fee
+     WHERE i.invoice_group_id = v_group AND i.customer_id = v_customer AND i.deleted_at IS NULL
+       AND ii.description <> 'Fuel Surcharge';
+    IF v_saved_rate IS DISTINCT FROM v_expected THEN
+      RAISE EXCEPTION 'SMOKE_FAIL(mixed-save): customer % expected %, saved %', v_customer, v_expected, v_saved_rate;
+    END IF;
+  END LOOP;
+
+  IF EXISTS (
+    SELECT 1 FROM invoices i
+     WHERE i.invoice_group_id = v_group AND i.deleted_at IS NULL
+       AND ((i.customer_id IN (v_a, v_b) AND i.season <> v_season)
+         OR (i.customer_id = v_c AND i.season <> v_season + 1))
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: saved member seasons do not match the accepted mixed-season contract';
+  END IF;
+
+  RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
+END
+$smoke$;

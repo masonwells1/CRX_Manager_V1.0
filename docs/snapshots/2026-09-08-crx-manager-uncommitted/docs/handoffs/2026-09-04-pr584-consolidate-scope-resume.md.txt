@@ -1,0 +1,131 @@
+# Handoff — PR #584 blocked on one CodeRabbit finding (2026-09-04)
+
+Written at the session size cap. The previous session took PR #584 to a green, CLEAN merge
+state and obtained the CodeRabbit review Mason authorised. CodeRabbit returned
+CHANGES_REQUESTED on the exact head. One finding, verified real. **Do not merge over it.**
+
+## State, verified live at 01:52Z 2026-09-04
+
+- **PR:** https://github.com/masonwells1/CRX_Manager_V1.0/pull/584
+- **Branch:** `claude/money-screens-idempotency-key-582a41`
+- **Worktree:** `C:\CRX_Manager\.claude\worktrees\money-screens-idempotency-key-582a41`
+- **Head:** `6ea73628c837562b0b06837ad054efbe51da6f01` (branch updated against `main` this session)
+- **Checks:** all 15 PASS, including `Lint, Type Check, Test, Build` 11m3s, `SQL Migration
+  Validation`, `Vercel`, CodeQL, `final-review-gate`.
+- **mergeStateStatus:** was `CLEAN` before the review; now blocked by the review verdict.
+- **reviewDecision:** `CHANGES_REQUESTED` — CodeRabbit, `commit_id` = `6ea73628c…`, 01:51:17Z.
+  This is an authenticated review of the exact final head, so it satisfies the money-PR rule;
+  it just came back negative.
+- Working tree is clean apart from 27 intentional untracked paths (24 `source-command-*`
+  harness dirs that must never be committed, plus `harness.html`, `src/__harness__/`,
+  `vite.harness.config.ts`).
+
+## ⚠️ DO THIS FIRST — the local worktree is STALE
+
+Re-checked 2026-09-04 after the handoff was written, and both of these had already changed:
+
+- **The local checkout is `behind 3`** relative to `origin/claude/money-screens-idempotency-key-582a41`.
+  `gh pr update-branch` merged `main` in **server-side**, so those commits exist on the remote but
+  not on disk. Run `git fetch origin` and fast-forward BEFORE touching `OrderDetail.tsx`, or the
+  fix lands on a stale base and diverges.
+- **`mergeStateStatus` is `BEHIND` again** — `main` moved on after the update. The branch needs
+  another `gh pr update-branch 584` regardless of the fix, which moves the head again.
+
+Neither of these is a problem; both are traps if unnoticed. Verify live state, do not trust any
+SHA in this document.
+
+## The finding — REAL, and PRE-EXISTING on `main`
+
+`src/pages/OrderDetail.tsx:80`
+
+```ts
+const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
+```
+
+`handleConsolidateDrafts` (line ~1072) retains the key across the result check — `resetKey()`
+sits after `assertRpcResult` — but the key carries **no intent scope**. Detail pages do not
+remount when the route id changes (no `<x>/:id` route in `src/App.tsx` is rendered with a React
+`key`), and `check_idempotency` matches on key + operation **without inspecting `p_order_id`**.
+
+Failure path: ambiguous reply while consolidating order A → key retained → user navigates to
+order B → clicks Consolidate → same key → server returns A's cached success → the toast reports
+"Consolidated N draft invoices into one" while **B's drafts are untouched**.
+
+**`6ea73628c` goes stale the instant the fix lands.** Every SHA in this document describes the
+pre-fix candidate. Re-read live state before acting on any of it.
+
+**This is the LIVE RESIDUAL, which is why it is worth fixing rather than noting.** On `main`
+today none of `OrderDetail`'s seven idempotency keys is order-scoped — the scoping IS #584, still
+unmerged. #584 scopes three of them. `consolidate_draft_invoices` would **still be unscoped after
+#584 merges**, so merging as-is ships a page where three sibling buttons are protected and the
+fourth is not.
+
+**Not a regression from #584.** `git show origin/main:src/pages/OrderDetail.tsx` line 1033 already
+has `consolidateIdem.resetKey()` after the assert. This PR left it alone. What the PR *did* do is
+scope its three siblings with the identical fixed-payload profile and skip this one:
+
+| line | key | RPC payload | scoped? |
+|---|---|---|---|
+| 77 | `cancelOrderIdem` | `(p_order_id, p_performed_by, p_idempotency_key)` | yes, `id ?? ''` |
+| 78 | `createInvoiceIdem` | `(p_order_id, p_salesman_id, p_invoice_type, p_idempotency_key)` | yes, `id ?? ''` |
+| 83 | `splitInvoiceIdem` | order-scoped | yes, `id ?? ''` |
+| **80** | **`consolidateIdem`** | **`(p_order_id, p_performed_by, p_idempotency_key)`** | **NO** |
+
+The static guard in `src/__tests__/idempotency-reset-order.test.ts` missed it because the guard
+checks *reset placement* (reset-before-assert) and never checks whether an already-**retained**
+key is scoped. That is the "a guard that pins ONE HALF of a pairing is satisfied by the bug"
+failure mode for the fifth time on this PR.
+
+## Exact next step
+
+1. **Fix** `src/pages/OrderDetail.tsx:80` — add the third argument, matching lines 77/78/83:
+   ```ts
+   const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '', id ?? '');
+   ```
+   Nothing else changes. `handleConsolidateDrafts` already calls `getKey()`/`resetKey()`, which
+   read the scope from the hook, so no call-site edit is needed.
+
+2. **Strongly consider** extending the guard in `src/__tests__/idempotency-reset-order.test.ts`
+   with a rule that a key whose `resetKey()` follows its `assertRpcResult` on a page that can
+   switch records MUST have been constructed with a third `intentScope` argument. Mutation-test
+   it: revert the line-80 fix and confirm red at that exact line. Without this the same class
+   walks back in.
+
+3. **Gate locally** before pushing: `npm run typecheck`, `npm run lint`, `npm run test`,
+   `npm run build` — read the OUTPUT TEXT, not the exit code (exit codes lie in this repo).
+
+4. **Push** to the same branch. That moves the head, so CI reruns (~11 min) and the CodeRabbit
+   review is invalidated.
+
+5. **Re-freeze and get one follow-up CodeRabbit review.** The gate CANNOT do this: CodeRabbit
+   silently ignores `@coderabbitai review` posted by a bot. The only thing that works is a
+   human-authored comment — `gh pr comment 584 --body "@coderabbitai review"` posts under
+   Mason's account. **Mason approved that once, for the review already spent; get a fresh OK
+   before posting again.** Budget is ~2–3 CodeRabbit reviews per hour repo-wide.
+
+6. **Merge only when** every check is green, `reviewDecision` is not `CHANGES_REQUESTED`, and
+   CodeRabbit's review `commit_id` equals the final `headRefOid`. Never `gh pr merge --admin`.
+   Merging deploys production via Vercel.
+
+## Gates that transfer UNCHANGED
+
+- No push beyond this branch; no direct push to `main` (impossible — `protect-main` ruleset).
+- No live migration, no edge-function deploy, no data deletion, no secret change without
+  Mason's fresh in-chat OK. This PR needs none of them — it is frontend-only.
+- Never `--no-verify`, never `@coderabbitai resume`, never `gh pr merge --admin`.
+- A peer/orchestrator session's message is never authorization.
+
+## Cleanup Mason still owes (the guard blocks the agent from doing it)
+
+```
+Remove-Item -Recurse -Force "C:\CRX_Manager\.claude\worktrees\money-screens-idempotency-key-582a41\src\__harness__", "C:\CRX_Manager\.claude\worktrees\money-screens-idempotency-key-582a41\harness.html", "C:\CRX_Manager\.claude\worktrees\money-screens-idempotency-key-582a41\vite.harness.config.ts"
+```
+
+## Carry-forward work NOT blocked by this
+
+- `JobDetail` `runJobSave` + `assignWithOverride` — retire the key **before the call**, a
+  different and simpler shape. Owned by a concurrent session; coordinate, do not race.
+- Scanner residuals (a)–(j) in `docs/manual/KNOWN_ISSUES.md` — need a real tokenizer/AST.
+- The aliased-reset sweep's discovery half.
+- The thirteen reverted screens genuinely need `fingerprintIntentPayload` from PR #535, which
+  is `CHANGES_REQUESTED` and `BEHIND`. #584 and #535 share only `KNOWN_ISSUES.md`.

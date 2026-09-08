@@ -1,0 +1,11 @@
+## 2026-09-04 — align field-application preview pricing with the saved invoice season
+
+Prepared a new migration that makes the split-preview RPC price new invoices from the submitted Chicago
+business date, each existing group member from its own stored season, and a newly added grower from the
+submitted date. The field-application page now requires and passes its transaction date, and the generated
+RPC argument type includes it. Added a registered rollback smoke with distinct adjacent-season rates,
+contract tests, and updated the known-issue and decision records, including the explicitly approved PR
+#599 review-gate deviation.
+
+This change was verified locally but was not applied to the live database; production remains on the
+four-argument preview function until Mason explicitly approves the migration apply.

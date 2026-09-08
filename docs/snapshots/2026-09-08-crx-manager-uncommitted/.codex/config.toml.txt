@@ -1,0 +1,21 @@
+[mcp_servers.supabase]
+url = "https://mcp.supabase.com/mcp?project_ref=rhyzpcqhnizqbxphqdkr&read_only=false&features=database,debugging,development,functions,docs"
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+required = false
+
+[mcp_servers.github]
+command = "pwsh"
+args = [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    "$env:GITHUB_PERSONAL_ACCESS_TOKEN = (& gh auth token); docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN -e GITHUB_TOOLSETS=repos,issues,pull_requests,actions,code_security ghcr.io/github/github-mcp-server",
+]
+
+[mcp_servers.sentry]
+url = "https://mcp.sentry.dev/mcp"
+
+[mcp_servers.vercel]
+url = "https://mcp.vercel.com"

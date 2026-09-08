@@ -1,0 +1,54 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+const root = process.cwd();
+const migration = readFileSync(
+  join(root, 'supabase/migrations/20260904190000_preview_field_app_invoice_season.sql'),
+  'utf8',
+);
+const page = readFileSync(join(root, 'src/pages/FieldApplicationInvoice.tsx'), 'utf8');
+const generatedTypes = readFileSync(join(root, 'src/types/supabase.ts'), 'utf8');
+const smoke = readFileSync(
+  join(root, 'scripts/smoke/smoke-preview-field-app-season-parity.sql'),
+  'utf8',
+);
+
+describe('field-app split preview season contract', () => {
+  it('prices new previews from the submitted invoice date with the Chicago fallback', () => {
+    expect(migration).toContain('p_invoice_date date DEFAULT NULL::date');
+    expect(migration).toContain(
+      "COALESCE(p_invoice_date, (now() AT TIME ZONE 'America/Chicago')::date)",
+    );
+    expect(migration).toContain('car.season = v_rate_season');
+    expect(migration).not.toContain('car.season = current_season()');
+  });
+
+  it('prices each existing group member from its own stored season and new growers from the date', () => {
+    expect(migration).toContain('v_rate_season := v_new_invoice_season');
+    expect(migration).toContain('i.customer_id = v_customer_id');
+    expect(migration).toContain('i.invoice_group_id = v_group_id');
+    expect(migration).toContain('IF NOT FOUND THEN');
+    expect(migration).not.toMatch(/UPDATE\s+invoices[\s\S]{0,300}\bseason\s*=/i);
+  });
+
+  it('keeps the caller and generated RPC type on the five-argument contract', () => {
+    expect(page).toMatch(
+      /rpc\('preview_field_app_invoice_split',[\s\S]*p_invoice_date: transactionDate/,
+    );
+    expect(page).toContain("toast('error', 'Choose an invoice date before previewing.')");
+    expect(page).toContain("toast('error', 'Choose an invoice date before saving.')");
+    expect(generatedTypes).toMatch(
+      /preview_field_app_invoice_split:[\s\S]*Args:[\s\S]*p_invoice_date\?: string/,
+    );
+  });
+
+  it('has a rollback business chain for adjacent and mixed-season rates', () => {
+    expect(smoke).toContain("SMOKE_PREREQ: five-argument preview_field_app_invoice_split is not installed");
+    expect(smoke).toContain('SMOKE_FAIL(new-old)');
+    expect(smoke).toContain('SMOKE_FAIL(new-next)');
+    expect(smoke).toContain('SMOKE_FAIL(mixed-preview)');
+    expect(smoke).toContain('SMOKE_FAIL(mixed-save)');
+    expect(smoke).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'");
+  });
+});
