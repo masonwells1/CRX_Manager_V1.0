@@ -304,6 +304,8 @@ SET search_path = public, pg_temp AS $$`;
   const revoke = 'REVOKE ALL ON FUNCTION public.body_path_probe() FROM PUBLIC, anon;';
   for (const body of [
     'BEGIN SET LOCAL search_path = attacker, public; END;',
+    "BEGIN SET SCHEMA 'attacker, public'; END;",
+    "BEGIN SET LOCAL SCHEMA 'attacker, public'; END;",
     "BEGIN PERFORM set_config('search_path', p_schema, true); END;",
   ]) assert.deepEqual(
     securityDefinerMissingAnonRevokes(`${header}\n${body}\n$$;\n${revoke}`),

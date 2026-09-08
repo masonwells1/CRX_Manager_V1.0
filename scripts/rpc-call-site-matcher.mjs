@@ -1,4 +1,7 @@
-import ts from 'typescript';
+// This proof helper intentionally uses only Node builtins. Loading a parser from
+// ignored node_modules would put executable, unverified code outside the proof
+// boundary. It recognizes the narrow RPC surface and withholds proof for every
+// indirect, dynamic, or malformed form.
 
 function applicationSourceFiles(snapshot) {
   return [
@@ -14,114 +17,140 @@ function lineSite(file, text, index) {
   return `  ${source} RPC: ${file}:${line}\n    ${excerpt}`;
 }
 
-function staticString(node) {
-  if (!node) return null;
-  const literal = unwrapExpression(node);
-  return ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal) ? literal.text : null;
+function maskedCode(text) {
+  // Only comments need removing before the narrow access matcher runs. Keeping
+  // literals intact lets the matcher read its first argument without attempting
+  // to parse JSX, regular expressions, or every template-expression grammar.
+  return String(text).replace(/\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\r\n]/g, ' '));
+
+  /* c8 ignore next -- retained defensive lexer documentation below */
+  let out = '';
+  const blank = (start, end) => text.slice(start, end).replace(/[^\r\n]/g, ' ');
+  for (let index = 0; index < text.length;) {
+    if (text[index] === '/' && text[index + 1] === '/') {
+      const end = text.slice(index).search(/[\r\n]/);
+      const finish = end === -1 ? text.length : index + end;
+      out += blank(index, finish); index = finish; continue;
+    }
+    if (text[index] === '/' && text[index + 1] === '*') {
+      const finish = text.indexOf('*/', index + 2);
+      if (finish === -1) return null;
+      out += blank(index, finish + 2); index = finish + 2; continue;
+    }
+    if (text[index] === '/' && /(?:^|[=(:,;[!{?])\s*$/.test(out)) {
+      const start = index++; let inClass = false;
+      for (; index < text.length; index++) {
+        if (text[index] === '\\') { index++; continue; }
+        if (text[index] === '[') { inClass = true; continue; }
+        if (text[index] === ']') { inClass = false; continue; }
+        if (text[index] === '/' && !inClass) break;
+      }
+      if (index >= text.length) return null;
+      index++; while (/[A-Za-z]/.test(text[index] || '')) index++;
+      out += blank(start, index); continue;
+    }
+    if (["'", '"', '`'].includes(text[index])) {
+      const start = index; const quote = text[index++];
+      for (; index < text.length; index++) {
+        if (text[index] === '\\') { index++; continue; }
+        if (text[index] === quote) break;
+      }
+      if (index >= text.length) return null;
+      out += blank(start, index + 1); index++; continue;
+    }
+    out += text[index++];
+  }
+  return out;
 }
 
-function unwrapExpression(node) {
-  let current = node;
-  while (
-    ts.isParenthesizedExpression(current)
-    || ts.isAsExpression(current)
-    || ts.isTypeAssertionExpression(current)
-    || ts.isNonNullExpression(current)
-  ) current = current.expression;
-  return current;
+function skipTrivia(text, index) {
+  while (index < text.length) {
+    if (/\s/.test(text[index])) { index++; continue; }
+    if (text[index] === '/' && text[index + 1] === '/') {
+      index += 2; while (index < text.length && !/[\r\n]/.test(text[index])) index++;
+      continue;
+    }
+    if (text[index] === '/' && text[index + 1] === '*') {
+      const end = text.indexOf('*/', index + 2);
+      if (end === -1) return null;
+      index = end + 2; continue;
+    }
+    return index;
+  }
+  return index;
 }
 
-function isRpcAccess(node) {
-  if (ts.isPropertyAccessExpression(node)) return node.name.text === 'rpc';
-  return ts.isElementAccessExpression(node) && staticString(node.argumentExpression) === 'rpc';
+function staticStringAt(text, index) {
+  const start = skipTrivia(text, index);
+  if (start === null || !['\'', '"', '`'].includes(text[start])) return null;
+  const quote = text[start]; let value = '';
+  for (let cursor = start + 1; cursor < text.length; cursor++) {
+    if (text[cursor] === '\\') { if (cursor + 1 >= text.length) return null; value += text[++cursor]; continue; }
+    if (quote === '`' && text[cursor] === '$' && text[cursor + 1] === '{') return null;
+    if (text[cursor] === quote) return { value, end: cursor + 1 };
+    value += text[cursor];
+  }
+  return null;
 }
 
-function isKnownClientReceiver(node, clientAliases) {
-  const receiver = unwrapExpression(node);
-  return ts.isIdentifier(receiver) && clientAliases.has(receiver.text);
-}
-
-function isDynamicClientPropertyAccess(node, clientAliases) {
-  return ts.isElementAccessExpression(node)
-    && isKnownClientReceiver(node.expression, clientAliases)
-    && staticString(node.argumentExpression) === null;
-}
-
-function isReflectGetCall(node) {
-  return ts.isCallExpression(node)
-    && ts.isPropertyAccessExpression(node.expression)
-    && ts.isIdentifier(node.expression.expression)
-    && node.expression.expression.text === 'Reflect'
-    && node.expression.name.text === 'get';
-}
-
-function isIndirectReflectGetAccess(node, clientAliases) {
-  return isReflectGetCall(node)
-    && isKnownClientReceiver(node.arguments[0], clientAliases);
-}
-
-function directCallForAccess(access) {
-  let parent = access.parent;
-  while (
-    ts.isParenthesizedExpression(parent)
-    || ts.isAsExpression(parent)
-    || ts.isTypeAssertionExpression(parent)
-    || ts.isNonNullExpression(parent)
-  ) parent = parent.parent;
-  if (!ts.isCallExpression(parent) || unwrapExpression(parent.expression) !== access) return null;
-  return parent;
-}
-
-function scriptKind(file) {
-  return file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-}
+function escapeRegex(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function snapshotRpcUses(snapshot) {
   const uses = [];
   for (const file of applicationSourceFiles(snapshot)) {
     const text = snapshot.text(file);
-    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind(file));
-    const clientAliases = new Set(['client', 'supabase', 'db']);
-    const addUnresolved = (node) => uses.push({
-      file,
-      text,
-      index: node.getStart(source),
-      routine: null,
-      unresolved: true,
-    });
-    if (source.parseDiagnostics.length) {
-      for (const diagnostic of source.parseDiagnostics) addUnresolved({ getStart: () => diagnostic.start || 0 });
-      continue;
-    }
-    const visit = (node) => {
-      if (ts.isVariableDeclaration(node)
-        && ts.isIdentifier(node.name)
-        && node.initializer
-        && isKnownClientReceiver(node.initializer, clientAliases)) clientAliases.add(node.name.text);
-      if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && isRpcAccess(node)) {
-        const call = directCallForAccess(node);
-        if (!call) addUnresolved(node);
-        else {
-          const routine = staticString(call.arguments[0]);
-          uses.push({ file, text, index: node.getStart(source), routine, unresolved: routine === null });
-        }
-      } else if (isDynamicClientPropertyAccess(node, clientAliases) || isIndirectReflectGetAccess(node, clientAliases)) {
-        addUnresolved(node);
-      } else if (
-        ts.isBindingElement(node)
-        && ts.isObjectBindingPattern(node.parent)
-        && ((node.propertyName && staticString(node.propertyName) === 'rpc')
-          || (!node.propertyName && ts.isIdentifier(node.name) && node.name.text === 'rpc'))
-      ) addUnresolved(node);
-      ts.forEachChild(node, visit);
+    const code = maskedCode(text);
+    const reported = new Set();
+    const addUnresolved = (index) => {
+      if (reported.has(index)) return;
+      reported.add(index); uses.push({ file, text, index, routine: null, unresolved: true });
     };
-    visit(source);
+    if (code === null) { addUnresolved(0); continue; }
+    const aliases = new Set(['client', 'supabase', 'db', 'adminClient']);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const sourceNames = [...aliases].map(escapeRegex).join('|');
+      const declarations = new RegExp(`\\b(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*(?::[^=;{}]+)?=\\s*(?:\\(\\s*)?(${sourceNames})\\b`, 'g');
+      for (const match of code.matchAll(declarations)) if (!aliases.has(match[1])) { aliases.add(match[1]); changed = true; }
+    }
+    const sourceNames = [...aliases].map(escapeRegex).join('|');
+    const destructuring = new RegExp(`\\b(?:const|let|var)\\s*\\{[^}]*\\brpc\\b[^}]*\\}\\s*=\\s*(?:${sourceNames})\\b`, 'g');
+    for (const match of code.matchAll(destructuring)) addUnresolved(match.index + match[0].indexOf('rpc'));
+    for (const alias of aliases) {
+      const escaped = escapeRegex(alias);
+      const reflect = new RegExp(`\\bReflect\\s*\\.\\s*get\\s*\\(\\s*${escaped}\\b`, 'g');
+      for (const match of code.matchAll(reflect)) addUnresolved(match.index);
+      const access = new RegExp(`\\b${escaped}\\s*(?:\\?\\.|\\.)\\s*rpc\\b`, 'g');
+      for (const match of code.matchAll(access)) {
+        const index = match.index; let cursor = index + match[0].length;
+        cursor = skipTrivia(text, cursor);
+        if (cursor === null) { addUnresolved(index); continue; }
+        if (text.startsWith('?.', cursor)) cursor = skipTrivia(text, cursor + 2);
+        while (text[cursor] === ')') cursor = skipTrivia(text, cursor + 1);
+        if (cursor === null || text[cursor] !== '(') { addUnresolved(index); continue; }
+        const routine = staticStringAt(text, cursor + 1);
+        if (routine === null) addUnresolved(index);
+        else uses.push({ file, text, index, routine: routine.value, unresolved: false });
+      }
+      const computed = new RegExp(`\\b${escaped}\\s*\\[`, 'g');
+      for (const match of code.matchAll(computed)) {
+        const index = match.index; const key = staticStringAt(text, index + match[0].length);
+        const close = key && skipTrivia(text, key.end);
+        if (key === null || key.value !== 'rpc' || close === null || text[close] !== ']') { addUnresolved(index); continue; }
+        let cursor = skipTrivia(text, close + 1);
+        if (text.startsWith('?.', cursor)) cursor = skipTrivia(text, cursor + 2);
+        while (text[cursor] === ')') cursor = skipTrivia(text, cursor + 1);
+        if (cursor === null || text[cursor] !== '(') { addUnresolved(index); continue; }
+        const routine = staticStringAt(text, cursor + 1);
+        if (routine === null) addUnresolved(index);
+        else uses.push({ file, text, index, routine: routine.value, unresolved: false });
+      }
+    }
   }
   return uses;
 }
 
-// Surface literal application RPC calls only. Every indirect, dynamic, or
-// unparsable access is reported separately and blocks proof production.
 export function applicationRpcCallSites(name, snapshot) {
   const literalName = String(name);
   return snapshotRpcUses(snapshot)

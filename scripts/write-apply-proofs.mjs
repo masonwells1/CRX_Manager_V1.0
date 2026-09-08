@@ -97,6 +97,7 @@ const PROOF_HARNESS_PATHS = [
   'scripts/migration-routine-references.mjs',
   'scripts/rpc-call-site-matcher.mjs',
   'scripts/migration-proof-file-state.mjs',
+  '.claude/hooks/migration-wrappability-lib.mjs',
 ];
 
 // The production-action hook denies Codex edits to this list. Comparing the

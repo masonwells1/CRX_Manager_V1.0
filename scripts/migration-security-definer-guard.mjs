@@ -140,7 +140,9 @@ function isStandardConformingStringsParameter(text, start) {
 
 function isSearchPathParameter(text, start) {
   const identifier = readConfigurationIdentifier(text, start);
-  return identifier !== null && identifier.value.toLowerCase() === 'search_path';
+  // PostgreSQL's `SET SCHEMA value` is syntax sugar for assigning
+  // `search_path`. Treat both spellings as the same owner-privileged setting.
+  return identifier !== null && ['search_path', 'schema'].includes(identifier.value.toLowerCase());
 }
 
 function setConfigNameEnd(text, start) {

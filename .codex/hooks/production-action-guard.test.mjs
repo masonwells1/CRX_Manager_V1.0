@@ -921,7 +921,7 @@ try {
       `every listed protected file is protected by the regex too: ${file}`,
     );
   }
-  assert.equal(PROTECTED_HARNESS_FILES.length, 22, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
+  assert.equal(PROTECTED_HARNESS_FILES.length, 23, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
   // NEAR-MISS CANARIES: reads, the sanctioned script runs, staging and
   // committing, and every command that names NO protected file stay allowed.
   // "Deny anything that names a hook file" would pass the block above while

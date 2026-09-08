@@ -117,6 +117,7 @@ function collectPaths(root, stateDir) {
     // This helper controls proof revocation and the authorization file paths;
     // bind it into the same immutable evidence hash as the producer.
     'scripts/migration-proof-file-state.mjs',
+    '.claude/hooks/migration-wrappability-lib.mjs',
     '.claude/hooks/protected-git.mjs',
     normal(path.join(relativeStateDir, 'applied-migrations.json')),
   ]);
