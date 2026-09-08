@@ -50,6 +50,12 @@ The same review also found a documentation mismatch in row 915 of
 unrelated `20260905090000_next_invoice_number_year_chicago.sql` candidate and row 918 as
 `20260905200200_refuse_stale_commission_payment_recipient.sql`.
 
+The first pushed candidate exposed one metadata-format constraint in CI: a `LOCAL CANDIDATE` row
+must contain exactly one backticked `.sql` basename so the parked-migration registry can identify
+the row's own file unambiguously. Row 915 still names the row 917 and row 918 filenames in plain
+text, but keeps only its own migration basename in code form. The correction guard therefore
+returns a known state without losing the neighboring migration identities CodeRabbit requested.
+
 Nothing in this change applies a migration or mutates live data. All commission candidates remain
 parked and require a fresh explicit in-chat approval plus the governed apply proof before any live
 Supabase change.
