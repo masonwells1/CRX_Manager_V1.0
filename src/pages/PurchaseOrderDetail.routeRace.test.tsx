@@ -421,6 +421,11 @@ async function loadPo(poId: string) {
 
 const RECEIVE_SUCCESS_TOAST = 'Items received and inventory updated';
 
+// Set when the receive RPC has ANSWERED in the current test, not merely been
+// called. A receive whose RPC is parked forever has no tail to leak; only an
+// answered one does. Reset in beforeEach, recorded by the harness rpc wrapper.
+let receiveAnswered = false;
+
 function receiveSettled() {
   return mocks.toast.mock.calls.some(
     ([kind, message]) => kind === 'success' && message === RECEIVE_SUCCESS_TOAST,
@@ -486,13 +491,15 @@ describe('PurchaseOrderDetail route-currency race', () => {
     // A receive whose RPC answered but whose tail is still running when the
     // test returns keeps writing -- toasts, refetches, parked queries -- into
     // whichever test runs next. Refuse to end a test in that state rather than
-    // let the leak surface as a flake somewhere else in the file.
-    const receiveFired = mocks.rpc.mock.calls.some((call) => call[0] === 'receive_po_items');
-    if (receiveFired && !receiveSettled()) {
+    // let the leak surface as a flake somewhere else in the file. A receive
+    // whose RPC was called but never answered (parked for the whole test) is
+    // fine: nothing runs after an answer that never comes.
+    if (receiveAnswered && !receiveSettled()) {
       throw new Error(
-        'This test fired receive_po_items but returned before the receive settled. '
-          + 'Call awaitReceiveSettled() (or leave the RPC parked) before the test ends, '
-          + 'or its success toast lands in the next test and breaks submitReceive there.',
+        'The receive_po_items RPC answered in this test, but the test returned before '
+          + 'the receive settled. Call awaitReceiveSettled() before the test ends (or '
+          + 'leave the RPC parked and never answer it), or its success toast lands in '
+          + 'the next test and breaks submitReceive there.',
       );
     }
   });
@@ -500,6 +507,7 @@ describe('PurchaseOrderDetail route-currency race', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pending.length = 0;
+    receiveAnswered = false;
     window.localStorage.clear();
     window.sessionStorage.clear();
     // The receive path records a durable mutation intent in IndexedDB before it
@@ -532,7 +540,19 @@ describe('PurchaseOrderDetail route-currency race', () => {
     );
     harness.impl = {
       from: (table: string) => new Query(table),
-      rpc: (name: string, args: unknown) => mocks.rpc(name, args),
+      rpc: (name: string, args: unknown) => {
+        const result = mocks.rpc(name, args);
+        // Every RPC passes through here, including one a test re-mocks to hold
+        // open, so this is the one place that can see the receive ANSWER (as
+        // opposed to being called). The afterEach guard keys off that.
+        if (name === 'receive_po_items') {
+          const markAnswered = () => {
+            receiveAnswered = true;
+          };
+          Promise.resolve(result).then(markAnswered, markAnswered);
+        }
+        return result;
+      },
     };
   });
 

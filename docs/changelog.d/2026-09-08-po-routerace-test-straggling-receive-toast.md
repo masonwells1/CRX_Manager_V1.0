@@ -92,6 +92,29 @@ what happened here: the door screen for `fetchReceivingHistory` was the last gua
 added, and it carried this one. Treat both post-await route checks as deliberately kept
 and untested; do not delete either because "all tests stay green".
 
+### Codex review finding (PR #636, P2) — fixed
+
+Codex pointed out that the guard keyed off "the receive RPC was **called**", so a test
+that deliberately parks `receive_po_items` and never answers it (the case the guard's own
+message said was allowed) would always be failed by the guard. Correct: the Vitest mock
+records the call at invocation, and a parked receive can never raise the success toast.
+
+Fix, still test-file only: the harness `rpc` wrapper — the one place every mocked RPC
+passes through, including one a test re-mocks to hold open — now records when the
+receive RPC **answers**, and the guard keys off that. A parked receive has no tail to
+leak; only an answered one does. The guard message now says so.
+
+Proof:
+
+- Backwards: a temporary test that parks the receive for the whole test passes under
+  the new guard (12/12) and fails under the old condition (1 failed / 11 passed, the
+  probe only).
+- Forwards: with test 1's `awaitReceiveSettled()` removed under full-suite load, the
+  guard still fails that test 3 of 3 times, and only that test.
+- File 3/3 green unloaded; `eslint` and `tsc --noEmit` clean.
+- Mutation table re-run against this version of the harness: identical result, 10 of
+  11 red on the same tests, the same single green row.
+
 ### Not verified
 
 - The flake was reproduced through the mechanism (toast landing after the test body) and
