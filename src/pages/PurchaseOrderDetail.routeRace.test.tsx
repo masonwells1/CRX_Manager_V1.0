@@ -93,6 +93,36 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
   }),
 }));
 
+// The receive handler awaits the durable-intent write (IndexedDB) BEFORE it
+// reaches runCriticalAction, so a receive's lifecycle record has to open when
+// that write starts, not when the wrapper below is entered; otherwise a test
+// that ends during the write has no record and the guard cannot see the leak.
+// Real hook, with only beginIntent wrapped.
+vi.mock('../hooks/useUncertainMutationIntent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../hooks/useUncertainMutationIntent')>();
+  return {
+    ...actual,
+    useUncertainMutationIntent: <T,>(
+      ...args: Parameters<typeof actual.useUncertainMutationIntent<T>>
+    ) => {
+      const real = actual.useUncertainMutationIntent<T>(...args);
+      return {
+        ...real,
+        beginIntent: (intent: T) => {
+          const record = { called: false, answered: false, settled: false };
+          mocks.receive.records.push(record);
+          return real.beginIntent(intent).catch((error: unknown) => {
+            // The handler's catch toasts and returns without running the
+            // wrapper, so nothing later will settle this record.
+            record.settled = true;
+            throw error;
+          });
+        },
+      };
+    },
+  };
+});
+
 vi.mock('../lib/criticalAction', () => ({
   runCriticalAction: async (options: {
     action: () => Promise<unknown>;
@@ -100,12 +130,18 @@ vi.mock('../lib/criticalAction', () => ({
     onSuccess?: (result: unknown) => void;
     sentryTag?: string;
   }) => {
-    // A receive gets its own lifecycle record the moment its handler starts;
-    // the RPC wrapper below marks it answered, and `finally` marks it settled.
-    const record = options.sentryTag === 'receive_po_items'
-      ? { called: false, answered: false, settled: false }
-      : undefined;
-    if (record) mocks.receive.records.push(record);
+    // A receive's lifecycle record was opened when its durable-intent write
+    // started (see the hook wrapper above); adopt it here. A receive that
+    // reaches this wrapper some other way still gets a record of its own.
+    // The RPC wrapper below marks it answered, and `finally` marks it settled.
+    let record: { called: boolean; answered: boolean; settled: boolean } | undefined;
+    if (options.sentryTag === 'receive_po_items') {
+      record = currentReceive();
+      if (!record) {
+        record = { called: false, answered: false, settled: false };
+        mocks.receive.records.push(record);
+      }
+    }
     try {
       const result = await options.action();
       options.onSuccess?.(result);
@@ -495,12 +531,11 @@ async function awaitReceiveSettled() {
 
 /** Drive the receive modal end to end and return the RPC arguments, if any. */
 async function submitReceive(quantity: string) {
-  // Only a toast raised by THIS receive means it reached an outcome. A toast
-  // that was already recorded before the click -- a straggler from a previous
-  // test's receive tail -- must not stop the sampling loop early.
-  const toastsBefore = mocks.toast.mock.calls.length;
-  // Likewise only an RPC call made by THIS receive counts: with two receives in
-  // one test, the first one's call must not stop the loop or be returned here.
+  // Only THIS receive's own lifecycle record decides when sampling stops, and
+  // only an RPC call made by THIS receive is returned: a toast or a call left
+  // over from an earlier receive (a straggler from a previous test, or a first
+  // receive in the same test) must not end the loop or be handed back here.
+  const recordsBefore = mocks.receive.records.length;
   const rpcCallsBefore = mocks.rpc.mock.calls.length;
   fireEvent.click(screen.getByRole('button', { name: /receive items/i }));
   const dialog = await screen.findByRole('dialog');
@@ -513,14 +548,14 @@ async function submitReceive(quantity: string) {
 
   // The receive path writes a durable mutation intent to IndexedDB before it
   // calls the RPC, so the outcome is several async turns away from the click.
-  // Settle until the RPC fires or the page reports a refusal; sampling after a
-  // single tick reads "not yet" as "never", which would let a broken guard look
-  // exactly like a working one.
+  // Settle until this receive's record shows the RPC was called or the handler
+  // finished; sampling after a single tick reads "not yet" as "never", which
+  // would let a broken guard look exactly like a working one. A receive the
+  // page refuses before the intent write (route-stale lines, no quantity)
+  // opens no record and has no tail, so the loop simply runs out.
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const fired = mocks.rpc.mock.calls
-      .slice(rpcCallsBefore)
-      .some((call) => call[0] === 'receive_po_items');
-    if (fired || mocks.toast.mock.calls.length > toastsBefore) break;
+    const record = mocks.receive.records[recordsBefore];
+    if (record && (record.called || record.settled)) break;
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });

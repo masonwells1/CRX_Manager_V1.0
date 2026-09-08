@@ -189,6 +189,44 @@ Proof (round-two harness, `NEW`, against the round-one harness at `3072f4718`, `
   same tests, the same single green row.
 - The rest of the suite (371 files, 5214 tests, this file excluded as the load) green.
 
+### Round three (head a773f3705): one Codex P2, one CodeRabbit Minor — both fixed
+
+1. **Codex P2 — the record opened too late.** The page awaits its durable-intent write
+   (`receiveIntent.beginIntent()`, IndexedDB) *before* it reaches `runCriticalAction`,
+   which is where the record was opened. A test that returned during that write had no
+   record at all, so the guard saw nothing to check. Fix: the suite now wraps the real
+   `useUncertainMutationIntent` hook (nothing else in it is stubbed) so that
+   `beginIntent()` opens the record the moment it is called; the `runCriticalAction`
+   stand-in adopts the open record instead of creating one. If the intent write rejects,
+   the handler's own catch toasts and returns without running the wrapper, so the wrapper
+   marks the record settled on rejection.
+2. **CodeRabbit Minor — `submitReceive` still sampled the shared toast count.** A terminal
+   toast from an earlier receive landing during the next receive's polling would stop the
+   loop before that receive's RPC fired. Fix: the helper now waits on *its own* record
+   (the one opened after its click) reaching `called` or `settled`, and no longer looks at
+   toasts at all. This supersedes item 1 of "What changed" above; the toast snapshot was
+   a stopgap for the same problem.
+
+Proof (round-three harness, `NEW`, against `a773f3705`, `OLD`):
+
+- Backwards, Codex P2: a temporary test stubs `indexedDB.open` to an inert request so the
+  intent write never completes and the RPC is never reached. `NEW` fails it with the guard
+  message; `OLD` passes it (no record existed).
+- Backwards, CodeRabbit Minor: a temporary test delays every IndexedDB open "success" by
+  5 ms and fires a stray success toast one tick after the click. `OLD` fails with
+  "expected undefined to be defined" (the exact CI assertion this ledger opened with);
+  `NEW` passes and returns the RPC call. A first variant without the delay did **not**
+  reproduce on `OLD`, because locally the RPC fires inside the click's own tick; the delay
+  is what makes the interleaving CodeRabbit described reachable.
+- The earlier probes (parked receive, error outcome, two-receive payload, pre-RPC start)
+  all still behave the same on `NEW` (16 tests: 15 pass, the one guard probe fails as
+  designed).
+- Forwards: test 1 without its wait, under full-suite load, was failed by the guard in
+  3 of 6 runs, only that test; the other runs fully green.
+- Mutation table re-run: identical, 10 of 11 red on the same tests, same single green row.
+- File 3/3 green unloaded; `tsc --noEmit -p tsconfig.app.json` and `eslint` clean; the
+  rest of the suite (371 files, 5214 tests) green.
+
 Proof (final harness):
 
 - Backwards, finding 1: a temporary test that parks the receive for the whole test
