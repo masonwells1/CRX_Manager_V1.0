@@ -389,7 +389,7 @@ export default function BlendRecipes() {
         // mints a fresh key. save_blend_recipe replays key-only and blend_recipes has
         // no uniqueness constraint, so that retry creates a SECOND copy while the
         // unobserved first copy stays. Refuse the changed snapshot once instead.
-        if (duplicateUnresolved.refuseOnce(intentScope)) {
+        if (duplicateUnresolved.refuseEdited(intentScope)) {
           throw new Error(UNRESOLVED_INTENT_MESSAGE);
         }
 

@@ -16,7 +16,7 @@ import { isDefinitiveRpcRejection } from '../lib/idempotency';
  *
  * The safe rule is: while an attempt is unresolved, the only two legal moves
  * are retrying it UNCHANGED (which replays the receipt) or reloading to learn
- * what happened. Editing is not one of them. `refuseOnce()` enforces exactly that
+ * what happened. Editing is not one of them. `refuseEdited()` enforces exactly that
  * and nothing wider — the identical payload is always allowed straight through.
  *
  * Verified read-only against the live catalog on 2026-09-08: none of the three
@@ -31,11 +31,6 @@ import { isDefinitiveRpcRejection } from '../lib/idempotency';
  */
 export function useUnresolvedIntent() {
   const scopeRef = useRef<string | null>(null);
-  // Edited scopes the operator has already been warned about and chose to send
-  // anyway. Acknowledging ONE edit must not disarm the guard for every later
-  // one: an earlier version cleared the unresolved scope on the first refusal,
-  // so a second, different edit went straight through with no warning at all.
-  const acknowledgedRef = useRef<Set<string>>(new Set());
   // Mirrors the ref so a frozen form can render its own banner. The ref is what
   // the guard reads: it is set synchronously, and two clicks can land inside one
   // render window.
@@ -59,40 +54,40 @@ export function useUnresolvedIntent() {
    */
   const clear = useCallback((): void => {
     scopeRef.current = null;
-    acknowledgedRef.current.clear();
     setUnresolvedScope(null);
   }, []);
 
   /**
-   * Refuse an EDITED submission while an earlier attempt is unresolved, once per
-   * distinct edit. A faithful retry — the same scope — is never refused: that is
-   * the safe move, and it replays the receipt instead of repeating the work.
+   * Refuse an EDITED submission for as long as the earlier attempt is unresolved.
+   * A faithful retry -- the same scope -- is never refused: replaying the identical
+   * request redeems the receipt instead of repeating the work, and is the only safe
+   * way forward that does not require a reload.
    *
-   * Warning once per edit rather than forever is deliberate. This state is
-   * component-level, so a permanent freeze would also block every unrelated hold or
-   * adjustment the operator began afterwards, leaving a page refresh as the only way
-   * out. One refusal turns a silent double-apply into a decision the operator
-   * actually made, matching the over-allocation warning already on this page: click
-   * again to proceed anyway.
+   * There is deliberately NO acknowledgement escape. Two earlier versions had one and
+   * both were wrong in the same direction:
+   *   1. Clearing the freeze on the first refusal disarmed the guard entirely, so a
+   *      third, different payload executed with no warning at all.
+   *   2. Warning once per distinct edit still let the SECOND click on any edited
+   *      payload through -- which mints a fresh key and re-applies work that may
+   *      already have committed. `gpt-5.6-sol` and the Codex bot both called that a
+   *      real double-apply path, independently, and they were right: these RPCs bind
+   *      no payload server-side, so the client is the only thing standing between a
+   *      lost response and a second stock adjustment, hold or duplicate record.
    *
-   * PER EDIT, not once in total. The freeze stays armed after an acknowledgement,
-   * and only the exact payload that was acknowledged passes. Clearing the freeze on
-   * the first refusal — an earlier version of this hook — meant acknowledging one
-   * edit silently disarmed the guard, so a THIRD, different payload executed with no
-   * warning while the original attempt was still unresolved. The freeze is lifted
-   * only by `clear()`: a confirmed success, a definitive refusal, or a reload that
-   * settled what the outstanding attempt actually did.
+   * The cost is that an operator with an unresolved attempt must reload before making
+   * a DIFFERENT change on that screen. That is the correct instruction anyway: while
+   * an attempt is unresolved nobody knows whether it applied, and a reload is what
+   * answers that. `clear()` lifts the freeze on a confirmed success, a definitive
+   * refusal, or a reload that settled the outstanding attempt.
    */
-  const refuseOnce = useCallback((scope: string): boolean => {
+  const refuseEdited = useCallback((scope: string): boolean => {
     if (scopeRef.current === null || scopeRef.current === scope) return false;
-    if (acknowledgedRef.current.has(scope)) return false;
-    acknowledgedRef.current.add(scope);
     return true;
   }, []);
 
-  return { unresolvedScope, isFrozen: unresolvedScope !== null, mark, markIfUncertain, clear, refuseOnce };
+  return { unresolvedScope, isFrozen: unresolvedScope !== null, mark, markIfUncertain, clear, refuseEdited };
 }
 
 /** Shown when an edited payload is refused because an earlier attempt is unresolved. */
 export const UNRESOLVED_INTENT_MESSAGE =
-  'The previous attempt never confirmed, so it may already have been applied. Refresh to check before changing anything — or click again with the original values to safely retry it.';
+  'The previous attempt never confirmed, so it may already have been applied. Refresh the page to check what happened — or put the original values back and submit again, which safely retries the same request instead of repeating it.';

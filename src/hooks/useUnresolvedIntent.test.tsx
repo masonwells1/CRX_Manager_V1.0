@@ -17,54 +17,50 @@ describe('useUnresolvedIntent', () => {
 
     act(() => result.current.mark('adjust:widget:10'));
     // Same scope = the identical request. Replaying it redeems the receipt instead of
-    // repeating the work, so it is the SAFE move and must always be allowed through.
-    expect(result.current.refuseOnce('adjust:widget:10')).toBe(false);
-    expect(result.current.refuseOnce('adjust:widget:10')).toBe(false);
+    // repeating the work, so it is the SAFE move and must always be allowed through —
+    // it is the only way forward that does not require a reload.
+    expect(result.current.refuseEdited('adjust:widget:10')).toBe(false);
+    expect(result.current.refuseEdited('adjust:widget:10')).toBe(false);
   });
 
-  it('refuses an edited payload, then allows that same edit on the second click', () => {
+  it('refuses an edited payload EVERY time, not once', () => {
     const { result } = renderHook(() => useUnresolvedIntent());
 
     act(() => result.current.mark('adjust:widget:10'));
-    // First click on the edited values: refused, and the operator is told why.
-    expect(result.current.refuseOnce('adjust:widget:25')).toBe(true);
-    // Clicking again with those same edited values is a decision they have now made
-    // deliberately, matching the over-allocation warning already on the page.
-    expect(result.current.refuseOnce('adjust:widget:25')).toBe(false);
-  });
-
-  it('stays armed after an acknowledgement, so a DIFFERENT edit is refused too', () => {
-    const { result } = renderHook(() => useUnresolvedIntent());
-
-    act(() => result.current.mark('adjust:widget:10'));
-    expect(result.current.refuseOnce('adjust:widget:25')).toBe(true);
-    expect(result.current.refuseOnce('adjust:widget:25')).toBe(false);
-
-    // The regression this test exists for. An earlier version cleared the unresolved
-    // scope on the FIRST refusal, so acknowledging one edit disarmed the guard entirely
-    // and a third, different payload executed with no warning at all while the original
-    // attempt was still unresolved.
-    expect(result.current.refuseOnce('adjust:widget:40')).toBe(true);
-    // Still frozen: only clear() lifts it.
+    // The regression this test exists for, and it has bitten twice in opposite ways.
+    //
+    // Version 1 dropped the freeze on the first refusal, so acknowledging one edit
+    // disarmed the guard and a third payload ran with no warning at all. Version 2
+    // warned once per distinct edit, which still let the SECOND click on any edited
+    // payload through — minting a fresh key and re-applying work that may already have
+    // committed. `gpt-5.6-sol` and the Codex bot each flagged that independently.
+    //
+    // There is no click count that makes an edited payload safe while the outcome of
+    // the original attempt is unknown. Only an authoritative reload settles it.
+    expect(result.current.refuseEdited('adjust:widget:25')).toBe(true);
+    expect(result.current.refuseEdited('adjust:widget:25')).toBe(true);
+    expect(result.current.refuseEdited('adjust:widget:25')).toBe(true);
+    // A different edit is refused too, and the freeze is still armed afterwards.
+    expect(result.current.refuseEdited('adjust:widget:40')).toBe(true);
     expect(result.current.isFrozen).toBe(true);
+    // The original payload remains the one safe way through.
+    expect(result.current.refuseEdited('adjust:widget:10')).toBe(false);
   });
 
-  it('lifts the freeze only on clear(), and forgets prior acknowledgements', () => {
+  it('lifts the freeze only when the outstanding attempt is settled', () => {
     const { result } = renderHook(() => useUnresolvedIntent());
 
     act(() => result.current.mark('adjust:widget:10'));
-    expect(result.current.refuseOnce('adjust:widget:25')).toBe(true);
+    expect(result.current.refuseEdited('adjust:widget:25')).toBe(true);
 
     act(() => result.current.clear());
     expect(result.current.isFrozen).toBe(false);
     // Nothing is unresolved, so nothing is refused.
-    expect(result.current.refuseOnce('adjust:widget:99')).toBe(false);
+    expect(result.current.refuseEdited('adjust:widget:99')).toBe(false);
 
-    // A LATER unresolved attempt must warn about the previously acknowledged payload
-    // again: that acknowledgement was about a different outstanding request, and
-    // carrying it forward would silently skip the warning on a fresh incident.
+    // A LATER unresolved attempt refuses again from scratch.
     act(() => result.current.mark('adjust:widget:10'));
-    expect(result.current.refuseOnce('adjust:widget:25')).toBe(true);
+    expect(result.current.refuseEdited('adjust:widget:25')).toBe(true);
   });
 
   it('freezes on an ambiguous failure but not on a definitive server refusal', () => {
@@ -85,7 +81,7 @@ describe('useUnresolvedIntent', () => {
       hint: null,
     }));
     expect(result.current.isFrozen).toBe(false);
-    expect(result.current.refuseOnce('hold:widget:9')).toBe(false);
+    expect(result.current.refuseEdited('hold:widget:9')).toBe(false);
   });
 
   it('refuses inside a single render window, before any state update lands', () => {
@@ -96,7 +92,7 @@ describe('useUnresolvedIntent', () => {
     // on a re-render having happened first.
     act(() => {
       result.current.mark('adjust:widget:10');
-      expect(result.current.refuseOnce('adjust:widget:25')).toBe(true);
+      expect(result.current.refuseEdited('adjust:widget:25')).toBe(true);
     });
   });
 });

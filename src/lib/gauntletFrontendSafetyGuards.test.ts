@@ -67,7 +67,7 @@ describe('gauntlet caller-side safety guards', () => {
     expect(component).toMatch(
       /const intentScope = `import:\$\{pf\.customer_id\}:\$\{pf\.field_name\}:\$\{await digestIntentPayload\(\[\s*\r?\n\s*fieldPayload,\s*\r?\n\s*\]\)\}`;/,
     );
-    expect(component).toContain('const boundaryScope = `boundary:${String(fieldId)}:${await digestIntentPayload([');
+    expect(component).toContain('const boundaryScope = `boundary:${String(fieldId)}:${geometryDigest}`;');
     expect(component).toContain('const overrideScope = `override:${String(fieldId)}:${pf.stated_acres}`;');
     expect(component).toContain('saveFieldIdem.getKeyFor(intentScope)');
     expect(component).toContain('setBoundaryIdem.getKeyFor(boundaryScope)');
@@ -81,14 +81,42 @@ describe('gauntlet caller-side safety guards', () => {
     expect(component).not.toContain('fingerprintIntentPayload(');
     // Two byte-identical rows in one file share the save_field scope on purpose, so
     // the count of created fields has to come from the committed ids, not the loop.
-    expect(component).toContain('const createdFieldIds = new Set<string>();');
+    //
+    // It maps id -> GEOMETRY DIGEST, not a bare id set, because "save_field returned an
+    // id we have already seen" has two causes and only one is a duplicate. The payload
+    // carries stated acreage, never geometry, so two rows can share a customer, a name
+    // and a byte-identical payload while mapping different ground. Same id + same
+    // geometry is a duplicate; same id + DIFFERENT geometry is a second field wearing
+    // the first one's receipt, and letting it through would point this row's boundary
+    // write at the earlier field and overwrite its map.
+    expect(component).toContain('const createdFieldIds = new Map<string, string>();');
     expect(component).toContain('if (createdFieldIds.has(committedFieldId)) {');
-    // And the keys must NOT be retired at the end of a successful row. Retiring
-    // save_field's key is what made the duplicate check dead code: the second
-    // identical row minted a fresh key, received a new field id, and created the
-    // duplicate the check exists to catch. Every scope here is content- or
-    // field-identity bound, so "already done" is exactly what a repeat means.
-    expect(component).not.toContain('saveFieldIdem.resetKeyFor(');
+    expect(component).toContain('createdFieldIds.set(committedFieldId, geometryDigest);');
+    expect(component).toContain('const geometryDigest = await digestIntentPayload([');
+    // The collision retry: retire the key and ask again ONCE, so the second row gets a
+    // field of its own. Pinned as a PAIR — the condition and the retirement — because
+    // the retirement on its own is the very thing the next assertion forbids.
+    // Anchored on `if (` so a disabled condition cannot satisfy it. Without the anchor,
+    // `if (false && priorGeometry !== ...)` still contains the matched substring and the
+    // pin passed over a mutation that removed the whole protection.
+    expect(component).toMatch(
+      /if \(attempt === 0 && priorGeometry !== undefined && priorGeometry !== geometryDigest\) \{[\s\S]{0,200}?saveFieldIdem\.resetKeyFor\(intentScope\);/,
+    );
+    // ONE save_field call site, reached at most twice. Writing the retry out as a second
+    // `supabase.rpc('save_field', …)` made it an RPC capture with no assert of its own,
+    // which the assertRpcResult coverage guard reports as real debt.
+    expect(component.match(/supabase\.rpc\('save_field'/g) ?? []).toHaveLength(1);
+    // The reply is verified BEFORE the key is retired. Retiring on the strength of an
+    // unverified answer is the reset-before-assert defect the F1 guard exists to catch.
+    expect(component).toMatch(
+      /assertRpcResult<string>\(saved\.data, 'save_field'\)[\s\S]{0,400}?saveFieldIdem\.resetKeyFor\(intentScope\);/,
+    );
+    // ONE retirement in the whole file, and it is that one. The keys must NOT be retired
+    // at the end of a successful row: that is what made the duplicate check dead code,
+    // because the second identical row minted a fresh key, received a new field id, and
+    // created the duplicate the check exists to catch. Every scope here is content- or
+    // field-identity bound, so outside the collision case a repeat means "already done".
+    expect(component.match(/saveFieldIdem\.resetKeyFor\(/g) ?? []).toHaveLength(1);
     expect(component).not.toContain('setBoundaryIdem.resetKeyFor(');
     expect(component).not.toContain('setOverrideAcresIdem.resetKeyFor(');
     // The override step must tell a lost response apart from a refusal: "billing on

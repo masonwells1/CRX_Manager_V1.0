@@ -129,6 +129,40 @@ locked, because `cleanupFailed` was invisible to `onSuccess`; and the nightly cr
 omitted its intentional-redirect count, so the totals no longer reconciled to the number of
 routes crawled.
 
+### Third review round - the Codex bot on the pushed head
+
+Two more P1s, both on code the previous round had just introduced. Both were right.
+
+- **The unresolved-intent freeze still had an escape.** Warning once per distinct edit
+  still let the SECOND click on an edited payload through, which mints a fresh key and
+  re-applies work that may already have committed. `gpt-5.6-sol` had said the same thing
+  about the first version; the fix had moved the escape rather than removing it. There is
+  now no acknowledgement path at all: while an attempt is unresolved, only the ORIGINAL
+  payload proceeds, and the freeze lifts on a confirmed success, a definitive refusal, or
+  a reload. The cost is that an operator must reload before making a different change on
+  that screen, which is the correct instruction anyway - while an attempt is unresolved
+  nobody knows whether it applied, and a reload is what answers that.
+  `refuseOnce` is renamed `refuseEdited`, because the old name now described a behaviour
+  the hook deliberately no longer has.
+- **The payload-only import scope could overwrite an existing field's map.** Scoping
+  `save_field` to the payload alone fixed the corrected-boundary duplicate, but the payload
+  carries stated acreage and never geometry - so two rows sharing a customer, a name and a
+  byte-identical payload while mapping DIFFERENT ground shared one key. `save_field`
+  replayed, returned the first row's id, and this row's boundary write then overwrote that
+  field's map instead of creating its own: silent data loss on a field that imported fine,
+  reported to the operator as "identical to an earlier row".
+  A geometry digest now tells the two cases apart at the only point where the evidence
+  exists - the returned id. Same id and same geometry is a real duplicate; same id and
+  different geometry is a second field wearing the first one's receipt, so the key is
+  retired and the row asks once more for a field of its own. `createdFieldIds` became a
+  Map of id to geometry digest to carry that evidence.
+
+Two repo guards then caught the FIRST shape of that fix, which is worth recording because
+both were correct: writing the retry as a second `save_field` call made it an RPC capture
+with no `assertRpcResult` of its own, and retiring the key before checking the reply was
+the reset-before-assert defect the F1 guard exists to catch. Both went away by looping one
+call site and asserting the reply before deciding anything about it.
+
 ### Proof observed
 
 `npx tsc --noEmit` clean; `npm run lint` clean (0 warnings); `npm test` — full vitest

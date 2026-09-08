@@ -391,7 +391,7 @@ export default function IntegrityCleanupPanel() {
     // distinct edit: it may already have been applied, and this RPC SETS the level
     // rather than adjusting it. A faithful retry of the same numbers is never
     // refused -- that replays the receipt instead of re-running the correction.
-    if (reconcileUnresolved.refuseOnce(scope)) {
+    if (reconcileUnresolved.refuseEdited(scope)) {
       toast('error', UNRESOLVED_INTENT_MESSAGE);
       return;
     }

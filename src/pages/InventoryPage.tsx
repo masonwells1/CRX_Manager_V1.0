@@ -421,7 +421,7 @@ export default function InventoryPage() {
     // A hold whose outcome was never confirmed may already be reserving stock.
     // Editing the product, customer, quantity or expiry would mint a new key and
     // reserve it a SECOND time, so refuse the edited submission — not the retry.
-    if (holdUnresolved.refuseOnce(scope)) throw new Error(UNRESOLVED_INTENT_MESSAGE);
+    if (holdUnresolved.refuseEdited(scope)) throw new Error(UNRESOLVED_INTENT_MESSAGE);
     const idemKey = createHoldIdem.getKeyFor(scope);
     try {
       const { data, error } = await supabase.rpc('create_inventory_hold', {
@@ -741,7 +741,7 @@ export default function InventoryPage() {
         // An earlier adjustment whose outcome was never confirmed may already have
         // moved this stock. Changing the quantity or note would mint a new key and
         // apply a SECOND delta on top of it, so refuse the edit rather than the retry.
-        if (adjustUnresolved.refuseOnce(scope)) throw new Error(UNRESOLVED_INTENT_MESSAGE);
+        if (adjustUnresolved.refuseEdited(scope)) throw new Error(UNRESOLVED_INTENT_MESSAGE);
         const idemKey = adjustIdem.getKeyFor(scope);
         const { data, error } = await supabase.rpc('adjust_inventory', {
           p_inventory_id: selectedId,
