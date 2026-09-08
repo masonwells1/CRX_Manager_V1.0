@@ -38,14 +38,28 @@ No SQL, no migration, no schema change.
 ### Proof observed
 
 - New test in `src/pages/JobDetail.staleLoad.test.tsx`: the post-commit crew/loader write
-  rejects with an FK error, the handler takes the backstop, and the credit RPC plus the
-  durable notification still fire exactly once each.
+  fails the way PostgREST really fails it — the await RESOLVES with `{ data: null, error }`
+  carrying a plain-object FK error, and `checkMutationResult` is what throws — the handler
+  takes the backstop, and the credit RPC plus the durable notification still fire exactly
+  once each.
 - **Falsified before trusted.** With `src/pages/JobDetail.tsx` reverted to `origin/main`
   and the test kept, the run fails on the credit assertion with the production symptom —
   `check_customer_credit_limit` never called — while the backstop-toast assertion still
   passes, proving the test really travels the early-return path rather than the success path.
 - Full suite green after the fix: 356 files, 5065 passed / 123 skipped.
 - `tsc --noEmit` clean; `eslint` clean on both changed files; `npm run build` succeeded.
+
+### Review
+
+CodeRabbit (2026-09-07, PR #633) flagged that the first version of the test made the mocked
+builder REJECT. Production calls `.update().select('id')` without `.throwOnError()`, so a
+constraint violation resolves with `{ data: null, error }` and it is `checkMutationResult`
+that throws. The stub for that checker was a no-op, which deleted the very error path the
+test claimed to prove — a test asserting a backstop production would never enter that way.
+Fixed: the shared `checkMutationResult` mock now mirrors the real checker's error branch
+(`if (result.error) throw result.error`), the failing chain returns the true PostgREST
+shape, and the now-unused rejecting-chain helper is gone. Re-falsified after the change:
+still 1 failed / 9 passed on the reverted page, failing on the credit assertion.
 
 ### Not verified
 

@@ -69,20 +69,6 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
 }
 
 /**
- * A chain whose await REJECTS, so a post-commit sub-write can fail exactly the way a real
- * PostgREST error does (a rejected promise out of the awaited builder), rather than by
- * stubbing the checker that inspects its result.
- */
-function buildRejectingChain(err: unknown): Record<string, unknown> {
-  const self = chainShell();
-  const settle = () => Promise.reject(err);
-  self.then = (onF: unknown, onR: unknown) => settle().then(onF as never, onR as never);
-  self.catch = (onR: unknown) => settle().catch(onR as never);
-  self.finally = (onF: unknown) => settle().finally(onF as never);
-  return self;
-}
-
-/**
  * A chain that does not answer until `gate` resolves. Resolution is LAZY (settled at await
  * time, not at construction) so the query can be issued long before the test releases it.
  */
@@ -107,7 +93,14 @@ vi.mock('../lib/db', async (importOriginal) => {
   return {
     ...actual,
     supabase: { from: mockFrom, rpc: mockRpc, storage: { from: vi.fn() } },
-    checkMutationResult: vi.fn(),
+    // Mirror the real checker's error branch. A PostgREST mutation RESOLVES with
+    // { data: null, error } on a constraint violation — it does NOT reject — so this call is
+    // what actually turns a failed post-commit sub-write into the thrown error its backstop
+    // catches. A no-op stub here deletes that error path, and a test could then "prove" a
+    // backstop production would never enter.
+    checkMutationResult: vi.fn((result: { error?: unknown }) => {
+      if (result?.error) throw result.error;
+    }),
     assertRpcResult: vi.fn((d) => d),
     sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
   };
@@ -713,8 +706,18 @@ describe('JobDetail cross-record stale-load guard', () => {
       }
       if (table === 'jobs' && jobCommitted) {
         // The real failure this backstop was written for: the crew row was deleted by
-        // another user, so the ground_crew_id FK rejects the update.
-        return buildRejectingChain(Object.assign(new Error('FK violation on ground_crew_id'), { code: '23503' }));
+        // another user, so the ground_crew_id FK rejects the update. Modelled the way
+        // PostgREST actually reports it — the await RESOLVES with { data: null, error },
+        // a plain object (not an Error), and checkMutationResult is what throws.
+        return buildChain({
+          data: null,
+          error: {
+            code: '23503',
+            message: 'insert or update on table "jobs" violates foreign key constraint "jobs_ground_crew_id_fkey"',
+            details: 'Key (ground_crew_id)=(crew-1) is not present in table "ground_crews".',
+            hint: null,
+          },
+        });
       }
       if (table === 'jobs') return buildChain({ data: JOB_B, error: null });
       return buildChain({ data: [], error: null });
