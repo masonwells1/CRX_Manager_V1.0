@@ -222,7 +222,14 @@ its approval — confirm the review exists on this exact head, and when it HAS a
 exact-SHA Codex proof below is a hard gate for risky money/RLS/migration diffs and is always
 required for them, while CodeRabbit participates only when the hourly job has actually delivered a
 review. A CodeRabbit review never substitutes for the Codex proof, and a missing CodeRabbit review
-never holds a green PR.
+never holds a green PR — **with one security exception.** A `SECURITY DEFINER` migration in a
+forgeable-actor shape (a caller-supplied `p_performed_by` / `p_actor*` / `p_user*`, or an
+actor-shaped name outside that pattern such as `p_target_id`, that the body does not bind to
+`auth.uid()`) DOES still need a real CodeRabbit review before merge. `actor-binding-check.mjs` is
+capped as best-effort by the 2026-09-01 decision, and `docs/reference/agent-guardrails.md` records
+that for the re-binding, laundering, naming-scope and cross-routine gaps **only the exact-SHA Codex
+proof and the CodeRabbit review stand**. For that diff class, hold the merge and tell Mason if no
+review has been delivered.
 
 **If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
 RLS-policy files / `src/lib/db.ts` / `src/lib/sentry`, or the diff text matches the money

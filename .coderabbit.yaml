@@ -24,15 +24,23 @@ reviews:
   # switch that gives the `mode: error` checks below any force at all: per
   # CodeRabbit's docs, an error-mode check only holds a PR when this is enabled.
   #
-  # Mason approved the hard final-review gate on 2026-08-28. GitHub now requires
-  # one approval, dismisses stale approvals after a new commit, requires approval
-  # from someone other than the last pusher, and requires the branch to be up to
-  # date. Since 2026-09-01 those rules are NO LONGER enforced for administrators:
-  # Mason has a manual override for a stuck review (see DECISION_LOG). CodeRabbit
-  # remains the normal merge-unlock path, and agents are barred from the override
-  # by the merge guards, but this file should not claim admins are bound.
-  # CodeRabbit's formal approval is therefore the normal merge-unlock path; the
-  # existing required build/deployment contexts remain separate and unchanged.
+  # UPDATED 2026-09-08. GitHub no longer requires an approving review at all:
+  # Mason removed `required_pull_request_reviews` from `main` on 2026-09-02, so
+  # CI — not a review — is the merge gate. `request_changes_workflow` below still
+  # matters, because a CHANGES_REQUESTED verdict still blocks and both agent
+  # merge guards refuse to merge over one. What changed is only the unlock path:
+  # a green PR merges with no approval, so CodeRabbit's formal approval is NOT
+  # the normal merge-unlock path any more. The 2026-08-28 hard-gate text that
+  # stood here (one approval, stale-approval dismissal, last-pusher rule) is
+  # superseded and was describing protection settings that no longer exist.
+  #
+  # ONE EXCEPTION, and it is a security control rather than a merge convention:
+  # a SECURITY DEFINER migration in a forgeable-actor shape still needs a real
+  # CodeRabbit review before merge. `actor-binding-check.mjs` is capped as
+  # best-effort by the 2026-09-01 decision, and `docs/reference/agent-guardrails.md`
+  # records that for the re-binding, laundering, naming-scope and cross-routine
+  # gaps only the exact-SHA Codex proof and the CodeRabbit review stand. Do not
+  # let the general "a review is optional" rule erase that one.
   request_changes_workflow: true
   high_level_summary: true
   poem: false

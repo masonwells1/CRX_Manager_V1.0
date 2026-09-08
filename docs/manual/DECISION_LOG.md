@@ -30,7 +30,19 @@ CodeRabbit ignores.
 second request collides with the job and consumes the slot another PR was waiting for. A CodeRabbit
 review is **not** a merge requirement — CI is the merge gate (see the 2026-09-02 entry) — so never
 stall a green landing waiting for one. `CHANGES_REQUESTED` still blocks and both agent merge gates
-still refuse to merge over it. There is no hidden gate-marker SHA on this path; when an approval
+still refuse to merge over it.
+
+**One security exception, deliberately carved out.** A `SECURITY DEFINER` migration in a
+forgeable-actor shape (a caller-supplied `p_performed_by` / `p_actor*` / `p_user*`, or an
+actor-shaped name outside that pattern such as `p_target_id`, that the body does not bind to
+`auth.uid()`) still requires a real CodeRabbit review before merge. `actor-binding-check.mjs` was
+capped as best-effort on 2026-09-01, and `docs/reference/agent-guardrails.md` records that for the
+re-binding, laundering, naming-scope and cross-routine gaps **only the exact-SHA Codex proof and
+the CodeRabbit review stand**. Making a review optional everywhere would have deleted one of the
+two remaining controls for that class without replacement — caught by the Codex GitHub App on the
+PR that introduced this decision. For that diff class: hold the merge and tell Mason rather than
+landing it unreviewed. Removing this exception needs either deterministic coverage for those shapes
+(parked PR #449) or Mason's explicit decision. There is no hidden gate-marker SHA on this path; when an approval
 exists, match that authenticated `APPROVED` review's `commit_id` to the live PR head.
 
 **Deliberately not permanent:** CodeRabbit documents no contract about comment-author identity, so

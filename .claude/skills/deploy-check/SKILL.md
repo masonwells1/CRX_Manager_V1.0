@@ -153,7 +153,14 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    **not** symmetric: a separate exact-SHA `gpt-5.6-sol` high-effort proof is a hard gate for risky
    money/RLS/migration diffs and is always required for them, while CodeRabbit participates only
    when the hourly job has actually delivered a review. CodeRabbit never substitutes for the Codex
-   proof, and a missing CodeRabbit review never holds a green PR.
+   proof, and a missing CodeRabbit review never holds a green PR — **except for one security
+   class.** A `SECURITY DEFINER` migration in a forgeable-actor shape (caller-supplied
+   `p_performed_by` / `p_actor*` / `p_user*`, or an actor-shaped name outside that pattern such as
+   `p_target_id`, not bound to `auth.uid()`) still needs a real CodeRabbit review before merge:
+   `actor-binding-check.mjs` is capped as best-effort (2026-09-01), and
+   `docs/reference/agent-guardrails.md` records that for the re-binding, laundering, naming-scope
+   and cross-routine gaps only the exact-SHA Codex proof and the CodeRabbit review stand. Hold the
+   merge and tell Mason if no review has been delivered on such a diff.
 5. Merge. **The merge is the deploy.**
 
 Landing regular reversible code with the full pipeline green is covered by Mason's standing push
