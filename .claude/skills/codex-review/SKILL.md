@@ -218,8 +218,11 @@ hourly job has not reached this PR, merge on green checks. But never treat CodeR
 row as evidence that a review happened: it reports green when reviews are disabled entirely. So
 whenever you rely on a CodeRabbit review — to claim it reviewed this candidate, or to merge on
 its approval — confirm the review exists on this exact head, and when it HAS approved, its
-`commit_id` must equal the PR's final `headRefOid`. The Codex proof below remains an additional hard gate
-for risky money/RLS/migration diffs. Both run — neither replaces the other.
+`commit_id` must equal the PR's final `headRefOid`. The two reviews are **not** symmetric: the
+exact-SHA Codex proof below is a hard gate for risky money/RLS/migration diffs and is always
+required for them, while CodeRabbit participates only when the hourly job has actually delivered a
+review. A CodeRabbit review never substitutes for the Codex proof, and a missing CodeRabbit review
+never holds a green PR.
 
 **If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
 RLS-policy files / `src/lib/db.ts` / `src/lib/sentry`, or the diff text matches the money

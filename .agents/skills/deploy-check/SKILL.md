@@ -149,9 +149,11 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    may act on that exemption. When CodeRabbit HAS approved, require that authenticated approval's
    `commit_id` and the final `headRefOid` to match; when it has not reviewed, that is not a
    blocker — CI is the merge gate. Either way, recheck every reported check and auto-merge OFF.
-   Ordinary green CodeRabbit or generic Actions status rows are insufficient. A separate exact-SHA
-   `gpt-5.6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration
-   diffs — both run, neither replaces the other.
+   Ordinary green CodeRabbit or generic Actions status rows are insufficient. The two reviews are
+   **not** symmetric: a separate exact-SHA `gpt-5.6-sol` high-effort proof is a hard gate for risky
+   money/RLS/migration diffs and is always required for them, while CodeRabbit participates only
+   when the hourly job has actually delivered a review. CodeRabbit never substitutes for the Codex
+   proof, and a missing CodeRabbit review never holds a green PR.
 5. Merge. **The merge is the deploy.**
 
 Landing regular reversible code with the full pipeline green is covered by Mason's standing push
