@@ -127,6 +127,36 @@
 -- for operations they do not own, and create_inventory_hold's body is the only
 -- writer of that operation's receipts anywhere in the repo.
 --
+-- RESIDUAL, KNOWN AND ACCEPTED (Codex HIGH, 2026-09-08): the trigger above
+-- fires on INSERT INTO idempotency_keys, so it cannot see an in-flight old-body
+-- call that passed p_idempotency_key => NULL. That call skips the receipt table
+-- ENTIRELY -- both the read (old body line 131) and the write (line 215) sit
+-- behind `IF p_idempotency_key IS NOT NULL` -- so the ACCESS EXCLUSIVE lock
+-- never drains it either. It could commit one unreceipted hold just after this
+-- migration lands, carrying the old missing-profile and NULL-p_force behaviour.
+-- NOT FIXED HERE, deliberately. The only way to catch it is a guard on
+-- public.inventory_holds, which is written by 16 migrations including the live
+-- job-reservation, quote-coordination and planned-program flows; a scoping
+-- mistake there breaks customer bookings. That is a LARGER risk than the one it
+-- removes, because: (a) the window is the apply transaction only, seconds long
+-- and attended -- PREFLIGHT_LEGACY_RECEIPTS already forces a quiet window;
+-- (b) the sole caller (InventoryPage callCreateHoldRpc) ALWAYS sends a key --
+-- getIdempotencyKey() throws rather than returning null; and (c) this is not a
+-- regression: keyless calls behave exactly this way on live TODAY, for every
+-- call, permanently. This migration shrinks that exposure from always to a few
+-- seconds, it does not create it. POST-APPLY DETECTION (run once, read-only,
+-- right after applying) -- it must return zero rows:
+--   SELECT h.id, h.created_at, h.hold_type, h.quantity
+--     FROM public.inventory_holds h
+--    WHERE h.hold_type IN ('manual', 'crop_program')
+--      AND h.created_at >= now() - interval '15 minutes'
+--      AND NOT EXISTS (SELECT 1 FROM public.idempotency_keys k
+--                       WHERE k.operation = 'create_inventory_hold'
+--                         AND k.request_actor_id IS NOT NULL
+--                         AND k.result ->> 'hold_id' = h.id::text);
+-- A row means a keyless call slipped through the cutover: verify it with the
+-- customer and delete it if it was not intended.
+--
 -- PREFLIGHT: check_idempotency_intent(text,text,uuid,text),
 -- extensions.digest(bytea,text) and pg_catalog.trim_scale(numeric) installed;
 -- exactly one overload of create_inventory_hold in public; the private impl name
