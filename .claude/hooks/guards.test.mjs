@@ -142,6 +142,38 @@ ok(classifySql("DELETE FROM vendor_payments WHERE id = 1").block, "DELETE from v
 // Codex P1 round 3: fully quoted schema qualification must not evade the classifier.
 ok(classifySql('UPDATE "public"."customers" SET phone = \'555\' WHERE id = 1').block, 'UPDATE "public"."customers" (quoted qualification) blocked');
 ok(classifySql('INSERT INTO "public"."invoices" (id) VALUES (1)').block, 'INSERT INTO "public"."invoices" (quoted qualification) blocked');
+
+// ── comment-aware classification (2026-09-08) ────────────────────────────
+// classifySql now strips SQL comments (quote-aware) before the pattern checks.
+// Motivation: every db-invariant-sweeps predicate opens with prose like
+// `-- predicate (f): overloads`, which the function-call scan read as a call to
+// a function named `predicate`. All 29 predicates were refused, so the C1
+// live-invariant control could not run through execute_sql at all.
+// A comment never executes, so stripping one cannot hide a real write — but the
+// strip MUST stay quote-aware, and it must not eat the [E2E] marker.
+ok(!classifySql("-- predicate (f): overloads\nSELECT proname FROM pg_proc").block, "prose in a leading comment is not a function call");
+ok(!classifySql("/* suite (fin): balance identity */ SELECT 1").block, "prose in a block comment is not a function call");
+ok(!classifySql("SELECT 1 -- DELETE FROM customers").block, "a commented-out DELETE does not block");
+ok(!classifySql("-- insert into financial_audit_log is trigger-only\nSELECT 1").block, "audit-log prose in a comment does not block");
+// ...while everything the comments were hiding behind stays blocked:
+eq(classifySql("-- predicate (c): actor forgery\nSELECT cancel_order(42)").kind, "rpc-via-select", "a real RPC after a comment is still blocked");
+eq(classifySql("/* note */ INSERT INTO financial_audit_log (x) VALUES (1)").kind, "audit-log-write", "a real audit-log write after a comment is still blocked");
+ok(classifySql("-- routine cleanup\nDELETE FROM customers WHERE id = 5").block, "a real DELETE after a comment is still blocked");
+// The strip must never swallow a real statement that follows a `--` or `/*`
+// living INSIDE a string literal (Codex P1 2026-07-13 round 5 regression guard).
+ok(classifySql("SELECT 'x --'; DELETE FROM customers;").block, "-- inside a literal does not comment out the following DELETE");
+ok(classifySql("SELECT '/*'; DELETE FROM customers; SELECT '*/';").block, "/* inside a literal does not swallow the following DELETE");
+ok(classifySql("UPDATE customers SET name = 'a -- b' WHERE id = 1").block, "-- inside a SET literal does not hide the UPDATE");
+// The [E2E] fake-data marker is deliberately writable as a trailing comment, so
+// the comment strip must not remove it (covered above at the UPDATE case too).
+ok(!classifySql("DELETE FROM customers WHERE id = 5 -- [E2E]").block, "[E2E] marker in a comment survives the comment strip");
+// pg_catalog definition formatters are reads; pg_get_functiondef was already
+// trusted, its siblings were simply omitted from the builtin list.
+ok(!classifySql("SELECT pg_get_function_identity_arguments(oid) FROM pg_proc").block, "pg_get_function_identity_arguments is a read");
+ok(!classifySql("SELECT oidvectortypes(proargtypes) FROM pg_proc").block, "oidvectortypes is a read");
+ok(!classifySql("SELECT pg_get_triggerdef(oid) FROM pg_trigger").block, "pg_get_triggerdef is a read");
+// Adding those names must not have opened the default-deny scan generally.
+eq(classifySql("SELECT save_customer('{}'::jsonb)").kind, "rpc-via-select", "an unknown app function is still default-denied");
 ok(classifySql('UPDATE public . "orders" SET notes = \'x\' WHERE id = 1').block, "spaced qualification still blocked");
 // Codex P1 round 4: live stock tables were missing from the lists.
 ok(classifySql("UPDATE inventory SET quantity = 0 WHERE id = 1").block, "raw UPDATE of inventory (live stock) blocked");

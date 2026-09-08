@@ -237,6 +237,13 @@ export function stripCommentsQuoteAware(sql) {
 const READONLY_FN_PREFIX_RE = /^(?:get|list|find|search|count|calc|calculate|compute|report|fetch|lookup|has|is|can|preview|estimate|summarize|derive)_/;
 export const READONLY_FN_NAMES = new Set([
   // (none audited yet — add "fn_name", // audited YYYY-MM-DD entries here)
+  // plpgsql_check's STATIC analyser: parses a stored function body and returns a
+  // findings table. It does not execute the analysed function and issues no DML.
+  // Installed deliberately on live by 20260610192229 to back the plpgsql-check
+  // predicate, and already run against live (baseline in
+  // docs/audits/2026-06-10-error-prevention-execution-log.md §4). The separate
+  // plpgsql_check_profiler/tracer entry points are NOT trusted here. audited 2026-09-08
+  "plpgsql_check_function_tb", "plpgsql_check_function",
 ]);
 const SQL_BUILTIN_FNS = new Set([
   // aggregates / window
@@ -286,9 +293,21 @@ const SQL_BUILTIN_FNS = new Set([
   "session_user", "pg_backend_pid", "txid_current", "pg_is_in_recovery",
   "obj_description", "col_description", "shobj_description",
   "pg_get_serial_sequence", "pg_get_functiondef", "pg_get_constraintdef",
+  // 2026-09-08: sibling pg_catalog DEFINITION FORMATTERS, omitted when the list
+  // was written. Each takes catalog oids and returns text; none can read table
+  // data or mutate anything. Their absence blocked the db-invariant-sweeps
+  // predicates (overloads / save-field-actor-binding / returns-lifecycle-rpc-owned)
+  // even though pg_get_functiondef — strictly more revealing — was already trusted.
+  "pg_get_function_identity_arguments", "pg_get_function_arguments",
+  "pg_get_function_result", "pg_get_triggerdef", "pg_get_ruledef",
+  "pg_get_userbyid", "oidvectortypes",
   "pg_get_indexdef", "pg_get_viewdef", "pg_get_expr", "pg_relation_size",
   "pg_total_relation_size", "pg_table_size", "pg_indexes_size", "pg_database_size",
   "format_type", "to_regclass", "to_regproc", "to_regtype",
+  // 2026-09-08: to_regprocedure is the same name-to-oid lookup family as
+  // to_regclass/to_regproc/to_regtype above (returns NULL instead of erroring on
+  // an unknown name); omitting it alone blocked the profile-role-lock predicate.
+  "to_regprocedure",
   "has_table_privilege", "has_column_privilege", "has_function_privilege",
   "has_schema_privilege", "has_database_privilege", "pg_has_role",
   "gen_random_uuid", "uuid_generate_v4", "exists", "currval", "lastval",
@@ -332,7 +351,21 @@ export function classifySql(query) {
   // The rolled-back-smoke structure below still reads the ORIGINAL text: the
   // RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK' marker lives inside a DO body, and a
   // COMMIT anywhere (even inside a DO body) must keep disqualifying the batch.
-  const t = stripDollarQuoted(q);
+  //
+  // 2026-09-08: comments are also removed, quote-aware. A `--` or block comment
+  // is never executed, so stripping it cannot hide a real write — but leaving it
+  // in produced pure false positives that made the db-invariant-sweeps C1 control
+  // unrunnable: every predicate opens with prose like `-- predicate (f): overloads`,
+  // which findNonReadFunctionCall read as a call to a function named `predicate`.
+  // All 29 predicates were refused (verified 2026-09-08 against classifySql itself).
+  // stripCommentsQuoteAware copies string literals, quoted identifiers, and
+  // dollar-quoted spans VERBATIM, so the `SELECT '/*'; DELETE FROM customers;`
+  // swallow (Codex P1 2026-07-13 round 5) stays impossible. Order matters:
+  // stripDollarQuoted runs FIRST so machine bodies are gone before comments are
+  // touched; comments inside a KEPT DO body therefore survive, which is the safe
+  // direction (an unstripped comment can only over-block).
+  const tWithComments = stripDollarQuoted(q);
+  const t = stripCommentsQuoteAware(tWithComments);
 
   // 1. financial_audit_log is append-only, written only by triggers/RPCs — a Hard
   //    Red Line. No [E2E] exemption; only REAL-DATA-OK (checked by the guard) overrides.
@@ -397,7 +430,11 @@ export function classifySql(query) {
   }
 
   // 4. Clearly-fake test data is fine for ordinary data writes.
-  if (t.includes("[E2E]")) return { block: false };
+  // Read the comment-BEARING text: `UPDATE ... -- [E2E]` is a documented, tested
+  // way to mark a fake-data write, so the 2026-09-08 comment strip must not eat
+  // the marker. Still dollar-stripped, so an [E2E] buried in a re-emitted machine
+  // body cannot exempt a real write — identical to the pre-2026-09-08 behaviour.
+  if (tWithComments.includes("[E2E]")) return { block: false };
 
   let m;
   if ((m = INSERT_RE.exec(t))) {
