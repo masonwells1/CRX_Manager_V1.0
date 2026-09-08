@@ -2543,7 +2543,6 @@ export type Database = {
           count_number: string
           created_at: string
           id: string
-          item_revision: number
           initiated_by: string
           item_revision: number
           notes: string | null
@@ -2557,7 +2556,6 @@ export type Database = {
           count_number: string
           created_at?: string
           id?: string
-          item_revision?: number
           initiated_by?: string
           item_revision?: number
           notes?: string | null
@@ -2571,7 +2569,6 @@ export type Database = {
           count_number?: string
           created_at?: string
           id?: string
-          item_revision?: number
           initiated_by?: string
           item_revision?: number
           notes?: string | null

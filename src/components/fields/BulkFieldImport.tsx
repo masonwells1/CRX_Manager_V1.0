@@ -535,20 +535,28 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         // Both were real: the first is CodeRabbit's finding on this line, the
         // second is Codex P1 on the save_field call below.
         //
-        // Content identity fixes both. The fingerprint still covers the full
-        // payload, geometry and stated acres, so genuinely different content
-        // mints a fresh key (the original reason position was not enough on its
-        // own) while an unchanged row replays its receipt from any file, at any
-        // position. Two byte-identical rows in one file now share a key on
-        // purpose; the duplicate-receipt check below keeps that from being
-        // counted as two fields.
-        // digestIntentPayload, not fingerprintIntentPayload: this serializes a
-        // COMPLETE field geometry, and the synchronous BigInt hash froze the tab
-        // for seconds per row on a large multi-part boundary (Codex P2 below).
+        // Content identity fixes both. An unchanged row replays its receipt from
+        // any file, at any position, while genuinely different content mints a
+        // fresh key. Two byte-identical rows in one file share a key on purpose;
+        // the duplicate-receipt check below keeps that from being counted twice.
+        //
+        // SCOPE ONE RPC AT A TIME. This row runs three independently committing
+        // RPCs, and folding all three inputs into one shared scope made a
+        // downstream correction rewrite the UPSTREAM key: fixing only a rejected
+        // boundary changed the combined hash, so the re-import called save_field
+        // with a FRESH key and p_field_id: null and created a SECOND field before
+        // retrying the boundary. Each stage is therefore keyed by exactly what
+        // that stage does.
+        //
+        // save_field is keyed by the field's own identity and payload only --
+        // deliberately NOT the boundary or the stated acres, which it never
+        // writes.
+        // digestIntentPayload, not fingerprintIntentPayload: the later stages
+        // serialize a COMPLETE field geometry, and the synchronous BigInt hash
+        // froze the tab for seconds per row on a large multi-part boundary
+        // (Codex P2 below).
         const intentScope = `import:${pf.customer_id}:${pf.field_name}:${await digestIntentPayload([
           fieldPayload,
-          pf.full_boundary_geojson,
-          pf.stated_acres ?? null,
         ])}`;
 
         saveOutcome = 'unknown';
@@ -597,12 +605,20 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           // positively refuses it. Starting optimistic here would let the screen state an
           // unverified database condition as fact — and then invite an admin to act on it.
           let boundaryUnknown = true;
+          // Keyed by the field this boundary lands on and the geometry itself --
+          // NOT by the save_field scope. The field id is the strongest identity
+          // available here and it already exists, so correcting a rejected
+          // boundary changes THIS key and nothing upstream: the retry updates the
+          // field that was created rather than creating another one.
+          const boundaryScope = `boundary:${String(fieldId)}:${await digestIntentPayload([
+            pf.full_boundary_geojson,
+          ])}`;
           try {
             const { data: bData, error: bErr, status: bStatus } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
               p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
               p_performed_by: profile.id,
-              p_idempotency_key: setBoundaryIdem.getKeyFor(intentScope),
+              p_idempotency_key: setBoundaryIdem.getKeyFor(boundaryScope),
             });
             if (bErr) {
               if (rpcDefinitelyRolledBack(bStatus, bErr)) boundaryUnknown = false;
@@ -640,28 +656,53 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               if (!isAcreInBand(pf.stated_acres)) {
                 warnings.push(`"${pf.field_name}": the file's ${pf.stated_acres} ac is outside the allowed ${ACRE_BAND_MIN}–${ACRE_BAND_MAX} acre range — billing on the measured ${pf.full_acres} ac instead.`);
               } else {
+                // Its own scope again, for the same reason as the boundary: the
+                // field id plus the exact acreage this call sets.
+                const overrideScope = `override:${String(fieldId)}:${pf.stated_acres}`;
+                // Same rule as save_field and the boundary: once the request is
+                // sent, the override may have committed, and only a response that
+                // proves PostgreSQL rolled back makes "billing on the measured
+                // acres" a true statement. Reporting a lost response as a plain
+                // failure told the operator the file's acreage was NOT applied
+                // when it may well have been -- and billable acres is the number
+                // the invoice multiplies.
+                let overrideUnknown = true;
                 try {
-                  const { data: ovData, error: ovErr } = await supabase.rpc('set_field_override_acres', {
+                  const { data: ovData, error: ovErr, status: ovStatus } = await supabase.rpc('set_field_override_acres', {
                     p_field_id: fieldId,
                     p_override_acres: pf.stated_acres,
                     p_performed_by: profile.id,
-                    p_idempotency_key: setOverrideAcresIdem.getKeyFor(intentScope),
+                    p_idempotency_key: setOverrideAcresIdem.getKeyFor(overrideScope),
                   });
-                  if (ovErr) throw ovErr;
+                  if (ovErr) {
+                    if (rpcDefinitelyRolledBack(ovStatus, ovErr)) overrideUnknown = false;
+                    throw ovErr;
+                  }
                   assertRpcResult(ovData, 'set_field_override_acres');
+                  overrideUnknown = false;
                 } catch (ovError: unknown) {
                   const msg = sanitizeError(ovError);
-                  warnings.push(`"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
+                  warnings.push(overrideUnknown
+                    ? `"${pf.field_name}": imported, but we never learned whether the file's ${pf.stated_acres} ac became the billable acres (${clampReason(msg)}). Check this field's billable acres before invoicing it.`
+                    : `"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
                 }
               }
             }
             success++;
-            // The full row pipeline completed, so a later import attempt is
-            // new intent. Do not rotate keys before the boundary/override
-            // steps finish or a lost response could create a duplicate field.
-            saveFieldIdem.resetKeyFor(intentScope);
-            setBoundaryIdem.resetKeyFor(intentScope);
-            setOverrideAcresIdem.resetKeyFor(intentScope);
+            // The keys are deliberately NOT reset here.
+            //
+            // Retiring save_field's key on success defeated the duplicate check
+            // below outright: two byte-identical rows share one scope, so the
+            // first row's success retired the key and the second row minted a
+            // FRESH one, got a new field id back, and created the duplicate the
+            // check exists to prevent. It never fired in a normal import.
+            //
+            // Retaining the key is also the right rule on its own terms. Every
+            // scope here is content- or field-identity bound, so "already done"
+            // is exactly what a repeat means: same customer, same name, same
+            // payload is the same field, not a second one. A deliberate re-import
+            // after a reload still gets a fresh key, which is the only case where
+            // creating another field could be intended.
           }
         }
       } catch (err: unknown) {

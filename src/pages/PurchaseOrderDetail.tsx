@@ -403,6 +403,12 @@ export default function PurchaseOrderDetail() {
     // of them fires. Gating post-commit side effects on it alone left the common
     // replay completely unguarded. (gpt-5.6-sol on 2ff8bdafc.)
     let wasLockedReplay = false;
+    // Declared out here, alongside wasLockedReplay, because onSuccess below has to
+    // read it. As a flag local to the submit block it was invisible to onSuccess,
+    // which then fired a green "Receiving reconciled" straight after the warning
+    // toast that says the workflow is still locked -- two contradictory messages
+    // about the same submission.
+    let cleanupFailed = false;
     try {
       const lockedRequest = receiveIntent.unresolvedIntent;
       if (lockedRequest) {
@@ -555,7 +561,6 @@ export default function PurchaseOrderDetail() {
         // retry replays under the SAME key and reconciles against the committed
         // receipt. Clearing the key here is what would let a retry mint a fresh one
         // and receive the goods a second time.
-        let cleanupFailed = false;
         try {
           await receiveIntent.resolveIntent();
         } catch (resolveErr) {
@@ -760,6 +765,12 @@ export default function PurchaseOrderDetail() {
         // goods recorded exactly once — say that, which is true either way and does
         // not credit this attempt with work it may not have done.
         // (gpt-5.6-sol on 2ff8bdafc.)
+        // The durable intent could not be cleared, so the workflow is still locked and
+        // the form is still open on this same receipt. The warning toast already said
+        // so; a success message on top of it would tell the operator the opposite of
+        // what the screen is showing them. The goods ARE recorded -- that is what the
+        // warning explains -- so nothing further is announced here.
+        if (cleanupFailed) return;
         if (wasLockedReplay) {
           toast('success', 'Receiving reconciled — these goods are recorded once, and the PO is up to date.');
           return;

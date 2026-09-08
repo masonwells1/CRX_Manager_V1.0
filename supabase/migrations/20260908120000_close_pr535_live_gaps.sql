@@ -53,9 +53,16 @@
 -- needing its own caller analysis, for no behavioural gain. The proof block VERIFIES
 -- the resulting grants instead of assuming them.
 --
+-- NO TRANSACTION CONTROL IN THIS FILE, deliberately. scripts/apply-migration-file.mjs
+-- wraps the migration AND its schema_migrations ledger row in ONE transaction so the
+-- two commit together, and it REFUSES any file containing a top-level BEGIN/COMMIT --
+-- a file that manages its own transaction can leave the schema changed with no ledger
+-- row. An earlier draft of this file carried BEGIN;/COMMIT; and was rejected outright
+-- by that guard (observed, not assumed). Atomicity is unchanged: the statements below
+-- still run inside the apply path's single transaction, so a failing precondition or
+-- postcondition still rolls the whole thing back.
+--
 -- Non-destructive: no data is written, moved or removed. One function body only.
-
-BEGIN;
 
 -- Precondition. Asserted BEFORE the replace, so it describes the database as found
 -- rather than as this file just left it. A postcondition alone would be circular: it
@@ -231,7 +238,15 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'POSTCOND: complete_cycle_count is executable by PUBLIC or anon';
   END IF;
+  -- aclexplode lists DIRECT grants only. A grant to some third role that anon is a
+  -- MEMBER of does not appear there at all, so the check above can pass while anon
+  -- still reaches EXECUTE by inheritance. has_function_privilege resolves membership
+  -- and is the right tool for that case -- but it passes vacuously on a database where
+  -- the anon role does not exist, which is why it is GUARDED on pg_roles here instead
+  -- of replacing the ACL scan. The two checks cover different holes; both are needed.
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
+     AND has_function_privilege('anon', v_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTCOND: anon can EXECUTE complete_cycle_count through role membership';
+  END IF;
 END
 $postcond$;
-
-COMMIT;

@@ -31,6 +31,11 @@ import { isDefinitiveRpcRejection } from '../lib/idempotency';
  */
 export function useUnresolvedIntent() {
   const scopeRef = useRef<string | null>(null);
+  // Edited scopes the operator has already been warned about and chose to send
+  // anyway. Acknowledging ONE edit must not disarm the guard for every later
+  // one: an earlier version cleared the unresolved scope on the first refusal,
+  // so a second, different edit went straight through with no warning at all.
+  const acknowledgedRef = useRef<Set<string>>(new Set());
   // Mirrors the ref so a frozen form can render its own banner. The ref is what
   // the guard reads: it is set synchronously, and two clicks can land inside one
   // render window.
@@ -54,25 +59,34 @@ export function useUnresolvedIntent() {
    */
   const clear = useCallback((): void => {
     scopeRef.current = null;
+    acknowledgedRef.current.clear();
     setUnresolvedScope(null);
   }, []);
 
   /**
-   * Refuse an EDITED submission once while an earlier attempt is unresolved, then
-   * stand aside. A faithful retry — the same scope — is never refused: that is the
-   * safe move, and it replays the receipt instead of repeating the work.
+   * Refuse an EDITED submission while an earlier attempt is unresolved, once per
+   * distinct edit. A faithful retry — the same scope — is never refused: that is
+   * the safe move, and it replays the receipt instead of repeating the work.
    *
-   * Refusing once rather than forever is deliberate. This state is component-level,
-   * so a permanent freeze would also block every unrelated hold or adjustment the
-   * operator began afterwards, leaving a page refresh as the only way out. One
-   * refusal turns a silent double-apply into a decision the operator actually made,
-   * matching the over-allocation warning already on this page: click again to
-   * proceed anyway.
+   * Warning once per edit rather than forever is deliberate. This state is
+   * component-level, so a permanent freeze would also block every unrelated hold or
+   * adjustment the operator began afterwards, leaving a page refresh as the only way
+   * out. One refusal turns a silent double-apply into a decision the operator
+   * actually made, matching the over-allocation warning already on this page: click
+   * again to proceed anyway.
+   *
+   * PER EDIT, not once in total. The freeze stays armed after an acknowledgement,
+   * and only the exact payload that was acknowledged passes. Clearing the freeze on
+   * the first refusal — an earlier version of this hook — meant acknowledging one
+   * edit silently disarmed the guard, so a THIRD, different payload executed with no
+   * warning while the original attempt was still unresolved. The freeze is lifted
+   * only by `clear()`: a confirmed success, a definitive refusal, or a reload that
+   * settled what the outstanding attempt actually did.
    */
   const refuseOnce = useCallback((scope: string): boolean => {
     if (scopeRef.current === null || scopeRef.current === scope) return false;
-    scopeRef.current = null;
-    setUnresolvedScope(null);
+    if (acknowledgedRef.current.has(scope)) return false;
+    acknowledgedRef.current.add(scope);
     return true;
   }, []);
 

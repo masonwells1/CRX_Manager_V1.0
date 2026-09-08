@@ -72,16 +72,29 @@ export function fingerprintIntentPayload(value: unknown): string {
  * digests are deliberately prefixed so they can never be mistaken for each
  * other: a scope must not change meaning based on which branch produced it.
  */
+// Once this page has fallen back to FNV it stays fallen back, for the life of the
+// module. The prefixes alone were not enough: they stop the two digests being
+// CONFUSED, but a payload that hashed to `f…` while SubtleCrypto was unavailable
+// and to `s…` once it recovered has a DIFFERENT scope either side of that
+// recovery — which mints a fresh idempotency key on exactly the retry the
+// retained key exists to serve, and re-applies work whose response was lost. The
+// doc comment above claimed this stability; this latch is what makes it true.
+let digestFallbackLatched = false;
+
 export async function digestIntentPayload(value: unknown): Promise<string> {
   const encoded = new TextEncoder().encode(JSON.stringify(value) ?? 'undefined');
   const subtle = globalThis.crypto?.subtle;
-  if (!subtle) return `f${fingerprintIntentPayload(value)}`;
+  if (digestFallbackLatched || !subtle) {
+    digestFallbackLatched = true;
+    return `f${fingerprintIntentPayload(value)}`;
+  }
   try {
     const digest = await subtle.digest('SHA-256', encoded);
     return `s${Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')}`;
   } catch {
-    // A refusal here is environmental, never payload-dependent, so the fallback
-    // stays stable for the life of the page and a retry still matches its key.
+    // Environmental, never payload-dependent. Latch so a later success cannot
+    // silently re-identify a payload this page has already keyed as `f…`.
+    digestFallbackLatched = true;
     return `f${fingerprintIntentPayload(value)}`;
   }
 }

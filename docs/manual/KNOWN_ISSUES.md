@@ -332,11 +332,22 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-09-05 — receiving can record goods against the WRONG purchase order (live on `main`)
+## FIXED 2026-09-08 — receiving could record goods against the WRONG purchase order
 
-**Severity: BLOCKER. Live in production now. NOT introduced by PR #535** — `fetchPO` is byte-identical
-on `origin/main`. Found by an exact-SHA `gpt-5.6-sol` gate reviewing PR #535 (head `2ff8bdafc`).
-**Mason's call, 2026-09-05: fix it in its OWN session, not by widening #535.**
+**Resolved on `main` and no longer live.** `src/pages/PurchaseOrderDetail.tsx` now carries a
+`routeIdRef` updated in a `useLayoutEffect` that also blanks `po`, `items` and the receiving history
+synchronously on every route change; each async load compares the id it was STARTED for against that
+live route id before writing state, and the submit path re-checks ownership before sending. Verified
+against the merged file on 2026-09-08, and `origin/main` no longer carries this entry at all.
+
+Kept as a record rather than deleted because the diagnosis below is the reusable part — it is the
+same async-load-without-a-record-guard shape that has appeared on several pages. The description is
+retained verbatim; only this header and the note above are new.
+
+**Original entry (2026-09-05, now resolved):** Severity BLOCKER, live in production at the time.
+**NOT introduced by PR #535** — `fetchPO` was byte-identical on `origin/main`. Found by an exact-SHA
+`gpt-5.6-sol` gate reviewing PR #535 (head `2ff8bdafc`).
+**Mason's call, 2026-09-05: fix it in its OWN session, not by widening #535.** That is what happened.
 
 `fetchPO` in `src/pages/PurchaseOrderDetail.tsx` (~line 191) is a `useCallback([id, toast])` that
 awaits the `purchase_orders` header query, calls `setPo`, then awaits a SECOND query for

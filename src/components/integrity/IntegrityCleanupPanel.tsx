@@ -8,6 +8,7 @@ import ConfirmModal from '../ui/ConfirmModal';
 import { Sentry } from '../../lib/sentry';
 import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages } from '../../lib/deliveryInvoiceCoverage';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { useUnresolvedIntent, UNRESOLVED_INTENT_MESSAGE } from '../../hooks/useUnresolvedIntent';
 import { fetchSplitBillingOrderIds, SPLIT_BILLING_BLOCK_REASON } from '../../lib/deliverySplitBilling';
 
 interface NegativeInvRow {
@@ -105,6 +106,10 @@ export default function IntegrityCleanupPanel() {
   const { profile } = useAuth();
   const { toast } = useToast();
   const reconcileIdem = useIdempotencyKey('reconcile_negative_inventory', profile?.id || '');
+  // reconcile_negative_inventory writes an ABSOLUTE quantity_available and replays on
+  // the key alone, so a lost response plus an edited quantity is a silent overwrite of
+  // every stock movement since the first commit. Same guard as the Inventory page.
+  const reconcileUnresolved = useUnresolvedIntent();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -382,6 +387,14 @@ export default function IntegrityCleanupPanel() {
     // reformatted retry, bypass the saved receipt, and re-run the correction —
     // overwriting any legitimate stock movement that happened in between.
     const scope = `reconcile:${row.id}:${newQuantity}:${input.reason.trim()}`;
+    // An edited correction while the previous one is unresolved is refused once per
+    // distinct edit: it may already have been applied, and this RPC SETS the level
+    // rather than adjusting it. A faithful retry of the same numbers is never
+    // refused -- that replays the receipt instead of re-running the correction.
+    if (reconcileUnresolved.refuseOnce(scope)) {
+      toast('error', UNRESOLVED_INTENT_MESSAGE);
+      return;
+    }
     if (reconcileInFlightRef.current.has(scope)) return;
     reconcileInFlightRef.current.add(scope);
     setReconcileInputs((prev) => ({ ...prev, [row.id]: { ...prev[row.id], busy: true } }));
@@ -395,6 +408,10 @@ export default function IntegrityCleanupPanel() {
       });
       if (error) throw error;
       assertRpcResult(data, 'reconcile_negative_inventory');
+      // Before resetKeyFor, deliberately: the next two statements are pinned as an
+      // ADJACENT pair (retire the receipt, then drop the row from the screen), and
+      // a line inserted between them would break that guard.
+      reconcileUnresolved.clear();
       reconcileIdem.resetKeyFor(scope);
       // Drop the reconciled row LOCALLY, before the refresh and independently of
       // whether it succeeds. The receipt was just retired one line above, so
@@ -420,6 +437,10 @@ export default function IntegrityCleanupPanel() {
       }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
+      // Freeze this correction unless the server positively refused it. Anything
+      // ambiguous means the absolute write may have landed, and editing the quantity
+      // afterwards would mint a fresh key and apply a second absolute write.
+      reconcileUnresolved.markIfUncertain(scope, err);
       // Same non-throwing-Supabase shape as handleBackfillInvoice above.
       toast('error', sanitizeError(err));
     } finally {

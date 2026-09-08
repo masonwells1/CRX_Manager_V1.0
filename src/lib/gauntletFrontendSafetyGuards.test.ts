@@ -42,11 +42,6 @@ describe('gauntlet caller-side safety guards', () => {
     expect(component).toContain('uploadInFlightRef.current');
     // The scope must bind the row's CONTENT, and ONLY its content.
     //
-    // A lost save_field response keeps the key cached while the modal stays mounted,
-    // so a scope that did not cover the geometry would let a later import of
-    // different geometry replay the earlier field_id and overwrite that field. That
-    // is why content is in the scope, and it still is.
-    //
     // Position came OUT. `fieldIndex` renumbers whenever an earlier row is dropped as
     // invalid, and it does not survive re-importing one corrected row in a new file
     // at all. So a position-bearing scope minted a FRESH key for an unchanged row on
@@ -57,20 +52,50 @@ describe('gauntlet caller-side safety guards', () => {
       'const intentScope = `import:${pf.customer_id}:${pf.field_name}:${await digestIntentPayload([',
     );
     expect(component).not.toContain('import:${fieldIndex}');
-    expect(component).toContain('pf.full_boundary_geojson,');
-    expect(component).toContain('pf.stated_acres ?? null,');
-    // digestIntentPayload, not fingerprintIntentPayload: the payload hashed here is a
-    // complete field boundary, and the synchronous 64-bit hash is neither
+    // ONE SCOPE PER RPC, and this is the load-bearing pin.
+    //
+    // The row runs three independently committing RPCs. A first fix hashed the field
+    // payload, the boundary AND the stated acres into one shared scope, which made a
+    // downstream correction rewrite the UPSTREAM key: fixing only a rejected boundary
+    // changed the combined hash, so the re-import called save_field with a fresh key
+    // and `p_field_id: null` and created a SECOND field before retrying the boundary.
+    //
+    // So save_field must be keyed by the field's own payload and NOT by the geometry
+    // or the acreage it never writes, while the two downstream calls must be keyed by
+    // the committed field id plus their own input. Deny the shared-scope form on both
+    // downstream calls outright — it is the exact shape that regressed.
+    expect(component).toMatch(
+      /const intentScope = `import:\$\{pf\.customer_id\}:\$\{pf\.field_name\}:\$\{await digestIntentPayload\(\[\s*\r?\n\s*fieldPayload,\s*\r?\n\s*\]\)\}`;/,
+    );
+    expect(component).toContain('const boundaryScope = `boundary:${String(fieldId)}:${await digestIntentPayload([');
+    expect(component).toContain('const overrideScope = `override:${String(fieldId)}:${pf.stated_acres}`;');
+    expect(component).toContain('saveFieldIdem.getKeyFor(intentScope)');
+    expect(component).toContain('setBoundaryIdem.getKeyFor(boundaryScope)');
+    expect(component).toContain('setOverrideAcresIdem.getKeyFor(overrideScope)');
+    expect(component).not.toContain('setBoundaryIdem.getKeyFor(intentScope)');
+    expect(component).not.toContain('setOverrideAcresIdem.getKeyFor(intentScope)');
+    // digestIntentPayload, not fingerprintIntentPayload: the boundary scope hashes a
+    // complete field geometry, and the synchronous 64-bit hash is neither
     // collision-resistant nor cheap enough to run on the UI thread for one. A
-    // collision between two different boundaries would replay the wrong field_id.
+    // collision between two different boundaries would replay the wrong receipt.
     expect(component).not.toContain('fingerprintIntentPayload(');
-    // Two byte-identical rows in one file now share a scope on purpose, so the count
-    // of created fields has to come from the committed ids, not from the loop.
+    // Two byte-identical rows in one file share the save_field scope on purpose, so
+    // the count of created fields has to come from the committed ids, not the loop.
     expect(component).toContain('const createdFieldIds = new Set<string>();');
     expect(component).toContain('if (createdFieldIds.has(committedFieldId)) {');
-    expect(component).toContain('saveFieldIdem.getKeyFor(intentScope)');
-    expect(component).toContain('setBoundaryIdem.getKeyFor(intentScope)');
-    expect(component).toContain('setOverrideAcresIdem.getKeyFor(intentScope)');
+    // And the keys must NOT be retired at the end of a successful row. Retiring
+    // save_field's key is what made the duplicate check dead code: the second
+    // identical row minted a fresh key, received a new field id, and created the
+    // duplicate the check exists to catch. Every scope here is content- or
+    // field-identity bound, so "already done" is exactly what a repeat means.
+    expect(component).not.toContain('saveFieldIdem.resetKeyFor(');
+    expect(component).not.toContain('setBoundaryIdem.resetKeyFor(');
+    expect(component).not.toContain('setOverrideAcresIdem.resetKeyFor(');
+    // The override step must tell a lost response apart from a refusal: "billing on
+    // the measured acres instead" is a false statement about BILLABLE acres when the
+    // override committed and only its answer was lost.
+    expect(component).toContain('let overrideUnknown = true;');
+    expect(component).toContain('if (rpcDefinitelyRolledBack(ovStatus, ovErr)) overrideUnknown = false;');
     // Both halves of the re-entry pairing, pinned SEPARATELY and anchored.
     //
     // This was previously a single whole-file toContain of

@@ -142,6 +142,22 @@ describe('cycle count completion revision contract', () => {
     // it. A postcondition on text the same file just wrote proves nothing, so the
     // pre-replace body hash check is the load-bearing half and is pinned here.
     expect(successorCode).toMatch(/DO \$precond\$[\s\S]*md5\(v_src\)/);
+    // No transaction control, same as the migration this one succeeds. The sanctioned
+    // apply path wraps the migration and its ledger row in ONE transaction and REFUSES
+    // a file that opens its own, so a BEGIN/COMMIT here makes the file unappliable
+    // rather than merely untidy. An earlier draft carried both and was rejected by that
+    // guard; without this pin the suite stayed green while the artifact could not ship.
+    expect(successorCode).not.toMatch(/^BEGIN;|\nBEGIN;\s*$/m);
+    expect(successorCode.trimEnd()).not.toMatch(/COMMIT;$/);
+    // The grant proof must close BOTH holes, because each check is blind to the other's
+    // case: aclexplode sees only DIRECT grants and would miss anon inheriting EXECUTE
+    // through a role it belongs to, while has_function_privilege resolves membership but
+    // passes vacuously where the anon role does not exist. Pin the pair, and pin the
+    // pg_roles guard that keeps the second one from being the vacuous form.
+    expect(successorCode).toContain('aclexplode(COALESCE(p.proacl');
+    expect(successorCode).toContain("a.grantee = 0 OR pg_get_userbyid(a.grantee) = 'anon'");
+    expect(successorCode).toContain("EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')");
+    expect(successorCode).toContain("has_function_privilege('anon', v_oid, 'EXECUTE')");
     // The operator-facing half: an out-of-date tab is the only caller that can trigger
     // the new refusal, so it must reach a readable instruction, not a raw code.
     expect(sharedDb).toContain("CYCLE_COUNT_REVISION_REQUIRED: 'CYCLE_COUNT_REVISION_REQUIRED'");
@@ -227,9 +243,16 @@ describe('cycle count completion revision contract', () => {
     // being established, and needs no paired ref write. Without the boundary the
     // replay call in executeComplete reads as an unpaired baseline site and this guard
     // fails on correct code — the way a guard gets deleted rather than fixed.
+    //
+    // Accept the equivalent spellings too, so the guard covers the INVARIANT rather
+    // than one way of writing it: a quoted or single-quoted key, and an optional-chained
+    // or parenthesis-free source expression. A structural guard that only recognises the
+    // spelling currently in the file is satisfied the moment someone writes the same
+    // defect in another valid style.
+    const BASELINE_SITE = /(?:^|[^\w])['"`]?item_revision['"`]?:\s*\(?\s*(\w+(?:\??\.\w+)*\??\.item_revision)/;
     const baselineSites = lines
       .map((line, i) => ({ line, i }))
-      .filter(({ line }) => /(?:^|[^\w])item_revision:\s*\w+\.item_revision/.test(line));
+      .filter(({ line }) => BASELINE_SITE.test(line));
 
     // The guard must have work to do; a regex that matches nothing always passes.
     expect(baselineSites.length).toBeGreaterThanOrEqual(3);
@@ -245,7 +268,7 @@ describe('cycle count completion revision contract', () => {
       // setActiveCount updater plus a short comment, far too narrow to be satisfied by
       // an unrelated ref mutation elsewhere in the function.
       .filter(({ line, i }) => {
-        const source = /(?:^|[^\w])item_revision:\s*(\w+\.item_revision)/.exec(line)?.[1];
+        const source = BASELINE_SITE.exec(line)?.[1];
         if (!source) return true;
         return !lines.slice(Math.max(0, i - 12), i + 10)
           .some((l) => l.includes('latestItemRevisionRef.current.set') && l.includes(source));

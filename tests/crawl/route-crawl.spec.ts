@@ -278,6 +278,12 @@ test.afterAll(() => {
     consoleErrors: results.filter((r) => r.status === 'console-errors').length,
     networkErrors: results.filter((r) => r.status === 'network-errors').length,
     unexpectedRedirect: results.filter((r) => r.status === 'unexpected-redirect').length,
+    // Counted even though it is a clean outcome and is deliberately excluded from
+    // `problems` below. Without it the summary no longer adds up to the number of
+    // rows crawled, and a route that produced a clean redirect looks identical to a
+    // route that fell out of the accounting altogether — which is the failure a
+    // summary exists to make visible.
+    intentionalRedirect: results.filter((r) => r.status === 'intentional-redirect').length,
     guardOk: results.filter((r) => r.status === 'guard-ok').length,
     guardLeak: results.filter((r) => r.status === 'guard-leak').length,
   };
