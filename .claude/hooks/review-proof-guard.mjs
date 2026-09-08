@@ -735,35 +735,40 @@ if (shellTool) {
   // own history had already classified HIGH. A leading `..` that escapes the root
   // is KEPT, never dropped: discarding it would fabricate a different path.
   const resolveDotSegments = (input) => {
-    // REPEATED SEPARATORS, collapsed before anything else looks at the path.
-    // Seventh gpt-5.6-sol round, P1: `rm -f .github//workflows/ci.yml` and
-    // `rm -f .codex//hooks/production-action-guard.mjs` passed the whole registered
-    // hook chain. POSIX and Win32 both treat `a//b` as `a/b`, so the write lands on
-    // the guarded file while the matcher — which spells the separator exactly once
-    // — sees an unguarded path. The early return below used to hand such a path
-    // straight back untouched, which is why resolving dot segments alone did not
-    // catch it.
-    // Belt-and-braces only: the sole caller (namesEnforcementSurface) already
-    // collapsed separators, and removing THIS line leaves the suite green — so it
-    // protects a future second caller, nothing that exists today. @unproven
-    const p = String(input).replace(/\/{2,}/g, "/");
-    if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
-    const isAbsolute = p.startsWith("/");
-    const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
-    const body = drive ? (drive[2] || "") : p;
+    // Codex gpt-5.6-sol High on b2988f2da, probe-confirmed: Win32 path ALIASES reached the
+    // protected files past the canonical-spelling rule. Windows drops a drive-RELATIVE
+    // prefix onto the drive's current directory (`C:.claude/hooks/x.mjs` opens
+    // `.claude/hooks/x.mjs`), and its path normaliser strips trailing periods and spaces
+    // from every segment before the file system sees the name (`.claude/hooks./x.mjs`,
+    // `.claude/settings.json.`, `x.mjs ` all open the real file; probe-confirmed with
+    // Get-Item on 2026-09-03 for the sibling canonicaliser in production-action-guard,
+    // whose rules this now mirrors). A drive-relative prefix is DROPPED (the spelling is
+    // then non-canonical by construction); a rooted drive (`C:/…`) is kept, because that
+    // is the spelling the native editors send on this machine and the settings globs are
+    // measured against it. Trailing periods and spaces are stripped from every segment
+    // and a segment left empty is dropped — deliberately over-inclusive, which for a
+    // deny-guard can only over-block. Repeated separators still collapse first (seventh
+  // gpt-5.6-sol round, P1: `rm -f .github//workflows/ci.yml` passed the whole chain), and
+  // there is no early return any more: every spelling goes through the segment walk.
+    const p = String(input).trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+    const drive = /^([a-zA-Z]:)(\/?)/.exec(p);
+    const rooted = drive ? drive[2] === "/" : p.startsWith("/");
+    const body = drive ? p.slice(drive[0].length) : p;
     const out = [];
     for (const seg of body.split("/")) {
       if (seg === "" || seg === ".") continue;
       if (seg === "..") {
         if (out.length && out[out.length - 1] !== "..") out.pop();
-        else if (!isAbsolute && !drive) out.push("..");
+        else if (!rooted) out.push("..");
         continue;
       }
-      out.push(seg);
+      const trimmed = seg.replace(/[. ]+$/, "");
+      if (trimmed === "") continue;
+      out.push(trimmed);
     }
     const joined = out.join("/");
-    if (drive) return `${drive[1]}/${joined}`;
-    return isAbsolute ? `/${joined}` : joined;
+    if (drive && drive[2] === "/") return `${drive[1]}/${joined}`;
+    return rooted ? `/${joined}` : joined;
   };
   const namesEnforcementSurface = (text) => {
     // `\` → `/` first, then repeated separators collapsed, so the whole-string test
@@ -1003,28 +1008,40 @@ const ENFORCEMENT_PATH_FIELD_RE = /(?:^|\/)(?:\.husky|\.github\/workflows|\.code
 // `.claude/commands/../hooks/review-proof-guard.mjs` was probe-confirmed ALLOW —
 // the intermediate directory exists, so the filesystem lands on the real hook.
 const resolvePathCandidate = (value) => {
-  // Repeated separators collapse here too. The reviewer only demonstrated the
-  // shell channel, but this resolver had the identical early return, so an MCP or
-  // tool-input write to `.claude//hooks/review-proof-guard.mjs` would have slipped
-  // the path-field rule the same way. Fixing one channel and not the other leaves
-  // the same defect reachable.
-  const p = String(value).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "");
-  if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
-  const isAbsolute = p.startsWith("/");
-  const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
+  // Codex gpt-5.6-sol High on b2988f2da, probe-confirmed: Win32 path ALIASES reached the
+  // protected files past the canonical-spelling rule. Windows drops a drive-RELATIVE
+  // prefix onto the drive's current directory (`C:.claude/hooks/x.mjs` opens
+  // `.claude/hooks/x.mjs`), and its path normaliser strips trailing periods and spaces
+  // from every segment before the file system sees the name (`.claude/hooks./x.mjs`,
+  // `.claude/settings.json.`, `x.mjs ` all open the real file; probe-confirmed with
+  // Get-Item on 2026-09-03 for the sibling canonicaliser in production-action-guard,
+  // whose rules this now mirrors). A drive-relative prefix is DROPPED (the spelling is
+  // then non-canonical by construction); a rooted drive (`C:/…`) is kept, because that
+  // is the spelling the native editors send on this machine and the settings globs are
+  // measured against it. Trailing periods and spaces are stripped from every segment
+  // and a segment left empty is dropped — deliberately over-inclusive, which for a
+  // deny-guard can only over-block. Repeated separators still collapse first (seventh
+  // gpt-5.6-sol round, P1: `rm -f .github//workflows/ci.yml` passed the whole chain), and
+  // there is no early return any more: every spelling goes through the segment walk.
+  const p = String(value).trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+  const drive = /^([a-zA-Z]:)(\/?)/.exec(p);
+  const rooted = drive ? drive[2] === "/" : p.startsWith("/");
+  const body = drive ? p.slice(drive[0].length) : p;
   const out = [];
-  for (const seg of (drive ? (drive[2] || "") : p).split("/")) {
+  for (const seg of body.split("/")) {
     if (seg === "" || seg === ".") continue;
     if (seg === "..") {
       if (out.length && out[out.length - 1] !== "..") out.pop();
-      else if (!isAbsolute && !drive) out.push("..");
+      else if (!rooted) out.push("..");
       continue;
     }
-    out.push(seg);
+    const trimmed = seg.replace(/[. ]+$/, "");
+    if (trimmed === "") continue;
+    out.push(trimmed);
   }
   const joined = out.join("/");
-  if (drive) return `${drive[1]}/${joined}`;
-  return isAbsolute ? `/${joined}` : joined;
+  if (drive && drive[2] === "/") return `${drive[1]}/${joined}`;
+  return rooted ? `/${joined}` : joined;
 };
 if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todowrite)$/i.test(toolName)) {
   // The `scripts/(check|validate|verify)-` arm crosses "/" explicitly (PR #605, CodeRabbit F3,
@@ -1047,7 +1064,8 @@ if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todow
 // on ci.yml; this hook exempted the native editors because the prompt is their boundary, and
 // armed autopilot was the only place that canonicalised. The exemption is sound only when the
 // spelling IS the canonical path. A non-canonical spelling (a `.`/`..` segment, a repeated or
-// trailing separator) whose canonical form is on the enforcement surface, or one that still
+// trailing separator, a drive-relative prefix, a trailing period or space in a segment) whose
+// canonical form is on the enforcement surface, or one that still
 // escapes the tree after resolution, is denied here in EVERY mode: re-issue with the canonical
 // path and the prompt fires. Backslashes are not counted as non-canonical — Windows spellings
 // are what the editors send on this machine, and the globs are measured against them.

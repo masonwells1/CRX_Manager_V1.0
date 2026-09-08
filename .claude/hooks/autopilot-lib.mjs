@@ -275,8 +275,16 @@ export function protectedSurfacePath(filePath) {
 // (CodeRabbit Major on 06f0039a2, CWE-22). A path that still starts with ".." after
 // normalisation points outside the tree the hook was given and is never trusted.
 export function canonicalToolPath(p) {
-  const s = String(p || "").replace(/\\/g, "/");
+  let s = String(p || "").trim().replace(/\\/g, "/");
   if (s === "") return "";
+  // Win32 ALIASES (Codex gpt-5.6-sol High on b2988f2da, probe-confirmed): a drive-RELATIVE
+  // prefix (`C:.claude/hooks/x.mjs`, no slash after the colon) resolves onto the drive's
+  // current directory, and trailing periods or spaces in any segment are stripped by the
+  // Win32 normaliser before the file system sees the name. The prefix is dropped and the
+  // trailing characters trimmed here, so the surface match sees the file Windows opens.
+  // A rooted drive (`C:/…`) is kept. `.` and `..` are left for normalize().
+  s = s.replace(/^[A-Za-z]:(?!\/)/, "");
+  s = s.split("/").map((seg) => (seg === "." || seg === ".." ? seg : seg.replace(/[. ]+$/, ""))).join("/");
   const n = path.posix.normalize(s);
   return n === "." ? "" : n;
 }

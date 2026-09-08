@@ -57,6 +57,13 @@ eq(autopilotDecision("Edit", { file_path: "C:\\CRX_Manager\\.claude\\worktrees\\
 eq(autopilotDecision("Write", { file_path: "docs/../.env.local" }), "deny", "a traversal onto an env file denied");
 eq(autopilotDecision("Write", { file_path: "../elsewhere/notes.md" }), "deny", "a path that escapes the tree is never auto-approved while armed");
 eq(autopilotDecision("Write", { file_path: "src/pages/../lib/x.ts" }), "allow", "an ordinary source path with a resolvable dot segment stays auto-approved");
+// Codex gpt-5.6-sol High on b2988f2da: Win32 aliases open the protected file.
+eq(autopilotDecision("Edit", { file_path: "C:.claude/hooks/x.mjs" }), "deny", "PROVEN BYPASS: a drive-relative prefix is dropped before the surface match");
+eq(autopilotDecision("Edit", { file_path: "C:.claude\\hooks\\x.mjs" }), "deny", "drive-relative with backslashes denied");
+eq(autopilotDecision("Write", { file_path: ".claude/hooks./x.mjs" }), "deny", "a trailing period in a directory segment is stripped before the match");
+eq(autopilotDecision("Write", { file_path: ".claude/settings.json." }), "deny", "a trailing period on the file name is stripped before the match");
+eq(autopilotDecision("Write", { file_path: "scripts/check-docs.mjs " }), "deny", "a trailing space is stripped before the match");
+eq(autopilotDecision("Write", { file_path: "src/lib/x.ts." }), "allow", "an unprotected path with a trailing period stays auto-approved");
 eq(autopilotDecision("mcp__some_server__put_file", { path: ".codex/hooks.json" }), "deny", "an MCP path field into .codex denied even when the tool name is not in DENY_TOOLNAME_RE");
 eq(autopilotDecision("Write", { file_path: ".claude/session-state/notes.md" }), "allow", "session-state stays auto-approved");
 eq(autopilotDecision("Edit", { file_path: "package-lock.json" }), "allow", "package-lock.json is deliberately outside the set");

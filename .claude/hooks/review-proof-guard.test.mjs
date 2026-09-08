@@ -38,6 +38,18 @@ for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/hooks/", content: "{}" } },
   { tool_name: "NotebookEdit", tool_input: { notebook_path: ".claude/commands/../hooks/probe.ipynb" } },
   { tool_name: "Edit", tool_input: { file_path: "../elsewhere/notes.md", old_string: "a", new_string: "b" } },
+  // Codex gpt-5.6-sol High on b2988f2da: Win32 aliases — a drive-relative prefix, a trailing
+  // period or space in a segment — open the protected file and passed the canonical check.
+  { tool_name: "Edit", tool_input: { file_path: "C:.claude\\hooks\\review-proof-guard.mjs", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/hooks./review-proof-guard.mjs", content: "x" } },
+  { tool_name: "MultiEdit", tool_input: { file_path: ".claude/settings.json.", edits: [] } },
+  { tool_name: "NotebookEdit", tool_input: { notebook_path: ".claude/hooks/probe.ipynb " } },
+  { tool_name: "Edit", tool_input: { file_path: ".github/workflows/ci.yml...", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: "C:.husky/pre-push", content: "x" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/hooks./x.mjs" } },
+  { tool_name: "Bash", tool_input: { command: "cp /tmp/evil .claude/hooks./review-proof-guard.mjs" } },
+  { tool_name: "Bash", tool_input: { command: "printf x > .claude/settings.json." } },
+  { tool_name: "Bash", tool_input: { command: "echo x > C:.claude\\hooks\\x.mjs" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/claude-review-push.json" } },
   { tool_name: "Bash", tool_input: { command: "echo {} > .claude/session-state/claude-review-push.json" } },
   { tool_name: "PowerShell", tool_input: { command: "Remove-Item .claude/session-state/codex-review-abc.json" } },
@@ -370,6 +382,8 @@ allowed({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\hooks\
 allowed({ tool_name: "Write", tool_input: { file_path: "C:/repo/.github/workflows/ci.yml", content: "x" } });
 allowed({ tool_name: "Edit", tool_input: { file_path: "src/pages/../lib/x.ts" } });
 allowed({ tool_name: "Write", tool_input: { file_path: "./docs/notes.md", content: "x" } });
+allowed({ tool_name: "Write", tool_input: { file_path: "docs/notes.md.", content: "x" } });
+allowed({ tool_name: "Bash", tool_input: { command: "echo done. > docs/x.md" } });
 // DELIBERATELY REVERSED 2026-09-01. This line used to assert that an MCP move of
 // a hook file was ALLOWED — true when `guarded-surface-lock` existed to catch it.
 // With the lock deleted, that is exactly the "silently rewrite a guard, then run

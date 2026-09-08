@@ -213,7 +213,8 @@ for (const sample of samples) {
 // ".claude/worktrees/../hooks/review-proof-guard.mjs" through.
 for (const sample of samples) {
   if (!settingsProtects(sample)) continue;
-  const spellings = [`./${sample}`, `zz/../${sample}`, sample.replace("/", "//"), sample.replace(/\//g, "\\")];
+  // Win32 aliases (Codex High on b2988f2da): a drive-relative prefix and a trailing period.
+  const spellings = [`./${sample}`, `zz/../${sample}`, sample.replace("/", "//"), `C:${sample}`, `${sample}.`, sample.replace(/\//g, "\\")];
   for (const spelled of spellings) {
     if (!autopilotDenies(spelled)) fail(`armed autopilot AUTO-APPROVES "${spelled}" although its canonical path "${sample}" is protected`);
   }
@@ -221,7 +222,7 @@ for (const sample of samples) {
   // settings prompt, which matches the spelling it is given. The real hook must deny a native
   // edit through any spelling that is not the canonical path (backslashes excepted: that is
   // the spelling the editors send on Windows and the globs are measured against it).
-  for (const spelled of spellings.slice(0, 3)) {
+  for (const spelled of spellings.filter((sp) => !sp.includes("\\"))) {
     if (spelled === sample) continue; // a slash-less sample has no doubled-separator spelling
     const r = runGuard({ tool_name: "Edit", tool_input: { file_path: spelled, old_string: "a", new_string: "b" } });
     if (!/"permissionDecision":"deny"/.test(r.stdout)) fail(`real hook: Edit "${spelled}" (canonical "${sample}") was NOT denied (stdout: ${r.stdout.slice(0, 120) || "<silent>"})`);
