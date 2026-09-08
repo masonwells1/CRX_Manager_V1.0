@@ -198,8 +198,9 @@ Proof (round-two harness, `NEW`, against the round-one harness at `3072f4718`, `
    `useUncertainMutationIntent` hook (nothing else in it is stubbed) so that
    `beginIntent()` opens the record the moment it is called; the `runCriticalAction`
    stand-in adopts the open record instead of creating one. If the intent write rejects,
-   the handler's own catch toasts and returns without running the wrapper, so the wrapper
-   marks the record settled on rejection.
+   the handler's own catch toasts and returns without ever reaching the `runCriticalAction`
+   stand-in, so it is the `beginIntent` wrapper itself that marks the record settled on
+   rejection.
 2. **CodeRabbit Minor — `submitReceive` still sampled the shared toast count.** A terminal
    toast from an earlier receive landing during the next receive's polling would stop the
    loop before that receive's RPC fired. Fix: the helper now waits on *its own* record
