@@ -4,13 +4,17 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live-ledger capture — 2026-09-05 evening. THIS IS THE CURRENT BOUNDARY.** A read-only query on
-project `rhyzpcqhnizqbxphqdkr` records **999 ledger rows** (992 distinct names), live `max(version)`
-**`20260905185938`**, and effective ordering high-water **`20260905185938_refuse_null_job_field_acres`**
-(row 916, PR #606). That row was recorded under the BARE name `refuse_null_job_field_acres`, so the
-ordering guard's effective stamp is synthesized from its version (`<version>_<name>`, per
-`scripts/refresh-applied-migrations.mjs`) — it is NOT the authored `20260904185900` the disk file
-carries. Consequence: the six parked commission candidates carried earlier same-day stamps that
+**Live-ledger capture — 2026-09-08. THIS IS THE CURRENT BOUNDARY.** A read-only `list_migrations`
+on project `rhyzpcqhnizqbxphqdkr` records **1000 ledger rows** (993 distinct names), live
+`max(version)` **`20260908045843`**, and effective ordering high-water
+**`20260906120000_preview_field_app_season_follows_invoice_date`** — applied live 2026-09-08 under
+that version. Any candidate must sort ABOVE that name-stamp, not merely above the previous one.
+
+The row it replaced, `20260905185938_refuse_null_job_field_acres` (row 916, PR #606), still shows
+why the effective stamp is not always the authored one: it was recorded under the BARE name
+`refuse_null_job_field_acres`, so the ordering guard synthesizes `<version>_<name>` (per
+`scripts/refresh-applied-migrations.mjs`) — NOT the authored `20260904185900` the disk file
+carries. Consequence at the time: the six parked commission candidates carried earlier same-day stamps that
 sorted BELOW this row, so the ordering guard would have refused them; the set was restamped
 `20260905200000`..`20260905210000` on 2026-09-05 evening, relative order preserved, label repair
 still last. Read each row for its own current version rather than inferring one from that range.

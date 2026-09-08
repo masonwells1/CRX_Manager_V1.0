@@ -1,6 +1,8 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-05 for the migration-ledger header; the F2 entry retains its separate
+**Last verified: 2026-09-08 against the live ledger (read-only `list_migrations`: 1000 rows,
+`max(version)` `20260908045843`, effective high-water
+`20260906120000_preview_field_app_season_follows_invoice_date`); the F2 entry retains its separate
 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
