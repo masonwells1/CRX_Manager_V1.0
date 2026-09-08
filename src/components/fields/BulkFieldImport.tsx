@@ -44,8 +44,6 @@ import {
   type AssignableField,
 } from '../../lib/fieldImportCustomers';
 import type { Customer, ParsedImportField } from '../../types';
-import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
-import { digestIntentPayload } from '../../lib/idempotency';
 
 
 interface BulkFieldImportProps {
@@ -127,9 +125,6 @@ function shortServerReason(status: number | undefined, message: string): string 
 export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
-  const saveFieldIdem = useIdempotencyKey('save_field', profile?.id || '');
-  const setBoundaryIdem = useIdempotencyKey('set_field_boundary', profile?.id || '');
-  const setOverrideAcresIdem = useIdempotencyKey('set_field_override_acres', profile?.id || '');
 
   // Step tracking
   const [step, setStep] = useState<Step>(1);
@@ -480,16 +475,6 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     // request went out, so PostgreSQL may or may not have committed it. These must NOT be
     // presented as safe to re-import.
     let unknownOutcome = 0;
-    // Field ids already returned during THIS run. Two byte-identical rows now
-    // share one intent key, so the second redeems the first row's receipt and
-    // save_field returns the SAME id without creating anything. Counting that as
-    // a second creation would overstate the import; name it as the duplicate it is.
-    //
-    // Maps the committed field id to the GEOMETRY DIGEST of the row that created it,
-    // not just the id, because "same id returned" has two very different causes and
-    // only one of them is a duplicate. See the collision handling at the save_field
-    // result below.
-    const createdFieldIds = new Map<string, string>();
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -526,95 +511,44 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           is_active: true,
         };
 
-        // Identify this row by its CONTENT, never by its position in the file.
+        // A FRESH KEY PER CALL, deliberately -- the same thing `main` does.
         //
-        // save_field replays on the key alone and receives p_field_id: null, so a
-        // key that does not survive a retry creates a DUPLICATE field. Position
-        // does not survive the two retries that actually happen:
-        //   * `fieldIndex` is the offset within the filtered `validFields`, so
-        //     fixing an EARLIER row renumbers every later row and mints new keys
-        //     for rows that never changed.
-        //   * `pf.index` is the source row, which is stable within one file but
-        //     not across files — re-importing one failed row on its own makes it
-        //     row 1, so it too would mint a new key and duplicate the field.
-        // Both were real: the first is CodeRabbit's finding on this line, the
-        // second is Codex P1 on the save_field call below.
+        // This screen ran three RPCs per row behind RETAINED, content-derived
+        // idempotency keys so a lost response could be replayed. Every version of that
+        // scheme was found to corrupt a DIFFERENT field, and the reason is structural
+        // rather than a bug to be patched out:
         //
-        // Content identity fixes both. An unchanged row replays its receipt from
-        // any file, at any position, while genuinely different content mints a
-        // fresh key. Two byte-identical rows in one file share a key on purpose;
-        // the duplicate-receipt check below keeps that from being counted twice.
+        //   * Keyed on the payload alone, two rows with the same customer, name and
+        //     stated acreage but different ground share a key. save_field replays,
+        //     hands back the first row's id, and this row's boundary write overwrites
+        //     that field's map.
+        //   * Keyed on the payload AND the geometry, a corrected boundary changes the
+        //     key -- so re-importing one fixed row creates a SECOND field.
         //
-        // SCOPE ONE RPC AT A TIME. This row runs three independently committing
-        // RPCs, and folding all three inputs into one shared scope made a
-        // downstream correction rewrite the UPSTREAM key: fixing only a rejected
-        // boundary changed the combined hash, so the re-import called save_field
-        // with a FRESH key and p_field_id: null and created a SECOND field before
-        // retrying the boundary. Each stage is therefore keyed by exactly what
-        // that stage does.
+        // Those two cases are textually identical: same customer, same name, same
+        // payload, different geometry. Nothing computable from the row can tell "this
+        // is a correction of that field" from "this is a different field", so no
+        // client-side identity is sound. Settled 2026-09-05 after two independent
+        // gpt-5.6-sol rounds, and re-confirmed here after CodeRabbit and the Codex bot
+        // each found a fresh corruption path in a fresh scheme.
         //
-        // save_field is keyed by the field's own identity and payload only --
-        // deliberately NOT the boundary or the stated acres, which it never
-        // writes.
-        // digestIntentPayload, not fingerprintIntentPayload: the later stages
-        // serialize a COMPLETE field geometry, and the synchronous BigInt hash
-        // froze the tab for seconds per row on a large multi-part boundary
-        // (Codex P2 below).
-        const intentScope = `import:${pf.customer_id}:${pf.field_name}:${await digestIntentPayload([
-          fieldPayload,
-        ])}`;
-        // Identifies this row's SHAPE, separately from the payload that names the field.
-        // Two rows can share a customer, a name and a byte-identical payload — the payload
-        // carries stated acreage, not geometry — while mapping different ground.
-        const geometryDigest = await digestIntentPayload([
-          pf.full_boundary_geojson,
-          pf.stated_acres ?? null,
-        ]);
-
+        // A per-call UUID means a retry DUPLICATES instead of replaying. That is the
+        // safer failure: a duplicate field is visible in the list and an admin can
+        // delete it, while a rewritten boundary is silent data loss on a field that
+        // imported correctly. The results screen already tells the operator not to
+        // re-import the whole file and which rows had an unknown outcome.
+        //
+        // The real fix is server-side: one atomic RPC creating field + boundary +
+        // override in a single transaction with actor- and payload-bound idempotency.
+        // That is a migration and it is Mason's call, tracked as an open follow-up.
         saveOutcome = 'unknown';
-        // ONE call site, run at most twice.
-        //
-        // COLLISION, not a duplicate. The payload-only scope is what keeps a corrected
-        // boundary from creating a second field on re-import, but it also means two rows
-        // that differ ONLY in geometry share a key: save_field replays, hands back the
-        // FIRST row's id, and this row's boundary write would then overwrite that field's
-        // map instead of creating its own. Silent data loss on a field that imported fine.
-        //
-        // The geometry digest tells the two cases apart, and only here, where the returned
-        // id is in front of us: same id + same geometry is a real duplicate; same id +
-        // different geometry is a second field wearing the first one's receipt. Retire the
-        // key and ask again, once, so this row gets a field of its own.
-        //
-        // The reply is CHECKED before the retirement, never after: retiring a key on the
-        // strength of an answer that was never verified is the reset-before-assert defect
-        // the F1 guard exists to catch. Looping one call site also keeps the RPC-capture
-        // count honest — a second call written out below would have been another capture
-        // with no assert of its own.
-        let fieldId: string | null = null;
-        let saveError: { message: string } | null = null;
-        let saveStatus: number | undefined;
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          const saved = await supabase.rpc('save_field', {
-            p_field_id: (null as string | null) as string,
-            p_field_payload: fieldPayload,
-            p_billing_defaults: [],
-            p_performed_by: profile.id,
-            p_idempotency_key: saveFieldIdem.getKeyFor(intentScope),
-          });
-          saveError = saved.error;
-          saveStatus = saved.status;
-          if (saveError) break;
-          // Throws on a null result, which the outer catch turns into a failed row with an
-          // UNKNOWN outcome — the same treatment the single-call version gave it.
-          const committedFieldId = String(assertRpcResult<string>(saved.data, 'save_field'));
-          const priorGeometry = createdFieldIds.get(committedFieldId);
-          if (attempt === 0 && priorGeometry !== undefined && priorGeometry !== geometryDigest) {
-            saveFieldIdem.resetKeyFor(intentScope);
-            continue;
-          }
-          fieldId = committedFieldId;
-          break;
-        }
+        const { data: fieldId, error: saveError, status: saveStatus } = await supabase.rpc('save_field', {
+          p_field_id: (null as string | null) as string,
+          p_field_payload: fieldPayload,
+          p_billing_defaults: [],
+          p_performed_by: profile.id,
+          p_idempotency_key: crypto.randomUUID(),
+        });
 
         if (saveError) {
           // Only a response that proves PostgreSQL answered and rolled back makes this row safe
@@ -628,24 +562,16 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           errors.push(saveOutcome === 'unknown'
             ? `"${pf.field_name}": OUTCOME UNKNOWN — the server did not give a clear answer (${shortServerReason(saveStatus, reason)}). It may have been created; check the field list before re-importing this row.`
             : `"${pf.field_name}": ${reason}`);
-        } else if (fieldId) {
-          // Already asserted inside the loop above; asserting the same value twice would
-          // leave an orphan assert with no RPC capture of its own.
+        } else if (assertRpcResult(fieldId, 'save_field')) {
           saveOutcome = 'committed';
           // A field id already seen in this run means this row is byte-identical to an
-          // earlier one and simply redeemed its receipt — no new field exists. Say so
-          // instead of counting a creation that did not happen. The boundary write below
-          // still runs: it shares the same key, so it replays a success and genuinely
-          // retries a boundary the earlier row failed to persist.
-          const committedFieldId = String(fieldId);
-          if (createdFieldIds.has(committedFieldId)) {
-            warnings.push(`"${pf.field_name}": identical to an earlier row in this file (same customer, name, boundary and acres); imported once, not twice.`);
-          } else {
-            createdFieldIds.set(committedFieldId, geometryDigest);
-            // save_field has COMMITTED. Count the row as created before anything else can fail, so
-            // a later boundary or override failure still reports the field as existing.
-            created++;
-          }
+          // save_field has COMMITTED. Count the row as created before anything else can fail,
+          // so a later boundary or override failure still reports the field as existing.
+          //
+          // Every call carries a fresh key, so nothing here is ever a replay: two identical
+          // rows create two fields. That is the visible, recoverable failure this screen
+          // deliberately prefers — see the note on the save_field call above.
+          created++;
           // Persist the boundary via the server-authoritative acreage RPC — it measures the
           // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
           // legacy boundary/centroid in sync, and sets measured_acres (the billable default).
@@ -660,13 +586,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           // available here and it already exists, so correcting a rejected
           // boundary changes THIS key and nothing upstream: the retry updates the
           // field that was created rather than creating another one.
-          const boundaryScope = `boundary:${String(fieldId)}:${geometryDigest}`;
           try {
             const { data: bData, error: bErr, status: bStatus } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
               p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
               p_performed_by: profile.id,
-              p_idempotency_key: setBoundaryIdem.getKeyFor(boundaryScope),
+              p_idempotency_key: crypto.randomUUID(),
             });
             if (bErr) {
               if (rpcDefinitelyRolledBack(bStatus, bErr)) boundaryUnknown = false;
@@ -704,9 +629,6 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               if (!isAcreInBand(pf.stated_acres)) {
                 warnings.push(`"${pf.field_name}": the file's ${pf.stated_acres} ac is outside the allowed ${ACRE_BAND_MIN}–${ACRE_BAND_MAX} acre range — billing on the measured ${pf.full_acres} ac instead.`);
               } else {
-                // Its own scope again, for the same reason as the boundary: the
-                // field id plus the exact acreage this call sets.
-                const overrideScope = `override:${String(fieldId)}:${pf.stated_acres}`;
                 // Same rule as save_field and the boundary: once the request is
                 // sent, the override may have committed, and only a response that
                 // proves PostgreSQL rolled back makes "billing on the measured
@@ -720,7 +642,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                     p_field_id: fieldId,
                     p_override_acres: pf.stated_acres,
                     p_performed_by: profile.id,
-                    p_idempotency_key: setOverrideAcresIdem.getKeyFor(overrideScope),
+                    p_idempotency_key: crypto.randomUUID(),
                   });
                   if (ovErr) {
                     if (rpcDefinitelyRolledBack(ovStatus, ovErr)) overrideUnknown = false;

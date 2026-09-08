@@ -163,6 +163,51 @@ with no `assertRpcResult` of its own, and retiring the key before checking the r
 the reset-before-assert defect the F1 guard exists to catch. Both went away by looping one
 call site and asserting the reply before deciding anything about it.
 
+### The bulk-import retained key is WITHDRAWN from this PR
+
+`BulkFieldImport.tsx` is back on `main`'s behaviour: a fresh `crypto.randomUUID()` for each
+of the three RPCs, no retained key, no content-derived scope. Everything this PR did to
+that file's idempotency scoping is removed.
+
+This reverses work done earlier in this same PR, so the reasoning matters more than the
+diff. Four review rounds each found a REAL corruption path in a scheme that had just been
+introduced to close the previous one:
+
+1. Position (`fieldIndex`) renumbers when a row is dropped, so an unchanged row minted a
+   fresh key on the exact retry the retained key existed to serve.
+2. Content identity over payload + geometry + acres meant a corrected boundary changed the
+   `save_field` key, so re-importing one fixed row created a SECOND field.
+3. Payload-only identity fixed that and made two rows with the same customer, name and
+   stated acreage but DIFFERENT ground share a key — the second row's boundary write then
+   overwrote the first field's map.
+4. Detecting that collision within a run and rotating the key left the shared scope mapped
+   to the second geometry's receipt, so a LATER import of the first row replayed it and
+   overwrote the second field instead.
+
+Cases 2 and 3 are textually identical: same customer, same name, same payload, different
+geometry. One is a correction, the other is a different field, and nothing computable from
+the row distinguishes them. So there is no sound client-side identity — not a bug in any
+particular scheme.
+
+This was already settled on 2026-09-05 after two independent `gpt-5.6-sol` rounds on a
+different branch, recorded there as "do not re-attempt a client-side fix — park it and do
+the migration". This PR re-attempted it without that context and the reviewers were right
+four times.
+
+`main`'s per-call UUID means a retry DUPLICATES instead of replaying. That is the better
+failure: a duplicate field is visible in the list and an admin can delete it, while a
+rewritten boundary is silent data loss on a field that imported correctly. The
+operator-warning layer that shipped in #623 already tells the operator not to re-import the
+whole file and which rows had an unknown outcome.
+
+The guard test no longer pins a scope shape. It pins the DECISION: three per-call UUIDs,
+and no retained-key form by shape (`p_idempotency_key: <something>Idem.`,
+`useIdempotencyKey(`, `getKeyFor(`, `resetKeyFor(`, `digestIntentPayload(`).
+
+**Open follow-up, needs Mason:** the real fix is one atomic RPC creating field + boundary +
+override in a single transaction with actor- and payload-bound idempotency. That is a
+migration and it is not in this PR.
+
 ### Proof observed
 
 `npx tsc --noEmit` clean; `npm run lint` clean (0 warnings); `npm test` — full vitest
