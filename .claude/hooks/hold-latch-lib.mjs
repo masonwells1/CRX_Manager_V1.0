@@ -4,7 +4,7 @@
 // and his NEXT message. Any non-hold prompt clears it, so it can never get stuck
 // across turns — it just halts the current runaway work until he speaks again.
 
-import { DENY_TOOLNAME_RE } from "./autopilot-lib.mjs";
+import { DENY_TOOLNAME_RE, canonicalToolPath, escapesTree } from "./autopilot-lib.mjs";
 
 // Mason wants to halt / pause / is only scoping a future session.
 //
@@ -67,8 +67,10 @@ export function isBuildActionUnderHold(toolName, toolInput) {
   const input = toolInput || {};
 
   if (/^(Write|Edit|NotebookEdit|MultiEdit)$/i.test(name)) {
-    const fp = String(input.file_path || input.notebook_path || input.path || input.filePath || "");
-    if (fp && ALLOW_WRITE_PATH_RE.test(fp)) return false; // notes / plan / md are fine
+    // Judged on the canonical path (CodeRabbit Major on 06f0039a2, CWE-22): a traversal
+    // that merely CONTAINS session-state or ends in .md after "../.." is still a source edit.
+    const fp = canonicalToolPath(input.file_path || input.notebook_path || input.path || input.filePath || "");
+    if (fp && !escapesTree(fp) && ALLOW_WRITE_PATH_RE.test(fp)) return false; // notes / plan / md are fine
     return true; // building source = blocked under hold
   }
 

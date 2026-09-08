@@ -261,6 +261,28 @@ export function protectedSurfacePath(filePath) {
   return p !== "" && PROTECTED_SURFACE_RE.test(`/${p}`);
 }
 
+// Canonical form of a tool path: backslashes folded and "." / ".." segments resolved, so
+// a traversal such as "../.claude/session-state/../../outside.txt" judges as
+// "../../outside.txt" and can never satisfy a trusted-root exception by substring
+// (CodeRabbit Major on 06f0039a2, CWE-22). A path that still starts with ".." after
+// normalisation points outside the tree the hook was given and is never trusted.
+export function canonicalToolPath(p) {
+  const s = String(p || "").replace(/\\/g, "/");
+  if (s === "") return "";
+  const n = path.posix.normalize(s);
+  return n === "." ? "" : n;
+}
+export function escapesTree(canonical) {
+  return /(?:^|\/)\.\.(?:\/|$)/.test(canonical);
+}
+// The overnight handshake's only exception: a FILE under .claude/session-state (the
+// hooks' own scratch root), on the canonical path, with no traversal left in it.
+const SESSION_STATE_FILE_RE = /(?:^|\/)\.claude\/session-state\/[^/]/;
+export function isSessionStatePath(p) {
+  const c = canonicalToolPath(p);
+  return c !== "" && !escapesTree(c) && SESSION_STATE_FILE_RE.test(c);
+}
+
 export function autopilotDecision(toolName, toolInput) {
   const name = String(toolName || "");
   if (DENY_TOOLNAME_RE.test(name)) return "deny";
@@ -442,8 +464,8 @@ export function overnightGateDecision(toolName, toolInput, context = {}) {
   // was auto-approved before the arm handshake completed. The regex is the same set
   // the settings `ask` tier enumerates; a new editor name must be added to both.
   if (/^(Write|Edit|MultiEdit|NotebookEdit)$/i.test(name) || UNARMED_WRITER_RE.test(name)) {
-    const fp = String(input.file_path || input.notebook_path || input.path || input.filePath || "");
-    return /session-state/.test(fp) ? "allow-through" : "deny-until-armed";
+    const fp = input.file_path || input.notebook_path || input.path || input.filePath || "";
+    return isSessionStatePath(fp) ? "allow-through" : "deny-until-armed";
   }
   // execute_sql / apply_migration intentionally omitted (Mason 2026-07-10): SQL and
   // migration applies do not gate on the overnight handshake either. Deploys still do.

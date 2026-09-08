@@ -415,6 +415,14 @@ eq(overnightGateDecision("Write", { file_path: "src/pages/Foo.tsx" }), "deny-unt
 eq(overnightGateDecision("NotebookEdit", { notebook_path: "notebooks/a.ipynb" }), "deny-until-armed", "notebook edit blocked until armed");
 eq(overnightGateDecision("NotebookEdit", { notebook_path: ".claude/session-state/scratch.ipynb" }), "allow-through", "session-state notebook edit passes the handshake via notebook_path");
 eq(overnightGateDecision("MultiEdit", { file_path: ".claude/session-state/notes.md", edits: [] }), "allow-through", "MultiEdit of session-state passes like Edit does");
+// CodeRabbit Major on 06f0039a2 (CWE-22): the exception was a "session-state" substring test.
+eq(overnightGateDecision("Write", { file_path: "../.claude/session-state/../../outside.txt" }), "deny-until-armed", "PROVEN BYPASS: a traversal through session-state is judged on its canonical path");
+eq(overnightGateDecision("Edit", { file_path: ".claude/session-state/../../src/App.tsx" }), "deny-until-armed", "session-state/../.. resolves to source and waits for the arm");
+eq(overnightGateDecision("Write", { file_path: "src/session-state/x.ts" }), "deny-until-armed", "a session-state folder elsewhere in the tree is not the trusted root");
+eq(overnightGateDecision("Write", { file_path: ".claude/session-state" }), "deny-until-armed", "the root directory itself is not a file under it");
+eq(overnightGateDecision("Write", { file_path: "C:\\CRX_Manager\\.claude\\session-state\\notes.json" }), "allow-through", "absolute Windows path into the trusted root passes");
+eq(overnightGateDecision("Write", { file_path: ".claude/session-state/sub/notes.json" }), "allow-through", "nested file under the trusted root passes");
+eq(overnightGateDecision("Write", { file_path: "./.claude/session-state/notes.json" }), "allow-through", "a ./ prefix normalises away");
 eq(overnightGateDecision("mcp__filesystem__write_file", { path: "src/x.ts" }), "deny-until-armed", "MCP write_file blocked until armed");
 eq(overnightGateDecision("mcp__filesystem__edit_file", { path: "src/x.ts" }), "deny-until-armed", "MCP edit_file blocked until armed");
 eq(overnightGateDecision("mcp__filesystem__create_directory", { path: "src/new" }), "deny-until-armed", "MCP create_directory blocked until armed");

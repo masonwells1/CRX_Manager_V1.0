@@ -70,14 +70,24 @@ const isFrontendFile = inSrc && /\.(ts|tsx|js|jsx)$/.test(filePath);
 // block comment that never closed, and everything after it (the key lookup, the
 // 'service_role' literal) vanished before the scan. A "/" starts a regex when the previous
 // non-blank token cannot end an operand (start of file, an operator or opening bracket,
-// or an expression keyword such as return/typeof/case); after an identifier, number or
-// closing quote it is division. ")" and "]" are ambiguous and count as regex starts: on
-// doubt the machine keeps MORE text, so the worst wrong guess is a comment that survives
-// and produces a refusal Mason can read, never code that vanishes.
+// or an expression keyword such as return/typeof/case); after an identifier, number,
+// closing quote or "]" it is division. After ")" it is a regex only when that parenthesis
+// closed a control-flow head — if (…) /re/.test(x) — and division otherwise, so
+// "(total + fee) / 2; // 'service_role'" strips its comment instead of refusing
+// (CodeRabbit Major on 06f0039a2). Where the machine cannot tell (an unmatched paren) it
+// keeps MORE text: the worst wrong guess is a comment that survives and produces a refusal
+// Mason can read, never code that vanishes.
 const REGEX_PREFIX_KEYWORDS = new Set([
   "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw",
   "case", "do", "else", "yield", "await",
 ]);
+const CONTROL_HEAD_KEYWORDS = new Set(["if", "while", "for", "with"]);
+function wordBefore(src, e) {
+  while (e >= 0 && /[ \t\r\n]/.test(src[e])) e -= 1;
+  let w = e;
+  while (w >= 0 && /[A-Za-z0-9_$]/.test(src[w])) w -= 1;
+  return src.slice(w + 1, e + 1);
+}
 function regexCanStart(src, i) {
   let j = i - 1;
   while (j >= 0 && /[ \t\r\n]/.test(src[j])) j -= 1;
@@ -88,6 +98,20 @@ function regexCanStart(src, i) {
     let k = j;
     while (k >= 0 && /[A-Za-z0-9_$]/.test(src[k])) k -= 1;
     return REGEX_PREFIX_KEYWORDS.has(src.slice(k + 1, j + 1));
+  }
+  if (prev === "]") return false; // end of an index or array literal: division
+  if (prev === ")") {
+    // Walk back to the matching "(" (nesting counted). A regex follows ")" only when the
+    // parenthesis closed a control-flow head; after a call or a grouped expression the
+    // slash is division. An unmatched paren is doubt, and doubt keeps more text (regex).
+    let depth = 0;
+    let k = j;
+    for (; k >= 0; k -= 1) {
+      if (src[k] === ")") depth += 1;
+      else if (src[k] === "(") { depth -= 1; if (depth === 0) break; }
+    }
+    if (k < 0) return true;
+    return CONTROL_HEAD_KEYWORDS.has(wordBefore(src, k - 1));
   }
   return true;
 }
