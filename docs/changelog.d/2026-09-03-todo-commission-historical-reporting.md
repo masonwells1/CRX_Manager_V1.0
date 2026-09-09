@@ -11,29 +11,31 @@ dropping it. This records that deferral so it is picked back up rather than redi
 
 It is dated rather than "someday" because the cheap window is open and will close. Verified live
 2026-09-03: 35 commissions (33 pending, 2 cancelled, **0 paid**), 8 `commission_payments` (all
-`unposted`), and **0 `commission_payment_items`**. Nothing has ever been paid, so there is no back
-history to reconstruct and shipping the refusal costs nothing real today. Build the ledger-backed
-report after a season of payouts and every date before that point becomes permanently
-unanswerable — the data to reconstruct it will never have existed. Mason put the first payout at
-"probably a few months out," which is the deadline.
+`unposted`), and **0 `commission_payment_items`**. Nothing has ever been paid, so there is no payout
+history to reconstruct. Pre-cutover earned-state changes were never recorded, however, so the
+correct design must observe the opening state at the real cutover and refuse earlier dates rather
+than backdating current rows. Build after a season of payouts and the missing payout interval also
+becomes permanently unanswerable. Mason put the first payout at "probably a few months out," which
+is the deadline.
 
 The write-up deliberately leads with what already exists, because the obvious failure mode here is
 someone scoping a new commission-history subsystem. There is already a dated payment ledger:
 `commission_payments` carries `payment_date`, `posted_at` and an `unposted|posted|voided` status,
 `commission_payment_items` links payments to individual commissions with amounts, and the
 `create_`/`post_`/`void_commission_payment` RPCs plus `src/pages/CommissionPayments.tsx` are live.
-The real gaps are two missing dated columns — `commission_payments.voided_at` and
-`commissions.cancelled_at` — and a report that reads current status instead of joining the ledger.
+The real gaps include two missing dated columns — `commission_payments.voided_at` and
+`commissions.cancelled_at` — plus immutable cutover, earned-state, and signed settlement facts;
+current payment and commission rows are operational state, not a complete history ledger.
 
 The 2 already-cancelled commissions have `deleted_at` NULL and no cancellation date, so their
-timing is already unrecoverable. The spec says to accept that and footnote it rather than invent a
-date, and gives the same instruction for the wider case if the window has closed by pickup time:
-refuse dates before the ledger start and name the boundary, never return a partial answer that
-reads as complete.
+timing is already unrecoverable. The spec says to include them as excluded legacy states in the
+real opening observation rather than inventing a historical date, and gives the same instruction
+for the wider case if the window has closed: refuse dates before the ledger start and name the
+boundary, never return a partial answer that reads as complete.
 
 Files: `TODO.md` (dated callout at the top of the engineering section) and
 `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md` (problem, verified live counts,
-existing machinery, the two gaps, target behaviour, acceptance criteria including real-path proof,
+existing machinery, the four gaps, target behaviour, acceptance criteria including real-path proof,
 and the fallback path).
 
 ## 2026-09-03 (follow-up) — Mason answered the open question; requirement upgraded
@@ -56,6 +58,6 @@ One finding makes it more tractable than it looked. Verified live: `post_commiss
 `void_commission_payment` are thin wrappers, and the real bodies
 (`_post_commission_payment_intent_impl_20260809`, `_void_commission_payment_intent_impl_20260809`)
 already write `commission_payment_items` and maintain `commissions.paid_date`. The reconciliation
-data will therefore already be captured correctly as payouts happen — this is a reporting rewrite
-over existing capture, not new plumbing. The two dated-column gaps
-(`commission_payments.voided_at`, `commissions.cancelled_at`) are unchanged.
+data remains a useful operational input, but stable historical reporting also requires new immutable
+cutover and event-ledger plumbing. The two dated-column gaps (`commission_payments.voided_at`,
+`commissions.cancelled_at`) are unchanged.

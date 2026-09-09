@@ -90,7 +90,7 @@ jobs:
           fi
       - name: Reset, request, or validate the one-shot final review
         if: steps.trusted-gate.outputs.available == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const gate = require('./.github/scripts/coderabbit-final-review.cjs');

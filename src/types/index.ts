@@ -771,7 +771,7 @@ export interface QuoteVersion {
   version_number: number;
   sent_by: string;
   sent_at: string;
-  sent_method: string;
+  sent_method: string | null;
   snapshot_data: {
     quote: {
       quote_number: string;
@@ -1388,6 +1388,8 @@ export interface Commission {
   paid_date: string | null;
   paid_note: string | null;
   deleted_at: string | null;
+  cancelled_at: string | null;
+  cancelled_amount_cents: number | null;
   created_at: string;
 }
 
@@ -2414,6 +2416,8 @@ export interface CycleCount {
   count_number: string;
   warehouse: string;
   status: CycleCountStatus;
+  /** Required after migration 20260831212415 is applied. */
+  item_revision?: number;
   initiated_by: string;
   completed_by: string | null;
   notes: string | null;
@@ -3404,6 +3408,27 @@ export interface CommissionBalanceRow {
   paid_count: number;
 }
 
+export interface CommissionPaymentDetailRow {
+  [k: string]: unknown;
+  payment_id: string;
+  payment_number: string;
+  payment_date: string;
+  recipient_id: string | null;
+  recipient_name: string;
+  commission_id: string;
+  source_type: string;
+  source_number: string;
+  customer_name: string;
+  commission_order_date: string;
+  settled_amount: number;
+}
+
+export interface CommissionHistoryReportPayload {
+  as_of_date: string;
+  balance_rows: CommissionBalanceRow[];
+  payment_detail_rows: CommissionPaymentDetailRow[];
+}
+
 export interface InventoryCostRow {
   [k: string]: unknown;
   product_id: string;
@@ -3445,6 +3470,8 @@ export interface CommissionPayment {
   payment_date: string;
   posted_by: string | null;
   posted_at: string | null;
+  voided_by: string | null;
+  voided_at: string | null;
   notes: string | null;
   season: number | null;
   created_by: string | null;
