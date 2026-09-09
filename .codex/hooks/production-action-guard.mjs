@@ -1427,6 +1427,7 @@ function codexAppAdvisory({ request, repoDir, runGh, deadlineMs = Date.now() + C
 export function evaluateProductionAction({
   toolName = "",
   toolInput = {},
+  eventCwd = "",
   branch = "",
   repoDir = process.cwd(),
   nowMs = Date.now(),
@@ -1435,23 +1436,30 @@ export function evaluateProductionAction({
 } = {}) {
   const name = String(toolName);
   const baseRepoDir = path.resolve(repoDir);
-  const requestedWorkingDir = toolInput.workdir ?? toolInput.cwd ?? "";
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  // Native apply_patch carries a raw string, so it has no nested workdir/cwd.
+  // Its event-level cwd is still the directory where the patch resolves. A
+  // nested relative workdir/cwd is relative to that event directory; without
+  // an event cwd, the repository root remains the established fallback.
+  const eventRepoDir = eventCwd ? path.resolve(baseRepoDir, String(eventCwd)) : baseRepoDir;
+  const requestedWorkingDir = input.workdir ?? input.cwd ?? "";
   const actionRepoDir = requestedWorkingDir
-    ? path.resolve(baseRepoDir, String(requestedWorkingDir))
-    : baseRepoDir;
+    ? path.resolve(eventRepoDir, String(requestedWorkingDir))
+    : eventRepoDir;
 
   const pathCandidates = [
-    toolInput.file_path,
-    toolInput.filePath,
-    toolInput.path,
-    toolInput.target,
-    toolInput.source,
-    toolInput.destination,
+    input.file_path,
+    input.filePath,
+    input.path,
+    input.target,
+    input.source,
+    input.destination,
   ];
   // Classify patch payloads by their DESTINATION headers, not the whole body —
   // documentation patches legitimately mention guard/proof paths in prose
   // (Codex round-5 false positive).
-  const patchDestinations = [toolInput.patch, toolInput.diff, toolInput.input, toolInput.changes]
+  const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
+  const patchDestinations = [rawPatchBody, input.patch, input.diff, input.input, input.changes]
     .flatMap((payloadText) => extractPatchDestinations(payloadText));
   if ([...pathCandidates, ...patchDestinations].some((candidate) => reviewProofPathMentioned(candidate))) {
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
@@ -1825,6 +1833,7 @@ async function main() {
   const result = evaluateProductionAction({
     toolName: payload.tool_name ?? payload.toolName ?? "",
     toolInput: payload.tool_input ?? payload.toolInput ?? {},
+    eventCwd: payload.cwd ?? "",
     repoDir: process.env.CODEX_PROJECT_DIR || process.cwd(),
   });
   // Codex treats allow payloads as noisy/failed hook output. Silence means allow.
