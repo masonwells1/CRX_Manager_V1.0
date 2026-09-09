@@ -1,7 +1,8 @@
 ## 2026-09-09 - Bind review-state read authorization to a stable pathname
 
 The native review-state read exemption now refuses a pathname that reaches its
-file through a symlink, junction, or other inspected reparse-point component.
+file through a symlink, junction, or other inspected reparse-point component,
+including a legitimate non-proof file outside review state.
 It also fails closed for every native read beneath this checkout's own
 junctioned state directory, including the target's external spelling: a
 separate pre-tool hook cannot bind a mutable alias to the later file-tool open.

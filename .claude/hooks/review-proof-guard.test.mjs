@@ -969,7 +969,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       }
       const outsideToFlag = path.join(fixtureRoot, "outside-flag.txt");
       symlinkSync(intentFlag, outsideToFlag, "file");
-      assert.equal(run({ tool_name: "Read", tool_input: { file_path: outsideToFlag } }).stdout, "", "outside symlink to a non-proof file stays allowed");
+      assert.match(run({ tool_name: "Read", tool_input: { file_path: outsideToFlag } }).stdout, /"permissionDecision":"deny"/, "outside symlink to a non-proof file must deny because a pre-tool hook cannot bind its target to the later native open");
     } else {
       console.log("review-proof-guard.test: symlink creation refused by the OS — symlink alias cases skipped");
     }
