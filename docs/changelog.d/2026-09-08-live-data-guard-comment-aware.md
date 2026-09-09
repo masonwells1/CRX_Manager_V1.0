@@ -27,8 +27,11 @@ anywhere**.
 - **A dollar-quote now only opens at a real token boundary.** Stripping a
   comment is safe only if the text handed to the stripper still has the
   statement's true comment structure — and it did not. `foo$x$a` is ONE
-  PostgreSQL identifier (`$` is a legal identifier continuation character, and
-  a dollar-quoted string cannot immediately follow an identifier or number),
+  PostgreSQL identifier (`$` is a legal identifier continuation character, so a
+  dollar-quoted string cannot immediately follow an identifier — **corrected
+  2026-09-09**, this first said "an identifier or number" and was implemented as
+  written, so `SELECT 1e2$x$--$x$;DELETE FROM customers;` hid a real DELETE
+  until Codex round 4 found it),
   but both lexers opened a dollar-quote there and then located the "closing"
   tag with `indexOf`, which landed inside a LATER string literal. That deleted
   the real SQL in between and manufactured a comment the strip then removed:
@@ -73,4 +76,7 @@ of those 12 clear the full Codex path. Reconciling the two allowlists is a
 follow-up. Separately, `findNonReadFunctionCall` still matches on the bare
 function name and discards the schema, so a same-named function in another
 schema would inherit a builtin's exemption — pre-existing, and widened by ten
-names here; no tracked migration defines any of them.
+names here; no tracked migration defines any of them. **Fixed 2026-09-09** after
+Codex round 4 showed `SELECT evil.pg_get_ruledef()` reaching that exemption: the
+qualifier is now captured, and only `public`, `pg_catalog` and
+`information_schema` are honoured.

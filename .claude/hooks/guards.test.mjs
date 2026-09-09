@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isHoldPhrase, isResumePhrase, isBuildActionUnderHold } from "./hold-latch-lib.mjs";
-import { classifySql } from "./live-testdata-lib.mjs";
+import { classifySql, destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 import { isGitPush, pushTargetsMain, mainPushSource, riskyFiles, contentIsRisky, proofValid } from "./codex-push-lib.mjs";
 import { DENY_TOOLNAME_RE } from "./autopilot-lib.mjs";
 
@@ -223,6 +223,32 @@ ok(classifySql("SELECT 'a\\', $$[E2E]$$; DELETE FROM customers;").block, "the sa
 ok(classifySql("SELECT 'a\\', $$[E2E]$$; UPDATE invoices SET total_cents = 0;").block, "the same shape cannot exempt an UPDATE");
 // The documented, tested exemption still works: no backslash, so both readings agree.
 ok(!classifySql("UPDATE customers SET name = 'x' WHERE id = 1 -- [E2E]").block, "a genuine [E2E] marker still exempts a fake-data write");
+// destructiveMigrationCheck takes the same union, and gates an UNATTENDED apply.
+// This one is destructive only under the escaping reading: without it the literal
+// ends early and the rest of the line is read as a comment.
+ok(destructiveMigrationCheck("SELECT 'x\\'--'; DELETE FROM customers;").destructive, "an ambiguous backslash cannot make a destructive migration look routine");
+
+// Codex round 4 (PR #639). Four shapes `main` blocks that this branch allowed.
+// (a) The [E2E] exemption was a blanket early return over the WHOLE batch, so a
+// marker in an unrelated statement waved through the write beside it. Both
+// readings agree here, so the union does NOT save it — the exemption is now
+// scoped to the statement that carries the marker.
+ok(classifySql("SELECT 1 AS foo$x$, '[E2E]$x$'; DELETE FROM customers;").block, "an [E2E] inside another statement's literal cannot exempt a DELETE");
+ok(classifySql("SELECT '[E2E]'; DELETE FROM customers;").block, "the plain form of that blanket exemption is closed too");
+ok(classifySql('SELECT "[E2E]"; DELETE FROM customers;').block, "a quoted identifier holding the marker cannot exempt another statement");
+ok(!classifySql("INSERT INTO customers (name) VALUES ('[E2E] A'); INSERT INTO customers (name) VALUES ('[E2E] B');").block, "each statement carrying its own marker is still exempt");
+// (b) The token-boundary walk rejected a `$` after ANY identifier-ish character,
+// so the `e` of `1e2` made it refuse a real dollar body, and the body's inert
+// `--` then erased the DELETE. `1e2` is a NUMBER; only a run that STARTED like
+// an identifier absorbs the `$`.
+ok(classifySql("SELECT 1e2$x$--$x$;DELETE FROM customers;").block, "a digit-led numeric run does not absorb the $, so its body stays inert");
+// The opposite direction still holds: `foo$x$` IS one identifier, so what follows
+// really is a comment and PostgreSQL really would not run the DELETE.
+ok(!classifySql("SELECT 1 AS foo$x$--$x$;DELETE FROM customers;").block, "an identifier-led run still absorbs the $");
+// (c) findNonReadFunctionCall discarded the schema, so any function could borrow
+// a trusted pg_catalog name.
+ok(classifySql("SELECT evil.pg_get_ruledef()").block, "a foreign schema cannot inherit a pg_catalog function's exemption");
+ok(!classifySql("SELECT pg_catalog.pg_get_functiondef(p.oid) FROM pg_proc p LIMIT 1").block, "the real pg_catalog formatter is still a read");
 ok(classifySql('UPDATE public . "orders" SET notes = \'x\' WHERE id = 1').block, "spaced qualification still blocked");
 // Codex P1 round 4: live stock tables were missing from the lists.
 ok(classifySql("UPDATE inventory SET quantity = 0 WHERE id = 1").block, "raw UPDATE of inventory (live stock) blocked");

@@ -769,13 +769,24 @@ function denied(reason) {
   return { blocked: true, reason };
 }
 
+// Whether `\` escapes inside an ordinary '…' literal depends on the session's
+// standard_conforming_strings, which this hook cannot read, and BOTH readings
+// were proven to hide a write (see the union note in live-testdata-lib.mjs).
+// Taking the default here left this call site with round 3's defect —
+// `SELECT 'a\'||'--';DELETE FROM customers;` still read as read-only (Codex
+// round 4, PR #639). A statement counts as read-only only if it is read-only
+// under BOTH readings.
 export function isClearlyReadOnlySql(sql) {
+  return isClearlyReadOnlySqlOnce(sql, true) && isClearlyReadOnlySqlOnce(sql, false);
+}
+
+function isClearlyReadOnlySqlOnce(sql, backslashEscapes) {
   // Comment stripping MUST be quote-aware (Codex round-4): naive comment
   // removal first lets `SELECT '--'; DELETE …` hide the mutation inside what
   // looks like a comment. stripCommentsQuoteAware (shared, 5 adversarial
   // rounds on the migration guard) removes comments while leaving '…', "…",
   // and $tag$…$tag$ contents intact; string literals are then blanked.
-  const withoutComments = stripCommentsQuoteAware(String(sql || ""));
+  const withoutComments = stripCommentsQuoteAware(String(sql || ""), backslashEscapes);
   const value = normalize(
     withoutComments
       .replace(/\$([A-Za-z_][A-Za-z0-9_]*)?\$[\s\S]*?\$\1\$/g, "''")

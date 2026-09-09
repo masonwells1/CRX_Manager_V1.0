@@ -119,14 +119,24 @@ const DOLLAR_TAG_RE = new RegExp(
   "y",
 );
 
-function openDollarTag(src, i) {
-  // A `$` only continues an IDENTIFIER, so walk back over the identifier-ish
-  // run and refuse only if that run actually STARTED like one. A number cannot
-  // absorb the `$` (`SELECT 1$x$body$x$` really does open a span), and neither
-  // can a positional parameter — PostgreSQL's rule is "keyword or identifier".
-  for (let k = i; k > 0 && IDENT_CONT_RE.test(src[k - 1]); k--) {
-    if (IDENT_START_RE.test(src[k - 1])) return null;
-  }
+// `runStart` is where the identifier-or-number run immediately before `i` began
+// (or `i` itself when the previous character cannot continue one). A `$` only
+// continues an IDENTIFIER, so the span opens unless that run actually STARTED
+// like one: `foo$x$` is a single identifier, but `1e2$x$` is the number `1e2`
+// followed by a real dollar quote, and so is the second `$$` of `$$a$$$$b$$`.
+//
+// Codex round 4 (PR #639) found both halves of the previous form wrong. Testing
+// EVERY character of the run for ident_start rejected `1e2$x$` on the `e`, so
+// `SELECT 1e2$x$--$x$;DELETE FROM customers;` re-read the dollar body as a real
+// comment and hid the DELETE. And walking the run backwards on every `$` made
+// classification quadratic — 16,000 characters of `1$1$1$…` took 3.0 seconds.
+// The callers track `runStart` as they scan forward, which is O(1) here.
+//
+// DOLLAR_TAG_RE is sticky and shared: lastIndex is set and consumed in the same
+// two statements, with no await/yield between them, so the two classification
+// passes cannot interleave inside it.
+function openDollarTag(src, i, runStart) {
+  if (runStart < i && IDENT_START_RE.test(src[runStart])) return null;
   DOLLAR_TAG_RE.lastIndex = i;
   return DOLLAR_TAG_RE.exec(src);
 }
@@ -139,11 +149,21 @@ function openDollarTag(src, i) {
 // comments are walked (not stripped) so a stray $$ inside them can't open a
 // fake quote span that swallows real statements. DO bodies are kept (they
 // execute). An unterminated dollar-quote leaves the rest untouched (fail closed).
-function stripDollarQuotedCore(sql, keepBody, backslashEscapes) {
-  const src = String(sql || "");
-  let out = "";
-  let i = 0;
+// ── One tokenizer, three consumers ──────────────────────────────────────────
+// stripDollarQuoted, stripCommentsQuoteAware and splitTopLevelStatements all
+// need to walk SQL the same way, so they share ONE scanner. Separate copies
+// could disagree about where a literal or a dollar-quoted span begins, and
+// every hidden-write BLOCKER on this PR came from exactly that kind of
+// disagreement. It also keeps the `runStart` token-boundary bookkeeping that
+// openDollarTag depends on in a single place.
+//
+// Yields one span per token-ish region: `kind` is "literal", "lineComment",
+// "blockComment", "quotedIdent", "dollar" (a $tag$…$tag$ span) or "char" (one
+// ordinary character).
+function* sqlSpans(src, backslashEscapes) {
   const n = src.length;
+  let i = 0;
+  let runStart = 0;
   while (i < n) {
     const ch = src[i];
     const escapeString = (ch === "e" || ch === "E") && src[i + 1] === "'" &&
@@ -165,12 +185,34 @@ function stripDollarQuotedCore(sql, keepBody, backslashEscapes) {
         if (src[j] === "'") { j++; break; }
         j++;
       }
-      out += src.slice(i, j); i = j; continue;
+      yield { kind: "literal", text: src.slice(i, j) };
+      i = j; runStart = i; continue;
+    }
+    if (ch === '"') {
+      // Quoted identifiers are copied VERBATIM: a `$`, `--` or `/*` inside one
+      // is part of the name, not a delimiter (`SELECT "$x$"` is a column).
+      let j = i + 1;
+      while (j < n && src[j] !== '"') j++;
+      yield { kind: "quotedIdent", text: src.slice(i, Math.min(j + 1, n)) };
+      i = j + 1; runStart = i; continue;
+    }
+    if (ch === "$") {
+      const tag = openDollarTag(src, i, runStart);
+      if (tag) {
+        const open = tag[0];
+        const close = src.indexOf(open, i + open.length);
+        // An unterminated dollar-quote swallows the rest of the input. Nothing
+        // after it can execute, so consumers keep it VERBATIM (fail closed).
+        const end = close === -1 ? n : close + open.length;
+        yield { kind: "dollar", text: src.slice(i, end), terminated: close !== -1 };
+        i = end; runStart = i; continue;
+      }
     }
     if (ch === "-" && src[i + 1] === "-") {
       let j = i + 2;
       while (j < n && src[j] !== "\n" && src[j] !== "\r") j++;
-      out += src.slice(i, j); i = j; continue;
+      yield { kind: "lineComment", text: src.slice(i, j) };
+      i = j; runStart = i; continue;
     }
     if (ch === "/" && src[i + 1] === "*") {
       let depth = 1, j = i + 2;
@@ -179,29 +221,43 @@ function stripDollarQuotedCore(sql, keepBody, backslashEscapes) {
         if (src[j] === "*" && src[j + 1] === "/") { depth--; j += 2; continue; }
         j++;
       }
-      out += src.slice(i, j); i = j; continue;
+      yield { kind: "blockComment", text: src.slice(i, j) };
+      i = j; runStart = i; continue;
     }
-    if (ch === '"') {
-      // Quoted identifiers are copied VERBATIM: a `$`, `--` or `/*` inside one
-      // is part of the name, not a delimiter (`SELECT "$x$"` is a column).
-      let j = i + 1;
-      while (j < n && src[j] !== '"') j++;
-      out += src.slice(i, j + 1); i = j + 1; continue;
+    yield { kind: "char", text: ch };
+    // A `$` can only continue a run that is already open; after anything else
+    // the next character starts fresh. Every span above resets runStart to its
+    // end, because a dollar-quote may legally follow a literal, a comment, a
+    // quoted identifier, or another dollar-quote.
+    runStart = IDENT_CONT_RE.test(ch) ? runStart : i + 1;
+    i++;
+  }
+}
+
+function stripDollarQuotedCore(sql, keepBody, backslashEscapes) {
+  let out = "";
+  for (const span of sqlSpans(String(sql || ""), backslashEscapes)) {
+    if (span.kind === "dollar") {
+      out += (!span.terminated || keepBody(out)) ? span.text : " ";
+      continue;
     }
-    if (ch === "$") {
-      const tag = openDollarTag(src, i);
-      if (tag) {
-        const open = tag[0];
-        const close = src.indexOf(open, i + open.length);
-        if (close === -1) { out += src.slice(i); break; }
-        const end = close + open.length;
-        out += keepBody(out) ? src.slice(i, end) : " ";
-        i = end; continue;
-      }
-    }
-    out += ch; i++;
+    out += span.text;
   }
   return out;
+}
+
+// Top-level statement split, used only to scope the [E2E] exemption. Semicolons
+// inside literals, comments, quoted identifiers and dollar-quoted bodies (a DO
+// block is full of them) are NOT boundaries.
+function splitTopLevelStatements(sql, backslashEscapes) {
+  const statements = [];
+  let cur = "";
+  for (const span of sqlSpans(String(sql || ""), backslashEscapes)) {
+    if (span.kind === "char" && span.text === ";") { statements.push(cur); cur = ""; continue; }
+    cur += span.text;
+  }
+  statements.push(cur);
+  return statements.filter((s) => s.trim() !== "");
 }
 
 export function stripDollarQuoted(sql, backslashEscapes = true) {
@@ -229,55 +285,9 @@ function stripFunctionBodiesOnly(sql, backslashEscapes = true) {
 // like `-- never TRUNCATE` in a DO body can false-positive — that parks the
 // migration for Mason, which is the safe direction.
 export function stripCommentsQuoteAware(sql, backslashEscapes = true) {
-  const src = String(sql || "");
   let out = "";
-  let i = 0;
-  const n = src.length;
-  while (i < n) {
-    const ch = src[i];
-    const escapeString = (ch === "e" || ch === "E") && src[i + 1] === "'" &&
-      !IDENT_CONT_RE.test(src[i - 1] || "");
-    if (ch === "'" || escapeString) {
-      let j = i + (escapeString ? 2 : 1);
-      while (j < n) {
-        // See the matching note in stripDollarQuotedCore: the caller decides,
-        // and classifySql runs both readings.
-        if ((backslashEscapes || escapeString) && src[j] === "\\") { j += Math.min(2, n - j); continue; }
-        if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
-        if (src[j] === "'") { j++; break; }
-        j++;
-      }
-      out += src.slice(i, j); i = j; continue;
-    }
-    if (ch === '"') {
-      let j = i + 1;
-      while (j < n && src[j] !== '"') j++;
-      out += src.slice(i, j + 1); i = j + 1; continue;
-    }
-    if (ch === "$") {
-      const tag = openDollarTag(src, i);
-      if (tag) {
-        const open = tag[0];
-        const close = src.indexOf(open, i + open.length);
-        const end = close === -1 ? n : close + open.length;
-        out += src.slice(i, end); i = end; continue;
-      }
-    }
-    if (ch === "-" && src[i + 1] === "-") {
-      let j = i + 2;
-      while (j < n && src[j] !== "\n" && src[j] !== "\r") j++;
-      out += " "; i = j; continue;
-    }
-    if (ch === "/" && src[i + 1] === "*") {
-      let depth = 1, j = i + 2;
-      while (j < n && depth > 0) {
-        if (src[j] === "/" && src[j + 1] === "*") { depth++; j += 2; continue; }
-        if (src[j] === "*" && src[j + 1] === "/") { depth--; j += 2; continue; }
-        j++;
-      }
-      out += " "; i = j; continue;
-    }
-    out += ch; i++;
+  for (const span of sqlSpans(String(sql || ""), backslashEscapes)) {
+    out += (span.kind === "lineComment" || span.kind === "blockComment") ? " " : span.text;
   }
   return out;
 }
@@ -388,10 +398,20 @@ const SQL_KEYWORD_FNS = new Set([
 export function findNonReadFunctionCall(sqlText) {
   const text = String(sqlText || "");
   if (!/\bselect\b/i.test(text)) return null;
-  const re = /(?:"?public"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
+  // The schema qualifier is CAPTURED, not skipped. It used to be an optional
+  // `public.` that simply failed to match anything else, so the regex started
+  // matching AFTER a foreign qualifier and `evil.pg_get_ruledef()` was read as
+  // a call to the trusted pg_catalog formatter (Codex round 4, PR #639 — a
+  // pre-existing hole this branch widened by adding ten more trusted names).
+  // Only the schemas that actually hold the trusted names are honoured; a call
+  // qualified with anything else is a custom function and fails closed.
+  const re = /(?:"?([a-z_][a-z0-9_]*)"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
+  const TRUSTED_SCHEMAS = new Set(["public", "pg_catalog", "information_schema"]);
   let m;
   while ((m = re.exec(text)) !== null) {
-    const name = m[1].toLowerCase();
+    const schema = m[1] ? m[1].toLowerCase() : null;
+    const name = m[2].toLowerCase();
+    if (schema && !TRUSTED_SCHEMAS.has(schema)) return `${schema}.${name}`;
     if (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name)) continue;
     if (READONLY_FN_NAMES.has(name)) continue;
     if (READONLY_FN_PREFIX_RE.test(name)) continue;
@@ -526,13 +546,33 @@ function classifySqlOnce(query, backslashEscapes) {
     }
   }
 
-  // 4. Clearly-fake test data is fine for ordinary data writes.
-  // Read the comment-BEARING text: `UPDATE ... -- [E2E]` is a documented, tested
-  // way to mark a fake-data write, so the 2026-09-08 comment strip must not eat
-  // the marker. Still dollar-stripped, so an [E2E] buried in a re-emitted machine
-  // body cannot exempt a real write — identical to the pre-2026-09-08 behaviour.
-  if (tWithComments.includes("[E2E]")) return { block: false };
+  // 4. Clearly-fake test data is fine for ordinary data writes — but the marker
+  //    exempts ONLY the statement that carries it.
+  //
+  //    This was a blanket early return over the whole batch, so ANY [E2E] text
+  //    anywhere waved through every write beside it. `SELECT '[E2E]'; DELETE
+  //    FROM customers;` is allowed by `main` today for that reason. Codex round
+  //    4 (PR #639) reached the same early return through a mis-lexed dollar tag
+  //    and produced an input `main` blocks and this branch did not; scoping the
+  //    exemption to its own statement closes the reported shape and the older
+  //    blanket hole together.
+  //
+  //    The marker is read from the comment-BEARING text, because `UPDATE … --
+  //    [E2E]` is a documented, tested form, and from the dollar-STRIPPED text,
+  //    so a marker buried in a re-emitted machine body still exempts nothing.
+  for (const stmt of splitTopLevelStatements(tWithComments, backslashEscapes)) {
+    if (stmt.includes("[E2E]")) continue;
+    const hazard = classifyWriteStatement(stripCommentsQuoteAware(stmt, backslashEscapes));
+    if (hazard) return hazard;
+  }
 
+  return { block: false };
+}
+
+// Checks 5-6 for ONE statement. Every rule here is [E2E]-exemptible; the Hard
+// Red Lines above (audit log, TRUNCATE, DDL/GRANT, sequence and RPC calls) are
+// not, and stay batch-wide.
+function classifyWriteStatement(t) {
   let m;
   if ((m = INSERT_RE.exec(t))) {
     return {
@@ -589,7 +629,7 @@ function classifySqlOnce(query, backslashEscapes) {
     };
   }
 
-  return { block: false };
+  return null;
 }
 
 // ── Destructive-migration classifier (Mason's settled 2026-07-13 policy) ─────
