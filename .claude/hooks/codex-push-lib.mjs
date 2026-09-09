@@ -2514,6 +2514,22 @@ export function ghApiMergeRequest(command) {
 // `gh api --method='P"OST'` must keep reading as the non-POST it is. The caller
 // refuses rather than analyses, for the same reason the push side does — an
 // analysis of text the shell will not run proves nothing.
+// Comparing only WHETHER each reading parses as a merge is not enough, and that
+// was the first spelling of this helper (Codex sol, 2026-09-08, SEC-002).
+// ``gh pr merge 123 --ad`min --squash`` parses as a merge BOTH ways — the raw
+// reading just records `admin: false` while gh receives `--admin`. So the whole
+// parse is compared, field by field: a difference in the administrator override,
+// the repository, the PR selector or the auto-merge flag is a difference in what
+// the command DOES, and the reading the shell will actually execute is the
+// unwrapped one. Any such difference is refused rather than analysed.
+function sameMergeRequest(a, b) {
+  if (!a || !b) return !a && !b;
+  return a.selector === b.selector
+    && a.repo === b.repo
+    && a.auto === b.auto
+    && a.admin === b.admin;
+}
+
 export function ghHiddenByShellComposition(cmd) {
   const text = String(cmd || "");
   const unwrapped = text
@@ -2522,10 +2538,51 @@ export function ghHiddenByShellComposition(cmd) {
     .replace(/`(?=[^\r\n])/g, "")
     .replace(/\^(?=[^\r\n])/g, "");
   if (unwrapped === text) return false;
-  const hidesMerge = Boolean(ghMergeRequest(unwrapped)) && !ghMergeRequest(text);
-  const hidesApiMerge = Boolean(ghApiMergeRequest(unwrapped)) && !ghApiMergeRequest(text);
-  const hidesMutation = ghApiMutates(unwrapped) && !ghApiMutates(text);
+  const hidesMerge = !sameMergeRequest(ghMergeRequest(unwrapped), ghMergeRequest(text));
+  const hidesApiMerge = !sameMergeRequest(ghApiMergeRequest(unwrapped), ghApiMergeRequest(text));
+  const hidesMutation = ghApiMutates(unwrapped) !== ghApiMutates(text);
   return hidesMerge || hidesApiMerge || hidesMutation;
+}
+
+// Top-level command segmentation, quote-aware.
+//
+// Splitting on a bare regex splits INSIDE a quoted value, and that is not a
+// cosmetic difference: `gh pr merge 123 --body 'note&more' --admin --squash` is
+// ONE command to every shell, but a regex split hands the parsers
+// `gh pr merge 123 --body 'note` — a merge with no `--admin` — and puts the
+// override in a second segment that contains no `gh` at all. A green
+// normal-merge gate then authorizes an administrator merge (Codex sol,
+// 2026-09-08, SEC-001; introduced by this branch when `&` became a separator).
+//
+// Only UNQUOTED separators split. An unterminated quote runs to the end of the
+// input, which yields a LONGER segment — the parsers see more text, never less,
+// so that direction cannot hide a command.
+export function splitCommandSegments(command) {
+  const text = String(command || "");
+  const segments = [];
+  let current = "";
+  let quote = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      current += char;
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "'" || char === '"') { quote = char; current += char; continue; }
+    if (char === "\\" && index + 1 < text.length) { current += char + text[index + 1]; index += 1; continue; }
+    if (char === "&" || char === "|") {
+      if (text[index + 1] === char) index += 1;
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    if (char === ";" || char === "\n") { segments.push(current); current = ""; continue; }
+    if (char === "\r" && text[index + 1] === "\n") { segments.push(current); current = ""; index += 1; continue; }
+    current += char;
+  }
+  segments.push(current);
+  return segments.map((segment) => segment.trim()).filter(Boolean);
 }
 
 // Does this `gh api` call MUTATE? Moved here from

@@ -356,9 +356,19 @@ ok(
 // A single `&` runs both sides — POSIX in the background, cmd sequentially — so
 // it must separate segments. Without it `gh pr merge 1 & gh pr merge 2` resolved
 // only PR 1 and the second merge ran ungated.
+//
+// It must go through the SHARED, quote-aware segmenter rather than a regex: a
+// regex splits inside `--body 'note&more'`, which hands the loop a merge whose
+// `--admin` has been carried off into a segment containing no `gh` at all
+// (Codex sol, 2026-09-08, SEC-001). Asserting the call site, not the helper,
+// for the same reason the assertion above does.
 ok(
-  /toolInput\.command\.split\(\/\(\?:&&\|&\|/.test(guardSource),
-  "a single & separates command segments, and && still matches first",
+  /for\s*\(\s*const\s+segment\s+of\s+splitCommandSegments\(\s*toolInput\.command\s*\)\s*\)/.test(guardSource),
+  "the segment loop uses the shared quote-aware segmenter on the whole command",
+);
+ok(
+  !/toolInput\.command\.split\(/.test(guardSource),
+  "no raw regex split of the command survives in this guard",
 );
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);

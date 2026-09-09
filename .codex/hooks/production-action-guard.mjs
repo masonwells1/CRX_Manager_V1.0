@@ -11,6 +11,7 @@ import {
   ghApiMergeRequest,
   ghApiMutates,
   ghHiddenByShellComposition,
+  splitCommandSegments,
   ghMergeRequest,
   gitPushCwd,
   isGitPush,
@@ -615,6 +616,13 @@ export function protectedBasenameMentioned(segment) {
   });
 }
 export const CHANGES_DIRECTORY_RE = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+/i;
+// NOTE: deliberately NOT splitCommandSegments. These two helpers never split on
+// a single `&`, so SEC-001 does not reach them, and making them quote-aware
+// regresses `cmd /c "set a=… && echo x > %a%lib.mjs"`: the whole nested command
+// becomes one segment, and the classifier then names the wrapper instead of the
+// mutating half an earlier round pinned it to name. Their quoted-`;`/`|` splits
+// are a pre-existing over-split (shorter segments, so fail-safe here) and are
+// named as still-open rather than half-fixed.
 function shellSegments(command) {
   return String(command || "").split(/(?:&&|\|\|?|;|\r?\n)/).map((s) => s.trim()).filter(Boolean);
 }
@@ -716,6 +724,7 @@ const COMPUTED_ARGUMENT_RE = /\(|\$|`[^`]*`|(?<=\s)@[A-Za-z_$]|\bjoin-path\b|\s-
 // "codex-bot-review-lib.mjs")` both returned blocked:false, because no literal
 // token in either spells the protected file.
 export function mutatingSegmentWithComputedText(command) {
+  // See shellSegments above for why this split stays regex-based.
   const segments = String(command || "").split(/(?:&&|\|\|?|;|\r?\n)/).map((s) => s.trim()).filter(Boolean);
   for (const segment of segments) {
     if (SHELL_MUTATION_RE.test(segment) && COMPUTED_TEXT_RE.test(segment)) return segment;
@@ -1560,9 +1569,11 @@ export function evaluateProductionAction({
   // because one rolling method was carried across the unsplit text and the later
   // GET overwrote the POST; `git push origin HEAD:feature & git push origin
   // HEAD:main` gated only the first push (Codex sol, 2026-09-08, finding 4 —
-  // both measured blocked:false end to end). `&&` still matches first: the
-  // alternation is ordered longest-first.
-  const commandSegments = command.split(/(?:&&|&|\|\|?|;|\r?\n)/).map((segment) => segment.trim()).filter(Boolean);
+  // both measured blocked:false end to end). The split is QUOTE-AWARE: a bare
+  // regex splits inside `--body 'note&more'` and hands this loop a merge whose
+  // `--admin` has been carried off into a segment with no `gh` in it (Codex sol,
+  // 2026-09-08, SEC-001).
+  const commandSegments = splitCommandSegments(command);
   // Merge requests that cleared every hard gate; their advisory lookups run
   // together at the very end, after the push segments too (Codex round 8).
   const deferredAdvisories = [];

@@ -1353,6 +1353,61 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "gh PR merge to main uses the same valid proof gate");
+
+  // Codex sol, 2026-09-08, SEC-001 and SEC-002. These run against THIS fixture
+  // on purpose: the PR above is APPROVED, CLEAN, green and carries a valid Sol
+  // proof, so the line directly above is ALLOWED. That is the only state in
+  // which these matter -- against a PR that is not merge-ready, every one of
+  // them "passes" for a reason that has nothing to do with the defect, which is
+  // exactly how the first probe of these findings looked safe.
+  //
+  // A quoted separator is NOT a separator. `--body 'note&more'` is one argument
+  // to every shell; splitting there hands the loop `gh pr merge 123 --body 'note`
+  // -- a merge with no `--admin` -- and carries the override into a segment with
+  // no `gh` in it. Measured blocked:false at 223bdf0d5 for all five spellings.
+  for (const command of [
+    "gh pr merge 123 --body 'note&more' --admin --squash",
+    'gh pr merge 123 --body "note&more" --admin --squash',
+    "gh pr merge 123 --subject 'a&b' --admin",
+    "gh pr merge 123 --body 'a;b' --admin",
+    "gh pr merge 123 --body 'a|b' --admin",
+  ]) {
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => mainPrJson,
+    });
+    assert.equal(verdict.blocked, true, `a quoted separator must not carry --admin out of the inspected segment: ${command}`);
+    assert.match(verdict.reason, /--admin/, `and it must be the --admin refusal that fires: ${command}`);
+  }
+
+  // The composition helper compared only WHETHER each reading is a merge, so a
+  // merge that is a merge both ways slipped through with `admin` differing.
+  // The backtick spelling was compensated by the computed-text rule; the caret
+  // spelling was not, and measured blocked:false at 223bdf0d5.
+  for (const command of ["gh pr merge 123 --ad`min --squash", "gh pr merge 123 --ad^min --squash"]) {
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => mainPrJson,
+    });
+    assert.equal(verdict.blocked, true, `an escaped --admin must be refused: ${command}`);
+  }
+
+  // Both directions: an ordinary quoted body with no separator in it must still
+  // reach the normal gate and be allowed, or this fix is an over-block.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash --body 'ships the thing'" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, false, "an ordinary quoted body does not become a refusal");
+
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh api -X PUT repos/crop/crx/pulls/123/merge -f merge_method=squash" },

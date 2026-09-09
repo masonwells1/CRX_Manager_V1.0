@@ -15,6 +15,7 @@ import {
   splitShellArgv,
   ghApiMutates,
   ghHiddenByShellComposition,
+  splitCommandSegments,
   ghMergeRequest,
   ghApiMergeRequest,
   describeRiskyContent,
@@ -2875,6 +2876,83 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     pushHiddenByShellComposition(pathological);
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
     assert.ok(elapsedMs < 250, `the composition readings stay linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
+  }
+}
+
+// ── Codex sol, 2026-09-08: the THIRD round, on the second round's own fix ─────
+{
+  // SEC-001. A quoted separator is not a separator. The regex split this
+  // replaces produced ["gh pr merge 123 --body 'note", "more' --admin --squash"]
+  // -- a merge with no --admin, and an override in a segment with no gh.
+  assert.deepEqual(
+    splitCommandSegments("gh pr merge 123 --body 'note&more' --admin --squash"),
+    ["gh pr merge 123 --body 'note&more' --admin --squash"],
+    "a quoted & does not separate segments",
+  );
+  assert.deepEqual(
+    splitCommandSegments('gh pr merge 123 --body "a;b|c&d" --admin'),
+    ['gh pr merge 123 --body "a;b|c&d" --admin'],
+    "no quoted separator of any kind separates segments",
+  );
+  // ...and every UNQUOTED separator still does, or the round-two fix is undone.
+  assert.deepEqual(
+    splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin"),
+    ["gh pr view 1", "gh pr merge 2 --admin"],
+    "a bare & still separates",
+  );
+  assert.deepEqual(
+    splitCommandSegments("a && b || c | d ; e\nf"),
+    ["a", "b", "c", "d", "e", "f"],
+    "&&, ||, |, ; and a newline all still separate",
+  );
+  assert.deepEqual(splitCommandSegments(""), [], "empty input yields no segments");
+  assert.deepEqual(
+    splitCommandSegments("gh pr merge 1 --body 'unterminated & --admin"),
+    ["gh pr merge 1 --body 'unterminated & --admin"],
+    "an unterminated quote runs to the end -- a LONGER segment, so the parsers see more, never less",
+  );
+
+  // SEC-002. Comparing only WHETHER each reading is a merge missed a merge that
+  // is a merge both ways while the ADMIN flag differs.
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --ad`min --squash"),
+    true,
+    "a backtick-escaped --admin is refused",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --ad^min --squash"),
+    true,
+    "a caret-escaped --admin is refused",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --re`po owner/other --squash"),
+    true,
+    "an escaped --repo is refused: the guard would verify one repository while gh operates on another",
+  );
+  // Both directions. A command with no backtick or caret is untouched, and one
+  // whose escapes change nothing security-relevant is not refused.
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --admin --squash"),
+    false,
+    "a plainly spelled --admin is left to the --admin refusal, not this one",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --squash --body 'plain note'"),
+    false,
+    "an ordinary merge with no escapes is not refused",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("npm run build"),
+    false,
+    "an unrelated command is not refused",
+  );
+
+  // Backtracking: the segmenter is a character walk, so it must stay linear.
+  for (const filler of ["'".repeat(40000), '"a'.repeat(20000), "\\&".repeat(20000), "&".repeat(40000)]) {
+    const started = process.hrtime.bigint();
+    splitCommandSegments(`gh pr merge 1 ${filler} --admin`);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `the segmenter stays linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
   }
 }
 

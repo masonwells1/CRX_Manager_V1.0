@@ -32,6 +32,7 @@ import {
   describeRiskyContent,
   ghApiMergeRequest,
   ghHiddenByShellComposition,
+  splitCommandSegments,
   ghMergeRequest,
   mcpMergeRequest,
   proofSearchDirs,
@@ -84,9 +85,11 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
   // A single `&` separates commands too — POSIX backgrounds the left side, cmd
   // runs it first, and either way BOTH run. Without it `gh pr merge 1 & gh pr
   // merge 2` was one segment and only the first merge was resolved
-  // (Codex sol, 2026-09-08, finding 4). `&&` still matches first: ordered
-  // alternation, longest spelling leftmost.
-  for (const segment of toolInput.command.split(/(?:&&|&|\|\|?|;|\r?\n)/)) {
+  // (Codex sol, 2026-09-08, finding 4). The split is QUOTE-AWARE: a bare regex
+  // splits inside `--body 'note&more'`, which would hand this loop a merge whose
+  // `--admin` had been carried off into a segment containing no `gh` at all
+  // (Codex sol, 2026-09-08, SEC-001).
+  for (const segment of splitCommandSegments(toolInput.command)) {
     // The mergePullRequest mutation is denied by NAME, whatever transport
     // carries it — `gh api graphql`, curl, Invoke-RestMethod, a fetch in a node
     // one-liner. Until 2026-09-01 only the `gh api graphql` spelling was caught
