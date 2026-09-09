@@ -91,31 +91,54 @@ function stripTrailingComments(s) {
   return t;
 }
 
+// Dollar-quote delimiter recognition, mirroring PostgreSQL's own scanner
+// (src/backend/parser/scan.l). BOTH lexers below call this one helper, so they
+// cannot disagree about where a dollar-quoted span begins.
+//
+// Getting this EXACTLY right is load-bearing in BOTH directions — neither error
+// is "the safe one" (Codex BLOCKERs on PR #639, rounds 1 and 2):
+//   - Open a span where PostgreSQL would NOT, and the closing tag is located by
+//     indexOf inside a LATER string literal. Everything between the two is
+//     deleted, manufacturing a comment that the strip then removes:
+//     `SELECT 1 AS foo$x$a, '$x$--'; DELETE FROM customers;` collapsed to
+//     `SELECT 1 AS foo`, hiding the DELETE.
+//   - MISS a span PostgreSQL WOULD open, and the body's inert `--` / `/*` text
+//     reaches the comment strip as if it were real comment syntax, erasing
+//     whatever follows: `SELECT $e$--$e$; DELETE FROM customers;`.
+//
+// So the character classes follow scan.l, non-ASCII bytes included —
+//   ident_start [A-Za-z\200-\377_]   ident_cont [A-Za-z\200-\377_0-9$]
+//   dolq_start  [A-Za-z\200-\377_]   dolq_cont  [A-Za-z\200-\377_0-9]
+// — and the tag carries NO length limit; an earlier 66-character match window
+// silently stopped recognizing longer, perfectly legal tags.
+const NON_ASCII = "\\u0080-\\uFFFF";
+const IDENT_START_RE = new RegExp(`[A-Za-z_${NON_ASCII}]`);
+const IDENT_CONT_RE = new RegExp(`[A-Za-z0-9_$${NON_ASCII}]`);
+const DOLLAR_TAG_RE = new RegExp(
+  `\\$(?:[A-Za-z_${NON_ASCII}][A-Za-z0-9_${NON_ASCII}]*)?\\$`,
+  "y",
+);
+
+function openDollarTag(src, i) {
+  // A `$` only continues an IDENTIFIER, so walk back over the identifier-ish
+  // run and refuse only if that run actually STARTED like one. A number cannot
+  // absorb the `$` (`SELECT 1$x$body$x$` really does open a span), and neither
+  // can a positional parameter — PostgreSQL's rule is "keyword or identifier".
+  for (let k = i; k > 0 && IDENT_CONT_RE.test(src[k - 1]); k--) {
+    if (IDENT_START_RE.test(src[k - 1])) return null;
+  }
+  DOLLAR_TAG_RE.lastIndex = i;
+  return DOLLAR_TAG_RE.exec(src);
+}
+
 // Strip dollar-quoted string bodies ($function$...$function$, $$...$$, any
 // $tag$...$tag$ pair) so classification sees only top-level hand-written SQL —
 // an INSERT INTO financial_audit_log inside a CREATE OR REPLACE FUNCTION body
 // being re-emitted by a BEGIN;...;ROLLBACK; smoke is machine content, not a
-// hand-written audit-log write. Single-quoted literals and comments are walked
-// (not stripped) so a stray $$ inside them can't open a fake quote span that
-// swallows real statements. DO bodies are kept (they execute). An unterminated
-// dollar-quote leaves the rest untouched (fail closed).
-// A `$` that CONTINUES an identifier or a number is NOT a dollar-quote
-// delimiter. PostgreSQL reads `foo$x$a` as ONE identifier — `$` is a legal
-// identifier continuation character, and a dollar-quoted string "cannot
-// immediately follow an identifier or number without intervening whitespace"
-// (PostgreSQL lexical structure). Opening a quote there let the closing tag be
-// located by indexOf INSIDE a later string literal, deleting the real SQL
-// between the two: `SELECT 1 AS foo$x$a, '$x$--'; DELETE FROM customers;`
-// collapsed to `SELECT 1 AS foo --'; DELETE FROM customers;`, and the
-// 2026-09-08 comment strip then ate the DELETE (Codex BLOCKER on PR #639).
-// Declining to open can only leave MORE text visible to classification, which
-// is the fail-safe direction.
-const DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/;
-function openDollarTag(src, i) {
-  if (/[A-Za-z0-9_$]/.test(src[i - 1] || "")) return null;
-  return DOLLAR_TAG_RE.exec(src.slice(i, i + 66));
-}
-
+// hand-written audit-log write. Single-quoted literals, quoted identifiers and
+// comments are walked (not stripped) so a stray $$ inside them can't open a
+// fake quote span that swallows real statements. DO bodies are kept (they
+// execute). An unterminated dollar-quote leaves the rest untouched (fail closed).
 function stripDollarQuotedCore(sql, keepBody) {
   const src = String(sql || "");
   let out = "";
@@ -124,11 +147,20 @@ function stripDollarQuotedCore(sql, keepBody) {
   while (i < n) {
     const ch = src[i];
     const escapeString = (ch === "e" || ch === "E") && src[i + 1] === "'" &&
-      !/[A-Za-z0-9_$]/.test(src[i - 1] || "");
+      !IDENT_CONT_RE.test(src[i - 1] || "");
     if (ch === "'" || escapeString) {
       let j = i + (escapeString ? 2 : 1);
       while (j < n) {
-        if (escapeString && src[j] === "\\") { j += Math.min(2, n - j); continue; }
+        // A backslash is treated as an escape in ORDINARY strings too, not only
+        // in E'...'. PostgreSQL does that only when standard_conforming_strings
+        // is OFF (non-default), and the session setting is not visible here, so
+        // take the direction that cannot hide a write: assuming an escape can
+        // only EXTEND the literal, and a literal is copied VERBATIM by both
+        // lexers, so any real statement that follows stays visible to
+        // classification. Assuming no escape would end the string early and feed
+        // the remainder to the comment strip — `SELECT 'x\'--'; DELETE FROM
+        // customers;` classified as a bare SELECT (Codex, PR #639 round 2).
+        if (src[j] === "\\") { j += Math.min(2, n - j); continue; }
         if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
         if (src[j] === "'") { j++; break; }
         j++;
@@ -204,11 +236,15 @@ export function stripCommentsQuoteAware(sql) {
   while (i < n) {
     const ch = src[i];
     const escapeString = (ch === "e" || ch === "E") && src[i + 1] === "'" &&
-      !/[A-Za-z0-9_$]/.test(src[i - 1] || "");
+      !IDENT_CONT_RE.test(src[i - 1] || "");
     if (ch === "'" || escapeString) {
       let j = i + (escapeString ? 2 : 1);
       while (j < n) {
-        if (escapeString && src[j] === "\\") { j += Math.min(2, n - j); continue; }
+        // See the matching note in stripDollarQuotedCore: backslash is treated
+        // as an escape in ordinary strings too, because over-consuming a literal
+        // keeps the following text VERBATIM and visible, while under-consuming
+        // would hand it to the comment strip.
+        if (src[j] === "\\") { j += Math.min(2, n - j); continue; }
         if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
         if (src[j] === "'") { j++; break; }
         j++;
@@ -378,18 +414,28 @@ export function classifySql(query) {
   // RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK' marker lives inside a DO body, and a
   // COMMIT anywhere (even inside a DO body) must keep disqualifying the batch.
   //
-  // 2026-09-08: comments are also removed, quote-aware. A `--` or block comment
-  // is never executed, so stripping it cannot hide a real write — but leaving it
-  // in produced pure false positives that made the db-invariant-sweeps C1 control
-  // unrunnable: every predicate opens with prose like `-- predicate (f): overloads`,
-  // which findNonReadFunctionCall read as a call to a function named `predicate`.
-  // All 29 predicates were refused (verified 2026-09-08 against classifySql itself).
+  // 2026-09-08: comments are also removed, quote-aware. Leaving them in produced
+  // pure false positives that made the db-invariant-sweeps C1 control unrunnable:
+  // every predicate opens with prose like `-- predicate (f): overloads`, which
+  // findNonReadFunctionCall read as a call to a function named `predicate`. All 29
+  // predicates were refused (verified 2026-09-08 against classifySql itself).
+  //
+  // "A comment never executes, so stripping one cannot hide a real write" is TRUE
+  // of real comments and FALSE as an argument about this code — it assumes the
+  // text reaching the stripper still carries the statement's true comment
+  // structure. Twice it did not (Codex BLOCKERs, PR #639 rounds 1 and 2): a
+  // mis-lexed dollar-quote delimiter both MANUFACTURED comment syntax that was
+  // never in the statement, and EXPOSED inert `--` body text as if it were. So
+  // the safety of this strip rests entirely on openDollarTag() matching
+  // PostgreSQL's scanner — see the long note there, and never relax it.
+  //
   // stripCommentsQuoteAware copies string literals, quoted identifiers, and
   // dollar-quoted spans VERBATIM, so the `SELECT '/*'; DELETE FROM customers;`
-  // swallow (Codex P1 2026-07-13 round 5) stays impossible. Order matters:
-  // stripDollarQuoted runs FIRST so machine bodies are gone before comments are
-  // touched; comments inside a KEPT DO body therefore survive, which is the safe
-  // direction (an unstripped comment can only over-block).
+  // swallow (Codex P1 2026-07-13 round 5) stays impossible. Order: stripDollarQuoted
+  // runs FIRST so machine bodies are gone before comments are touched; comments
+  // inside a KEPT DO body therefore survive, which over-blocks rather than
+  // under-blocks. Both passes share one delimiter helper, so they cannot disagree
+  // about where a dollar-quoted span is.
   const tWithComments = stripDollarQuoted(q);
   const t = stripCommentsQuoteAware(tWithComments);
 

@@ -36,11 +36,11 @@ anywhere**.
   `SELECT 1 AS foo`. `main` blocked that statement; the first cut of this
   change allowed it. Found by the pinned `gpt-5.6-sol` adversarial review of
   `e7b8c9089` and reproduced against the deployed hook process before fixing.
-  Both lexers now refuse to open a dollar-quote when the `$` follows an
-  identifier character, and `stripDollarQuotedCore` copies quoted identifiers
-  verbatim so a tag-shaped column name cannot open one either. Declining to
-  open leaves MORE text visible to classification, which is the fail-safe
-  direction.
+  A second review round then found four more shapes in the same family and
+  disproved the "declining to open is fail-safe" reasoning outright —
+  under-recognizing a delimiter is equally dangerous. Delimiter recognition was
+  therefore rewritten to match PostgreSQL's own scanner; see
+  `2026-09-08-dollar-quote-scanner-fidelity.md` for that change and its proof.
 - The `[E2E]` fake-data marker is now read from the comment-BEARING text, so
   the documented, tested `UPDATE ... -- [E2E]` form still exempts. It stays
   dollar-stripped, so an `[E2E]` buried in a re-emitted machine body still
@@ -55,7 +55,7 @@ literals is a genuinely different risk (dynamic SQL can execute literal text),
 so it was deliberately left for a separate, owner-approved decision rather than
 folded in here.
 
-**Proof.** `guards.test.mjs` 168 → 196 assertions; full
+**Proof.** `guards.test.mjs` 168 → 201 assertions; full
 `npm run test:correction-guards` green. Beyond the unit tests, the DEPLOYED
 hook process was driven with real PreToolUse payloads (`REAL-DATA-OK` absent):
 it still DENIES deleting customers, changing an invoice total, hand-writing

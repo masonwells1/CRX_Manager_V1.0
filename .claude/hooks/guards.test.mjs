@@ -183,7 +183,7 @@ ok(!classifySql("SELECT pg_get_userbyid(relowner) FROM pg_class").block, "pg_get
 // NB: the argument literals carry no `(` — a call-shaped name inside a string
 // literal still blocks, which is the documented, deliberately unchanged limit.
 ok(!classifySql("SELECT to_regprocedure('public.save_field')").block, "to_regprocedure is a read");
-ok(!classifySql("SELECT * FROM plpgsql_check_function_tb(oid) FROM pg_proc").block, "plpgsql_check_function_tb is a static analyser");
+ok(!classifySql("SELECT * FROM pg_proc, plpgsql_check_function_tb(oid)").block, "plpgsql_check_function_tb is a static analyser");
 ok(!classifySql("SELECT plpgsql_check_function(oid) FROM pg_proc").block, "plpgsql_check_function is a static analyser");
 // Adding those names must not have opened the default-deny scan generally.
 eq(classifySql("SELECT save_customer('{}'::jsonb)").kind, "rpc-via-select", "an unknown app function is still default-denied");
@@ -201,6 +201,17 @@ ok(classifySql("SELECT 1 AS n1$x$a, '$x$--'; UPDATE customers SET name = 'x';").
 ok(classifySql("SELECT \"$x$\", '$x$--'; DELETE FROM customers;").block, "a tag-shaped quoted identifier cannot manufacture a comment");
 // Genuine dollar-quoted bodies must still be recognized at a real boundary.
 ok(!classifySql("SELECT $x$ DELETE FROM customers $x$ AS body").block, "a genuine dollar-quoted body at a token boundary is still inert text");
+// Round 2 (Codex): the delimiter rule must match PostgreSQL's scanner exactly.
+// Recognizing too FEW delimiters is not the safe side either — a missed real
+// body hands its inert `--` text to the comment strip, which then erases the
+// statement that follows. Both directions are covered here.
+ok(classifySql("SELECT 1 AS é$x$a, '$x$--'; DELETE FROM customers;").block, "a NON-ASCII identifier absorbs the $ just like an ASCII one");
+ok(classifySql("SELECT $é$--$é$; DELETE FROM customers;").block, "a NON-ASCII dollar tag is a real body, so its -- is inert");
+ok(classifySql(`SELECT $${"a".repeat(70)}$--$${"a".repeat(70)}$; DELETE FROM customers;`).block, "a dollar tag longer than 64 chars is still a real body");
+ok(classifySql("SELECT 1$x$--$x$; DELETE FROM customers;").block, "a DIGIT cannot absorb the $, so this opens a real body");
+// standard_conforming_strings is not visible from here, so a backslash is read
+// as an escape: that can only EXTEND a literal, keeping the rest verbatim.
+ok(classifySql("SELECT 'x\\'--'; DELETE FROM customers;").block, "a backslash-escaped quote cannot end the literal early and comment out the DELETE");
 ok(classifySql('UPDATE public . "orders" SET notes = \'x\' WHERE id = 1').block, "spaced qualification still blocked");
 // Codex P1 round 4: live stock tables were missing from the lists.
 ok(classifySql("UPDATE inventory SET quantity = 0 WHERE id = 1").block, "raw UPDATE of inventory (live stock) blocked");
