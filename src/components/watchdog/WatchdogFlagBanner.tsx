@@ -56,6 +56,19 @@ export default function WatchdogFlagBanner({
   // matches must NOT write flags (prevents an older record's response landing last and
   // showing/dismissing the wrong record's flags when navigating quickly).
   const loadSeq = useRef(0);
+  // Second, INDEPENDENT operand: loadSeq only answers "has a NEWER load started?", which is
+  // silent about whether this load still has a component to write to. Unmount with nothing
+  // newer behind it (navigate away from /jobs/:id while the RPC is in flight) leaves
+  // seq === loadSeq.current true, so the finally-block below wrote state into a torn-down
+  // tree. Under Vitest that write lands after the jsdom environment is gone and surfaces as
+  // an unhandled `ReferenceError: window is not defined` — the suite's tests all pass and
+  // the run still exits non-zero. Kept alongside loadSeq rather than replacing it: they
+  // answer different questions (superseded vs. gone) and neither implies the other.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   // The watchdog RPCs are admin/sales_rep-only. /jobs/:id is also reachable by
   // applicators — without this gate every applicator opening a job would trip
@@ -99,13 +112,14 @@ export default function WatchdogFlagBanner({
           byId.set(f.id, f);
         }
       }
-      // Ignore a stale response: a newer load (different record / re-run) has started.
-      if (seq !== loadSeq.current) return;
+      // Ignore a stale response: a newer load (different record / re-run) has started,
+      // or the component is gone and there is nothing left to write to.
+      if (!mounted.current || seq !== loadSeq.current) return;
       setFlags([...byId.values()]);
     } catch (err) {
       Sentry.captureException(err, { tags: { component: 'WatchdogFlagBanner' } });
     } finally {
-      if (seq === loadSeq.current) setLoading(false);
+      if (mounted.current && seq === loadSeq.current) setLoading(false);
     }
   }, [canViewWatchdog, jobId, invoiceId, showDismissed]);
 
@@ -137,7 +151,8 @@ export default function WatchdogFlagBanner({
         });
       }
     }
-    if (seq !== loadSeq.current) return; // a newer load superseded us during the sweep
+    // A newer load superseded us during the sweep, or the component went away while it ran.
+    if (!mounted.current || seq !== loadSeq.current) return;
     await fetchFlags(seq);
   }, [canViewWatchdog, autoRefresh, jobId, fetchFlags]);
 
@@ -177,6 +192,13 @@ function FlagItem({ flag, profileId, onDismissed }: FlagItemProps) {
   const [pending, setPending]     = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const dismissIdem = useIdempotencyKey('dismiss_watchdog_flag', profileId ?? 'anon');
+  // Same defect as the banner above, one component down: a dismiss awaits an RPC and then
+  // logActivity, and navigating away mid-dismiss unmounts this row while both are in flight.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const handleDismiss = useCallback(async (resolution: WatchdogResolution) => {
     if (!profileId) return;
@@ -200,15 +222,19 @@ function FlagItem({ flag, profileId, onDismissed }: FlagItemProps) {
         entityId:    flag.id,
       });
 
+      // resetKey() and onDismissed() stay UNGATED on purpose. The dismiss already committed
+      // server-side, so retiring the idempotency key is a fact about the RPC, not about this
+      // row still being on screen; and onDismissed() drives the parent's refetch, which is
+      // itself mount-guarded above. Only the two state writes need the guard.
       dismissIdem.resetKey();
-      setPending(false);
+      if (mounted.current) setPending(false);
       onDismissed();
     } catch (err) {
       Sentry.captureException(err, {
         tags: { component: 'WatchdogFlagBanner', action: 'dismiss' },
       });
     } finally {
-      setDismissing(false);
+      if (mounted.current) setDismissing(false);
     }
   }, [flag, profileId, dismissIdem, onDismissed]);
 
