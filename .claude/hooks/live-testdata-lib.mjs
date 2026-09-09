@@ -8,6 +8,9 @@
 // the reviewed apply_migration path. Rolled-back smoke batches (BEGIN;...;ROLLBACK;
 // with no COMMIT) stay allowed — that is the documented safe test pattern.
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 const BUSINESS_TABLES = [
   "customers", "products", "orders", "order_items", "invoices", "invoice_items",
   "quotes", "quote_items", "deliveries", "delivery_items", "blend_tickets",
@@ -324,7 +327,79 @@ export function findNonReadFunctionCall(sqlText) {
 }
 
 // Returns { block: false } | { block: true, kind, reason }
+// ── Known sweep predicates, recognised by content — NOT parsed ──────────────
+//
+// All 29 db-invariant-sweep predicates are refused by the checks below, because
+// each opens with prose like `-- predicate (f): overloads` and
+// findNonReadFunctionCall reads that as a call to a function named `predicate`.
+//
+// PR #639 tried to fix that by teaching this file to lex SQL. Six pinned
+// gpt-5.6-sol rounds each found real defects — several introduced by the
+// previous round's fix — and it was closed unmerged on Mason's decision
+// (2026-09-09). A PreToolUse hook cannot see standard_conforming_strings,
+// cannot resolve a search_path, and cannot know which schema a name binds to.
+// It was guessing, and the guesses were the bugs.
+//
+// These predicates are not unknown input. They are fixed, reviewed text in this
+// repository, so they are RECOGNISED rather than understood: a sha256 of the
+// exact bytes, against a checked-in manifest. This can only ever ADD permission
+// for text already written and reviewed, so it changes nothing about how any
+// other input is classified — the checks below are untouched.
+//
+// Editing a predicate changes its fingerprint, so the guard stops recognising
+// it until the manifest is regenerated, and that regeneration appears in the
+// diff where the changed SQL is re-reviewed. That is the control, and it is
+// deliberately the only one: see the long note in
+// scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs about the
+// keyword shape-check that was tried here and removed for demanding a lexer.
+const FINGERPRINT_MANIFEST = new URL(
+  "../../scripts/db-invariant-sweeps/predicate-fingerprints.json",
+  import.meta.url,
+);
+let fingerprintCache = null;
+
+// Line endings, a UTF-8 BOM, and trailing whitespace at end of file can all
+// differ between checkouts without a single SQL character changing, so they are
+// normalised — identically here and in the generator. NOTHING inside the SQL is
+// touched: no comment stripping, no case folding, no whitespace collapsing.
+// Every one of those would be a parser again, and would let two different
+// statements share a fingerprint.
+export function normalizePredicateSql(text) {
+  return String(text)
+    .replace(/^﻿/, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\s+$/, "");
+}
+
+function knownPredicateHashes() {
+  if (fingerprintCache) return fingerprintCache;
+  try {
+    const raw = readFileSync(FINGERPRINT_MANIFEST, "utf8");
+    const parsed = JSON.parse(raw);
+    const values = Object.values(parsed?.predicates || {});
+    // A malformed or empty manifest must not become a blanket allowance.
+    fingerprintCache = new Set(values.filter((v) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v)));
+  } catch {
+    // Missing or unreadable manifest: recognise nothing, classify as before.
+    fingerprintCache = new Set();
+  }
+  return fingerprintCache;
+}
+
+export function isKnownSweepPredicate(query) {
+  const text = normalizePredicateSql(query || "");
+  if (!text) return false;
+  const hashes = knownPredicateHashes();
+  if (!hashes.size) return false;
+  return hashes.has(createHash("sha256").update(text, "utf8").digest("hex"));
+}
+
 export function classifySql(query) {
+  if (isKnownSweepPredicate(query)) return { block: false, kind: "known-sweep-predicate" };
+  return classifySqlInner(query);
+}
+
+function classifySqlInner(query) {
   const q = String(query || "");
   if (!q) return { block: false };
 
