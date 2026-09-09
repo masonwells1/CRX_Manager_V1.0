@@ -2555,40 +2555,83 @@ export function ghHiddenByShellComposition(cmd) {
 // 2026-09-08, SEC-001; introduced by this branch when `&` became a separator).
 //
 // Only UNQUOTED separators split. An unterminated quote runs to the end of the
-// input, which yields a LONGER segment — the parsers see more text, never less,
-// so that direction cannot hide a command.
-export function splitCommandSegments(command) {
-  const text = String(command || "");
+// input, which yields a LONGER segment.
+//
+// A LONGER segment is NOT automatically the safe direction, and believing it was
+// is what round four got wrong (Codex sol, 2026-09-09, finding 2, measured).
+// The parsers read the FIRST command of a segment, so joining two commands hides
+// the SECOND one just as surely as splitting hides the tail of the first:
+//
+//   git push origin HEAD:feature \| git push origin HEAD:main
+//
+// PowerShell does not treat `\` as an escape, so that is a real pipeline whose
+// second half pushes main. Honouring the escape produces one segment whose first
+// command is a harmless feature push.
+//
+// Splitting can hide a command and joining can hide a command, so no single
+// reading is safe and this returns the UNION of two:
+//
+//   1. the shell-accurate walk — quotes and escapes honoured, so a quoted or
+//      escaped separator does not sever a command and strand its options;
+//   2. a NAIVE walk — every separator character splits, whatever quotes or
+//      escapes surround it, so nothing a quote or escape could hide stays
+//      hidden.
+//
+// Where the shells agree the two readings are identical and de-duplicate to one.
+// Where they disagree, both meanings get inspected. Both call sites are
+// `for (const segment of ...)` loops hunting for an offence, so an extra reading
+// can only add inspection.
+//
+// A third reading — the WHOLE command, unsplit — was tried and REMOVED. It is
+// load-bearing for nothing: when the accurate walk yields one segment it IS the
+// whole command, and when it yields several the concatenation is a string no
+// shell runs as a single command. It also cost a real duplicate: it re-parsed a
+// chained merge as one more merge and fired the Codex advisory a third time for
+// `gh pr merge 123 --squash && gh pr merge 456 --squash`.
+function segmentOneReading(text, { honorQuotes, honorEscapes }) {
   const segments = [];
   let current = "";
   let quote = "";
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
     if (quote) {
+      // Inside DOUBLE quotes a backslash escapes the closing quote, so `\"` does
+      // not end the string (Codex sol, 2026-09-09, finding 3 — measured: closing
+      // early split `--body "note\"&more"` at the literal & and carried --admin
+      // into an uninspected segment). Single quotes have no escapes anywhere.
+      if (honorEscapes && quote === '"' && char === "\\" && index + 1 < text.length) {
+        current += char + text[index + 1];
+        index += 1;
+        continue;
+      }
       current += char;
       if (char === quote) quote = "";
       continue;
     }
-    if (char === "'" || char === '"') { quote = char; current += char; continue; }
-    // An ESCAPED separator is not a separator either, and a quote is not the
-    // only way to escape one: PowerShell spells it ``x`&y`` and cmd.exe spells
-    // it `x^&y`, both of which are a single argument carrying a literal `&`
-    // (Codex sol, 2026-09-09, finding 2 — measured: the split produced
-    // `gh pr merge 123 --body x`` ` `` with admin:false and carried --admin into
-    // a segment with no gh, the same bypass SEC-001 was). All three escape
-    // characters are consumed with the character they protect. Consuming one
-    // can only JOIN segments, never divide them, so a shell that treats the
-    // character literally still leaves the parsers reading more text, not less.
-    if ((char === "\\" || char === "`" || char === "^") && index + 1 < text.length) {
+    if (honorQuotes && (char === "'" || char === '"')) { quote = char; current += char; continue; }
+    // An ESCAPED separator is not a separator, and a quote is not the only way to
+    // escape one: PowerShell spells it ``x`&y`` and cmd.exe spells it `x^&y`,
+    // each a single argument carrying a literal `&` (Codex sol, 2026-09-08).
+    // Reading 2 below covers the shells where these are NOT escapes.
+    if (honorEscapes && (char === "\\" || char === "`" || char === "^") && index + 1 < text.length) {
       current += char + text[index + 1];
       index += 1;
       continue;
     }
     if (char === "&" || char === "|") {
-      if (text[index + 1] === char) index += 1;
-      segments.push(current);
-      current = "";
-      continue;
+      // `2>&1`, `>&2` and `&>file` are REDIRECTIONS, not command separators
+      // (Codex sol, 2026-09-09, finding 1 — measured: splitting at the `&` of
+      // `gh pr merge 123 --squash 2>&1 --admin` left --admin in a segment with
+      // no gh, and `main` blocks that command today). A separator `&` never sits
+      // against a redirection arrow.
+      const isRedirection = char === "&"
+        && (text[index - 1] === ">" || text[index - 1] === "<" || text[index + 1] === ">");
+      if (!isRedirection) {
+        if (text[index + 1] === char) index += 1;
+        segments.push(current);
+        current = "";
+        continue;
+      }
     }
     if (char === ";" || char === "\n") { segments.push(current); current = ""; continue; }
     if (char === "\r" && text[index + 1] === "\n") { segments.push(current); current = ""; index += 1; continue; }
@@ -2596,6 +2639,21 @@ export function splitCommandSegments(command) {
   }
   segments.push(current);
   return segments.map((segment) => segment.trim()).filter(Boolean);
+}
+
+export function splitCommandSegments(command) {
+  const text = String(command || "");
+  const seen = new Set();
+  const union = [];
+  for (const segment of [
+    ...segmentOneReading(text, { honorQuotes: true, honorEscapes: true }),
+    ...segmentOneReading(text, { honorQuotes: false, honorEscapes: false }),
+  ]) {
+    if (!segment || seen.has(segment)) continue;
+    seen.add(segment);
+    union.push(segment);
+  }
+  return union;
 }
 
 // Does this `gh api` call MUTATE? Moved here from

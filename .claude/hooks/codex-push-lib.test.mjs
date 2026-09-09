@@ -2884,32 +2884,40 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   // SEC-001. A quoted separator is not a separator. The regex split this
   // replaces produced ["gh pr merge 123 --body 'note", "more' --admin --squash"]
   // -- a merge with no --admin, and an override in a segment with no gh.
-  assert.deepEqual(
-    splitCommandSegments("gh pr merge 123 --body 'note&more' --admin --squash"),
-    ["gh pr merge 123 --body 'note&more' --admin --squash"],
-    "a quoted & does not separate segments",
+  //
+  // Round FIVE changed this function's contract from "the one right reading" to
+  // "the UNION of several readings", so these assert what actually protects the
+  // gate -- that the whole command is among the readings, so no quote can carry
+  // --admin out of every inspected segment -- rather than an exact segment list.
+  // Pinning the exact list would forbid the extra readings that close SEC-004.
+  assert.ok(
+    splitCommandSegments("gh pr merge 123 --body 'note&more' --admin --squash")
+      .includes("gh pr merge 123 --body 'note&more' --admin --squash"),
+    "a quoted & leaves the whole command among the readings",
   );
-  assert.deepEqual(
-    splitCommandSegments('gh pr merge 123 --body "a;b|c&d" --admin'),
-    ['gh pr merge 123 --body "a;b|c&d" --admin'],
-    "no quoted separator of any kind separates segments",
+  assert.ok(
+    splitCommandSegments('gh pr merge 123 --body "a;b|c&d" --admin')
+      .includes('gh pr merge 123 --body "a;b|c&d" --admin'),
+    "no quoted separator of any kind removes the whole-command reading",
   );
   // ...and every UNQUOTED separator still does, or the round-two fix is undone.
-  assert.deepEqual(
-    splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin"),
-    ["gh pr view 1", "gh pr merge 2 --admin"],
-    "a bare & still separates",
-  );
-  assert.deepEqual(
-    splitCommandSegments("a && b || c | d ; e\nf"),
-    ["a", "b", "c", "d", "e", "f"],
-    "&&, ||, |, ; and a newline all still separate",
-  );
+  for (const expected of ["gh pr view 1", "gh pr merge 2 --admin"]) {
+    assert.ok(
+      splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin").includes(expected),
+      `a bare & still separates, exposing: ${expected}`,
+    );
+  }
+  for (const expected of ["a", "b", "c", "d", "e", "f"]) {
+    assert.ok(
+      splitCommandSegments("a && b || c | d ; e\nf").includes(expected),
+      `&&, ||, |, ; and a newline all still separate, exposing: ${expected}`,
+    );
+  }
   assert.deepEqual(splitCommandSegments(""), [], "empty input yields no segments");
-  assert.deepEqual(
-    splitCommandSegments("gh pr merge 1 --body 'unterminated & --admin"),
-    ["gh pr merge 1 --body 'unterminated & --admin"],
-    "an unterminated quote runs to the end -- a LONGER segment, so the parsers see more, never less",
+  assert.ok(
+    splitCommandSegments("gh pr merge 1 --body 'unterminated & --admin")
+      .includes("gh pr merge 1 --body 'unterminated & --admin"),
+    "an unterminated quote runs to the end, and that whole reading survives",
   );
 
   // SEC-002. Comparing only WHETHER each reading is a merge missed a merge that
@@ -2966,14 +2974,12 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   // spelling the third round did not cover.
   for (const [name, escape] of [["POSIX backslash", "\\"], ["PowerShell backtick", "`"], ["cmd.exe caret", "^"]]) {
     const command = `gh pr merge 123 --body x${escape}&y --admin --squash`;
-    assert.deepEqual(
-      splitCommandSegments(command),
-      [command],
-      `an escaped & is data, not a separator (${name})`,
+    assert.ok(
+      splitCommandSegments(command).includes(command),
+      `an escaped & leaves the whole command among the readings (${name})`,
     );
-    assert.equal(
-      ghMergeRequest(splitCommandSegments(command)[0])?.admin,
-      true,
+    assert.ok(
+      splitCommandSegments(command).some((segment) => ghMergeRequest(segment)?.admin === true),
       `the --admin after an escaped & is still seen (${name})`,
     );
   }
@@ -2981,9 +2987,8 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   // them, so a shell that treats the character literally leaves the parsers
   // reading MORE text -- the fail-safe direction. Every unquoted, unescaped
   // separator must still separate, or the second round's fix is undone.
-  assert.deepEqual(
-    splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin"),
-    ["gh pr view 1", "gh pr merge 2 --admin"],
+  assert.ok(
+    splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin").includes("gh pr merge 2 --admin"),
     "an UNescaped & still separates after the escape set widened",
   );
   // And the escape characters keep their OWN refusal: joining them back into
@@ -2999,6 +3004,79 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     true,
     "a backtick splicing the gh subcommand is still refused",
   );
+}
+
+// ── Codex sol, 2026-09-09: the FIFTH round, on the fourth round's own fix ─────
+{
+  // Round four claimed a LONGER segment was automatically the safe direction.
+  // It is not, and this is the assertion that says so. The parsers read the
+  // FIRST command of a segment, so JOINING two commands hides the second one as
+  // surely as splitting hides the tail of the first. `\` and `^` are not escapes
+  // in PowerShell, so this is a real pipeline whose second half pushes main:
+  const joined = splitCommandSegments("git push origin HEAD:feature \\| git push origin HEAD:main");
+  assert.ok(
+    joined.includes("git push origin HEAD:main"),
+    "the second command of an escaped pipeline is still exposed as its own segment",
+  );
+  for (const escape of ["\\", "^", "`"]) {
+    assert.ok(
+      splitCommandSegments(`gh pr view 1 ${escape}| gh pr merge 2 --admin --squash`)
+        .some((segment) => ghMergeRequest(segment)?.admin === true),
+      `an escaped pipeline still exposes its administrator merge (${escape})`,
+    );
+  }
+
+  // SEC-004 finding 1. `2>&1`, `>&2` and `&>file` are REDIRECTIONS. Treating the
+  // `&` as a separator left `--admin` in a segment holding no gh, and `main`
+  // blocks that command today -- so round four was a REGRESSION against main.
+  for (const command of [
+    "gh pr merge 123 --squash 2>&1 --admin",
+    "gh pr merge 123 --squash >&2 --admin",
+    "gh pr merge 123 --squash &>log --admin",
+  ]) {
+    assert.ok(
+      splitCommandSegments(command).some((segment) => ghMergeRequest(segment)?.admin === true),
+      `a redirection is not a command separator: ${command}`,
+    );
+  }
+  assert.deepEqual(
+    splitCommandSegments("gh api repos/o/r/issues/comments/1 2>&1 -X DELETE").filter(ghApiMutates).length > 0,
+    true,
+    "a redirection does not hide a mutating gh api verb",
+  );
+  // ...but a separator `&` that merely sits NEAR a redirection still separates.
+  assert.ok(
+    splitCommandSegments("gh pr view 1 > log & gh pr merge 2 --admin")
+      .some((segment) => ghMergeRequest(segment)?.admin === true),
+    "an & after a completed redirection is still a separator",
+  );
+
+  // SEC-004 finding 3. Inside DOUBLE quotes a backslash escapes the closing
+  // quote, so `\"` does not end the string. Closing early split at the literal
+  // & and carried --admin into an uninspected segment.
+  assert.ok(
+    splitCommandSegments('gh pr merge 123 --body "note\\"&more" --admin --squash')
+      .some((segment) => ghMergeRequest(segment)?.admin === true),
+    "an escaped quote inside a double-quoted body does not close it",
+  );
+
+  // Every earlier round must still hold under the union reading.
+  assert.ok(
+    splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin").some((s) => ghMergeRequest(s)?.admin === true),
+    "a bare & still exposes the second command",
+  );
+  assert.ok(
+    splitCommandSegments("gh pr merge 123 --body 'note&more' --admin --squash")
+      .some((segment) => ghMergeRequest(segment)?.admin === true),
+    "a quoted & still yields a whole-command reading carrying --admin",
+  );
+  // Linearity: three walks over the input, still linear.
+  for (const filler of ["'".repeat(40000), '"a'.repeat(20000), "\\&".repeat(20000), "&".repeat(40000)]) {
+    const started = process.hrtime.bigint();
+    splitCommandSegments(`gh pr merge 1 ${filler} --admin`);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `the union segmenter stays linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
+  }
 }
 
 console.log("OK - codex push shared library checks passed.");
