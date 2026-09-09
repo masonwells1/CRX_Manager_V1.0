@@ -409,19 +409,24 @@ or not the proof-name rule lists it (round 11 found `migration-review-*.json` wa
 Flags and `.txt` captures are the only things the exemption lets a native reader open. Membership
 in the directory is decided by the resolved path, by the lexical path the tool was given, and by
 the real location of this checkout's own state directory (a junctioned `session-state` strips the
-protected components from resolved paths — Codex App P1 on the round-11 head). **PR #612 adds a
-deliberate availability limit:** when this checkout's `session-state` directory is itself a
-junction or symlink, every native `Read`/`NotebookRead` under that state directory — including a
-read named by its external resolved path — now denies. More broadly, the native-read exemption
-refuses any target reached through a symlink, junction, or inspected reparse-point component,
-whether or not it is under review state. The hook runs before the file tool and cannot bind a
-mutable alias to the later open, so this is the recoverable fail-closed choice; the wrappers never
-junction what they write. Residual: a junctioned state directory belonging to a DIFFERENT checkout,
-read by its external name, is not this checkout's to know. The shell branch is
-NOT changed: it reasons about command text, an 8.3 token can also be hash-styled
-(`CO3F2A~1.JSO` once a prefix has collided four times), and a text rule for it would be one more
-round of the "command-text guard never converges" pattern this repository has already recorded
-three times on this guard.
+protected components from resolved paths — Codex App P1 on the round-11 head). A legitimate
+non-proof file reached through a junction or symlink, and a direct real flag under a checkout whose
+PARENT is junctioned, remain readable. That is intentionally not a claim that the check authorizes
+the file later opened: this hook runs before the reader and cannot bind a checked pathname to that
+later open. A caller can retarget an alias after inspection, replace an ordinary directory with a
+junction after inspection, or replace the final file with a hard link after inspection. Each can
+turn an allowed ordinary pathname into proof bytes at the later open. The harness reproduces the
+first case with a real directory junction; the other two have the same check/open boundary.
+
+This guard is therefore a named-access speed bump against mistakes and casual self-certification,
+not a confidentiality boundary for proof bytes. The already-recorded routes remain open: a shell,
+PowerShell, or Node interpreter can construct a proof pathname/basename instead of spelling it;
+an outside-state hard link can expose proof bytes under a harmless name; and command-text matching
+cannot enumerate every interpreter or path-construction form. The shell branch is NOT changed: it
+reasons about command text, an 8.3 token can also be hash-styled (`CO3F2A~1.JSO` once a prefix has
+collided four times), and a text rule for it would be one more round of the "command-text guard
+never converges" pattern this repository has already recorded three times on this guard. The
+durable boundary remains wrapper-held proof creation and validation plus protected branch review.
 
 **Recommended fix — an owner action, not a guard edit.** Two separate steps, with different
 risk. (1) `fsutil 8dot3name set C: 1` (elevated prompt) stops Windows creating short names for

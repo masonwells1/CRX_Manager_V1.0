@@ -11,7 +11,12 @@ of this checkout's junctioned state directory. A legitimate non-proof alias is
 not refused solely for being an alias. Missing targets fail closed inside the
 state directory. `Grep`, `Glob`, MCP readers, and writers keep their existing
 restrictions. The capture text can itself be gate-consumed evidence; permitting
-a read does not authorize changing it.
+a read does not authorize changing it. This is a classification of the pathname
+at hook time, not a binding to the later file-tool open: alias retargeting,
+replacing a checked directory with a junction, and replacing a checked file
+with a hard link remain documented pre-hook/open races in `KNOWN_ISSUES.md`.
+The guard is a named-access speed bump; wrapper validation and protected branch
+review are the durable boundary.
 
 The proposed shell exceptions for home transcript walks and quoted `function`
 searches were withdrawn after bypasses were found. Their over-blocks remain;

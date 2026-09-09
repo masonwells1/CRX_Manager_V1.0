@@ -969,18 +969,18 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       }
       const outsideToFlag = path.join(fixtureRoot, "outside-flag.txt");
       symlinkSync(intentFlag, outsideToFlag, "file");
-      assert.match(run({ tool_name: "Read", tool_input: { file_path: outsideToFlag } }).stdout, /"permissionDecision":"deny"/, "outside symlink to a non-proof file must deny because a pre-tool hook cannot bind its target to the later native open");
+      assert.equal(run({ tool_name: "Read", tool_input: { file_path: outsideToFlag } }).stdout, "", "outside symlink to a non-proof file stays allowed");
     } else {
       console.log("review-proof-guard.test: symlink creation refused by the OS — symlink alias cases skipped");
     }
-    // P1, PR #612: this hook is a separate pre-tool process, so its verdict does
-    // not bind the pathname a later native Read opens. A directory junction can
-    // be retargeted after this hook allows `alias/harmless.txt`: the second target
-    // is a hard link to a real wrapper proof, so the native read obtains the
-    // proof's exact bytes. The assertion below must fail on the vulnerable guard
-    // only AFTER the swap has reproduced that check/use split. `junction` is a
-    // real Windows directory junction (no developer-mode symlink privilege), not
-    // the file-symlink case above; setup failure is a test failure, never a skip.
+    // A native Read of an ordinary non-proof file through a junction OUTSIDE
+    // review state remains allowed. The same fixture also records the residual:
+    // this pre-tool hook cannot bind that allow to the later native open. A
+    // junction retargeted after the allow can open a hard-linked wrapper proof.
+    // A fresh static guard invocation after the retarget still denies the proof,
+    // which distinguishes the retained resolved-target rule from the unclosable
+    // check/open race. `junction` is a real Windows directory junction (no
+    // developer-mode symlink privilege); its setup failure is a test failure.
     const raceRoot = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-alias-swap-"));
     const raceSafeDir = path.join(raceRoot, "safe");
     const raceAlias = path.join(raceRoot, "alias");
@@ -993,15 +993,39 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       symlinkSync(raceSafeDir, raceAlias, "junction");
       const verdictBeforeSwap = run({ tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: raceRead } });
       console.log(`review-proof-guard.test: alias-swap junction regression executed; pre-open verdict=${verdictBeforeSwap.stdout === "" ? "ALLOW" : "DENY"}`);
-      if (verdictBeforeSwap.stdout === "") {
-        rmSync(raceAlias, { recursive: true, force: true });
-        symlinkSync(stateDir, raceAlias, "junction");
-        assert.equal(readFileSync(raceRead, "utf8"), readFileSync(migrationProof, "utf8"), "an allowed alias retargeted after the hook verdict must reproduce the wrapper-proof read");
-        console.log("review-proof-guard.test: alias-swap junction regression executed and opened wrapper proof bytes after the vulnerable allow");
-      }
-      assert.match(verdictBeforeSwap.stdout, /"permissionDecision":"deny"/, "a native Read through a retargetable junction must deny before the eventual open");
+      assert.equal(verdictBeforeSwap.stdout, "", "ordinary non-proof file through a junction outside review state must allow");
+      rmSync(raceAlias, { recursive: true, force: true });
+      symlinkSync(stateDir, raceAlias, "junction");
+      assert.match(run({ tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: raceRead } }).stdout, /"permissionDecision":"deny"/, "a static junction alias whose resolved target is a proof must deny");
+      assert.equal(readFileSync(raceRead, "utf8"), readFileSync(migrationProof, "utf8"), "an allowed alias retargeted after the hook verdict reproduces the wrapper-proof read");
+      console.log("review-proof-guard.test: alias-swap junction residual reproduced: ALLOW before retarget, then wrapper proof bytes opened");
     } finally {
       rmSync(raceRoot, { recursive: true, force: true });
+    }
+    // A checkout merely living below a junctioned PARENT is not itself an
+    // aliased state directory. Its direct state-directory flag must remain
+    // readable whether the hook cwd names the real checkout or its parent
+    // junction spelling. The old ownStateDirsOf() alias propagation made the
+    // second case deny every native read under this state directory.
+    const parentJunctionRoot = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-parent-junction-"));
+    const realParent = path.join(parentJunctionRoot, "real-parent");
+    const parentAlias = path.join(parentJunctionRoot, "alias-parent");
+    const realCheckout = path.join(realParent, "checkout");
+    const directStateDir = path.join(realCheckout, ".claude", "session-state");
+    const directFlag = path.join(directStateDir, "direct-real.flag");
+    let parentJunctioned = false;
+    try {
+      mkdirSync(directStateDir, { recursive: true });
+      writeFileSync(directFlag, "hello");
+      symlinkSync(realParent, parentAlias, "junction");
+      parentJunctioned = true;
+      assert.equal(run({ tool_name: "Read", cwd: realCheckout, tool_input: { file_path: directFlag } }).stdout, "", "a direct real state-directory flag read must allow");
+      assert.equal(run({ tool_name: "Read", cwd: path.join(parentAlias, "checkout"), tool_input: { file_path: directFlag } }).stdout, "", "a parent-junction cwd must not disable a direct real state-directory flag read");
+    } catch (error) {
+      if (parentJunctioned) throw error;
+      console.log("review-proof-guard.test: parent-junction creation refused — parent-junction allow case skipped");
+    } finally {
+      rmSync(parentJunctionRoot, { recursive: true, force: true });
     }
     // The state DIRECTORY itself as a junction (Codex GitHub App review of the
     // round-11 head, P1): realpath then strips `.claude/session-state` from every
@@ -1049,7 +1073,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
           assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
           assert.match(result.stdout, /"permissionDecision":"deny"/, `evidence under a JUNCTIONED state dir must deny: ${JSON.stringify(payload.tool_input)}`);
         }
-        assert.match(run({ tool_name: "Read", tool_input: { file_path: path.join(junctionRoot, ".claude", "session-state", "OVERNIGHT-INTENT.flag") } }).stdout, /"permissionDecision":"deny"/, "a flag read through a junctioned state dir must fail closed because the native pathname is mutable");
+        assert.equal(run({ tool_name: "Read", tool_input: { file_path: path.join(junctionRoot, ".claude", "session-state", "OVERNIGHT-INTENT.flag") } }).stdout, "", "a non-proof flag through this checkout's junctioned state dir stays allowed");
         // The payload `cwd` BELOW the checkout root (Codex GitHub App review of
         // 22e2be806, P1): probing `<cwd>/.claude/session-state` from `<repo>/src`
         // finds nothing, membership rule 3 switches off, and the external name of
@@ -1067,7 +1091,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
           assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
           assert.match(result.stdout, /"permissionDecision":"deny"/, `evidence read by its external name from a SUBDIRECTORY cwd must deny: ${JSON.stringify(payload.tool_input)}`);
         }
-        assert.match(run({ tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: path.join(externalDir, "OVERNIGHT-INTENT.flag") } }).stdout, /"permissionDecision":"deny"/, "a flag under this checkout's junctioned state dir must fail closed even by its external name");
+        assert.equal(run({ tool_name: "Read", cwd: subdirCwd, tool_input: { file_path: path.join(externalDir, "OVERNIGHT-INTENT.flag") } }).stdout, "", "a flag under this checkout's junctioned state dir stays allowed by its external name");
         // A directory symlink INTO the state dir followed by `..` (Codex GitHub
         // App review of e25605efd, P1): `path.resolve` collapses `alias/..`
         // textually, so the guard examined `<tmp>/migration-review-x.json`
