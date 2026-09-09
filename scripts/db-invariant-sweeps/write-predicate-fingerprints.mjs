@@ -28,23 +28,20 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizePredicateSql } from "../../.claude/hooks/live-testdata-lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PREDICATE_DIR = path.join(HERE, "predicates");
 export const MANIFEST_PATH = path.join(HERE, "predicate-fingerprints.json");
 
-// The ONLY normalisation, applied identically here and in the guard: line
-// endings, a UTF-8 BOM, and trailing whitespace at end of file. A checkout can
-// change all three without a single SQL character differing, and a fingerprint
-// that flipped on `core.autocrlf` would be useless on Windows. Nothing inside
-// the SQL is touched — no comment stripping, no case folding, no whitespace
-// collapsing — because every one of those would be a parser again.
-export function normalizePredicateSql(text) {
-  return String(text)
-    .replace(/^﻿/, "")
-    .replace(/\r\n?/g, "\n")
-    .replace(/\s+$/, "");
-}
+// The normalisation is IMPORTED from the guard, not restated here. Two copies
+// could drift into hashing different bytes, and then the manifest would stop
+// matching what the guard computes — the one failure this design cannot detect
+// from the inside. It covers line endings, a UTF-8 BOM, and trailing whitespace
+// at end of file: a checkout can change all three without a single SQL
+// character differing, and a fingerprint that flipped on `core.autocrlf` would
+// be useless on Windows.
+export { normalizePredicateSql };
 
 export function fingerprint(text) {
   return createHash("sha256").update(normalizePredicateSql(text), "utf8").digest("hex");

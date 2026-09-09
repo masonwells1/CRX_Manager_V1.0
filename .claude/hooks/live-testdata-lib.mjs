@@ -360,15 +360,24 @@ let fingerprintCache = null;
 
 // Line endings, a UTF-8 BOM, and trailing whitespace at end of file can all
 // differ between checkouts without a single SQL character changing, so they are
-// normalised — identically here and in the generator. NOTHING inside the SQL is
-// touched: no comment stripping, no case folding, no whitespace collapsing.
-// Every one of those would be a parser again, and would let two different
-// statements share a fingerprint.
+// normalised. NOTHING inside the SQL is touched: no comment stripping, no case
+// folding, no whitespace collapsing. Every one of those would be a parser
+// again, and would let two different statements share a fingerprint.
+//
+// This is the ONE definition — write-predicate-fingerprints.mjs imports it, so
+// the generator and the guard cannot drift into hashing different bytes.
+//
+// `trimEnd()` rather than `/\s+$/`: the regex backtracks, and every input now
+// passes through here on its way to the classifier, so a long run of leading
+// whitespace made classification quadratic — 80,000 spaces cost 1.06 s and
+// could exceed the hook timeout (Codex, PR #648 round 1). `trimEnd()` strips
+// exactly the same character set (WhiteSpace plus LineTerminator) natively and
+// in linear time.
 export function normalizePredicateSql(text) {
   return String(text)
     .replace(/^﻿/, "")
     .replace(/\r\n?/g, "\n")
-    .replace(/\s+$/, "");
+    .trimEnd();
 }
 
 function knownPredicateHashes() {
