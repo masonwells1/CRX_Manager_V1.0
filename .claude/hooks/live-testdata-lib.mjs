@@ -287,7 +287,13 @@ function stripFunctionBodiesOnly(sql, backslashEscapes = true) {
 export function stripCommentsQuoteAware(sql, backslashEscapes = true) {
   let out = "";
   for (const span of sqlSpans(String(sql || ""), backslashEscapes)) {
-    out += (span.kind === "lineComment" || span.kind === "blockComment") ? " " : span.text;
+    // A comment becomes spaces of the SAME LENGTH, so offsets in the stripped
+    // text still line up with the comment-bearing text. classifySql relies on
+    // that to ask where the [E2E] marker sits relative to the write it claims
+    // to mark.
+    out += (span.kind === "lineComment" || span.kind === "blockComment")
+      ? " ".repeat(span.text.length)
+      : span.text;
   }
   return out;
 }
@@ -395,29 +401,82 @@ const SQL_KEYWORD_FNS = new Set([
   "cross", "inner", "outer", "full", "grouping", "window", "partition", "if",
 ]);
 
+const TRUSTED_SCHEMAS = new Set(["public", "pg_catalog", "information_schema"]);
+
+// The pg_catalog definition formatters added 2026-09-08 are trusted ONLY when
+// the caller writes `pg_catalog.` explicitly. Codex round 5 built a custom
+// function of the same name in a live PostgreSQL 17 container: both
+// `pg_get_ruledef()` and `public.pg_get_ruledef()` executed it and inserted a
+// row while the guard said `block:false`. Nobody can create into `pg_catalog`,
+// so the qualified spelling is the only one that cannot be shadowed. The
+// sweep predicates were updated to qualify these calls in the same change.
+//
+// The names trusted BEFORE this PR (pg_get_functiondef, format_type, to_regclass,
+// …) are deliberately NOT listed here: narrowing them would change behaviour
+// this branch never touched.
+const CATALOG_ONLY_FNS = new Set([
+  "oidvectortypes", "pg_get_function_arguments", "pg_get_function_identity_arguments",
+  "pg_get_function_result", "pg_get_ruledef", "pg_get_triggerdef", "pg_get_userbyid",
+  "to_regprocedure",
+]);
+
+// Identifier-aware, LINEAR call scan.
+//
+// The previous form was one regex with an optional `(?:"?ident"?\s*\.\s*)?`
+// prefix. It had two defects, both found by Codex round 5:
+//   - it backtracked across any long identifier that never reached a `(`
+//     (64,000 characters of `a` cost 3.0 s), and
+//   - its character class was ASCII-only and ignored quoting, so
+//     `SELECT "é".pg_get_ruledef()` never matched the qualifier at all and
+//     `public."!"()` was never scanned.
+//
+// Every alternative below is anchored and consumes at least one character, so
+// the scan is O(n). Unquoted identifiers fold to lower case and quoted ones keep
+// their spelling, which is how PostgreSQL resolves them.
+const CALL_TOKEN_RE = new RegExp(
+  `"((?:[^"]|"")*)"|([A-Za-z_${NON_ASCII}][A-Za-z0-9_$${NON_ASCII}]*)|(\\.)|(\\()|(\\s+)|([^\\s])`,
+  "g",
+);
+
+function classifyCallChain(parts) {
+  const name = parts[parts.length - 1];
+  const schema = parts.length > 1 ? parts[parts.length - 2] : null;
+  const qualified = schema ? `${schema}.${name}` : name;
+  if (schema && !TRUSTED_SCHEMAS.has(schema)) return qualified;
+  if (CATALOG_ONLY_FNS.has(name)) return schema === "pg_catalog" ? null : qualified;
+  if (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name)) return null;
+  if (READONLY_FN_NAMES.has(name)) return null;
+  if (READONLY_FN_PREFIX_RE.test(name)) return null;
+  // pg_catalog/information_schema internals are reads
+  if (name.startsWith("pg_stat") || name.startsWith("pg_ls") || name.startsWith("information_schema")) return null;
+  return qualified;
+}
+
 export function findNonReadFunctionCall(sqlText) {
   const text = String(sqlText || "");
   if (!/\bselect\b/i.test(text)) return null;
-  // The schema qualifier is CAPTURED, not skipped. It used to be an optional
-  // `public.` that simply failed to match anything else, so the regex started
-  // matching AFTER a foreign qualifier and `evil.pg_get_ruledef()` was read as
-  // a call to the trusted pg_catalog formatter (Codex round 4, PR #639 — a
-  // pre-existing hole this branch widened by adding ten more trusted names).
-  // Only the schemas that actually hold the trusted names are honoured; a call
-  // qualified with anything else is a custom function and fails closed.
-  const re = /(?:"?([a-z_][a-z0-9_]*)"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
-  const TRUSTED_SCHEMAS = new Set(["public", "pg_catalog", "information_schema"]);
+  CALL_TOKEN_RE.lastIndex = 0;
+  let parts = [];
+  let afterIdent = false;
+  let afterDot = false;
   let m;
-  while ((m = re.exec(text)) !== null) {
-    const schema = m[1] ? m[1].toLowerCase() : null;
-    const name = m[2].toLowerCase();
-    if (schema && !TRUSTED_SCHEMAS.has(schema)) return `${schema}.${name}`;
-    if (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name)) continue;
-    if (READONLY_FN_NAMES.has(name)) continue;
-    if (READONLY_FN_PREFIX_RE.test(name)) continue;
-    // pg_catalog/information_schema internals are reads
-    if (name.startsWith("pg_stat") || name.startsWith("pg_ls") || name.startsWith("information_schema")) continue;
-    return name;
+  while ((m = CALL_TOKEN_RE.exec(text)) !== null) {
+    if (m[5] !== undefined) continue; // whitespace never breaks `public . foo (`
+    if (m[1] !== undefined || m[2] !== undefined) {
+      const name = m[1] !== undefined ? m[1].replace(/""/g, '"') : m[2].toLowerCase();
+      if (afterDot) parts.push(name); else parts = [name];
+      afterIdent = true; afterDot = false;
+      continue;
+    }
+    if (m[3] !== undefined) {
+      if (afterIdent) { afterDot = true; afterIdent = false; } else { parts = []; afterDot = false; }
+      continue;
+    }
+    if (m[4] !== undefined && afterIdent && parts.length) {
+      const hit = classifyCallChain(parts);
+      if (hit) return hit;
+    }
+    parts = []; afterIdent = false; afterDot = false;
   }
   return null;
 }
@@ -560,10 +619,21 @@ function classifySqlOnce(query, backslashEscapes) {
   //    The marker is read from the comment-BEARING text, because `UPDATE … --
   //    [E2E]` is a documented, tested form, and from the dollar-STRIPPED text,
   //    so a marker buried in a re-emitted machine body still exempts nothing.
+  //    Within a statement the marker must also FOLLOW the write it marks. Every
+  //    documented form does — `VALUES ('[E2E] Farm Alpha')`, `SET notes =
+  //    '[E2E] test'`, a trailing `-- [E2E]`. Three shapes where it does not were
+  //    all false allows, and all three are on `main` today (Codex round 5):
+  //      DO $$BEGIN RAISE NOTICE '[E2E]'; DELETE FROM customers; END$$;
+  //      WITH x AS (SELECT '[E2E]') DELETE FROM customers;
+  //      SELECT 1; -- [E2E]        <- a comment binds to the NEXT statement
+  //      DELETE FROM customers;
+  //    A marker that precedes the write is describing something else.
   for (const stmt of splitTopLevelStatements(tWithComments, backslashEscapes)) {
-    if (stmt.includes("[E2E]")) continue;
     const hazard = classifyWriteStatement(stripCommentsQuoteAware(stmt, backslashEscapes));
-    if (hazard) return hazard;
+    if (!hazard) continue;
+    const { at, ...verdict } = hazard;
+    if (stmt.indexOf("[E2E]", at) !== -1) continue;
+    return verdict;
   }
 
   return { block: false };
@@ -577,6 +647,7 @@ function classifyWriteStatement(t) {
   if ((m = INSERT_RE.exec(t))) {
     return {
       block: true,
+      at: m.index,
       kind: "real-insert",
       reason: `This INSERTs into the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). If Mason explicitly asked for a REAL write, first create .claude/session-state/REAL-DATA-OK to record his authorization, then retry.`,
     };
@@ -584,6 +655,7 @@ function classifyWriteStatement(t) {
   if ((m = DELETE_RE.exec(t))) {
     return {
       block: true,
+      at: m.index,
       kind: "financial-delete",
       reason: `This DELETEs from the live financial table "${m[1]}". Deleting real financial records is Mason's call — surface the record IDs in your findings instead of acting. (Override: he authorizes via .claude/session-state/REAL-DATA-OK.)`,
     };
@@ -591,6 +663,7 @@ function classifyWriteStatement(t) {
   if ((m = CANCEL_VOID_RE.exec(t))) {
     return {
       block: true,
+      at: m.index,
       kind: "financial-cancel",
       reason: `This cancels/voids a real record in "${m[1]}". Cancelling/voiding live invoices/orders/payments is Mason's job — surface the IDs, don't act. (Override: .claude/session-state/REAL-DATA-OK.)`,
     };
@@ -614,6 +687,7 @@ function classifyWriteStatement(t) {
   if ((m = DELETE_ANY_RE.exec(t))) {
     return {
       block: true,
+      at: m.index,
       kind: "real-delete",
       reason: `This DELETEs from the live business table "${m[1]}" without the [E2E] fake-data marker. Deleting real records is Mason's call — surface the record IDs instead of acting. (Override: he authorizes via .claude/session-state/REAL-DATA-OK.)`,
     };
@@ -624,6 +698,7 @@ function classifyWriteStatement(t) {
   if ((m = UPDATE_ANY_RE.exec(t))) {
     return {
       block: true,
+      at: m.index,
       kind: "real-update",
       reason: `This UPDATEs the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). If Mason explicitly asked for a REAL write, first create .claude/session-state/REAL-DATA-OK to record his authorization, then retry.`,
     };

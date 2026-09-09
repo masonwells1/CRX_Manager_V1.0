@@ -171,18 +171,27 @@ ok(classifySql("UPDATE customers SET name = 'a -- b' WHERE id = 1").block, "-- i
 // The [E2E] fake-data marker is deliberately writable as a trailing comment, so
 // the comment strip must not remove it (covered above at the UPDATE case too).
 ok(!classifySql("DELETE FROM customers WHERE id = 5 -- [E2E]").block, "[E2E] marker in a comment survives the comment strip");
-// pg_catalog definition formatters are reads; pg_get_functiondef was already
-// trusted, its siblings were simply omitted from the builtin list.
-ok(!classifySql("SELECT pg_get_function_identity_arguments(oid) FROM pg_proc").block, "pg_get_function_identity_arguments is a read");
-ok(!classifySql("SELECT oidvectortypes(proargtypes) FROM pg_proc").block, "oidvectortypes is a read");
-ok(!classifySql("SELECT pg_get_triggerdef(oid) FROM pg_trigger").block, "pg_get_triggerdef is a read");
-ok(!classifySql("SELECT pg_get_function_arguments(oid) FROM pg_proc").block, "pg_get_function_arguments is a read");
-ok(!classifySql("SELECT pg_get_function_result(oid) FROM pg_proc").block, "pg_get_function_result is a read");
-ok(!classifySql("SELECT pg_get_ruledef(oid) FROM pg_rewrite").block, "pg_get_ruledef is a read");
-ok(!classifySql("SELECT pg_get_userbyid(relowner) FROM pg_class").block, "pg_get_userbyid is a read");
+// pg_catalog definition formatters are reads, but ONLY spelled `pg_catalog.`.
+// Codex round 5 created a custom pg_get_ruledef in a live PostgreSQL 17
+// container: unqualified and `public.`-qualified calls both executed it and
+// inserted a row. Nobody can create into pg_catalog, so the explicit spelling
+// is the only one that cannot be shadowed, and the sweep predicates now use it.
+ok(!classifySql("SELECT pg_catalog.pg_get_function_identity_arguments(oid) FROM pg_proc").block, "pg_catalog.pg_get_function_identity_arguments is a read");
+ok(!classifySql("SELECT pg_catalog.oidvectortypes(proargtypes) FROM pg_proc").block, "pg_catalog.oidvectortypes is a read");
+ok(!classifySql("SELECT pg_catalog.pg_get_triggerdef(oid) FROM pg_trigger").block, "pg_catalog.pg_get_triggerdef is a read");
+ok(!classifySql("SELECT pg_catalog.pg_get_function_arguments(oid) FROM pg_proc").block, "pg_catalog.pg_get_function_arguments is a read");
+ok(!classifySql("SELECT pg_catalog.pg_get_function_result(oid) FROM pg_proc").block, "pg_catalog.pg_get_function_result is a read");
+ok(!classifySql("SELECT pg_catalog.pg_get_ruledef(oid) FROM pg_rewrite").block, "pg_catalog.pg_get_ruledef is a read");
+ok(!classifySql("SELECT pg_catalog.pg_get_userbyid(relowner) FROM pg_class").block, "pg_catalog.pg_get_userbyid is a read");
+// The unqualified and public-qualified spellings of the SAME names must NOT be
+// trusted — that is the widening this PR first shipped and round 5 disproved.
+ok(classifySql("SELECT pg_get_ruledef(oid) FROM pg_rewrite").block, "the unqualified spelling can resolve to a user function, so it is not trusted");
+ok(classifySql("SELECT public.pg_get_ruledef(oid) FROM pg_rewrite").block, "an explicit public. qualifier never inherits a pg_catalog name's trust");
+ok(classifySql('SELECT "é".pg_get_ruledef(oid) FROM pg_rewrite').block, "a non-ASCII schema is recognised as a foreign qualifier, not skipped");
+ok(classifySql('SELECT public."!"()').block, "a quoted function name is scanned instead of being invisible");
 // NB: the argument literals carry no `(` — a call-shaped name inside a string
 // literal still blocks, which is the documented, deliberately unchanged limit.
-ok(!classifySql("SELECT to_regprocedure('public.save_field')").block, "to_regprocedure is a read");
+ok(!classifySql("SELECT pg_catalog.to_regprocedure('public.save_field')").block, "pg_catalog.to_regprocedure is a read");
 ok(!classifySql("SELECT * FROM pg_proc, plpgsql_check_function_tb(oid)").block, "plpgsql_check_function_tb is a static analyser");
 ok(!classifySql("SELECT plpgsql_check_function(oid) FROM pg_proc").block, "plpgsql_check_function is a static analyser");
 // Adding those names must not have opened the default-deny scan generally.
@@ -249,6 +258,15 @@ ok(!classifySql("SELECT 1 AS foo$x$--$x$;DELETE FROM customers;").block, "an ide
 // a trusted pg_catalog name.
 ok(classifySql("SELECT evil.pg_get_ruledef()").block, "a foreign schema cannot inherit a pg_catalog function's exemption");
 ok(!classifySql("SELECT pg_catalog.pg_get_functiondef(p.oid) FROM pg_proc p LIMIT 1").block, "the real pg_catalog formatter is still a read");
+// Codex round 5. The marker must FOLLOW the write it claims to mark; all three
+// of these are false allows on main, where any [E2E] in the text exempted
+// everything beside it.
+ok(classifySql("DO $$BEGIN RAISE NOTICE '[E2E]'; DELETE FROM customers; END$$;").block, "a marker in one PL/pgSQL statement cannot exempt a later inner DELETE");
+ok(classifySql("WITH x AS (SELECT '[E2E]') DELETE FROM customers;").block, "a marker inside a CTE cannot exempt the DELETE that follows it");
+ok(classifySql("SELECT 1; -- [E2E]\nDELETE FROM customers;").block, "a comment after the previous statement's semicolon does not mark the next one");
+// The documented forms all put the marker after the write verb, so they stand.
+ok(!classifySql("INSERT INTO customers (name) VALUES ('[E2E] Farm Alpha')").block, "a marked INSERT payload still exempts");
+ok(!classifySql("DELETE FROM customers WHERE id = 5 -- [E2E]").block, "a trailing marker comment still exempts its own DELETE");
 ok(classifySql('UPDATE public . "orders" SET notes = \'x\' WHERE id = 1').block, "spaced qualification still blocked");
 // Codex P1 round 4: live stock tables were missing from the lists.
 ok(classifySql("UPDATE inventory SET quantity = 0 WHERE id = 1").block, "raw UPDATE of inventory (live stock) blocked");

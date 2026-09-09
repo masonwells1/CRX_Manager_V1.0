@@ -101,6 +101,11 @@ try {
   assert.equal(isClearlyReadOnlySql("select * from invoices where (status = 'open') and not (balance_cents = 0) order by (created_at)"), true);
   assert.equal(isClearlyReadOnlySql("select i.id from invoices i join customers c on (c.id = i.customer_id) group by (i.id)"), true);
   assert.equal(isClearlyReadOnlySql("update invoices set status = 'paid'"), false);
+  // Whether `\` escapes inside an ordinary '...' literal is session-dependent and
+  // invisible here, so read-only must hold under BOTH readings. Taking the
+  // default left these reading as read-only (Codex rounds 3 and 5, PR #639).
+  assert.equal(isClearlyReadOnlySql("SELECT 'a\\'||'--';DELETE FROM customers;"), false);
+  assert.equal(isClearlyReadOnlySql("SELECT 'x\\'--'; DELETE FROM customers;"), false);
   assert.equal(isClearlyReadOnlySql("with changed as (delete from invoices returning *) select * from changed"), false);
   assert.equal(isClearlyReadOnlySql("select allocate_payment('x', 100)"), false);
   assert.equal(isClearlyReadOnlySql("select public.\"allocate_payment\"('x', 100)"), false);

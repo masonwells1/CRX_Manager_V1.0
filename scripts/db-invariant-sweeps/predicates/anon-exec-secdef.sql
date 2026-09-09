@@ -10,7 +10,7 @@
 --   gate is the real control; a function with NO such gate must be REVOKEd, not allowlisted).
 -- Output columns: violation_key (identity), is_trigger, self_gates, has_dml — to drive disposition.
 
-SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
+SELECT p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
        (p.prorettype = 'pg_catalog.trigger'::regtype)                      AS is_trigger,
        (p.prosrc ~* 'auth\.uid|require_admin|is_admin|is_sales_rep|jwt')   AS self_gates,
        (p.prosrc ~* '(insert\s+into|update\s+\S+\s+set|delete\s+from)')    AS has_dml

@@ -38,7 +38,7 @@ allowed AS (
 ),
 fns AS (
   SELECT p.proname,
-         pg_get_function_identity_arguments(p.oid) AS args,
+         pg_catalog.pg_get_function_identity_arguments(p.oid) AS args,
          p.prosrc
   FROM pg_proc p
   WHERE p.pronamespace = 'public'::regnamespace

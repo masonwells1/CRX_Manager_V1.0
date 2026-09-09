@@ -22,7 +22,7 @@
 
 WITH targets AS (
   SELECT p.oid,
-         p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS ident
+         p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' AS ident
   FROM pg_proc p
   JOIN pg_language l ON l.oid = p.prolang AND l.lanname = 'plpgsql'
   WHERE p.pronamespace = 'public'::regnamespace

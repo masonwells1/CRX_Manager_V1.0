@@ -12,7 +12,7 @@
 
 SELECT p.proname AS violation_key,
        count(*)  AS overload_count,
-       array_agg(pg_get_function_identity_arguments(p.oid) ORDER BY pg_get_function_identity_arguments(p.oid)) AS signatures
+       array_agg(pg_catalog.pg_get_function_identity_arguments(p.oid) ORDER BY pg_catalog.pg_get_function_identity_arguments(p.oid)) AS signatures
 FROM pg_proc p
 WHERE p.pronamespace = 'public'::regnamespace
   -- 2026-06-11: exclude EXTENSION-owned functions (pg_depend deptype 'e').

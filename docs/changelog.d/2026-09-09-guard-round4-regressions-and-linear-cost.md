@@ -97,7 +97,16 @@ must-allow shapes, and clears the same 12 of 29 sweep predicates — the
 schema-qualifier tightening adds no false positive to the sweep.
 
 **Still open, unchanged by this entry:** 17 of 29 predicates remain blocked
-because function names appear inside string literals; Codex's separate allowlist
-still clears only 5 of the 12; and a marker in a comment ON the write's own
-statement (`/*[E2E]*/ DELETE FROM customers;`) still exempts it, which is the
-documented behaviour of the marker, not a hole in the scoping.
+because function names appear inside string literals, and Codex's separate
+allowlist still clears only 5 of the 12.
+
+**Superseded the same day.** Two claims in this entry did not survive round 5:
+the `[E2E]` exemption was scoped only to TOP-LEVEL statements (a marker inside a
+DO body or a CTE still exempted an unrelated write), and "only `public`,
+`pg_catalog` and `information_schema` are honoured, and anything else fails
+closed" was false while the qualifier pattern could not see a quoted or
+non-ASCII schema. Both are corrected in
+`2026-09-09-catalog-qualification-and-marker-ordering.md`; they are left
+standing here rather than deleted, because the sequence is the point.
+
+<!-- round-5 detail moved to its own entry -->

@@ -15,7 +15,7 @@
 --   helper name doesn't contain the literal tokens above will be flagged — adjudicate via the live body and
 --   confirm the helper runs in-transaction (so failure rolls back the mutation) before allowlisting.
 
-SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
+SELECT p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
        p.proname
 FROM pg_proc p
 WHERE p.pronamespace = 'public'::regnamespace

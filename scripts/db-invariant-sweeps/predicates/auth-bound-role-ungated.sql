@@ -12,7 +12,7 @@
 -- Note: the `!~* 'role'` filter also excludes functions that read a role column directly (e.g.
 --   "SELECT role FROM profiles WHERE ..."), which is the intended behavior — that IS a role check.
 
-SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
+SELECT p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
        p.proname
 FROM pg_proc p
 WHERE p.pronamespace = 'public'::regnamespace

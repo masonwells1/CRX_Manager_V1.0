@@ -11,7 +11,7 @@
 --   setting and are checked for exact config/body qualification by
 --   schemaIntegrityLive.test.ts. (Live count at authoring time: 0.)
 
-SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
+SELECT p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
        p.proname,
        p.proconfig
 FROM pg_proc p
