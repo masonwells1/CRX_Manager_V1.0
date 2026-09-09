@@ -176,4 +176,12 @@ deny("idempotency-body-check.mjs", "Write", { file_path: shortSql, content: "SEL
 deny("actor-binding-check.mjs", "Write", { file_path: shortSql, content: "SELECT 1;" }, "a DOS 8.3 migrations alias dodged the actor-binding scope");
 deny("grant-change-guard.mjs", "Write", { file_path: shortSql, content: "SELECT 1;" }, "a DOS 8.3 migrations alias dodged the grant-change scope");
 allow("money-safety.mjs", "Write", { file_path: path.join(root, "src", "lib", "money.ts~"), content: "const cents = 1;" }, "a trailing ~ backup name is not a short name");
+// Codex gpt-5.6-sol High on 4c869416a: env-guard scoped on a `/src/` SUBSTRING, so the
+// repo-relative path a MultiEdit ordinarily sends (`src/lib/x.ts`, now auto-accepted) never
+// matched and the service_role scan was skipped. Anchored to a segment boundary now.
+deny("env-guard.mjs", "MultiEdit", { file_path: "src/lib/secrets.ts", edits: [{ old_string: "a", new_string: roleKey }] }, "PROVEN BYPASS: a repo-relative src path skipped the service_role scan");
+deny("env-guard.mjs", "Write", { file_path: "src/lib/secrets.ts", content: "const r = 'service_role';" }, "repo-relative src path, service_role literal");
+deny("env-guard.mjs", "Edit", { file_path: "src/App.tsx", old_string: "a", new_string: roleKey }, "repo-relative src path through Edit");
+allow("env-guard.mjs", "MultiEdit", { file_path: "src/lib/ok.ts", edits: [{ old_string: "a", new_string: "const k = import.meta.env.VITE_SUPABASE_ANON_KEY;" }] }, "repo-relative src path, anon key stays allowed");
+allow("env-guard.mjs", "Write", { file_path: "docs/src-notes.md", content: "const r = 'service_role';" }, "a path merely CONTAINING src is not in scope");
 console.log(`content-guards-multiedit: ${pass} assertions passed`);

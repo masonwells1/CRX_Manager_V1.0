@@ -58,7 +58,12 @@ if (isEnvFile && !isExample) {
 const { content } = judgedContent(filePath, payload?.tool_input);
 if (!content) out("allow");
 
-const inSrc = filePath.includes("/src/");
+// Anchored to a segment boundary, not a `/src/` SUBSTRING (Codex gpt-5.6-sol High on
+// 4c869416a): a repo-relative `src/lib/x.ts` — what a MultiEdit ordinarily sends, and now
+// auto-accepted — contains no leading slash, so it never matched and the service_role scan
+// below was skipped entirely. The eight other content guards were anchored in this commit;
+// this one was missed because it already canonicalised its path and reads differently.
+const inSrc = /(?:^|\/)src\//.test(filePath);
 const isFrontendFile = inSrc && /\.(ts|tsx|js|jsx)$/.test(filePath);
 
 // The service_role scans judge the RAW content, comments included. Three attempts to
