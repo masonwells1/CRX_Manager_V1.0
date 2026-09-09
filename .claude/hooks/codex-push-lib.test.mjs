@@ -2956,4 +2956,49 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   }
 }
 
+// ── Codex sol, 2026-09-08: the FOURTH round, on the third round's own fix ─────
+{
+  // The quote-aware segmenter knew ONE escape character, POSIX `\`. PowerShell
+  // spells the same escape with a backtick and cmd.exe with a caret, so
+  // `gh pr merge 123 --body x^&y --admin --squash` is ONE command to cmd.exe
+  // while the segmenter cut it in two -- handing the loop a merge carrying no
+  // --admin and a second segment carrying no gh. That is SEC-001 again, in the
+  // spelling the third round did not cover.
+  for (const [name, escape] of [["POSIX backslash", "\\"], ["PowerShell backtick", "`"], ["cmd.exe caret", "^"]]) {
+    const command = `gh pr merge 123 --body x${escape}&y --admin --squash`;
+    assert.deepEqual(
+      splitCommandSegments(command),
+      [command],
+      `an escaped & is data, not a separator (${name})`,
+    );
+    assert.equal(
+      ghMergeRequest(splitCommandSegments(command)[0])?.admin,
+      true,
+      `the --admin after an escaped & is still seen (${name})`,
+    );
+  }
+  // Consuming one more escape character can only JOIN segments, never divide
+  // them, so a shell that treats the character literally leaves the parsers
+  // reading MORE text -- the fail-safe direction. Every unquoted, unescaped
+  // separator must still separate, or the second round's fix is undone.
+  assert.deepEqual(
+    splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin"),
+    ["gh pr view 1", "gh pr merge 2 --admin"],
+    "an UNescaped & still separates after the escape set widened",
+  );
+  // And the escape characters keep their OWN refusal: joining them back into
+  // one segment must not stand down ghHiddenByShellComposition, which strips
+  // them independently of the segmenter.
+  assert.equal(
+    ghHiddenByShellComposition("gh^ pr merge 123 --squash"),
+    true,
+    "a caret splicing the gh binary is still refused",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("gh pr me`rge 123 --squash"),
+    true,
+    "a backtick splicing the gh subcommand is still refused",
+  );
+}
+
 console.log("OK - codex push shared library checks passed.");

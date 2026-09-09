@@ -2570,7 +2570,20 @@ export function splitCommandSegments(command) {
       continue;
     }
     if (char === "'" || char === '"') { quote = char; current += char; continue; }
-    if (char === "\\" && index + 1 < text.length) { current += char + text[index + 1]; index += 1; continue; }
+    // An ESCAPED separator is not a separator either, and a quote is not the
+    // only way to escape one: PowerShell spells it ``x`&y`` and cmd.exe spells
+    // it `x^&y`, both of which are a single argument carrying a literal `&`
+    // (Codex sol, 2026-09-09, finding 2 — measured: the split produced
+    // `gh pr merge 123 --body x`` ` `` with admin:false and carried --admin into
+    // a segment with no gh, the same bypass SEC-001 was). All three escape
+    // characters are consumed with the character they protect. Consuming one
+    // can only JOIN segments, never divide them, so a shell that treats the
+    // character literally still leaves the parsers reading more text, not less.
+    if ((char === "\\" || char === "`" || char === "^") && index + 1 < text.length) {
+      current += char + text[index + 1];
+      index += 1;
+      continue;
+    }
     if (char === "&" || char === "|") {
       if (text[index + 1] === char) index += 1;
       segments.push(current);

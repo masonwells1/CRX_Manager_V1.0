@@ -1398,6 +1398,41 @@ try {
     assert.equal(verdict.blocked, true, `an escaped --admin must be refused: ${command}`);
   }
 
+  // Codex sol, 2026-09-08, SEC-003 — raised on the fix directly above. The
+  // quote-aware segmenter knew ONE escape character, the POSIX backslash.
+  // PowerShell escapes with a backtick and cmd.exe with a caret, so
+  // `--body x^&y` is one literal ampersand inside one argument while the
+  // segmenter cut the command in two and left `--admin` in a segment holding no
+  // `gh`. Measured against THIS merge-ready fixture at 3e099b510: the caret
+  // spelling returned blocked:false — a live administrator-merge bypass. The
+  // backtick spelling was denied there, but by the command-substitution rule,
+  // which is a compensator, not a fix.
+  for (const command of [
+    "gh pr merge 123 --body x`&y --admin --squash",
+    "gh pr merge 123 --body x^&y --admin --squash",
+    "gh pr merge 123 --body x\\&y --admin --squash",
+  ]) {
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => mainPrJson,
+    });
+    assert.equal(verdict.blocked, true, `an escaped & must not carry --admin out of the inspected segment: ${command}`);
+  }
+  // An UNescaped & must still separate, or the round-two fix is undone: the
+  // --admin lives in the second segment here and must still be found.
+  const unescapedChain = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr view 1 & gh pr merge 2 --admin --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  });
+  assert.equal(unescapedChain.blocked, true, "a bare & still separates after the escape set widened");
+  assert.match(unescapedChain.reason, /--admin/, "and the second segment's --admin is what fires");
+
   // Both directions: an ordinary quoted body with no separator in it must still
   // reach the normal gate and be allowed, or this fix is an over-block.
   assert.equal(evaluateProductionAction({
