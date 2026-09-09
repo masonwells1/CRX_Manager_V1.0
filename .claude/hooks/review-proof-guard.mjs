@@ -6,6 +6,7 @@
 // their tool command, so legitimate proof creation still works.
 
 import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import {
   extractPatchDestinations,
@@ -31,10 +32,27 @@ try {
   process.exit(0);
 }
 
-const input = payload?.tool_input || payload?.toolInput || {};
+const toolInput = payload?.tool_input || payload?.toolInput || {};
+// Codex's native apply_patch sends its free-form patch as the whole tool_input
+// string, whereas other clients put it in a field. Normalize only the object
+// access here and route both forms through the existing destination parser.
+// Scanning destination headers (rather than the full patch text) keeps ordinary
+// documentation that merely discusses protected paths allowed.
+const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
+const input = toolInput && typeof toolInput === "object" ? toolInput : {};
 const toolName = String(payload?.tool_name || payload?.toolName || "");
-const hookCwd = String(payload?.cwd || input.cwd || input.workdir || "");
-const pathCandidates = [
+const eventCwd = String(payload?.cwd || "");
+// Preserve the event-first cwd used by the shell-state checks below. Patch
+// destinations use pathCandidateCwd instead: an explicit relative tool
+// workdir/cwd resolves from the event directory, while raw apply_patch uses the
+// event directory directly because it has no nested input object.
+const hookCwd = String(eventCwd || input.cwd || input.workdir || "");
+const nestedWorkingDir = input.workdir ?? input.cwd ?? "";
+const pathCandidateCwd = nestedWorkingDir
+  ? path.resolve(eventCwd || process.cwd(), String(nestedWorkingDir))
+  : eventCwd;
+const patchPayloads = [rawPatchBody, input.patch, input.diff, input.input, input.changes];
+const rawPathCandidates = [
   input.file_path,
   input.filePath,
   input.path,
@@ -46,8 +64,14 @@ const pathCandidates = [
   // patch's destination headers, NOT its whole body — added prose may
   // legitimately mention proof paths in documentation (Codex round-5). Write's
   // `content` is likewise deliberately not scanned; its target is file_path.
-  ...[input.patch, input.diff, input.input, input.changes].flatMap((payloadText) => extractPatchDestinations(payloadText)),
+  ...patchPayloads.flatMap((payloadText) => extractPatchDestinations(payloadText)),
 ];
+// Resolve `..` using the host's native path rules without touching disk. A bare
+// patch destination then matches the file it will write from the event cwd.
+const pathCandidates = rawPathCandidates.map((candidate) => {
+  if (candidate == null || !pathCandidateCwd) return candidate;
+  return path.resolve(pathCandidateCwd, String(candidate));
+});
 if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
   deny("REVIEW PROOF GUARD: Claude/Codex review proof files are wrapper-owned. Run the real review workflow; do not write, edit, move, or delete proof JSON directly.");
 }
@@ -97,6 +121,7 @@ const isAckValvePath = (candidate) =>
 const stateDirCandidates = pathCandidates.filter((c) => c != null && cdTargetEntersStateDir(c));
 const isMoveOrDeleteShape =
   (input.source != null && input.destination != null) ||
+  patchPayloads.some((payloadText) => /^\*{3}\s*(?:Delete\s+File:|Move\s+to:)/im.test(String(payloadText || ""))) ||
   /(?:^|[-._])(?:move|rename|delete|remove|unlink|trash|copy)(?:[-._]|$)/i.test(toolName);
 const isPureAckWrite = stateDirCandidates.length > 0 &&
   !isMoveOrDeleteShape &&
