@@ -613,4 +613,36 @@ try {
   rmSync(resolvedArmedDir, { recursive: true, force: true });
 }
 
+// CodeRabbit Major on 60910c005 (canonical output runtime-observed): canonicalToolPath tested
+// `seg === ".."` before trimming, so `.. ` fell through to the trailing-dot strip, became empty
+// and vanished — the traversal was lost, the path missed PROTECTED_SURFACE_RE, and armed
+// autopilot returned allow. Folded onto `..` now, fail closed (measured 2026-09-09: neither
+// Node's fs nor PowerShell opens `.. ` as `..` on this machine).
+// The behavioural assertions come first so the previous lib (which has no trimWin32Segment
+// export) fails on the bypass, not on a missing import.
+{
+  const lib = await import("./autopilot-lib.mjs");
+  eq(autopilotDecision("Edit", { file_path: ".claude/worktrees/.. /hooks/review-proof-guard.mjs" }), "deny", "PROVEN BYPASS: armed autopilot refuses the `.. ` traversal into .claude/hooks");
+  eq(lib.canonicalToolPath(".claude/worktrees/.. /hooks/review-proof-guard.mjs"), ".claude/hooks/review-proof-guard.mjs", "PROVEN BYPASS: `.. ` resolves as a traversal");
+  eq(lib.canonicalToolPath(".claude/session-state/.. /../src/App.tsx"), "src/App.tsx", "two `.. ` traversals resolve");
+  eq(lib.canonicalToolPath(".claude/worktrees/..:x/hooks/x.mjs"), ".claude/hooks/x.mjs", "stream suffix on `..` stays a traversal");
+  eq(autopilotDecision("Write", { file_path: "C:\\repo\\.claude\\worktrees\\.. \\..\\.claude\\settings.json", content: "{}" }), "deny", "absolute Windows spelling with a `.. ` segment");
+  eq(autopilotDecision("MultiEdit", { file_path: ".claude/worktrees/..:x/hooks/x.mjs", edits: [] }), "deny", "stream suffix on `..` still reaches .claude/hooks");
+  // DOS 8.3 short names (Codex High CRX-SEC-001 on 5f69ecc2d, packet-confirmed: CLAUDE~1
+  // resolves to .claude). Armed autopilot refuses the alias instead of expanding it.
+  eq(autopilotDecision("Edit", { file_path: "CLAUDE~1/hooks/review-proof-guard.mjs" }), "deny", "PROVEN BYPASS: armed autopilot refuses a DOS 8.3 alias of .claude/hooks");
+  eq(autopilotDecision("Write", { file_path: "PACKAG~2.JSO", content: "{}" }), "deny", "DOS 8.3 alias of package.json");
+  eq(autopilotDecision("MultiEdit", { file_path: "C:\\repo\\GITHUB~1\\workflows\\ci.yml", edits: [] }), "deny", "DOS 8.3 alias of .github/workflows");
+  eq(lib.hasShortNameSegment("supabase/MIGRAT~1/x.sql"), true, "short-name segment detected");
+  eq(lib.hasShortNameSegment("docs/plan.md~"), false, "a trailing ~ backup name is not a short name");
+  eq(lib.hasShortNameSegment("~/notes.md"), false, "a home-directory ~ is not a short name");
+  eq(autopilotDecision("Edit", { file_path: "docs/plan.md~" }), "allow", "a backup file name stays allowed while armed");
+  eq(typeof lib.trimWin32Segment, "function", "trimWin32Segment is exported for review-proof-guard");
+  eq(lib.trimWin32Segment(".. "), "..", "`.. ` is `..`");
+  eq(lib.trimWin32Segment(". "), ".", "`. ` is `.`");
+  eq(lib.trimWin32Segment("..:stream"), "..", "a stream suffix on `..` is still `..`");
+  eq(lib.trimWin32Segment("hooks. "), "hooks", "trailing period and space are stripped");
+  eq(lib.trimWin32Segment("x.mjs::$DATA"), "x.mjs", "default stream suffix is cut");
+}
+
 console.log(`autopilot-lib: ${pass} assertions passed`);

@@ -1033,4 +1033,104 @@ for (const payload of [
 // `|` that splits the segment.
 allowed({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } });
 
+// SHELL VARIABLES IN A WRITE DESTINATION. GitHub Codex P1 on 6e3f1bd36, probe-confirmed: the
+// first two payloads passed the whole registered Bash hook chain (only bash-safety answered,
+// with allow). Same-command assignments are now resolved into every view, and whatever is
+// still unreadable in a write position fails closed. Every deny below is silent on the
+// previous hook.
+for (const [tool_name, command] of [
+  ["Bash", 'd=.claude; printf x > "$d/hooks/review-proof-guard.mjs"'],
+  ["Bash", "n=package; printf '{}' > \"$n.json\""],
+  ["Bash", 'd=.claude; cp /tmp/evil "$d/hooks/review-proof-guard.mjs"'],
+  ["Bash", 'n=package; tee "$n.json" < /tmp/evil'],
+  ["Bash", 'd=.cl; b="${d}aude"; printf x > "$b/hooks/x.mjs"'],
+  ["Bash", 'export d=.claude\nprintf x > "$d/settings.json"'],
+  ["Bash", "d=.claude && printf x > $d/hooks/x.mjs"],
+  ["Bash", 'FOO=1 d=.husky cp /tmp/evil "$d/pre-push"'],
+  ["Bash", 'printf x > "$(echo .claude)/hooks/review-proof-guard.mjs"'],
+  ["Bash", "printf x > \"`echo .claude`/hooks/x.mjs\""],
+  ["Bash", 'printf x > "${d:-.claude}/hooks/x.mjs"'],
+  ["Bash", 'printf x > "$LOG"'],
+  ["Bash", 'echo x >> "${OUT}"'],
+  ["Bash", 'read d <<< .claude; cp /tmp/evil "$d/hooks/x.mjs"'],
+  // Codex gpt-5.6-sol High CRX-SEC-002 on 5f69ecc2d: the first fix RESOLVED same-command
+  // assignments, and assignment-shaped text the shell never executes forged a harmless value.
+  // There is no parser now — an expansion in a write destination is unreadable, full stop —
+  // so the forgery payloads deny for the same reason the plain ones do.
+  ["Bash", "printf ' d=/tmp/x' ; printf x > \"$d/hooks/review-proof-guard.mjs\""],
+  ["Bash", "echo '# d=/tmp/x' && cp /tmp/evil \"$d/hooks/x.mjs\""],
+  ["Bash", 'd=/tmp/scratch; printf x > "$d/out.log"'],
+  ["Bash", 'D=/tmp/x; cp /tmp/evil "$D/hooks/review-proof-guard.mjs"'],
+  // Codex gpt-5.6-sol High CRX-SEC-001 on 5f69ecc2d, packet-confirmed on the review host:
+  // `CLAUDE~1` -> `.claude`, `PACKAG~2.JSO` -> `package.json`, `supabase\MIGRAT~1` ->
+  // `supabase\migrations`, all resolving to identical bytes. Refused, not expanded.
+  ["Bash", "printf x > CLAUDE~1/hooks/review-proof-guard.mjs"],
+  ["Bash", "cp /tmp/evil CLAUDE~1\\hooks\\review-proof-guard.mjs"],
+  ["Bash", "cp /tmp/evil PACKAG~2.JSO"],
+  ["Bash", "tee GITHUB~1/workflows/ci.yml < /tmp/evil"],
+  ["Bash", "printf x > HUSKY~1/pre-push"],
+  ["Bash", 'cp /tmp/evil "$(echo LmNsYXVkZS9ob29rcy94Lm1qcw== | base64 -d)"'],
+  ["Bash", 'for f in $(ls); do cp /tmp/evil "$f/hooks/x.mjs"; done'],
+  ["Bash", 'if true; then tee "$d/pre-push" < /tmp/evil; fi'],
+  ["PowerShell", '$d = ".claude"; Set-Content -Path "$d/hooks/x.mjs" -Value x'],
+  ["PowerShell", 'Set-Content -Path "$env:TEMP/../repo/package.json" -Value x'],
+  ["Bash", "set d=.claude& printf x > %d%\\hooks\\x.mjs"],
+]) {
+  const result = run({ tool_name, tool_input: { command } });
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny (shell variable in a write destination): ${command}`);
+}
+// Read-only, or not path-shaped: unchanged. (A variable write destination is NOT here any
+// more — `d=/tmp/scratch; printf x > "$d/out.log"` denies, the accepted cost of having no
+// assignment parser to forge. Reads through variables are untouched.)
+for (const [tool_name, command] of [
+  ["Bash", 'echo "$d/hooks/x"'],
+  ["Bash", 'cat "$(git rev-parse --show-toplevel)/README.md"'],
+  ["Bash", 'for f in $(git ls-files docs); do echo "$f"; done'],
+  ["Bash", 'node scripts/x.mjs "$(cat notes.txt)"'],
+  ["Bash", 'git commit -m "$(cat /tmp/msg.txt)"'],
+  ["Bash", 'gh api repos/x/y/pulls/605 --jq "$Q"'],
+  ["Bash", 'curl -s "$URL" -o /tmp/out.json'],
+  ["Bash", 'npm test -- --grep "$PATTERN"'],
+  ["Bash", "X=1 node script.mjs"],
+  ["Bash", "printf x > /tmp/out.log 2>&1"],
+  ["Bash", "echo done >&2"],
+  ["Bash", 'if [ -n "$HOME" ]; then echo ok; fi'],
+  ["Bash", 'cd "$HOME/projects" && ls'],
+]) {
+  allowed({ tool_name, tool_input: { command } });
+}
+// CodeRabbit Minor on 60910c005: a launcher's `--fix` belongs to the launched program.
+for (const command of ["npm exec -- eslint --fix src", "pnpm exec eslint --fix", "npx --no-install eslint --fix"]) {
+  allowed({ tool_name: "Bash", tool_input: { command } });
+}
+for (const command of ["npm exec -- npm pkg fix", "npm exec -- npm audit fix", "pnpm exec yarn constraints --fix"]) {
+  assert.match(run({ tool_name: "Bash", tool_input: { command } }).stdout, /"permissionDecision":"deny"/, `must deny (nested manifest write behind a launcher): ${command}`);
+}
+// CodeRabbit Major on 60910c005: the old segment walk tested for `..` before trimming, so a
+// `.. ` (dot-dot-space) segment vanished and the traversal was lost. Folded onto `..` now, fail
+// closed (measured 2026-09-09: neither Node's fs nor PowerShell opens `.. ` as `..` here).
+for (const payload of [
+  { tool_name: "Edit", tool_input: { file_path: ".claude/worktrees/.. /hooks/review-proof-guard.mjs", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/worktrees/..:x/hooks/review-proof-guard.mjs", content: "x" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/worktrees/.. /../.claude/settings.json" } },
+  { tool_name: "Bash", tool_input: { command: 'cp /tmp/evil ".claude/worktrees/.. /hooks/review-proof-guard.mjs"' } },
+]) {
+  assert.match(run(payload).stdout, /"permissionDecision":"deny"/, `must deny (dot-dot-space traversal): ${JSON.stringify(payload.tool_input)}`);
+}
+
+// DOS 8.3 aliases through the native editors and the MCP path field (Codex CRX-SEC-001 on
+// 5f69ecc2d, packet-confirmed: CLAUDE~1 resolves to .claude, PACKAG~2.JSO to package.json).
+for (const payload of [
+  { tool_name: "Edit", tool_input: { file_path: "CLAUDE~1/hooks/review-proof-guard.mjs", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: "C:\\repo\\CLAUDE~1\\settings.json", content: "{}" } },
+  { tool_name: "MultiEdit", tool_input: { file_path: "PACKAG~2.JSO", edits: [] } },
+  { tool_name: "NotebookEdit", tool_input: { notebook_path: "GITHUB~1/workflows/probe.ipynb" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "HUSKY~1/pre-push" } },
+]) {
+  assert.match(run(payload).stdout, /"permissionDecision":"deny"/, `must deny (DOS 8.3 alias): ${JSON.stringify(payload.tool_input)}`);
+}
+// A literal `~` that is not a short-name alias is untouched: home paths, backup file names.
+for (const command of ["head -5 ~/notes.md", "ls ~", "grep -n x docs/plan.md~"]) {
+  allowed({ tool_name: "Bash", tool_input: { command } });
+}
 console.log("OK - review proof guard checks passed.");

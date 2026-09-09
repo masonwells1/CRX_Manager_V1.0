@@ -39,7 +39,9 @@ function runCopiedHook(hooksDir, scriptName, payload) {
 function scaffoldIsolatedHook(tmpDir, scriptNames, registryContent) {
   const hooksDir = path.join(tmpDir, ".claude", "hooks");
   mkdirSync(hooksDir, { recursive: true });
-  for (const name of scriptNames) {
+  // Every content guard imports canonicalToolPath() from autopilot-lib.mjs since PR #605 (the
+  // scope predicate judges the canonical path), so the lib rides along with each scaffold.
+  for (const name of [...scriptNames, "autopilot-lib.mjs"]) {
     copyFileSync(path.join(__dirname, name), path.join(hooksDir, name));
   }
   if (registryContent !== null) {

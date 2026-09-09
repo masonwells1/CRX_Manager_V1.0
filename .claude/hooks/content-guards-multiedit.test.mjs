@@ -133,4 +133,47 @@ deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const x = a / b
 deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const re = /[/*]/; // 'service_role' is banned here\nconst k = import.meta.env.VITE_SUPABASE_ANON_KEY;" }, "FAIL CLOSED, raw scan (comments count): a class regex closes cleanly and the line comment after it is still stripped");
 deny("env-guard.mjs", "Write", { file_path: missingTs, content: "const re = /x\\/y/; /* 'service_role' */ const k = import.meta.env.VITE_SUPABASE_ANON_KEY;" }, "FAIL CLOSED, raw scan (comments count): a regex with an escaped slash closes cleanly and the block comment after it is still stripped");
 
+// ── Win32 alias spellings of the scoped directories ─────────────────────────
+// GitHub Codex P1 on 60910c005: every content guard applied its scope predicate to the RAW
+// spelling, so an alias that folds onto the real file fell outside the scope and the guard
+// answered allow — under MultiEdit auto-accept, with no prompt. Measured 2026-09-09 on this
+// machine: `x.sql::$DATA` opens the real file through Node's fs and PowerShell; `migrations.`
+// through PowerShell (the shell channel) but not Node's fs; `.. ` / trailing-space directories
+// through neither. Every spelling is judged as the file the Win32 normaliser would fold it
+// onto (deny-only). All eight guards now scope on canonicalToolPath(); every deny below is an
+// allow on the previous hooks.
+const aliasSql = path.join(root, "supabase", "migrations.", "20260909000002_alias.sql");
+const streamSql = missingSql + "::$DATA";
+const spacedSql = path.join(root, "supabase", "migrations ", "20260909000003_alias.sql");
+const aliasTs = path.join(root, "src.", "lib", "money.ts");
+const streamTs = missingTs + "::$DATA";
+deny("rls-on-new-tables.mjs", "MultiEdit", { file_path: aliasSql, edits: [{ old_string: "a", new_string: bareTable }] }, "PROVEN BYPASS: `migrations.` directory alias dodged the RLS scope");
+deny("rls-on-new-tables.mjs", "Write", { file_path: streamSql, content: bareTable }, "stream suffix on a migration file dodged the RLS scope");
+deny("rls-on-new-tables.mjs", "Edit", { file_path: spacedSql, old_string: "a", new_string: bareTable }, "`migrations ` (trailing space) directory alias dodged the RLS scope");
+deny("money-safety.mjs", "MultiEdit", { file_path: aliasTs, edits: [{ old_string: "a", new_string: floatCents }] }, "PROVEN BYPASS: `src.` directory alias dodged the money scope");
+deny("money-safety.mjs", "Write", { file_path: streamTs, content: floatCents }, "stream suffix on a src file dodged the money scope");
+deny("money-safety.mjs", "Write", { file_path: "src/lib/money.ts", content: floatCents }, "a repo-relative src path is in scope (the old `/src/` substring never matched it)");
+deny("generated-column-check.mjs", "MultiEdit", { file_path: aliasTs, edits: [{ old_string: "a", new_string: genWrite }] }, "PROVEN BYPASS: `src.` directory alias dodged the generated-column scope");
+deny("generated-column-check.mjs", "Write", { file_path: streamTs, content: genWrite }, "stream suffix on a src file dodged the generated-column scope");
+deny("sql-safety.mjs", "Write", { file_path: aliasSql, content: "SELECT pg_get_functiondef('public.f'::regproc);" }, "`migrations.` directory alias dodged the sql-safety scope");
+deny("status-enum-check.mjs", "Write", { file_path: aliasSql, content: "UPDATE public.invoices SET status = 'not_a_real_status';" }, "`migrations.` directory alias dodged the status-enum scope");
+allow("money-safety.mjs", "MultiEdit", { file_path: aliasTs, edits: [{ old_string: "a", new_string: "const cents = Math.round(dollars * 100);" }] }, "clean content through an alias spelling is still allowed");
+allow("rls-on-new-tables.mjs", "Write", { file_path: path.join(root, "docs.", "notes.sql"), content: bareTable }, "an alias spelling OUTSIDE the scope stays out of scope");
+
+// ── DOS 8.3 short names (Codex High CRX-SEC-001 on 5f69ecc2d) ───────────────
+// `supabase\\MIGRAT~1\\x.sql` opens the real migrations directory but matches no scope
+// predicate, so each guard would wave it through. Expanding an alias needs the filesystem;
+// refusing it does not, and nothing legitimate spells a path this way.
+const shortSql = "supabase/MIGRAT~1/20260909000004_alias.sql";
+const shortTs = "SRC~1/lib/money.ts";
+deny("rls-on-new-tables.mjs", "MultiEdit", { file_path: shortSql, edits: [{ old_string: "a", new_string: bareTable }] }, "PROVEN BYPASS: a DOS 8.3 migrations alias dodged the RLS scope");
+deny("rls-on-new-tables.mjs", "Write", { file_path: shortSql, content: bareTable + " ALTER TABLE public.probe_t ENABLE ROW LEVEL SECURITY; CREATE POLICY p ON public.probe_t FOR SELECT USING (true);" }, "a short-name path is refused even when its content is compliant");
+deny("money-safety.mjs", "MultiEdit", { file_path: shortTs, edits: [{ old_string: "a", new_string: floatCents }] }, "PROVEN BYPASS: a DOS 8.3 src alias dodged the money scope");
+deny("generated-column-check.mjs", "Write", { file_path: shortSql, content: genWrite }, "a DOS 8.3 migrations alias dodged the generated-column scope");
+deny("sql-safety.mjs", "Write", { file_path: shortSql, content: "SELECT 1;" }, "a DOS 8.3 migrations alias dodged the sql-safety scope");
+deny("status-enum-check.mjs", "Write", { file_path: shortSql, content: "SELECT 1;" }, "a DOS 8.3 migrations alias dodged the status-enum scope");
+deny("idempotency-body-check.mjs", "Write", { file_path: shortSql, content: "SELECT 1;" }, "a DOS 8.3 migrations alias dodged the idempotency scope");
+deny("actor-binding-check.mjs", "Write", { file_path: shortSql, content: "SELECT 1;" }, "a DOS 8.3 migrations alias dodged the actor-binding scope");
+deny("grant-change-guard.mjs", "Write", { file_path: shortSql, content: "SELECT 1;" }, "a DOS 8.3 migrations alias dodged the grant-change scope");
+allow("money-safety.mjs", "Write", { file_path: path.join(root, "src", "lib", "money.ts~"), content: "const cents = 1;" }, "a trailing ~ backup name is not a short name");
 console.log(`content-guards-multiedit: ${pass} assertions passed`);

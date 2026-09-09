@@ -266,6 +266,7 @@ export function protectedSurfacePath(filePath) {
   // normalisation is never auto-approved while armed: review-proof-guard cannot see
   // where it lands, so the arm must not vouch for it.
   const canon = canonicalToolPath(raw);
+  if (hasShortNameSegment(raw)) return true;
   return PROTECTED_SURFACE_RE.test(`/${raw}`) || escapesTree(canon) || PROTECTED_SURFACE_RE.test(`/${canon}`);
 }
 
@@ -289,12 +290,41 @@ export function canonicalToolPath(p) {
   // the one colon that is kept. A `\\?\` / `\\.\` device prefix before a drive is dropped.
   s = s.replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, "").replace(/^[A-Za-z]:(?!\/)/, "");
   s = s.split("/").map((seg, i) => {
-    if (seg === "." || seg === "..") return seg;
     if (i === 0 && /^[A-Za-z]:$/.test(seg)) return seg;
-    return seg.replace(/:.*$/, "").replace(/[. ]+$/, "");
+    return trimWin32Segment(seg);
   }).join("/");
   const n = path.posix.normalize(s);
   return n === "." ? "" : n;
+}
+// One path SEGMENT as the Win32 normaliser sees it, shared by canonicalToolPath() and the
+// two review-proof-guard resolvers so the three cannot drift (CodeRabbit Trivial on
+// 60910c005). Trailing SPACES go first, and only then is a dot segment recognised: the old
+// order tested `seg === ".."` before trimming, so `.. ` fell through to the trailing-dot
+// strip, became an empty segment and vanished — `.claude/worktrees/.. /hooks/review-proof-guard.mjs`
+// canonicalised to `.claude/worktrees/hooks/review-proof-guard.mjs`, matched nothing, and
+// armed autopilot returned `allow` (CodeRabbit Major on 60910c005; the canonical output was
+// runtime-observed). Measured 2026-09-09: neither Node's fs nor PowerShell opens a `.. `
+// segment as `..` on this machine, so this is consistency of the canonical form, fail-closed
+// (a spelling the Win32 normaliser would fold onto a traversal is treated as one), not a
+// reproduced file write.
+// A stream suffix is cut at the first colon BEFORE the dot check, so `..:x` is still a
+// traversal rather than an empty segment that would drop it; trailing periods/spaces are
+// stripped from everything else, as before.
+export function trimWin32Segment(seg) {
+  const spaceTrimmed = String(seg).replace(/:.*$/, "").replace(/ +$/, "");
+  if (spaceTrimmed === "." || spaceTrimmed === "..") return spaceTrimmed;
+  return spaceTrimmed.replace(/[. ]+$/, "");
+}
+// DOS 8.3 SHORT NAMES (Codex gpt-5.6-sol High CRX-SEC-001 on 5f69ecc2d, packet-confirmed:
+// `CLAUDE~1` -> `.claude`, `GITHUB~1` -> `.github`, `PACKAG~2.JSO` -> `package.json`,
+// `supabase\\MIGRAT~1` -> `supabase\\migrations`, each resolving to identical bytes). Windows
+// keeps these aliases for every long name, so `CLAUDE~1/hooks/review-proof-guard.mjs` opens
+// the guard while matching no protected pattern. EXPANDING an alias needs the filesystem and
+// a resolver for paths that do not exist yet; REFUSING one needs neither, and no human or
+// agent has a reason to spell a path this way. So a `~<digit>` segment is judged as protected
+// wherever a path is judged: deny-only, and the long path is always available instead.
+export function hasShortNameSegment(p) {
+  return /(?:^|[\\/])[^\\/]*~\d/.test(String(p || ""));
 }
 export function escapesTree(canonical) {
   return /(?:^|\/)\.\.(?:\/|$)/.test(canonical);

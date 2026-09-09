@@ -12,6 +12,7 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
 } from "./codex-push-lib.mjs";
+import { trimWin32Segment, hasShortNameSegment } from "./autopilot-lib.mjs";
 
 function deny(reason) {
   process.stdout.write(JSON.stringify({
@@ -117,11 +118,30 @@ const command = String(input.command ?? input.cmd ?? "");
 // composed-verb deletion, `r"m" -rf .claude/session-state`, were proven bypasses
 // of the raw-only scans; the cd scanner already ran over a quote-stripped view,
 // these matchers did not).
-function shellCommandViews(cmd) {
+function shellBaseViews(cmd) {
   const base = decodeAnsiCQuotes(String(cmd || "")).replace(/[\\`]\r?\n/g, "");
   const stripQuotes = (v) => v.replace(/["']/g, "");
   const dropBackslash = (v) => v.replace(/\\(.)/g, "$1");
   return [base, stripQuotes(base), dropBackslash(base), dropBackslash(stripQuotes(base))];
+}
+// SHELL VARIABLES. GitHub Codex P1 on 6e3f1bd36, probe-confirmed: `d=.claude; printf x >
+// "$d/hooks/review-proof-guard.mjs"` and `n=package; printf '{}' > "$n.json"` passed the whole
+// registered Bash hook chain, because every matcher here reads the literal command text and the
+// protected name was assembled at run time.
+//
+// The first fix RESOLVED same-command assignments before matching. Codex gpt-5.6-sol High
+// (CRX-SEC-002 on 5f69ecc2d) broke it: the parser scanned raw text, so assignment-shaped text
+// the shell never executes — inside single quotes, a comment, an argument — forged a value and
+// the guard substituted the HARMLESS one while the real destination still reached the shell. A
+// parser that must model quoting, execution position and scope to stay safe is the wrong shape
+// for a deny guard: every gap in it is an allow.
+//
+// So there is no parser. An expansion in a write destination is simply unreadable, and
+// unreadable fails closed (the rule at the enforcement-surface deny below). Spell the
+// destination out. This refuses `printf x > "$LOG"` and `d=/tmp/s; printf x > "$d/out.log"`
+// too, which is the accepted cost: reads are untouched, and a literal path is always available.
+function shellCommandViews(cmd) {
+  return shellBaseViews(cmd);
 }
 // Applies ONLY to the shell `command` string (shell syntax). The pathCandidates
 // and hookCwd predicates above/below are literal filesystem paths, NOT shell
@@ -734,57 +754,24 @@ if (shellTool) {
   // traversal for exactly this reason, and not porting it re-opened a bypass its
   // own history had already classified HIGH. A leading `..` that escapes the root
   // is KEPT, never dropped: discarding it would fabricate a different path.
-  const resolveDotSegments = (input) => {
-    // Codex gpt-5.6-sol High on b2988f2da, probe-confirmed: Win32 path ALIASES reached the
-    // protected files past the canonical-spelling rule. Windows drops a drive-RELATIVE
-    // prefix onto the drive's current directory (`C:.claude/hooks/x.mjs` opens
-    // `.claude/hooks/x.mjs`), and its path normaliser strips trailing periods and spaces
-    // from every segment before the file system sees the name (`.claude/hooks./x.mjs`,
-    // `.claude/settings.json.`, `x.mjs ` all open the real file; probe-confirmed with
-    // Get-Item on 2026-09-03 for the sibling canonicaliser in production-action-guard,
-    // whose rules this now mirrors). A drive-relative prefix is DROPPED (the spelling is
-    // then non-canonical by construction); a rooted drive (`C:/…`) is kept, because that
-    // is the spelling the native editors send on this machine and the settings globs are
-    // measured against it. Trailing periods and spaces are stripped from every segment
-    // and a segment left empty is dropped — deliberately over-inclusive, which for a
-    // deny-guard can only over-block. NTFS ALTERNATE DATA STREAMS (Codex gpt-5.6-sol High on
-  // d1bbf5ac6, probe-confirmed: `package.json::$DATA`, `.claude/settings.json::$DATA` and
-  // `scripts/write-codex-push-proof.mjs::$DATA` resolve to the real files): a colon inside a
-  // segment names a stream of that file, so the segment is cut at its first colon (the
-  // rooted drive `C:` is handled before the walk and never reaches it); a `\\?\` or `\\.\`
-  // device prefix in front of a drive is dropped. Repeated separators still collapse first (seventh
-  // gpt-5.6-sol round, P1: `rm -f .github//workflows/ci.yml` passed the whole chain), and
-  // there is no early return any more: every spelling goes through the segment walk.
-    const p = String(input).trim().replace(/\\/g, "/").replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, "").replace(/\/{2,}/g, "/");
-    const drive = /^([a-zA-Z]:)(\/?)/.exec(p);
-    const rooted = drive ? drive[2] === "/" : p.startsWith("/");
-    const body = drive ? p.slice(drive[0].length) : p;
-    const out = [];
-    for (const seg of body.split("/")) {
-      if (seg === "" || seg === ".") continue;
-      if (seg === "..") {
-        if (out.length && out[out.length - 1] !== "..") out.pop();
-        else if (!rooted) out.push("..");
-        continue;
-      }
-      const trimmed = seg.replace(/:.*$/, "").replace(/[. ]+$/, "");
-      if (trimmed === "") continue;
-      out.push(trimmed);
-    }
-    const joined = out.join("/");
-    if (drive && drive[2] === "/") return `${drive[1]}/${joined}`;
-    return rooted ? `/${joined}` : joined;
-  };
+  // The resolver itself is resolvePathCandidate() below (a hoisted function shared with the
+  // path-field rule): one algorithm, one output contract, both channels. It was two identical
+  // copies until CodeRabbit (Trivial on 60910c005) asked for one; the Win32 segment rules
+  // live in autopilot-lib's trimWin32Segment() so armed autopilot cannot drift either.
   const namesEnforcementSurface = (text) => {
     // `\` → `/` first, then repeated separators collapsed, so the whole-string test
     // below and every token split out of `flat` both see the canonical path. See
-    // the separator note in resolveDotSegments.
+    // the separator note in resolvePathCandidate.
     const flat = String(text ?? "").replace(/\\/g, "/").replace(/\/{2,}/g, "/");
     if (ENFORCEMENT_SURFACE_RE.test(flat)) return true;
-    return flat
-      .split(/[\s"'=:;&|()<>]+/)
-      .filter(Boolean)
-      .some((token) => ENFORCEMENT_SURFACE_RE.test(`/${resolveDotSegments(token)}`));
+    const loose = flat.split(/[\s"'=:;&|()<>]+/).filter(Boolean);
+    // A QUOTED argument is one path to the shell even with a space inside it, and the
+    // resolver folds a `.. ` segment onto `..` (CodeRabbit Major on 60910c005), so
+    // `cp /tmp/evil ".claude/worktrees/.. /hooks/x.mjs"` must be judged as ONE path that
+    // canonicalises onto the hook, while the whitespace split above sees two harmless halves.
+    // Quote-aware tokens are judged too (deny-only: it can only add a match).
+    const quoted = (flat.match(/(?:"[^"]*"|'[^']*'|\S)+/g) || []).map((t) => t.replace(/["']/g, ""));
+    return [...loose, ...quoted].some((token) => ENFORCEMENT_SURFACE_RE.test(`/${resolvePathCandidate(token)}`));
   };
   const redirectTargetsEnforcementSurface = (v) => {
     for (const m of v.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
@@ -815,6 +802,65 @@ if (shellTool) {
   // the same thing indirectly.
   const COMMAND_RESOLUTION_RE =
     /(?:^|[\s;&|(])(?:export\s+)?(?:PATH|BASH_ENV|ENV|SHELL|IFS|LD_PRELOAD|LD_LIBRARY_PATH|NODE_OPTIONS|PATHEXT)\s*=/i;
+  // UNREADABLE WRITE DESTINATIONS (GitHub Codex P1 on 6e3f1bd36; see shellAssignments at the
+  // top of this file). Judged on the RESOLVED views only, so a variable assigned in the same
+  // command has already been substituted and is not what is caught here. What remains is a
+  // destination the guard cannot read, and this is a self-certification gate, so it fails
+  // closed by shape rather than by guessing:
+  //   1. a redirect (`>`, `>>`) whose target still carries any expansion — `$d`, `${d}`,
+  //      `$(…)`, a backtick, `%d%` — whatever the head;
+  //   2. in a segment whose head is not a recognised reader (and not a shell control word,
+  //      which writes nothing itself), a token that carries a COMPUTED expansion — command
+  //      substitution, a backtick, or any `${…}` form other than a plain name — or a plain
+  //      variable glued to a path fragment (`$d/hooks/x.mjs`, `$n.json`, `%d%\x`).
+  // Known over-blocks, accepted on this file's standing rule that a false refusal is the
+  // cheaper failure: `printf x > "$TEMP/scratch.log"` (assign the path in the same command or
+  // spell it out), `npm run build -- --out=$DIR/dist`, `gh pr merge … --match-head-commit
+  // $(git rev-parse HEAD)` (pass the literal SHA; that is the exact-head discipline anyway).
+  // Readers are unaffected: `echo "$d/hooks/x"`, `cat "$(git rev-parse --show-toplevel)/…"`,
+  // `node scripts/x.mjs "$(cat f)"` and `for f in $(git ls-files); do …` all stay allowed.
+  // Residual, stated: a plain variable NOT glued to a path shape (`cp /tmp/evil "$dst"`) is
+  // an environment variable by construction (same-command assignments are resolved), and the
+  // user's environment is not an in-command channel this rule has to read.
+  const UNRESOLVED_EXPANSION_RE = /[$`]|%[A-Za-z_][A-Za-z0-9_]*%|~\d/;
+  const COMPUTED_EXPANSION_RE = /\$\(|`|<\(|>\(|\$\{(?![A-Za-z_][A-Za-z0-9_]*\})/;
+  const PLAIN_VARIABLE_ON_PATH_RE = /(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$env:[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%)(?:[\\/]|\.[A-Za-z0-9]+(?![A-Za-z0-9_]))/;
+  // Words that PRECEDE the real command in a segment (`do cp …`, `then tee …`, `{ cp …`,
+  // `time cp …`) are stepped over so the write behind them is judged; a segment that is
+  // ONLY control flow (`for f in $(…)`, `fi`, `done`) writes nothing and is skipped.
+  const SHELL_PREFIX_WORDS = new Set(["do", "then", "else", "{", "(", "!", "time", "elif"]);
+  const SHELL_CONTROL_HEADS = new Set([
+    "for", "while", "until", "if", "fi", "done", "case", "esac", "in", "select", "function",
+    "[", "[[", "}", ")", "export", "local", "declare", "readonly", "typeset", "unset",
+    "shift", "break", "continue", "return", "exit", ":", "set",
+  ]);
+  const redirectTargetUnreadable = (v) => {
+    for (const m of v.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
+      if (UNRESOLVED_EXPANSION_RE.test(m[1])) return true;
+    }
+    return false;
+  };
+  const writerSegmentUnreadable = (segment) => {
+    const words = String(segment).trim().split(/\s+/);
+    // A leading `NAME=value` is an environment prefix (`FOO=1 cp …`), not the command.
+    let k = 0;
+    while (k < words.length && (SHELL_PREFIX_WORDS.has(words[k].toLowerCase()) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k]))) k += 1;
+    const body = words.slice(k).join(" ");
+    const head = (words[k] || "").toLowerCase();
+    if (!head || SHELL_CONTROL_HEADS.has(head)) return false;
+    if (enforcementSegmentIsReadOnly(body)) return false;
+    const tokens = body.match(/(?:"[^"]*"|'[^']*'|\S)+/g) || [];
+    return tokens.some((raw) => {
+      const token = raw.replace(/["']/g, "");
+      return COMPUTED_EXPANSION_RE.test(token) || PLAIN_VARIABLE_ON_PATH_RE.test(token)
+        || hasShortNameSegment(token);
+    });
+  };
+  const unreadableWriteDestination = (v) =>
+    redirectTargetUnreadable(v) || enforcementSegments(v).some(writerSegmentUnreadable);
+  if (destructiveViews.some(unreadableWriteDestination)) {
+    deny("REVIEW PROOF GUARD: this shell command writes to a destination the guard cannot read — a redirect target or a write command's argument built from a variable, command substitution, or parameter expansion that is not assigned in the same command. The protected-path rules judge the literal text, so an assembled path could reach .claude/hooks, package.json, or the other gate files unseen. Spell the destination out and re-run. A DOS 8.3 short name (`CLAUDE~1`, `MIGRAT~1`) is refused the same way: it opens the real file but matches no protected pattern, so the long path is required.");
+  }
   if (destructiveViews.some((v) =>
     redirectTargetsEnforcementSurface(v) ||
     ((REDEFINES_COMMANDS_RE.test(v) || NESTED_EXECUTION_RE.test(v) || COMMAND_RESOLUTION_RE.test(v)) &&
@@ -938,12 +984,18 @@ if (shellTool) {
     // The rule is now the class: a `fix` word or `--fix*` flag after ANY non-script-runner
     // subcommand (`audit fix`, `constraints --fix`, `pkg fix`) is a manifest write.
     // `npm config fix` over-blocks (it writes .npmrc); accepted on this file's standing rule.
+    // A LAUNCHER runs another program, so `--fix` after it belongs to that program
+    // (`npm exec -- eslint --fix`, `pnpm exec eslint --fix`) — CodeRabbit Minor on
+    // 60910c005: the FIX check below ran first and refused both. The launcher rule
+    // still refuses a nested manifest write (`npm exec -- npm pkg fix`, `… npm audit fix`)
+    // because `pkg`/`audit` are writing words, and a nested manager token is classified
+    // in its own right by packageManagerWritesManifest.
+    if (PM_LAUNCHERS.has(sub)) return after.some((t) => !t.startsWith("-") && isWritingWord(t.toLowerCase()));
     if (!PM_SCRIPT_RUNNERS.has(sub) && (positionals.some((t) => t.toLowerCase() === "fix") || after.some((t) => /^--fix/i.test(t)))) return true;
     if (PM_SAVE_SENSITIVE.has(sub)) return competingSave;
     if (PM_REMOVE_FAMILY.has(sub)) return !noManifest;
     if (PM_UPDATE_FAMILY.has(sub)) return !noManifest;
     if (PM_ADD_FAMILY.has(sub)) return positionals.length > 0 && !noManifest;
-    if (PM_LAUNCHERS.has(sub)) return after.some((t) => !t.startsWith("-") && isWritingWord(t.toLowerCase()));
     if (PM_READ_OR_RUN.has(sub)) return false;
     return true;                                                                        // unknown subcommand: fail closed
   };
@@ -1024,7 +1076,7 @@ const ENFORCEMENT_PATH_FIELD_RE = /(?:^|\/)(?:\.husky|\.github\/workflows|\.code
 // Dot segments are resolved here too. Second review round, HIGH: an MCP write to
 // `.claude/commands/../hooks/review-proof-guard.mjs` was probe-confirmed ALLOW —
 // the intermediate directory exists, so the filesystem lands on the real hook.
-const resolvePathCandidate = (value) => {
+function resolvePathCandidate(value) {
   // Codex gpt-5.6-sol High on b2988f2da, probe-confirmed: Win32 path ALIASES reached the
   // protected files past the canonical-spelling rule. Windows drops a drive-RELATIVE
   // prefix onto the drive's current directory (`C:.claude/hooks/x.mjs` opens
@@ -1050,21 +1102,22 @@ const resolvePathCandidate = (value) => {
   const rooted = drive ? drive[2] === "/" : p.startsWith("/");
   const body = drive ? p.slice(drive[0].length) : p;
   const out = [];
-  for (const seg of body.split("/")) {
+  for (const raw of body.split("/")) {
+    // Win32 segment rules (stream suffix, trailing period/space, `.. ` folded onto `..`) are
+    // applied BEFORE the dot check — see trimWin32Segment in autopilot-lib.mjs.
+    const seg = trimWin32Segment(raw);
     if (seg === "" || seg === ".") continue;
     if (seg === "..") {
       if (out.length && out[out.length - 1] !== "..") out.pop();
       else if (!rooted) out.push("..");
       continue;
     }
-    const trimmed = seg.replace(/:.*$/, "").replace(/[. ]+$/, "");
-    if (trimmed === "") continue;
-    out.push(trimmed);
+    out.push(seg);
   }
   const joined = out.join("/");
   if (drive && drive[2] === "/") return `${drive[1]}/${joined}`;
   return rooted ? `/${joined}` : joined;
-};
+}
 if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todowrite)$/i.test(toolName)) {
   // The `scripts/(check|validate|verify)-` arm crosses "/" explicitly (PR #605, CodeRabbit F3,
   // decided "widen" 2026-09-06) so it reads the same as the shell regex above and the measured
@@ -1073,6 +1126,9 @@ if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todow
   // behaviour change here; the behaviour change lives in codex-push-lib.mjs RISKY_PATH_RES.
   const enforcementPathHit = pathCandidates.some((candidate) => {
     if (candidate == null) return false;
+    // A DOS 8.3 alias (Codex CRX-SEC-001 on 5f69ecc2d) resolves to the real file but matches
+    // no pattern, and this channel has no prompt behind it at all, so it is refused here too.
+    if (hasShortNameSegment(candidate)) return true;
     return ENFORCEMENT_PATH_FIELD_RE
       .test(`/${resolvePathCandidate(candidate)}`);
   });
@@ -1101,6 +1157,9 @@ if (/^(?:write|edit|notebookedit|multiedit)$/i.test(toolName)) {
     // was given, whether or not the spelling was already canonical; it is never a native
     // edit this repository can vouch for.
     if (/^\.\.(?:\/|$)/.test(canonical)) return true;
+    // A DOS 8.3 alias (Codex CRX-SEC-001 on 5f69ecc2d): `CLAUDE~1/hooks/x.mjs` opens the real
+    // file, the settings glob matches the spelling it is given, so the prompt never fires.
+    if (hasShortNameSegment(folded)) return true;
     if (folded === canonical) return false;
     return ENFORCEMENT_PATH_FIELD_RE.test(`/${canonical}`);
   });
