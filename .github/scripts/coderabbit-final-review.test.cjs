@@ -2772,9 +2772,9 @@ test('a native review is not accepted when its head changes during reconciliatio
 test('a green CodeRabbit status and empty COMMENTED artifact stay pending', async () => {
   const harness = makeHarness({
     action: 'labeled',
-    eventLabel: DISPATCH_LABEL,
-    pulls: [pullRequest({ labels: [REQUESTED_LABEL, DISPATCH_LABEL] })],
-    eventPullRequest: pullRequest({ labels: [REQUESTED_LABEL, DISPATCH_LABEL] }),
+    eventLabel: READY_LABEL,
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL] })],
+    eventPullRequest: pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL] }),
     coderabbitReviews: [{
       user: { login: 'coderabbitai[bot]' }, commit_id: HEAD, state: 'COMMENTED', body: '',
     }],
@@ -2788,9 +2788,9 @@ test('a green CodeRabbit status and empty COMMENTED artifact stay pending', asyn
 test('a malformed otherwise-positive CodeRabbit review stays unknown and blocked', async () => {
   const harness = makeHarness({
     action: 'labeled',
-    eventLabel: DISPATCH_LABEL,
-    pulls: [pullRequest({ labels: [REQUESTED_LABEL, DISPATCH_LABEL] })],
-    eventPullRequest: pullRequest({ labels: [REQUESTED_LABEL, DISPATCH_LABEL] }),
+    eventLabel: READY_LABEL,
+    pulls: [pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL] })],
+    eventPullRequest: pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL] }),
     coderabbitReviews: [{
       user: { login: 'coderabbitai[bot]' }, commit_id: HEAD, state: 'APPROVED', body: '',
     }],
@@ -2814,6 +2814,45 @@ function nativeReview(overrides = {}) {
     ...overrides,
   };
 }
+
+for (const [action, eventLabel, permission] of [
+  ['labeled', 'documentation', 'triage'],
+  ['labeled', REQUESTED_LABEL, 'triage'],
+  ['labeled', DISPATCH_LABEL, 'triage'],
+  ['unlabeled', 'documentation', 'triage'],
+  ['edited', null, 'triage'],
+  ['labeled', 'documentation', 'admin'],
+  ['labeled', READY_LABEL, 'triage'],
+]) {
+  test(`${permission} ${action} ${eventLabel} cannot forge native reconciliation authorization`, async () => {
+    const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+    const harness = makeHarness({
+      action, eventLabel, permission,
+      pulls: [pullRequest({ labels })], eventPullRequest: pullRequest({ labels }),
+      coderabbitReviews: [nativeReview()],
+    });
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'blocked');
+    assert.notEqual(harness.failures.length, 0);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+    assert.equal(harness.actionsComments.length, 0);
+  });
+}
+
+test('a ready authorization cannot transfer to a new head before native reconciliation starts', async () => {
+  const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+  const original = pullRequest({ labels });
+  const changed = pullRequest({ head: NEXT_HEAD, labels });
+  const harness = makeHarness({
+    pulls: [original, changed], eventPullRequest: original,
+    coderabbitReviews: [nativeReview({ commit_id: NEXT_HEAD })],
+  });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.match(harness.failures.join('\n'), /fresh authorized/);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+});
 
 test('an existing substantive review avoids dispatch and leaves no incomplete marker', async () => {
   const harness = makeHarness({ coderabbitReviews: [nativeReview()] });

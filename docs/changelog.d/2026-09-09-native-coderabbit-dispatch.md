@@ -17,6 +17,9 @@ removes the dispatch label with the other gate labels.
 Existing gate regressions are retained alongside native request, polling,
 duplicate-prevention, evidence, refusal and race tests. The provider label must
 already exist; the workflow does not create repository labels implicitly.
+Reconciliation requires a fresh authorized ready-label event bound to the
+validated commit; label managers cannot fabricate authorization by attaching
+the request and dispatch markers themselves.
 
 A real provider-label review remains unverified until the introducing PR is
 bootstrapped with Mason's exact one-time authorization. CodeRabbit documents

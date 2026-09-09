@@ -822,6 +822,7 @@ async function inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumbe
 // racing the lookup was reported as a confirmed duplicate instead of a reset.
 async function reconcileLabelEvent({
   github, owner, repo, pullNumber, core, defaultBranch, action, label, config, selfRunId,
+  authorizedReadyHeadSha = null,
   reasonPrefix: prefixOverride,
 }) {
   const reasonPrefix = prefixOverride
@@ -853,6 +854,13 @@ async function reconcileLabelEvent({
     }
 
     if (labels.has(DISPATCH_LABEL)) {
+      // Labels can be managed by triage collaborators. They record dedupe state,
+      // not who authorized this review. Only the ready-event route below supplies
+      // this head after verifying its actor and live candidate.
+      if (!authorizedReadyHeadSha || authorizedReadyHeadSha !== headSha) {
+        core.setFailed(`Native review reconciliation requires a fresh authorized ${READY_LABEL} action for head ${headSha}; dispatch state was preserved.`);
+        return { status: 'blocked', headSha, reason: 'native_reconciliation_requires_authorized_ready' };
+      }
       const reviewed = await inspectExactHeadCodeRabbitReview({
         github, owner, repo, pullNumber, headSha,
       });
@@ -1345,6 +1353,7 @@ async function runGate({ github, context, core, config, attemptState }) {
       label: eventLabel,
       config,
       selfRunId: context.runId,
+      authorizedReadyHeadSha: expectedHeadSha,
     });
   }
   if (labels.has(REQUESTED_LABEL)) {

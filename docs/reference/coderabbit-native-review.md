@@ -42,6 +42,11 @@ and preserve dedupe state. Do not clear and re-add the provider label to retry.
 Read the actual review and current candidate state first. When a matching review
 has arrived after the observation window, re-apply `ready-for-coderabbit` to
 reconcile that existing dispatch without requesting another review.
+Only a fresh ready-label event from an authorized actor can reconcile delivery,
+and that authorization is bound to the event's validated commit. Labels alone
+cannot prove authorization: lower-permission collaborators can manage labels.
+Unrelated label and metadata events therefore preserve dispatch state and stay
+blocked until an authorized ready action occurs.
 
 A head change or deliberate invalidating reset clears workflow labels, but
 removing a provider label cannot cancel an already accepted review. Before any
