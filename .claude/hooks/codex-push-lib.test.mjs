@@ -69,6 +69,22 @@ import {
 const now = Date.parse("2026-07-13T18:00:00.000Z");
 const sha = "a".repeat(40);
 
+assert.deepEqual(
+  extractPatchDestinations("*** Begin Patch\n*** Update File: docs/a.md\n*** Move to: .codex/hooks/production-action-guard.mjs\n*** End Patch"),
+  ["docs/a.md", ".codex/hooks/production-action-guard.mjs"],
+  "apply_patch Move to header names its actual destination",
+);
+assert.deepEqual(
+  extractPatchDestinations("*** Begin Patch\n*** Update File: docs/a.md\n*** Move to: .claude/session-state/claude-review-push.json\n*** End Patch"),
+  ["docs/a.md", ".claude/session-state/claude-review-push.json"],
+  "apply_patch Move to header recognizes wrapper-owned proof destinations",
+);
+assert.deepEqual(
+  extractPatchDestinations("*** Begin Patch\n*** Update File: docs/a.md\n*** Move to: docs/b.md\n@@\n-old\n+mentions .codex/hooks/production-action-guard.mjs\n*** End Patch"),
+  ["docs/a.md", "docs/b.md"],
+  "ordinary documentation move extracts its destination but not protected prose",
+);
+
 assert.equal(mainPushSource("git push origin HEAD:main", "feature"), "HEAD");
 assert.equal(gitSubcommandIsDynamic("$verb='push'; git $verb origin HEAD:main"), true, "PowerShell variable subcommand");
 assert.equal(gitSubcommandIsDynamic("verb=push; git ${verb} origin HEAD:main"), true, "POSIX variable subcommand");
