@@ -281,6 +281,7 @@ describe('JobDetail transfer intent recovery', () => {
   it.each([
     'TRANSFER_INVOICE_RESULT_INVALID',
     'IDEMPOTENCY_RESULT_INVALID',
+    'IDEMPOTENCY_RECEIPT_MISSING',
   ])('reconciles the job before allowing a new confirmed request for %s', async (token) => {
     let resolveReconciliation!: (result: { data: unknown; error: unknown }) => void;
     const reconciliation = new Promise<{ data: unknown; error: unknown }>((resolve) => {

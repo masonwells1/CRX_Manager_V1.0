@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { notifyApplicatorDispatched, notifyApplicatorRescheduled, notifyApplicatorUndispatched } from '../lib/notificationTriggers';
-import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes, sanitizeError, transferInvoiceErrorMessage } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, isTransferInvoiceResultInvalid, RpcErrorCodes, sanitizeError, transferInvoiceErrorMessage } from '../lib/db';
 import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
@@ -3163,8 +3163,7 @@ export default function JobDetail() {
       }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
-      const resultInvalid = hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID)
-        || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RESULT_INVALID);
+      const resultInvalid = isTransferInvoiceResultInvalid(err);
       const intentRecovery = transferInvoiceErrorMessage(err);
       if (resultInvalid) {
         setTransferReconciliationPending(true);

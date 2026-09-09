@@ -9,8 +9,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   supabase,
   assertRpcResult,
-  hasRpcCode,
-  RpcErrorCodes,
+  isTransferInvoiceResultInvalid,
   sanitizeError,
   transferInvoiceErrorMessage,
 } from '../../lib/db';
@@ -224,8 +223,7 @@ export default function UnbilledApplicationsPanel() {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
         extra: { context: 'transfer_job_to_invoice', jobId: pendingJobInvoice.row.id },
       });
-      const resultInvalid = hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID)
-        || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RESULT_INVALID);
+      const resultInvalid = isTransferInvoiceResultInvalid(err);
       if (resultInvalid) {
         const failedJobId = pendingJobInvoice.row.id;
         setPendingJobInvoice(null);

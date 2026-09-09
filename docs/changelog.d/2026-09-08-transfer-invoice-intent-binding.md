@@ -13,7 +13,8 @@ signal before it can commit an unbound receipt; the new wrapper marks its own
 transaction before calling the preserved implementation. The runtime refusal
 tokens are also registered in the shared TypeScript RPC error contract, with
 tested plain-English retry and reconciliation guidance in both job-invoice entry
-points, including corrupt cached-receipt failures.
+points, including corrupt cached-receipt failures and missing post-mutation
+receipts.
 
 An offline static contract proof and a disposable PostgreSQL 17 behavioral proof
 cover unsafe-autocommit refusal, stale-body rollback, and replay paths. This entry

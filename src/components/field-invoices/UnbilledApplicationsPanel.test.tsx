@@ -129,6 +129,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
   it.each([
     'TRANSFER_INVOICE_RESULT_INVALID',
     'IDEMPOTENCY_RESULT_INVALID',
+    'IDEMPOTENCY_RECEIPT_MISSING',
   ])('refreshes the backlog before allowing a new confirmed request for %s', async (token) => {
     let jobReads = 0;
     let ticketReads = 0;

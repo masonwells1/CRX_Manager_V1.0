@@ -10,6 +10,7 @@ import {
   assertRpcResult,
   hasRpcCode,
   describePostInvoiceBlock,
+  isTransferInvoiceResultInvalid,
   rpcAuthErrorMessage,
   transferInvoiceErrorMessage,
   RpcErrorCodes,
@@ -165,6 +166,15 @@ describe('transferInvoiceErrorMessage', () => {
       .toBe('The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.');
     expect(transferInvoiceErrorMessage({ code: 'P0001', message: 'IDEMPOTENCY_RESULT_INVALID' }))
       .toBe('The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.');
+    expect(transferInvoiceErrorMessage({ code: 'P0001', message: 'IDEMPOTENCY_RECEIPT_MISSING' }))
+      .toBe('The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.');
+  });
+
+  it('classifies every untrusted receipt outcome for reconciliation', () => {
+    expect(isTransferInvoiceResultInvalid(new Error('TRANSFER_INVOICE_RESULT_INVALID'))).toBe(true);
+    expect(isTransferInvoiceResultInvalid({ message: 'IDEMPOTENCY_RESULT_INVALID' })).toBe(true);
+    expect(isTransferInvoiceResultInvalid({ message: 'IDEMPOTENCY_RECEIPT_MISSING' })).toBe(true);
+    expect(isTransferInvoiceResultInvalid({ message: 'SPLIT_OVERRIDE_UNSUPPORTED' })).toBe(false);
   });
 
   it('leaves unrelated transfer errors to the existing handlers', () => {

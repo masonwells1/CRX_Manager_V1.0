@@ -314,6 +314,7 @@ export const RpcErrorCodes = {
   TRANSFER_INVOICE_INTENT_CUTOVER_RETRY: 'TRANSFER_INVOICE_INTENT_CUTOVER_RETRY',
   TRANSFER_INVOICE_RESULT_INVALID: 'TRANSFER_INVOICE_RESULT_INVALID',
   IDEMPOTENCY_RESULT_INVALID: 'IDEMPOTENCY_RESULT_INVALID',
+  IDEMPOTENCY_RECEIPT_MISSING: 'IDEMPOTENCY_RECEIPT_MISSING',
   // transfer_invoice_to_job (U7) — this invoice is one member of a multi-owner group;
   // return the job to scheduling by voiding each owner invoice instead
   JOB_BILLED_AS_GROUP: 'JOB_BILLED_AS_GROUP',
@@ -455,14 +456,17 @@ export function rpcAuthErrorMessage(err: unknown): string | null {
  * the cutover case should retry the same request, while an invalid result must be
  * reconciled from a fresh job read before the operator decides whether to retry.
  */
+export function isTransferInvoiceResultInvalid(err: unknown): boolean {
+  return hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID)
+    || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RESULT_INVALID)
+    || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RECEIPT_MISSING);
+}
+
 export function transferInvoiceErrorMessage(err: unknown): string | null {
   if (hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_INTENT_CUTOVER_RETRY)) {
     return 'The invoice safety update finished during this transfer. Try Transfer to Invoice again — the app will safely reuse the same request.';
   }
-  if (
-    hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID)
-    || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RESULT_INVALID)
-  ) {
+  if (isTransferInvoiceResultInvalid(err)) {
     return 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
   }
   return null;
