@@ -3038,6 +3038,19 @@ r = runHook(fn(`
   DECLARE
     v_actor uuid := auth.uid();
   BEGIN
+    IF true THEN v_actor := p_target_id; END IF;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`, "p_performed_by uuid, p_target_id uuid"));
+ok(isDeny(r), "a same-line THEN assignment cannot preserve a trusted auth.uid binding");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
     "v_actor" := p_performed_by;
     IF p_performed_by IS DISTINCT FROM v_actor THEN
       RAISE EXCEPTION 'p_performed_by does not match authenticated user';

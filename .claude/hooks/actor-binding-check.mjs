@@ -1681,7 +1681,8 @@ function stableAuthUidBindings(structuralBody, beforeIndex, allowUnqualifiedUuid
     // evading the reassignment count.
     const optionalBlockQualifier = `(?:${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*)?`;
     const assignmentRe = new RegExp(
-      `(?:^|[;\\n]|\\bDECLARE\\b)\\s*${optionalBlockQualifier}${ref}` +
+      `(?:^|[;\\n]|\\bDECLARE\\b|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b|\\bLOOP\\b)\\s*` +
+        `${optionalBlockQualifier}${ref}` +
         `(?:\\s+[^;\\n:=]+?)?\\s*:=`,
       "gi"
     );
