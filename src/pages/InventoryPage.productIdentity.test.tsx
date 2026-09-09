@@ -80,11 +80,26 @@ vi.mock('../components/ui/Toast', () => ({
   useToast: () => ({ toast: mocks.toast }),
 }));
 
+// Mirror the REAL hook's full surface. A partial mock is not neutral here: a
+// component that scopes its retained key calls getKeyFor/resetKeyFor, and an
+// undefined member throws inside the click handler, so the RPC never fires and
+// the test fails for a reason that has nothing to do with what it asserts.
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({
-    getKey: () => 'idem-1',
-    resetKey: mocks.resetKey,
-  }),
+  useIdempotencyKey: () => {
+    const scopedKeys = new Map<string, string>();
+    return {
+      getKey: () => 'idem-1',
+      resetKey: mocks.resetKey,
+      getKeyFor: (scope: string) => {
+        if (!scopedKeys.has(scope)) scopedKeys.set(scope, `idem-1:${scopedKeys.size + 1}`);
+        return scopedKeys.get(scope)!;
+      },
+      resetKeyFor: (scope: string) => {
+        scopedKeys.delete(scope);
+        mocks.resetKey(scope);
+      },
+    };
+  },
 }));
 
 vi.mock('../lib/criticalAction', () => ({

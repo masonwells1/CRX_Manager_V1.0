@@ -319,6 +319,58 @@ test('the workflow runs every subscribed label event through the trusted gate', 
   assert.doesNotMatch(job, /github\.event\.label\.name\s*==\s*'ready-for-coderabbit'/);
 });
 
+function workflowJobDeclarationLines(workflow) {
+  const lines = workflow.split(/\r?\n/);
+  const jobsStart = lines.findIndex((line) => line === 'jobs:');
+  assert.notEqual(jobsStart, -1, 'the trusted workflow must declare a jobs block');
+
+  const declarations = [];
+  for (const line of lines.slice(jobsStart + 1)) {
+    if (/^\S/.test(line)) break;
+    if (/^ {2}(?! )\S/.test(line) && !/^ {2}#/.test(line)) {
+      declarations.push(line);
+    }
+  }
+  return declarations;
+}
+
+function assertOnlyTrustedGateJob(workflow) {
+  assert.deepEqual(
+    workflowJobDeclarationLines(workflow),
+    ['  final-review-gate:'],
+    'GitHub exposes per-run/job database IDs, not a stable YAML job key; keep this workflow to one literal gate job declaration so its check name remains unambiguous',
+  );
+}
+
+test('the trusted final-review workflow has only the final-review-gate job', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+  assertOnlyTrustedGateJob(workflow);
+});
+
+test('the one-job workflow guard rejects quoted, flow-style, and explicit-key second jobs', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
+    'utf8',
+  );
+  const secondJobVariants = [
+    '  "security":',
+    '  security: { runs-on: ubuntu-latest }',
+    '  ? security\n  : { runs-on: ubuntu-latest }',
+  ];
+
+  for (const secondJob of secondJobVariants) {
+    const mutated = workflow.replace('  final-review-gate:', `  final-review-gate:\n${secondJob}`);
+    assert.throws(
+      () => assertOnlyTrustedGateJob(mutated),
+      /one literal gate job declaration/,
+      secondJob,
+    );
+  }
+});
+
 test('the workflow binds the CodeRabbit exclusion to the trusted status creator', () => {
   const workflow = fs.readFileSync(
     path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
@@ -394,8 +446,6 @@ function makeHarness({
   checkRunsSequence = null,
   statusesSequence = null,
   resolvedWorkflowPath = '.github/workflows/ci.yml',
-  selfWorkflowId = 9999,
-  selfWorkflowPath = '.github/workflows/coderabbit-final-review.yml',
   resolvedWorkflowByRunId = null,
   liveLabelSequence = null,
   pullFailuresAt = [],
@@ -418,6 +468,8 @@ function makeHarness({
   // pre-attempt snapshot and the ambiguous-post recovery, so these indices are
   // global, not poll-relative.
   deleteCommentFailure = false,
+  gateWorkflowId = 818181,
+  gateWorkflowPath = '.github/workflows/coderabbit-final-review.yml',
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = existingComments.map((comment) => ({ ...comment }));
@@ -474,13 +526,13 @@ function makeHarness({
     },
     rest: {
       actions: {
-        getWorkflowRun: async ({ run_id: requestedRunId }) => {
+        getWorkflowRun: async ({ run_id: actionRunId }) => {
           if (workflowRunFailure) throw new Error('workflow lookup failed');
-          if (requestedRunId === runId) {
-            return { data: { workflow_id: selfWorkflowId, path: selfWorkflowPath } };
+          if (Number(actionRunId) === Number(runId)) {
+            return { data: { workflow_id: gateWorkflowId, path: gateWorkflowPath } };
           }
-          if (resolvedWorkflowByRunId?.[requestedRunId]) {
-            return { data: resolvedWorkflowByRunId[requestedRunId] };
+          if (resolvedWorkflowByRunId?.[actionRunId]) {
+            return { data: resolvedWorkflowByRunId[actionRunId] };
           }
           return { data: { workflow_id: 4242, path: resolvedWorkflowPath } };
         },
@@ -730,27 +782,6 @@ function inProgressCheck(name, runId) {
   };
 }
 
-function completedWorkflowCheck({
-  name = 'final-review-gate',
-  conclusion = 'failure',
-  runId,
-  workflowId,
-  workflowPath,
-}) {
-  return {
-    id: runId,
-    app: { id: 15368 },
-    name,
-    status: 'completed',
-    conclusion,
-    created_at: '2026-08-30T11:59:00Z',
-    completed_at: '2026-08-30T12:00:00Z',
-    details_url: `https://github.com/masonwells1/FarmRx/actions/runs/${runId}/job/1`,
-    workflow_id: workflowId,
-    workflow_path: workflowPath,
-  };
-}
-
 test("the gate's own in-progress check does not block it", async () => {
   const harness = makeHarness({
     runId: 909090,
@@ -771,10 +802,13 @@ test("the gate's own in-progress check does not block it", async () => {
 // concurrent run of this same workflow (different id, same name). Without this,
 // "ignore anything called final-review-gate" would pass the test above while
 // letting a genuinely unfinished check through.
-test('an in-progress check from a different run still blocks', async () => {
+test('a concurrent in-progress check from the trusted gate workflow still blocks', async () => {
+  const concurrentGateRun = inProgressCheck('final-review-gate', 424242);
+  concurrentGateRun.workflow_id = 818181;
+  concurrentGateRun.workflow_path = '.github/workflows/coderabbit-final-review.yml';
   const harness = makeHarness({
     runId: 909090,
-    checkRuns: [completedCheck('foundation'), inProgressCheck('final-review-gate', 424242)],
+    checkRuns: [completedCheck('foundation'), concurrentGateRun],
   });
   const result = await execute(harness);
 
@@ -785,50 +819,97 @@ test('an in-progress check from a different run still blocks', async () => {
   );
 });
 
-test('a historical failed check from this gate does not block its retry', async () => {
-  const gatePath = '.github/workflows/coderabbit-final-review.yml';
+test('a completed failure from an earlier trusted gate run does not wedge a retry', async () => {
+  const priorGateFailure = completedCheck('final-review-gate', 'failure');
+  priorGateFailure.workflow_id = undefined;
+  priorGateFailure.workflow_path = undefined;
+  priorGateFailure.details_url = 'https://github.com/masonwells1/FarmRx/actions/runs/555555/job/1';
   const harness = makeHarness({
-    runId: 909090,
-    selfWorkflowId: 4242,
-    selfWorkflowPath: gatePath,
-    checkRuns: [
-      completedCheck('foundation'),
-      completedWorkflowCheck({
-        runId: 424242,
-        workflowId: 4242,
-        workflowPath: gatePath,
-      }),
-    ],
+    checkRuns: [completedCheck('foundation'), priorGateFailure],
+    resolvedWorkflowByRunId: {
+      555555: {
+        workflow_id: 818181,
+        path: '.github/workflows/coderabbit-final-review.yml',
+      },
+    },
   });
   const result = await execute(harness);
 
   assert.equal(
     result.status,
     'requested',
-    'an earlier failure of this control-plane gate records a spent attempt, not a candidate failure',
+    'only a completed failure proven to come from this gate workflow is stale retry state',
   );
   assert.deepEqual(harness.failures, []);
 });
 
-test('a historical failed check from another workflow still blocks', async () => {
+test('a completed same-name failure from another workflow still blocks', async () => {
+  const untrustedFailure = completedCheck('final-review-gate', 'failure');
+  untrustedFailure.workflow_id = undefined;
+  untrustedFailure.workflow_path = undefined;
+  untrustedFailure.details_url = 'https://github.com/masonwells1/FarmRx/actions/runs/666666/job/1';
   const harness = makeHarness({
-    runId: 909090,
-    checkRuns: [
-      completedCheck('foundation'),
-      completedWorkflowCheck({
-        runId: 424242,
-        workflowId: 5151,
-        workflowPath: '.github/workflows/another-gate.yml',
-      }),
-    ],
+    checkRuns: [completedCheck('foundation'), untrustedFailure],
+    resolvedWorkflowByRunId: {
+      666666: {
+        workflow_id: 919191,
+        path: '.github/workflows/not-the-gate.yml',
+      },
+    },
   });
   const result = await execute(harness);
 
   assert.notEqual(
     result.status,
     'requested',
-    'only the current trusted gate workflow is control-plane state; another failed workflow remains a candidate blocker',
+    'a job name is not provenance: another workflow failure must still stop the review request',
   );
+  assert.match(harness.failures.join('\n'), /final-review-gate: completed\/failure/);
+});
+
+test('a completed failed different job from the trusted gate workflow still blocks', async () => {
+  const trustedWorkflowOtherJob = completedCheck('gate-security-audit', 'failure');
+  trustedWorkflowOtherJob.workflow_id = 818181;
+  trustedWorkflowOtherJob.workflow_path = '.github/workflows/coderabbit-final-review.yml';
+  const harness = makeHarness({
+    checkRuns: [completedCheck('foundation'), trustedWorkflowOtherJob],
+  });
+  const result = await execute(harness);
+
+  assert.notEqual(
+    result.status,
+    'requested',
+    'the retry exemption is for this gate job only, not a blanket exemption for its workflow',
+  );
+  assert.match(harness.failures.join('\n'), /gate-security-audit: completed\/failure/);
+});
+
+test('a matching gate name and workflow from another app still blocks', async () => {
+  const foreignAppFailure = completedCheck('final-review-gate', 'failure');
+  foreignAppFailure.app = { id: 99999 };
+  foreignAppFailure.workflow_id = 818181;
+  foreignAppFailure.workflow_path = '.github/workflows/coderabbit-final-review.yml';
+  const harness = makeHarness({
+    checkRuns: [completedCheck('foundation'), foreignAppFailure],
+  });
+  const result = await execute(harness);
+
+  assert.notEqual(result.status, 'requested');
+  assert.match(harness.failures.join('\n'), /final-review-gate: completed\/failure/);
+});
+
+test('a matching gate name and workflow without an app identity still blocks', async () => {
+  const missingAppFailure = completedCheck('final-review-gate', 'failure');
+  missingAppFailure.app = undefined;
+  missingAppFailure.workflow_id = 818181;
+  missingAppFailure.workflow_path = '.github/workflows/coderabbit-final-review.yml';
+  const harness = makeHarness({
+    checkRuns: [completedCheck('foundation'), missingAppFailure],
+  });
+  const result = await execute(harness);
+
+  assert.notEqual(result.status, 'requested');
+  assert.match(harness.failures.join('\n'), /final-review-gate: completed\/failure/);
 });
 
 test('green frozen candidate posts exactly one review command and records the request', async () => {
@@ -1951,7 +2032,7 @@ test('a workflow-provenance lookup failure warns with the API error and blocks c
 
   assert.equal(result.status, 'blocked');
   assert.match(harness.notices.join('\n'), /workflow lookup failed/);
-  assert.match(harness.failures[0], /trusted required check is missing or not successful/);
+  assert.match(harness.failures[0], /workflow provenance could not be verified/);
 });
 
 test('a head change during the gate removes the request marker and posts no comment', async () => {

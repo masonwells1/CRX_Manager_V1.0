@@ -5,6 +5,8 @@ const REQUESTED_LABEL = 'coderabbit-review-requested';
 const REVIEW_COMMAND = '@coderabbitai review';
 const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 const CODERABBIT_BOT_LOGIN = 'coderabbitai[bot]';
+const GITHUB_ACTIONS_APP_ID = 15368;
+const GATE_CHECK_NAME = 'final-review-gate';
 const RESET_ACTIONS = new Set([
   'synchronize',
   'closed',
@@ -514,11 +516,10 @@ async function collectReviewDecisionBlockers({
     // mergeability state all block here too. Refusing costs a relabel; posting
     // blind can spend a paid slot on a pull request that cannot merge.
     //
-    // Known cost, stated rather than hidden: a refusal leaves a red
-    // `final-review-gate` check run on this head, and a previous completed-failure
-    // run of this workflow still counts as a blocking check on later attempts at
-    // the same SHA, so a transient GraphQL error can require a new commit. That is
-    // a separate open defect in this gate, not a reason to fail open here.
+    // A refusal leaves a red `final-review-gate` check run on this head. The
+    // retry path below recognizes a completed historical result from this exact
+    // trusted gate, so the transient failure remains fail-closed without forcing
+    // an unrelated candidate commit merely to request the review again.
     core.warning(`Could not read the review decision: ${error.message}`);
     return [`could not read the pull request review decision (${error.message})`];
   }
@@ -571,6 +572,53 @@ async function attachRequiredWorkflowProvenance({
       core.warning(`Could not resolve workflow provenance for ${check.name}: ${error.message}`);
     }
   }));
+}
+
+// A failed earlier invocation of this gate leaves a completed check run on the
+// candidate SHA. Retrying the ready label starts a NEW invocation, so treating
+// that old gate result as an ordinary failed check wedges every retry forever.
+//
+// Do not identify it by job name: another workflow can call a job
+// `final-review-gate`. Instead ask Actions for THIS invocation's immutable
+// workflow identity, then only discount *completed* checks from that exact
+// workflow AND this exact gate job from the official GitHub Actions app. A
+// concurrent invocation remains in_progress and therefore blocks; so does a
+// same-name job from any other workflow, or a different job in this workflow.
+async function resolveTrustedGateWorkflowProvenance({
+  github, owner, repo, selfRunId, core,
+}) {
+  if (!isPositiveSafeInteger(selfRunId)) {
+    return { error: 'this workflow run id is missing or invalid' };
+  }
+
+  try {
+    const response = await github.rest.actions.getWorkflowRun({
+      owner, repo, run_id: Number(selfRunId),
+    });
+    const workflowId = response?.data?.workflow_id;
+    const workflowPath = response?.data?.path;
+    if (!isPositiveSafeInteger(workflowId) || !isNonBlankString(workflowPath)) {
+      return { error: 'this workflow run did not identify a trusted workflow' };
+    }
+    return { workflowId, workflowPath };
+  } catch (error) {
+    core.warning(`Could not resolve this gate workflow provenance: ${error.message}`);
+    return { error: error.message };
+  }
+}
+
+function isCompletedTrustedGateCheck(check, trustedGateWorkflow) {
+  // The checks/jobs APIs expose per-invocation database IDs, not a stable YAML
+  // job-key field. The workflow test therefore pins this trusted workflow to its
+  // sole job key; this runtime check binds the resulting check run to Actions,
+  // the exact workflow identity, and that job name.
+  return check
+    && typeof check === 'object'
+    && check.status === 'completed'
+    && Number(check.app?.id) === GITHUB_ACTIONS_APP_ID
+    && normalize(check.name) === GATE_CHECK_NAME
+    && Number(check.workflow_id) === Number(trustedGateWorkflow.workflowId)
+    && String(check.workflow_path || '') === String(trustedGateWorkflow.workflowPath);
 }
 
 function mergeabilityIsPending(pullRequest) {
@@ -880,29 +928,8 @@ async function reconcileLabelEvent({
 // name. A concurrent second run of this same workflow keeps its own id and is
 // still treated as a blocker, which is correct — that one really is a pending
 // check that has not finished.
-//
-// A prior COMPLETED failure from this same gate must also be excluded. It is the
-// record of an earlier attempt to request a CodeRabbit review, not a candidate
-// prerequisite; retaining it makes a transient gate failure permanent for a
-// frozen candidate. That broader exclusion is bound to the current workflow's
-// authoritative ID AND path obtained from this run, never the mutable job name.
-// If that identity cannot be read, the old run stays visible and blocks.
 async function collectCheckBlockers({ github, owner, repo, headSha, config, core, selfRunId = null }) {
-  const selfWorkflowPromise = Number.isSafeInteger(Number(selfRunId)) && Number(selfRunId) > 0
-    ? github.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(selfRunId) })
-      .then((response) => {
-        const workflowId = Number(response?.data?.workflow_id);
-        const workflowPath = String(response?.data?.path || '');
-        return Number.isSafeInteger(workflowId) && workflowId > 0 && workflowPath
-          ? { workflowId, workflowPath }
-          : null;
-      })
-      .catch((error) => {
-        core.warning(`Could not resolve this gate workflow identity: ${error.message}`);
-        return null;
-      })
-    : Promise.resolve(null);
-  const [checkRuns, statuses, selfWorkflow] = await Promise.all([
+  const [checkRuns, statuses] = await Promise.all([
     // NO mapFn. `checks.listForRef` returns a NAMESPACED list envelope
     // (`{ total_count, check_runs }`), and Octokit's paginate normalizes that
     // before the mapFn ever sees it: `normalizePaginatedListResponse` replaces
@@ -926,33 +953,38 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config, core
       github.rest.repos.listCommitStatusesForRef,
       { owner, repo, ref: headSha, per_page: 100 },
     ),
-    selfWorkflowPromise,
   ]);
+  // Drop THIS run's own check before anything evaluates it. Done here rather
+  // than in evaluateChecks so the shape guard there still sees the raw list and
+  // a malformed entry is still reported, not silently filtered away.
+  const observedCheckRuns = Array.isArray(checkRuns) && selfRunId !== null
+    ? checkRuns.filter((check) => !(
+      check && typeof check === 'object' && actionRunId(check.details_url) === Number(selfRunId)
+    ))
+    : checkRuns;
   await attachRequiredWorkflowProvenance({
     github,
     owner,
     repo,
-    checkRuns,
+    checkRuns: observedCheckRuns,
     requiredChecks: config.requiredChecks,
     core,
   });
-  // Drop this run and earlier runs from this exact gate before evaluation. Do it
-  // after provenance resolution so a historical check is excluded only when its
-  // workflow ID and path both match the trusted identity of the current run.
-  // The shape guard in evaluateChecks still receives every malformed entry.
-  const observedCheckRuns = Array.isArray(checkRuns) && selfRunId !== null
-    ? checkRuns.filter((check) => {
-      if (!check || typeof check !== 'object') return true;
-      if (actionRunId(check.details_url) === Number(selfRunId)) return false;
-      return !(
-        selfWorkflow
-        && Number(check.workflow_id) === selfWorkflow.workflowId
-        && String(check.workflow_path || '') === selfWorkflow.workflowPath
-      );
-    })
-    : checkRuns;
+  const trustedGateWorkflow = await resolveTrustedGateWorkflowProvenance({
+    github,
+    owner,
+    repo,
+    selfRunId,
+    core,
+  });
+  if (trustedGateWorkflow.error) {
+    return [`final-review-gate: workflow provenance could not be verified (${trustedGateWorkflow.error})`];
+  }
+  const retrySafeCheckRuns = Array.isArray(observedCheckRuns)
+    ? observedCheckRuns.filter((check) => !isCompletedTrustedGateCheck(check, trustedGateWorkflow))
+    : observedCheckRuns;
   return evaluateChecks({
-    checkRuns: observedCheckRuns,
+    checkRuns: retrySafeCheckRuns,
     statuses,
     requiredChecks: config.requiredChecks,
     ignoredChecks: config.ignoredChecks,

@@ -1,0 +1,153 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
+
+/**
+ * Renders the REAL NewVendorBill page and drives a real PO-overage rejection.
+ *
+ * A source-text guard cannot catch this class of defect, because the defect was
+ * WHICH dialog the blocked branch opens. `ReasonModal` collects a reason that
+ * `beginIntent()` then discards whenever a pending record survives, so prompting
+ * there loops forever — the operator confirms, the confirmation is dropped, and
+ * the same refusal comes back. These tests render the page and look at the DOM.
+ *
+ * They also pin the healthy path: an ordinary overage must still prompt, and
+ * confirming it must put `p_confirm_po_overage` and `p_po_overage_reason` on the
+ * wire. That is the payload the stale-`useState` read used to strip.
+ */
+
+const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
+  mockFrom: vi.fn(),
+  mockRpc: vi.fn(),
+  mockToast: vi.fn(),
+  mockNavigate: vi.fn(),
+}));
+
+function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
+  const chain: Record<string, unknown> = {};
+  const method = (..._args: unknown[]) => chain;
+  for (const name of ['select', 'eq', 'is', 'in', 'order', 'limit']) chain[name] = method;
+  const promise = Promise.resolve(result);
+  chain.then = promise.then.bind(promise);
+  chain.catch = promise.catch.bind(promise);
+  chain.finally = promise.finally.bind(promise);
+  return chain;
+}
+
+// Mock ONLY the Supabase client. `hasRpcCode` / `RpcErrorCodes` come from the
+// real module on purpose: the previous stub matched on `error.code === '22023'`,
+// but the real `hasRpcCode` matches on the error MESSAGE (`message === code`, or
+// a `CODE:` / `CODE ` prefix) and the real constant is the semantic string, not a
+// SQLSTATE. Stubbing them asserted a contract that does not exist in production —
+// the page could have failed to recognize a real refusal with this test green.
+//
+// `assertRpcResult` is real for the same reason. It used to be stubbed as an
+// identity function, which deleted the very guard the success path relies on:
+// the page calls assertRpcResult(data, 'create_vendor_bill'), and under the stub
+// a null `data` — a silent RLS denial — would have flowed on into the success
+// path here while production threw. A test must not replace the guard standing
+// next to the behavior it is asserting.
+vi.mock('../lib/db', async () => {
+  const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
+  return {
+    ...actual,
+    supabase: { from: mockFrom, rpc: mockRpc },
+  };
+});
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({ profile: { id: 'actor-overage' }, role: 'admin' }),
+}));
+vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
+vi.mock('react-router-dom', () => ({ useNavigate: () => mockNavigate }));
+
+import NewVendorBill from './NewVendorBill';
+
+const VENDORS = [
+  { id: 'v-1', name: 'Acme Chemical', default_payment_terms: null, default_payment_terms_days: null },
+];
+
+describe('NewVendorBill PO-overage handling', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    globalThis.indexedDB = new IDBFactory();
+    mockToast.mockClear();
+    mockNavigate.mockClear();
+    mockRpc.mockReset();
+    mockFrom.mockImplementation((table: string) =>
+      buildChain({ data: table === 'vendors' ? VENDORS : [], error: null }));
+  });
+
+  async function fillAndSave() {
+    await waitFor(() => expect(screen.getByText('Acme Chemical')).toBeTruthy());
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'v-1' } });
+    fireEvent.change(screen.getByPlaceholderText("Vendor's invoice/bill #"), {
+      target: { value: 'VB-OVERAGE-1' },
+    });
+    fireEvent.change(screen.getAllByPlaceholderText('0.00')[0], { target: { value: '1000.00' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create Bill/i }));
+  }
+
+  it('prompts for a reason on an ordinary overage and sends the confirmation on retry', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' } });
+    render(<NewVendorBill />);
+    await fillAndSave();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Enter a reason to confirm the overage/i)).toBeTruthy();
+    });
+    expect(screen.queryByText(/pending request for this bill could not be cleared/i)).toBeNull();
+
+    mockRpc.mockResolvedValue({ data: 'bill-1', error: null });
+    fireEvent.change(screen.getByPlaceholderText(/Why should cumulative billing exceed/i), {
+      target: { value: 'Freight surcharge approved by the owner' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /^Create Bill$/ }).slice(-1)[0]);
+
+    await waitFor(() => expect(mockRpc.mock.calls.length).toBeGreaterThan(1));
+    const retryArgs = mockRpc.mock.calls[mockRpc.mock.calls.length - 1][1];
+    expect(retryArgs.p_confirm_po_overage).toBe(true);
+    expect(retryArgs.p_po_overage_reason).toBe('Freight surcharge approved by the owner');
+  });
+
+  it('shows a blocking banner and opens no reason prompt when the pending record survives', async () => {
+    // beginIntent() has already succeeded by the time the RPC answers. Killing the
+    // durable store here — and only here — makes the release fail the way a live peer
+    // claim does, so the record survives into classifyFailure(). Confirming anything
+    // in this state is futile, so no confirmation control may be offered.
+    mockRpc.mockImplementation(async () => {
+      Object.defineProperty(globalThis, 'indexedDB', { configurable: true, writable: true, value: undefined });
+      return { data: null, error: { code: 'P0001', message: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: cumulative active bills would reach 112% of the PO total' } };
+    });
+    render(<NewVendorBill />);
+    await fillAndSave();
+
+    await waitFor(() => {
+      expect(screen.getByText(/pending request for this bill could not be cleared/i)).toBeTruthy();
+    });
+    expect(screen.queryByText(/Enter a reason to confirm the overage/i)).toBeNull();
+    expect(screen.queryByPlaceholderText(/Why should cumulative billing exceed/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Retry Exact Bill/i })).toBeTruthy();
+  });
+
+  // Un-stubbing `assertRpcResult` in the mock above is only worth anything if
+  // something asserts on it. Without this case the suite passes identically with
+  // the identity stub reinstated, because the other two tests read
+  // `mockRpc.mock.calls` — arguments captured BEFORE the guard ever runs.
+  //
+  // `{ data: null, error: null }` is what a silent RLS denial looks like from
+  // PostgREST: no error, no row. The page must treat that as a failure. Creating
+  // a vendor bill that was never written, then navigating to its detail page, is
+  // a money-path defect.
+  it('treats a null RPC result as a failure and does not report a bill created', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: null });
+    render(<NewVendorBill />);
+    await fillAndSave();
+
+    await waitFor(() => {
+      expect(mockToast.mock.calls.some(([level]) => level === 'error')).toBe(true);
+    });
+    expect(mockToast.mock.calls.some(([, message]) => message === 'Vendor bill created')).toBe(false);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});
