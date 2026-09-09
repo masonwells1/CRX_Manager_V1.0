@@ -276,6 +276,7 @@ authorize another general pattern-hardening round, a new SQL parser, wider actor
 cross-routine dataflow, incremental-edit reconstruction, changes to the post-apply predicates, or
 claims that the hook is a security boundary. Future residuals return to the capped posture unless
 Mason separately authorizes them.
+
 ## 2026-09-03 — accepted the Codex HIGH on the Section 9 apply window; a lock-then-check migration needs a quiesced rollout
 
 **Source:** Mason's in-chat acceptance on 2026-09-03 ("yeah accept it and write up the rule"),
