@@ -209,9 +209,20 @@ ok(classifySql("SELECT 1 AS é$x$a, '$x$--'; DELETE FROM customers;").block, "a 
 ok(classifySql("SELECT $é$--$é$; DELETE FROM customers;").block, "a NON-ASCII dollar tag is a real body, so its -- is inert");
 ok(classifySql(`SELECT $${"a".repeat(70)}$--$${"a".repeat(70)}$; DELETE FROM customers;`).block, "a dollar tag longer than 64 chars is still a real body");
 ok(classifySql("SELECT 1$x$--$x$; DELETE FROM customers;").block, "a DIGIT cannot absorb the $, so this opens a real body");
-// standard_conforming_strings is not visible from here, so a backslash is read
-// as an escape: that can only EXTEND a literal, keeping the rest verbatim.
+// standard_conforming_strings is not visible from here, and BOTH readings of a
+// backslash were proven to hide a write, so classifySql runs both and blocks if
+// either sees a hazard. These two cases fail in OPPOSITE readings, so together
+// they pin the union: neither single reading can satisfy both.
+// Reading `\` as an escape is what saves this one (round 2) --
 ok(classifySql("SELECT 'x\\'--'; DELETE FROM customers;").block, "a backslash-escaped quote cannot end the literal early and comment out the DELETE");
+// -- and reading it literally is what saves these (round 3). With `\` escaping,
+// the literal over-runs and swallows the `$$[E2E]$$` that stripDollarQuoted
+// would have deleted, so the surviving marker exempts a real financial DELETE.
+ok(classifySql("SELECT 'a\\', $$[E2E]$$; DELETE FROM invoices;").block, "an over-consumed literal cannot smuggle an [E2E] marker past the dollar-strip");
+ok(classifySql("SELECT 'a\\', $$[E2E]$$; DELETE FROM customers;").block, "the same shape cannot exempt a business-table DELETE");
+ok(classifySql("SELECT 'a\\', $$[E2E]$$; UPDATE invoices SET total_cents = 0;").block, "the same shape cannot exempt an UPDATE");
+// The documented, tested exemption still works: no backslash, so both readings agree.
+ok(!classifySql("UPDATE customers SET name = 'x' WHERE id = 1 -- [E2E]").block, "a genuine [E2E] marker still exempts a fake-data write");
 ok(classifySql('UPDATE public . "orders" SET notes = \'x\' WHERE id = 1').block, "spaced qualification still blocked");
 // Codex P1 round 4: live stock tables were missing from the lists.
 ok(classifySql("UPDATE inventory SET quantity = 0 WHERE id = 1").block, "raw UPDATE of inventory (live stock) blocked");

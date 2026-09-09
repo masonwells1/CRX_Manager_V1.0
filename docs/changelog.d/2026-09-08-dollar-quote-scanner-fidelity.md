@@ -47,6 +47,12 @@ quote ending a literal early.
   cannot see the session's `standard_conforming_strings`, and assuming an escape
   can only EXTEND a literal — which both lexers copy verbatim — so any statement
   that follows stays visible to classification.
+  **This reasoning was wrong, and a third review round disproved it the same day.
+  The statement does stay visible; it just stops mattering, because an
+  over-consumed literal also swallows a `$$...$$` span the dollar-strip would
+  have removed, and a surviving `[E2E]` marker exempts the whole batch before any
+  check runs. Superseded by `2026-09-08-backslash-ambiguity-union.md`, which
+  stops guessing and classifies under both readings.**
 - The `classifySql` header no longer claims that stripping a comment cannot hide
   a write. It records instead that the strip's safety rests entirely on this
   helper matching the real scanner.

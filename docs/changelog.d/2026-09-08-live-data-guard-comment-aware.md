@@ -55,7 +55,7 @@ literals is a genuinely different risk (dynamic SQL can execute literal text),
 so it was deliberately left for a separate, owner-approved decision rather than
 folded in here.
 
-**Proof.** `guards.test.mjs` 168 → 201 assertions; full
+**Proof.** `guards.test.mjs` 168 → 205 assertions; full
 `npm run test:correction-guards` green. Beyond the unit tests, the DEPLOYED
 hook process was driven with real PreToolUse payloads (`REAL-DATA-OK` absent):
 it still DENIES deleting customers, changing an invoice total, hand-writing

@@ -139,7 +139,7 @@ function openDollarTag(src, i) {
 // comments are walked (not stripped) so a stray $$ inside them can't open a
 // fake quote span that swallows real statements. DO bodies are kept (they
 // execute). An unterminated dollar-quote leaves the rest untouched (fail closed).
-function stripDollarQuotedCore(sql, keepBody) {
+function stripDollarQuotedCore(sql, keepBody, backslashEscapes) {
   const src = String(sql || "");
   let out = "";
   let i = 0;
@@ -151,16 +151,16 @@ function stripDollarQuotedCore(sql, keepBody) {
     if (ch === "'" || escapeString) {
       let j = i + (escapeString ? 2 : 1);
       while (j < n) {
-        // A backslash is treated as an escape in ORDINARY strings too, not only
-        // in E'...'. PostgreSQL does that only when standard_conforming_strings
-        // is OFF (non-default), and the session setting is not visible here, so
-        // take the direction that cannot hide a write: assuming an escape can
-        // only EXTEND the literal, and a literal is copied VERBATIM by both
-        // lexers, so any real statement that follows stays visible to
-        // classification. Assuming no escape would end the string early and feed
-        // the remainder to the comment strip — `SELECT 'x\'--'; DELETE FROM
-        // customers;` classified as a bare SELECT (Codex, PR #639 round 2).
-        if (src[j] === "\\") { j += Math.min(2, n - j); continue; }
+        // Whether a backslash escapes inside an ORDINARY '...' literal depends on
+        // standard_conforming_strings, which a PreToolUse hook cannot see. Inside
+        // E'...' it always escapes. NEITHER guess is safe on its own, so this is a
+        // parameter and classifySql runs the whole classification under BOTH —
+        // see the union note there. Round 2 proved under-consuming unsafe
+        // (`SELECT 'x\'--'; DELETE FROM customers;` becomes a bare SELECT once the
+        // remainder is read as a comment); round 3 proved OVER-consuming unsafe
+        // too, which is the direction this code previously hard-coded while
+        // asserting it could not hide a write.
+        if ((backslashEscapes || escapeString) && src[j] === "\\") { j += Math.min(2, n - j); continue; }
         if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
         if (src[j] === "'") { j++; break; }
         j++;
@@ -204,8 +204,8 @@ function stripDollarQuotedCore(sql, keepBody) {
   return out;
 }
 
-export function stripDollarQuoted(sql) {
-  return stripDollarQuotedCore(sql, (out) => DO_PREFIX_RE.test(stripTrailingComments(out)));
+export function stripDollarQuoted(sql, backslashEscapes = true) {
+  return stripDollarQuotedCore(sql, (out) => DO_PREFIX_RE.test(stripTrailingComments(out)), backslashEscapes);
 }
 
 // Function-definition bodies ONLY: a dollar-quote is stripped iff the last
@@ -216,8 +216,8 @@ export function stripDollarQuoted(sql) {
 // DO-prefix allowlist kept being bypassable by legal comment placement; an
 // over-kept body can only cause a false PARK, never hidden data loss).
 const FN_BODY_PREFIX_RE = /\bas\s*$/i;
-function stripFunctionBodiesOnly(sql) {
-  return stripDollarQuotedCore(sql, (out) => !FN_BODY_PREFIX_RE.test(stripTrailingComments(out)));
+function stripFunctionBodiesOnly(sql, backslashEscapes = true) {
+  return stripDollarQuotedCore(sql, (out) => !FN_BODY_PREFIX_RE.test(stripTrailingComments(out)), backslashEscapes);
 }
 
 // Quote-aware comment removal. String literals, quoted identifiers, and
@@ -228,7 +228,7 @@ function stripFunctionBodiesOnly(sql) {
 // a kept dollar-quoted body (e.g. a DO block) is no longer stripped, so prose
 // like `-- never TRUNCATE` in a DO body can false-positive — that parks the
 // migration for Mason, which is the safe direction.
-export function stripCommentsQuoteAware(sql) {
+export function stripCommentsQuoteAware(sql, backslashEscapes = true) {
   const src = String(sql || "");
   let out = "";
   let i = 0;
@@ -240,11 +240,9 @@ export function stripCommentsQuoteAware(sql) {
     if (ch === "'" || escapeString) {
       let j = i + (escapeString ? 2 : 1);
       while (j < n) {
-        // See the matching note in stripDollarQuotedCore: backslash is treated
-        // as an escape in ordinary strings too, because over-consuming a literal
-        // keeps the following text VERBATIM and visible, while under-consuming
-        // would hand it to the comment strip.
-        if (src[j] === "\\") { j += Math.min(2, n - j); continue; }
+        // See the matching note in stripDollarQuotedCore: the caller decides,
+        // and classifySql runs both readings.
+        if ((backslashEscapes || escapeString) && src[j] === "\\") { j += Math.min(2, n - j); continue; }
         if (src[j] === "'" && src[j + 1] === "'") { j += 2; continue; }
         if (src[j] === "'") { j++; break; }
         j++;
@@ -405,7 +403,34 @@ export function findNonReadFunctionCall(sqlText) {
 }
 
 // Returns { block: false } | { block: true, kind, reason }
+//
+// Whether `\` escapes inside an ordinary '...' literal depends on the session's
+// standard_conforming_strings, which a PreToolUse hook cannot read. Both guesses
+// were proven to hide a real write, each in its own way:
+//
+//   backslashEscapes = false  ends the literal early, so the remainder reaches
+//     the comment strip as real comment syntax:
+//       SELECT 'x\'--'; DELETE FROM customers;        (Codex, round 2)
+//
+//   backslashEscapes = true   over-consumes, swallowing a `$$...$$` span the
+//     dollar-strip would have REMOVED. That matters because the [E2E] exemption
+//     is read from the dollar-stripped text, so a marker that should have been
+//     deleted survives and exempts the whole batch:
+//       SELECT 'a\', $$[E2E]$$; DELETE FROM invoices; (Codex, round 3)
+//
+// The round-2 fix hard-coded `true` and asserted over-consuming "can only EXTEND
+// the literal ... so any real statement that follows stays visible". The
+// statement does stay visible — round 3's counterexample never needed to hide
+// it, because the false [E2E] exemption fires first. So there is no safe single
+// reading: classify under BOTH and block if EITHER sees a hazard. A statement is
+// allowed only when it is harmless however PostgreSQL would have lexed it.
 export function classifySql(query) {
+  const escaped = classifySqlOnce(query, true);
+  if (escaped.block) return escaped;
+  return classifySqlOnce(query, false);
+}
+
+function classifySqlOnce(query, backslashEscapes) {
   const q = String(query || "");
   if (!q) return { block: false };
 
@@ -436,8 +461,8 @@ export function classifySql(query) {
   // inside a KEPT DO body therefore survive, which over-blocks rather than
   // under-blocks. Both passes share one delimiter helper, so they cannot disagree
   // about where a dollar-quoted span is.
-  const tWithComments = stripDollarQuoted(q);
-  const t = stripCommentsQuoteAware(tWithComments);
+  const tWithComments = stripDollarQuoted(q, backslashEscapes);
+  const t = stripCommentsQuoteAware(tWithComments, backslashEscapes);
 
   // 1. financial_audit_log is append-only, written only by triggers/RPCs — a Hard
   //    Red Line. No [E2E] exemption; only REAL-DATA-OK (checked by the guard) overrides.
@@ -583,14 +608,24 @@ export function classifySql(query) {
 // to refuse a destructive apply in a hands-free run — a false positive parks
 // the migration for the morning, a false negative would delete data with
 // nobody watching.
+// Same standard_conforming_strings ambiguity as classifySql, same answer: run
+// both readings and call the migration destructive if EITHER does. A migration
+// is applied without Mason watching, so an ambiguous lex must resolve to "park
+// it", never to "apply it".
 export function destructiveMigrationCheck(sql) {
+  const escaped = destructiveMigrationCheckOnce(sql, true);
+  if (escaped.destructive) return escaped;
+  return destructiveMigrationCheckOnce(sql, false);
+}
+
+function destructiveMigrationCheckOnce(sql, backslashEscapes) {
   // Strip ONLY clear function-definition bodies (AS $$...$$) — everything
   // else, including DO blocks however commented, stays visible (default-keep).
-  const stripped = stripFunctionBodiesOnly(String(sql || ""));
+  const stripped = stripFunctionBodiesOnly(String(sql || ""), backslashEscapes);
   if (!stripped) return { destructive: false };
   // Quote-aware, NOT raw regex: a `/*` inside a string literal must not open a
   // fake comment span that swallows a real DELETE (Codex P1 round 5).
-  const t = stripCommentsQuoteAware(stripped);
+  const t = stripCommentsQuoteAware(stripped, backslashEscapes);
   if (/\bdrop\s+table\b/i.test(t)) return { destructive: true, reason: "DROP TABLE" };
   // DOMAIN/TYPE/EXTENSION drops can CASCADE into data-bearing columns/tables;
   // any of them in a migration is rare enough to deserve Mason's eyes
