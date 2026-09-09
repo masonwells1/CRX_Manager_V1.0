@@ -21,6 +21,84 @@ export function generateIdempotencyKey(operation: string, userId: string): strin
   return `${operation}:${userId}:${uuid}`;
 }
 
+/**
+ * Deterministic fingerprint of the payload a retained key was minted for.
+ *
+ * useIdempotencyKey retains one key per intent scope so a lost response can be
+ * replayed safely. That is only correct while the scope still identifies the
+ * SAME work: if a scope is built from position and name alone, a later action
+ * carrying different content reuses the earlier key and replays the earlier
+ * receipt. Appending this fingerprint to the scope makes changed content mint a
+ * fresh key, while a true retry of unchanged content keeps replaying.
+ *
+ * FNV-1a is a local lookup hash, not a security boundary. This mirrors
+ * pendingBulkPOIntentStorageKey in src/lib/bulkPOImportRetry.ts, which uses the
+ * same hash for the same local-identity purpose.
+ *
+ * KNOWN LIMIT — do not read more protection into this than it gives. For RPCs
+ * that bind the actor and payload server-side, this is only a local convenience
+ * and the server remains the authoritative duplicate check. But several call
+ * sites deliberately target RPCs that replay on the KEY ALONE — `adjust_inventory`
+ * and `retire_inventory_item` say so in their own comments (live catalog:
+ * key-only check_idempotency, no actor/payload binding). For those, this 64-bit
+ * digest is the ONLY thing separating two different payloads, and some of the
+ * fingerprinted payloads include operator-entered free text (e.g. `adjustNote`).
+ * Accidental collision is negligible at these volumes; a deliberate one is not
+ * structurally prevented. Do not widen this function's use to a new key-only RPC
+ * without either a collision-resistant digest or server-side payload binding.
+ */
+export function fingerprintIntentPayload(value: unknown): string {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(JSON.stringify(value) ?? 'undefined')) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
+/**
+ * Async, collision-resistant equivalent of fingerprintIntentPayload.
+ *
+ * fingerprintIntentPayload walks every UTF-8 byte doing 64-bit BigInt
+ * multiplications on the UI thread. That is fine for a small form payload, but
+ * a bulk import fingerprints a COMPLETE field geometry per row, and a large
+ * multi-part boundary near the 25 MB import ceiling froze the browser for
+ * seconds before the request was even sent. SubtleCrypto hashes natively and
+ * off the main thread, and SHA-256 also retires the 64-bit collision caveat
+ * documented on fingerprintIntentPayload for key-only RPCs.
+ *
+ * Falls back to the synchronous FNV digest only where SubtleCrypto is absent
+ * (a non-secure context, or a test environment without webcrypto). The two
+ * digests are deliberately prefixed so they can never be mistaken for each
+ * other: a scope must not change meaning based on which branch produced it.
+ */
+// Once this page has fallen back to FNV it stays fallen back, for the life of the
+// module. The prefixes alone were not enough: they stop the two digests being
+// CONFUSED, but a payload that hashed to `f…` while SubtleCrypto was unavailable
+// and to `s…` once it recovered has a DIFFERENT scope either side of that
+// recovery — which mints a fresh idempotency key on exactly the retry the
+// retained key exists to serve, and re-applies work whose response was lost. The
+// doc comment above claimed this stability; this latch is what makes it true.
+let digestFallbackLatched = false;
+
+export async function digestIntentPayload(value: unknown): Promise<string> {
+  const encoded = new TextEncoder().encode(JSON.stringify(value) ?? 'undefined');
+  const subtle = globalThis.crypto?.subtle;
+  if (digestFallbackLatched || !subtle) {
+    digestFallbackLatched = true;
+    return `f${fingerprintIntentPayload(value)}`;
+  }
+  try {
+    const digest = await subtle.digest('SHA-256', encoded);
+    return `s${Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')}`;
+  } catch {
+    // Environmental, never payload-dependent. Latch so a later success cannot
+    // silently re-identify a payload this page has already keyed as `f…`.
+    digestFallbackLatched = true;
+    return `f${fingerprintIntentPayload(value)}`;
+  }
+}
+
 type IdempotencyMismatchDetail = {
   operation?: string;
   result?: Record<string, unknown>;

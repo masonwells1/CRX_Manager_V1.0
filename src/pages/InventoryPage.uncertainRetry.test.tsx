@@ -102,7 +102,6 @@ vi.mock('../lib/db', async () => {
     RpcErrorCodes: actual.RpcErrorCodes,
   };
 });
-
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ role: 'admin', profile: { id: 'admin-1', full_name: 'Admin' } }),
 }));

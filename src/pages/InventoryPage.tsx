@@ -21,7 +21,7 @@ import {
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
   useUncertainMutationIntent,
 } from '../hooks/useUncertainMutationIntent';
-import { getIdempotencyMismatchResult } from '../lib/idempotency';
+import { fingerprintIntentPayload, getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
@@ -773,14 +773,17 @@ export default function InventoryPage() {
           p_performed_by: request.performedBy,
           p_idempotency_key: idemKey,
         });
+        let completedElsewhere = false;
         if (error) {
           const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
           const recordIds = receipt?.receiving_record_ids;
           if (Array.isArray(recordIds) && recordIds.length > 0 && recordIds.every((id) => typeof id === 'string')) {
+            completedElsewhere = true;
             toast('warning', 'The earlier receipt already completed. Refreshing inventory instead of receiving it twice.');
           } else {
             const disposition = await receivePoIntent.classifyFailure(error);
             if (disposition === 'resolved') {
+              completedElsewhere = true;
               toast('warning', 'This receipt completed in another tab. Refreshing inventory instead of receiving it twice.');
             } else if (disposition === 'definitive') {
               throw error;
@@ -792,12 +795,12 @@ export default function InventoryPage() {
           assertRpcResult(data, 'receive_po_items');
         }
         await receivePoIntent.resolveIntent();
-        return request.quantity;
+        return { quantity: request.quantity, completedElsewhere };
       },
       toast,
       sentryTag: 'receive_po_items',
-      onSuccess: (receivedQuantity) => {
-        toast('success', `Received ${receivedQuantity} units`);
+      onSuccess: ({ quantity: receivedQuantity, completedElsewhere }) => {
+        if (!completedElsewhere) toast('success', `Received ${receivedQuantity} units`);
         setReceiveOpen(false);
         setReceiveQty('');
         setReceivePOItemId('');
@@ -895,14 +898,17 @@ export default function InventoryPage() {
         // original receipt instead of retiring twice), while confirming a
         // DIFFERENT row mints its own key rather than replaying this receipt.
         // The key is retired only on confirmed success.
-        const scope = `retire:${deleteConfirmId}`;
+        const scope = `retire:${fingerprintIntentPayload([deleteConfirmId])}`;
         const idemKey = retireIdem.getKeyFor(scope);
         const { data, error } = await supabase.rpc('retire_inventory_item', {
           p_inventory_id: deleteConfirmId,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
-        if (error) throw error;
+        if (error) {
+          if (getIdempotencyBindingRejection(error)) retireIdem.resetKeyFor(scope);
+          throw error;
+        }
         assertRpcResult(data, 'retire_inventory_item');
         retireIdem.resetKeyFor(scope);
       },
