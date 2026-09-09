@@ -82,11 +82,14 @@ reviews:
     # Do not spend a review on PR creation or work-in-progress pushes. Once the
     # candidate is frozen, checks are green, and the separate Codex review is
     # clean, apply `ready-for-coderabbit`. The trusted GitHub workflow validates
-    # that exact head and posts `@coderabbitai review` once.
+    # that exact head, then adds the separate provider label below. Keeping the
+    # intent and provider labels separate prevents a review before validation.
     enabled: false
     auto_incremental_review: false
+    labels:
+      - coderabbit-review-dispatch
     drafts: false
-    # Keep opt-in sources empty so only the explicit PR comment starts a review.
+    # The trusted workflow is the only source that adds the opt-in label.
     description_keyword: ""
 
   # Project-specific review guidance. These mirror the "CRX Hard Rules" in
