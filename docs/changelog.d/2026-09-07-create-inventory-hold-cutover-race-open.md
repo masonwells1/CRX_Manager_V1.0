@@ -6,7 +6,7 @@ one is **substantive and remains OPEN**. It is recorded here and on migration-hi
 
 ### The race
 
-`20260905230000` drains `public.idempotency_keys` with `SET LOCAL lock_timeout = '10s'` +
+`20260908130000` drains `public.idempotency_keys` with `SET LOCAL lock_timeout = '10s'` +
 `LOCK TABLE ... ACCESS EXCLUSIVE` before renaming the function and installing the wrapper. That
 drains transactions which have already *touched* the receipt table. It does not stop a call that
 already resolved the **old** `create_inventory_hold` body and has not reached its receipt write yet.

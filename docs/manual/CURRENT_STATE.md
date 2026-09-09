@@ -13,7 +13,7 @@ replaced `20260905185938_refuse_null_job_field_acres` (#606, applied live 2026-0
 ledger name, so its stamp was synthesized from its version), which held the boundary until then.
 A candidate must now sort above the `20260906120000` name-stamp, not above the 09-05 row.
 
-**Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260905230000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The later 2026-09-08 high-water above means this candidate must be restamped before any future apply.
+**Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and remains unapplied.
 
 Six local commission follow-ups (`20260905200000` through `20260905210000`, with no `20260905200500` file) are not applied. The
 six-file set was restamped together above that row on 2026-09-05 evening, preserving its order;
@@ -92,7 +92,7 @@ query found it APPLIED LIVE as ledger name `refuse_null_job_field_acres`, versio
 until that lane updates it. Because the ledger recorded it without its timestamp prefix, the
 authored-name ordering boundary above did not move — read ordering from the NAME with care here.
 
-A second local candidate, `20260905230000_bind_create_inventory_hold_receipt_to_intent` (branch
+A second local candidate, `20260908130000_bind_create_inventory_hold_receipt_to_intent` (branch
 `claude/inventory-idempotency-key-reset-888161`, history row 923), is written and container-proven but
 **NOT applied and NOT merged** — its stamp is authored above PR #592's pending `20260905*` files, and
 deliberately clear of `20260905210000`, which PR #592 occupies with

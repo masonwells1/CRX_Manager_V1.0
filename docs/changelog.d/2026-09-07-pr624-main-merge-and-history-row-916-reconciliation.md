@@ -19,7 +19,7 @@ Exactly one file conflicted: `docs/reference/migration-history.md`, at row 916
   assigns at apply time, not the file's own stamp, so searching the file for the file's
   timestamp finds only the stale row and searching for the live version finds nothing.
 - **Branch side** carried the pre-correction (false) text for row 916, plus a genuinely new
-  row 923 for `20260905230000_bind_create_inventory_hold_receipt_to_intent.sql`.
+  row 924 for `20260908130000_bind_create_inventory_hold_receipt_to_intent.sql`.
 
 Resolved **by content, not by side**: `main`'s corrected row 916 was taken, and the
 branch's new row 923 was kept. Taking either side wholesale would have lost real
@@ -40,7 +40,7 @@ appear exactly once; row 916 now opens `**APPLIED LIVE`.
 
 ### State recorded, not fixed here
 
-- **The migration `20260905230000` is still NOT applied to live.** Nothing in this change
+- **The migration `20260908130000` is still NOT applied to live.** Nothing in this change
   applies it; row 923 keeps its LOCAL CANDIDATE marker. Applying it remains a hard gate
   needing Mason's explicit in-conversation approval, and it must precede the
   `InventoryPage` fix reaching real users.

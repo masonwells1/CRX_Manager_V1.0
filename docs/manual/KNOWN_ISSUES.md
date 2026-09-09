@@ -20,7 +20,7 @@ and diverge, so reading the boundary off `version` gives a plausible wrong answe
 returns garbage, because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …)
 sort above digits — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` in
 that capture as a point-in-time observation, not a fact** — any lane applying a migration moves
-them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05. The live `create_inventory_hold` surface described in the OPEN 2026-09-05 manual-hold entry below was separately re-read READ-ONLY on 2026-09-06 for the `20260905230000` candidate's preconditions (no boundary facts restated here on purpose — see that entry and the migration header).
+them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05. The live `create_inventory_hold` surface described in the OPEN 2026-09-05 manual-hold entry below was separately re-read READ-ONLY on 2026-09-06 for the `20260908130000` candidate's preconditions (no boundary facts restated here on purpose — see that entry and the migration header).
 The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
@@ -1760,7 +1760,7 @@ network-disabled container built from the 2026-07-27 baseline plus all 75 later 
 session 2 exits with that error. The same body also gates role with `v_role NOT IN (...)`, which lets a
 caller with no `profiles` row through (NULL is not IN anything), and accepts a NULL key.
 
-Local forward migration `20260905230000_bind_create_inventory_hold_receipt_to_intent.sql` renames the
+Local forward migration `20260908130000_bind_create_inventory_hold_receipt_to_intent.sql` renames the
 live body to `_create_inventory_hold_intent_impl_20260905` (postgres-only EXECUTE) and installs a
 same-signature wrapper: AUTH_REQUIRED, ACTOR_MISMATCH on a forged `p_performed_by`, a NULL-safe ACTIVE
 admin/sales_rep gate, key required, request fingerprint, then `check_idempotency_intent` (per-key

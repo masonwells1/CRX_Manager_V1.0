@@ -692,10 +692,10 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
       const createdAtMs = Date.now();
       const retryNotAfterMs = createdAtMs + SAFE_RETRY_WINDOW_MS;
       // localStorage is only a UI mirror. It can lag behind IndexedDB when a
-      // response resolves between the two writes, so it must never supply a
-      // pending payload here. The coordinator keeps the authoritative pending
-      // record (including conflict and expiry refusal) or accepts this fresh
-      // candidate after an authoritative resolved/absent record.
+      // response resolves between the two writes, so it never establishes a
+      // retry payload here. The coordinator alone restores its authoritative
+      // pending record (including conflict and expiry refusal); a resolved or
+      // absent coordinator record receives this caller's fresh candidate.
       const proposed: DurableMutationIntentRecord<T> = {
         version: 4,
         status: 'pending',

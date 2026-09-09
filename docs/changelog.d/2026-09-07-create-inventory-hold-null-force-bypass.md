@@ -6,7 +6,7 @@ and it is real.
 
 ### The defect
 
-`20260905230000_bind_create_inventory_hold_receipt_to_intent.sql` fingerprinted
+`20260908130000_bind_create_inventory_hold_receipt_to_intent.sql` fingerprinted
 `COALESCE(p_force, false)` but passed the **raw nullable `p_force`** to the wrapped body. That
 body (the live pre-20260905 hold body, unchanged) tests the flag with bare `IF p_force` and
 `AND NOT p_force`. SQL three-valued logic makes an explicit NULL invisible to both:

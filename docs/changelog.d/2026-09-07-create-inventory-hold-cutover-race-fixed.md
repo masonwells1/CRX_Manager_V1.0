@@ -1,7 +1,7 @@
 ## 2026-09-07 - the create_inventory_hold cutover race is closed (candidate, still NOT applied)
 
 A fourth `gpt-5.6-sol` review of PR #624 found a real hole in the
-`20260905230000` candidate: the `ACCESS EXCLUSIVE` lock it takes on
+`20260908130000` candidate: the `ACCESS EXCLUSIVE` lock it takes on
 `idempotency_keys` only drains transactions that have already touched that
 table. A call that had already resolved the OLD `create_inventory_hold` body was
 untouched by it — that body authenticates, reads the profile, runs the stock

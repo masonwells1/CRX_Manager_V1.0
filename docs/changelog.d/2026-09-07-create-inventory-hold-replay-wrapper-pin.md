@@ -5,7 +5,7 @@ by execution against a real PostgreSQL container.
 
 ### The defect
 
-`20260905230000_bind_create_inventory_hold_receipt_to_intent.sql` is deliberately re-runnable.
+`20260908130000_bind_create_inventory_hold_receipt_to_intent.sql` is deliberately re-runnable.
 On a re-run its preflight decided "the wrapper is already installed" by looking for the string
 `check_idempotency_intent` in the live function body — a **marker**, not the body itself — and
 then hashed only the *private implementation*. The file then unconditionally

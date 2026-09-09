@@ -57,7 +57,7 @@ on disk. Mason later authorized a read-only production check on 2026-09-06, reco
 **Server-side binding — partially addressed in this same PR.** The residual risk named by CodeRabbit
 on #535 was that the server binds nothing to the key, so a forward migration adding actor + payload
 binding is the durable fix. That migration now ships in this PR:
-`supabase/migrations/20260905230000_bind_create_inventory_hold_receipt_to_intent.sql` (see its own
+`supabase/migrations/20260908130000_bind_create_inventory_hold_receipt_to_intent.sql` (see its own
 changelog entry). It is **written and container-proven but NOT applied live and NOT merged**, and it
 covers **only `create_inventory_hold`** — `adjust_inventory` and `retire_inventory_item` still have
 no actor/payload binding on the server and keep relying on the frontend freeze described above.

@@ -1,6 +1,6 @@
 ## 2026-09-05 - Serialize create_inventory_hold on its idempotency key (local candidate, NOT applied)
 
-**What changed.** New migration `supabase/migrations/20260905230000_bind_create_inventory_hold_receipt_to_intent.sql`,
+**What changed.** New migration `supabase/migrations/20260908130000_bind_create_inventory_hold_receipt_to_intent.sql`,
 a LOCAL CANDIDATE that has NOT been applied live and is NOT merged. It renames the live
 `create_inventory_hold` body to `_create_inventory_hold_intent_impl_20260905` (executable only by
 `postgres`) and installs a same-signature public wrapper that: requires a signed-in caller and refuses a
@@ -91,7 +91,7 @@ helper dependencies the preflight does not pin, for no behavioural gain.
 
 **Two defects found while acting on that review, which the review itself did not report.** First,
 PR #592 already occupies the `20260905210000` timestamp with its repair_commission_history_label_snapshots
-migration; this migration was therefore renamed to `20260905230000_bind_create_inventory_hold_receipt_to_intent.sql`,
+migration; this migration was therefore renamed to `20260908130000_bind_create_inventory_hold_receipt_to_intent.sql`,
 because two migration files sharing a timestamp have undefined apply order. Second, the branch
 carried a SECOND history row numbered 917 (`main` already used 917 for `20260905090000`); this row is
 now 923, clear of `main`'s 917 and of PR #592's pending 918-922, and the file header was corrected to
