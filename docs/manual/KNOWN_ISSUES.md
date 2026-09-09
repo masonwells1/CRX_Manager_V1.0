@@ -3,15 +3,16 @@
 **Last verified: 2026-09-08 against the live ledger (read-only `list_migrations`: 1000 rows,
 `max(version)` `20260908045843`, effective high-water
 `20260906120000_preview_field_app_season_follows_invoice_date`); the F2 entry retains its separate
-2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
-count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
-`docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
-there before any apply decision, and update it there — never restate it here. The reason is a trap
+2026-09-04 verification.** The row count, `max(version)`, and effective high-water above are dated
+verification metadata, not current apply authority. The authoritative source for apply decisions is
+the live-ledger capture at the top of `docs/reference/migration-history.md` (the block headed "THIS
+IS THE CURRENT BOUNDARY"); read it there before any apply decision, and update it there. The reason
+is a trap
 hit for real on 2026-09-05: for several hours this header still named the afternoon boundary
 (`20260904180000_invoice_season_follows_invoice_date`, 998 rows) after PR #606 had moved the live
 high-water to `20260905185938_refuse_null_job_field_acres` (999 rows), so a migration stamped
-between the two read as safe from this manual while the ordering guard refused it. Two
-hand-maintained copies of one moving fact will always drift apart; this file now keeps none.
+between the two read as safe from this manual while the ordering guard refused it. A dated snapshot
+can still drift, so current apply decisions always use the authoritative capture in migration history.
 Read ordering from the NAME — it is what the ordering guard compares and it moves far less often
 than the counters; when a row was recorded under a bare name (as #606's was), the guard synthesizes
 `<version>_<name>`, and the capture in `migration-history.md` records that effective stamp. Two
@@ -29,8 +30,8 @@ nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning 
 Six local commission candidates (`20260905200000` through `20260905210000`, excluding superseded `20260905200500`) remain unapplied;
 the complete six-file set was restamped together on 2026-09-05 evening, after a #606 apply moved the
 live ordering boundary above most of the set, and the set's relative order was preserved during the
-restamp. This file deliberately does not name that boundary — re-read it from the live-ledger capture
-in `docs/reference/migration-history.md` before any apply decision.
+restamp. This paragraph deliberately does not repeat that boundary — re-read it from the live-ledger
+capture in `docs/reference/migration-history.md` before any apply decision.
 The label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
