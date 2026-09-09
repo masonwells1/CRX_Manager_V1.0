@@ -431,6 +431,7 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  */
 function stripNoise(line: string): string {
   return line
+    .replace(/\/\*.*?\*\//g, '')
     .replace(/'(?:[^'\\]|\\.)*'/g, "''")
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .replace(/`(?:[^`\\]|\\.)*`/g, '``')
@@ -661,6 +662,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
 
   it('requires executable recovery evidence on a reset line', () => {
     expect(classify(['idem.resetKey(); // getIdempotencyMismatchResult(error)'], 1)).toBeNull();
+    expect(classify(['idem.resetKey(); /* getIdempotencyBindingRejection(error) */'], 1)).toBeNull();
     expect(classify(["const note = 'isDefinitiveRpcRejection'; idem.resetKey();"], 1)).toBeNull();
     expect(classify(['if (isDefinitiveRpcRejection(error)) idem.resetKey();'], 1)).toBe('recovery');
   });
