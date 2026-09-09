@@ -1393,7 +1393,12 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // declare p_idempotency_key, and use the canonical replay machinery, so they are
   // classified here rather than in the migration-only bucket.
   '_cancel_order_idem_impl_20260721',
+  '_cancel_return_intent_impl_20260812',
+  '_draw_down_quote_below_cost_impl_20260810',
+  '_price_order_below_cost_impl_20260810',
+  '_restore_quote_version_below_cost_impl_20260810',
   '_save_field_app_split_invoice_impl',
+  '_save_invoice_lineage_unaware_impl_20260827',
   '_save_purchase_order_ascii_identity_impl',
   'adjust_inventory',
   'allocate_payment',
@@ -2693,19 +2698,42 @@ function registryMigrationHighWater(): string {
   return registry._meta?.migrations_high_water || '';
 }
 
-// Intentional bookkeeping gate: update this set when Section 9 applies or a
-// new current pending migration is added; otherwise the inventory fails closed.
-// Keep this set aligned with rows explicitly marked PENDING APPLY in
-// docs/reference/migration-history.md.
+// Intentional bookkeeping gate: migrations whose RPCs must stay in the mutator
+// inventory because neither the generated types nor the schema registry know
+// about them yet. Every entry must have a row in
+// docs/reference/migration-history.md marked PENDING APPLY or APPLIED LIVE.
 //
-// No migration indexed by the current history is waiting on a live apply.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
+// The six PR #535 gauntlet migrations APPLIED LIVE on 2026-09-03 (ledger
+// versions 20260903023935/024550/025249/025854/124710/124741). They stay
+// registered here, and it is NOT correct to clear them just because they applied:
+// migrations_high_water carries a ledger VERSION, not an authored name, so it
+// reads 20260903025854 while these files are authored 20260831*. Every one of
+// them therefore sorts BELOW the high-water, the `timestamp > highWater` arm of
+// the discovery rule is false for all six, and emptying this set would drop them
+// from the inventory and silently pre-suppress the exemptions that describe them
+// — the exact failure this gate exists to prevent.
+//
+// PR #581's registry refresh has ALREADY merged (main c02da074e) and does not
+// clear these: it ran before 20260831233000 and 20260831235900 applied, so the
+// registry lists only four of the six. Clear an entry only once a refresh taken
+// AFTER 2026-09-03 12:47 UTC lands, together with src/types/supabase.ts
+// regenerated from production — at that point the generated-names arm covers
+// these RPCs on its own.
+const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
+  '20260831160000',
+  '20260831161000',
+  '20260831162000',
+  '20260831212415',
+  '20260831233000',
+  '20260831235900',
+]);
 
 /**
- * Explicitly pending migrations remain part of the contract inventory even
- * when Supabase assigned a later ledger version to another applied migration.
+ * Registered migrations remain part of the contract inventory even when Supabase
+ * assigned a later ledger version to another applied migration — which is why
+ * this survives the apply and is cleared by the type/registry regeneration.
  */
-function pendingMigrationTimestamps(): Set<string> {
+function migrationsAwaitingTypeRegeneration(): Set<string> {
   const historyPath = join(
     dirname(fileURLToPath(import.meta.url)),
     '..',
@@ -2716,22 +2744,26 @@ function pendingMigrationTimestamps(): Set<string> {
   );
   const migrationDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'supabase', 'migrations');
   const lines = readFileSync(historyPath, 'utf8').split(/\r?\n/);
-  const pendingRows = lines.filter((line) =>
-    /^\|\s*\d+\s*\|\s*\d{14}\s*\|.*\bPENDING APPLY\b/i.test(line),
-  );
-  const timestamps = new Set(
-    pendingRows.map((line) => {
-      const match = line.match(/^\|\s*\d+\s*\|\s*(\d{14})\s*\|\s*\*\*PENDING APPLY\b/i);
-      if (!match) {
-        throw new Error(`Pending migration-history row must start its purpose with PENDING APPLY: ${line}`);
-      }
-      return match[1];
-    }),
-  );
-  const expected = [...EXPECTED_PENDING_MIGRATION_TIMESTAMPS].sort();
-  const actual = [...timestamps].sort();
-  if (actual.length !== expected.length || actual.some((timestamp, index) => timestamp !== expected[index])) {
-    throw new Error(`Pending migration-history drift: expected ${expected.join(', ')}, found ${actual.join(', ') || '(none)'}`);
+  // Each registered timestamp must have a real migration-history row, and that
+  // row must state a rollout status this gate understands. Scanning for
+  // "PENDING APPLY" alone stopped working once the Section 9 chain applied on
+  // 2026-09-03: the rows correctly became "APPLIED LIVE", the scan found none,
+  // and the set could not simply be emptied — see the constant's comment for why
+  // clearing it would silently drop these RPCs from the inventory.
+  const timestamps = new Set<string>();
+  for (const timestamp of MIGRATIONS_AWAITING_TYPE_REGENERATION) {
+    const row = lines.find((line) =>
+      new RegExp(`^\\|\\s*\\d+\\s*\\|\\s*${timestamp}\\s*\\|`).test(line),
+    );
+    if (!row) {
+      throw new Error(`Registered migration ${timestamp} has no docs/reference/migration-history.md row.`);
+    }
+    if (!/\*\*(PENDING APPLY|APPLIED LIVE)\b/i.test(row)) {
+      throw new Error(
+        `Migration-history row for ${timestamp} must start its purpose with PENDING APPLY or APPLIED LIVE: ${row}`,
+      );
+    }
+    timestamps.add(timestamp);
   }
   const diskTimestamps = new Set(
     readdirSync(migrationDir)
@@ -2741,6 +2773,30 @@ function pendingMigrationTimestamps(): Set<string> {
   const missingSources = [...timestamps].filter((timestamp) => !diskTimestamps.has(timestamp));
   if (missingSources.length > 0) {
     throw new Error(`Pending migration-history rows lack checked-in migration sources: ${missingSources.join(', ')}`);
+  }
+  // Drift in the OTHER direction. The pre-2026-09-03 guard compared the whole
+  // PENDING APPLY row set against this constant, so a new pending migration that
+  // nobody registered failed loudly. Matching on status alone had to go (applied
+  // rows stop saying PENDING APPLY), but dropping the reverse check with it would
+  // have been a silent weakening — so it is restored here, narrowed to the case
+  // that actually matters.
+  //
+  // Only a pending migration whose timestamp sorts at or below the registry
+  // high-water needs registering: above it, the `timestamp > highWater` arm of the
+  // discovery rule already covers the RPCs. F06's 20260903150000 is exactly that
+  // benign case and must NOT be forced into this constant — the old whole-set
+  // comparison would have demanded it and been wrong.
+  const highWater = registryMigrationHighWater();
+  const unregisteredBelowHighWater = lines
+    .map((line) => line.match(/^\|\s*\d+\s*\|\s*(\d{14})\s*\|\s*\*\*PENDING APPLY\b/i)?.[1])
+    .filter((timestamp): timestamp is string => Boolean(timestamp))
+    .filter((timestamp) => timestamp <= highWater && !timestamps.has(timestamp));
+  if (unregisteredBelowHighWater.length > 0) {
+    throw new Error(
+      'Pending migration(s) sort at or below the registry high-water '
+      + `${highWater} but are not registered in MIGRATIONS_AWAITING_TYPE_REGENERATION, so their `
+      + `RPCs would be dropped from the mutator inventory: ${unregisteredBelowHighWater.join(', ')}`,
+    );
   }
   return timestamps;
 }
@@ -2755,7 +2811,7 @@ function generatedMutatingRpcInventory(): Set<string> {
   const functions = latestMigrationFunctions();
   const mutators = transitiveMutatingFunctionNames(latestMigrationFunctionBodies());
   const highWater = registryMigrationHighWater();
-  const pendingTimestamps = pendingMigrationTimestamps();
+  const pendingTimestamps = migrationsAwaitingTypeRegeneration();
   return new Set([...mutators].filter((name) => {
     const timestamp = functions.get(name)?.fileName.match(/^\d{14}/)?.[0] || '';
     return generatedNames.has(name)
@@ -2764,7 +2820,7 @@ function generatedMutatingRpcInventory(): Set<string> {
 }
 
 const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
-  // The live registry/type regeneration through 20260722064814 moved every
+  // The live registry/type regeneration through 20260903202611 moved every
   // former entry into
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
@@ -2777,56 +2833,6 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
 
-  // Private implementation behind the public cancel_return RPC. Direct
-  // EXECUTE is revoked, it declares p_idempotency_key, and it deliberately
-  // enforces the public 'cancel_return' cache namespace. Migration
-  // 20260827041500 re-emits it for exact inventory reversal, placing it in the
-  // pending-migration inventory while it remains absent from generated types.
-  '_cancel_return_intent_impl_20260812',
-
-  // Private implementation behind the public draw_down_quote RPC, so it is
-  // absent from the generated types by design. It declares p_idempotency_key
-  // text and owns the canonical check_idempotency/save_idempotency pair for the
-  // 'draw_down_quote' operation. The new public wrapper separately owns the
-  // actor/fingerprint replay check and receipt binding, then forwards the same
-  // key through this implementation — the test above re-asserts the full chain.
-  // Pre-apply-window entry: it enters the inventory because migration
-  // 20260816120000 is the FIRST on-disk CREATE of this function under its
-  // post-rename name. 20260812115237 renamed the original public body with
-  // ALTER FUNCTION ... RENAME TO and defined no body on disk, so the
-  // transitive-mutation walker could not see it until now. Move this to
-  // MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever becomes public.
-  '_draw_down_quote_below_cost_impl_20260810',
-
-  // Private implementation behind the public restore_quote_version RPC, so it
-  // is absent from the generated types by design. It declares
-  // p_idempotency_key text and owns the canonical
-  // check_idempotency('restore_quote_version') lookup plus the idempotency_keys
-  // cache write, asserting a single affected row.
-  // Pre-apply-window entry, exactly like the draw-down impl above: it enters
-  // the inventory because migration 20260826220000 is the FIRST on-disk CREATE
-  // of this function under its post-rename name. 20260812115237 renamed the
-  // original public body with ALTER FUNCTION ... RENAME TO and defined no body
-  // on disk, so the transitive-mutation walker could not see it until now.
-  // Move this to MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever
-  // becomes public — live grants on 2026-08-25 show no EXECUTE for anon,
-  // authenticated or service_role, and 20260826220000 re-asserts that shape.
-  '_restore_quote_version_below_cost_impl_20260810',
-
-  // Private implementations behind the public price_order and save_invoice
-  // RPCs, absent from the generated types by design (direct EXECUTE revoked
-  // to PUBLIC/anon/authenticated/service_role by 20260812115237 and
-  // 20260827041500 respectively; CREATE OR REPLACE keeps those ACLs). Both
-  // declare p_idempotency_key text and deliberately share their public
-  // wrapper's cache namespace ('price_order' / 'save_invoice'). Pre-apply-window
-  // entries, exactly like the draw-down impl above: migration 20260904160000
-  // (invoice_date fallbacks -> America/Chicago business day) is the FIRST
-  // on-disk CREATE of each under its post-rename name, because both were
-  // originally renamed with ALTER FUNCTION ... RENAME TO and had no on-disk
-  // body the transitive-mutation walker could see. Move either to
-  // MUTATING_RPCS_WITH_IDEMPOTENCY only if it ever becomes public.
-  '_price_order_below_cost_impl_20260810',
-  '_save_invoice_lineage_unaware_impl_20260827',
 ]);
 
 /**
@@ -2881,6 +2887,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
   auto_expire_quotes: 'service-role maintenance sets only currently-expirable quote statuses',
+  bump_cycle_count_item_revision:
+    'trigger-only cycle-count revision bump; it is SECURITY DEFINER with all application-role EXECUTE revoked and the item-write transaction owns its atomicity',
   check_idempotency: 'idempotency infrastructure helper; mutation only purges an expired key',
   check_idempotency_intent:
     'idempotency infrastructure helper (Section 07 gauntlet finding 2); mutation only purges an expired key, and it raises rather than replays when the actor or request fingerprint differs; direct client EXECUTE is revoked',
@@ -2889,6 +2897,16 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
+  // The applied ledger migration moved both recorder helpers below the live
+  // registry high-water. The forward-only label and stale-recipient candidates
+  // re-emit them, so they are discovered again until those candidates apply.
+  // Both remain trigger-only (RETURNS trigger) and every non-owner EXECUTE grant
+  // is revoked; these narrow entries must be removed after the next truthful
+  // live registry refresh moves beyond the candidates.
+  record_commission_earned_state:
+    'local commission-label repair candidate re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission write owns the transaction',
+  record_commission_settlement_event:
+    'local stale-recipient guard re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission-payment status update owns the transaction',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
   release_expired_quote_holds: 'maintenance releases only holds that remain in the expired state',
