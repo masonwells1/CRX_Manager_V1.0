@@ -5,6 +5,7 @@ DECLARE
   v_product uuid;
   v_inventory uuid;
   v_count uuid;
+  v_item_revision bigint;
   v_qty numeric;
   v_status text;
   v_suffix text := substr(md5(random()::text), 1, 8);
@@ -26,13 +27,27 @@ BEGIN
     variance, variance_pct, is_counted, counted_by, counted_at
   ) VALUES (v_count, v_product, v_inventory, 100, 112, 12, 12, true, v_admin, now());
 
-  PERFORM complete_cycle_count(v_count, v_admin, 'smk-cc-complete-' || v_suffix);
+  SELECT item_revision INTO v_item_revision
+  FROM cycle_counts
+  WHERE id = v_count;
+
+  PERFORM complete_cycle_count(
+    v_count,
+    v_admin,
+    'smk-cc-complete-' || v_suffix,
+    v_item_revision
+  );
   SELECT quantity_available INTO v_qty FROM inventory WHERE id = v_inventory;
   SELECT status INTO v_status FROM cycle_counts WHERE id = v_count;
   IF v_qty <> 112 OR v_status <> 'completed' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: complete produced qty/status %/%', v_qty, v_status;
   END IF;
-  PERFORM complete_cycle_count(v_count, v_admin, 'smk-cc-complete-' || v_suffix);
+  PERFORM complete_cycle_count(
+    v_count,
+    v_admin,
+    'smk-cc-complete-' || v_suffix,
+    v_item_revision
+  );
   SELECT quantity_available INTO v_qty FROM inventory WHERE id = v_inventory;
   IF v_qty <> 112 THEN RAISE EXCEPTION 'SMOKE_FAIL: complete replay changed qty to %', v_qty; END IF;
 
@@ -48,7 +63,7 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc
-    WHERE oid = 'public.complete_cycle_count(uuid,uuid,text)'::regprocedure
+    WHERE oid = 'public.complete_cycle_count(uuid,uuid,text,bigint)'::regprocedure
       AND prosrc LIKE '%FOR UPDATE OF i%'
   ) OR NOT EXISTS (
     SELECT 1 FROM pg_proc

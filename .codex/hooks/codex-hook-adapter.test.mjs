@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import { normalizeHookOutput, resolveSharedHook } from "./codex-hook-adapter.mjs";
@@ -50,5 +51,27 @@ assert.equal(
   path.resolve(root, ".claude/hooks/sql-safety.mjs"),
 );
 assert.throws(() => resolveSharedHook(root, "../outside.mjs"), /must be a file under/);
+
+// The adapter must preserve event-level cwd as it forwards raw native
+// apply_patch JSON to the registered shared review-proof guard.
+{
+  const repoRoot = process.cwd();
+  const adapterPath = path.join(repoRoot, ".codex", "hooks", "codex-hook-adapter.mjs");
+  const result = spawnSync(process.execPath, [adapterPath, ".claude/hooks/review-proof-guard.mjs"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    input: JSON.stringify({
+      tool_name: "apply_patch",
+      cwd: path.join(repoRoot, ".claude", "hooks"),
+      tool_input: "*** Begin Patch\n*** Update File: review-proof-guard.mjs\n@@\n-old\n+new\n*** End Patch",
+    }),
+  });
+  assert.equal(result.error, undefined, "adapter event-cwd probe starts without a process error");
+  assert.equal(result.status, 0, "adapter forwards the hook denial without process failure");
+  assert.equal(result.stderr, "", "adapter event-cwd probe emits no stderr");
+  const decision = JSON.parse(result.stdout);
+  assert.equal(decision.hookSpecificOutput?.permissionDecision, "deny", "adapter preserves event cwd for raw patch destinations");
+  assert.match(String(decision.hookSpecificOutput?.permissionDecisionReason || ""), /through a path field/);
+}
 
 console.log("OK - Codex hook adapter checks passed.");
