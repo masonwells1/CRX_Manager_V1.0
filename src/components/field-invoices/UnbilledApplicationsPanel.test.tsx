@@ -42,12 +42,28 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => mockNavigate };
 });
 
-vi.mock('../../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({
-    getKey: () => `transfer-key-${transferIdemState.generation}`,
-    resetKey: mockResetKey,
-  }),
-}));
+vi.mock('../../hooks/useIdempotencyKey', async () => {
+  const { useCallback, useRef } = await vi.importActual<typeof import('react')>('react');
+
+  return {
+    useIdempotencyKey: () => {
+      const keyRef = useRef<string | null>(null);
+      const getKey = useCallback(() => {
+        if (keyRef.current === null) {
+          transferIdemState.generation += 1;
+          keyRef.current = `transfer-key-${transferIdemState.generation}`;
+        }
+        return keyRef.current;
+      }, []);
+      const resetKey = useCallback(() => {
+        keyRef.current = null;
+        mockResetKey();
+      }, []);
+
+      return { getKey, resetKey };
+    },
+  };
+});
 
 vi.mock('../../lib/sentry', () => ({
   Sentry: { captureException: vi.fn() },
@@ -80,9 +96,6 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     transferIdemState.generation = 0;
-    mockResetKey.mockImplementation(() => {
-      transferIdemState.generation += 1;
-    });
     mockSanitizeError.mockReturnValue('sanitized fallback');
     mockFrom.mockImplementation((table: string) => queryResult(table === 'jobs' ? [completedJob] : []));
   });
@@ -148,7 +161,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     });
     expect(screen.queryByRole('dialog', { name: 'Create Invoice' })).toBeNull();
     expect(mockRpc).toHaveBeenCalledTimes(1);
-    expect(mockResetKey).toHaveBeenCalledTimes(1);
+    expect(mockResetKey).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Create Invoice' }));
     expect(screen.getByRole('dialog', { name: 'Create Invoice' })).toBeInTheDocument();
@@ -159,7 +172,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     const secondKey = mockRpc.mock.calls[1][1].p_idempotency_key;
     expect(firstKey).toBeTruthy();
     expect(secondKey).not.toBe(firstKey);
-    expect(mockResetKey).toHaveBeenCalledTimes(2);
+    expect(mockResetKey).toHaveBeenCalledTimes(1);
   });
 
   it('removes an already-invoiced job from the backlog after invalid-result reconciliation', async () => {
@@ -184,7 +197,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     expect(screen.queryByRole('button', { name: 'Create Invoice' })).toBeNull();
     expect(screen.queryByRole('dialog', { name: 'Create Invoice' })).toBeNull();
     expect(mockRpc).toHaveBeenCalledTimes(1);
-    expect(mockResetKey).toHaveBeenCalledTimes(1);
+    expect(mockResetKey).not.toHaveBeenCalled();
   });
 
   it('keeps the job blocked until a failed reconciliation is followed by a successful refresh', async () => {
@@ -217,7 +230,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Create Invoice' })).not.toBeDisabled());
     expect(jobReads).toBe(3);
-    expect(mockResetKey).toHaveBeenCalledTimes(1);
+    expect(mockResetKey).not.toHaveBeenCalled();
     expect(mockRpc).toHaveBeenCalledTimes(1);
   });
 

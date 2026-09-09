@@ -137,7 +137,6 @@ export default function UnbilledApplicationsPanel() {
   const [billNextReady, setBillNextReady] = useState(false);
   const [reconciliationPendingJobIds, setReconciliationPendingJobIds] = useState<Set<string>>(() => new Set());
   const jobInvoiceKeysRef = useRef<Map<string, JobInvoiceKeyControls>>(new Map());
-  const reconciliationKeyResetsRef = useRef<Map<string, () => void>>(new Map());
 
   const registerJobInvoiceKeys = useCallback((jobId: string, controls: JobInvoiceKeyControls | null) => {
     if (controls) {
@@ -186,10 +185,6 @@ export default function UnbilledApplicationsPanel() {
   const refreshAndReconcile = useCallback(async () => {
     if (!await fetchAll()) return false;
 
-    for (const retireReconciledKey of reconciliationKeyResetsRef.current.values()) {
-      retireReconciledKey();
-    }
-    reconciliationKeyResetsRef.current.clear();
     setReconciliationPendingJobIds(new Set());
     return true;
   }, [fetchAll]);
@@ -232,15 +227,14 @@ export default function UnbilledApplicationsPanel() {
       const resultInvalid = hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID)
         || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RESULT_INVALID);
       if (resultInvalid) {
-        const failedAttempt = pendingJobInvoice;
+        const failedJobId = pendingJobInvoice.row.id;
         setPendingJobInvoice(null);
-        reconciliationKeyResetsRef.current.set(failedAttempt.row.id, failedAttempt.resetKey);
-        setReconciliationPendingJobIds((current) => new Set(current).add(failedAttempt.row.id));
+        setReconciliationPendingJobIds((current) => new Set(current).add(failedJobId));
         toast('error', transferInvoiceErrorMessage(err)!);
         // The row stays blocked if either authoritative list read fails. A
         // successful automatic or operator-triggered refresh settles whether an
-        // invoice exists, retires the suspect receipt key, and requires a brand-
-        // new confirmation before another billing mutation can run.
+        // invoice exists. The loading boundary remounts the row action with a fresh
+        // component-local key before a new confirmation can run another mutation.
         await refreshAndReconcile();
       } else {
         toast('error', transferInvoiceErrorMessage(err) ?? sanitizeError(err));

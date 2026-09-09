@@ -359,7 +359,7 @@ function classify(lines: string[], lineNo: number): Reason | null {
   // for a branch to open or close, so exitsBranch has nothing to rule out. classify()
   // read only the lines ABOVE the reset, so this single-line guard form was
   // unclassifiable and every instance of it read as a defect.
-  if (RECOVERY_MARKER.test(self)) return 'recovery';
+  if (RECOVERY_MARKER.test(stripNoise(self))) return 'recovery';
 
   const aboveLines = above.split('\n');
   const markerIdx = lastIndexMatching(aboveLines, RECOVERY_MARKER);
@@ -426,8 +426,8 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  *  - a whole TEMPLATE LITERAL is removed including its `${…}` interpolations, so a
  *    reset executed inside one is invisible, and a multi-line template body still
  *    reads as code because stripping is line-based;
- *  - only the hit scan is stripped. classify() and aliasNames() read RAW lines, so a
- *    comment or string can excuse a real hit or invent an alias.
+ *  - most classify() windows and aliasNames() still read RAW lines, so a comment or
+ *    string can excuse a real hit or invent an alias.
  */
 function stripNoise(line: string): string {
   return line
@@ -658,6 +658,12 @@ function findResetBeforeAssert(file: string): number[] {
 // not verified clean; they are pinned to the exact sites the scanner already finds.
 describe('F1 guard — resets are verified outside the pinned files, and the pinned files cannot drift', () => {
   const files = walk('src').map((f) => f.replace(/\\/g, '/'));
+
+  it('requires executable recovery evidence on a reset line', () => {
+    expect(classify(['idem.resetKey(); // getIdempotencyMismatchResult(error)'], 1)).toBeNull();
+    expect(classify(["const note = 'isDefinitiveRpcRejection'; idem.resetKey();"], 1)).toBeNull();
+    expect(classify(['if (isDefinitiveRpcRejection(error)) idem.resetKey();'], 1)).toBe('recovery');
+  });
 
   it('scans a meaningful number of source files', () => {
     // Guards that cannot fire are worse than no guard: prove the sweep found work.
