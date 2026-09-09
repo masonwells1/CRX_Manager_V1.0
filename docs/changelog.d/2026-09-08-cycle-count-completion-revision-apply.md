@@ -89,7 +89,7 @@ locked down (`impl` = `{postgres, service_role}`, pre-revision wrapper = `{postg
 anywhere is `scripts/smoke/smoke-cycle-count-concurrency-guards.sql`, which passes the
 revision positionally from a `NOT NULL DEFAULT 0` column.
 
-### The apply, and what was observed afterwards
+### The apply, and what was observed afterward
 
 Applied 2026-09-08 via `scripts/apply-migration-file.mjs --confirm` (the MCP `apply_migration`
 path is dead against the guard). All five gates passed — ordering, autopilot state,
