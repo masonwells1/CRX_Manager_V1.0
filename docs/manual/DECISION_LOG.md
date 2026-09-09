@@ -1,11 +1,96 @@
 # Decision Log
 
-Last verified: 2026-09-04
+Last verified: 2026-09-05
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-05 — Retain guard approvals and broaden ordinary work
+
+**Source:** Mason answered "yes proceed" to the recommendation to retain approval for
+files controlling review and merging while giving agents broad access to ordinary work.
+
+**Decision:** Restore all 32 native Edit/Write approval entries for the 16 protected
+configuration/hook/workflow/script path patterns in PR #605. Use `acceptEdits` mode,
+explicit MCP read grants, connector safeguards, and expanded risky-path
+review coverage. Ordinary source edits remain permitted. Explicit merge/deploy approvals
+and the existing protected delivery process are unchanged. This supersedes the earlier
+same-day unrestricted native-edit decision below. No review rejection may be waived.
+
+**Extension (same day, Codex P1 on `753165db4`):** the restored entries named only `Edit` and
+`Write`; `MultiEdit` and `NotebookEdit` — the other native editors the review-proof guard exempts —
+were auto-approved on the same paths under `acceptEdits`. Matching `MultiEdit(...)` and
+`NotebookEdit(...)` entries were added for all 16 patterns (64 `ask` entries) and for the three
+`.env` `deny` pairs. The rule is that every exempted native editor is named, not just the two the
+original list happened to spell. A second review round (Codex HIGH on `1730c5cfd`, matched by the
+GitHub Codex P1 "Gate edits to migration reviewer charters") added three patterns the
+migration-proof minter trusts verbatim — `.claude/agents/**`, `scripts/write-apply-proofs.mjs`,
+`scripts/write-apply-proofs-lib.mjs` — for 20 patterns and 80 `ask` entries. Charter edits were
+silent on `main` too (bare `Edit`/`Write` allow), so this closes a pre-existing gap rather than a
+regression; binding charter hashes into the proof itself is recorded as a follow-up. A third round
+(`gpt-5.6-sol` HIGH on `02b342610`) made the same three paths hard-denied for shell and path-field
+writers in `review-proof-guard.mjs` (the `ask` tier covers native editors only) and added
+`scripts/write-apply-proofs-lib.mjs` to the risky-path set so its diff needs the exact-SHA review.
+A fourth round (GitHub Codex P1 on `8179ae989`) added `.claude/launch.json` to all three lists:
+`preview_start`, newly allowed, executes the command that file names, so an unprotected edit to
+it was a route around every Bash hook. `preview_start` itself stays allowed. A fifth round
+(`gpt-5.6-sol` HIGH on `d6302e28b`) moved `mcp__Claude_Browser__read_network_requests` from `allow`
+to `ask`: CRX page traffic carries Supabase bearer tokens and signed customer-document links, and
+nothing proves the connector redacts them, so network capture in the preview browser prompts; the
+other thirteen read-only browser tools stay allowed. A sixth round (GitHub Codex P1s on `c82d29308`)
+moved `preview_start` to `ask` — `git switch` to a branch carrying a modified `.claude/launch.json`
+defeats edit protection, so starting a configured preview prompts — and moved
+`read_network_requests` to `deny`: an approved capture still puts bearer tokens and signed URLs into
+model context, so it stays blocked (main's effective behaviour) until redaction is proven.
+A seventh round replaced ad-hoc rounds with a test. `.claude/hooks/protected-surface-parity.test.mjs` (wired into
+`npm run test:agent-workflows`, so CI and the pre-commit hook run it) asserts that the three by-name lists agree —
+settings `ask` (all four native editors per pattern), `review-proof-guard.mjs`'s shell and path-field patterns, and
+`codex-push-lib.mjs`'s `RISKY_PATH_RES` — and that every tracked top-level entry under `.claude/` and `.codex/` is
+either protected or recorded in writing as deliberately open. It fails on `main` (56 divergences) and on the branch
+head that preceded it, `45d80321e` (13), which is the proof it is load-bearing rather than decorative. Writing the
+test forced six entries to be decided on evidence rather than habit, each traced to what reads or executes it:
+`.claude/schema-registry.json` (four registered PreToolUse hooks parse it — `generated-column-check.mjs:46`,
+`session-staleness.mjs:110`, `sql-safety.mjs:137`, `status-enum-check.mjs:95` — plus two CI checks and the migration
+review packet; `sql-safety.mjs` wraps its read in a fail-open `catch`, so corrupting the file silently disables that
+check rather than blocking); `.claude/caller-graph.json` (`grant-change-guard.mjs:218` trusts its CONTENT — a missing
+graph fails closed on a risky REVOKE, but a stale one only warns, and a DOCTORED one is not caught at all);
+`.claude/commands/**`, `.claude/skills/**` and `.claude/workflows/**` (all reach CI: `package.json:57` runs the two
+`.test.mjs` files under `workflows/` and `scripts/check-agent-workflows.mjs`, which reads six command files by name,
+and `.github/workflows/ci.yml:468` plus `.husky/pre-commit:43` execute that script — a weakened test still turns the
+CI row green, so the gate lies instead of failing, and the equivalent test files under `.claude/hooks/` were already
+protected, which makes the omission an accident rather than a decision); and `.codex/**` by shape, which brings in
+`sync-from-claude.ps1`. That last one is NOT reachable from CI, husky, or any hook — it is protected because it was
+the only unguarded entry in a directory whose other three were already covered, and one pattern ends the category.
+The reachability trace matched path STRINGS, so a script that assembles one of these paths dynamically would have
+been missed; none was found, but that is a negative grep, not a proof. Cost, stated plainly: editing a slash-command
+or skill file now prompts, and `.codex/sync-from-claude.ps1` can no longer be run from the Bash tool. Mason's
+2026-09-03 ruling against blanket `.claude/**` prompting still holds — the set stays by-name, and the test is what
+keeps a by-name set honest.
+
+**Mode correction after review:** inheriting Auto left new named connector mutations
+eligible for classifier approval. `acceptEdits` keeps ordinary local edits automatic
+but requires permission for unlisted connector tools. This is a tool-permission mode,
+not a change to merge authorization or GitHub auto-merge. It supersedes the earlier
+implementation choice to inherit Auto mode and avoids chasing every future tool name.
+
+## 2026-09-05 — Superseded: agents may natively edit enforcement surfaces without a prompt
+
+**Implementation follow-up:** a fresh Claude session proved that removing ask rules alone still
+leaves built-in `.claude/` writes denied under `dontAsk`. PR #605 now removes that repository mode
+override and inherits Mason's existing user-level Auto mode. Protected-path writes are evaluated
+by Claude's classifier; explicit ask/deny rules remain. The shared risky-path list also now covers
+every newly editable configuration and check/validate/verify script. Earlier descriptions below
+explain the original policy decision, not a guarantee that every native edit is auto-approved.
+
+**Source:** Mason's 2026-09-05 direction ("give full permission to Claude and Codex ... everything else is free game"), reaffirmed twice after the concern was raised, and his reply "open it all I'll merge" after the exact-SHA Codex review of PR #605 returned a HIGH objection to exactly this point.
+
+**Decision:** `.claude/settings.json` no longer lists native `Edit`/`Write` of `.claude/settings.json`, `.claude/hooks/**`, `.codex/hooks/**`, `.codex/hooks.json`, `.codex/config.toml`, `.husky/**`, `.github/workflows/**`, `package.json`, `.coderabbit.yaml`, the `scripts/check-*`/`validate-*`/`verify-*` families, or the proof/ledger/review scripts in `ask`. Under this repo's `dontAsk` mode those entries were silent refusals, not prompts. Merge, deploy, and live-database entries stay in `ask`; the `deny` list grew (Supabase lifecycle, filesystem and Desktop Commander mutators); MCP grants are explicit and read-only; the browser grant is read-only tools.
+
+**Why:** Mason cannot review code, so a permission prompt buys him nothing and a silent refusal only stalls work he cannot diagnose. The hooks, CI, branch protection, and the risky-path exact-SHA Codex proof at merge are the boundary he relies on. Codex's objection — a mistaken or hijacked session can now rewrite those hooks locally — was put to him plainly with the recommendation to keep the gate files prompted; he chose the full opening and to click Merge himself, since the Codex proof gate binds agents, not the owner.
+
+**What this forbids/implies:** no agent may self-certify past a `BLOCKERS` verdict; when Codex objects to a settings change, the objection goes to Mason and only Mason's own GitHub merge lands it. A hook or settings edit remains a risky path: agents still need the exact-SHA Codex proof to merge one. Do not re-add the removed `ask` entries without a fresh decision here. Recorded as a known residual in `docs/reference/agent-guardrails.md`.
 
 ## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
 

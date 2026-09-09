@@ -33,7 +33,8 @@ const hooksDir = path.join(tmp, ".claude", "hooks");
 mkdirSync(hooksDir, { recursive: true });
 mkdirSync(path.join(tmp, "supabase", "migrations"), { recursive: true });
 mkdirSync(path.join(tmp, "src", "lib"), { recursive: true });
-for (const dep of ["status-enum-check.mjs", "edit-splice-lib.mjs"]) {
+// autopilot-lib.mjs supplies canonicalToolPath() (the scope predicate judges the canonical path since PR #605).
+for (const dep of ["status-enum-check.mjs", "edit-splice-lib.mjs", "autopilot-lib.mjs"]) {
   copyFileSync(path.join(__dirname, dep), path.join(hooksDir, dep));
 }
 writeFileSync(path.join(tmp, ".claude", "schema-registry.json"), JSON.stringify({

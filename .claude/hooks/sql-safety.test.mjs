@@ -32,7 +32,8 @@ const tmp = mkdtempSync(path.join(os.tmpdir(), "crx-sql-safety-"));
 const hooksDir = path.join(tmp, ".claude", "hooks");
 mkdirSync(hooksDir, { recursive: true });
 mkdirSync(path.join(tmp, "supabase", "migrations"), { recursive: true });
-for (const dep of ["sql-safety.mjs", "registry-freshness-lib.mjs", "edit-splice-lib.mjs"]) {
+// autopilot-lib.mjs supplies canonicalToolPath() (the scope predicate judges the canonical path since PR #605).
+for (const dep of ["sql-safety.mjs", "registry-freshness-lib.mjs", "edit-splice-lib.mjs", "autopilot-lib.mjs"]) {
   copyFileSync(path.join(__dirname, dep), path.join(hooksDir, dep));
 }
 writeFileSync(path.join(tmp, ".claude", "schema-registry.json"), JSON.stringify({

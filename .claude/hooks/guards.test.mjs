@@ -55,6 +55,11 @@ ok(isBuildActionUnderHold("Bash", { command: "node scripts/apply-migration-file.
 ok(isBuildActionUnderHold("Bash", { command: "node scripts/apply-migration-file.mjs x.sql" }),
   "even a dry run of the live-apply door pauses under hold");
 ok(!isBuildActionUnderHold("Write", { file_path: ".claude/session-state/hold.json" }), "session-state write allowed");
+// CodeRabbit Major on 06f0039a2 (CWE-22): the notes exception matched by substring.
+ok(isBuildActionUnderHold("Write", { file_path: ".claude/session-state/../../src/pages/Foo.tsx" }), "PROVEN BYPASS: a traversal through session-state is still a source edit under hold");
+ok(isBuildActionUnderHold("Write", { file_path: "../notes/../../outside.md" }), "an .md reached by escaping the tree is not the notes exception");
+ok(!isBuildActionUnderHold("Write", { file_path: "C:\\CRX_Manager\\.claude\\session-state\\hold.json" }), "absolute session-state path allowed under hold");
+ok(!isBuildActionUnderHold("Write", { file_path: "docs/notes/../SCOPE.md" }), "SCOPE.md reached through a normalising path is still allowed");
 ok(!isBuildActionUnderHold("Write", { file_path: "docs/SCOPE.md" }), "SCOPE.md allowed under hold");
 ok(!isBuildActionUnderHold("Bash", { command: "npm run test" }), "tests allowed under hold");
 ok(!isBuildActionUnderHold("Read", { file_path: "x" }), "read allowed under hold");

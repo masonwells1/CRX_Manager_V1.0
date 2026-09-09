@@ -14,9 +14,52 @@ function run(payload) {
   });
 }
 
+// PR #605 CodeRabbit F4 (2026-09-06): an allow is "silent AND exited 0". Before this, 54 lines
+// in this file asserted only `.stdout === ""`, so a hook that crashed (empty stdout, non-zero
+// exit) satisfied every one of them — "allowed" and "died" were the same observation, the same
+// species as the 2026-07-28 incident where 30 Windows guards silently failed open.
+function allowed(payload) {
+  const label = `${payload.tool_name} ${JSON.stringify(payload.tool_input).slice(0, 90)}`;
+  const result = run(payload);
+  assert.equal(result.status, 0, `hook should exit 0 on an allowed call: ${label} ${result.stderr || ""}`);
+  assert.equal(result.stdout, "", `must stay silent on an allowed call: ${label}`);
+}
+
 for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/session-state/claude-review-push.json", content: "{}" } },
   { tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\codex-review-abc.json" } },
+  // GitHub Codex P1 on ac5758f03: the settings `ask` glob matches the spelling it is given, so a
+  // native edit through a dot segment or a doubled separator reached a protected file with no
+  // prompt. Non-canonical spellings of the enforcement surface deny in every mode.
+  { tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.github\\scripts\\..\\workflows\\ci.yml", old_string: "a", new_string: "b" } },
+  { tool_name: "MultiEdit", tool_input: { file_path: ".github/scripts/../workflows/ci.yml", edits: [] } },
+  { tool_name: "Write", tool_input: { file_path: ".claude//hooks/review-proof-guard.mjs", content: "x" } },
+  { tool_name: "Write", tool_input: { file_path: "./.claude/settings.json", content: "{}" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/hooks/", content: "{}" } },
+  { tool_name: "NotebookEdit", tool_input: { notebook_path: ".claude/commands/../hooks/probe.ipynb" } },
+  { tool_name: "Edit", tool_input: { file_path: "../elsewhere/notes.md", old_string: "a", new_string: "b" } },
+  // Codex gpt-5.6-sol High on b2988f2da: Win32 aliases — a drive-relative prefix, a trailing
+  // period or space in a segment — open the protected file and passed the canonical check.
+  { tool_name: "Edit", tool_input: { file_path: "C:.claude\\hooks\\review-proof-guard.mjs", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/hooks./review-proof-guard.mjs", content: "x" } },
+  { tool_name: "MultiEdit", tool_input: { file_path: ".claude/settings.json.", edits: [] } },
+  { tool_name: "NotebookEdit", tool_input: { notebook_path: ".claude/hooks/probe.ipynb " } },
+  { tool_name: "Edit", tool_input: { file_path: ".github/workflows/ci.yml...", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: "C:.husky/pre-push", content: "x" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/hooks./x.mjs" } },
+  { tool_name: "Bash", tool_input: { command: "cp /tmp/evil .claude/hooks./review-proof-guard.mjs" } },
+  { tool_name: "Bash", tool_input: { command: "printf x > .claude/settings.json." } },
+  { tool_name: "Bash", tool_input: { command: "echo x > C:.claude\\hooks\\x.mjs" } },
+  // Codex gpt-5.6-sol High on d1bbf5ac6: NTFS alternate data streams and device prefixes open
+  // the real file; probe-confirmed silent before the fix.
+  { tool_name: "MultiEdit", tool_input: { file_path: ".claude/settings.json::$DATA", edits: [] } },
+  { tool_name: "Edit", tool_input: { file_path: "scripts/write-codex-push-proof.mjs::$DATA", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: "package.json::$DATA", content: "{}" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/hooks/x.mjs:evil", content: "x" } },
+  { tool_name: "NotebookEdit", tool_input: { notebook_path: ".claude/hooks/p.ipynb:s:$DATA" } },
+  { tool_name: "Edit", tool_input: { file_path: "\\\\?\\C:\\repo\\.claude\\settings.json", old_string: "a", new_string: "b" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".husky/pre-push::$DATA" } },
+  { tool_name: "Bash", tool_input: { command: "printf x > .claude/settings.json::$DATA" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/claude-review-push.json" } },
   { tool_name: "Bash", tool_input: { command: "echo {} > .claude/session-state/claude-review-push.json" } },
   { tool_name: "PowerShell", tool_input: { command: "Remove-Item .claude/session-state/codex-review-abc.json" } },
@@ -194,15 +237,102 @@ for (const payload of [
   assert.match(result.stdout, /"permissionDecision":"deny"/);
 }
 
-assert.equal(run({ tool_name: "Write", tool_input: { file_path: "docs/review.md", content: "ok" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).stdout, "");
+allowed({ tool_name: "Write", tool_input: { file_path: "docs/review.md", content: "ok" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/run-claude-review.mjs --scope base-main" } });
+// Running the proof minter and READING a charter stay allowed; only writes are gated.
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/write-apply-proofs.mjs --migration supabase/migrations/20260905_x.sql" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cat .claude/agents/rls-security-reviewer.md" } });
+allowed({ tool_name: "Bash", tool_input: { command: "grep -n verdict scripts/write-apply-proofs-lib.mjs" } });
+allowed({ tool_name: "Read", tool_input: { file_path: ".claude/agents/rls-security-reviewer.md" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cat .claude/launch.json" } });
+allowed({ tool_name: "Read", tool_input: { file_path: ".claude/launch.json" } });
+// protected-surface-parity (PR #605 round 12): reads, the generators, and npm stay silent.
+allowed({ tool_name: "Bash", tool_input: { command: "cat package.json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "jq .scripts package.json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm run typecheck" } });
+// CodeRabbit on 18d1bee17 (review 5126628334, Major): `npm install left-pad` used to be
+// pinned here as ALLOW. It rewrites package.json without naming it, so it now DENIES —
+// see the package-manager block below. Installing FROM the manifest stays silent.
+allowed({ tool_name: "Bash", tool_input: { command: "npm install" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm ci" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm install --no-save left-pad" } });
+// A launcher in front of a from-manifest or non-manifest command stays silent.
+allowed({ tool_name: "Bash", tool_input: { command: "cmd /c npm ci" } });
+// Read-only and run subcommands stay silent, including the ones the fail-closed rule must know.
+allowed({ tool_name: "Bash", tool_input: { command: "npm audit" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn constraints" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn constraints --json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm run lint -- --fix" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm test -- --fix" } });
+allowed({ tool_name: "Bash", tool_input: { command: "pnpm run format:fix" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn run fix" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm audit --json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm dedupe" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm prune" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm outdated" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm ls left-pad" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm view left-pad version" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm exec -- vitest run src/lib/rpcContracts.test.ts" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm config set fund false" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm whoami" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn workspaces list" } });
+allowed({ tool_name: "Bash", tool_input: { command: "pnpm dlx create-vite my-app" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm run build -- --prefix x" } });
+allowed({ tool_name: "Bash", tool_input: { command: "sh -c 'npm run build'" } });
+allowed({ tool_name: "Bash", tool_input: { command: "powershell -Command npm test" } });
+allowed({ tool_name: "Bash", tool_input: { command: "ls node_modules/.bin/npm" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npx vitest run src/lib/npm.test.ts" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm install -g corepack" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm uninstall --no-save left-pad" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm pkg get scripts" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm version" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm --version" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm test" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npx vitest run src/lib/rpcContracts.test.ts" } });
+allowed({ tool_name: "Bash", tool_input: { command: "pnpm install --frozen-lockfile" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn" } });
+allowed({ tool_name: "Bash", tool_input: { command: "yarn install --immutable" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun install" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm pkg get name" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm ls" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm bin" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm cache" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm hash" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm whoami" } });
+allowed({ tool_name: "Bash", tool_input: { command: "bun pm" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack enable" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack prepare pnpm@9 --activate" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack pnpm@9 install" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack pnpm@9 run build" } });
+allowed({ tool_name: "Bash", tool_input: { command: "corepack --version" } });
+allowed({ tool_name: "Bash", tool_input: { command: "npm install -g npm@latest" } });
+allowed({ tool_name: "Bash", tool_input: { command: "git worktree list" } });
+allowed({ tool_name: "Bash", tool_input: { command: "git worktree list --porcelain" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh pr view 605" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh pr checks 605" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh api repos/o/r/contents/.claude/hooks/review-proof-guard.mjs" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh -R owner/repo run view 1 --log | grep .husky/pre-push" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh gist view deadbeef" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh auth status" } });
+allowed({ tool_name: "Bash", tool_input: { command: "gh gist clone deadbeef /tmp/scratch" } });
+allowed({ tool_name: "Bash", tool_input: { command: "git worktree list; cat .claude/hooks/review-proof-guard.mjs" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd /c/repo && npm ci && npm run build" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/regenerate-schema-registry.mjs --from-introspection /tmp/introspection.json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/generate-caller-graph.mjs --live-json /tmp/live.json" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cat .claude/schema-registry.json" } });
+// Round thirteen: reads of the newly protected prose and orchestration files stay silent.
+allowed({ tool_name: "Bash", tool_input: { command: "cat .claude/commands/ship.md" } });
+allowed({ tool_name: "Bash", tool_input: { command: "grep -rn verdict .claude/workflows" } });
+allowed({ tool_name: "Bash", tool_input: { command: "ls .claude/skills" } });
+allowed({ tool_name: "Read", tool_input: { file_path: ".codex/sync-from-claude.ps1" } });
+allowed({ tool_name: "Read", tool_input: { file_path: ".claude/caller-graph.json" } });
 // 2026-08-18 false-positive class: a cd to an UNRELATED literal directory plus a
 // read-only mention of the state dir must be allowed — only the cd TARGET matters.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "C:\\CRX_Manager\\.claude\\worktrees\\skills-audit-x" && wc -l src/app.ts; ls .claude/session-state 2>/dev/null' } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd /c/repo && cat .claude/session-state/README.md" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude/hooks && node review-proof-guard.test.mjs" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: 'cd "C:\\CRX_Manager\\.claude\\worktrees\\skills-audit-x" && wc -l src/app.ts; ls .claude/session-state 2>/dev/null' } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd /c/repo && cat .claude/session-state/README.md" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd .claude/hooks && node review-proof-guard.test.mjs" } });
 // Unresolvable target WITHOUT any state-dir mention is fine.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "$HOME/projects" && ls' } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: 'cd "$HOME/projects" && ls' } });
 // Option tokens before an UNRELATED literal target must not re-trigger the
 // old "cd anywhere + state-dir mention" false positive.
 const optionAllow = run({ tool_name: "Bash", tool_input: { command: "cd -- /c/repo && ls .claude/session-state 2>/dev/null" } });
@@ -210,58 +340,67 @@ assert.equal(optionAllow.status, 0);
 assert.equal(optionAllow.stdout, "");
 // Multi-line commands whose cds all target innocent directories stay allowed —
 // the newline fix must not turn every multi-line script into a false positive.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd /c/repo\nnpm run test\nls .claude/session-state" } }).stdout, "");
-assert.equal(run({ tool_name: "PowerShell", tool_input: { command: "Push-Location C:\\repo\nGet-ChildItem" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "cd /c/repo\nnpm run test\nls .claude/session-state" } });
+allowed({ tool_name: "PowerShell", tool_input: { command: "Push-Location C:\\repo\nGet-ChildItem" } });
 // Round 4 non-regressions: `sl` must not swallow `sleep`; the sanctioned
 // removal script is the allowed path and never names the ledger file; a
 // destructive verb WITHOUT any state-dir mention stays allowed.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "sleep 5 && ls .claude/session-state" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --name stale_probe" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --list" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules && npm install" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "sleep 5 && ls .claude/session-state" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --name stale_probe" } });
+allowed({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --list" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules && npm install" } });
 // Round 5 non-regressions (F4/F5/F6): the deglue pass must not split a verb out
 // of an unrelated word; an empty location target WITHOUT a state-dir mention is
 // fine; and a destructive verb on a `.claude`-PREFIXED but distinct path
 // (`.claude-cache`, `.clauderc`) must stay allowed — only bare `.claude` counts.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "scandir.parse('.claude/session-state')" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd && ls /tmp" } }).stdout, "");
-assert.equal(run({ tool_name: "PowerShell", tool_input: { command: "Get-Content foo.json | sl" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf .claude-cache && rm -rf build/.clauderc" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "scandir.parse('.claude/session-state')" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd && ls /tmp" } });
+allowed({ tool_name: "PowerShell", tool_input: { command: "Get-Content foo.json | sl" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rm -rf .claude-cache && rm -rf build/.clauderc" } });
 // Round 6 non-regressions: the new backslash-dropped and quote-stripped views
 // must not manufacture a false `.claude` component or proof basename. A
 // destructive verb on a `.claude`-PREFIXED-but-distinct path stays allowed even
 // after the `\` is dropped, and a find-delete on an unrelated `.claudex` glob is
 // fine — only bare `.claude` as a whole component with a delete/exec counts.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf build\\.clauderc-cache" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "find src -name '*.claudex' -delete" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "rm -rf build\\.clauderc-cache" } });
+allowed({ tool_name: "Bash", tool_input: { command: "find src -name '*.claudex' -delete" } });
 // Round 7 non-regressions: the component-aware / glob-fail-closed / new-verb net
 // must not over-match. A glob with NO literal prefix (`*.js`), a destructive verb
 // on an unrelated path, and `git clean` / `rsync --delete` / `truncate` that name
 // no protected component all stay allowed. Only a glob whose LITERAL prefix could
 // expand to `.claude` / `session-state` / the ledger — or a redirect INTO the
 // state dir — is denied.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm dist/*.js" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules/.cache" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "echo hi > /tmp/out" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "echo x > .claude-notes.txt" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "git clean -fdx dist" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rsync -a --delete /tmp/a/ /tmp/b/" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "truncate -s0 /tmp/log" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "rm dist/*.js" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules/.cache" } });
+allowed({ tool_name: "Bash", tool_input: { command: "echo hi > /tmp/out" } });
+allowed({ tool_name: "Bash", tool_input: { command: "echo x > .claude-notes.txt" } });
+allowed({ tool_name: "Bash", tool_input: { command: "git clean -fdx dist" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rsync -a --delete /tmp/a/ /tmp/b/" } });
+allowed({ tool_name: "Bash", tool_input: { command: "truncate -s0 /tmp/log" } });
 // The unresolvable-target skeleton check must not over-match: a `$VAR` target whose
 // literal parts are NOT protected components stays allowed, and a `.claude`-PREFIXED
 // but distinct component (`.claude-cache`) stays allowed even unresolved.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd $HOME/session-state-notes && ls" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude-cache/$sub && ls" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "cd $HOME/session-state-notes && ls" } });
+allowed({ tool_name: "Bash", tool_input: { command: "cd .claude-cache/$sub && ls" } });
 // Round 8 non-regressions: the dotted-lead glob floor must not over-block an
 // ordinary delete whose glob lead is a bare `s`/`a` (a prefix of `session-state`
 // / `applied-source-ledger.json` but too generic to be a real target of them),
 // and the MCP directory-level deny must still allow a legit hook/settings edit
 // or a hook-file move that never enters `.claude/session-state`.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm s*.o" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm a*.log" } }).stdout, "");
-assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/review-proof-guard.mjs", content: "// edit" } }).stdout, "");
-assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/settings.json", content: "{}" } }).stdout, "");
-assert.equal(run({ tool_name: "Edit", tool_input: { file_path: ".claude/hooks/stop-wrap.mjs" } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: "rm s*.o" } });
+allowed({ tool_name: "Bash", tool_input: { command: "rm a*.log" } });
+allowed({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/review-proof-guard.mjs", content: "// edit" } });
+allowed({ tool_name: "Write", tool_input: { file_path: ".claude/settings.json", content: "{}" } });
+allowed({ tool_name: "Edit", tool_input: { file_path: ".claude/hooks/stop-wrap.mjs" } });
+// Canonical spellings (Windows separators included) stay with the settings prompt, and a
+// non-canonical spelling of an UNPROTECTED path is nobody's business here.
+allowed({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\hooks\\stop-wrap.mjs" } });
+allowed({ tool_name: "Write", tool_input: { file_path: "C:/repo/.github/workflows/ci.yml", content: "x" } });
+allowed({ tool_name: "Edit", tool_input: { file_path: "src/pages/../lib/x.ts" } });
+allowed({ tool_name: "Write", tool_input: { file_path: "./docs/notes.md", content: "x" } });
+allowed({ tool_name: "Write", tool_input: { file_path: "docs/notes.md.", content: "x" } });
+allowed({ tool_name: "Write", tool_input: { file_path: "docs/notes.md::$DATA", content: "x" } });
+allowed({ tool_name: "Bash", tool_input: { command: "echo done. > docs/x.md" } });
 // DELIBERATELY REVERSED 2026-09-01. This line used to assert that an MCP move of
 // a hook file was ALLOWED — true when `guarded-surface-lock` existed to catch it.
 // With the lock deleted, that is exactly the "silently rewrite a guard, then run
@@ -276,9 +415,9 @@ assert.match(
 // Ack valve (stop-wrap-ack.json): the ONE session-state basename stop-wrap.mjs
 // tells the agent to write to acknowledge loose ends — must be ALLOWED again
 // (the round-8 whole-dir deny had broken this designed carve-out).
-assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/session-state/stop-wrap-ack.json", content: '{"signature":"x"}' } }).stdout, "");
-assert.equal(run({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\stop-wrap-ack.json" } }).stdout, "");
-assert.equal(run({ tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } }).stdout, "");
+allowed({ tool_name: "Write", tool_input: { file_path: ".claude/session-state/stop-wrap-ack.json", content: '{"signature":"x"}' } });
+allowed({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\stop-wrap-ack.json" } });
+allowed({ tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } });
 
 // ── Worktree-path denials: a tripwire for any future carve-out ──────────────
 // Agent worktrees live at <repo>/.claude/worktrees/<name>/, so every file in one
@@ -501,8 +640,47 @@ for (const command of [
   "cp /tmp/evil scripts/check-ledger-update.mjs",
   "echo x > scripts/validate-sql.mjs",
   "cp /tmp/evil scripts/verify-deps.mjs",
+  // PR #605 F3 (widen): nested check-script paths deny through the shell too.
+  "cp /tmp/evil scripts/check-x/y.txt",
+  "printf x > scripts/validate-schema/run.mjs",
   "rm -f scripts/agent-manifest-parity.mjs",
   "cp /tmp/evil scripts/sync-agent-workflows.mjs",
+  // PR #605 (gpt-5.6-sol HIGH on 02b342610): the migration-proof minter's INPUTS.
+  // write-apply-proofs.mjs reads each .claude/agents/<reviewer>.md verbatim and
+  // runs it as a machine-verdict review; a weakened charter or minter mints a
+  // clean proof for a LIVE apply before any merge-time review sees the edit.
+  // `Set-Content` to all three was probe-confirmed ALLOW before this fix.
+  "Set-Content .claude/agents/rls-security-reviewer.md",
+  "cp /tmp/evil .claude/agents/migration-drift-reviewer.md",
+  "echo x > .claude/agents/rls-security-reviewer.md",
+  "sed -i s/BLOCKERS/CLEAN/ .claude/agents/compliance-reviewer.md",
+  "Set-Content scripts/write-apply-proofs.mjs",
+  "cp /tmp/evil scripts/write-apply-proofs.mjs",
+  "Set-Content scripts/write-apply-proofs-lib.mjs",
+  "tee scripts/write-apply-proofs-lib.mjs",
+  "cp /tmp/evil .claude//agents/rls-security-reviewer.md",
+  "cp /tmp/evil .claude/commands/../agents/rls-security-reviewer.md",
+  // GitHub Codex P1 on 8179ae989: preview_start runs the command .claude/launch.json names.
+  "Set-Content .claude/launch.json",
+  "echo x > .claude/launch.json",
+  "cp /tmp/evil .claude/launch.json",
+  "sed -i s/npm/curl/ .claude/launch.json",
+  "cp /tmp/evil .claude/commands/../launch.json",
+  // protected-surface-parity (PR #605 round 12): gate inputs and the scripts manifest.
+  // Round thirteen: commands/skills/workflows reach CI; .codex is matched by shape.
+  "echo x > .claude/commands/ship.md",
+  "cp /tmp/evil .claude/skills/graphify/SKILL.md",
+  "Set-Content .claude/workflows/truthful-review-states.test.mjs",
+  "sed -i s/x/y/ .claude/workflows/migration-review.js",
+  "tee .codex/sync-from-claude.ps1",
+  "cp /tmp/evil .codex/sync-from-claude.ps1",
+  "Set-Content .claude/schema-registry.json",
+  "cp /tmp/evil .claude/caller-graph.json",
+  "sed -i s/x/y/ package.json",
+  "cp /tmp/evil package.json",
+  "echo x > package.json",
+  "tee package.json",
+  "Set-Content ./package.json",
   // SEVENTH gpt-5.6-sol round, both P1 and both reproduced by the reviewer.
   //
   // (a) `rg --pre CMD` runs CMD on every input path, so an allowlisted READER
@@ -525,6 +703,26 @@ for (const command of [
   // read-only: git runs whatever a config override or pager/diff helper names.
   // Both of these were reproduced by the reviewer DELETING .husky/pre-push.
   "git -c diff.external=rm diff --ext-diff -- .husky/pre-push",
+  // GitHub Codex P1 on 06f0039a2: `git worktree` sat whole in the read-only set, but
+  // `add`/`move` populate the path they are given and `remove` deletes it.
+  "git worktree add --detach .claude/skills/probe 0123abc",
+  "git worktree add .claude/hooks/probe HEAD",
+  "git worktree add -b feat .github/workflows main",
+  "git worktree move wt-a .claude/skills/probe",
+  "git worktree remove .claude/skills/probe",
+  "git worktree frobnicate .claude/skills/probe",
+  "cd repo && git worktree add --detach .claude/skills/probe 0123abc",
+  "git -C repo worktree add --detach .claude/skills/probe 0123abc",
+  // GitHub Codex P1 on c94e16dc7: `gh` sat whole in the read-only set, but `gist clone` and
+  // `repo clone` materialise files at the named directory and `download --dir` writes into it.
+  "gh gist clone deadbeef .claude/skills/probe",
+  "gh repo clone owner/repo .claude/skills/probe",
+  "gh -R owner/repo repo clone owner/repo .claude/skills/probe",
+  "gh run download 123 --dir .claude/hooks",
+  "gh release download v1 --dir .github/workflows",
+  "gh repo fork owner/repo --clone -- .claude/skills/probe",
+  "gh frobnicate .claude/hooks/review-proof-guard.mjs",
+  "cd repo && gh gist clone deadbeef .claude/skills/probe",
   "git grep --open-files-in-pager=rm pattern -- .husky/pre-push",
   "git grep -O rm pattern -- .github/workflows/ci.yml",
   "git -c core.pager=rm log .husky/pre-push",
@@ -593,6 +791,132 @@ for (const command of [
   assert.equal(result.stdout, "", `must allow: ${command}`);
 }
 
+// PR #605, CodeRabbit on 18d1bee17 (review 5126628334, Major): package-manager
+// commands that rewrite package.json WITHOUT naming it. Every line here was
+// probe-confirmed exit 0 / silent before the fix — that is the backwards proof.
+// Matched by shape (manager head + manifest-writing subcommand family), so aliases,
+// path-qualified heads, `corepack`, a VAR=value prefix and a preceding `cd &&` all deny.
+for (const command of [
+  "npm install left-pad",
+  // Codex gpt-5.6-sol High on 8ac85002d: the manager behind a launcher. Every line was
+  // probe-confirmed silent before the fix.
+  "cmd /c npm install left-pad",
+  "npx npm install left-pad",
+  "powershell -Command npm install left-pad",
+  "sh -c 'npm install left-pad'",
+  "bash -c \"npm install left-pad\"",
+  "env npm install left-pad",
+  "command npm install left-pad",
+  "nice npm install left-pad",
+  "cmd /c yarn add left-pad",
+  // Codex gpt-5.6-sol High on fc36b2d28: only the first manager token was classified, and an
+  // unknown subcommand read as "not a write". Every line was probe-confirmed silent before.
+  "npm exec -- npm pkg set scripts.probe=true",
+  "npm x -- npm install left-pad",
+  "npm exec -- sh -c \"npm install left-pad\"",
+  "npm audit fix",
+  "npm audit fix --force",
+  "npm dedupe --save",
+  "npm prune --save",
+  "npm create vite@latest",
+  "yarn set version stable",
+  "yarn workspace api add left-pad",
+  "pnpm --filter api add left-pad",
+  "pnpm patch-commit ./patches/left-pad",
+  "yarn unplug lodash",
+  "npm frobnicate left-pad",
+  "npm --prefix . install left-pad",
+  "npm --prefix help install left-pad",
+  "npm --prefix=. install left-pad",
+  "pnpm --dir . add left-pad",
+  "npm --unknown-option value install left-pad",
+  "npm install left-pad --no-save --save",
+  "npm install left-pad --no-save --save-dev",
+  "npm install left-pad -g --global=false",
+  "npm i left-pad@1.3.0",
+  "npm install --save-dev left-pad",
+  "npm add left-pad",
+  "npm link left-pad",
+  "npm uninstall left-pad",
+  "npm rm left-pad",
+  "npm un left-pad",
+  "npm update",
+  "npm up left-pad",
+  "npm pkg set scripts.test=true",
+  "npm pkg delete scripts.lint",
+  "npm pkg fix",
+  "npm version patch",
+  "npm version 9.9.9 --no-git-tag-version",
+  "npm init -y",
+  "npm set-script lint true",
+  "pnpm add left-pad",
+  "pnpm remove left-pad",
+  "pnpm up",
+  "yarn add left-pad",
+  "yarn remove left-pad",
+  "yarn upgrade",
+  "yarn version",
+  "yarn version --new-version 1.0.0",
+  "bun add left-pad",
+  "bun remove left-pad",
+  "bun install left-pad",
+  // Codex gpt-5.6-sol High on cbd986732: `pm` is a namespace; what follows it is classified.
+  // GitHub Codex P1 on c94e16dc7: `corepack use pnpm@latest` writes packageManager into
+  // package.json and installs; `pnpm@latest` is the manager under a versioned descriptor.
+  "corepack use pnpm@latest",
+  "corepack up",
+  "corepack pnpm@latest add left-pad",
+  "corepack yarn@4.1.0 remove left-pad",
+  "npx pnpm@9 install left-pad",
+  "pnpm@latest install left-pad",
+  "corepack frobnicate",
+  "cmd /c corepack use npm@10",
+  // GitHub Codex P1: `yarn constraints --fix` persists changed workspace manifests, yet
+  // `constraints` sat in the read/run allowlist; the FIX rule is now the class.
+  "yarn constraints --fix",
+  "yarn constraints --fix --json",
+  "corepack yarn@4.14.1 constraints --fix",
+  "yarn@4 constraints --fix",
+  "cd packages/app && yarn constraints --fix",
+  "npm pkg fix",
+  "npm audit --fix",
+  "bun pm pkg set scripts.test=x",
+  "bun pm pkg delete scripts.lint",
+  "bun pm pkg fix",
+  "bun pm version patch",
+  "bun pm trust left-pad",
+  "bun pm migrate",
+  "bun pm frobnicate",
+  "bun --cwd . pm pkg set scripts.test=x",
+  "cmd /c bun pm pkg set scripts.test=x",
+  "npm pm pkg set scripts.test=x",
+  "FOO=1 npm install left-pad",
+  "cd /c/repo && npm install left-pad",
+  "rm -rf node_modules && npm install left-pad",
+  "/usr/bin/npm install left-pad",
+  "npm.cmd install left-pad",
+  "corepack pnpm add left-pad",
+  'npm install "left-pad"',
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);
+  assert.match(result.stdout, /package-manager commands that rewrite package\.json/, `must deny for the package-manager reason: ${command}`);
+}
+// The same shape through PowerShell.
+{
+  const ps = run({ tool_name: "PowerShell", tool_input: { command: "Set-Location C:\\repo; npm install left-pad" } });
+  assert.equal(ps.status, 0);
+  assert.match(ps.stdout, /package-manager commands that rewrite package\.json/);
+}
+
+// Nested single-`*` samples, real hook: the measured glob crosses `/`, and the shell regex was
+// widened to match (F3). These stay pinned so the parity model and the hook cannot drift apart.
+for (const nested of ["scripts/check-probe/nested.txt", ".claude/hooks/probe-dir/probe.mjs"]) {
+  const w = run({ tool_name: "Bash", tool_input: { command: `printf x > ${nested}` } });
+  assert.match(w.stdout, /"permissionDecision":"deny"/, `nested single-* path must be denied: ${nested}`);
+}
+
 // Near-misses must NOT be swept up: the path components are whole words.
 for (const command of [
   "rm -rf .husky-backup",
@@ -608,6 +932,22 @@ for (const command of [
 // must deny too — Codex listed these alongside the shell bypasses.
 for (const payload of [
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".husky/pre-push" } },
+  // PR #605 (gpt-5.6-sol HIGH on 02b342610): proof-minter inputs through a path field.
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/agents/rls-security-reviewer.md" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/agents/migration-drift-reviewer.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/write-apply-proofs.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/write-apply-proofs-lib.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/../agents/rls-security-reviewer.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/launch.json" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/launch.json" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/commands/ship.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/skills/graphify/SKILL.md" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/workflows/truthful-review-states.test.mjs" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".codex/sync-from-claude.ps1" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/schema-registry.json" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/caller-graph.json" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "package.json" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: "package.json" } },
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".claude/hooks/sql-safety.mjs" } },
   { tool_name: "mcp__filesystem__edit_file", tool_input: { path: ".codex/hooks.json" } },
   { tool_name: "apply_patch", tool_input: { patch: "*** Begin Patch\n*** Update File: .github/workflows/ci.yml\n" } },
@@ -621,10 +961,17 @@ for (const payload of [
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".github//workflows/ci.yml" } },
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: ".husky//pre-push" } },
   { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude\\\\hooks\\sql-safety.mjs" } },
+  // PR #605 CodeRabbit F3, resolved by WIDENING: nested check/validate/verify script paths deny
+  // through a path field, matching the settings globs (measured to cross "/") and the shell regex.
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "scripts/check-x/y.txt" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x", destination: "scripts/verify-deps/helpers/index.mjs" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
   assert.match(result.stdout, /"permissionDecision":"deny"/, `path-field writer must deny: ${payload.tool_name}`);
+  assert.match(result.stdout, /Use native Edit\/Write/);
+  assert.match(result.stdout, /exact-SHA independent review before merge/);
+  assert.doesNotMatch(result.stdout, /ask.*tier/);
 }
 
 // Read-only built-ins must be allowed on protected paths — this guard's own
@@ -641,15 +988,15 @@ for (const payload of [
 }
 
 // Native Write/Edit are deliberately NOT denied here — there is no unlock any
-// more, so denying them would permanently strand hook maintenance. The `ask` tier
-// gates them instead. Pinned so the exemption stays a recorded choice.
+// more, so denying them would permanently strand hook maintenance. Independent
+// review gates delivery instead. Pinned so the exemption stays a recorded choice.
 for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/hooks/sql-safety.mjs", content: "x" } },
   { tool_name: "Edit", tool_input: { file_path: ".husky/pre-push" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "", `native editor stays with the ask tier: ${payload.tool_name}`);
+  assert.equal(result.stdout, "", `native editor remains allowed: ${payload.tool_name}`);
 }
 
 // KNOWN OVER-BLOCK, pinned deliberately rather than papered over. A dotted
@@ -684,6 +1031,106 @@ for (const payload of [
 // without ever exercising it, and would have stayed green if the workaround broke.
 // The pattern below is the real thing: quoted, bracket-classed, and free of the
 // `|` that splits the segment.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } }).stdout, "");
+allowed({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } });
 
+// SHELL VARIABLES IN A WRITE DESTINATION. GitHub Codex P1 on 6e3f1bd36, probe-confirmed: the
+// first two payloads passed the whole registered Bash hook chain (only bash-safety answered,
+// with allow). Same-command assignments are now resolved into every view, and whatever is
+// still unreadable in a write position fails closed. Every deny below is silent on the
+// previous hook.
+for (const [tool_name, command] of [
+  ["Bash", 'd=.claude; printf x > "$d/hooks/review-proof-guard.mjs"'],
+  ["Bash", "n=package; printf '{}' > \"$n.json\""],
+  ["Bash", 'd=.claude; cp /tmp/evil "$d/hooks/review-proof-guard.mjs"'],
+  ["Bash", 'n=package; tee "$n.json" < /tmp/evil'],
+  ["Bash", 'd=.cl; b="${d}aude"; printf x > "$b/hooks/x.mjs"'],
+  ["Bash", 'export d=.claude\nprintf x > "$d/settings.json"'],
+  ["Bash", "d=.claude && printf x > $d/hooks/x.mjs"],
+  ["Bash", 'FOO=1 d=.husky cp /tmp/evil "$d/pre-push"'],
+  ["Bash", 'printf x > "$(echo .claude)/hooks/review-proof-guard.mjs"'],
+  ["Bash", "printf x > \"`echo .claude`/hooks/x.mjs\""],
+  ["Bash", 'printf x > "${d:-.claude}/hooks/x.mjs"'],
+  ["Bash", 'printf x > "$LOG"'],
+  ["Bash", 'echo x >> "${OUT}"'],
+  ["Bash", 'read d <<< .claude; cp /tmp/evil "$d/hooks/x.mjs"'],
+  // Codex gpt-5.6-sol High CRX-SEC-002 on 5f69ecc2d: the first fix RESOLVED same-command
+  // assignments, and assignment-shaped text the shell never executes forged a harmless value.
+  // There is no parser now — an expansion in a write destination is unreadable, full stop —
+  // so the forgery payloads deny for the same reason the plain ones do.
+  ["Bash", "printf ' d=/tmp/x' ; printf x > \"$d/hooks/review-proof-guard.mjs\""],
+  ["Bash", "echo '# d=/tmp/x' && cp /tmp/evil \"$d/hooks/x.mjs\""],
+  ["Bash", 'd=/tmp/scratch; printf x > "$d/out.log"'],
+  ["Bash", 'D=/tmp/x; cp /tmp/evil "$D/hooks/review-proof-guard.mjs"'],
+  // Codex gpt-5.6-sol High CRX-SEC-001 on 5f69ecc2d, packet-confirmed on the review host:
+  // `CLAUDE~1` -> `.claude`, `PACKAG~2.JSO` -> `package.json`, `supabase\MIGRAT~1` ->
+  // `supabase\migrations`, all resolving to identical bytes. Refused, not expanded.
+  ["Bash", "printf x > CLAUDE~1/hooks/review-proof-guard.mjs"],
+  ["Bash", "cp /tmp/evil CLAUDE~1\\hooks\\review-proof-guard.mjs"],
+  ["Bash", "cp /tmp/evil PACKAG~2.JSO"],
+  ["Bash", "tee GITHUB~1/workflows/ci.yml < /tmp/evil"],
+  ["Bash", "printf x > HUSKY~1/pre-push"],
+  ["Bash", 'cp /tmp/evil "$(echo LmNsYXVkZS9ob29rcy94Lm1qcw== | base64 -d)"'],
+  ["Bash", 'for f in $(ls); do cp /tmp/evil "$f/hooks/x.mjs"; done'],
+  ["Bash", 'if true; then tee "$d/pre-push" < /tmp/evil; fi'],
+  ["PowerShell", '$d = ".claude"; Set-Content -Path "$d/hooks/x.mjs" -Value x'],
+  ["PowerShell", 'Set-Content -Path "$env:TEMP/../repo/package.json" -Value x'],
+  ["Bash", "set d=.claude& printf x > %d%\\hooks\\x.mjs"],
+]) {
+  const result = run({ tool_name, tool_input: { command } });
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny (shell variable in a write destination): ${command}`);
+}
+// Read-only, or not path-shaped: unchanged. (A variable write destination is NOT here any
+// more — `d=/tmp/scratch; printf x > "$d/out.log"` denies, the accepted cost of having no
+// assignment parser to forge. Reads through variables are untouched.)
+for (const [tool_name, command] of [
+  ["Bash", 'echo "$d/hooks/x"'],
+  ["Bash", 'cat "$(git rev-parse --show-toplevel)/README.md"'],
+  ["Bash", 'for f in $(git ls-files docs); do echo "$f"; done'],
+  ["Bash", 'node scripts/x.mjs "$(cat notes.txt)"'],
+  ["Bash", 'git commit -m "$(cat /tmp/msg.txt)"'],
+  ["Bash", 'gh api repos/x/y/pulls/605 --jq "$Q"'],
+  ["Bash", 'curl -s "$URL" -o /tmp/out.json'],
+  ["Bash", 'npm test -- --grep "$PATTERN"'],
+  ["Bash", "X=1 node script.mjs"],
+  ["Bash", "printf x > /tmp/out.log 2>&1"],
+  ["Bash", "echo done >&2"],
+  ["Bash", 'if [ -n "$HOME" ]; then echo ok; fi'],
+  ["Bash", 'cd "$HOME/projects" && ls'],
+]) {
+  allowed({ tool_name, tool_input: { command } });
+}
+// CodeRabbit Minor on 60910c005: a launcher's `--fix` belongs to the launched program.
+for (const command of ["npm exec -- eslint --fix src", "pnpm exec eslint --fix", "npx --no-install eslint --fix"]) {
+  allowed({ tool_name: "Bash", tool_input: { command } });
+}
+for (const command of ["npm exec -- npm pkg fix", "npm exec -- npm audit fix", "pnpm exec yarn constraints --fix"]) {
+  assert.match(run({ tool_name: "Bash", tool_input: { command } }).stdout, /"permissionDecision":"deny"/, `must deny (nested manifest write behind a launcher): ${command}`);
+}
+// CodeRabbit Major on 60910c005: the old segment walk tested for `..` before trimming, so a
+// `.. ` (dot-dot-space) segment vanished and the traversal was lost. Folded onto `..` now, fail
+// closed (measured 2026-09-09: neither Node's fs nor PowerShell opens `.. ` as `..` here).
+for (const payload of [
+  { tool_name: "Edit", tool_input: { file_path: ".claude/worktrees/.. /hooks/review-proof-guard.mjs", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/worktrees/..:x/hooks/review-proof-guard.mjs", content: "x" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/worktrees/.. /../.claude/settings.json" } },
+  { tool_name: "Bash", tool_input: { command: 'cp /tmp/evil ".claude/worktrees/.. /hooks/review-proof-guard.mjs"' } },
+]) {
+  assert.match(run(payload).stdout, /"permissionDecision":"deny"/, `must deny (dot-dot-space traversal): ${JSON.stringify(payload.tool_input)}`);
+}
+
+// DOS 8.3 aliases through the native editors and the MCP path field (Codex CRX-SEC-001 on
+// 5f69ecc2d, packet-confirmed: CLAUDE~1 resolves to .claude, PACKAG~2.JSO to package.json).
+for (const payload of [
+  { tool_name: "Edit", tool_input: { file_path: "CLAUDE~1/hooks/review-proof-guard.mjs", old_string: "a", new_string: "b" } },
+  { tool_name: "Write", tool_input: { file_path: "C:\\repo\\CLAUDE~1\\settings.json", content: "{}" } },
+  { tool_name: "MultiEdit", tool_input: { file_path: "PACKAG~2.JSO", edits: [] } },
+  { tool_name: "NotebookEdit", tool_input: { notebook_path: "GITHUB~1/workflows/probe.ipynb" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: "HUSKY~1/pre-push" } },
+]) {
+  assert.match(run(payload).stdout, /"permissionDecision":"deny"/, `must deny (DOS 8.3 alias): ${JSON.stringify(payload.tool_input)}`);
+}
+// A literal `~` that is not a short-name alias is untouched: home paths, backup file names.
+for (const command of ["head -5 ~/notes.md", "ls ~", "grep -n x docs/plan.md~"]) {
+  allowed({ tool_name: "Bash", tool_input: { command } });
+}
 console.log("OK - review proof guard checks passed.");

@@ -35,6 +35,47 @@ eq(autopilotDecision("Bash", { command: "git worktree remove ../x" }), "deny", "
 eq(autopilotDecision("Bash", { command: "echo SECRET >> .env" }), "deny", "write to .env denied");
 eq(autopilotDecision("Write", { file_path: "C:/CRX_Manager/.env.local" }), "deny", "Write .env.local denied");
 eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied");
+// PR #605 (Codex gpt-5.6-sol High at 28bba740b): the enforcement surface joins the armed
+// deny set. Every native editor, the MCP path field, relative and absolute Windows paths.
+eq(autopilotDecision("Edit", { file_path: ".claude/hooks/review-proof-guard.mjs" }), "deny", "armed Edit of a hook denied");
+eq(autopilotDecision("Write", { file_path: "package.json" }), "deny", "armed Write of package.json denied");
+eq(autopilotDecision("MultiEdit", { file_path: ".husky/pre-push" }), "deny", "armed MultiEdit of a husky hook denied");
+eq(autopilotDecision("NotebookEdit", { file_path: ".github/workflows/ci.yml" }), "deny", "armed NotebookEdit of a workflow denied");
+// CodeRabbit Major on 537625b59: NotebookEdit sends notebook_path, which the armed check never read.
+eq(autopilotDecision("NotebookEdit", { notebook_path: ".claude/hooks/x.mjs" }), "deny", "PROVEN BYPASS: armed NotebookEdit via notebook_path of a hook denied");
+eq(autopilotDecision("NotebookEdit", { notebook_path: "C:\\CRX_Manager\\.github\\workflows\\ci.yml" }), "deny", "armed NotebookEdit via absolute notebook_path of a workflow denied");
+eq(autopilotDecision("NotebookEdit", { notebook_path: ".env.local" }), "deny", "armed NotebookEdit via notebook_path of an env file denied");
+eq(autopilotDecision("NotebookEdit", { notebook_path: "notebooks/analysis.ipynb" }), "allow", "armed NotebookEdit of an ordinary notebook allowed");
+eq(autopilotDecision("Write", { file_path: "C:\\CRX_Manager\\.claude\\settings.json" }), "deny", "absolute Windows path to settings.json denied");
+eq(autopilotDecision("Edit", { file_path: "C:/CRX_Manager/scripts/write-codex-push-proof.mjs" }), "deny", "absolute path to the proof minter denied");
+eq(autopilotDecision("Edit", { file_path: "scripts/check-docs.mjs" }), "deny", "check-* script denied");
+// Codex gpt-5.6-sol High at fdce1aa53: the surface was matched on the raw spelling only.
+eq(autopilotDecision("Edit", { file_path: ".claude/worktrees/../hooks/review-proof-guard.mjs" }), "deny", "PROVEN BYPASS: a traversal into .claude/hooks is judged on the canonical path");
+eq(autopilotDecision("Write", { file_path: ".claude//hooks/x.mjs" }), "deny", "repeated separators collapse before the match");
+eq(autopilotDecision("Write", { file_path: "./.husky/pre-push" }), "deny", "a ./ prefix normalises away");
+eq(autopilotDecision("Edit", { file_path: "C:\\CRX_Manager\\.claude\\worktrees\\wt\\..\\..\\hooks\\x.mjs" }), "deny", "absolute Windows traversal into hooks denied");
+eq(autopilotDecision("Write", { file_path: "docs/../.env.local" }), "deny", "a traversal onto an env file denied");
+eq(autopilotDecision("Write", { file_path: "../elsewhere/notes.md" }), "deny", "a path that escapes the tree is never auto-approved while armed");
+eq(autopilotDecision("Write", { file_path: "src/pages/../lib/x.ts" }), "allow", "an ordinary source path with a resolvable dot segment stays auto-approved");
+// Codex gpt-5.6-sol High on b2988f2da: Win32 aliases open the protected file.
+eq(autopilotDecision("Edit", { file_path: "C:.claude/hooks/x.mjs" }), "deny", "PROVEN BYPASS: a drive-relative prefix is dropped before the surface match");
+eq(autopilotDecision("Edit", { file_path: "C:.claude\\hooks\\x.mjs" }), "deny", "drive-relative with backslashes denied");
+eq(autopilotDecision("Write", { file_path: ".claude/hooks./x.mjs" }), "deny", "a trailing period in a directory segment is stripped before the match");
+eq(autopilotDecision("Write", { file_path: ".claude/settings.json." }), "deny", "a trailing period on the file name is stripped before the match");
+eq(autopilotDecision("Write", { file_path: "scripts/check-docs.mjs " }), "deny", "a trailing space is stripped before the match");
+eq(autopilotDecision("Write", { file_path: "src/lib/x.ts." }), "allow", "an unprotected path with a trailing period stays auto-approved");
+// Codex gpt-5.6-sol High on d1bbf5ac6: NTFS alternate data streams open the real file. The raw-spelling
+// match already denied these (the protected prefix survives the suffix); the canonical form now agrees.
+eq(autopilotDecision("Write", { file_path: ".claude/hooks/x.mjs::$DATA" }), "deny", "the default-stream suffix is cut before the surface match");
+eq(autopilotDecision("Write", { file_path: "package.json::$DATA" }), "deny", "package.json through its default stream denied");
+eq(autopilotDecision("Edit", { file_path: ".claude/settings.json:evil" }), "deny", "a named stream of a protected file denied");
+eq(autopilotDecision("Edit", { file_path: "\\\\?\\C:\\repo\\.claude\\hooks\\x.mjs" }), "deny", "a device-prefixed rooted path denied");
+eq(autopilotDecision("Write", { file_path: "src/lib/x.ts::$DATA" }), "allow", "an unprotected path through its default stream stays auto-approved");
+eq(autopilotDecision("mcp__some_server__put_file", { path: ".codex/hooks.json" }), "deny", "an MCP path field into .codex denied even when the tool name is not in DENY_TOOLNAME_RE");
+eq(autopilotDecision("Write", { file_path: ".claude/session-state/notes.md" }), "allow", "session-state stays auto-approved");
+eq(autopilotDecision("Edit", { file_path: "package-lock.json" }), "allow", "package-lock.json is deliberately outside the set");
+eq(autopilotDecision("Edit", { file_path: "scripts/foo.mjs" }), "allow", "an ordinary script stays auto-approved");
+eq(autopilotDecision("Write", { file_path: "docs/changelog.d/2026-09-08-x.md" }), "allow", "a ledger entry stays auto-approved");
 
 // ── deny-set additions (2026-07-04): CLI deploy, PR merge, MCP write/exec ─
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
@@ -389,6 +430,27 @@ ok(intentFresh(JSON.stringify({ created: new Date().toISOString() })), "fresh in
 ok(!intentFresh(JSON.stringify({ created: new Date(Date.now() - 2 * 3600e3).toISOString() })), "stale intent ignored");
 ok(!intentFresh("not json"), "malformed intent ignored");
 eq(overnightGateDecision("Edit", { file_path: "src/pages/Foo.tsx" }), "deny-until-armed", "edit blocked until armed");
+// GitHub Codex P2 on df8f2442a: MultiEdit was missing from the unarmed editor branch, and
+// acceptEdits auto-approves it — a hands-free run could mutate source before the arm.
+eq(overnightGateDecision("MultiEdit", { file_path: "src/pages/Foo.tsx", edits: [] }), "deny-until-armed", "PROVEN BYPASS: MultiEdit blocked until armed");
+eq(overnightGateDecision("Write", { file_path: "src/pages/Foo.tsx" }), "deny-until-armed", "write blocked until armed");
+eq(overnightGateDecision("NotebookEdit", { notebook_path: "notebooks/a.ipynb" }), "deny-until-armed", "notebook edit blocked until armed");
+eq(overnightGateDecision("NotebookEdit", { notebook_path: ".claude/session-state/scratch.ipynb" }), "allow-through", "session-state notebook edit passes the handshake via notebook_path");
+eq(overnightGateDecision("MultiEdit", { file_path: ".claude/session-state/notes.md", edits: [] }), "allow-through", "MultiEdit of session-state passes like Edit does");
+// CodeRabbit Major on 06f0039a2 (CWE-22): the exception was a "session-state" substring test.
+eq(overnightGateDecision("Write", { file_path: "../.claude/session-state/../../outside.txt" }), "deny-until-armed", "PROVEN BYPASS: a traversal through session-state is judged on its canonical path");
+eq(overnightGateDecision("Edit", { file_path: ".claude/session-state/../../src/App.tsx" }), "deny-until-armed", "session-state/../.. resolves to source and waits for the arm");
+eq(overnightGateDecision("Write", { file_path: "src/session-state/x.ts" }), "deny-until-armed", "a session-state folder elsewhere in the tree is not the trusted root");
+eq(overnightGateDecision("Write", { file_path: ".claude/session-state" }), "deny-until-armed", "the root directory itself is not a file under it");
+eq(overnightGateDecision("Write", { file_path: "C:\\CRX_Manager\\.claude\\session-state\\notes.json" }), "allow-through", "absolute Windows path into the trusted root passes");
+eq(overnightGateDecision("Write", { file_path: ".claude/session-state/sub/notes.json" }), "allow-through", "nested file under the trusted root passes");
+eq(overnightGateDecision("Write", { file_path: "./.claude/session-state/notes.json" }), "allow-through", "a ./ prefix normalises away");
+eq(overnightGateDecision("mcp__filesystem__write_file", { path: "src/x.ts" }), "deny-until-armed", "MCP write_file blocked until armed");
+eq(overnightGateDecision("mcp__filesystem__edit_file", { path: "src/x.ts" }), "deny-until-armed", "MCP edit_file blocked until armed");
+eq(overnightGateDecision("mcp__filesystem__create_directory", { path: "src/new" }), "deny-until-armed", "MCP create_directory blocked until armed");
+eq(overnightGateDecision("mcp__github__push_files", { branch: "main" }), "deny-until-armed", "an armed-deny tool never passes unarmed either");
+eq(overnightGateDecision("mcp__filesystem__read_file", { path: "src/x.ts" }), "allow-through", "MCP read_file still passes before the arm");
+eq(overnightGateDecision("mcp__filesystem__list_directory", { path: "src" }), "allow-through", "MCP list_directory still passes before the arm");
 eq(overnightGateDecision("Bash", { command: "git add -A && git commit -m x" }), "deny-until-armed", "commit blocked until armed");
 eq(overnightGateDecision("mcp__supabase__execute_sql", { query: "SELECT 1" }), "allow-through", "sql passes even before arm (Mason 2026-07-10)");
 eq(overnightGateDecision("mcp__x__deploy_edge_function", {}), "deny-until-armed", "deploy still blocked until armed");
@@ -549,6 +611,38 @@ try {
   ok(/"permissionDecision":\s*"deny"/.test(r.stdout), "hook DENIES a deny-set command (rm -rf /) when armed");
 } finally {
   rmSync(resolvedArmedDir, { recursive: true, force: true });
+}
+
+// CodeRabbit Major on 60910c005 (canonical output runtime-observed): canonicalToolPath tested
+// `seg === ".."` before trimming, so `.. ` fell through to the trailing-dot strip, became empty
+// and vanished — the traversal was lost, the path missed PROTECTED_SURFACE_RE, and armed
+// autopilot returned allow. Folded onto `..` now, fail closed (measured 2026-09-09: neither
+// Node's fs nor PowerShell opens `.. ` as `..` on this machine).
+// The behavioural assertions come first so the previous lib (which has no trimWin32Segment
+// export) fails on the bypass, not on a missing import.
+{
+  const lib = await import("./autopilot-lib.mjs");
+  eq(autopilotDecision("Edit", { file_path: ".claude/worktrees/.. /hooks/review-proof-guard.mjs" }), "deny", "PROVEN BYPASS: armed autopilot refuses the `.. ` traversal into .claude/hooks");
+  eq(lib.canonicalToolPath(".claude/worktrees/.. /hooks/review-proof-guard.mjs"), ".claude/hooks/review-proof-guard.mjs", "PROVEN BYPASS: `.. ` resolves as a traversal");
+  eq(lib.canonicalToolPath(".claude/session-state/.. /../src/App.tsx"), "src/App.tsx", "two `.. ` traversals resolve");
+  eq(lib.canonicalToolPath(".claude/worktrees/..:x/hooks/x.mjs"), ".claude/hooks/x.mjs", "stream suffix on `..` stays a traversal");
+  eq(autopilotDecision("Write", { file_path: "C:\\repo\\.claude\\worktrees\\.. \\..\\.claude\\settings.json", content: "{}" }), "deny", "absolute Windows spelling with a `.. ` segment");
+  eq(autopilotDecision("MultiEdit", { file_path: ".claude/worktrees/..:x/hooks/x.mjs", edits: [] }), "deny", "stream suffix on `..` still reaches .claude/hooks");
+  // DOS 8.3 short names (Codex High CRX-SEC-001 on 5f69ecc2d, packet-confirmed: CLAUDE~1
+  // resolves to .claude). Armed autopilot refuses the alias instead of expanding it.
+  eq(autopilotDecision("Edit", { file_path: "CLAUDE~1/hooks/review-proof-guard.mjs" }), "deny", "PROVEN BYPASS: armed autopilot refuses a DOS 8.3 alias of .claude/hooks");
+  eq(autopilotDecision("Write", { file_path: "PACKAG~2.JSO", content: "{}" }), "deny", "DOS 8.3 alias of package.json");
+  eq(autopilotDecision("MultiEdit", { file_path: "C:\\repo\\GITHUB~1\\workflows\\ci.yml", edits: [] }), "deny", "DOS 8.3 alias of .github/workflows");
+  eq(lib.hasShortNameSegment("supabase/MIGRAT~1/x.sql"), true, "short-name segment detected");
+  eq(lib.hasShortNameSegment("docs/plan.md~"), false, "a trailing ~ backup name is not a short name");
+  eq(lib.hasShortNameSegment("~/notes.md"), false, "a home-directory ~ is not a short name");
+  eq(autopilotDecision("Edit", { file_path: "docs/plan.md~" }), "allow", "a backup file name stays allowed while armed");
+  eq(typeof lib.trimWin32Segment, "function", "trimWin32Segment is exported for review-proof-guard");
+  eq(lib.trimWin32Segment(".. "), "..", "`.. ` is `..`");
+  eq(lib.trimWin32Segment(". "), ".", "`. ` is `.`");
+  eq(lib.trimWin32Segment("..:stream"), "..", "a stream suffix on `..` is still `..`");
+  eq(lib.trimWin32Segment("hooks. "), "hooks", "trailing period and space are stripped");
+  eq(lib.trimWin32Segment("x.mjs::$DATA"), "x.mjs", "default stream suffix is cut");
 }
 
 console.log(`autopilot-lib: ${pass} assertions passed`);

@@ -14,6 +14,8 @@
 // LF-normalization is safe — and it keeps every index self-consistent for the
 // length-preserving maskers that slice content by index.
 
+import { existsSync, readFileSync } from "node:fs";
+
 /** Normalize CRLF (and lone CR) to LF. */
 export function toLF(s) {
   return String(s).replace(/\r\n?/g, "\n");
@@ -38,4 +40,42 @@ export function applyEditsForAnalysis(diskText, toolInput) {
     applyOne(toolInput?.old_string, toolInput?.new_string);
   }
   return text;
+}
+
+/**
+ * The text a content guard should judge for a Write / Edit / MultiEdit call.
+ *
+ * Write: `content` IS the post-edit file. Edit and MultiEdit hand the hook only
+ * fragments, so the full post-edit file is reconstructed from disk with
+ * applyEditsForAnalysis; when the file cannot be read the fragments themselves
+ * (every `edits[i].new_string`, joined) are judged instead. Either way the
+ * MultiEdit `edits` array is never invisible.
+ *
+ * Why this exists (Codex gpt-5.6-sol High, PR #605 at 233dbf3c8): money-safety,
+ * rls-on-new-tables, generated-column-check and env-guard each read
+ * `content || new_string`, so a MultiEdit payload produced "" and every one of
+ * them emitted `allow` — under `acceptEdits` an auto-accepted MultiEdit could
+ * land float cents math, a table without RLS, a generated-column write, or
+ * service_role material without the guard firing. Probe-confirmed on all four.
+ *
+ * Returns { content, reconstructed }: `reconstructed` is true when `content` is
+ * the real post-edit file (a Write, or a successful splice), false when only the
+ * fragments were available. LF-normalized.
+ */
+export function judgedContent(filePath, toolInput) {
+  const input = toolInput || {};
+  if (typeof input.content === "string") return { content: toLF(input.content), reconstructed: true };
+  const isFragmentEdit = typeof input.old_string === "string" || Array.isArray(input.edits);
+  if (!isFragmentEdit) return { content: "", reconstructed: false };
+  const fragments = Array.isArray(input.edits)
+    ? input.edits.map((e) => (typeof e?.new_string === "string" ? e.new_string : "")).join("\n")
+    : (typeof input.new_string === "string" ? input.new_string : "");
+  try {
+    if (filePath && existsSync(filePath)) {
+      return { content: applyEditsForAnalysis(readFileSync(filePath, "utf8"), input), reconstructed: true };
+    }
+  } catch {
+    /* fall through to the fragments */
+  }
+  return { content: toLF(fragments), reconstructed: false };
 }

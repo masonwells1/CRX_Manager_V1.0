@@ -12,6 +12,7 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
 } from "./codex-push-lib.mjs";
+import { trimWin32Segment, hasShortNameSegment } from "./autopilot-lib.mjs";
 
 function deny(reason) {
   process.stdout.write(JSON.stringify({
@@ -37,6 +38,7 @@ const hookCwd = String(payload?.cwd || input.cwd || input.workdir || "");
 const pathCandidates = [
   input.file_path,
   input.filePath,
+  input.notebook_path,
   input.path,
   input.target,
   input.source,
@@ -116,11 +118,30 @@ const command = String(input.command ?? input.cmd ?? "");
 // composed-verb deletion, `r"m" -rf .claude/session-state`, were proven bypasses
 // of the raw-only scans; the cd scanner already ran over a quote-stripped view,
 // these matchers did not).
-function shellCommandViews(cmd) {
+function shellBaseViews(cmd) {
   const base = decodeAnsiCQuotes(String(cmd || "")).replace(/[\\`]\r?\n/g, "");
   const stripQuotes = (v) => v.replace(/["']/g, "");
   const dropBackslash = (v) => v.replace(/\\(.)/g, "$1");
   return [base, stripQuotes(base), dropBackslash(base), dropBackslash(stripQuotes(base))];
+}
+// SHELL VARIABLES. GitHub Codex P1 on 6e3f1bd36, probe-confirmed: `d=.claude; printf x >
+// "$d/hooks/review-proof-guard.mjs"` and `n=package; printf '{}' > "$n.json"` passed the whole
+// registered Bash hook chain, because every matcher here reads the literal command text and the
+// protected name was assembled at run time.
+//
+// The first fix RESOLVED same-command assignments before matching. Codex gpt-5.6-sol High
+// (CRX-SEC-002 on 5f69ecc2d) broke it: the parser scanned raw text, so assignment-shaped text
+// the shell never executes — inside single quotes, a comment, an argument — forged a value and
+// the guard substituted the HARMLESS one while the real destination still reached the shell. A
+// parser that must model quoting, execution position and scope to stay safe is the wrong shape
+// for a deny guard: every gap in it is an allow.
+//
+// So there is no parser. An expansion in a write destination is simply unreadable, and
+// unreadable fails closed (the rule at the enforcement-surface deny below). Spell the
+// destination out. This refuses `printf x > "$LOG"` and `d=/tmp/s; printf x > "$d/out.log"`
+// too, which is the accepted cost: reads are untouched, and a literal path is always available.
+function shellCommandViews(cmd) {
+  return shellBaseViews(cmd);
 }
 // Applies ONLY to the shell `command` string (shell syntax). The pathCandidates
 // and hookCwd predicates above/below are literal filesystem paths, NOT shell
@@ -404,8 +425,36 @@ if (shellTool) {
   // are NOT in it, and the removed lock DID catch them. Without this line,
   // deleting the lock would quietly drop `git checkout <rev> -- .claude/hooks/x`
   // — a silent guard rewrite — from the protected set.
+  // PR #605 (gpt-5.6-sol HIGH on 02b342610): the migration-proof minter's inputs -
+  // `.claude/agents/**` (reviewer charters run as machine-verdict Codex reviews),
+  // `scripts/write-apply-proofs.mjs`, and `scripts/write-apply-proofs-lib.mjs` - were
+  // gated only for native editors via the settings `ask` tier; `Set-Content` to all
+  // three was probe-confirmed ALLOW here. A weakened charter mints a clean proof for a
+  // LIVE apply, before any merge-time review, so they join both patterns below.
+  // `.claude/launch.json` (GitHub Codex P1 on 8179ae989): `mcp__Claude_Browser__preview_start`
+  // executes the `runtimeExecutable`/`runtimeArgs` that file names, so a shell or
+  // path-field rewrite of it followed by preview_start ran any command outside every
+  // Bash hook. Reading it stays allowed.
+  // protected-surface-parity.test.mjs (PR #605, round twelve) derived the rest from one
+  // question - what does a gate producer read from the working tree at decision time?
+  // `.claude/schema-registry.json` (three SQL PreToolUse hooks and the migration review
+  // packet), `.claude/caller-graph.json` (grant-change-guard), and `package.json` (the
+  // scripts CI and husky run) were native-editor protected but shell-writable here. The
+  // generators that rewrite the first two (`node scripts/regenerate-schema-registry.mjs`,
+  // `node scripts/generate-caller-graph.mjs`) never name their output on the command
+  // line, so they are unaffected; `npm install`/`npm pkg set` never name package.json.
+  // Round thirteen widened it again, by shape rather than by the file that got caught:
+  // `.claude/commands`, `.claude/skills` and `.claude/workflows` all reach CI - the two
+  // `.test.mjs` files under workflows and `check-agent-workflows.mjs` run inside
+  // `npm run test:agent-workflows` (package.json:57, ci.yml:468, .husky/pre-commit:43),
+  // and `check-agent-guidance.mjs` reads `commands/preflight.md`, `commands/ship.md` and
+  // `skills/graphify/SKILL.md` by name. A defanged test still turns the CI row green, so
+  // the gate does not fail, it lies. `.codex` is now matched bare, the way `.husky` is:
+  // `sync-from-claude.ps1` was the last unprotected entry in a directory whose other
+  // three were already covered, and it writes into `.codex/hooks/**` (an agent that
+  // needs to run it does so outside the Bash tool, or edits the outputs deliberately).
   const ENFORCEMENT_SURFACE_RE =
-    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex[/\\](?:hooks|config\.toml)|\.claude[/\\](?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts[/\\](?:(?:check|validate|verify)-[^\s"']*|write-codex-push-proof\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
+    /(?:^|[\s"'=:/\\(])(?:\.husky|\.github[/\\]workflows|\.codex|\.claude[/\\](?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts[/\\](?:(?:check|validate|verify)-[^\s"']*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
   // FAIL-CLOSED READ-ONLY ALLOWLIST — deliberately NOT a destructive-verb list.
   // @proven-by review-proof-guard.test.mjs (the deny block asserts that heads
   // absent from this set — cp, tee, rm, Set-Content, command, npx — are refused,
@@ -478,9 +527,22 @@ if (shellTool) {
     "rev-parse", "rev-list", "merge-base", "cherry", "describe", "shortlog", "name-rev",
     "remote", "branch", "tag", "fetch", "ls-remote", "reflog", "check-ignore", "var",
     "config", "help", "version", "count-objects", "verify-commit", "symbolic-ref",
-    // Staging/committing record content; they do not alter it.
+    // Staging/committing record content; they do not alter it. `worktree` is a
+    // NAMESPACE whose only reader is `list`; see the sub === "worktree" rule below.
     "add", "commit", "push", "worktree",
   ]);
+  // The action word after `git worktree` (options skipped), or null.
+  const gitWorktreeActionOf = (segment) => {
+    const tokens = String(segment).match(/(?:"[^"]*"|'[^']*'|\S)+/g) || [];
+    const w = tokens.findIndex((t) => t.replace(/["']/g, "").toLowerCase() === "worktree");
+    if (w < 0) return null;
+    for (let i = w + 1; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (token.startsWith("-")) continue;
+      return token.replace(/["']/g, "").toLowerCase();
+    }
+    return null;
+  };
   // KNOWN OVER-BLOCK, pinned in the tests rather than papered over: this splits on
   // `|` even inside quotes, so `grep -E "(a|b)" .husky/pre-push` becomes two
   // segments and the second one's head is `b)"`, which is not allowlisted, so an
@@ -510,6 +572,33 @@ if (shellTool) {
       return token.replace(/["']/g, "").toLowerCase();
     }
     return null;
+  };
+  // `gh` is a NAMESPACE, not a reader. GitHub Codex P1 on c94e16dc7, probe-confirmed:
+  // `gh gist clone <gist> [<dir>]` and `gh repo clone <repo> [<dir>]` materialise files at
+  // the named directory, `gh run download --dir` / `gh release download --dir` write into
+  // it, `gh repo fork --clone` and `gh extension install` write too, yet the whole
+  // command sat in the read-only set. Only an allowlist of READ verbs (view, list,
+  // status, checks, diff, watch, browse, search) or a read-only command (`api`,
+  // `search`, `status`, `browse`, `auth status`, `help`) is vouched for; any other
+  // verb, including one this rule has never heard of, is a writer of the paths it
+  // names (fail closed). Global options that take a value (`-R/--repo`, `--hostname`)
+  // are skipped so they cannot pose as the command word.
+  const GH_READ_COMMANDS = new Set(["api", "search", "status", "browse", "help", "version", "--version", "--help"]);
+  const GH_READ_VERBS = new Set(["view", "list", "ls", "status", "checks", "diff", "watch", "browse", "search", "help"]);
+  const GH_VALUE_OPTIONS = new Set(["-R", "--repo", "--hostname"]);
+  const ghIsReadOnly = (segment) => {
+    const tokens = String(segment).replace(/["'`]/g, " ").split(/\s+/).filter(Boolean).slice(1);
+    let i = 0;
+    while (i < tokens.length && tokens[i].startsWith("-")) {
+      const name = tokens[i].split("=")[0];
+      if (GH_VALUE_OPTIONS.has(name) && !tokens[i].includes("=")) i += 2; else i += 1;
+    }
+    const command = (tokens[i] || "").toLowerCase();
+    if (command === "") return true;                                   // bare `gh`
+    if (GH_READ_COMMANDS.has(command)) return true;
+    if (command === "auth") return (tokens[i + 1] || "").toLowerCase() === "status";
+    const verb = (tokens.slice(i + 1).find((t) => !t.startsWith("-")) || "").toLowerCase();
+    return GH_READ_VERBS.has(verb);
   };
   const enforcementSegmentIsReadOnly = (segment) => {
     const raw = (String(segment).trim().match(/^([\w.:\\/-]+)/) || [])[1];
@@ -554,6 +643,7 @@ if (shellTool) {
     // rule. `--pre-glob` only selects which files `--pre` applies to, but it is
     // meaningless without `--pre` and refusing it costs nothing.
     if (head === "rg" && /(?:^|\s)--(?:pre|pre-glob|hostname-bin)(?:[=\s]|$)/i.test(segment)) return false;
+    if (head === "gh" && !ghIsReadOnly(segment)) return false;
     if (head === "git") {
       // GIT CAN BE TOLD TO RUN A PROGRAM, and a read-only SUBCOMMAND does not stop
       // it. Seventh-round P1s, both reproduced by the reviewer deleting
@@ -593,6 +683,13 @@ if (shellTool) {
       // Pinned to the safe DESTINATION rather than enumerating unsafe ones: a value
       // that is exactly `.husky` is the only accepted target, so a spelling nobody
       // has thought of yet is refused by default instead of admitted by omission.
+      // `git worktree` is a NAMESPACE, not a reader. GitHub Codex P1 on 06f0039a2:
+      // `add` and `move` POPULATE the path they are given — `git worktree add --detach
+      // .claude/skills/probe <sha>` materialises a committed SKILL.md under a protected
+      // directory with no approval — and `remove` deletes it, yet the whole namespace
+      // sat in the read-only set. Only `list` is vouched for; every other action, and
+      // an unknown one, is a writer of the paths it names (fail closed).
+      if (sub === "worktree" && gitWorktreeActionOf(segment) !== "list") return false;
       if (sub === "config") {
         // A READ must actually be a read. `--type` is NOT a read flag — it is a
         // modifier that a SET also takes, so listing it would have let
@@ -657,47 +754,24 @@ if (shellTool) {
   // traversal for exactly this reason, and not porting it re-opened a bypass its
   // own history had already classified HIGH. A leading `..` that escapes the root
   // is KEPT, never dropped: discarding it would fabricate a different path.
-  const resolveDotSegments = (input) => {
-    // REPEATED SEPARATORS, collapsed before anything else looks at the path.
-    // Seventh gpt-5.6-sol round, P1: `rm -f .github//workflows/ci.yml` and
-    // `rm -f .codex//hooks/production-action-guard.mjs` passed the whole registered
-    // hook chain. POSIX and Win32 both treat `a//b` as `a/b`, so the write lands on
-    // the guarded file while the matcher — which spells the separator exactly once
-    // — sees an unguarded path. The early return below used to hand such a path
-    // straight back untouched, which is why resolving dot segments alone did not
-    // catch it.
-    // Belt-and-braces only: the sole caller (namesEnforcementSurface) already
-    // collapsed separators, and removing THIS line leaves the suite green — so it
-    // protects a future second caller, nothing that exists today. @unproven
-    const p = String(input).replace(/\/{2,}/g, "/");
-    if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
-    const isAbsolute = p.startsWith("/");
-    const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
-    const body = drive ? (drive[2] || "") : p;
-    const out = [];
-    for (const seg of body.split("/")) {
-      if (seg === "" || seg === ".") continue;
-      if (seg === "..") {
-        if (out.length && out[out.length - 1] !== "..") out.pop();
-        else if (!isAbsolute && !drive) out.push("..");
-        continue;
-      }
-      out.push(seg);
-    }
-    const joined = out.join("/");
-    if (drive) return `${drive[1]}/${joined}`;
-    return isAbsolute ? `/${joined}` : joined;
-  };
+  // The resolver itself is resolvePathCandidate() below (a hoisted function shared with the
+  // path-field rule): one algorithm, one output contract, both channels. It was two identical
+  // copies until CodeRabbit (Trivial on 60910c005) asked for one; the Win32 segment rules
+  // live in autopilot-lib's trimWin32Segment() so armed autopilot cannot drift either.
   const namesEnforcementSurface = (text) => {
     // `\` → `/` first, then repeated separators collapsed, so the whole-string test
     // below and every token split out of `flat` both see the canonical path. See
-    // the separator note in resolveDotSegments.
+    // the separator note in resolvePathCandidate.
     const flat = String(text ?? "").replace(/\\/g, "/").replace(/\/{2,}/g, "/");
     if (ENFORCEMENT_SURFACE_RE.test(flat)) return true;
-    return flat
-      .split(/[\s"'=:;&|()<>]+/)
-      .filter(Boolean)
-      .some((token) => ENFORCEMENT_SURFACE_RE.test(`/${resolveDotSegments(token)}`));
+    const loose = flat.split(/[\s"'=:;&|()<>]+/).filter(Boolean);
+    // A QUOTED argument is one path to the shell even with a space inside it, and the
+    // resolver folds a `.. ` segment onto `..` (CodeRabbit Major on 60910c005), so
+    // `cp /tmp/evil ".claude/worktrees/.. /hooks/x.mjs"` must be judged as ONE path that
+    // canonicalises onto the hook, while the whitespace split above sees two harmless halves.
+    // Quote-aware tokens are judged too (deny-only: it can only add a match).
+    const quoted = (flat.match(/(?:"[^"]*"|'[^']*'|\S)+/g) || []).map((t) => t.replace(/["']/g, ""));
+    return [...loose, ...quoted].some((token) => ENFORCEMENT_SURFACE_RE.test(`/${resolvePathCandidate(token)}`));
   };
   const redirectTargetsEnforcementSurface = (v) => {
     for (const m of v.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
@@ -728,13 +802,249 @@ if (shellTool) {
   // the same thing indirectly.
   const COMMAND_RESOLUTION_RE =
     /(?:^|[\s;&|(])(?:export\s+)?(?:PATH|BASH_ENV|ENV|SHELL|IFS|LD_PRELOAD|LD_LIBRARY_PATH|NODE_OPTIONS|PATHEXT)\s*=/i;
+  // UNREADABLE WRITE DESTINATIONS (GitHub Codex P1 on 6e3f1bd36; see shellAssignments at the
+  // top of this file). Judged on the RESOLVED views only, so a variable assigned in the same
+  // command has already been substituted and is not what is caught here. What remains is a
+  // destination the guard cannot read, and this is a self-certification gate, so it fails
+  // closed by shape rather than by guessing:
+  //   1. a redirect (`>`, `>>`) whose target still carries any expansion — `$d`, `${d}`,
+  //      `$(…)`, a backtick, `%d%` — whatever the head;
+  //   2. in a segment whose head is not a recognised reader (and not a shell control word,
+  //      which writes nothing itself), a token that carries a COMPUTED expansion — command
+  //      substitution, a backtick, or any `${…}` form other than a plain name — or a plain
+  //      variable glued to a path fragment (`$d/hooks/x.mjs`, `$n.json`, `%d%\x`).
+  // Known over-blocks, accepted on this file's standing rule that a false refusal is the
+  // cheaper failure: `printf x > "$TEMP/scratch.log"` (assign the path in the same command or
+  // spell it out), `npm run build -- --out=$DIR/dist`, `gh pr merge … --match-head-commit
+  // $(git rev-parse HEAD)` (pass the literal SHA; that is the exact-head discipline anyway).
+  // Readers are unaffected: `echo "$d/hooks/x"`, `cat "$(git rev-parse --show-toplevel)/…"`,
+  // `node scripts/x.mjs "$(cat f)"` and `for f in $(git ls-files); do …` all stay allowed.
+  // Residual, stated: a plain variable NOT glued to a path shape (`cp /tmp/evil "$dst"`) is
+  // an environment variable by construction (same-command assignments are resolved), and the
+  // user's environment is not an in-command channel this rule has to read.
+  const UNRESOLVED_EXPANSION_RE = /[$`]|%[A-Za-z_][A-Za-z0-9_]*%|~\d/;
+  const COMPUTED_EXPANSION_RE = /\$\(|`|<\(|>\(|\$\{(?![A-Za-z_][A-Za-z0-9_]*\})/;
+  const PLAIN_VARIABLE_ON_PATH_RE = /(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$env:[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%)(?:[\\/]|\.[A-Za-z0-9]+(?![A-Za-z0-9_]))/;
+  // Words that PRECEDE the real command in a segment (`do cp …`, `then tee …`, `{ cp …`,
+  // `time cp …`) are stepped over so the write behind them is judged; a segment that is
+  // ONLY control flow (`for f in $(…)`, `fi`, `done`) writes nothing and is skipped.
+  const SHELL_PREFIX_WORDS = new Set(["do", "then", "else", "{", "(", "!", "time", "elif"]);
+  const SHELL_CONTROL_HEADS = new Set([
+    "for", "while", "until", "if", "fi", "done", "case", "esac", "in", "select", "function",
+    "[", "[[", "}", ")", "export", "local", "declare", "readonly", "typeset", "unset",
+    "shift", "break", "continue", "return", "exit", ":", "set",
+  ]);
+  const redirectTargetUnreadable = (v) => {
+    for (const m of v.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
+      if (UNRESOLVED_EXPANSION_RE.test(m[1])) return true;
+    }
+    return false;
+  };
+  const writerSegmentUnreadable = (segment) => {
+    const words = String(segment).trim().split(/\s+/);
+    // A leading `NAME=value` is an environment prefix (`FOO=1 cp …`), not the command.
+    let k = 0;
+    while (k < words.length && (SHELL_PREFIX_WORDS.has(words[k].toLowerCase()) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k]))) k += 1;
+    const body = words.slice(k).join(" ");
+    const head = (words[k] || "").toLowerCase();
+    if (!head || SHELL_CONTROL_HEADS.has(head)) return false;
+    if (enforcementSegmentIsReadOnly(body)) return false;
+    const tokens = body.match(/(?:"[^"]*"|'[^']*'|\S)+/g) || [];
+    return tokens.some((raw) => {
+      const token = raw.replace(/["']/g, "");
+      return COMPUTED_EXPANSION_RE.test(token) || PLAIN_VARIABLE_ON_PATH_RE.test(token)
+        || hasShortNameSegment(token);
+    });
+  };
+  const unreadableWriteDestination = (v) =>
+    redirectTargetUnreadable(v) || enforcementSegments(v).some(writerSegmentUnreadable);
+  if (destructiveViews.some(unreadableWriteDestination)) {
+    deny("REVIEW PROOF GUARD: this shell command writes to a destination the guard cannot read — a redirect target or a write command's argument built from a variable, command substitution, or parameter expansion that is not assigned in the same command. The protected-path rules judge the literal text, so an assembled path could reach .claude/hooks, package.json, or the other gate files unseen. Spell the destination out and re-run. A DOS 8.3 short name (`CLAUDE~1`, `MIGRAT~1`) is refused the same way: it opens the real file but matches no protected pattern, so the long path is required.");
+  }
   if (destructiveViews.some((v) =>
     redirectTargetsEnforcementSurface(v) ||
     ((REDEFINES_COMMANDS_RE.test(v) || NESTED_EXECUTION_RE.test(v) || COMMAND_RESOLUTION_RE.test(v)) &&
       namesEnforcementSurface(v)) ||
     enforcementSegments(v).some((seg) =>
       namesEnforcementSurface(seg) && !enforcementSegmentIsReadOnly(seg)))) {
-    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write, which the `ask` tier in .claude/settings.json gates.");
+    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .claude/agents, .claude/commands, .claude/skills, .claude/workflows, .claude/launch.json, .claude/schema-registry.json, .claude/caller-graph.json, .codex, .coderabbit.yaml, package.json, or the check/validate/proof/parity scripts are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write; the permission tiers in .claude/settings.json decide whether that native edit proceeds, prompts, or is refused, and every one of these paths is a risky path that cannot merge without the exact-SHA Codex proof.");
+  }
+
+  // PACKAGE-MANAGER WRITES TO package.json THAT NEVER NAME IT. CodeRabbit on
+  // 18d1bee17 (review 5126628334, Major, PR #605): the path rule above protects
+  // package.json, but `npm install left-pad`, `npm uninstall`, `npm pkg set` and
+  // `npm version patch` rewrite it without the file name ever appearing in the
+  // command — the comment at the top of ENFORCEMENT_SURFACE_RE documented exactly
+  // that gap, and the test pinned `npm install left-pad` as ALLOW. All four were
+  // probe-confirmed silent before this fix.
+  //
+  // Matched by SHAPE, not by listing four npm spellings: any package-manager head
+  // (npm/pnpm/yarn/bun, path-qualified or .cmd, optionally behind `corepack` or a
+  // leading VAR=value), then a subcommand FAMILY that writes the manifest. A name
+  // list inherits its own omissions — the failure mode this file has already paid
+  // for twice — so families, aliases and the other three managers are covered
+  // together. @proven-by review-proof-guard.test.mjs (both forms: the deny block
+  // and the allow block below it).
+  //   deny : <pm> install|i|add|link <positional>   adds a dependency
+  //          <pm> uninstall|remove|rm|un|unlink     always rewrites the manifest
+  //          <pm> update|up|upgrade                 npm >= 7 saves the new ranges
+  //          <pm> pkg set|delete|fix, <pm> init, <pm> set-script
+  //          <pm> version <bump> (and bare `yarn version`, which prompts and writes)
+  //          <pm> create, patch-commit, unplug, `yarn set`, `audit fix`, `dedupe|prune --save`
+  //          <pm> <any non-script subcommand> fix|--fix (`yarn constraints --fix`)
+  //          <pm> exec|x|dlx|workspace … <writing word>, and ANY subcommand the rule does
+  //          not know (fail closed, PM_READ_OR_RUN is the allowlist)
+  //   allow: installing FROM the manifest (`npm install`, `npm ci`, `pnpm install`,
+  //          `yarn`, `bun install`), `--no-save`, `-g`/`--global`, `npm run`,
+  //          `npm test`, `npm pkg get`, bare `npm version` (prints), `npx`.
+  // Known over-blocks, accepted on this file's standing rule that a false refusal is
+  // the cheaper failure: a value-taking flag before the package name (`--registry
+  // <url>`) reads as a positional; bare `pnpm update` / `yarn upgrade` are refused
+  // even where the lockfile alone would change. Use `--no-save` or edit package.json.
+  // A versioned DESCRIPTOR (`pnpm@latest`, `yarn@4.1.0`) is the same manager: Corepack and
+  // npx accept it in place of the bare name (GitHub Codex P1 on c94e16dc7).
+  const PACKAGE_MANAGER_RE = /^(?:.*[/\\])?(?:npm|pnpm|yarn|bun)(?:\.cmd|\.exe|\.ps1)?(?:@[^\s/\\]+)?$/i;
+  // Corepack itself: `corepack use <desc>` assigns the release to package.json and installs;
+  // `corepack up` rewrites the same field. `enable`/`disable`/`prepare`/`hydrate`/`pack`/
+  // `cache`/`install` touch the shim store, not the manifest. A subcommand in neither set is
+  // refused (fail closed); a manager descriptor after `corepack` is classified as a manager.
+  const COREPACK_MANIFEST_WRITERS = new Set(["use", "up"]);
+  const COREPACK_READ_OR_RUN = new Set(["enable", "disable", "prepare", "hydrate", "pack", "cache", "install", "help", "--version", "-v", "--help", "-h"]);
+  const PM_ADD_FAMILY = new Set(["install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add", "a", "link", "ln"]);
+  const PM_REMOVE_FAMILY = new Set(["uninstall", "unlink", "remove", "rm", "r", "un"]);
+  const PM_UPDATE_FAMILY = new Set(["update", "up", "upgrade", "udpate", "upgrade-interactive"]);
+  // `trust` writes trustedDependencies into package.json (bun pm trust <pkg>).
+  const PM_MANIFEST_EDITORS = new Set(["init", "innit", "create", "set-script", "patch-commit", "unplug", "trust"]);
+  const PM_NO_MANIFEST_RE = /(?:^|\s)(?:--no-save|-g|--global|--location(?:=|\s+)global)(?=\s|$)/i;
+  const PM_VALUE_OPTIONS = new Set(["--prefix", "--cwd", "--dir", "--directory", "-C", "--registry", "--cache", "--userconfig", "--globalconfig", "--location", "--workspace", "-w", "--filter", "-F"]);
+  const PM_BOOLEAN_OPTIONS = new Set(["-g", "--global", "--no-save", "--silent", "-s", "--verbose", "--version", "-v", "--help", "-h"]);
+  // Subcommands that never write package.json. A subcommand that is in NEITHER this set
+  // NOR a writing family is REFUSED (fail closed) — Codex gpt-5.6-sol High on fc36b2d28:
+  // `npm audit fix` and `npm dedupe --save` were unknown to the rule and passed. A new
+  // read-only subcommand is added here deliberately, with its proof; an unknown one costs a
+  // refusal, never a silent manifest write.
+  const PM_READ_OR_RUN = new Set([
+    "run", "run-script", "rum", "urn", "test", "t", "tst", "start", "stop", "restart",
+    "ci", "clean-install", "ic", "install-clean", "isntall-clean", "install-ci-test", "cit", "clean-install-test", "sit", "install-test", "it",
+    "view", "v", "info", "show", "ls", "list", "ll", "la", "outdated", "ping", "whoami", "doctor", "help", "help-search",
+    "explain", "why", "fund", "search", "s", "se", "find", "root", "prefix", "bin", "docs", "home", "repo", "bugs", "issues",
+    "cache", "rebuild", "rb", "prune", "dedupe", "ddp", "find-dupes", "diff", "pack", "publish", "unpublish", "owner", "author",
+    "access", "deprecate", "undeprecate", "dist-tag", "dist-tags", "star", "unstar", "stars", "team", "org", "profile", "login",
+    "logout", "adduser", "add-user", "completion", "token", "hook", "sbom", "query", "audit", "config", "c", "get",
+    "licenses", "store", "fetch", "env", "setup", "server", "node", "plugin", "constraints", "stage", "check", "autoclean",
+    "policies", "import", "build", "info", "npm",
+    // bun pm read-only leaves (bun pm ls / bin / cache / hash / whoami / view / untrusted).
+    "hash", "hash-string", "hash-print", "untrusted", "default-trusted",
+  ]);
+  // `pm` is a NAMESPACE (bun pm pkg set, bun pm version, bun pm trust), not a subcommand.
+  // Codex gpt-5.6-sol High on cbd986732: it sat in PM_READ_OR_RUN, so `bun pm pkg set
+  // scripts.test=…` was "not a manifest write" while `npm pkg set` denied. What follows
+  // `pm` is now classified as if the manager had been invoked directly, so every rule
+  // above (pkg get vs set/delete/fix, version <bump>, trust, unknown → refuse) applies.
+  const PM_NAMESPACES = new Set(["pm"]);
+  // Launcher subcommands run OTHER programs: what follows them is classified too (see
+  // PM_LAUNCHERS below), and a nested manager token is classified in its own right.
+  const PM_LAUNCHERS = new Set(["exec", "x", "explore", "dlx", "workspace", "workspaces", "w"]);
+  // `audit fix` rewrites overrides/dependencies; `dedupe`/`prune` write only under --save.
+  const PM_SAVE_SENSITIVE = new Set(["dedupe", "ddp", "find-dupes", "prune"]);
+  // Script runners hand their arguments to the project's own script: `npm run lint -- --fix`
+  // and `npm test -- --fix` are the script's flags, not the manager's, so the FIX rule
+  // below does not read them.
+  const PM_SCRIPT_RUNNERS = new Set(["run", "run-script", "rum", "urn", "test", "t", "tst", "start", "stop", "restart"]);
+  const isWritingWord = (t) => PM_ADD_FAMILY.has(t) || PM_REMOVE_FAMILY.has(t) || PM_UPDATE_FAMILY.has(t)
+    || PM_MANIFEST_EDITORS.has(t) || t === "pkg" || t === "version" || t === "audit";
+  const classifyFrom = (tokens, i) => {
+    const manager = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").replace(/@.*$/, "").toLowerCase();
+    const rest = tokens.slice(i + 1);
+    let subIndex = 0;
+    while (subIndex < rest.length && rest[subIndex].startsWith("-")) {
+      const option = rest[subIndex];
+      const name = option.split("=")[0];
+      if (PM_VALUE_OPTIONS.has(name)) subIndex += option.includes("=") ? 1 : 2;
+      else if (PM_BOOLEAN_OPTIONS.has(option)) subIndex += 1;
+      else return true; // Unknown leading options cannot hide the subcommand.
+    }
+    if (subIndex >= rest.length) return false;                                        // bare `yarn`, `npm --version`
+    const sub = rest[subIndex].toLowerCase();
+    const after = rest.slice(subIndex + 1);
+    const positionals = after.filter((t) => !t.startsWith("-"));
+    // A competing save/global option may override an earlier exemption. Refuse
+    // ambiguous combinations instead of assuming --no-save or -g always wins.
+    const competingSave = tokens.some((t) => /^(?:--save(?:[=-]|$)|-[SDEO]$|--global=|--location(?:=|$))/.test(t));
+    const noManifest = PM_NO_MANIFEST_RE.test(tokens.join(" ")) && !competingSave;
+    if (PM_NAMESPACES.has(sub)) return after.length > 0 && classifyFrom([manager, ...after], 0);
+    if (PM_MANIFEST_EDITORS.has(sub)) return true;
+    if (sub === "pkg") return (positionals[0] || "").toLowerCase() !== "get";
+    if (sub === "version") return manager === "yarn" || after.length > 0;
+    if (sub === "set") return manager === "yarn";                                       // `yarn set version` writes packageManager; npm/pnpm `set` is config
+    // A subcommand asked to FIX rewrites what it checks. GitHub Codex P1 on 6e3f1bd36's
+    // diff: `yarn constraints --fix` persists every changed workspace manifest (Yarn 4
+    // documents --fix as automatically fixing unambiguous issues), yet `constraints` sat
+    // in the read/run allowlist and the FIX check below was written for `audit` alone.
+    // The rule is now the class: a `fix` word or `--fix*` flag after ANY non-script-runner
+    // subcommand (`audit fix`, `constraints --fix`, `pkg fix`) is a manifest write.
+    // `npm config fix` over-blocks (it writes .npmrc); accepted on this file's standing rule.
+    // A LAUNCHER runs another program, so `--fix` after it belongs to that program
+    // (`npm exec -- eslint --fix`, `pnpm exec eslint --fix`) — CodeRabbit Minor on
+    // 60910c005: the FIX check below ran first and refused both. The launcher rule
+    // still refuses a nested manifest write (`npm exec -- npm pkg fix`, `… npm audit fix`)
+    // because `pkg`/`audit` are writing words, and a nested manager token is classified
+    // in its own right by packageManagerWritesManifest.
+    if (PM_LAUNCHERS.has(sub)) return after.some((t) => !t.startsWith("-") && isWritingWord(t.toLowerCase()));
+    if (!PM_SCRIPT_RUNNERS.has(sub) && (positionals.some((t) => t.toLowerCase() === "fix") || after.some((t) => /^--fix/i.test(t)))) return true;
+    if (PM_SAVE_SENSITIVE.has(sub)) return competingSave;
+    if (PM_REMOVE_FAMILY.has(sub)) return !noManifest;
+    if (PM_UPDATE_FAMILY.has(sub)) return !noManifest;
+    if (PM_ADD_FAMILY.has(sub)) return positionals.length > 0 && !noManifest;
+    if (PM_READ_OR_RUN.has(sub)) return false;
+    return true;                                                                        // unknown subcommand: fail closed
+  };
+  const packageManagerWritesManifest = (segment) => {
+    const text = String(segment ?? "");
+    // Quotes are dropped and the text re-split so a manager hidden inside a quoted
+    // wrapper argument (`sh -c 'npm install x'`) is seen as its own tokens.
+    const tokens = text.replace(/["'`]/g, " ").split(/\s+/).filter(Boolean);
+    // Wrapper-agnostic and position-agnostic (Codex gpt-5.6-sol High on 8ac85002d and
+    // on fc36b2d28): the manager may sit behind ANY launcher — `cmd /c`, `sh -c`,
+    // `powershell -Command`, `npx`, `env`, `command`, `nice`, `corepack`, a VAR=value
+    // prefix, or another manager's `exec` — and a launcher list would inherit its own
+    // omissions, so EVERY token that names a package manager is classified, and one
+    // writing classification denies. Known over-block, accepted on this file's standing
+    // rule: text that merely quotes such a command (`git commit -m "npm install x"`,
+    // `grep "npm add x"`) is refused too; reword it. Accepted residual, beyond any
+    // lexical hook: arbitrary code (`npx <tool>`, `node -e`) can write any file — that
+    // is what the exact-SHA Codex review and the parity test stand for.
+    // A descriptor that is an ARGUMENT of a Corepack subcommand (`corepack prepare pnpm@9
+    // --activate`, `corepack use pnpm@latest`) is not a manager invocation of its own; it is
+    // judged by the Corepack rule below, not classified as if `pnpm@9 --activate` had been run.
+    const corepackArgs = new Set();
+    for (let i = 0; i < tokens.length; i += 1) {
+      const base = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
+      if (base !== "corepack") continue;
+      const subIndex = tokens.findIndex((t, k) => k > i && !t.startsWith("-"));
+      if (subIndex < 0) continue;
+      const sub = tokens[subIndex].toLowerCase();
+      if (!COREPACK_MANIFEST_WRITERS.has(sub) && !COREPACK_READ_OR_RUN.has(sub)) continue;
+      for (let k = subIndex + 1; k < tokens.length; k += 1) {
+        if (/^(?:npm|pnpm|yarn|bun)@/i.test(tokens[k])) corepackArgs.add(k);
+      }
+    }
+    for (let i = 0; i < tokens.length; i += 1) {
+      if (!corepackArgs.has(i) && PACKAGE_MANAGER_RE.test(tokens[i]) && classifyFrom(tokens, i)) return true;
+      const base = tokens[i].replace(/^.*[/\\]/, "").replace(/\.(?:cmd|exe|ps1)$/i, "").toLowerCase();
+      if (base === "corepack") {
+        const next = tokens.slice(i + 1).find((t) => !t.startsWith("-")) || "";
+        const sub = next.toLowerCase();
+        if (sub === "") continue;                                   // `corepack --version`
+        if (COREPACK_MANIFEST_WRITERS.has(sub)) return true;
+        if (PACKAGE_MANAGER_RE.test(next)) continue;                // the descriptor is classified on its own turn
+        if (!COREPACK_READ_OR_RUN.has(sub)) return true;            // unknown subcommand: fail closed
+      }
+    }
+    return false;
+  };
+  if (destructiveViews.some((v) => enforcementSegments(v).some(packageManagerWritesManifest))) {
+    deny("REVIEW PROOF GUARD: package-manager commands that rewrite package.json are blocked — `npm install <pkg>`, `npm uninstall`, `npm update`, `npm pkg set`, `npm version <bump>`, `npm init` and the pnpm/yarn/bun equivalents edit the scripts and dependency list that CI and husky run from without ever naming the file. Installing FROM the manifest stays allowed (`npm install`, `npm ci`, `pnpm install`, `yarn`), as do `--no-save`, `-g`, `npm run`, `npm test`, `npm pkg get`, `npm audit`, `npm ls`, `npm view`; a subcommand this rule does not know is refused rather than guessed. `corepack use`/`corepack up` and a versioned descriptor (`pnpm@latest add x`) are the same writes under another name. Add or remove a dependency deliberately through Edit/Write on package.json, where the permission tiers in .claude/settings.json decide; package.json is a risky path that cannot merge without the exact-SHA Codex proof.");
   }
 }
 
@@ -744,11 +1054,13 @@ if (shellTool) {
 // `Edit` are deliberately NOT denied here: they are the only way a hook file can
 // ever be legitimately changed, there is no unlock any more, and denying them
 // would permanently strand hook maintenance the way the deleted lock did twice
-// in one session. They are gated by the `ask` tier instead. @unproven — that tier
-// is mode-dependent: under `dontAsk` it is a real denial, but a session in
-// bypass-permissions mode honours neither it nor any allow/deny rule, so native
-// writes to these paths are ungated there. Recorded, not hidden; closing it needs
-// a boundary outside this repository, which is branch protection.
+// in one session. Whether a native edit to these paths proceeds, prompts, or is
+// refused is decided by the permission tiers in .claude/settings.json (see the
+// 2026-09-05 changelog entries for the current tiering). @unproven — any tier
+// there is mode-dependent: a session in bypass-permissions mode honours neither
+// it nor any allow/deny rule, so native writes to these paths are ungated there.
+// Recorded, not hidden; closing it needs a boundary outside this repository,
+// which is branch protection plus the risky-path exact-SHA Codex proof at merge.
 // Read-only built-ins are exempt as well as the native editors. Fifth
 // gpt-5.6-sol round, MEDIUM: this rule applied to EVERY tool except the native
 // writers, and the hook is registered under `matcher: "*"`, so `Read`, `Grep`,
@@ -758,41 +1070,101 @@ if (shellTool) {
 // third thing lost in that port, so the list is spelled out here rather than
 // inferred. Name-matched, never shape-matched: a tool that both reads and writes
 // must not appear below.
-if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todowrite)$/i.test(toolName)) {
-  // Dot segments are resolved here too. Second review round, HIGH: an MCP write to
-  // `.claude/commands/../hooks/review-proof-guard.mjs` was probe-confirmed ALLOW —
-  // the intermediate directory exists, so the filesystem lands on the real hook.
-  const resolvePathCandidate = (value) => {
-    // Repeated separators collapse here too. The reviewer only demonstrated the
-    // shell channel, but this resolver had the identical early return, so an MCP or
-    // tool-input write to `.claude//hooks/review-proof-guard.mjs` would have slipped
-    // the path-field rule the same way. Fixing one channel and not the other leaves
-    // the same defect reachable.
-    const p = String(value).replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/\/+$/, "");
-    if (!p.includes("./") && !p.endsWith("/.") && !p.endsWith("/..")) return p;
-    const isAbsolute = p.startsWith("/");
-    const drive = /^([a-zA-Z]:)(\/.*)?$/.exec(p);
-    const out = [];
-    for (const seg of (drive ? (drive[2] || "") : p).split("/")) {
-      if (seg === "" || seg === ".") continue;
-      if (seg === "..") {
-        if (out.length && out[out.length - 1] !== "..") out.pop();
-        else if (!isAbsolute && !drive) out.push("..");
-        continue;
-      }
-      out.push(seg);
+// The enforcement surface as a path-field regex (shared by the non-native rule below and the
+// native-editor canonical-spelling rule after it).
+const ENFORCEMENT_PATH_FIELD_RE = /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex|\.claude\/(?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts\/(?:(?:check|validate|verify)-[^/]*(?:\/[^/]*)*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
+// Dot segments are resolved here too. Second review round, HIGH: an MCP write to
+// `.claude/commands/../hooks/review-proof-guard.mjs` was probe-confirmed ALLOW —
+// the intermediate directory exists, so the filesystem lands on the real hook.
+function resolvePathCandidate(value) {
+  // Codex gpt-5.6-sol High on b2988f2da, probe-confirmed: Win32 path ALIASES reached the
+  // protected files past the canonical-spelling rule. Windows drops a drive-RELATIVE
+  // prefix onto the drive's current directory (`C:.claude/hooks/x.mjs` opens
+  // `.claude/hooks/x.mjs`), and its path normaliser strips trailing periods and spaces
+  // from every segment before the file system sees the name (`.claude/hooks./x.mjs`,
+  // `.claude/settings.json.`, `x.mjs ` all open the real file; probe-confirmed with
+  // Get-Item on 2026-09-03 for the sibling canonicaliser in production-action-guard,
+  // whose rules this now mirrors). A drive-relative prefix is DROPPED (the spelling is
+  // then non-canonical by construction); a rooted drive (`C:/…`) is kept, because that
+  // is the spelling the native editors send on this machine and the settings globs are
+  // measured against it. Trailing periods and spaces are stripped from every segment
+  // and a segment left empty is dropped — deliberately over-inclusive, which for a
+  // deny-guard can only over-block. NTFS ALTERNATE DATA STREAMS (Codex gpt-5.6-sol High on
+  // d1bbf5ac6, probe-confirmed: `package.json::$DATA`, `.claude/settings.json::$DATA` and
+  // `scripts/write-codex-push-proof.mjs::$DATA` resolve to the real files): a colon inside a
+  // segment names a stream of that file, so the segment is cut at its first colon (the
+  // rooted drive `C:` is handled before the walk and never reaches it); a `\\?\` or `\\.\`
+  // device prefix in front of a drive is dropped. Repeated separators still collapse first (seventh
+  // gpt-5.6-sol round, P1: `rm -f .github//workflows/ci.yml` passed the whole chain), and
+  // there is no early return any more: every spelling goes through the segment walk.
+  const p = String(value).trim().replace(/\\/g, "/").replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, "").replace(/\/{2,}/g, "/");
+  const drive = /^([a-zA-Z]:)(\/?)/.exec(p);
+  const rooted = drive ? drive[2] === "/" : p.startsWith("/");
+  const body = drive ? p.slice(drive[0].length) : p;
+  const out = [];
+  for (const raw of body.split("/")) {
+    // Win32 segment rules (stream suffix, trailing period/space, `.. ` folded onto `..`) are
+    // applied BEFORE the dot check — see trimWin32Segment in autopilot-lib.mjs.
+    const seg = trimWin32Segment(raw);
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length && out[out.length - 1] !== "..") out.pop();
+      else if (!rooted) out.push("..");
+      continue;
     }
-    const joined = out.join("/");
-    if (drive) return `${drive[1]}/${joined}`;
-    return isAbsolute ? `/${joined}` : joined;
-  };
+    out.push(seg);
+  }
+  const joined = out.join("/");
+  if (drive && drive[2] === "/") return `${drive[1]}/${joined}`;
+  return rooted ? `/${joined}` : joined;
+}
+if (!/^(?:write|edit|notebookedit|multiedit|read|grep|glob|notebookread|ls|todowrite)$/i.test(toolName)) {
+  // The `scripts/(check|validate|verify)-` arm crosses "/" explicitly (PR #605, CodeRabbit F3,
+  // decided "widen" 2026-09-06) so it reads the same as the shell regex above and the measured
+  // settings-glob behaviour. The earlier `[^/]*` form already caught nested paths as a prefix
+  // match (the trailing lookahead permits "/"), so this is an alignment of stated intent, not a
+  // behaviour change here; the behaviour change lives in codex-push-lib.mjs RISKY_PATH_RES.
   const enforcementPathHit = pathCandidates.some((candidate) => {
     if (candidate == null) return false;
-    return /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex\/(?:hooks|config\.toml)|\.claude\/(?:hooks|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|scripts\/(?:(?:check|validate|verify)-[^/]*|write-codex-push-proof\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i
+    // A DOS 8.3 alias (Codex CRX-SEC-001 on 5f69ecc2d) resolves to the real file but matches
+    // no pattern, and this channel has no prompt behind it at all, so it is refused here too.
+    if (hasShortNameSegment(candidate)) return true;
+    return ENFORCEMENT_PATH_FIELD_RE
       .test(`/${resolvePathCandidate(candidate)}`);
   });
   if (enforcementPathHit) {
-    deny("REVIEW PROOF GUARD: this tool would write to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml through a path field. These decide whether the commit, push, CI, and review gates run at all. Use Edit/Write for a deliberate change, which the `ask` tier in .claude/settings.json gates.");
+    deny("REVIEW PROOF GUARD: this tool would write to .husky, .github/workflows, .claude/hooks, .claude/agents, .claude/commands, .claude/skills, .claude/workflows, .claude/launch.json, .claude/schema-registry.json, .claude/caller-graph.json, .codex, .coderabbit.yaml, package.json, or the check/validate/proof/parity scripts through a path field. These decide whether the commit, push, CI, and review gates run at all. Use native Edit/Write for a deliberate change; enforcement-surface changes require an exact-SHA independent review before merge.");
+  }
+}
+// GitHub Codex P1 on ac5758f03 (`settings.json:216`), probe-confirmed: the native editors are
+// gated by the settings `ask` globs, and a glob matches the SPELLING it is given, so
+// `Edit $ROOT/.github/scripts/../workflows/ci.yml` prompted nothing while the filesystem landed
+// on ci.yml; this hook exempted the native editors because the prompt is their boundary, and
+// armed autopilot was the only place that canonicalised. The exemption is sound only when the
+// spelling IS the canonical path. A non-canonical spelling (a `.`/`..` segment, a repeated or
+// trailing separator, a drive-relative prefix, a trailing period or space in a segment, an NTFS
+// stream suffix such as `::$DATA`, a `\\?\` device prefix) whose
+// canonical form is on the enforcement surface, or one that still
+// escapes the tree after resolution, is denied here in EVERY mode: re-issue with the canonical
+// path and the prompt fires. Backslashes are not counted as non-canonical — Windows spellings
+// are what the editors send on this machine, and the globs are measured against them.
+if (/^(?:write|edit|notebookedit|multiedit)$/i.test(toolName)) {
+  const nonCanonicalProtected = pathCandidates.some((candidate) => {
+    if (candidate == null) return false;
+    const folded = String(candidate).replace(/\\/g, "/");
+    const canonical = resolvePathCandidate(candidate);
+    // A relative path that still begins with `..` after resolution leaves the tree the hook
+    // was given, whether or not the spelling was already canonical; it is never a native
+    // edit this repository can vouch for.
+    if (/^\.\.(?:\/|$)/.test(canonical)) return true;
+    // A DOS 8.3 alias (Codex CRX-SEC-001 on 5f69ecc2d): `CLAUDE~1/hooks/x.mjs` opens the real
+    // file, the settings glob matches the spelling it is given, so the prompt never fires.
+    if (hasShortNameSegment(folded)) return true;
+    if (folded === canonical) return false;
+    return ENFORCEMENT_PATH_FIELD_RE.test(`/${canonical}`);
+  });
+  if (nonCanonicalProtected) {
+    deny("REVIEW PROOF GUARD: this native edit names a protected enforcement path through a non-canonical spelling (a `..` or `.` segment, a repeated or trailing separator), or a relative path that leaves the tree. The protected-path prompt matches the spelling it is given, so it would not fire. Re-issue the edit with the canonical path (for example `.github/workflows/ci.yml`, not `.github/scripts/../workflows/ci.yml`) and answer the prompt.");
   }
 }
 if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {

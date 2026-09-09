@@ -241,6 +241,102 @@ const DENY_BASH_RES = [
 // Edit/Write targets that must never be auto-approved.
 const DENY_PATH_RE = /(^|[\\/])\.env(\.|$)/i;
 
+// The enforcement surface — the files that decide whether the commit, push, CI, review
+// and apply gates run at all. review-proof-guard.mjs hard-denies SHELL and MCP path-field
+// writes to these but deliberately exempts the native editors, whose only gate is the
+// settings.json `permissions.ask` prompt. A hook `allow` cannot disarm a settings `ask`
+// (measured 2026-09-06), so in practice the prompt still fires while armed — but autopilot
+// exists precisely so nobody is at the keyboard, and the one honest answer to a prompt in an
+// unattended run is a refusal, not a session that hangs or a rule that quietly changes
+// permission tiers. Codex gpt-5.6-sol High on PR #605 at 28bba740b: armed autopilot returned
+// `allow` for `Edit .claude/hooks/x.mjs` and `Write package.json`. Same literal as the
+// path-field regex in review-proof-guard.mjs; protected-surface-parity.test.mjs fails the
+// build if this set, the settings ask set, and the two guard regexes stop agreeing.
+// Judged on the path with backslashes folded to "/" and a leading "/" prepended, so an
+// absolute Windows path (C:\repo\.claude\hooks\x.mjs) and a repo-relative one decide alike.
+const PROTECTED_SURFACE_RE = /(?:^|\/)(?:\.husky|\.github\/workflows|\.codex|\.claude\/(?:hooks|agents|commands|skills|workflows|launch\.json|schema-registry\.json|caller-graph\.json|settings(?:\.local)?\.json)|\.coderabbit\.ya?ml|package\.json|scripts\/(?:(?:check|validate|verify)-[^/]*(?:\/[^/]*)*|write-codex-push-proof\.mjs|write-apply-proofs(?:-lib)?\.mjs|run-claude-review\.mjs|remove-applied-ledger-entry\.mjs|agent-manifest-parity\.mjs|sync-agent-workflows\.mjs))(?![\w-])/i;
+
+export function protectedSurfacePath(filePath) {
+  const raw = String(filePath || "").replace(/\\/g, "/");
+  if (raw === "") return false;
+  // Judged on BOTH the raw spelling and the canonical one (Codex gpt-5.6-sol High at
+  // fdce1aa53, probe-confirmed: ".claude/worktrees/../hooks/review-proof-guard.mjs"
+  // matched nothing raw, and armed autopilot auto-approved a rewrite of the guard).
+  // Either form hitting is a deny, and a path that still escapes the tree after
+  // normalisation is never auto-approved while armed: review-proof-guard cannot see
+  // where it lands, so the arm must not vouch for it.
+  const canon = canonicalToolPath(raw);
+  if (hasShortNameSegment(raw)) return true;
+  return PROTECTED_SURFACE_RE.test(`/${raw}`) || escapesTree(canon) || PROTECTED_SURFACE_RE.test(`/${canon}`);
+}
+
+// Canonical form of a tool path: backslashes folded and "." / ".." segments resolved, so
+// a traversal such as "../.claude/session-state/../../outside.txt" judges as
+// "../../outside.txt" and can never satisfy a trusted-root exception by substring
+// (CodeRabbit Major on 06f0039a2, CWE-22). A path that still starts with ".." after
+// normalisation points outside the tree the hook was given and is never trusted.
+export function canonicalToolPath(p) {
+  let s = String(p || "").trim().replace(/\\/g, "/");
+  if (s === "") return "";
+  // Win32 ALIASES (Codex gpt-5.6-sol High on b2988f2da, probe-confirmed): a drive-RELATIVE
+  // prefix (`C:.claude/hooks/x.mjs`, no slash after the colon) resolves onto the drive's
+  // current directory, and trailing periods or spaces in any segment are stripped by the
+  // Win32 normaliser before the file system sees the name. The prefix is dropped and the
+  // trailing characters trimmed here, so the surface match sees the file Windows opens.
+  // A rooted drive (`C:/…`) is kept. `.` and `..` are left for normalize().
+  // NTFS alternate data streams (Codex gpt-5.6-sol High on d1bbf5ac6, probe-confirmed:
+  // `package.json::$DATA` opens package.json): a colon inside a segment names a stream of
+  // that file, so the segment is cut at its first colon; the rooted drive segment `C:` is
+  // the one colon that is kept. A `\\?\` / `\\.\` device prefix before a drive is dropped.
+  s = s.replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, "").replace(/^[A-Za-z]:(?!\/)/, "");
+  s = s.split("/").map((seg, i) => {
+    if (i === 0 && /^[A-Za-z]:$/.test(seg)) return seg;
+    return trimWin32Segment(seg);
+  }).join("/");
+  const n = path.posix.normalize(s);
+  return n === "." ? "" : n;
+}
+// One path SEGMENT as the Win32 normaliser sees it, shared by canonicalToolPath() and the
+// two review-proof-guard resolvers so the three cannot drift (CodeRabbit Trivial on
+// 60910c005). Trailing SPACES go first, and only then is a dot segment recognised: the old
+// order tested `seg === ".."` before trimming, so `.. ` fell through to the trailing-dot
+// strip, became an empty segment and vanished — `.claude/worktrees/.. /hooks/review-proof-guard.mjs`
+// canonicalised to `.claude/worktrees/hooks/review-proof-guard.mjs`, matched nothing, and
+// armed autopilot returned `allow` (CodeRabbit Major on 60910c005; the canonical output was
+// runtime-observed). Measured 2026-09-09: neither Node's fs nor PowerShell opens a `.. `
+// segment as `..` on this machine, so this is consistency of the canonical form, fail-closed
+// (a spelling the Win32 normaliser would fold onto a traversal is treated as one), not a
+// reproduced file write.
+// A stream suffix is cut at the first colon BEFORE the dot check, so `..:x` is still a
+// traversal rather than an empty segment that would drop it; trailing periods/spaces are
+// stripped from everything else, as before.
+export function trimWin32Segment(seg) {
+  const spaceTrimmed = String(seg).replace(/:.*$/, "").replace(/ +$/, "");
+  if (spaceTrimmed === "." || spaceTrimmed === "..") return spaceTrimmed;
+  return spaceTrimmed.replace(/[. ]+$/, "");
+}
+// DOS 8.3 SHORT NAMES (Codex gpt-5.6-sol High CRX-SEC-001 on 5f69ecc2d, packet-confirmed:
+// `CLAUDE~1` -> `.claude`, `GITHUB~1` -> `.github`, `PACKAG~2.JSO` -> `package.json`,
+// `supabase\\MIGRAT~1` -> `supabase\\migrations`, each resolving to identical bytes). Windows
+// keeps these aliases for every long name, so `CLAUDE~1/hooks/review-proof-guard.mjs` opens
+// the guard while matching no protected pattern. EXPANDING an alias needs the filesystem and
+// a resolver for paths that do not exist yet; REFUSING one needs neither, and no human or
+// agent has a reason to spell a path this way. So a `~<digit>` segment is judged as protected
+// wherever a path is judged: deny-only, and the long path is always available instead.
+export function hasShortNameSegment(p) {
+  return /(?:^|[\\/])[^\\/]*~\d/.test(String(p || ""));
+}
+export function escapesTree(canonical) {
+  return /(?:^|\/)\.\.(?:\/|$)/.test(canonical);
+}
+// The overnight handshake's only exception: a FILE under .claude/session-state (the
+// hooks' own scratch root), on the canonical path, with no traversal left in it.
+const SESSION_STATE_FILE_RE = /(?:^|\/)\.claude\/session-state\/[^/]/;
+export function isSessionStatePath(p) {
+  const c = canonicalToolPath(p);
+  return c !== "" && !escapesTree(c) && SESSION_STATE_FILE_RE.test(c);
+}
+
 export function autopilotDecision(toolName, toolInput) {
   const name = String(toolName || "");
   if (DENY_TOOLNAME_RE.test(name)) return "deny";
@@ -255,9 +351,12 @@ export function autopilotDecision(toolName, toolInput) {
     }
   }
 
-  // Edit/Write/file tools
-  const filePath = input.file_path || input.path || input.filePath || "";
-  if (filePath && DENY_PATH_RE.test(String(filePath))) return "deny";
+  // Edit/Write/file tools. Every path field a native editor carries: NotebookEdit's is
+  // notebook_path (CodeRabbit Major on 537625b59: it was unread, so an armed NotebookEdit
+  // of a hook file judged an empty path and returned "allow").
+  const filePath = input.file_path || input.notebook_path || input.path || input.filePath || "";
+  if (filePath && (DENY_PATH_RE.test(String(filePath)) || DENY_PATH_RE.test(canonicalToolPath(filePath)))) return "deny";
+  if (protectedSurfacePath(filePath)) return "deny";
 
   return "allow";
 }
@@ -282,6 +381,9 @@ export function intentFresh(content, nowMs) {
 // checks, session-state writes and the arm command pass; building/mutating waits
 // for the arm.
 const INTENT_ALLOW_TOOL_RE = /^(Read|Glob|Grep|TaskList|TaskGet|TaskCreate|TaskUpdate|WebFetch|WebSearch|AskUserQuestion|Skill)$/i;
+// Tools that mutate files by NAME rather than by native editor: an MCP filesystem
+// writer reached through an allow-list entry would otherwise run before the arm.
+const UNARMED_WRITER_RE = /(?:write|edit|create|put|append|move|rename|copy|delete|remove|unlink|trash)_(?:file|files|block|directory|dir|entry|entries)\b/i;
 const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|worktree\s+list)|ls|dir|cat|head|tail|grep|rg|find|echo|node\s+--version)\b/;
 
 // THERE IS DELIBERATELY NO SHELL ESCAPE HATCH HERE (Mason, 2026-09-01).
@@ -408,9 +510,16 @@ export function overnightGateDecision(toolName, toolInput, context = {}) {
     const writesViaRedirect = />|\btee\b/.test(cmd);
     return INTENT_ALLOW_BASH_RE.test(cmd) && !writesViaRedirect ? "allow-through" : "deny-until-armed";
   }
-  if (/^(Write|Edit|NotebookEdit)$/i.test(name)) {
-    const fp = String(input.file_path || input.path || "");
-    return /session-state/.test(fp) ? "allow-through" : "deny-until-armed";
+  // Anything the ARMED deny-set refuses certainly waits for the arm too (deploys,
+  // branch mutation, MCP file writers) — armed mode is the more permissive one.
+  if (DENY_TOOLNAME_RE.test(name)) return "deny-until-armed";
+  // EVERY native editor plus MCP file writers. GitHub Codex P2 on df8f2442a: this list
+  // read Write|Edit|NotebookEdit, so under acceptEdits a MultiEdit of ordinary source
+  // was auto-approved before the arm handshake completed. The regex is the same set
+  // the settings `ask` tier enumerates; a new editor name must be added to both.
+  if (/^(Write|Edit|MultiEdit|NotebookEdit)$/i.test(name) || UNARMED_WRITER_RE.test(name)) {
+    const fp = input.file_path || input.notebook_path || input.path || input.filePath || "";
+    return isSessionStatePath(fp) ? "allow-through" : "deny-until-armed";
   }
   // execute_sql / apply_migration intentionally omitted (Mason 2026-07-10): SQL and
   // migration applies do not gate on the overnight handshake either. Deploys still do.
@@ -431,4 +540,4 @@ export function flagActive(content, nowMs) {
   return { active: true, expires: data.expires };
 }
 
-export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, INTENT_FRESH_MS };
+export { DENY_TOOLNAME_RE, DENY_BASH_RES, DENY_PATH_RE, PROTECTED_SURFACE_RE, INTENT_FRESH_MS };
