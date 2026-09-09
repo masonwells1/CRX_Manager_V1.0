@@ -353,8 +353,14 @@ function classify(lines: string[], lineNo: number): Reason | null {
   // one. Leaving it unrecognised reported four correct sites as defects.
   const RECOVERY_MARKER =
     /getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection|committed[A-Za-z]*(Id|Result)/;
+  // The predicate receives the caught RPC value directly. Restrict it to one
+  // identifier so a nested reset (including an aliased reset function) cannot
+  // make an unsafe reset look like recovery.
+  const RECOVERY_ERROR_VALUE = /[A-Za-z_$][\w$]*/;
   const SAME_LINE_RECOVERY_GUARD =
-    /^\s*if\s*\(\s*(?:getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection)\s*\([^)]*\)\s*\)\s*\{?\s*(?:[A-Za-z_$][\w$]*\.)?resetKey(?:For)?\s*\([^)]*\)\s*;?\s*\}?\s*$/;
+    new RegExp(
+      `^\\s*if\\s*\\(\\s*(?:getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection)\\s*\\(\\s*${RECOVERY_ERROR_VALUE.source}\\s*\\)\\s*\\)\\s*\\{?\\s*(?:[A-Za-z_$][\\w$]*\\.)?resetKey(?:For)?\\s*\\([^)]*\\)\\s*;?\\s*\\}?\\s*$`,
+    );
 
   // A marker on the RESET'S OWN LINE — `if (marker(error)) idem.resetKeyFor(scope);` —
   // is the strongest same-branch evidence available: there is no room between the two
@@ -673,6 +679,10 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     expect(classify(['console.debug(isDefinitiveRpcRejection(error)); idem.resetKey();'], 1)).toBeNull();
     expect(classify(['if (isDefinitiveRpcRejection(error)) idem.resetKey();'], 1)).toBe('recovery');
     expect(classify(['if (isDefinitiveRpcRejection(error)) { idem.resetKey(); }'], 1)).toBe('recovery');
+    expect(
+      classify(['if (isDefinitiveRpcRejection(unsafeIdem.resetKey())) safeIdem.resetKey();'], 1),
+    ).toBeNull();
+    expect(classify(['if (isDefinitiveRpcRejection(unsafeReset())) safeIdem.resetKey();'], 1)).toBeNull();
     expect(classify(['unsafe.resetKey(); if (isDefinitiveRpcRejection(error)) safe.resetKey();'], 1)).toBeNull();
     expect(classify(['if (isDefinitiveRpcRejection(error)) safe.resetKey(); unsafe.resetKey();'], 1)).toBeNull();
   });
