@@ -351,10 +351,10 @@ export function pushUsesBulkMode(cmd) {
 // (Codex round-5).
 export function extractPatchDestinations(text) {
   const out = [];
-  const re = /^(?:\*{3}\s*(?:Add|Update|Delete|Move(?:\s+to)?)\s+File:\s*(.+?)\s*$|\+{3}\s+(?:b\/)?(\S+)|-{3}\s+(?:a\/)?(\S+)|rename\s+to\s+(\S+)\s*$)/gim;
+  const re = /^(?:\*{3}\s*(?:Add|Update|Delete|Move(?:\s+to)?)\s+File:\s*(.+?)\s*$|\*{3}\s*Move\s+to:\s*(.+?)\s*$|\+{3}\s+(?:b\/)?(\S+)|-{3}\s+(?:a\/)?(\S+)|rename\s+to\s+(\S+)\s*$)/gim;
   let match;
   while ((match = re.exec(String(text || ""))) !== null) {
-    const dest = match[1] || match[2] || match[3] || match[4];
+    const dest = match[1] || match[2] || match[3] || match[4] || match[5];
     if (dest && dest !== "/dev/null") out.push(dest);
   }
   return out;
