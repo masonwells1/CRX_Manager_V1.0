@@ -11,36 +11,61 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifySql, isKnownSweepPredicate } from "../../.claude/hooks/live-testdata-lib.mjs";
 import {
-  MANIFEST_PATH,
+  KNOWN_SWEEP_PREDICATE_SHA256,
+  classifySql,
+  isKnownSweepPredicate,
+} from "../../.claude/hooks/live-testdata-lib.mjs";
+import {
+  GUARD_PATH,
   PREDICATE_DIR,
   collectPredicates,
   fingerprint,
   normalizePredicateSql,
+  renderRegion,
 } from "./write-predicate-fingerprints.mjs";
 
 let pass = 0;
 const ok = (c, m) => { assert.ok(c, m); pass++; };
 const eq = (a, b, m) => { assert.equal(a, b, m); pass++; };
 
-const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
 const onDisk = collectPredicates();
-
-// 1. No drift, in EITHER direction.
-const manifestNames = Object.keys(manifest.predicates).sort();
 const diskNames = onDisk.map((p) => p.file);
+
+// 1. No drift, in EITHER direction. The authorised hashes live INSIDE the guard
+//    (an approval-gated enforcement surface) rather than in a writable manifest
+//    beside the predicates — the manifest version could be bypassed by hashing a
+//    destructive statement and appending it with an ordinary edit (Codex, PR
+//    #648 round 4). So this compares the files on disk against the guard's own
+//    embedded set, and against the exact text the generator would emit.
 assert.deepEqual(
-  manifestNames,
-  diskNames,
-  "predicate-fingerprints.json does not list exactly the .sql files on disk — run node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs",
+  [...KNOWN_SWEEP_PREDICATE_SHA256].sort(),
+  onDisk.map((p) => p.sha256).sort(),
+  "the guard's embedded fingerprints are not exactly the hashes of the .sql files on disk — run node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs",
 );
 pass++;
+eq(
+  KNOWN_SWEEP_PREDICATE_SHA256.size,
+  onDisk.length,
+  "the guard authorises exactly as many hashes as there are predicate files — no stale or extra entry",
+);
 for (const p of onDisk) {
-  eq(
-    manifest.predicates[p.file],
-    p.sha256,
-    `${p.file} does not match its recorded fingerprint — the SQL changed, so re-review it and regenerate the manifest`,
+  ok(
+    KNOWN_SWEEP_PREDICATE_SHA256.has(p.sha256),
+    `${p.file} does not match its recorded fingerprint — the SQL changed, so re-review it and regenerate`,
+  );
+}
+// The generated region must be exactly what the generator produces from the
+// current files, so a hand-edited hash inside the guard fails here too.
+{
+  // Line-ending agnostic: this checkout is CRLF under git's autocrlf while the
+  // generator emits LF. The claim is about CONTENT, not about which bytes the
+  // working copy happens to use for a newline.
+  const lf = (s) => s.replace(/\r\n?/g, "\n");
+  const guard = lf(fs.readFileSync(GUARD_PATH, "utf8"));
+  ok(
+    guard.includes(lf(renderRegion(onDisk))),
+    "the generated region in the guard is not what the generator emits — do not hand-edit it; run node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs",
   );
 }
 // PINNED, not a floor. A floor lets a reviewed predicate be deleted from BOTH
@@ -214,7 +239,7 @@ for (const p of onDisk.slice(0, 3)) {
   const selfPath = fileURLToPath(import.meta.url);
   const bytes = fs.readFileSync(selfPath);
   eq(bytes.indexOf(0), -1, "this test file must contain no NUL byte — write control characters as \\uXXXX escapes");
-  for (const file of [MANIFEST_PATH, path.join(PREDICATE_DIR, diskNames[0])]) {
+  for (const file of [GUARD_PATH, path.join(PREDICATE_DIR, diskNames[0])]) {
     eq(fs.readFileSync(file).indexOf(0), -1, `${path.basename(file)} must contain no NUL byte`);
   }
 }
