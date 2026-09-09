@@ -353,13 +353,15 @@ function classify(lines: string[], lineNo: number): Reason | null {
   // one. Leaving it unrecognised reported four correct sites as defects.
   const RECOVERY_MARKER =
     /getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection|committed[A-Za-z]*(Id|Result)/;
+  const SAME_LINE_RECOVERY_CALL =
+    /(?:getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection|committed[A-Za-z]*(?:Id|Result))\s*\(/;
 
   // A marker on the RESET'S OWN LINE — `if (marker(error)) idem.resetKeyFor(scope);` —
   // is the strongest same-branch evidence available: there is no room between the two
   // for a branch to open or close, so exitsBranch has nothing to rule out. classify()
   // read only the lines ABOVE the reset, so this single-line guard form was
   // unclassifiable and every instance of it read as a defect.
-  if (RECOVERY_MARKER.test(stripNoise(self))) return 'recovery';
+  if (SAME_LINE_RECOVERY_CALL.test(stripNoise(self))) return 'recovery';
 
   const aboveLines = above.split('\n');
   const markerIdx = lastIndexMatching(aboveLines, RECOVERY_MARKER);
@@ -431,7 +433,7 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  */
 function stripNoise(line: string): string {
   return line
-    .replace(/\/\*.*?\*\//g, '')
+    .replace(/\/\*.*?(?:\*\/|$)/g, '')
     .replace(/'(?:[^'\\]|\\.)*'/g, "''")
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .replace(/`(?:[^`\\]|\\.)*`/g, '``')
@@ -663,7 +665,9 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
   it('requires executable recovery evidence on a reset line', () => {
     expect(classify(['idem.resetKey(); // getIdempotencyMismatchResult(error)'], 1)).toBeNull();
     expect(classify(['idem.resetKey(); /* getIdempotencyBindingRejection(error) */'], 1)).toBeNull();
+    expect(classify(['idem.resetKey(); /* isDefinitiveRpcRejection(error)'], 1)).toBeNull();
     expect(classify(["const note = 'isDefinitiveRpcRejection'; idem.resetKey();"], 1)).toBeNull();
+    expect(classify(['const marker = /isDefinitiveRpcRejection/; idem.resetKey();'], 1)).toBeNull();
     expect(classify(['if (isDefinitiveRpcRejection(error)) idem.resetKey();'], 1)).toBe('recovery');
   });
 
