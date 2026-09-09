@@ -727,6 +727,37 @@ try {
     true,
     "the `cwd` spelling of the working directory is joined too",
   );
+  // The native apply_patch shape has no nested object to carry workdir/cwd. Its
+  // event-level cwd therefore resolves a bare destination before matching.
+  for (const [eventCwd, patch] of [
+    [".codex/hooks", "*** Begin Patch\n*** Update File: production-action-guard.mjs\n@@\n-old\n+new\n*** End Patch"],
+    ["C:\\repo\\.codex\\hooks", "*** Begin Patch\n*** Update File: codex-hook-adapter.mjs\n@@\n-old\n+new\n*** End Patch"],
+    ["/repo/.codex/hooks/../hooks", "*** Begin Patch\n*** Update File: docs/guard-notes.md\n*** Move to: production-action-guard.mjs\n@@\n-old\n+new\n*** End Patch"],
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "apply_patch", toolInput: patch, eventCwd }).blocked,
+      true,
+      `raw patch destination resolves from event cwd: ${eventCwd}`,
+    );
+  }
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "apply_patch",
+      eventCwd: ".codex/hooks",
+      toolInput: { workdir: "../../docs", patch: "*** Begin Patch\n*** Update File: notes.md\n@@\n-old\n+This prose names .codex/hooks/production-action-guard.mjs.\n*** End Patch" },
+    }).blocked,
+    false,
+    "nested workdir remains more specific than the event cwd",
+  );
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "apply_patch",
+      eventCwd: ".codex",
+      toolInput: { workdir: "hooks", patch: "*** Begin Patch\n*** Update File: production-action-guard.mjs\n@@\n-old\n+new\n*** End Patch" },
+    }).blocked,
+    true,
+    "a nested relative workdir resolves from the event cwd",
+  );
   // NEAR-MISS CANARIES: an unrelated file in an unrelated working directory,
   // and a protected-looking basename in a directory that is not the protected
   // one, both stay editable — the join must not turn every basename into a hit.
@@ -1875,6 +1906,20 @@ try {
   const rawProtectedDecision = JSON.parse(rawProtectedEntrypoint.stdout);
   assert.equal(rawProtectedDecision.hookSpecificOutput?.permissionDecision, "deny", "raw-string protected patch is denied through the JSON/stdin entrypoint");
   assert.match(String(rawProtectedDecision.hookSpecificOutput?.permissionDecisionReason || ""), /production\/review harness is a security boundary/, "raw-string protected patch reaches the harness-boundary denial rather than an unexpected guard error");
+  const eventCwdProtectedEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({
+      tool_name: "apply_patch",
+      cwd: path.join(projectRoot, ".codex", "hooks"),
+      tool_input: "*** Begin Patch\n*** Update File: production-action-guard.mjs\n@@\n-old\n+weaken()\n*** End Patch",
+    }),
+    encoding: "utf8",
+  });
+  assert.equal(eventCwdProtectedEntrypoint.error, undefined, "event-cwd raw patch entrypoint starts without a process error");
+  assert.equal(eventCwdProtectedEntrypoint.status, 0, "event-cwd raw patch entrypoint exits cleanly after denial");
+  assert.equal(eventCwdProtectedEntrypoint.stderr, "", "event-cwd raw patch entrypoint emits no stderr");
+  const eventCwdProtectedDecision = JSON.parse(eventCwdProtectedEntrypoint.stdout);
+  assert.equal(eventCwdProtectedDecision.hookSpecificOutput?.permissionDecision, "deny", "event cwd resolves the raw patch basename through JSON/stdin");
+  assert.match(String(eventCwdProtectedDecision.hookSpecificOutput?.permissionDecisionReason || ""), /production\/review harness is a security boundary/, "event-cwd raw patch reaches the harness-boundary denial");
   const rawDocumentationEntrypoint = spawnSync(process.execPath, [guardPath], {
     input: JSON.stringify({ tool_name: "apply_patch", tool_input: rawDocumentationPatch }),
     encoding: "utf8",

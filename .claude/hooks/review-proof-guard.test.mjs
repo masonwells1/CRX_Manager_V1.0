@@ -77,6 +77,37 @@ for (const [shape, patch] of [
     assertEntrypointAllowed({ tool_name: "apply_patch", tool_input }, shape);
   }
 }
+// A raw native patch inherits the event's cwd when no nested tool workdir/cwd
+// exists. Exercise Windows, POSIX, and `..` spellings through the real stdin
+// entrypoint; the final case confirms nested workdir remains more specific.
+for (const [cwd, tool_input] of [
+  ["C:\\repo\\.claude\\hooks", "*** Begin Patch\n*** Update File: review-proof-guard.mjs\n@@\n-old\n+new\n*** End Patch"],
+  ["/repo/.claude/hooks", { patch: "*** Begin Patch\n*** Update File: codex-push-lib.mjs\n@@\n-old\n+new\n*** End Patch" }],
+  ["/repo/.claude/hooks/../hooks", "*** Begin Patch\n*** Update File: docs/guard-notes.md\n*** Move to: review-proof-guard.mjs\n@@\n-old\n+new\n*** End Patch"],
+]) {
+  assertEntrypointDenied(
+    { tool_name: "apply_patch", cwd, tool_input },
+    /through a path field/,
+    `event cwd resolves patch destination: ${cwd}`,
+  );
+}
+assertEntrypointAllowed(
+  {
+    tool_name: "apply_patch",
+    cwd: ".claude/hooks",
+    tool_input: { workdir: "../../docs", patch: "*** Begin Patch\n*** Update File: notes.md\n@@\n-old\n+mentions .claude/hooks/review-proof-guard.mjs\n*** End Patch" },
+  },
+  "nested workdir remains more specific than event cwd",
+);
+assertEntrypointDenied(
+  {
+    tool_name: "apply_patch",
+    cwd: ".claude",
+    tool_input: { workdir: "hooks", patch: "*** Begin Patch\n*** Update File: review-proof-guard.mjs\n@@\n-old\n+new\n*** End Patch" },
+  },
+  /through a path field/,
+  "a nested relative workdir resolves from event cwd",
+);
 
 for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/session-state/claude-review-push.json", content: "{}" } },
