@@ -5,7 +5,7 @@
 // both agents. The wrappers write internally and never name the proof path in
 // their tool command, so legitimate proof creation still works.
 
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -104,12 +104,15 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 //                    the exemption exists for are all `.flag` and `.txt` files,
 //                    so JSON in the state directory is evidence by shape and
 //                    fails closed here, present and future producers alike;
-//   "aliased"      — resolves into the state directory with more than one hard
-//                    link. A hard link has no "real" name to resolve to (both
-//                    names ARE the file); the wrappers never hard-link what they
-//                    write, so a second name there can only be an alias made to
-//                    read a proof. Outside the state directory link counts are
-//                    ignored — pnpm-style stores hard-link every module file;
+//   "aliased"      — reaches the file through a symlink/junction/reparse-point
+//                    component, through an own state directory that is itself
+//                    aliased, or resolves into the state directory with more
+//                    than one hard link. A separate pre-tool hook cannot bind a
+//                    checked alias to the later native open, and a hard link has
+//                    no "real" name to resolve to (both names ARE the file);
+//                    the wrappers never create either alias for their evidence.
+//                    Outside the state directory link counts are ignored —
+//                    pnpm-style stores hard-link every module file;
 //   "unresolvable" — missing, a directory, or a path the OS cannot resolve;
 //   "clear"        — a regular file that is none of the above.
 const READ_ONLY_SINGLE_FILE_TOOL_RE = /^(?:read|notebookread)$/i;
@@ -129,6 +132,35 @@ const STATE_DIR_EVIDENCE_RE = /\.json$/i;
 // Residual, documented in KNOWN_ISSUES: a junctioned state directory of a
 // DIFFERENT checkout read by its external name is not this checkout's to know.
 const samePath = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+// Check every component the OS will walk, preserving a POSIX `alias/..` segment
+// long enough to see the alias before applying `..`. `realpath` alone cannot
+// bind the later native open: between this pre-tool process and that open a
+// mutable junction can point somewhere else. `lstat` sees Windows junctions as
+// symbolic links, while plain case changes and 8.3 spellings remain ordinary
+// components and therefore do not create false denials.
+function pathHasAliasComponent(candidate) {
+  const raw = String(candidate);
+  const parsed = path.parse(raw);
+  let current = parsed.root;
+  const components = raw.slice(parsed.root.length).split(/[\\/]+/);
+  try {
+    for (const component of components) {
+      if (component === "" || component === ".") continue;
+      if (component === "..") {
+        current = path.dirname(current);
+        continue;
+      }
+      current = path.join(current, component);
+      if (lstatSync(current).isSymbolicLink()) return true;
+    }
+    return false;
+  } catch {
+    // This runs only after realpath/stat proved the final target exists. A
+    // component we cannot inspect is therefore uncertainty, not a harmless
+    // missing-file read; refuse it rather than authorize a mutable alias.
+    return true;
+  }
+}
 function realStateDirOf(baseDir) {
   try {
     return realpathSync.native(path.join(baseDir, ".claude", "session-state"));
@@ -154,7 +186,13 @@ function ownStateDirsOf(startDirs) {
     for (;;) {
       const real = realStateDirOf(dir);
       if (real != null) {
-        if (!found.some((known) => samePath(known, real))) found.push(real);
+        const aliased = pathHasAliasComponent(path.join(dir, ".claude", "session-state"));
+        const known = found.find((entry) => samePath(entry.real, real));
+        if (known) {
+          known.aliased ||= aliased;
+        } else {
+          found.push({ real, aliased });
+        }
         break;
       }
       const parent = path.dirname(dir);
@@ -164,7 +202,7 @@ function ownStateDirsOf(startDirs) {
   }
   return found;
 }
-const ownStateDirsReal = ownStateDirsOf([hookCwd, process.cwd(), process.env.CLAUDE_PROJECT_DIR]);
+const ownStateDirs = ownStateDirsOf([hookCwd, process.cwd(), process.env.CLAUDE_PROJECT_DIR]);
 function classifyReadTarget(candidate) {
   const raw = String(candidate);
   const lexical = path.resolve(hookCwd || process.cwd(), raw);
@@ -193,9 +231,11 @@ function classifyReadTarget(candidate) {
   }
   if (!stats.isFile()) return "unresolvable";
   if (reviewProofPathMentioned(resolved) || reviewProofPathMentioned(lexical)) return "proof";
+  const ownStateDir = ownStateDirs.find(({ real }) => samePath(path.dirname(resolved), real));
+  if (pathHasAliasComponent(asOpened) || ownStateDir?.aliased) return "aliased";
   const inStateDir = STATE_DIR_REAL_PATH_RE.test(resolved) ||
     STATE_DIR_REAL_PATH_RE.test(lexical) ||
-    ownStateDirsReal.some((stateDir) => samePath(path.dirname(resolved), stateDir));
+    ownStateDir != null;
   if (inStateDir && (STATE_DIR_EVIDENCE_RE.test(resolved) || STATE_DIR_EVIDENCE_RE.test(lexical))) return "evidence";
   if (inStateDir && stats.nlink > 1) return "aliased";
   return "clear";

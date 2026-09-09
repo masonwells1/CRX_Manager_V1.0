@@ -409,9 +409,13 @@ or not the proof-name rule lists it (round 11 found `migration-review-*.json` wa
 Flags and `.txt` captures are the only things the exemption lets a native reader open. Membership
 in the directory is decided by the resolved path, by the lexical path the tool was given, and by
 the real location of this checkout's own state directory (a junctioned `session-state` strips the
-protected components from resolved paths — Codex App P1 on the round-11 head). Residual: a
-junctioned state directory belonging to a DIFFERENT checkout, read by its external name, is not
-this checkout's to know; the wrappers never junction what they write. The shell branch is
+protected components from resolved paths — Codex App P1 on the round-11 head). **PR #612 adds a
+deliberate availability limit:** when this checkout's `session-state` directory is itself a
+junction or symlink, every native `Read`/`NotebookRead` under that state directory — including a
+read named by its external resolved path — now denies. The hook runs before the file tool and
+cannot bind a mutable alias to the later open, so this is the recoverable fail-closed choice; the
+wrappers never junction what they write. Residual: a junctioned state directory belonging to a
+DIFFERENT checkout, read by its external name, is not this checkout's to know. The shell branch is
 NOT changed: it reasons about command text, an 8.3 token can also be hash-styled
 (`CO3F2A~1.JSO` once a prefix has collided four times), and a text rule for it would be one more
 round of the "command-text guard never converges" pattern this repository has already recorded
