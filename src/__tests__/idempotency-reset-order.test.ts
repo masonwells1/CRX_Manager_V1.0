@@ -354,14 +354,15 @@ function classify(lines: string[], lineNo: number): Reason | null {
   const RECOVERY_MARKER =
     /getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection|committed[A-Za-z]*(Id|Result)/;
   const SAME_LINE_RECOVERY_GUARD =
-    /\bif\s*\(\s*(?:getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection)\s*\([^)]*\)\s*\)\s*\{?\s*(?:[A-Za-z_$][\w$]*\.)?resetKey(?:For)?\s*\(/;
+    /^\s*if\s*\(\s*(?:getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection)\s*\([^)]*\)\s*\)\s*\{?\s*(?:[A-Za-z_$][\w$]*\.)?resetKey(?:For)?\s*\([^)]*\)\s*;?\s*\}?\s*$/;
 
   // A marker on the RESET'S OWN LINE — `if (marker(error)) idem.resetKeyFor(scope);` —
   // is the strongest same-branch evidence available: there is no room between the two
   // for a branch to open or close, so exitsBranch has nothing to rule out. classify()
   // read only the lines ABOVE the reset, so this single-line guard form was
   // unclassifiable and every instance of it read as a defect.
-  if (SAME_LINE_RECOVERY_GUARD.test(stripNoise(self))) return 'recovery';
+  const cleanSelf = stripNoise(self);
+  if (SAME_LINE_RECOVERY_GUARD.test(cleanSelf)) return 'recovery';
 
   const aboveLines = above.split('\n');
   const markerIdx = lastIndexMatching(aboveLines, RECOVERY_MARKER);
@@ -672,6 +673,8 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     expect(classify(['console.debug(isDefinitiveRpcRejection(error)); idem.resetKey();'], 1)).toBeNull();
     expect(classify(['if (isDefinitiveRpcRejection(error)) idem.resetKey();'], 1)).toBe('recovery');
     expect(classify(['if (isDefinitiveRpcRejection(error)) { idem.resetKey(); }'], 1)).toBe('recovery');
+    expect(classify(['unsafe.resetKey(); if (isDefinitiveRpcRejection(error)) safe.resetKey();'], 1)).toBeNull();
+    expect(classify(['if (isDefinitiveRpcRejection(error)) safe.resetKey(); unsafe.resetKey();'], 1)).toBeNull();
   });
 
   it('scans a meaningful number of source files', () => {
