@@ -161,6 +161,17 @@ export const RpcErrorCodes = {
   // return-credit COGS and year-end report guards (20260827041000/041100)
   RETURN_CREDIT_CUTOVER_IN_PROGRESS: 'RETURN_CREDIT_CUTOVER_IN_PROGRESS',
   CUSTOMER_SCOPE_DENIED: 'CUSTOMER_SCOPE_DENIED',
+  PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED',
+  // complete_cycle_count optimistic-concurrency refusal (20260831212415). Raised
+  // when another client changed a counted quantity after the completing client
+  // read its snapshot, so the completion would apply inventory adjustments the
+  // operator never reviewed.
+  CYCLE_COUNT_STALE_REVISION: 'CYCLE_COUNT_STALE_REVISION',
+  // complete_cycle_count refusal when p_expected_item_revision is omitted entirely
+  // (20260908120000). Only a client cached from before that migration can send no
+  // revision; the server used to skip the staleness checks for it, which is the
+  // defect being closed. The operator needs to reload to get the current build.
+  CYCLE_COUNT_REVISION_REQUIRED: 'CYCLE_COUNT_REVISION_REQUIRED',
   RETURN_NOT_APPROVED: 'RETURN_NOT_APPROVED',
   RETURN_CREDIT_UNIT_MISMATCH: 'RETURN_CREDIT_UNIT_MISMATCH',
   RETURN_CREDIT_INVENTORY_UNIT_MISMATCH: 'RETURN_CREDIT_INVENTORY_UNIT_MISMATCH',

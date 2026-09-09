@@ -1,5 +1,5 @@
 -- 20260906120000_preview_field_app_season_follows_invoice_date.sql
--- STATUS: NOT APPLIED
+-- STATUS: APPLIED LIVE 2026-09-08 (ledger version 20260908045843)
 -- (This status line goes stale at apply time; the ledger is authoritative.)
 --
 -- CRX-SEC-001: the field-application invoice PREVIEW priced the application fee from the

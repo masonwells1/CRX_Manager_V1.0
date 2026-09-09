@@ -727,6 +727,37 @@ try {
     true,
     "the `cwd` spelling of the working directory is joined too",
   );
+  // The native apply_patch shape has no nested object to carry workdir/cwd. Its
+  // event-level cwd therefore resolves a bare destination before matching.
+  for (const [eventCwd, patch] of [
+    [".codex/hooks", "*** Begin Patch\n*** Update File: production-action-guard.mjs\n@@\n-old\n+new\n*** End Patch"],
+    ["C:\\repo\\.codex\\hooks", "*** Begin Patch\n*** Update File: codex-hook-adapter.mjs\n@@\n-old\n+new\n*** End Patch"],
+    ["/repo/.codex/hooks/../hooks", "*** Begin Patch\n*** Update File: docs/guard-notes.md\n*** Move to: production-action-guard.mjs\n@@\n-old\n+new\n*** End Patch"],
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: "apply_patch", toolInput: patch, eventCwd }).blocked,
+      true,
+      `raw patch destination resolves from event cwd: ${eventCwd}`,
+    );
+  }
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "apply_patch",
+      eventCwd: ".codex/hooks",
+      toolInput: { workdir: "../../docs", patch: "*** Begin Patch\n*** Update File: notes.md\n@@\n-old\n+This prose names .codex/hooks/production-action-guard.mjs.\n*** End Patch" },
+    }).blocked,
+    false,
+    "nested workdir remains more specific than the event cwd",
+  );
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "apply_patch",
+      eventCwd: ".codex",
+      toolInput: { workdir: "hooks", patch: "*** Begin Patch\n*** Update File: production-action-guard.mjs\n@@\n-old\n+new\n*** End Patch" },
+    }).blocked,
+    true,
+    "a nested relative workdir resolves from the event cwd",
+  );
   // NEAR-MISS CANARIES: an unrelated file in an unrelated working directory,
   // and a protected-looking basename in a directory that is not the protected
   // one, both stay editable — the join must not turn every basename into a hit.
@@ -1855,6 +1886,72 @@ try {
     toolName: "apply_patch",
     toolInput: { patch: "*** Update File: .codex/hooks/production-action-guard.mjs\n+weaken()" },
   }).blocked, true, "patch whose destination is the guard itself is denied");
+  const rawProtectedPatch = "*** Begin Patch\n*** Update File: .codex/hooks/production-action-guard.mjs\n@@\n-old\n+weaken()\n*** End Patch";
+  const rawDocumentationPatch = "*** Begin Patch\n*** Update File: docs/reference/agent-guardrails.md\n@@\n-old\n+The protected destination is .codex/hooks/production-action-guard.mjs.\n*** End Patch";
+  assert.equal(evaluateProductionAction({
+    toolName: "apply_patch",
+    toolInput: rawProtectedPatch,
+  }).blocked, true, "raw-string apply_patch cannot rewrite the production harness");
+  assert.equal(evaluateProductionAction({
+    toolName: "apply_patch",
+    toolInput: rawDocumentationPatch,
+  }).blocked, false, "raw-string documentation patch mentioning a protected path remains allowed");
+  const rawProtectedEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({ tool_name: "apply_patch", tool_input: rawProtectedPatch }),
+    encoding: "utf8",
+  });
+  assert.equal(rawProtectedEntrypoint.error, undefined, "raw-string protected patch entrypoint starts without a process error");
+  assert.equal(rawProtectedEntrypoint.status, 0, "raw-string protected patch entrypoint exits cleanly after denial");
+  assert.equal(rawProtectedEntrypoint.stderr, "", "raw-string protected patch entrypoint emits no stderr");
+  const rawProtectedDecision = JSON.parse(rawProtectedEntrypoint.stdout);
+  assert.equal(rawProtectedDecision.hookSpecificOutput?.permissionDecision, "deny", "raw-string protected patch is denied through the JSON/stdin entrypoint");
+  assert.match(String(rawProtectedDecision.hookSpecificOutput?.permissionDecisionReason || ""), /production\/review harness is a security boundary/, "raw-string protected patch reaches the harness-boundary denial rather than an unexpected guard error");
+  const eventCwdProtectedEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({
+      tool_name: "apply_patch",
+      cwd: path.join(projectRoot, ".codex", "hooks"),
+      tool_input: "*** Begin Patch\n*** Update File: production-action-guard.mjs\n@@\n-old\n+weaken()\n*** End Patch",
+    }),
+    encoding: "utf8",
+  });
+  assert.equal(eventCwdProtectedEntrypoint.error, undefined, "event-cwd raw patch entrypoint starts without a process error");
+  assert.equal(eventCwdProtectedEntrypoint.status, 0, "event-cwd raw patch entrypoint exits cleanly after denial");
+  assert.equal(eventCwdProtectedEntrypoint.stderr, "", "event-cwd raw patch entrypoint emits no stderr");
+  const eventCwdProtectedDecision = JSON.parse(eventCwdProtectedEntrypoint.stdout);
+  assert.equal(eventCwdProtectedDecision.hookSpecificOutput?.permissionDecision, "deny", "event cwd resolves the raw patch basename through JSON/stdin");
+  assert.match(String(eventCwdProtectedDecision.hookSpecificOutput?.permissionDecisionReason || ""), /production\/review harness is a security boundary/, "event-cwd raw patch reaches the harness-boundary denial");
+  const rawDocumentationEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({ tool_name: "apply_patch", tool_input: rawDocumentationPatch }),
+    encoding: "utf8",
+  });
+  assert.equal(rawDocumentationEntrypoint.error, undefined, "raw-string documentation patch entrypoint starts without a process error");
+  assert.equal(rawDocumentationEntrypoint.status, 0, "raw-string documentation patch entrypoint exits cleanly");
+  assert.equal(rawDocumentationEntrypoint.stderr, "", "raw-string documentation patch entrypoint emits no stderr");
+  assert.equal(rawDocumentationEntrypoint.stdout, "", "raw-string documentation patch remains allowed through the JSON/stdin entrypoint");
+  const moveToGuardPatch = "*** Begin Patch\n*** Update File: docs/reference/agent-guardrails.md\n*** Move to: .codex/hooks/production-action-guard.mjs\n@@\n-old\n+weaken()\n*** End Patch";
+  const moveToProofPatch = "*** Begin Patch\n*** Update File: docs/reference/agent-guardrails.md\n*** Move to: .claude/session-state/claude-review-push.json\n@@\n-old\n+{}\n*** End Patch";
+  const moveToDocumentationPatch = "*** Begin Patch\n*** Update File: docs/reference/agent-guardrails.md\n*** Move to: docs/reference/moved-guardrails.md\n@@\n-old\n+mentions .codex/hooks/production-action-guard.mjs\n*** End Patch";
+  for (const [patch, reason] of [[moveToGuardPatch, /production\/review harness is a security boundary/], [moveToProofPatch, /review proof files/]]) {
+    assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: patch }).blocked, true, "raw Move to protected destination is denied");
+    assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch } }).blocked, true, "structured Move to protected destination is denied");
+    const movedEntrypoint = spawnSync(process.execPath, [guardPath], { input: JSON.stringify({ tool_name: "apply_patch", tool_input: patch }), encoding: "utf8" });
+    assert.equal(movedEntrypoint.error, undefined, "Move to entrypoint starts without a process error");
+    assert.equal(movedEntrypoint.status, 0, "Move to entrypoint exits after denial");
+    assert.equal(movedEntrypoint.stderr, "", "Move to entrypoint emits no stderr");
+    const movedDecision = JSON.parse(movedEntrypoint.stdout);
+    assert.equal(movedDecision.hookSpecificOutput?.permissionDecision, "deny", "raw Move to is denied through JSON/stdin");
+    assert.match(String(movedDecision.hookSpecificOutput?.permissionDecisionReason || ""), reason, "Move to reaches the expected denial");
+  }
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: moveToDocumentationPatch }).blocked, false, "ordinary raw documentation move remains allowed");
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch: moveToDocumentationPatch } }).blocked, false, "ordinary structured documentation move remains allowed");
+  const ordinaryMoveEntrypoint = spawnSync(process.execPath, [guardPath], {
+    input: JSON.stringify({ tool_name: "apply_patch", tool_input: moveToDocumentationPatch }),
+    encoding: "utf8",
+  });
+  assert.equal(ordinaryMoveEntrypoint.error, undefined, "ordinary move entrypoint starts without a process error");
+  assert.equal(ordinaryMoveEntrypoint.status, 0, "ordinary move entrypoint exits cleanly");
+  assert.equal(ordinaryMoveEntrypoint.stderr, "", "ordinary move entrypoint emits no stderr");
+  assert.equal(ordinaryMoveEntrypoint.stdout, "", "ordinary move mentioning protected prose stays allowed through JSON/stdin");
 
   // ── Codex round-4 regressions (2026-07-13) ────────────────────────────────
   // R4-1: comment markers inside string literals cannot hide a mutation.
