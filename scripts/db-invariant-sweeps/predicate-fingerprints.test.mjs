@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { classifySql, isKnownSweepPredicate } from "../../.claude/hooks/live-testdata-lib.mjs";
 import {
   MANIFEST_PATH,
@@ -151,39 +152,45 @@ ok(fs.existsSync(path.join(PREDICATE_DIR, diskNames[0])), "generator and guard a
 
 // 9. Unicode whitespace. `trimEnd()` and `/\s+$/` strip the same set, which
 //    includes NBSP and friends — so a predicate followed by exotic trailing
-//    whitespace is still the same predicate, and exotic whitespace in the
-//    MIDDLE is still a different one.
+//    whitespace is still the same predicate, while the same character in the
+//    MIDDLE or at the START is a different one.
 //
-//    Every exotic character here is written as an ESCAPE, never as the literal
-//    byte. The first cut of this block embedded a real NUL, which made git treat
-//    the entire file as binary — `Bin 0 -> 8143 bytes`, zero additions, no patch
-//    rendered on the PR — so none of these assertions could be read in review.
-//    On a change whose whole safety argument is "the combined diff is the gate",
-//    an unreviewable test defeats the design (Codex, PR #648 round 2).
+//    Every character below is built from its CODE POINT. Not a literal byte,
+//    and not a `\uXXXX` escape either — twice this block was written with
+//    literal control characters while its own comment claimed otherwise, and an
+//    escape sequence is only as reliable as whatever wrote the file. A number
+//    cannot be silently mangled by an editor or a tool. Section 11 asserts the
+//    file really does contain no NUL, so a third recurrence fails the suite
+//    rather than depending on where in the file the byte happens to land.
 {
   const lf = normalizePredicateSql(onDisk[0].text);
+  const ch = (code) => String.fromCodePoint(code);
+  const NUL = ch(0x00);
   const exotic = [
-    ["NBSP", " "],
-    ["en quad", " "],
-    ["ideographic space", "　"],
-    ["line separator", " "],
-    ["vertical tab", "\v"],
-    ["form feed", "\f"],
-    ["ogham space mark", " "],
-    ["narrow no-break space", " "],
+    ["NBSP U+00A0", ch(0x00a0)],
+    ["vertical tab U+000B", ch(0x000b)],
+    ["form feed U+000C", ch(0x000c)],
+    ["ogham space mark U+1680", ch(0x1680)],
+    ["en quad U+2000", ch(0x2000)],
+    ["line separator U+2028", ch(0x2028)],
+    ["paragraph separator U+2029", ch(0x2029)],
+    ["narrow no-break space U+202F", ch(0x202f)],
+    ["ideographic space U+3000", ch(0x3000)],
+    ["zero width no-break space U+FEFF", ch(0xfeff)],
   ];
   for (const [name, ws] of exotic) {
     ok(isKnownSweepPredicate(`${lf}${ws}`), `trailing ${name} is normalised away`);
   }
-  ok(!isKnownSweepPredicate(`${lf.slice(0, 5)} ${lf.slice(5)}`), "an NBSP in the MIDDLE is a different predicate");
-  ok(!isKnownSweepPredicate(` ${lf}`), "a LEADING NBSP is a different predicate");
-  ok(!isKnownSweepPredicate(`${lf} `), "a trailing NUL is not whitespace and is not recognised");
-  ok(!isKnownSweepPredicate(`${lf}    `), "a NUL hidden before trailing spaces is not trimmed away");
+  ok(!isKnownSweepPredicate(`${lf.slice(0, 5)}${ch(0x00a0)}${lf.slice(5)}`), "an NBSP in the MIDDLE is a different predicate");
+  ok(!isKnownSweepPredicate(`${ch(0x00a0)}${lf}`), "a LEADING NBSP is a different predicate");
+  ok(!isKnownSweepPredicate(`${lf}${NUL}`), "a trailing NUL is not whitespace and is not recognised");
+  ok(!isKnownSweepPredicate(`${lf}${NUL}   `), "a NUL hidden before trailing spaces is not trimmed away");
   // trimEnd() and /\s+$/ must agree on every one of these, or the generator and
-  // the guard could accept a different set than this file documents.
+  // the guard could accept a different set than these comments claim.
   for (const [name, ws] of exotic) {
     eq(`x${ws}`.trimEnd(), `x${ws}`.replace(/\s+$/, ""), `trimEnd and /\\s+$/ agree on ${name}`);
   }
+  eq(`x${NUL}`.trimEnd(), `x${NUL}`, "sanity: NUL is not whitespace to trimEnd either");
 }
 
 // 10. The generator hashes what the guard hashes. They import ONE normaliser
@@ -191,6 +198,25 @@ ok(fs.existsSync(path.join(PREDICATE_DIR, diskNames[0])), "generator and guard a
 //     failure this design cannot detect from the inside.
 for (const p of onDisk.slice(0, 3)) {
   eq(fingerprint(p.text), fingerprint(normalizePredicateSql(p.text)), `${p.file}: hashing is normalisation-stable`);
+}
+
+// 11. THIS FILE must stay reviewable in a diff.
+//
+//     The control this whole change rests on is that a predicate cannot move
+//     without the manifest moving, and a person then reads the combined diff.
+//     A test file containing a NUL byte is classified binary by git, which
+//     renders zero additions and no patch — so the test enforcing that control
+//     becomes unreadable in exactly the place it needs to be read. It happened
+//     twice on PR #648: once inside git's 8,000-byte sniff window (the file went
+//     binary) and once past it (the file rendered by luck). Both are the same
+//     defect; only one was visible. This asserts the property directly.
+{
+  const selfPath = fileURLToPath(import.meta.url);
+  const bytes = fs.readFileSync(selfPath);
+  eq(bytes.indexOf(0), -1, "this test file must contain no NUL byte — write control characters as \\uXXXX escapes");
+  for (const file of [MANIFEST_PATH, path.join(PREDICATE_DIR, diskNames[0])]) {
+    eq(fs.readFileSync(file).indexOf(0), -1, `${path.basename(file)} must contain no NUL byte`);
+  }
 }
 
 console.log(`predicate-fingerprints: ${pass} assertions passed (${diskNames.length} predicates)`);
