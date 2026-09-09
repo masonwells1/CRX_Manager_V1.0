@@ -110,6 +110,22 @@ denyBash("RD /S /Q build", "cmd.exe switches are case-insensitive");
 denyBash("erase /s build", "`erase` is the documented cmd.exe alias of `del`");
 denyBash("del /f /s /q build", "PROVEN BYPASS: the old rule only read the token right after `del`");
 
+// ── Alias-head composition: suffixes AND unordered recursive switches ─────
+// The bare aliases pin the branch scanner; their executable-suffix twins pin
+// main's shape-aware `bin()` head. Both must deny or the merged rule regresses.
+denyBash("del /f /s C:/target", "bare del keeps unordered cmd switches denied");
+denyBash("del.exe /f /s C:/target", "del.exe retains unordered cmd switches");
+denyBash("erase /s C:/target", "bare erase keeps recursive cmd switches denied");
+denyBash("erase.exe /s C:/target", "erase.exe retains recursive cmd switches");
+denyBash("erase /f /s C:/target", "bare erase keeps unordered cmd switches denied");
+denyBash("erase.cmd /f /s C:/target", "erase.cmd retains unordered cmd switches");
+denyBash("rd /s C:/target", "bare rd keeps recursive cmd switches denied");
+denyBash("rd.exe /s C:/target", "rd.exe retains recursive cmd switches");
+denyBash("ri -Recurse C:/target", "bare ri keeps recursive PowerShell parameters denied");
+denyBash("ri.exe -Recurse C:/target", "ri.exe retains recursive PowerShell parameters");
+denyBash("Remove-Item -Recurse C:/target", "bare Remove-Item keeps recursive parameters denied");
+denyBash("Remove-Item.exe -Recurse C:/target", "Remove-Item.exe retains recursive parameters");
+
 // ── sibling rules with the same defect shape ─────────────────────────────
 // Each of these knew ONE spelling of a destructive option and missed the
 // documented equivalents.

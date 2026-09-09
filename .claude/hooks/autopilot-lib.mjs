@@ -50,18 +50,6 @@ const GIT_COMMIT_FLAG_ONLY = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX
   .filter((c) => !GIT_COMMIT_VALUE_OPTS.includes(c))
   .join("");
 
-// PowerShell removal aliases and cmd.exe recursive-delete aliases. The command
-// names/switches are case-insensitive in those shells; scope the rule to removal.
-const PS_RECURSIVE_REMOVE_RE = new RegExp(
-  String.raw`\b(?:Remove-Item|ri|rd|rmdir|del|erase)\b` + OPT_SCAN +
-    String.raw`-[Rr](?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?(?=$|[\s:])`,
-  "i"
-);
-const CMD_RECURSIVE_DELETE_RE = new RegExp(
-  String.raw`\b(?:rmdir|rd|del|erase)\b` + OPT_SCAN + String.raw`\/[sq]\b`,
-  "i"
-);
-
 // `git` and `gh` accept GLOBAL OPTIONS BETWEEN the binary and the subcommand
 // (`git -C <dir> push`, `gh -R <owner>/<repo> pr merge`). A bare `git\s+push`
 // cannot span them, so those shapes were AUTO-APPROVED while armed — armed mode
@@ -223,6 +211,24 @@ const BIN_TAIL = String.raw`(?:\.[^\s'".\\/]*)?["']?`;
 const bin = (name) => String.raw`\b${foldCase(name)}\b${BIN_TAIL}`;
 const git = (rest) => new RegExp(String.raw`${bin("git")}${GLOBAL_OPTS}\s+${rest}`);
 const gh = (rest) => new RegExp(String.raw`${bin("gh")}${GLOBAL_OPTS}\s+${rest}`);
+
+// PowerShell removal aliases and cmd.exe recursive-delete aliases. These retain
+// the branch's complete-token, order-independent switch scan, while `bin()`
+// gives every alias the same executable-suffix and path-qualified command-head
+// resolution as rm, git, and the other shape-aware rules below.
+const PS_RECURSIVE_REMOVE_HEAD = ["Remove-Item", "ri", "rd", "rmdir", "del", "erase"]
+  .map(bin)
+  .join("|");
+const CMD_RECURSIVE_DELETE_HEAD = ["rmdir", "rd", "del", "erase"].map(bin).join("|");
+const PS_RECURSIVE_REMOVE_RE = new RegExp(
+  String.raw`(?:${PS_RECURSIVE_REMOVE_HEAD})` + OPT_SCAN +
+    String.raw`-[Rr](?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?(?=$|[\s:])`,
+  "i"
+);
+const CMD_RECURSIVE_DELETE_RE = new RegExp(
+  String.raw`(?:${CMD_RECURSIVE_DELETE_HEAD})` + OPT_SCAN + String.raw`\/[sq]\b`,
+  "i"
+);
 
 // Every OTHER name-anchored rule below had the same binary hole, for the same
 // reason — the name is followed by a required `\s`, so an extension ends the match
