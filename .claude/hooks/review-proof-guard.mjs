@@ -32,10 +32,27 @@ try {
   process.exit(0);
 }
 
-const input = payload?.tool_input || payload?.toolInput || {};
+const toolInput = payload?.tool_input || payload?.toolInput || {};
+// Codex's native apply_patch sends its free-form patch as the whole tool_input
+// string, whereas other clients put it in a field. Normalize only the object
+// access here and route both forms through the existing destination parser.
+// Scanning destination headers (rather than the full patch text) keeps ordinary
+// documentation that merely discusses protected paths allowed.
+const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
+const input = toolInput && typeof toolInput === "object" ? toolInput : {};
 const toolName = String(payload?.tool_name || payload?.toolName || "");
-const hookCwd = String(payload?.cwd || input.cwd || input.workdir || "");
-const pathCandidates = [
+const eventCwd = String(payload?.cwd || "");
+// Preserve the event-first cwd used by the shell-state checks below. Patch
+// destinations use pathCandidateCwd instead: an explicit relative tool
+// workdir/cwd resolves from the event directory, while raw apply_patch uses the
+// event directory directly because it has no nested input object.
+const hookCwd = String(eventCwd || input.cwd || input.workdir || "");
+const nestedWorkingDir = input.workdir ?? input.cwd ?? "";
+const pathCandidateCwd = nestedWorkingDir
+  ? path.resolve(eventCwd || process.cwd(), String(nestedWorkingDir))
+  : eventCwd;
+const patchPayloads = [rawPatchBody, input.patch, input.diff, input.input, input.changes];
+const rawPathCandidates = [
   input.file_path,
   input.filePath,
   // NotebookRead/NotebookEdit carry their target here (exact-SHA gpt-5.6-sol
@@ -52,8 +69,14 @@ const pathCandidates = [
   // patch's destination headers, NOT its whole body — added prose may
   // legitimately mention proof paths in documentation (Codex round-5). Write's
   // `content` is likewise deliberately not scanned; its target is file_path.
-  ...[input.patch, input.diff, input.input, input.changes].flatMap((payloadText) => extractPatchDestinations(payloadText)),
+  ...patchPayloads.flatMap((payloadText) => extractPatchDestinations(payloadText)),
 ];
+// Resolve `..` using the host's native path rules without touching disk. A bare
+// patch destination then matches the file it will write from the event cwd.
+const pathCandidates = rawPathCandidates.map((candidate) => {
+  if (candidate == null || !pathCandidateCwd) return candidate;
+  return path.resolve(pathCandidateCwd, String(candidate));
+});
 if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
   deny("REVIEW PROOF GUARD: Claude/Codex review proof files are wrapper-owned. Run the real review workflow; do not write, edit, move, or delete proof JSON directly.");
 }
@@ -178,9 +201,11 @@ function classifyReadTarget(candidate) {
   return "clear";
 }
 if (READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName)) {
-  for (const candidate of pathCandidates) {
-    if (candidate == null || String(candidate) === "") continue;
-    const verdict = classifyReadTarget(candidate);
+  // Keep this loop on the raw tool spelling. On POSIX, normalizing an
+  // `alias/..` segment before realpath changes which file open() reaches.
+  for (const rawCandidate of rawPathCandidates) {
+    if (rawCandidate == null || String(rawCandidate) === "") continue;
+    const verdict = classifyReadTarget(rawCandidate);
     if (verdict === "proof" || verdict === "evidence" || verdict === "aliased") {
       deny("REVIEW PROOF GUARD: that path resolves to wrapper-owned evidence in the review state directory (a review proof, the applied-source ledger, or other JSON the apply and push gates consume). Run the real review workflow; evidence files are not readable through file tools. Flags and .txt captures there remain readable by their real names.");
     }
@@ -229,9 +254,17 @@ if (READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName)) {
 const ACK_VALVE_RE = /(?:^|\/)\.claude\/session-state\/stop-wrap-ack\.json$/;
 const isAckValvePath = (candidate) =>
   ACK_VALVE_RE.test(String(candidate).replace(/\\/g, "/").replace(/\/+$/, ""));
-const stateDirCandidates = pathCandidates.filter((c) => c != null && cdTargetEntersStateDir(c));
+// Patch and mutation targets use the normalized path that the tool resolves
+// from its event cwd. Keep the raw spelling beside each target only for the
+// native-read classifier, whose POSIX symlink-then-`..` behavior must match
+// open(), rather than path.resolve().
+const stateDirCandidatePairs = rawPathCandidates
+  .map((rawCandidate, index) => ({ rawCandidate, candidate: pathCandidates[index] }))
+  .filter(({ candidate }) => candidate != null && cdTargetEntersStateDir(candidate));
+const stateDirCandidates = stateDirCandidatePairs.map(({ candidate }) => candidate);
 const isMoveOrDeleteShape =
   (input.source != null && input.destination != null) ||
+  patchPayloads.some((payloadText) => /^\*{3}\s*(?:Delete\s+File:|Move\s+to:)/im.test(String(payloadText || ""))) ||
   /(?:^|[-._])(?:move|rename|delete|remove|unlink|trash|copy)(?:[-._]|$)/i.test(toolName);
 const isPureAckWrite = stateDirCandidates.length > 0 &&
   !isMoveOrDeleteShape &&
@@ -261,7 +294,7 @@ const isPureAckWrite = stateDirCandidates.length > 0 &&
 // directory itself, a Grep/Glob over the directory, and an MCP read still deny).
 const isCanonicalSingleFileRead = READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName) &&
   stateDirCandidates.length > 0 &&
-  stateDirCandidates.every((candidate) => classifyReadTarget(candidate) === "clear");
+  stateDirCandidatePairs.every(({ rawCandidate }) => classifyReadTarget(rawCandidate) === "clear");
 if (stateDirCandidates.length > 0 && !isPureAckWrite && !isCanonicalSingleFileRead) {
   deny("REVIEW PROOF GUARD: the review state directory (.claude/session-state) and its wrapper-owned contents cannot be created, moved, or deleted through a file tool. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
 }

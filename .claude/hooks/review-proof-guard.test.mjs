@@ -16,6 +16,101 @@ function run(payload) {
   });
 }
 
+function assertEntrypointDenied(payload, reason, label) {
+  const result = run(payload);
+  assert.equal(result.error, undefined, `${label}: hook process must spawn`);
+  assert.equal(result.status, 0, `${label}: hook exits successfully after denying`);
+  assert.equal(result.signal, null, `${label}: hook must not terminate by signal`);
+  assert.equal(result.stderr, "", `${label}: hook must not write stderr`);
+  const response = JSON.parse(result.stdout);
+  assert.equal(response?.hookSpecificOutput?.permissionDecision, "deny", `${label}: must deny`);
+  assert.match(response?.hookSpecificOutput?.permissionDecisionReason || "", reason, `${label}: expected deny reason`);
+}
+
+function assertEntrypointAllowed(payload, label) {
+  const result = run(payload);
+  assert.equal(result.error, undefined, `${label}: hook process must spawn`);
+  assert.equal(result.status, 0, `${label}: hook exits successfully when allowing`);
+  assert.equal(result.signal, null, `${label}: hook must not terminate by signal`);
+  assert.equal(result.stderr, "", `${label}: hook must not write stderr`);
+  assert.equal(result.stdout, "", `${label}: must allow`);
+}
+
+// Native Codex apply_patch passes its patch as a raw tool_input STRING, while
+// other clients nest it in patch. Both real JSON/stdin shapes must route their
+// destination headers through the same protection and preserve documentation
+// prose as an allowed non-destination.
+const protectedPatchTargets = [
+  { path: ".husky/pre-push", reason: /through a path field/ },
+  { path: ".github/workflows/ci.yml", reason: /through a path field/ },
+  { path: ".coderabbit.yaml", reason: /through a path field/ },
+  { path: ".claude/session-state/claude-review-push.json", reason: /review proof files are wrapper-owned/ },
+  { path: ".claude/session-state/untrusted-state.json", reason: /review state directory/ },
+];
+for (const { path: target, reason } of protectedPatchTargets) {
+  for (const [shape, tool_input] of [
+    ["raw", `*** Begin Patch\n*** Update File: ${target}\n@@\n-old\n+new\n*** End Patch`],
+    ["structured", { patch: `*** Begin Patch\n*** Update File: ${target}\n@@\n-old\n+new\n*** End Patch` }],
+    ["raw-move", `*** Begin Patch\n*** Update File: docs/guard-notes.md\n*** Move to: ${target}\n@@\n-old\n+new\n*** End Patch`],
+    ["structured-move", { patch: `*** Begin Patch\n*** Update File: docs/guard-notes.md\n*** Move to: ${target}\n@@\n-old\n+new\n*** End Patch` }],
+  ]) {
+    assertEntrypointDenied({ tool_name: "apply_patch", tool_input }, reason, `${shape} patch to ${target}`);
+  }
+}
+// A Delete header must not use the ack valve, which is intentionally only for a
+// native Write/Edit to the exact acknowledgment file.
+for (const patch of [
+  "*** Begin Patch\n*** Delete File: .claude/session-state/stop-wrap-ack.json\n*** End Patch",
+  "*** Begin Patch\n*** Update File: docs/guard-notes.md\n*** Move to: .claude/session-state/stop-wrap-ack.json\n@@\n-old\n+{}\n*** End Patch",
+]) {
+  for (const tool_input of [patch, { patch }]) {
+    assertEntrypointDenied(
+      { tool_name: "apply_patch", tool_input },
+      /review state directory/,
+      "patch move/delete cannot use the ack valve",
+    );
+  }
+}
+for (const [shape, patch] of [
+  ["doc-edit", "*** Begin Patch\n*** Update File: docs/guard-notes.md\n@@\n-old\n+This prose mentions .husky/pre-push and .claude/session-state/claude-review-forged.json.\n*** End Patch"],
+  ["doc-move", "*** Begin Patch\n*** Update File: docs/guard-notes.md\n*** Move to: docs/guard-notes-moved.md\n@@\n-old\n+This prose mentions .github/workflows/ci.yml and .coderabbit.yaml.\n*** End Patch"],
+]) {
+  for (const tool_input of [patch, { patch }]) {
+    assertEntrypointAllowed({ tool_name: "apply_patch", tool_input }, shape);
+  }
+}
+// A raw native patch inherits the event's cwd when no nested tool workdir/cwd
+// exists. Exercise Windows, POSIX, and `..` spellings through the real stdin
+// entrypoint; the final case confirms nested workdir remains more specific.
+for (const [cwd, tool_input] of [
+  ["C:\\repo\\.claude\\hooks", "*** Begin Patch\n*** Update File: review-proof-guard.mjs\n@@\n-old\n+new\n*** End Patch"],
+  ["/repo/.claude/hooks", { patch: "*** Begin Patch\n*** Update File: codex-push-lib.mjs\n@@\n-old\n+new\n*** End Patch" }],
+  ["/repo/.claude/hooks/../hooks", "*** Begin Patch\n*** Update File: docs/guard-notes.md\n*** Move to: review-proof-guard.mjs\n@@\n-old\n+new\n*** End Patch"],
+]) {
+  assertEntrypointDenied(
+    { tool_name: "apply_patch", cwd, tool_input },
+    /through a path field/,
+    `event cwd resolves patch destination: ${cwd}`,
+  );
+}
+assertEntrypointAllowed(
+  {
+    tool_name: "apply_patch",
+    cwd: ".claude/hooks",
+    tool_input: { workdir: "../../docs", patch: "*** Begin Patch\n*** Update File: notes.md\n@@\n-old\n+mentions .claude/hooks/review-proof-guard.mjs\n*** End Patch" },
+  },
+  "nested workdir remains more specific than event cwd",
+);
+assertEntrypointDenied(
+  {
+    tool_name: "apply_patch",
+    cwd: ".claude",
+    tool_input: { workdir: "hooks", patch: "*** Begin Patch\n*** Update File: review-proof-guard.mjs\n@@\n-old\n+new\n*** End Patch" },
+  },
+  /through a path field/,
+  "a nested relative workdir resolves from event cwd",
+);
+
 for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/session-state/claude-review-push.json", content: "{}" } },
   { tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\codex-review-abc.json" } },
@@ -725,6 +820,26 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
   const unlistedJson = write("some-future-gate-proof.json", "{}");
   const reviewerCapture = write("codex-review-mig-20260901120000_x-rls-security-reviewer-capture.txt", "FINAL_VERDICT: SHIP\n");
   try {
+    // Merge composition: main routes a native Codex raw-string patch through
+    // resolved destination protection, while this branch lets a real non-proof
+    // state-dir flag be read through the OS. Pin both outcomes together.
+    assertEntrypointDenied(
+      {
+        tool_name: "apply_patch",
+        cwd: fixtureRoot,
+        tool_input: `*** Begin Patch\n*** Update File: ${proof}\n@@\n-old\n+new\n*** End Patch`,
+      },
+      /review proof files are wrapper-owned/,
+      "merge composition raw-string patch to a real review proof",
+    );
+    assertEntrypointAllowed(
+      {
+        tool_name: "Read",
+        cwd: fixtureRoot,
+        tool_input: { file_path: ".claude/session-state/OVERNIGHT-INTENT.flag" },
+      },
+      "merge composition native single-file read of a real non-proof flag",
+    );
     for (const payload of [
       { tool_name: "Read", tool_input: { file_path: intentFlag } },
       { tool_name: "Read", tool_input: { file_path: capture } },
