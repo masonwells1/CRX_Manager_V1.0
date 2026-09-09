@@ -675,16 +675,28 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   const beginIntent = useCallback(async (intent: T): Promise<T> => {
     activateCurrentIdentity(true);
     if (!options && intentRef.current !== null) return intentRef.current;
-    const existing = recordRef.current;
+    const mirrorRecord = recordRef.current;
     if (options) {
       if (!storageKey) throw new Error('DURABLE_MUTATION_INTENT_IDENTITY_MISSING');
+      // A malformed mirror cannot establish whether it represented a pending
+      // request before the local failure. Do not let an absent IndexedDB record
+      // turn that uncertainty into permission for a new mutation.
+      if (mirrorRecord?.surface === '__reconciliation_required__') {
+        writeDurableRecord(storageKey, mirrorRecord);
+        throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
+      }
       const currentClaimId = tabIdRef.current ?? currentPageClaimId();
       tabIdRef.current = currentClaimId;
       markClaimLive(currentClaimId);
       const idempotencyKey = generateIdempotencyKey(options.operation, options.userId);
       const createdAtMs = Date.now();
       const retryNotAfterMs = createdAtMs + SAFE_RETRY_WINDOW_MS;
-      const proposed: DurableMutationIntentRecord<T> = existing?.status === 'pending' ? existing : {
+      // localStorage is only a UI mirror. It can lag behind IndexedDB when a
+      // response resolves between the two writes, so it must never supply a
+      // pending payload here. The coordinator keeps the authoritative pending
+      // record (including conflict and expiry refusal) or accepts this fresh
+      // candidate after an authoritative resolved/absent record.
+      const proposed: DurableMutationIntentRecord<T> = {
         version: 4,
         status: 'pending',
         requestVersion: crypto.randomUUID(),

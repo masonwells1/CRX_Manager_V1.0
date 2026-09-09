@@ -642,6 +642,41 @@ describe('useUncertainMutationIntent', () => {
     expect(afterResolve.result.current.getIdempotencyKey()).not.toBe(completedKey);
   });
 
+  it('uses a fresh payload and key when IndexedDB resolved the record before a stale local mirror', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-stale-mirror-race',
+      surface: 'inventory-page',
+      scope: 'manual-adjustment',
+    };
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([
+      options.operation,
+      options.userId,
+    ])}`;
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'completed-tab');
+    const completedTab = renderHook(() => useUncertainMutationIntent<{ inventoryId: string; delta: number }>(options));
+    await act(async () => completedTab.result.current.beginIntent({ inventoryId: 'inventory-a', delta: -10 }));
+    const completedKey = completedTab.result.current.getIdempotencyKey();
+    const stalePendingMirror = window.localStorage.getItem(storageKey)!;
+
+    await act(async () => completedTab.result.current.resolveIntent());
+    // The coordinator is authoritative. Model the narrow window where Tab A
+    // committed its resolved IndexedDB tombstone but a stale pending mirror
+    // remained visible to Tab B.
+    window.localStorage.setItem(storageKey, stalePendingMirror);
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'fresh-tab');
+    const freshTab = renderHook(() => useUncertainMutationIntent<{ inventoryId: string; delta: number }>(options));
+    let freshRequest!: { inventoryId: string; delta: number };
+    await act(async () => {
+      freshRequest = await freshTab.result.current.beginIntent({ inventoryId: 'inventory-b', delta: 25 });
+    });
+
+    expect(freshRequest).toEqual({ inventoryId: 'inventory-b', delta: 25 });
+    expect(freshTab.result.current.getIdempotencyKey()).not.toBe(completedKey);
+  });
+
   it('keeps duplicated tabs distinct and never erases a peer resolved tombstone', async () => {
     const options = {
       operation: 'record_vendor_payment',

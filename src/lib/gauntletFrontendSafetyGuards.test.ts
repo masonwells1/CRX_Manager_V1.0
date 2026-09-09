@@ -198,25 +198,44 @@ describe('gauntlet caller-side safety guards', () => {
     expect(integrity).toContain('setNegatives([]);');
   });
 
-  // Regression guard for the Sol BLOCKERS verdict on ef82064a. This branch
-  // removed six per-open resetKey() calls and replaced them with retained keys,
-  // on the assumption that the server would answer a changed intent with
-  // IDEMPOTENCY_INTENT_MISMATCH. For these five RPCs it does not: the live
-  // catalog shows create_inventory_hold / adjust_inventory /
-  // retire_inventory_item / save_purchase_order / cancel_purchase_order carry
-  // no actor or payload binding, and none of the six 20260831 migrations add
-  // one. A retained key therefore has to be scoped to the payload on the client
-  // or a reopened dialog on a DIFFERENT target replays the earlier receipt and
-  // reports a hold, adjustment, retirement, PO edit or PO cancellation that
-  // never happened. Never reduce these back to a bare getKey().
-  it('scopes retained keys for the RPCs that replay on the key alone', () => {
+  // Regression guard for the Sol BLOCKERS verdict on ef82064a. The server still
+  // replays these RPCs on the key alone, but hold and adjustment now bind a key
+  // and payload together in a durable intent record. Their RPCs must therefore
+  // use the frozen request, never live form state: this is not a reduction back
+  // to a bare getKey(). Retirement and PO actions retain payload-scoped keys.
+  it('keeps replay-on-key-only RPCs bound to their current payload', () => {
     const inventory = source('src/pages/InventoryPage.tsx');
     const purchaseOrder = source('src/pages/PurchaseOrderDetail.tsx');
 
-    expect(inventory).toContain('const holdIntentScope = (force: boolean, forceReason: string | null) =>');
-    expect(inventory).toContain('createHoldIdem.getKeyFor(scope)');
-    expect(inventory).toContain('const scope = `adjust:${fingerprintIntentPayload([selectedId, qty, adjustNote || null])}`');
-    expect(inventory).toContain('adjustIdem.getKeyFor(scope)');
+    expect(inventory).toContain('const request = await createHoldIntent.beginIntent({');
+    expect(inventory).toContain('const idemKey = createHoldIntent.getIdempotencyKey();');
+    expect(inventory).toContain('createHoldIntent.classifyFailure(error)');
+    expect(inventory).toContain('await createHoldIntent.resolveIntent();');
+    expect(inventory).toContain('const request = await adjustIntent.beginIntent({');
+    expect(inventory).toContain('const idemKey = adjustIntent.getIdempotencyKey();');
+    expect(inventory).toContain('adjustIntent.classifyFailure(error)');
+    expect(inventory).toContain('await adjustIntent.resolveIntent();');
+
+    const holdRpcStart = inventory.indexOf("supabase.rpc('create_inventory_hold', {");
+    expect(holdRpcStart).toBeGreaterThan(-1);
+    const holdRpc = inventory.slice(holdRpcStart, inventory.indexOf('});', holdRpcStart));
+    expect(holdRpc).toContain('p_product_id: request.productId');
+    expect(holdRpc).toContain('p_quantity: request.quantity');
+    expect(holdRpc).toContain('p_notes: request.notes as string');
+    expect(holdRpc).not.toContain('p_product_id: holdProductId');
+    expect(holdRpc).not.toContain('p_quantity: parseFloat(holdQty)');
+    expect(holdRpc).not.toContain('p_notes: holdNotes');
+
+    const adjustRpcStart = inventory.indexOf("supabase.rpc('adjust_inventory', {");
+    expect(adjustRpcStart).toBeGreaterThan(-1);
+    const adjustRpc = inventory.slice(adjustRpcStart, inventory.indexOf('});', adjustRpcStart));
+    expect(adjustRpc).toContain('p_inventory_id: request.inventoryId');
+    expect(adjustRpc).toContain('p_delta: request.delta');
+    expect(adjustRpc).toContain('p_reason: request.note as string');
+    expect(adjustRpc).not.toContain('p_inventory_id: selectedId');
+    expect(adjustRpc).not.toContain('p_delta: qty');
+    expect(adjustRpc).not.toContain('p_reason: adjustNote');
+
     expect(inventory).toContain('const scope = `retire:${fingerprintIntentPayload([deleteConfirmId])}`');
     expect(inventory).toContain('retireIdem.getKeyFor(scope)');
 
@@ -225,11 +244,8 @@ describe('gauntlet caller-side safety guards', () => {
     expect(purchaseOrder).toContain('cancelPOIdem.getKeyFor(cancelScope)');
     expect(purchaseOrder).toContain('fingerprintIntentPayload([cancelReason || \'Cancelled\'])');
 
-    // The unscoped form is what regressed; keep it out of these two files for
-    // the five unbound RPCs.
-    for (const idem of ['createHoldIdem', 'adjustIdem', 'retireIdem']) {
-      expect(inventory, `${idem} must not use a bare getKey()`).not.toContain(`${idem}.getKey()`);
-    }
+    // The scoped retirement/PO calls still have no durable request record.
+    expect(inventory, 'retireIdem must not use a bare getKey()').not.toContain('retireIdem.getKey()');
     for (const idem of ['savePOIdem', 'cancelPOIdem']) {
       expect(purchaseOrder, `${idem} must not use a bare getKey()`).not.toContain(`${idem}.getKey()`);
     }
