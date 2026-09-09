@@ -886,15 +886,34 @@ compensating controls, and conflating them would overstate the defence:
    "an attacker must clear all three" — that is true only for the subset of shapes the predicates' sinks
    happen to cover, and asserting it flatly is the same overclaim this entry exists to remove.
 2. **Re-binding and laundering bypasses** — `p_performed_by := p_target_id;` after a passing check,
-   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips. **The post-apply sweeps do NOT
-   cover these, and it is not a near miss.** Both predicates select only rows where
-   `prosrc !~* 'ACTOR_MISMATCH'`, so a routine that performs a legitimate-looking binding check and *then*
-   re-assigns the parameter is excluded from both sweeps outright — the very presence of the check it
-   defeated is what hides it. A temp-table round trip evades them for a second, independent reason:
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips.
+   **NARROWED 2026-09-01 (ships with PR #449): the direct-assignment form IS now covered by both
+   post-apply sweep predicates.** Each fails closed and scans the whole body — rather than truncating
+   at the refusal — when the actor parameter is assigned to at statement position, so a routine that
+   passes a binding check and then re-assigns the parameter is no longer excluded. The match is pinned
+   to statement position because PL/pgSQL named-argument syntax (`f(p_performed_by := v_actor)`) is
+   lexically identical to assignment; proved on real PostgreSQL 17 in both directions, and confirmed to
+   add zero findings against the live catalog. **The laundering forms below remain uncovered** —
+   `EXECUTE … USING`, `INSERT … RETURNING … INTO`, and temp-table round trips are dataflow, not a
+   spelling, and no pattern reaches them. A temp-table round trip evades them for a second, independent reason:
    `actor-forgery.sql` requires the parameter to appear near `coalesce`/`auth.uid`/role text, and
    `actor-forgery-fin-audit.sql` requires it to appear after `financial_audit_log` **before the next
    semicolon**, so stashing the parameter in a temp table in one statement and inserting it into the audit
    log in another satisfies neither. Only the Codex proof and the CodeRabbit review stand here.
+
+   **Bounded repair authorized 2026-09-03 — rebinding through a NON-FIRST `INTO` target.** The exact-SHA
+   `gpt-5.6-sol` proof on PR #449 head `4976ed08` returned **BLOCKERS** on this, and it did not
+   theorise: it ran the payload through the real hook with an authenticated grant and observed
+   `allow`. `SELECT 1, p_target_id INTO v_dummy, p_performed_by` re-forges the actor after a passing
+   check; moving the actor to the FIRST `INTO` target correctly returns `deny`. The same second-target
+   overwrite of a trusted `v_actor := auth.uid()` local also returns `allow`. **Both sweep predicates
+   miss it too** — their rebinding rule recognises assignment syntax (`:=` / `=`) and not `INTO`
+   target lists — so the 2026-09-01 narrowing above covers the *assignment* form ONLY. Do not read it
+   more broadly. Mason authorized PR #449 to inspect every target in the hook's already-recognized
+   `SELECT`/`RETURNING`/`FETCH`/`EXECUTE INTO` forms. That one exception does not reopen the broader
+   pattern-hardening programme or change the hook's best-effort status. The predicates remain
+   unchanged: they still do not model `INTO` target lists, so the exact-SHA proof and CodeRabbit
+   remain the load-bearing review controls for this shape until the candidate lands.
 3. **The naming-scope gap** — actor-shaped parameters that do not match `^p_\w*by$|^p_actor|^p_user`, e.g.
    `p_target_id` or `p_acting_user_id`. **The live sweep predicates share this exact name pattern, so the
    sweep does NOT cover this path either.** Do not claim the sweep as the compensating control for it. The
