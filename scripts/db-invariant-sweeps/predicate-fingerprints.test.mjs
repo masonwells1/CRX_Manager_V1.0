@@ -218,6 +218,36 @@ ok(fs.existsSync(path.join(PREDICATE_DIR, diskNames[0])), "generator and guard a
   eq(`x${NUL}`.trimEnd(), `x${NUL}`, "sanity: NUL is not whitespace to trimEnd either");
 }
 
+// 9b. The generator writes JavaScript INTO the guard, so it must refuse to
+//     interpolate anything it has not validated. A predicate filename is
+//     attacker-influenced on any filesystem that permits newlines, and
+//     `x\n  "<hash>", // y.sql` would close the trailing comment and inject a
+//     line straight into the authorised Set. Windows forbidding newlines in
+//     filenames is an accident of platform, not a control.
+for (const bad of [
+  'evil\n  "0000000000000000000000000000000000000000000000000000000000000000", // x.sql',
+  "evil.sql\r// x",
+  "../escape.sql",
+  "quote\".sql",
+  "back`tick.sql",
+  "dollar${x}.sql",
+]) {
+  assert.throws(
+    () => renderRegion([{ file: bad, sha256: "a".repeat(64) }]),
+    /refusing to embed an unexpected predicate filename/,
+    `the generator refuses the filename ${JSON.stringify(bad)}`,
+  );
+  pass++;
+}
+assert.throws(
+  () => renderRegion([{ file: "ok.sql", sha256: "nope" }]),
+  /refusing to embed a malformed fingerprint/,
+  "the generator refuses a malformed fingerprint",
+);
+pass++;
+// ...and still accepts every real one.
+ok(renderRegion(onDisk).includes(onDisk[0].sha256), "the generator accepts the real predicate filenames");
+
 // 10. The generator hashes what the guard hashes. They import ONE normaliser
 //     now; this pins that they cannot silently diverge, which is the single
 //     failure this design cannot detect from the inside.

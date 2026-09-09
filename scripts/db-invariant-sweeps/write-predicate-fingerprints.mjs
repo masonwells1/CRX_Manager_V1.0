@@ -90,6 +90,21 @@ export function collectPredicates() {
 // guard is left byte-for-byte alone, so a regeneration shows up in review as a
 // list of hashes and nothing else.
 export function renderRegion(predicates) {
+  // This function writes JavaScript into the guard, so every value it
+  // interpolates is validated first. A filename is attacker-influenced input on
+  // any filesystem that permits newlines: `x\n  "<hash>", // y.sql` would close
+  // the trailing comment and inject a line into the authorised Set — code
+  // injection straight into the enforcement surface that round 4 just moved
+  // these hashes into. Windows forbids newlines in names, which is exactly the
+  // kind of accident-of-platform that should not be load-bearing.
+  for (const p of predicates) {
+    if (!/^[A-Za-z0-9._-]+$/.test(p.file)) {
+      throw new Error(`refusing to embed an unexpected predicate filename in the guard: ${JSON.stringify(p.file)}`);
+    }
+    if (!/^[0-9a-f]{64}$/.test(p.sha256)) {
+      throw new Error(`refusing to embed a malformed fingerprint for ${p.file}: ${JSON.stringify(p.sha256)}`);
+    }
+  }
   const lines = predicates.map((p) => `  "${p.sha256}", // ${p.file}`);
   return [
     `// ${BEGIN} — do not hand-edit`,
