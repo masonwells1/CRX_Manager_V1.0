@@ -89,7 +89,8 @@ reviews:
     labels:
       - coderabbit-review-dispatch
     drafts: false
-    # The trusted workflow is the only source that adds the opt-in label.
+    # Normal dispatch uses the trusted workflow. GitHub label managers can also
+    # attach this label; its presence alone never proves authorization.
     description_keyword: ""
 
   # Project-specific review guidance. These mirror the "CRX Hard Rules" in

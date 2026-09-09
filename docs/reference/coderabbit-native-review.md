@@ -13,6 +13,13 @@ separate from operator intent, so applying the ready label cannot start a
 review before the trusted checks. The workflow must find the configured
 provider label already present in the repository; it never creates one.
 
+GitHub does not restrict a label to one writer. Collaborators who can manage
+labels can directly apply the provider label and potentially consume a review
+before validation. This repair does not change collaborator permissions. Such
+a label write cannot establish authorized reconciliation or merge clearance;
+agents must use the trusted ready-label path, except for the explicitly approved
+introducing-PR bootstrap below.
+
 Provider documentation:
 
 - [Automatic review controls](https://docs.coderabbit.ai/configuration/auto-review)
