@@ -363,9 +363,12 @@ export function findNonReadFunctionCall(sqlText) {
 // are gone (Codex, PR #648 round 4).
 //
 // So the authorised hashes are part of the guard, protected by whatever
-// protects the guard, and adding one is an edit to a hook file. There is no
-// runtime file read here at all, which also retires the cache-lifetime,
-// path-resolution and malformed-manifest questions that version carried.
+// protects the guard, and adding one is an edit to a hook file. This library
+// now reads no file at runtime, which also retires the cache-lifetime,
+// path-resolution and malformed-manifest questions that version carried. (Said
+// precisely: the HOOK that calls this still reads its PreToolUse payload from
+// stdin, as every hook does. An earlier commit message claimed "the guard
+// performs no readFileSync", which was broader than the truth.)
 //
 // Regenerate with: node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs
 // It rewrites ONLY the marked region below.
@@ -379,17 +382,26 @@ export function findNonReadFunctionCall(sqlText) {
 // This is the ONE definition — write-predicate-fingerprints.mjs imports it, so
 // the generator and the guard cannot drift into hashing different bytes.
 //
-// `trimEnd()` rather than `/\s+$/`: the regex backtracks, and every input now
-// passes through here on its way to the classifier, so a long run of leading
-// whitespace made classification quadratic — 80,000 spaces cost 1.06 s and
-// could exceed the hook timeout (Codex, PR #648 round 1). `trimEnd()` strips
-// exactly the same character set (WhiteSpace plus LineTerminator) natively and
-// in linear time.
+// The trailing trim is ASCII-only, and deliberately narrower than `trimEnd()`.
+// `trimEnd()` also strips NBSP, U+2028, ideographic space and friends, none of
+// which a checkout introduces — and PostgreSQL does not treat them as
+// whitespace either, so trimming them meant `SELECT 1;` plus a trailing NBSP
+// shared a fingerprint with `SELECT 1;` while being a syntax error to the
+// server (Codex, PR #648 round 6). Harmless in practice, but it made the stated
+// rule — "only what a checkout can change" — untrue. This is the rule as
+// written.
+//
+// It is also a hand-rolled loop rather than `/[ \t\n\r\f\v]+$/`, because that
+// regex backtracks: every input passes through here on its way to the
+// classifier, and a long run of leading whitespace made classification
+// quadratic — 80,000 spaces cost 1.06 s, enough to exceed the hook timeout
+// (Codex, PR #648 round 1). Scanning backwards is linear.
+const ASCII_TRAILING_WS = new Set([" ", "\t", "\n", "\r", "\f", "\v"]);
 export function normalizePredicateSql(text) {
-  return String(text)
-    .replace(/^﻿/, "")
-    .replace(/\r\n?/g, "\n")
-    .trimEnd();
+  const s = String(text).replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  let end = s.length;
+  while (end > 0 && ASCII_TRAILING_WS.has(s[end - 1])) end--;
+  return end === s.length ? s : s.slice(0, end);
 }
 
 // >>> BEGIN GENERATED PREDICATE FINGERPRINTS — do not hand-edit

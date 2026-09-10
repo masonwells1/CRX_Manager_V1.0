@@ -58,15 +58,22 @@ for (const p of onDisk) {
 // The generated region must be exactly what the generator produces from the
 // current files, so a hand-edited hash inside the guard fails here too.
 {
-  // Line-ending agnostic: this checkout is CRLF under git's autocrlf while the
-  // generator emits LF. The claim is about CONTENT, not about which bytes the
-  // working copy happens to use for a newline.
+  // Line-ending agnostic, and a substring check — NOT byte-identity. Saying
+  // "byte-identical" was wrong: this normalises CRLF and looks for containment
+  // (Codex, PR #648 round 6). The load-bearing assertion is the deepEqual above,
+  // which compares the guard's LIVE exported Set against the files on disk; this
+  // one additionally catches a hand-edited region that happens to agree.
   const lf = (s) => s.replace(/\r\n?/g, "\n");
   const guard = lf(fs.readFileSync(GUARD_PATH, "utf8"));
   ok(
     guard.includes(lf(renderRegion(onDisk))),
     "the generated region in the guard is not what the generator emits — do not hand-edit it; run node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs",
   );
+  // Exactly one marker pair. Two begin markers made a regeneration delete every
+  // line between the stray one and the real end marker, taking unrelated guard
+  // code with it.
+  eq(guard.split("// >>> BEGIN GENERATED PREDICATE FINGERPRINTS").length - 1, 1, "the guard has exactly one begin marker");
+  eq(guard.split("// <<< END GENERATED PREDICATE FINGERPRINTS").length - 1, 1, "the guard has exactly one end marker");
 }
 // PINNED, not a floor. A floor lets a reviewed predicate be deleted from BOTH
 // the directory and the manifest without any assertion noticing, once the suite
@@ -175,26 +182,41 @@ ok(fs.existsSync(path.join(PREDICATE_DIR, diskNames[0])), "generator and guard a
   );
 }
 
-// 9. Unicode whitespace. `trimEnd()` and `/\s+$/` strip the same set, which
-//    includes NBSP and friends — so a predicate followed by exotic trailing
-//    whitespace is still the same predicate, while the same character in the
-//    MIDDLE or at the START is a different one.
+// 9. Trailing whitespace: ASCII only, and that boundary is the point.
 //
-//    Every character below is built from its CODE POINT. Not a literal byte,
-//    and not a `\uXXXX` escape either — twice this block was written with
-//    literal control characters while its own comment claimed otherwise, and an
-//    escape sequence is only as reliable as whatever wrote the file. A number
-//    cannot be silently mangled by an editor or a tool. Section 11 asserts the
-//    file really does contain no NUL, so a third recurrence fails the suite
-//    rather than depending on where in the file the byte happens to land.
+//    The trim was `trimEnd()`, which also strips NBSP, U+2028, ideographic
+//    space and friends. No checkout introduces those, and PostgreSQL does not
+//    treat them as whitespace either — so `SELECT 1;` plus a trailing NBSP
+//    shared a fingerprint with `SELECT 1;` while being a syntax error to the
+//    server. Harmless in practice, but it made the stated rule ("only what a
+//    checkout can change") untrue, so the rule is now what it says (Codex, PR
+//    #648 round 6).
+//
+//    Every character below is built from its CODE POINT. Not a literal byte and
+//    not a `\uXXXX` escape — twice this block was written with literal control
+//    characters while its own comment claimed otherwise, and an escape is only
+//    as reliable as whatever wrote the file. A number cannot be mangled in
+//    transit. Section 11 asserts the file really contains no NUL.
 {
   const lf = normalizePredicateSql(onDisk[0].text);
   const ch = (code) => String.fromCodePoint(code);
   const NUL = ch(0x00);
-  const exotic = [
+  // What a checkout can change — stripped.
+  for (const [name, ws] of [
+    ["space", ch(0x20)],
+    ["tab", ch(0x09)],
+    ["newline", ch(0x0a)],
+    ["carriage return", ch(0x0d)],
+    ["form feed", ch(0x0c)],
+    ["vertical tab", ch(0x0b)],
+  ]) {
+    ok(isKnownSweepPredicate(`${lf}${ws}`), `trailing ${name} is normalised away`);
+  }
+  ok(isKnownSweepPredicate(`${lf}${ch(0x20)}${ch(0x09)}${ch(0x0a)}${ch(0x20)}`), "a mixed ASCII whitespace tail is normalised away");
+  // What it cannot — NOT stripped, because PostgreSQL does not accept these as
+  // whitespace and a fingerprint must not span a parse difference.
+  for (const [name, ws] of [
     ["NBSP U+00A0", ch(0x00a0)],
-    ["vertical tab U+000B", ch(0x000b)],
-    ["form feed U+000C", ch(0x000c)],
     ["ogham space mark U+1680", ch(0x1680)],
     ["en quad U+2000", ch(0x2000)],
     ["line separator U+2028", ch(0x2028)],
@@ -202,20 +224,15 @@ ok(fs.existsSync(path.join(PREDICATE_DIR, diskNames[0])), "generator and guard a
     ["narrow no-break space U+202F", ch(0x202f)],
     ["ideographic space U+3000", ch(0x3000)],
     ["zero width no-break space U+FEFF", ch(0xfeff)],
-  ];
-  for (const [name, ws] of exotic) {
-    ok(isKnownSweepPredicate(`${lf}${ws}`), `trailing ${name} is normalised away`);
+  ]) {
+    ok(!isKnownSweepPredicate(`${lf}${ws}`), `trailing ${name} is NOT normalised away`);
+    // ...and this is a deliberate divergence from trimEnd(), which would.
+    ok(`x${ws}`.trimEnd() === "x", `sanity: trimEnd would have stripped ${name}`);
   }
   ok(!isKnownSweepPredicate(`${lf.slice(0, 5)}${ch(0x00a0)}${lf.slice(5)}`), "an NBSP in the MIDDLE is a different predicate");
   ok(!isKnownSweepPredicate(`${ch(0x00a0)}${lf}`), "a LEADING NBSP is a different predicate");
   ok(!isKnownSweepPredicate(`${lf}${NUL}`), "a trailing NUL is not whitespace and is not recognised");
   ok(!isKnownSweepPredicate(`${lf}${NUL}   `), "a NUL hidden before trailing spaces is not trimmed away");
-  // trimEnd() and /\s+$/ must agree on every one of these, or the generator and
-  // the guard could accept a different set than these comments claim.
-  for (const [name, ws] of exotic) {
-    eq(`x${ws}`.trimEnd(), `x${ws}`.replace(/\s+$/, ""), `trimEnd and /\\s+$/ agree on ${name}`);
-  }
-  eq(`x${NUL}`.trimEnd(), `x${NUL}`, "sanity: NUL is not whitespace to trimEnd either");
 }
 
 // 9b. The generator writes JavaScript INTO the guard, so it must refuse to
@@ -269,8 +286,14 @@ for (const p of onDisk.slice(0, 3)) {
   const selfPath = fileURLToPath(import.meta.url);
   const bytes = fs.readFileSync(selfPath);
   eq(bytes.indexOf(0), -1, "this test file must contain no NUL byte — write control characters as \\uXXXX escapes");
-  for (const file of [GUARD_PATH, path.join(PREDICATE_DIR, diskNames[0])]) {
-    eq(fs.readFileSync(file).indexOf(0), -1, `${path.basename(file)} must contain no NUL byte`);
+  // EVERY predicate, not just the first. Checking one left the hole open: a NUL
+  // inside a leading comment of any other predicate would let git render that
+  // SQL as binary, so the reviewer sees a hash change with no readable diff —
+  // defeating the "review the changed SQL and its hash together" control that
+  // this whole design rests on (Codex, PR #648 round 6).
+  eq(fs.readFileSync(GUARD_PATH).indexOf(0), -1, "the guard must contain no NUL byte");
+  for (const name of diskNames) {
+    eq(fs.readFileSync(path.join(PREDICATE_DIR, name)).indexOf(0), -1, `${name} must contain no NUL byte`);
   }
 }
 

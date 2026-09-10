@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-// Regenerates predicate-fingerprints.json from the predicate files on disk.
+// Regenerates the authorised-fingerprint list INSIDE
+// .claude/hooks/live-testdata-lib.mjs from the predicate files on disk.
+// (It wrote a predicate-fingerprints.json beside these predicates until
+// 2026-09-09; that file was deleted because a writable manifest outside the
+// gated hook surface could be edited to authorise arbitrary SQL.)
 //
 // The live-data guard refuses every one of the 29 db-invariant-sweep predicates,
 // because each opens with prose like `-- predicate (f): overloads` and the
@@ -118,12 +122,22 @@ export function renderRegion(predicates) {
 function main() {
   const predicates = collectPredicates();
   const guard = fs.readFileSync(GUARD_PATH, "utf8");
-  const start = guard.indexOf(`// ${BEGIN}`);
+  const beginMarker = `// ${BEGIN}`;
   const endMarker = `// ${END}`;
+  // EXACTLY ONE of each, and in order. Taking the first occurrence of each was
+  // destructive: a stray duplicate begin marker earlier in the file made a
+  // regeneration delete everything between it and the real end marker,
+  // including unrelated guard code (Codex, PR #648 round 6). This script writes
+  // into an enforcement surface, so an ambiguous file is a refusal, never a
+  // guess.
+  const count = (needle) => guard.split(needle).length - 1;
+  const begins = count(beginMarker);
+  const ends = count(endMarker);
+  const start = guard.indexOf(beginMarker);
   const end = guard.indexOf(endMarker);
-  if (start === -1 || end === -1 || end < start) {
-    console.error(`Could not find the generated region in ${GUARD_PATH}.`);
-    console.error("Restore the two marker comments before regenerating; this script will not guess.");
+  if (begins !== 1 || ends !== 1 || start === -1 || end === -1 || end < start) {
+    console.error(`Refusing to rewrite ${GUARD_PATH}: expected exactly one marker pair, found ${begins} begin and ${ends} end.`);
+    console.error("Restore a single well-formed marker pair before regenerating; this script will not guess.");
     process.exit(1);
   }
   // Emit the region with whatever line ending the file already uses, so a
