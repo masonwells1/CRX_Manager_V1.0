@@ -1,30 +1,15 @@
--- APPLIED LIVE 2026-09-08 as ledger version 20260909023300 (authored stamp
--- 20260908120000, filename unchanged per the B7 rule -- the live ledger name preserves
--- close_pr535_live_gaps, and a differing apply-time version alone does not justify a
--- rename). PR #535 follow-up, applied with Mason's explicit in-chat approval through
--- scripts/apply-migration-file.mjs with all five gates satisfied.
+-- PARKED - NOT APPLIED LIVE. PR #535 follow-up. Requires Mason's explicit approval
+-- immediately before it is applied.
 --
--- Reviews on the exact applied bytes: rls-security-reviewer 0/0/0 and
--- migration-drift-reviewer CLEAN, both as gpt-5.6-sol high-effort machine verdicts from
--- scripts/write-apply-proofs.mjs.
---
--- The two subagent reviews that preceded them ran against an EARLIER revision of this file
--- and are a distinct, pre-remediation pass -- not the verdicts above. Their exact results:
--- rls-security 0 BLOCKER / 0 HIGH / 2 MED / 3 LOW, and migration-drift 0 BLOCKER / 0 HIGH /
--- 0 MED / 4 LOW. Both MED were fixed (the precondition privilege pin and the sibling-ACL
--- postcondition below); the LOW items were documented rather than fixed, with reasons, in
--- the FIDELITY PROOF block. An earlier version of this header described the drift result as
--- "0 findings at every severity", which was wrong -- it had 4 LOW -- and CodeRabbit caught
--- the overclaim on PR #646. Corrected here. Comment-only: the installed body md5 remains
--- ad7249f15027bd75084cb0cfbf8b6bab.
---
--- Verified live post-apply from the catalog, NOT from the HTTP 201: exactly one
--- complete_cycle_count overload and it is the 4-argument one; body md5 is now
--- ad7249f15027bd75084cb0cfbf8b6bab; CYCLE_COUNT_REVISION_REQUIRED present and the
--- 'p_expected_item_revision IS NOT NULL' bypass absent; prosecdef true with
--- search_path=public, pg_temp; ACL {postgres, authenticated, service_role} with no anon
--- and no PUBLIC; trg_bump_cycle_count_item_revision still present and enabled; and no
--- cycle-count SECDEF function anywhere is anon-executable or missing its search_path.
+-- The exact shape of that first line is load-bearing, not styling. The repository's
+-- parked-migration recognizer accepts "PARKED" followed directly by NOT APPLIED / DO
+-- NOT APPLY (separated only by /, - or an em dash), and every LOCAL CANDIDATE row in
+-- docs/reference/migration-history.md must map one-to-one onto a file whose header it
+-- recognizes. An earlier version of this header read "PARKED - PR #535 follow-up. NOT
+-- APPLIED LIVE.", which put the PR reference between the two halves the recognizer
+-- pairs, so this file was invisible to it and the guard-hook regression suite failed
+-- with "parked marker and LOCAL CANDIDATE history registry are not one-to-one".
+-- Keep NOT APPLIED LIVE immediately after PARKED.
 --
 -- ordering-guard: ahead-of-pending the seven 20260905* files are already stranded; this strands nothing new
 --
@@ -378,22 +363,6 @@ BEGIN
   -- only, so a grant to some third role that anon or authenticated is a MEMBER of does not
   -- appear in it. has_function_privilege resolves membership but passes vacuously where the
   -- role does not exist, so it is guarded on pg_roles rather than used alone.
-  --
-  -- KNOWN LIMITATION, raised by CodeRabbit on PR #646 and NOT fixable in place. The pg_roles
-  -- EXISTS test is written as an AND sibling of the has_function_privilege call, and SQL does
-  -- not guarantee that WHERE conditions evaluate left to right. On a database where 'anon' or
-  -- 'authenticated' does not exist, the planner is free to evaluate has_function_privilege
-  -- first, which ERRORS rather than returning false. The robust form is a CASE that only calls
-  -- the function once the role has resolved.
-  --
-  -- Why it is left as written: this is a DO block. It executed ONCE during the apply on
-  -- 2026-09-08 and installed nothing -- only the CREATE OR REPLACE FUNCTION above persists --
-  -- so there is no live object carrying this defect and nothing for a new migration to repair.
-  -- It also did not misfire: both roles exist on this database (verified read-only 2026-09-08),
-  -- which is why the block evaluated cleanly and the apply committed. Rewriting it now would
-  -- edit an applied migration to change code that can never run again -- a replay is already
-  -- refused by the md5 precondition, whose pinned hash no longer matches the installed body.
-  -- Recorded here so the pattern is not copied into a NEW migration, where it would matter.
   IF EXISTS (
     SELECT 1
     FROM pg_proc p,
