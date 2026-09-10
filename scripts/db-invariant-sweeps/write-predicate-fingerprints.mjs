@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// Regenerates the authorised-fingerprint list INSIDE
-// .claude/hooks/live-testdata-lib.mjs from the predicate files on disk.
-// (It wrote a predicate-fingerprints.json beside these predicates until
-// 2026-09-09; that file was deleted because a writable manifest outside the
-// gated hook surface could be edited to authorise arbitrary SQL.)
+// Prints the authorised-fingerprint block that belongs INSIDE
+// .claude/hooks/live-testdata-lib.mjs, computed from the predicate files on
+// disk. It NEVER changes the guard — see "WHY THIS ONLY PRINTS" below. (The
+// name predates that and is kept so existing references stay valid. It wrote a
+// predicate-fingerprints.json beside these predicates until 2026-09-09; that
+// file was deleted because a writable manifest outside the gated hook surface
+// could be edited to authorise arbitrary SQL.)
 //
 // The live-data guard refuses every one of the 29 db-invariant-sweep predicates,
 // because each opens with prose like `-- predicate (f): overloads` and the
@@ -23,11 +25,30 @@
 // classified.
 //
 // Changing a predicate changes its fingerprint, so the guard stops recognising
-// it until this file is regenerated — and that regeneration lands in the diff,
-// where the changed SQL gets re-reviewed. That is the point of the design, not
-// a wart.
+// it until the block inside the guard is updated — and that update lands in the
+// diff, where the changed SQL gets re-reviewed. That is the point of the
+// design, not a wart.
+//
+// WHY THIS ONLY PRINTS (2026-09-10).
+//
+// Until this change the script rewrote the marked region of the guard itself.
+// That quietly undid the reason the list moved into the guard. The permission
+// config auto-allows `node scripts/...` commands, while edits to
+// `.claude/hooks/**` sit in its `ask` tier — so a script that changes the hook
+// file on its own is an allowed command doing a gated thing. Edit a predicate
+// into destructive SQL, run this, and the guard recognises that SQL on the next
+// execute_sql call with no prompt anywhere: the round-4 manifest bypass again,
+// through a side door (Codex GitHub review on PR #648).
+//
+// So this script computes and prints, and whoever changes the list applies the
+// printed block with an ordinary edit to the hook file — which is the step the
+// hook-edit permission tier sees. predicate-fingerprints.test.mjs pins that this
+// file only ever reads.
 //
 // Run: node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs
+//   exit 0  the guard already matches the files
+//   exit 1  it does not (the replacement block is printed to stdout), or the
+//           guard's markers are ambiguous
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -40,14 +61,14 @@ export const PREDICATE_DIR = path.join(HERE, "predicates");
 // A manifest under scripts/ is an ordinary writable file while `.claude/hooks/**`
 // is an approval-gated enforcement surface, so the manifest version could be
 // bypassed: hash a destructive statement, append it with an ordinary edit, call
-// execute_sql (Codex, PR #648 round 4). This script therefore rewrites a marked
-// region of the guard, and adding an allowance is an edit to a hook file.
+// execute_sql (Codex, PR #648 round 4). Adding an allowance is therefore an edit
+// to a hook file, made by whoever applies the block this script prints.
 export const GUARD_PATH = path.resolve(HERE, "../../.claude/hooks/live-testdata-lib.mjs");
 const BEGIN = ">>> BEGIN GENERATED PREDICATE FINGERPRINTS";
 const END = "<<< END GENERATED PREDICATE FINGERPRINTS";
 
 // The normalisation is IMPORTED from the guard, not restated here. Two copies
-// could drift into hashing different bytes, and then the manifest would stop
+// could drift into hashing different bytes, and then the list would stop
 // matching what the guard computes — the one failure this design cannot detect
 // from the inside. It covers line endings, a UTF-8 BOM, and trailing whitespace
 // at end of file: a checkout can change all three without a single SQL
@@ -90,11 +111,10 @@ export function collectPredicates() {
     });
 }
 
-// Rewrites ONLY the region between the two markers. Everything else in the
-// guard is left byte-for-byte alone, so a regeneration shows up in review as a
-// list of hashes and nothing else.
+// Renders the block that belongs between the two markers, and nothing else, so
+// an update shows up in review as a list of hashes.
 export function renderRegion(predicates) {
-  // This function writes JavaScript into the guard, so every value it
+  // The printed block is JavaScript destined for the guard, so every value it
   // interpolates is validated first. A filename is attacker-influenced input on
   // any filesystem that permits newlines: `x\n  "<hash>", // y.sql` would close
   // the trailing comment and inject a line into the authorised Set — code
@@ -119,39 +139,52 @@ export function renderRegion(predicates) {
   ].join("\n");
 }
 
-function main() {
-  const predicates = collectPredicates();
-  const guard = fs.readFileSync(GUARD_PATH, "utf8");
+// Pure: compares the guard's text with what the files produce. Reads nothing
+// and changes nothing, so the suite can drive every outcome without touching
+// the real guard.
+//
+// EXACTLY ONE marker of each kind, in order, or the answer is "ambiguous".
+// Taking the first occurrence of each was destructive back when this script
+// rewrote the region: a stray duplicate begin marker made a regeneration delete
+// everything between it and the real end marker, including unrelated guard
+// code (Codex, PR #648 round 6). Nothing is rewritten now, but an ambiguous
+// file is still a refusal, never a guess about which list the guard uses.
+export function planRegeneration(guardText, predicates) {
+  const text = String(guardText);
   const beginMarker = `// ${BEGIN}`;
   const endMarker = `// ${END}`;
-  // EXACTLY ONE of each, and in order. Taking the first occurrence of each was
-  // destructive: a stray duplicate begin marker earlier in the file made a
-  // regeneration delete everything between it and the real end marker,
-  // including unrelated guard code (Codex, PR #648 round 6). This script writes
-  // into an enforcement surface, so an ambiguous file is a refusal, never a
-  // guess.
-  const count = (needle) => guard.split(needle).length - 1;
+  const count = (needle) => text.split(needle).length - 1;
   const begins = count(beginMarker);
   const ends = count(endMarker);
-  const start = guard.indexOf(beginMarker);
-  const end = guard.indexOf(endMarker);
-  if (begins !== 1 || ends !== 1 || start === -1 || end === -1 || end < start) {
-    console.error(`Refusing to rewrite ${GUARD_PATH}: expected exactly one marker pair, found ${begins} begin and ${ends} end.`);
-    console.error("Restore a single well-formed marker pair before regenerating; this script will not guess.");
+  const start = text.indexOf(beginMarker);
+  const end = text.indexOf(endMarker);
+  if (begins !== 1 || ends !== 1 || end < start) return { status: "ambiguous", begins, ends };
+  const region = renderRegion(predicates);
+  // A CRLF checkout of the guard is the same list; compare on LF.
+  const current = text.slice(start, end + endMarker.length).replace(/\r\n/g, "\n");
+  return { status: current === region ? "current" : "stale", region };
+}
+
+function main() {
+  const predicates = collectPredicates();
+  const rel = path.relative(process.cwd(), GUARD_PATH);
+  const plan = planRegeneration(fs.readFileSync(GUARD_PATH, "utf8"), predicates);
+  if (plan.status === "ambiguous") {
+    console.error(`Refusing: ${rel} must contain exactly one marker pair, in order; found ${plan.begins} begin and ${plan.ends} end.`);
+    console.error("Restore a single well-formed marker pair; this script will not guess which list the guard uses.");
     process.exit(1);
   }
-  // Emit the region with whatever line ending the file already uses, so a
-  // regeneration on a CRLF checkout does not rewrite the file's convention and
-  // show up as a whole-file diff.
-  const eol = guard.includes("\r\n") ? "\r\n" : "\n";
-  const region = renderRegion(predicates).replace(/\n/g, eol);
-  const next = guard.slice(0, start) + region + guard.slice(end + endMarker.length);
-  if (next === guard) {
-    console.log(`${predicates.length} fingerprints already current in ${path.relative(process.cwd(), GUARD_PATH)}`);
+  if (plan.status === "current") {
+    console.log(`${predicates.length} fingerprints already current in ${rel}`);
     return;
   }
-  fs.writeFileSync(GUARD_PATH, next, "utf8");
-  console.log(`Wrote ${predicates.length} fingerprints into ${path.relative(process.cwd(), GUARD_PATH)}`);
+  console.error(`The fingerprint list in ${rel} does not match the ${predicates.length} predicate files.`);
+  console.error("This script does not change the guard. Review the changed SQL first, then replace everything");
+  console.error("from the BEGIN marker line through the END marker line in the guard with the block below,");
+  console.error("using an ordinary edit to that file:");
+  console.error("");
+  console.log(plan.region);
+  process.exit(1);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

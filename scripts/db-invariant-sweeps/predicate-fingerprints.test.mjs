@@ -8,6 +8,7 @@
 //
 // Run: node scripts/db-invariant-sweeps/predicate-fingerprints.test.mjs
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,7 @@ import {
   collectPredicates,
   fingerprint,
   normalizePredicateSql,
+  planRegeneration,
   renderRegion,
 } from "./write-predicate-fingerprints.mjs";
 
@@ -41,7 +43,7 @@ const diskNames = onDisk.map((p) => p.file);
 assert.deepEqual(
   [...KNOWN_SWEEP_PREDICATE_SHA256].sort(),
   onDisk.map((p) => p.sha256).sort(),
-  "the guard's embedded fingerprints are not exactly the hashes of the .sql files on disk — run node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs",
+  "the guard's embedded fingerprints are not exactly the hashes of the .sql files on disk — run node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs and apply the block it prints",
 );
 pass++;
 eq(
@@ -67,7 +69,7 @@ for (const p of onDisk) {
   const guard = lf(fs.readFileSync(GUARD_PATH, "utf8"));
   ok(
     guard.includes(lf(renderRegion(onDisk))),
-    "the generated region in the guard is not what the generator emits — do not hand-edit it; run node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs",
+    "the generated region in the guard is not what the generator emits — do not hand-edit individual hashes; run node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs and apply the whole block it prints",
   );
   // Exactly one marker pair. Two begin markers made a regeneration delete every
   // line between the stray one and the real end marker, taking unrelated guard
@@ -295,6 +297,71 @@ for (const p of onDisk.slice(0, 3)) {
   for (const name of diskNames) {
     eq(fs.readFileSync(path.join(PREDICATE_DIR, name)).indexOf(0), -1, `${name} must contain no NUL byte`);
   }
+}
+
+// 12. The generator PRINTS; it never changes the guard.
+//
+//     It used to rewrite the marked region of the guard itself. That made it an
+//     auto-allowed `node scripts/...` command able to change an approval-gated
+//     hook file: edit a predicate into destructive SQL, run the generator, and
+//     the guard would recognise that SQL on the next execute_sql call — the
+//     round-4 manifest bypass again, through a side door (Codex GitHub review,
+//     PR #648). The authorised list must only ever change through an edit to
+//     the hook file itself.
+{
+  const generatorPath = fileURLToPath(new URL("./write-predicate-fingerprints.mjs", import.meta.url));
+  const source = fs.readFileSync(generatorPath, "utf8");
+  // Static tripwire: every mention of the `fs` namespace in the generator is
+  // one of its reads, or the import itself. This guards against an honest
+  // regression — someone restoring the old write — and is not a sandbox; no
+  // regex can prove what arbitrary JavaScript does. The subprocess run below is
+  // the behavioural proof. It counts EVERY `fs` token rather than matching a
+  // list of write APIs, because a deny-list is only as good as its author's
+  // memory of Node's API, and because `fs["..."]` or `const { x } = fs` would
+  // never be seen by a pattern that demands `fs.`.
+  //
+  // `\s*` around the dot on purpose: the generator writes `fs\n  .readdirSync(`.
+  // The first version of this check demanded `fs.`, saw only ONE of the calls,
+  // and passed for the wrong reason.
+  const fsTokens = [...source.matchAll(/\bfs\b/g)].length;
+  const fsReads = [...source.matchAll(/\bfs\s*\.\s*(?:readFileSync|readdirSync)\s*\(/g)].length;
+  const fsImports = [...source.matchAll(/^import fs from "node:fs";$/gm)].length;
+  eq(fsImports, 1, "the generator imports node:fs exactly once, as the namespace this check inspects");
+  // The import line names `fs` twice: the binding and the `node:fs` specifier.
+  eq(fsTokens, fsReads + 2 * fsImports, "every use of the fs namespace in the generator is a readFileSync/readdirSync call");
+  ok(fsReads >= 2, `sanity: the reads are all seen (found ${fsReads}; the first version of this check saw one)`);
+  ok(
+    !/\bimport\s*\(|\brequire\s*\(|["'](?:node:)?(?:fs\/promises|child_process|worker_threads)["']|process\s*\.\s*(?:binding|dlopen)/.test(source),
+    "the generator reaches no other filesystem or process API (no dynamic import, require, fs/promises, child_process or worker_threads)",
+  );
+
+  // Behavioural: a real run against the real guard leaves it byte-for-byte alone.
+  const before = fs.readFileSync(GUARD_PATH);
+  const run = spawnSync(process.execPath, [generatorPath], { encoding: "utf8" });
+  eq(run.status, 0, `the generator exits 0 when the guard is current (stderr: ${run.stderr})`);
+  ok(/already current/.test(run.stdout), "...and says so");
+  ok(before.equals(fs.readFileSync(GUARD_PATH)), "running the generator leaves the guard byte-for-byte unchanged");
+
+  // Every outcome of the decision, driven through the pure function.
+  const guardText = before.toString("utf8");
+  eq(planRegeneration(guardText, onDisk).status, "current", "planRegeneration agrees the real guard is current");
+  eq(planRegeneration(guardText.replace(/\n/g, "\r\n").replace(/\r\r\n/g, "\r\n"), onDisk).status, "current", "a CRLF checkout of the guard is still current");
+  const stale = guardText.replace(onDisk[0].sha256, "0".repeat(64));
+  ok(stale !== guardText, "sanity: the stale fixture really differs");
+  const plan = planRegeneration(stale, onDisk);
+  eq(plan.status, "stale", "a guard whose list disagrees with the files is reported stale");
+  eq(plan.region, renderRegion(onDisk), "...and the block to apply is exactly what the files produce");
+  eq(
+    planRegeneration(`${guardText}\n// >>> BEGIN GENERATED PREDICATE FINGERPRINTS\n`, onDisk).status,
+    "ambiguous",
+    "a duplicate begin marker is refused, not guessed",
+  );
+  eq(
+    planRegeneration(guardText.replace("// <<< END GENERATED PREDICATE FINGERPRINTS", ""), onDisk).status,
+    "ambiguous",
+    "a missing end marker is refused",
+  );
+  ok(before.equals(fs.readFileSync(GUARD_PATH)), "the guard is still unchanged after every planRegeneration case");
 }
 
 console.log(`predicate-fingerprints: ${pass} assertions passed (${diskNames.length} predicates)`);

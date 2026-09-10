@@ -150,8 +150,16 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs --explain <predicate>  # header 
    expectation (zero rows / allowlist), and any approximation/false-positive modes.
 3. The query MUST be read-only and MUST output a `violation_key` column (a stable identity — function
    identity strings are the convention so the allowlist key survives across runs).
-4. Run `--explain <class>` to eyeball it, then run it live via MCP. Seed `allowlist.json` for anything
-   it legitimately flags today (with a justification), and **report — do not allowlist — any real hole.**
+4. Run `--explain <class>` to eyeball it.
+5. Authorise its fingerprint, or the live-data guard will refuse to run it. The guard recognises
+   predicates by the sha256 of their exact text, from a list kept inside
+   `.claude/hooks/live-testdata-lib.mjs`. Run `node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs`:
+   it prints the updated fingerprint block and **never changes the guard itself**. Replace the guard's
+   marked block with the printed one using an ordinary edit to that hook file (an approval-gated edit),
+   and update the pinned predicate count in `predicate-fingerprints.test.mjs`. Editing an existing
+   predicate needs the same step, because any change to its text changes its fingerprint.
+6. Run it live via MCP. Seed `allowlist.json` for anything it legitimately flags today (with a
+   justification), and **report — do not allowlist — any real hole.**
 
 ## Allowlist discipline (non-negotiable)
 

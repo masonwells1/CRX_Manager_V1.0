@@ -346,8 +346,8 @@ export function findNonReadFunctionCall(sqlText) {
 // other input is classified — the checks below are untouched.
 //
 // Editing a predicate changes its fingerprint, so the guard stops recognising
-// it until the list below is regenerated, and that regeneration appears in the
-// diff where the changed SQL is re-reviewed. That is the control, and it is
+// it until the list below is updated, and that update appears in the diff
+// where the changed SQL is re-reviewed. That is the control, and it is
 // deliberately the only one: see the long note in
 // scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs about the
 // keyword shape-check that was tried here and removed for demanding a lexer.
@@ -370,8 +370,14 @@ export function findNonReadFunctionCall(sqlText) {
 // stdin, as every hook does. An earlier commit message claimed "the guard
 // performs no readFileSync", which was broader than the truth.)
 //
-// Regenerate with: node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs
-// It rewrites ONLY the marked region below.
+// To change the list: node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs
+// PRINTS the block that belongs between the markers below; it never changes
+// this file. Apply the printed block with an ordinary edit here. It used to
+// rewrite this region itself, which let an auto-allowed `node scripts/...`
+// command change an approval-gated hook file — the manifest bypass above, by a
+// side door (Codex GitHub review, PR #648). This removes that sanctioned,
+// pre-allowed writer; it does not make hook files tamper-proof against an
+// agent that writes its own script, which no hook-file layout can.
 
 // Line endings, a UTF-8 BOM, and trailing whitespace at end of file can all
 // differ between checkouts without a single SQL character changing, so they are
