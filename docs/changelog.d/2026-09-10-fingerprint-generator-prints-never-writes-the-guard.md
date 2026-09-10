@@ -29,7 +29,10 @@ refuses when the markers are ambiguous. The marker-uniqueness rule survives as a
 refusal to guess which list the guard uses.
 
 **Proof.** 15 new assertions (216 → 231). The behavioural one is a real
-subprocess run of the generator that leaves the guard byte-for-byte identical.
+subprocess run of the generator that leaves the guard byte-for-byte identical —
+on an already-current guard only, which is not the path the old code wrote on.
+The stale and refusal paths were proved behaviourally in the follow-up
+(`2026-09-10-fingerprint-review-round-seven.md`).
 Beside it sits a static tripwire — every use of the `fs` namespace in the
 generator must be a `readFileSync`/`readdirSync` call, with no dynamic import,
 `require`, `fs/promises`, `child_process` or `worker_threads` — which catches an

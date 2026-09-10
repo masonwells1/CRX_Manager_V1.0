@@ -1,21 +1,23 @@
 #!/usr/bin/env node
 // Proves the predicate fingerprint allowance is honest.
 //
-// The allowance is only as good as the manifest matching the files, so that is
-// the first and most important assertion here: if anyone edits a predicate
-// without regenerating, this fails, and the guard has already stopped
-// recognising that file anyway.
+// The allowance is only as good as the guard's embedded list matching the
+// files, so that is the first and most important assertion here: if anyone
+// edits a predicate without updating the list, this fails — and the guard has
+// already stopped recognising that file anyway.
 //
 // Run: node scripts/db-invariant-sweeps/predicate-fingerprints.test.mjs
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   KNOWN_SWEEP_PREDICATE_SHA256,
   classifySql,
   isKnownSweepPredicate,
+  normalizePredicateSql as guardNormalizePredicateSql,
 } from "../../.claude/hooks/live-testdata-lib.mjs";
 import {
   GUARD_PATH,
@@ -84,15 +86,20 @@ for (const p of onDisk) {
 eq(diskNames.length, 29, `expected exactly 29 predicates, found ${diskNames.length} — update this number deliberately`);
 
 // 2. Every predicate file is recognised, and therefore allowed. This is the
-//    behaviour the whole change exists to produce: before it, all 29 were
-//    refused by findNonReadFunctionCall reading their header prose as a call.
+//    behaviour the whole change exists to produce. Before it, all 29 were
+//    refused: 27 by findNonReadFunctionCall reading comment prose or an
+//    unlisted catalog function as a call (`predicate()` in 8 of them, `suite()`,
+//    `expected()`, `key()` and others in the rest), and 2 by the audit-log
+//    write check. (This comment used to blame `predicate()` for all 29; Codex,
+//    PR #648 round 7, counted.)
 for (const p of onDisk) {
   ok(isKnownSweepPredicate(p.text), `${p.file} is recognised by fingerprint`);
   eq(classifySql(p.text).block, false, `${p.file} clears the live-data guard`);
   eq(classifySql(p.text).kind, "known-sweep-predicate", `${p.file} is allowed BY FINGERPRINT, not by accident`);
 }
 
-// 3. The allowance is byte-exact. One changed character is a different file.
+// 3. One changed character is a different predicate. (Not "byte-exact": the
+//    three normalisations in section 4 are the only differences ignored.)
 {
   const p = onDisk[0];
   ok(!isKnownSweepPredicate(`${p.text}\nDELETE FROM customers;`), "appending a DELETE breaks the fingerprint");
@@ -111,7 +118,7 @@ for (const p of onDisk) {
   ok(isKnownSweepPredicate(lf), "an LF checkout is recognised");
   ok(isKnownSweepPredicate(lf.replace(/\n/g, "\r\n")), "a CRLF checkout is recognised");
   ok(isKnownSweepPredicate(lf.replace(/\n/g, "\r")), "a lone-CR checkout is recognised");
-  ok(isKnownSweepPredicate(`﻿${lf}`), "a UTF-8 BOM is recognised");
+  ok(isKnownSweepPredicate(`${String.fromCodePoint(0xfeff)}${lf}`), "a UTF-8 BOM is recognised");
   ok(isKnownSweepPredicate(`${lf}\n\n  `), "trailing whitespace is recognised");
   // ...and nothing else. Two predicates must never collapse onto one hash.
   const hashes = new Set(onDisk.map((x) => x.sha256));
@@ -130,9 +137,19 @@ ok(classifySql("SELECT save_customer('{}'::jsonb)").block, "an unknown app funct
 ok(classifySql("INSERT INTO financial_audit_log (x) VALUES (1)").block, "the audit log is still blocked");
 eq(isKnownSweepPredicate(""), false, "empty input is not recognised");
 eq(isKnownSweepPredicate(null), false, "null input is not recognised");
+// classifySql converts its input to a string ONCE and judges that string, as
+// base did. Converting separately for recognition and for the classifier let a
+// value whose toString changes between calls read differently to each (Codex,
+// PR #648 round 7). Unreachable from a JSON hook payload; pinned anyway.
+{
+  let calls = 0;
+  const shifty = { toString: () => (++calls === 1 ? "SELECT 1" : "DELETE FROM customers") };
+  eq(classifySql(shifty).block, false, "classifySql judges the one reading it took, as base does");
+  eq(calls, 1, "...and converts its input exactly once");
+}
 
-// 6. A predicate that is NOT in the manifest gets no allowance, even sitting in
-//    the same directory shape.
+// 6. A predicate that is NOT in the guard's list gets no allowance, even
+//    sitting in the same shape.
 ok(
   !isKnownSweepPredicate("-- predicate (z): not a real one\nSELECT 1;"),
   "an unlisted predicate-shaped file is not recognised",
@@ -140,8 +157,8 @@ ok(
 ok(fingerprint("a") !== fingerprint("b"), "sanity: the fingerprint distinguishes inputs");
 eq(normalizePredicateSql("x\r\n"), "x", "sanity: normalisation strips CRLF and trailing whitespace");
 
-// 7. The directory the guard reads is the directory the generator writes.
-ok(fs.existsSync(path.join(PREDICATE_DIR, diskNames[0])), "generator and guard agree on the predicate directory");
+// 7. The generator reads the directory the predicates actually live in.
+ok(fs.existsSync(path.join(PREDICATE_DIR, diskNames[0])), "the generator's predicate directory holds the predicate files");
 
 // 8. Normalisation must be LINEAR. Every input reaching the guard now passes
 //    through it before the classifier, so a super-linear normaliser is a denial
@@ -264,15 +281,31 @@ assert.throws(
   "the generator refuses a malformed fingerprint",
 );
 pass++;
+// Two files with one fingerprint would be one Set entry, so the printed block
+// could never match the files. Refused before anything is printed.
+assert.throws(
+  () => renderRegion([{ file: "a.sql", sha256: "a".repeat(64) }, { file: "b.sql", sha256: "a".repeat(64) }]),
+  /refusing to embed a duplicate fingerprint/,
+  "the generator refuses two files with one fingerprint",
+);
+pass++;
+// What is printed is what was validated: each value is converted once.
+{
+  let calls = 0;
+  const shifty = { toString: () => (++calls === 1 ? "a".repeat(64) : "not-hex") };
+  const block = renderRegion([{ file: "ok.sql", sha256: shifty }]);
+  ok(block.includes("a".repeat(64)) && !block.includes("not-hex"), "the generator prints the same string it validated");
+}
 // ...and still accepts every real one.
 ok(renderRegion(onDisk).includes(onDisk[0].sha256), "the generator accepts the real predicate filenames");
 
-// 10. The generator hashes what the guard hashes. They import ONE normaliser
-//     now; this pins that they cannot silently diverge, which is the single
-//     failure this design cannot detect from the inside.
-for (const p of onDisk.slice(0, 3)) {
-  eq(fingerprint(p.text), fingerprint(normalizePredicateSql(p.text)), `${p.file}: hashing is normalisation-stable`);
-}
+// 10. The generator hashes what the guard hashes, because it uses the guard's
+//     own normaliser — the same function, re-exported, not a copy. Two copies
+//     could drift into hashing different bytes, the one failure this design
+//     cannot detect from the inside. (This replaced three assertions that only
+//     showed normalising twice changes nothing — true, but not this property;
+//     Codex, PR #648 round 7.)
+eq(normalizePredicateSql, guardNormalizePredicateSql, "the generator uses the guard's normaliser itself, not a copy");
 
 // 11. THIS FILE must stay reviewable in a diff.
 //
@@ -313,12 +346,12 @@ for (const p of onDisk.slice(0, 3)) {
   const source = fs.readFileSync(generatorPath, "utf8");
   // Static tripwire: every mention of the `fs` namespace in the generator is
   // one of its reads, or the import itself. This guards against an honest
-  // regression — someone restoring the old write — and is not a sandbox; no
-  // regex can prove what arbitrary JavaScript does. The subprocess run below is
-  // the behavioural proof. It counts EVERY `fs` token rather than matching a
-  // list of write APIs, because a deny-list is only as good as its author's
-  // memory of Node's API, and because `fs["..."]` or `const { x } = fs` would
-  // never be seen by a pattern that demands `fs.`.
+  // regression — someone restoring the old write — and is NOT a proof: no
+  // regex can say what arbitrary JavaScript does, and Codex (PR #648 round 7)
+  // wrote a stale-path write this regex cannot see. The scratch-tree runs
+  // below are the proof. It counts EVERY `fs` token rather than matching a
+  // list of write APIs, because `fs["..."]` or `const { x } = fs` would never
+  // be seen by a pattern that demands `fs.`.
   //
   // `\s*` around the dot on purpose: the generator writes `fs\n  .readdirSync(`.
   // The first version of this check demanded `fs.`, saw only ONE of the calls,
@@ -331,21 +364,64 @@ for (const p of onDisk.slice(0, 3)) {
   eq(fsTokens, fsReads + 2 * fsImports, "every use of the fs namespace in the generator is a readFileSync/readdirSync call");
   ok(fsReads >= 2, `sanity: the reads are all seen (found ${fsReads}; the first version of this check saw one)`);
   ok(
-    !/\bimport\s*\(|\brequire\s*\(|["'](?:node:)?(?:fs\/promises|child_process|worker_threads)["']|process\s*\.\s*(?:binding|dlopen)/.test(source),
-    "the generator reaches no other filesystem or process API (no dynamic import, require, fs/promises, child_process or worker_threads)",
+    !/\bimport\s*\(|\brequire\s*\(|getBuiltinModule|["'](?:node:)?(?:fs\/promises|child_process|worker_threads)["']|process\s*\.\s*(?:binding|dlopen)/.test(source),
+    "tripwire: the generator uses none of the known routes to another module (dynamic import, require, getBuiltinModule, fs/promises, child_process, worker_threads, process.binding/dlopen)",
   );
 
-  // Behavioural: a real run against the real guard leaves it byte-for-byte alone.
+  // Behavioural, current path: a real run against the real guard leaves it
+  // byte-for-byte alone.
   const before = fs.readFileSync(GUARD_PATH);
   const run = spawnSync(process.execPath, [generatorPath], { encoding: "utf8" });
   eq(run.status, 0, `the generator exits 0 when the guard is current (stderr: ${run.stderr})`);
   ok(/already current/.test(run.stdout), "...and says so");
   ok(before.equals(fs.readFileSync(GUARD_PATH)), "running the generator leaves the guard byte-for-byte unchanged");
 
+  // Behavioural, on the paths the old generator actually wrote on. The run
+  // above only proves an already-current guard is left alone; the old code
+  // wrote when the list was STALE. So copy the generator, the guard and the
+  // predicates into a scratch tree, make one predicate stale there, and run
+  // the copied generator on it. A write reached by any route — including one
+  // the tripwire above cannot see — changes the scratch guard and fails here
+  // (Codex, PR #648 round 7). The real checkout is never touched.
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "crx-predicate-fingerprints-"));
+  try {
+    const scratchSweeps = path.join(scratch, "scripts", "db-invariant-sweeps");
+    const scratchPredicates = path.join(scratchSweeps, "predicates");
+    const scratchHooks = path.join(scratch, ".claude", "hooks");
+    fs.mkdirSync(scratchPredicates, { recursive: true });
+    fs.mkdirSync(scratchHooks, { recursive: true });
+    const scratchGenerator = path.join(scratchSweeps, "write-predicate-fingerprints.mjs");
+    const scratchGuard = path.join(scratchHooks, "live-testdata-lib.mjs");
+    fs.copyFileSync(generatorPath, scratchGenerator);
+    fs.copyFileSync(GUARD_PATH, scratchGuard);
+    for (const name of diskNames) fs.copyFileSync(path.join(PREDICATE_DIR, name), path.join(scratchPredicates, name));
+
+    const target = onDisk[0];
+    const edited = `${target.text}\n-- edited: this predicate is now stale\n`;
+    fs.writeFileSync(path.join(scratchPredicates, target.file), edited);
+    const expected = renderRegion(onDisk.map((p) => (p.file === target.file ? { file: p.file, sha256: fingerprint(edited) } : p)));
+    const staleBefore = fs.readFileSync(scratchGuard);
+    const staleRun = spawnSync(process.execPath, [scratchGenerator], { encoding: "utf8", cwd: scratch });
+    eq(staleRun.status, 1, `the generator exits 1 when the list is stale (stderr: ${staleRun.stderr})`);
+    eq(staleRun.stdout.replace(/\r\n/g, "\n").trimEnd(), expected, "...prints exactly the block the edited files produce");
+    ok(staleBefore.equals(fs.readFileSync(scratchGuard)), "...and leaves the guard byte-for-byte unchanged on the stale path");
+
+    fs.writeFileSync(scratchGuard, `${staleBefore.toString("utf8")}\n// >>> BEGIN GENERATED PREDICATE FINGERPRINTS — do not hand-edit\n`);
+    const refusedBefore = fs.readFileSync(scratchGuard);
+    const refusedRun = spawnSync(process.execPath, [scratchGenerator], { encoding: "utf8", cwd: scratch });
+    eq(refusedRun.status, 1, "the generator exits 1 when the markers are ambiguous");
+    ok(/Refusing/.test(refusedRun.stderr), "...says it is refusing");
+    ok(refusedBefore.equals(fs.readFileSync(scratchGuard)), "...and leaves the guard byte-for-byte unchanged on the refusal path");
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+
   // Every outcome of the decision, driven through the pure function.
   const guardText = before.toString("utf8");
   eq(planRegeneration(guardText, onDisk).status, "current", "planRegeneration agrees the real guard is current");
+  eq(planRegeneration(guardText, onDisk, KNOWN_SWEEP_PREDICATE_SHA256).status, "current", "...and so does the Set the real guard exports");
   eq(planRegeneration(guardText.replace(/\n/g, "\r\n").replace(/\r\r\n/g, "\r\n"), onDisk).status, "current", "a CRLF checkout of the guard is still current");
+  eq(planRegeneration(guardText.replace(/\r?\n/g, "\r"), onDisk).status, "current", "a lone-CR checkout is still current, as the predicate normaliser treats it");
   const stale = guardText.replace(onDisk[0].sha256, "0".repeat(64));
   ok(stale !== guardText, "sanity: the stale fixture really differs");
   const plan = planRegeneration(stale, onDisk);
@@ -361,7 +437,17 @@ for (const p of onDisk.slice(0, 3)) {
     "ambiguous",
     "a missing end marker is refused",
   );
-  ok(before.equals(fs.readFileSync(GUARD_PATH)), "the guard is still unchanged after every planRegeneration case");
+  eq(
+    planRegeneration(guardText.replace("BEGIN GENERATED PREDICATE FINGERPRINTS", "BEGIN GENERATED PREDICATE FINGERPRINTSX"), onDisk).status,
+    "ambiguous",
+    "a near-miss marker line is refused, not taken as the marker",
+  );
+  eq(
+    planRegeneration(`${guardText}\nKNOWN_SWEEP_PREDICATE_SHA256.clear();\n`, onDisk, new Set()).status,
+    "overridden",
+    "a matching block whose exported Set is changed after the markers is 'overridden', never 'current'",
+  );
+  ok(before.equals(fs.readFileSync(GUARD_PATH)), "the guard is still unchanged after every case above");
 }
 
 console.log(`predicate-fingerprints: ${pass} assertions passed (${diskNames.length} predicates)`);

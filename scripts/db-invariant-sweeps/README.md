@@ -152,12 +152,19 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs --explain <predicate>  # header 
    identity strings are the convention so the allowlist key survives across runs).
 4. Run `--explain <class>` to eyeball it.
 5. Authorise its fingerprint, or the live-data guard will refuse to run it. The guard recognises
-   predicates by the sha256 of their exact text, from a list kept inside
-   `.claude/hooks/live-testdata-lib.mjs`. Run `node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs`:
-   it prints the updated fingerprint block and **never changes the guard itself**. Replace the guard's
-   marked block with the printed one using an ordinary edit to that hook file (an approval-gated edit),
-   and update the pinned predicate count in `predicate-fingerprints.test.mjs`. Editing an existing
-   predicate needs the same step, because any change to its text changes its fingerprint.
+   predicates by the sha256 of their text after normalising line endings, a leading UTF-8 BOM and
+   trailing whitespace (any other change, including case or internal spacing, is a new fingerprint),
+   from a list kept inside `.claude/hooks/live-testdata-lib.mjs`. Name the file with letters, digits,
+   `.`, `_` and `-` only: the name is written into the guard, so the generator refuses anything else.
+   Run `node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs`; it **never changes the
+   guard itself**. Exit 0 means the list is already current. Exit 1 with a printed block is the
+   expected result after adding or editing a predicate: review the SQL, then replace the guard's
+   marked block (BEGIN line through END line) with the printed one using an ordinary edit to that
+   hook file (an approval-gated edit). If you added or removed a file, also update the pinned
+   predicate count in `predicate-fingerprints.test.mjs`. Then run
+   `node scripts/db-invariant-sweeps/predicate-fingerprints.test.mjs` and confirm it passes. Editing
+   an existing predicate needs the same step whenever the generator reports the list out of date;
+   an edit that only touches line endings or trailing whitespace does not.
 6. Run it live via MCP. Seed `allowlist.json` for anything it legitimately flags today (with a
    justification), and **report — do not allowlist — any real hole.**
 

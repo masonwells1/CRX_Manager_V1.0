@@ -193,10 +193,10 @@ callers. The family is now five spellings deep:
 | `\M(?:` — a regex word boundary before a non-capturing group | `m()` |
 
 The 29 `db-invariant-sweeps` predicates used to be refused this way, which blocked the documented
-"Claude mode" path in `run-sweeps.mjs`. Since PR #648 they are **recognised by exact content
+"Claude mode" path in `run-sweeps.mjs`. Since PR #648 they are **recognised by content
 fingerprint** instead of parsed: the guard keeps the sha256 of each predicate file (after normalising
-line endings, a UTF-8 BOM and trailing ASCII whitespace) and allows exactly those texts, so each runs
-verbatim through `mcp__supabase__execute_sql`. The call-detection defect itself is **unchanged** — any
+line endings, a UTF-8 BOM and trailing ASCII whitespace) and allows those texts and their line-ending,
+BOM and trailing-whitespace variants, so each runs verbatim through `mcp__supabase__execute_sql`. The call-detection defect itself is **unchanged** — any
 other statement using the spellings above is still refused, and so is a predicate that was just added
 or edited until its fingerprint is authorised. To authorise one, run
 `node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs`; it prints the fingerprint block

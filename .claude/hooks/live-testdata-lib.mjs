@@ -328,9 +328,13 @@ export function findNonReadFunctionCall(sqlText) {
 // Returns { block: false } | { block: true, kind, reason }
 // ── Known sweep predicates, recognised by content — NOT parsed ──────────────
 //
-// All 29 db-invariant-sweep predicates are refused by the checks below, because
-// each opens with prose like `-- predicate (f): overloads` and
-// findNonReadFunctionCall reads that as a call to a function named `predicate`.
+// All 29 db-invariant-sweep predicates are refused by the checks below. 27 are
+// refused by findNonReadFunctionCall, which reads comment prose or an unlisted
+// catalog function as a call — `-- predicate (f): overloads` as `predicate()`
+// in 8 of them, and `suite()`, `expected()`, `key()`, `pg_get_triggerdef()` and
+// others in the rest. The other 2 trip the audit-log write check. (This comment
+// used to say all 29 were refused as `predicate()`; Codex, PR #648 round 7,
+// counted.)
 //
 // PR #639 tried to fix that by teaching this file to lex SQL. Six pinned
 // gpt-5.6-sol rounds each found real defects — several introduced by the
@@ -340,8 +344,9 @@ export function findNonReadFunctionCall(sqlText) {
 // It was guessing, and the guesses were the bugs.
 //
 // These predicates are not unknown input. They are fixed, reviewed text in this
-// repository, so they are RECOGNISED rather than understood: a sha256 of the
-// exact bytes, against a checked-in manifest. This can only ever ADD permission
+// repository, so they are RECOGNISED rather than understood: a sha256 of their
+// text after the normalisation below, against the list embedded in this file
+// (not the checked-in manifest an earlier version used). This can only ever ADD permission
 // for text already written and reviewed, so it changes nothing about how any
 // other input is classified — the checks below are untouched.
 //
@@ -384,6 +389,14 @@ export function findNonReadFunctionCall(sqlText) {
 // normalised. NOTHING inside the SQL is touched: no comment stripping, no case
 // folding, no whitespace collapsing. Every one of those would be a parser
 // again, and would let two different statements share a fingerprint.
+//
+// Two consequences are accepted, not overlooked (Codex, PR #648 round 7).
+// Line endings are folded everywhere, including inside a string literal, where
+// a CR is part of the value; none of the 29 has a raw line break inside a
+// literal, and a literal's contents change what a read returns, never whether
+// it writes. And a leading BOM is stripped although PostgreSQL rejects one, so
+// the BOM-prefixed variant shares a fingerprint while being a syntax error,
+// which executes nothing.
 //
 // This is the ONE definition — write-predicate-fingerprints.mjs imports it, so
 // the generator and the guard cannot drift into hashing different bytes.
@@ -452,8 +465,14 @@ export function isKnownSweepPredicate(query) {
 }
 
 export function classifySql(query) {
-  if (isKnownSweepPredicate(query)) return { block: false, kind: "known-sweep-predicate" };
-  return classifySqlInner(query);
+  // Convert ONCE and judge that one string. Converting separately for the
+  // recognition check and the classifier let a value whose toString changes
+  // between calls read differently to each, where base converted once (Codex,
+  // PR #648 round 7). Unreachable from a JSON hook payload, but it keeps
+  // "untouched for every other input" literally true.
+  const q = String(query || "");
+  if (isKnownSweepPredicate(q)) return { block: false, kind: "known-sweep-predicate" };
+  return classifySqlInner(q);
 }
 
 function classifySqlInner(query) {

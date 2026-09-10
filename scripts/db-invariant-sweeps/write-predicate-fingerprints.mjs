@@ -7,10 +7,13 @@
 // file was deleted because a writable manifest outside the gated hook surface
 // could be edited to authorise arbitrary SQL.)
 //
-// The live-data guard refuses every one of the 29 db-invariant-sweep predicates,
-// because each opens with prose like `-- predicate (f): overloads` and the
-// guard's function-call scan reads that as a call to a function named
-// `predicate`. PR #639 tried to fix this by teaching the guard to lex SQL —
+// The live-data guard refuses every one of the 29 db-invariant-sweep
+// predicates. 27 trip its function-call scan, which reads comment prose or an
+// unlisted catalog function as a call — `-- predicate (f): overloads` becomes a
+// call to `predicate()` in 8 of them, and words like `suite`, `expected` or
+// `key` in the rest. The other 2 trip its audit-log write check. (This comment
+// used to say all 29 were refused as `predicate()`; Codex, PR #648 round 7,
+// counted.) PR #639 tried to fix the scan by teaching the guard to lex SQL —
 // strings, comments, dollar-quoting, schema qualification. Six pinned
 // gpt-5.6-sol rounds each found real defects, several introduced by the
 // previous round's fix, and it was closed unmerged. A PreToolUse hook cannot
@@ -19,10 +22,10 @@
 // bugs.
 //
 // These 29 predicates are not unknown input. They are fixed, reviewed text in
-// this repository. So the guard does not parse them — it recognises them, by
-// exact content fingerprint. That can only ever ADD permission for bytes we
-// have already written and reviewed, so it cannot change how any other input is
-// classified.
+// this repository. So the guard does not parse them — it recognises them, by a
+// fingerprint of their normalised text (the normalisation is described below).
+// That can only ever ADD permission for text we have already written and
+// reviewed, so it cannot change how any other input is classified.
 //
 // Changing a predicate changes its fingerprint, so the guard stops recognising
 // it until the block inside the guard is updated — and that update lands in the
@@ -42,18 +45,20 @@
 //
 // So this script computes and prints, and whoever changes the list applies the
 // printed block with an ordinary edit to the hook file — which is the step the
-// hook-edit permission tier sees. predicate-fingerprints.test.mjs pins that this
-// file only ever reads.
+// hook-edit permission tier sees. predicate-fingerprints.test.mjs runs this
+// script against a scratch copy of the tree on every path — current, stale and
+// refused — and checks the scratch guard comes back byte-for-byte unchanged.
 //
 // Run: node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs
 //   exit 0  the guard already matches the files
-//   exit 1  it does not (the replacement block is printed to stdout), or the
-//           guard's markers are ambiguous
+//   exit 1  it does not (the replacement block is printed to stdout), the
+//           guard's markers are ambiguous, or the Set the guard exports
+//           disagrees with its own marked block
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizePredicateSql } from "../../.claude/hooks/live-testdata-lib.mjs";
+import { KNOWN_SWEEP_PREDICATE_SHA256, normalizePredicateSql } from "../../.claude/hooks/live-testdata-lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PREDICATE_DIR = path.join(HERE, "predicates");
@@ -66,6 +71,8 @@ export const PREDICATE_DIR = path.join(HERE, "predicates");
 export const GUARD_PATH = path.resolve(HERE, "../../.claude/hooks/live-testdata-lib.mjs");
 const BEGIN = ">>> BEGIN GENERATED PREDICATE FINGERPRINTS";
 const END = "<<< END GENERATED PREDICATE FINGERPRINTS";
+const BEGIN_LINE = `// ${BEGIN} — do not hand-edit`;
+const END_LINE = `// ${END}`;
 
 // The normalisation is IMPORTED from the guard, not restated here. Two copies
 // could drift into hashing different bytes, and then the list would stop
@@ -96,10 +103,11 @@ export function fingerprint(text) {
 // the component we just deleted is worse than no check: it applies pressure to
 // weaken itself until it goes quiet.
 //
-// What actually establishes these are reads: the bytes are pinned, so any
-// change shows up as a fingerprint change in a reviewed diff, and the sweep
-// executes them read-only against live where their behaviour is observed. Both
-// of those look at the real thing. A regex looking for scary words does not.
+// What actually establishes these are reads: the text is pinned, so any change
+// beyond line endings, a BOM or trailing whitespace shows up as a fingerprint
+// change in a reviewed diff, and the sweep executes them read-only against live
+// where their behaviour is observed. Both of those look at the real thing. A
+// regex looking for scary words does not.
 export function collectPredicates() {
   return fs
     .readdirSync(PREDICATE_DIR)
@@ -121,21 +129,39 @@ export function renderRegion(predicates) {
   // injection straight into the enforcement surface that round 4 just moved
   // these hashes into. Windows forbids newlines in names, which is exactly the
   // kind of accident-of-platform that should not be load-bearing.
-  for (const p of predicates) {
-    if (!/^[A-Za-z0-9._-]+$/.test(p.file)) {
-      throw new Error(`refusing to embed an unexpected predicate filename in the guard: ${JSON.stringify(p.file)}`);
+  //
+  // Each value is converted to a string ONCE, and that one string is both
+  // validated and printed. Validating one conversion and printing another let a
+  // value whose toString changes between calls slip past the check (Codex, PR
+  // #648 round 7). collectPredicates() hands over plain strings, so that was not
+  // reachable from the command line, but this function is exported.
+  const seen = new Map();
+  const lines = predicates.map((p) => {
+    const file = String(p.file);
+    const sha256 = String(p.sha256);
+    if (!/^[A-Za-z0-9._-]+$/.test(file)) {
+      throw new Error(`refusing to embed an unexpected predicate filename in the guard: ${JSON.stringify(file)}`);
     }
-    if (!/^[0-9a-f]{64}$/.test(p.sha256)) {
-      throw new Error(`refusing to embed a malformed fingerprint for ${p.file}: ${JSON.stringify(p.sha256)}`);
+    if (!/^[0-9a-f]{64}$/.test(sha256)) {
+      throw new Error(`refusing to embed a malformed fingerprint for ${file}: ${JSON.stringify(sha256)}`);
     }
-  }
-  const lines = predicates.map((p) => `  "${p.sha256}", // ${p.file}`);
+    // Two files with one fingerprint become ONE entry in the Set, so the block
+    // could never match the files and the suite would fail once it was applied.
+    // Ordinary work reaches this: a new predicate that differs from an existing
+    // one only in line endings or trailing whitespace. Refuse before printing
+    // (Codex, PR #648 round 7).
+    if (seen.has(sha256)) {
+      throw new Error(`refusing to embed a duplicate fingerprint: ${file} and ${seen.get(sha256)} normalise to the same text`);
+    }
+    seen.set(sha256, file);
+    return `  "${sha256}", // ${file}`;
+  });
   return [
-    `// ${BEGIN} — do not hand-edit`,
+    BEGIN_LINE,
     "export const KNOWN_SWEEP_PREDICATE_SHA256 = new Set([",
     ...lines,
     "]);",
-    `// ${END}`,
+    END_LINE,
   ].join("\n");
 }
 
@@ -149,29 +175,58 @@ export function renderRegion(predicates) {
 // everything between it and the real end marker, including unrelated guard
 // code (Codex, PR #648 round 6). Nothing is rewritten now, but an ambiguous
 // file is still a refusal, never a guess about which list the guard uses.
-export function planRegeneration(guardText, predicates) {
-  const text = String(guardText);
-  const beginMarker = `// ${BEGIN}`;
-  const endMarker = `// ${END}`;
-  const count = (needle) => text.split(needle).length - 1;
-  const begins = count(beginMarker);
-  const ends = count(endMarker);
-  const start = text.indexOf(beginMarker);
-  const end = text.indexOf(endMarker);
-  if (begins !== 1 || ends !== 1 || end < start) return { status: "ambiguous", begins, ends };
+//
+// A marker is a whole LINE. Every line that merely contains a marker phrase
+// counts toward "exactly one", and the one found must be the canonical line
+// exactly — so a near miss like `...FINGERPRINTSX` is refused rather than taken
+// as the marker. Line endings are folded to LF first, lone CR included, the
+// same set the predicate normaliser folds (Codex, PR #648 round 7).
+//
+// The text comparison covers the marked block only, and code after the block
+// could still change the Set when the module loads. So when the caller passes
+// the Set the guard actually exports, a matching block with a different
+// runtime Set is "overridden", never "current" (Codex, PR #648 round 7).
+export function planRegeneration(guardText, predicates, loadedSet) {
+  const lines = String(guardText).replace(/\r\n?/g, "\n").split("\n");
+  const at = (phrase) => lines.flatMap((line, i) => (line.includes(phrase) ? [i] : []));
+  const beginAt = at(BEGIN);
+  const endAt = at(END);
+  const begins = beginAt.length;
+  const ends = endAt.length;
+  if (
+    begins !== 1 ||
+    ends !== 1 ||
+    lines[beginAt[0]] !== BEGIN_LINE ||
+    lines[endAt[0]] !== END_LINE ||
+    endAt[0] < beginAt[0]
+  ) {
+    return { status: "ambiguous", begins, ends };
+  }
   const region = renderRegion(predicates);
-  // A CRLF checkout of the guard is the same list; compare on LF.
-  const current = text.slice(start, end + endMarker.length).replace(/\r\n/g, "\n");
-  return { status: current === region ? "current" : "stale", region };
+  const current = lines.slice(beginAt[0], endAt[0] + 1).join("\n");
+  if (current !== region) return { status: "stale", region };
+  if (loadedSet) {
+    const want = predicates.map((p) => String(p.sha256)).sort();
+    const got = [...loadedSet].sort();
+    if (want.length !== got.length || want.some((h, i) => h !== got[i])) {
+      return { status: "overridden", region };
+    }
+  }
+  return { status: "current", region };
 }
 
 function main() {
   const predicates = collectPredicates();
   const rel = path.relative(process.cwd(), GUARD_PATH);
-  const plan = planRegeneration(fs.readFileSync(GUARD_PATH, "utf8"), predicates);
+  const plan = planRegeneration(fs.readFileSync(GUARD_PATH, "utf8"), predicates, KNOWN_SWEEP_PREDICATE_SHA256);
   if (plan.status === "ambiguous") {
-    console.error(`Refusing: ${rel} must contain exactly one marker pair, in order; found ${plan.begins} begin and ${plan.ends} end.`);
+    console.error(`Refusing: ${rel} must contain exactly one well-formed marker line of each kind, in order; found ${plan.begins} begin and ${plan.ends} end.`);
     console.error("Restore a single well-formed marker pair; this script will not guess which list the guard uses.");
+    process.exit(1);
+  }
+  if (plan.status === "overridden") {
+    console.error(`Refusing: the marked block in ${rel} matches the files, but the Set the guard exports does not.`);
+    console.error("Code outside the markers changes the list when the guard loads. Remove it; this script will not.");
     process.exit(1);
   }
   if (plan.status === "current") {
