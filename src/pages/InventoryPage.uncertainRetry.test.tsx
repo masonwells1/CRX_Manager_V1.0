@@ -308,6 +308,55 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     expect(mocks.toast).toHaveBeenCalledWith('success', 'Hold created successfully');
   });
 
+  it('retries a lost ADMIN OVERRIDE under the SAME key with the frozen force flag and reason', async () => {
+    let attempts = 0;
+    respond({
+      create_inventory_hold: () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return { data: null, error: { code: 'P0001', message: 'INSUFFICIENT_HOLD_INVENTORY: only 2 units are free' } };
+        }
+        return attempts === 2
+          ? { data: null, error: LOST_REPLY }
+          : { data: { hold_id: 'hold-1' }, error: null };
+      },
+    });
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('button', { name: /create hold/i }));
+    const dialog = screen.getByRole('dialog', { name: /create.*hold/i });
+    fireEvent.click(await within(dialog).findByRole('button', { name: /SKU-A/i }));
+    fireEvent.change(within(dialog).getByLabelText(/^quantity$/i), { target: { value: '3' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create hold$/i }));
+
+    // The server refuses for stock, so the admin override dialog opens.
+    const forceDialog = await screen.findByRole('dialog', { name: /force-create hold/i });
+    fireEvent.change(within(forceDialog).getByLabelText(/reason/i), { target: { value: 'physical stock confirmed' } });
+    fireEvent.click(within(forceDialog).getByRole('button', { name: /force-create hold/i }));
+
+    await waitFor(() => expect(callsTo('create_inventory_hold')).toHaveLength(2));
+    const forced = callsTo('create_inventory_hold')[1];
+    expect(forced.p_force).toBe(true);
+    expect(forced.p_force_reason).toBe('physical stock confirmed');
+
+    // The forced reply was lost. The only way forward is the ordinary retry
+    // button, which must re-send the override, not a plain hold.
+    const holdDialog = () => screen.getByRole('dialog', { name: /^create.*hold$/i });
+    await waitFor(() => expect(within(holdDialog()).getByRole('button', { name: /retry exact hold/i })).toBeInTheDocument());
+    fireEvent.click(within(holdDialog()).getByRole('button', { name: /retry exact hold/i }));
+
+    await waitFor(() => expect(callsTo('create_inventory_hold')).toHaveLength(3));
+    const retry = callsTo('create_inventory_hold')[2];
+    expect(retry.p_idempotency_key).toBe(forced.p_idempotency_key);
+    expect(retry.p_force).toBe(true);
+    expect(retry.p_force_reason).toBe('physical stock confirmed');
+    expect(retry.p_product_id).toBe('product-a');
+    expect(retry.p_quantity).toBe(3);
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^create.*hold$/i })).not.toBeInTheDocument());
+    expect(mocks.toast).toHaveBeenCalledWith('success', 'Hold created with admin override');
+  });
+
   it('retire keeps one key per row: a lost reply retries the same key, a different row gets its own', async () => {
     let attempts = 0;
     respond({

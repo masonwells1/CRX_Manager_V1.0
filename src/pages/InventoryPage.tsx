@@ -562,13 +562,19 @@ export default function InventoryPage() {
 
     setCreatingHold(true);
     try {
-      const outcome = await callCreateHoldRpc(false, null);
+      // A locked retry must re-send the frozen force flag and reason. The
+      // coordinator fingerprints both, so retrying an uncertain admin override
+      // as an ordinary hold would read as a different request and be refused
+      // before it reached the server, leaving the override unreconcilable.
+      const frozen = createHoldIntent.isIntentLocked ? createHoldIntent.getUnresolvedIntent() : null;
+      const force = frozen?.force ?? false;
+      const outcome = await callCreateHoldRpc(force, frozen?.forceReason ?? null);
       if (outcome === 'uncertain') {
         toast('warning', HOLD_UNCERTAIN_MESSAGE);
         return;
       }
       if (outcome === 'replayed') toast('warning', HOLD_REPLAYED_MESSAGE);
-      else toast('success', 'Hold created successfully');
+      else toast('success', force ? 'Hold created with admin override' : 'Hold created successfully');
       setHoldOpen(false);
       fetchInventory();
       fetchHolds();

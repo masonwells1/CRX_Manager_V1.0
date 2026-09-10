@@ -294,9 +294,7 @@ BEGIN
     -- emits, or we refuse and let a human decide. Same lesson as row 873's
     -- silent-clobber-on-replay fix, which pinned both ends.
     v_wrapper_sha := encode(
-      extensions.digest(convert_to(replace(v_src, E'
-', E'
-'), 'UTF8'), 'sha256'), 'hex');
+      extensions.digest(convert_to(replace(v_src, E'\r\n', E'\n'), 'UTF8'), 'sha256'), 'hex');
     IF v_wrapper_sha <> v_wrapper_pin THEN
       RAISE EXCEPTION
         'PREFLIGHT_WRAPPER_DRIFT: create_inventory_hold is the intent wrapper but its body is %, not the % this file emits. It has been hotfixed since this migration was written; replaying would revert that fix. Investigate before re-running.',
