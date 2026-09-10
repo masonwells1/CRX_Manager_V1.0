@@ -27,9 +27,12 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
-import { sessionProofDirs, sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
+import { sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
+import { migrationProofEvidenceHash } from "../../scripts/migration-proof-evidence-hash.mjs";
+import { AUTHORITATIVE_MAIN_POLICY, authoritativeMainCommit, fixedGitExecutable, GIT_CALL_TIMEOUT_MS, protectedGitEnv } from "./protected-git.mjs";
+import { checkWrappable } from "./migration-wrappability-lib.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 export const REQUIRED_CODEX_EFFORT = "high";
@@ -46,7 +49,7 @@ export const MAIN_REF_MAX_AGE_MS = PROOF_MAX_AGE_MS;
 // nothing, and a PreToolUse hook that emits nothing does NOT deny. Long git
 // timeouts are therefore a fail-open on a live migration apply, not a courtesy.
 // (CodeRabbit, PR #502.)
-export const GIT_CALL_TIMEOUT_MS = 1_500;
+export { GIT_CALL_TIMEOUT_MS } from "./protected-git.mjs";
 
 /**
  * Milliseconds since this checkout last fetched from origin, or null when that
@@ -314,6 +317,10 @@ export function evaluateMigrationApply({
   // fetch, or null when unknowable. Both real callers leave them unset.
   gitTrackedMigrations,
   originFetchAge,
+  // Tests may pass null when their temporary repositories intentionally lack a
+  // protected origin/main policy ref. An explicit SHA is a test seam; real
+  // callers omit this and resolve authoritative GitHub main at apply time.
+  reviewerPolicyCommit,
   // Defaults to TRUE so a caller that forgets it inherits the safe behaviour.
   // It was introduced (PR #470) opt-in for scripts/apply-migration-file.mjs only,
   // which left the MCP apply_migration path — the door used for ROUTINE migrations —
@@ -333,6 +340,17 @@ export function evaluateMigrationApply({
   const migQuery = (query || "").toString();
   if (!migQuery.trim()) {
     return block("MIGRATION APPLY GUARD: transmitted SQL is missing or empty. Refusing an unbound migration apply.");
+  }
+  // The file-based apply path rejects top-level transaction control before it
+  // calls this shared rule book. The MCP path calls evaluateMigrationApply()
+  // directly, so enforce the same precondition here: SAVEPOINT/ROLLBACK can
+  // otherwise undo an ACL revoke that the source-only SECURITY DEFINER guard
+  // records as effective.
+  const wrappability = checkWrappable(migQuery);
+  if (!wrappability.wrappable) {
+    return block(
+      `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" is not safely wrappable ` +
+      `(${wrappability.reason}). Refusing transaction control that could invalidate a reviewed migration state.`);
   }
   const currentHash = createHash("sha256").update(migQuery).digest("hex");
   const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unknown";
@@ -411,7 +429,15 @@ export function evaluateMigrationApply({
       throw err;
     }
   };
-  const proofDirs = sessionProofDirs(projectDir, hookCwd, listWorktrees);
+  // Evidence is session-owned: a proof may be discovered in a sibling state
+  // directory for diagnosis, but it can NEVER authorize the checkout that is
+  // applying the migration. Never validate a primary-checkout proof against
+  // primary bytes while the active worktree supplies different callers, schema,
+  // history, or reviewer policy. A proof must live in the active worktree's
+  // session state; do not fall back to sibling proof directories.
+  const activeProofRoot = resolveSessionWorktree(projectDir, hookCwd, listWorktrees) || projectDir;
+  const activeProofStateDir = path.join(activeProofRoot, ".claude", "session-state");
+  const authorizedProofDirs = [activeProofStateDir];
 
   // SOURCE PROVENANCE PREFLIGHT. Runs before ordering, autopilot, destructive
   // classification and the proof scan, because it answers the question those all
@@ -483,7 +509,11 @@ export function evaluateMigrationApply({
   // refuses the apply and tells the operator how to produce one. Only the
   // library's internal "this name has no timestamp" case abstains.
   {
-    const snapPath = path.join(stateDir, "applied-migrations.json");
+    // The proof and the ordering gate must consume the same session-worktree
+    // ledger. Reading the primary checkout here while hashing the active
+    // worktree's ledger would certify one ordering floor and apply against
+    // another.
+    const snapPath = path.join(activeProofStateDir, "applied-migrations.json");
     // The recapture target must be the project THIS apply is aimed at. Reading it
     // from the environment printed a literal `<your project ref>` in every normal
     // hook run — neither manifest exports SUPABASE_PROJECT_REF — and a stray env
@@ -850,9 +880,25 @@ export function evaluateMigrationApply({
   const MAX_AGE_MS = PROOF_MAX_AGE_MS;
 
   let validProof = null;
+  let validProofEvidenceHash = null;
+  let validProofCurrentPolicyMismatch = null;
   let contentMismatchedProof = null;
+  let evidenceMismatchedProof = null;
+  // The proof producer obtains this commit from the literal authoritative GitHub
+  // remote, never from local origin config. The apply side must independently
+  // resolve that remote again: accepting a policy commit merely because it is an
+  // ancestor of HEAD would let a recently changed reviewer charter be bypassed
+  // for the remainder of a 30-minute proof lifetime.
+  let requiredReviewerPolicyCommit = reviewerPolicyCommit;
+  if (requiredReviewerPolicyCommit === undefined) {
+    try { requiredReviewerPolicyCommit = authoritativeMainCommit(); }
+    catch (error) {
+      return block(`MIGRATION APPLY GUARD: could not resolve the current authoritative GitHub main reviewer policy (${error?.message || error}). Refusing to reuse a proof bound to an older policy.`);
+    }
+  }
+  const requiresProtectedBase = requiredReviewerPolicyCommit !== null;
   const freshCleanProofNames = [];
-  for (const dir of proofDirs) {
+  for (const dir of authorizedProofDirs) {
     if (validProof) break;
     try {
       const files = readdirSync(dir).filter(f => f.startsWith("migration-review-") && f.endsWith(".json"));
@@ -913,7 +959,44 @@ export function evaluateMigrationApply({
               if (!contentMismatchedProof) contentMismatchedProof = { file: f, dir, data };
               continue;
             }
+            // The reviewer also judges registry, ledger, prior declarations,
+            // application callers, its charter, and the wrapper prompt. A
+            // migration-only hash would let any of those inputs move after a
+            // clean verdict. This is required in every mode: Mason's presence
+            // is authorization, not a reason to accept stale evidence.
+            const proofPolicyCommit = String(data.reviewerPolicyCommit || '').toLowerCase();
+            let protectedBindingReason = !requiresProtectedBase ? null
+              : data.reviewerPolicyAuthority !== AUTHORITATIVE_MAIN_POLICY ? 'reviewerPolicyAuthority does not name the fixed authoritative GitHub main policy'
+                : !/^[a-f0-9]{40}$/.test(proofPolicyCommit) ? 'reviewerPolicyCommit is not a full authoritative policy commit SHA'
+                : String(data.protectedBaseCommit || '').toLowerCase() !== proofPolicyCommit ? 'protectedBaseCommit does not match reviewerPolicyCommit'
+                  : null;
+            if (requiresProtectedBase && !protectedBindingReason) try {
+              execFileSync(fixedGitExecutable(), ["--no-replace-objects", "merge-base", "--is-ancestor", proofPolicyCommit, "HEAD"], {
+                cwd: activeProofRoot, encoding: "utf8", timeout: GIT_CALL_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], env: protectedGitEnv(),
+              });
+            } catch {
+              protectedBindingReason = 'the protected reviewer policy commit is not an ancestor of this checkout';
+            }
+            let expectedEvidenceHash = null;
+            try {
+              expectedEvidenceHash = migrationProofEvidenceHash({
+                projectDir: activeProofRoot,
+                stateDir: activeProofStateDir,
+                protectedBaseCommit: requiresProtectedBase ? proofPolicyCommit : null,
+              });
+            } catch { /* unreadable active evidence is never a valid proof */ }
+            if (!data.evidenceHash || !expectedEvidenceHash || data.evidenceHash !== expectedEvidenceHash || protectedBindingReason) {
+              if (!evidenceMismatchedProof) evidenceMismatchedProof = {
+                file: f, dir, data, expectedEvidenceHash, protectedBindingReason,
+              };
+              continue;
+            }
             validProof = { file: f, dir, data };
+            validProofEvidenceHash = expectedEvidenceHash;
+            validProofCurrentPolicyMismatch = requiresProtectedBase
+              && proofPolicyCommit !== String(requiredReviewerPolicyCommit).toLowerCase()
+              ? 'reviewerPolicyCommit does not match the current authoritative reviewer policy commit'
+              : null;
             break;
           }
         }
@@ -929,6 +1012,16 @@ export function evaluateMigrationApply({
       `exactly match the SHA-256 of the transmitted SQL (expected: ${currentHash || "(no query text)"}; ` +
       `received: ${proofHash || "(missing)"}). Re-confirm the reviewers against the CURRENT SQL, ` +
       `update the proof's queryHash, and retry.`);
+  }
+
+  if (!validProof && evidenceMismatchedProof) {
+    const proofHash = String(evidenceMismatchedProof.data.evidenceHash || "");
+    return block(
+      `MIGRATION APPLY GUARD: the reviewer proof for "${migName || "(unnamed)"}" is not evidence-bound — ` +
+      `proofs require "evidenceHash" to match every repository input and reviewer charter that the ` +
+      `verdict saw (expected: ${evidenceMismatchedProof.expectedEvidenceHash || "(unreadable evidence)"}; ` +
+      `received: ${proofHash || "(missing)"}; ${evidenceMismatchedProof.protectedBindingReason || "no protected-base mismatch"}). Re-run node scripts/write-apply-proofs.mjs against the ` +
+      `CURRENT checkout; never edit proof JSON by hand.`);
   }
 
   if (validProof) {
@@ -980,20 +1073,27 @@ export function evaluateMigrationApply({
       //     "timestamp": <ISO-8601, <30 min old> }
       // Write it ONLY after an ACTUAL /codex-review run on this migration this
       // session — a fabricated file violates Mason's codex-gate rule and is the
-      // documented self-attestation residual (KNOWN_ISSUES §4b).
-      // Searched across the same session-scoped directories as the reviewer proof
-      // above, for the same reason. A candidate only WINS by satisfying
+      // documented self-attestation residual (KNOWN_ISSUES §4b). Searched only
+      // in the active worktree's proof directory, just like reviewer proof above:
+      // a sibling proof is evidence for a different checkout. A candidate only
+      // WINS by satisfying
       // every criterion the single-directory version demanded — clean verdict,
       // exact queryHash, age inside [0, 30min]; the first parseable file is kept
       // only so the block message below can say which criterion failed.
       let codexProof = null;
-      for (const dir of proofDirs) {
+      let codexProofEvidenceHash = null;
+      for (const dir of authorizedProofDirs) {
         let candidate = null;
         try { candidate = JSON.parse(readFileSync(path.join(dir, `codex-review-mig-${safeName}.json`), "utf8")); } catch { continue; }
         if (!candidate) continue;
-        if (!codexProof) codexProof = candidate;
+        const candidateEvidenceHash = validProofEvidenceHash;
+        if (!codexProof) {
+          codexProof = candidate;
+          codexProofEvidenceHash = candidateEvidenceHash;
+        }
         const okVerdict = ["clean", "ship", "ship-with-followups"].includes(String(candidate.verdict || "").toLowerCase());
         const okHash = !!currentHash && String(candidate.queryHash || "") === currentHash;
+        const okEvidenceHash = !!candidateEvidenceHash && String(candidate.evidenceHash || "") === candidateEvidenceHash;
         const okIdentity = candidate.model === REQUIRED_CODEX_MODEL
           && candidate.reasoning_effort === REQUIRED_CODEX_EFFORT;
         let okFresh = false;
@@ -1001,10 +1101,16 @@ export function evaluateMigrationApply({
           const candidateAge = now - new Date(candidate.timestamp).getTime();
           okFresh = candidateAge >= 0 && candidateAge <= MAX_AGE_MS;
         } catch { okFresh = false; }
-        if (okVerdict && okHash && okIdentity && okFresh) { codexProof = candidate; break; }
+        if (okVerdict && okHash && okEvidenceHash && okIdentity && okFresh) {
+          codexProof = candidate;
+          codexProofEvidenceHash = candidateEvidenceHash;
+          break;
+        }
       }
       const cvOk = codexProof && ["clean", "ship", "ship-with-followups"].includes(String(codexProof.verdict || "").toLowerCase());
       const cvHashOk = codexProof && currentHash && String(codexProof.queryHash || "") === currentHash;
+      const cvEvidenceHashOk = codexProof && codexProofEvidenceHash
+        && String(codexProof.evidenceHash || "") === codexProofEvidenceHash;
       const cvIdentityOk = codexProof
         && codexProof.model === REQUIRED_CODEX_MODEL
         && codexProof.reasoning_effort === REQUIRED_CODEX_EFFORT;
@@ -1015,10 +1121,10 @@ export function evaluateMigrationApply({
         const cvAge = now - new Date(codexProof.timestamp).getTime();
         cvFresh = !!codexProof && cvAge >= 0 && cvAge <= MAX_AGE_MS;
       } catch { cvFresh = false; }
-      if (!cvOk || !cvHashOk || !cvIdentityOk || !cvFresh) {
+      if (!cvOk || !cvHashOk || !cvEvidenceHashOk || !cvIdentityOk || !cvFresh) {
         return block(
           `MIGRATION APPLY GUARD (hands-free run): the Sol high-effort gate is not satisfied for ` +
-          `"${migName || "(unnamed)"}" (${!codexProof ? "no Codex proof file" : !cvOk ? "verdict is not clean/ship" : !cvHashOk ? "queryHash does not match the transmitted SQL" : !cvIdentityOk ? `proof must record model=${REQUIRED_CODEX_MODEL} and reasoning_effort=${REQUIRED_CODEX_EFFORT}` : "proof timestamp is not within the last 30 minutes"}). ` +
+          `"${migName || "(unnamed)"}" (${!codexProof ? "no Codex proof file" : !cvOk ? "verdict is not clean/ship" : !cvHashOk ? "queryHash does not match the transmitted SQL" : !cvEvidenceHashOk ? "evidenceHash does not match the reviewed source surface" : !cvIdentityOk ? `proof must record model=${REQUIRED_CODEX_MODEL} and reasoning_effort=${REQUIRED_CODEX_EFFORT}` : "proof timestamp is not within the last 30 minutes"}). ` +
           `Autonomous applies require a fresh, content-bound Codex verdict (Mason's settled 2026-07-13 ` +
           `policy). Run: node scripts/write-apply-proofs.mjs ${migName || "<migName>"} — it runs the ` +
           `trusted Codex CLI itself and mints the content-bound proof ONLY on a CLEAN machine verdict. ` +
@@ -1026,6 +1132,13 @@ export function evaluateMigrationApply({
           `A BLOCKERS verdict or a failed Codex run does NOT qualify — fix the findings or PARK the ` +
           `migration for Mason. Never self-certify.`);
       }
+    }
+    if (validProofCurrentPolicyMismatch) {
+      return block(
+        `MIGRATION APPLY GUARD: the reviewer proof for "${migName || "(unnamed)"}" is bound to an older reviewer policy ` +
+        `(${String(validProof.data.reviewerPolicyCommit || "(missing)")}), not the current authoritative GitHub main policy ` +
+        `(${String(requiredReviewerPolicyCommit || "(unavailable)")}). Re-run node scripts/write-apply-proofs.mjs against the CURRENT checkout; ` +
+        'an ancestor policy commit is not sufficient after a reviewer-charter update.');
     }
     return allow();
   }

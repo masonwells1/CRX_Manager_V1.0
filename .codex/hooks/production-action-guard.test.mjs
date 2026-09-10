@@ -301,6 +301,19 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "package.json" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "package.json" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/write-apply-proofs.mjs" } }).blocked, true);
+  for (const helper of [
+    ".claude/hooks/protected-git.mjs",
+    "scripts/migration-proof-evidence-hash.mjs",
+    "scripts/migration-proof-reviewer-launch.mjs",
+    "scripts/migration-proof-file-state.mjs",
+    "scripts/migration-security-definer-guard.mjs",
+    "scripts/migration-routine-references.mjs",
+    "scripts/rpc-call-site-matcher.mjs",
+  ]) assert.equal(
+    evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: helper } }).blocked,
+    true,
+    `every direct migration-proof helper is protected: ${helper}`,
+  );
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/overnight-codex-gate.mjs" } }).blocked, true);
   for (const command of [
     "rm .claude/hooks/review-proof-guard.mjs",
@@ -939,7 +952,7 @@ try {
       `every listed protected file is protected by the regex too: ${file}`,
     );
   }
-  assert.equal(PROTECTED_HARNESS_FILES.length, 15, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
+  assert.equal(PROTECTED_HARNESS_FILES.length, 23, "the protected file list has one entry per alternative in PROTECTED_HARNESS_SOURCE");
   // NEAR-MISS CANARIES: reads, the sanctioned script runs, staging and
   // committing, and every command that names NO protected file stay allowed.
   // "Deny anything that names a hook file" would pass the block above while

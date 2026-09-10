@@ -544,9 +544,10 @@ jobs:
     # The containment checker folds path case on win32 only, because that is the
     # platform whose filesystem compares paths case-insensitively. Every other
     # job here is ubuntu-latest, so those branches would never execute and the
-    # Windows-specific behavior could silently regress. This suite imports only
-    # Node builtins and sibling scripts, so it needs Git and Node but no
-    # `npm ci` -- keeping the extra Windows leg to roughly a minute.
+    # Windows-specific behavior could silently regress. Most helpers import
+    # only Node builtins, but the RPC call-site matcher deliberately uses the
+    # TypeScript parser; install the locked dependency graph before exercising
+    # the complete guard suite on this platform.
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -557,6 +558,9 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
+
+      - name: Install dependencies for parser-backed guard checks
+        run: npm ci
 
       - name: Phase 3C private-artifact regression tests (win32 path semantics)
         # The hosted runner points TEMP at an 8.3 short path
