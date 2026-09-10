@@ -19,14 +19,16 @@
  * that helper. Its real semantics are covered in src/__tests__/idempotency-reset-order.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
-const { auth, mockFrom, mockRpc, mockToast, tables } = vi.hoisted(() => ({
+const { auth, mockCreateSignedUrl, mockFrom, mockRpc, mockToast, route, tables } = vi.hoisted(() => ({
   auth: { role: 'admin', profile: { id: 'user-1', role: 'admin' }, deniedPages: [] },
+  mockCreateSignedUrl: vi.fn(),
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
   mockToast: vi.fn(),
+  route: { id: 'del-1' },
   tables: { data: {} as Record<string, unknown[]> },
 }));
 
@@ -50,7 +52,7 @@ function buildChain(rows: unknown[]): Record<string, unknown> {
 }
 
 vi.mock('../lib/db', () => ({
-  supabase: { from: mockFrom, rpc: mockRpc, storage: { from: () => ({ createSignedUrl: () => Promise.resolve({ data: null, error: null }) }) } },
+  supabase: { from: mockFrom, rpc: mockRpc, storage: { from: () => ({ createSignedUrl: mockCreateSignedUrl }) } },
   sanitizeError: (e: unknown) => (e as Error)?.message || 'Error',
   checkMutationResult: vi.fn(),
   assertRpcResult: (d: unknown, op: string) => {
@@ -79,7 +81,7 @@ vi.mock('../components/team/RelatedNotes', () => ({ default: () => null }));
 vi.mock('../components/ui/SignatureCanvas', () => ({ default: () => null }));
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
-  return { ...actual, useParams: () => ({ id: 'del-1' }), useNavigate: () => vi.fn() };
+  return { ...actual, useParams: () => ({ id: route.id }), useNavigate: () => vi.fn() };
 });
 
 import DeliveryDetail from './DeliveryDetail';
@@ -108,6 +110,8 @@ const PENDING_REMAINDER = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  route.id = 'del-1';
+  mockCreateSignedUrl.mockResolvedValue({ data: null, error: null });
   tables.data = {
     deliveries: [COMPLETED_DELIVERY],
     delivery_items: [],
@@ -121,6 +125,12 @@ beforeEach(() => {
   };
   mockFrom.mockImplementation((table: string) => buildChain(tables.data[table] ?? []));
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
 
 async function renderAndFindButton(): Promise<HTMLButtonElement> {
   render(<MemoryRouter><DeliveryDetail /></MemoryRouter>);
@@ -167,5 +177,58 @@ describe('F1 — an ambiguous follow-up reply leaves the retry REACHABLE', () =>
       mockRpc.mock.calls[1][1].p_idempotency_key,
       'a CONFIRMED success must retire the key — reusing it would make a genuine second follow-up replay the first',
     ).not.toBe(mockRpc.mock.calls[0][1].p_idempotency_key);
+  });
+});
+
+describe('PR #18 — signature URLs belong to the current delivery route', () => {
+  const deliveryWithSignature = (id: string) => ({
+    ...COMPLETED_DELIVERY,
+    id,
+    delivery_number: id.toUpperCase(),
+    signature_url: `signatures/${id}.png`,
+  });
+
+  it('clears delivery A signature before delivery B URL finishes loading', async () => {
+    tables.data.deliveries = [deliveryWithSignature('del-1')];
+    mockCreateSignedUrl.mockResolvedValueOnce({ data: { signedUrl: 'https://private.test/del-1' }, error: null });
+
+    const view = render(<MemoryRouter><DeliveryDetail /></MemoryRouter>);
+    const firstSignature = await screen.findByAltText('Customer signature');
+    expect(firstSignature).toHaveAttribute('src', 'https://private.test/del-1');
+
+    const secondUrl = deferred<{ data: { signedUrl: string }; error: null }>();
+    mockCreateSignedUrl.mockReturnValueOnce(secondUrl.promise);
+    tables.data.deliveries = [deliveryWithSignature('del-2')];
+    route.id = 'del-2';
+    view.rerender(<MemoryRouter><DeliveryDetail /></MemoryRouter>);
+
+    await waitFor(() => expect(mockCreateSignedUrl).toHaveBeenCalledTimes(2));
+    expect(screen.queryByAltText('Customer signature')).not.toBeInTheDocument();
+
+    secondUrl.resolve({ data: { signedUrl: 'https://private.test/del-2' }, error: null });
+    expect(await screen.findByAltText('Customer signature')).toHaveAttribute('src', 'https://private.test/del-2');
+  });
+
+  it('discards a late signature URL response from delivery A after delivery B wins', async () => {
+    const firstUrl = deferred<{ data: { signedUrl: string }; error: null }>();
+    mockCreateSignedUrl.mockReturnValueOnce(firstUrl.promise);
+    tables.data.deliveries = [deliveryWithSignature('del-1')];
+
+    const view = render(<MemoryRouter><DeliveryDetail /></MemoryRouter>);
+    await waitFor(() => expect(mockCreateSignedUrl).toHaveBeenCalledTimes(1));
+
+    mockCreateSignedUrl.mockResolvedValueOnce({ data: { signedUrl: 'https://private.test/del-2' }, error: null });
+    tables.data.deliveries = [deliveryWithSignature('del-2')];
+    route.id = 'del-2';
+    view.rerender(<MemoryRouter><DeliveryDetail /></MemoryRouter>);
+
+    const secondSignature = await screen.findByAltText('Customer signature');
+    expect(secondSignature).toHaveAttribute('src', 'https://private.test/del-2');
+
+    await act(async () => {
+      firstUrl.resolve({ data: { signedUrl: 'https://private.test/del-1' }, error: null });
+      await firstUrl.promise;
+    });
+    expect(screen.getByAltText('Customer signature')).toHaveAttribute('src', 'https://private.test/del-2');
   });
 });
