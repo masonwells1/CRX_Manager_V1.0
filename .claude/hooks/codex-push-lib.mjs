@@ -2656,6 +2656,35 @@ export function splitCommandSegments(command) {
   return union;
 }
 
+// A stable identity for a resolved merge request, so a caller can gate the same
+// request once instead of once per READING of it.
+//
+// Why this exists: splitCommandSegments returns a union, so any command carrying
+// a quote or an escape yields two segments that resolve to the SAME request.
+// Each one then costs a `gh pr view` and an advisory lookup. The merge hooks are
+// bounded (15s in Codex, 30s in Claude) and each gh call is capped at 5-10s, so
+// duplicated lookups walk toward the ceiling — and a PreToolUse hook killed
+// mid-call emits nothing, and a hook that emits nothing ALLOWS. Duplicate work
+// is therefore a fail-OPEN risk here, not merely slow (CodeRabbit, 2026-09-09).
+//
+// Keyed on the COMPLETE parse, never on selector + repository. The same review
+// proposed selector+repo; that is unsafe against this splitter, because the two
+// readings of `gh pr merge 123 --body 'note&more' --admin --squash` are
+// identical in selector AND repository and differ ONLY in `admin` (measured:
+// {"123","",false} and {"123","",true}). Collapsing them by selector+repo can
+// keep the admin:false reading and erase the very offence the gate exists to
+// refuse. Sorting over ALL own keys also means a field added to a request shape
+// later widens the key automatically, keeping distinct parses distinct rather
+// than silently merging them — the fail-safe direction for a de-duplicator.
+export function mergeRequestKey(request) {
+  if (!request || typeof request !== "object") return String(request);
+  return JSON.stringify(
+    Object.entries(request)
+      .map(([name, value]) => [name, value === undefined ? null : value])
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
+}
+
 // Does this `gh api` call MUTATE? Moved here from
 // .codex/hooks/production-action-guard.mjs on 2026-09-07 so the gh binary is
 // modelled in exactly one place: that copy carried the one-item extension list

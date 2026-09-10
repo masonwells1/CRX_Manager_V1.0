@@ -83,6 +83,14 @@ function evaluatePush(repo, nowMs = Date.now(), command = "git push origin HEAD:
   });
 }
 
+// Every spawnSync below launches a guard and waits for its verdict. The hook
+// runtime's own 15s limit and the guard's internal 5s git/gh caps bound what
+// happens INSIDE the guard, not this outer call — so a wedged guard would hang
+// the suite until the CI job timeout, where the failure reads as "CI is slow"
+// rather than "a guard hung" (CodeRabbit, 2026-09-09). Generous enough that a
+// merely slow machine never trips it; finite so a hang fails fast and loudly.
+const GUARD_SPAWN_TIMEOUT_MS = 60_000;
+
 function runClaudePushGuard(command, projectDir, payloadCwd = "") {
   const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
@@ -90,6 +98,7 @@ function runClaudePushGuard(command, projectDir, payloadCwd = "") {
     cwd: projectRoot,
     env,
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
     input: JSON.stringify({ tool_name: "Bash", cwd: payloadCwd || undefined, tool_input: { command } }),
   });
 }
@@ -2044,6 +2053,51 @@ try {
   assert.equal(chainedControlVerdict.blocked, false, "CONTROL: two clean merges are allowed");
   assert.equal(chainedControlAttempts, 2, "CONTROL: the advisory runs once per merge AFTER both cleared their hard gates — deferred, not dropped");
 
+  // ── round 6: ONE request, gated once, however many readings name it ────────
+  // splitCommandSegments returns a UNION of readings, so any command carrying a
+  // quote or an escape resolves to the same merge TWICE. Each reading used to
+  // cost its own `gh pr view` and its own advisory lookup. This hook is bounded
+  // and a hook killed mid-call emits nothing — and a hook that emits nothing
+  // ALLOWS — so duplicated lookups spend the budget that protects the hard
+  // gates (CodeRabbit, 2026-09-09, Major).
+  let dedupeAdvisoryAttempts = 0;
+  let dedupePrViews = 0;
+  const dedupeGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      dedupeAdvisoryAttempts += 1;
+      throw new Error("advisory unavailable"); // fail-open
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    if (Array.isArray(args) && args.includes("view")) dedupePrViews += 1;
+    return mainPrJson;
+  };
+  const dedupeVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    // Two readings: the quote-aware one, and the naive one that splits on the
+    // `&` inside the body. Both resolve to selector 123, admin false.
+    toolInput: { command: "gh pr merge 123 --body 'note&more' --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: dedupeGh,
+  });
+  assert.equal(dedupeVerdict.blocked, false, "a clean quoted-body merge is allowed");
+  assert.equal(dedupeAdvisoryAttempts, 1, "the advisory runs ONCE for one merge request, not once per reading of it");
+  assert.equal(dedupePrViews, 1, "the PR is resolved ONCE for one merge request, not once per reading of it");
+
+  // The de-duplication must key on the COMPLETE parse. These two readings differ
+  // ONLY in `admin`, so keying on selector+repository — as the review proposed —
+  // would collapse them and could keep the admin:false reading, erasing the
+  // offence. Deny, and deny FOR the flag.
+  const dedupeAdminVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --body 'note&more' --admin --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: dedupeGh,
+  });
+  assert.equal(dedupeAdminVerdict.blocked, true, "de-duplication must not drop the --admin reading of a quoted-body merge");
+  assert.match(String(dedupeAdminVerdict.reason), /--admin/, "the denial names the administrator override, not some unrelated gate");
+
   // ── round 9: the GitHub-connector merge tool must get the advisory too ─────
   // Codex HIGH on the exact-SHA proof of dc965401f — a regression round 8
   // introduced. Moving the lookup out of gatePullRequestMerge() left the
@@ -2336,6 +2390,7 @@ try {
   const rawProtectedEntrypoint = spawnSync(process.execPath, [guardPath], {
     input: JSON.stringify({ tool_name: "apply_patch", tool_input: rawProtectedPatch }),
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
   });
   assert.equal(rawProtectedEntrypoint.error, undefined, "raw-string protected patch entrypoint starts without a process error");
   assert.equal(rawProtectedEntrypoint.status, 0, "raw-string protected patch entrypoint exits cleanly after denial");
@@ -2350,6 +2405,7 @@ try {
       tool_input: "*** Begin Patch\n*** Update File: production-action-guard.mjs\n@@\n-old\n+weaken()\n*** End Patch",
     }),
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
   });
   assert.equal(eventCwdProtectedEntrypoint.error, undefined, "event-cwd raw patch entrypoint starts without a process error");
   assert.equal(eventCwdProtectedEntrypoint.status, 0, "event-cwd raw patch entrypoint exits cleanly after denial");
@@ -2360,6 +2416,7 @@ try {
   const rawDocumentationEntrypoint = spawnSync(process.execPath, [guardPath], {
     input: JSON.stringify({ tool_name: "apply_patch", tool_input: rawDocumentationPatch }),
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
   });
   assert.equal(rawDocumentationEntrypoint.error, undefined, "raw-string documentation patch entrypoint starts without a process error");
   assert.equal(rawDocumentationEntrypoint.status, 0, "raw-string documentation patch entrypoint exits cleanly");
@@ -2371,7 +2428,7 @@ try {
   for (const [patch, reason] of [[moveToGuardPatch, /production\/review harness is a security boundary/], [moveToProofPatch, /review proof files/]]) {
     assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: patch }).blocked, true, "raw Move to protected destination is denied");
     assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch } }).blocked, true, "structured Move to protected destination is denied");
-    const movedEntrypoint = spawnSync(process.execPath, [guardPath], { input: JSON.stringify({ tool_name: "apply_patch", tool_input: patch }), encoding: "utf8" });
+    const movedEntrypoint = spawnSync(process.execPath, [guardPath], { input: JSON.stringify({ tool_name: "apply_patch", tool_input: patch }), encoding: "utf8", timeout: GUARD_SPAWN_TIMEOUT_MS });
     assert.equal(movedEntrypoint.error, undefined, "Move to entrypoint starts without a process error");
     assert.equal(movedEntrypoint.status, 0, "Move to entrypoint exits after denial");
     assert.equal(movedEntrypoint.stderr, "", "Move to entrypoint emits no stderr");
@@ -2384,6 +2441,7 @@ try {
   const ordinaryMoveEntrypoint = spawnSync(process.execPath, [guardPath], {
     input: JSON.stringify({ tool_name: "apply_patch", tool_input: moveToDocumentationPatch }),
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
   });
   assert.equal(ordinaryMoveEntrypoint.error, undefined, "ordinary move entrypoint starts without a process error");
   assert.equal(ordinaryMoveEntrypoint.status, 0, "ordinary move entrypoint exits cleanly");
@@ -2474,6 +2532,7 @@ try {
   const deniedProcess = spawnSync(process.execPath, [guardPath], {
     cwd: risky.repo,
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
     input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "git push origin HEAD:main" } }),
   });
   assert.equal(deniedProcess.status, 0);
@@ -2485,6 +2544,7 @@ try {
   const allowedProcess = spawnSync(process.execPath, [guardPath], {
     cwd: risky.repo,
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
     input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "git push origin HEAD:main" } }),
   });
   assert.equal(allowedProcess.status, 0);

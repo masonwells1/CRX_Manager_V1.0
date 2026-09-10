@@ -35,6 +35,7 @@ import {
   splitCommandSegments,
   ghMergeRequest,
   mcpMergeRequest,
+  mergeRequestKey,
   proofSearchDirs,
   proofValid,
   pullRequestApproved,
@@ -70,7 +71,32 @@ const toolInput = payload?.tool_input || {};
 // let the second run ungated, and a raw REST call after a gh merge would never
 // be seen at all (Codex round-6 finding on this guard's own PR). Collect every
 // request; deny immediately on any unresolvable form in any segment.
+//
+// Command segments are collected through addRequest, which drops a request
+// already collected. The connector path below pushes directly: it resolves ONE
+// request from structured tool input, so it has no second reading to collapse.
+// splitCommandSegments returns a UNION of readings, so a command carrying a
+// quote or an escape resolves to the same merge twice; gating it twice spends a
+// `gh pr view` and an advisory lookup on a verdict already known. This hook is
+// bounded (30s) and each gh call is capped at 10s — and a PreToolUse hook killed
+// mid-call emits nothing, which ALLOWS. Duplicated lookups therefore spend the
+// budget protecting the hard gates, so this is a fail-OPEN risk, not merely slow
+// (CodeRabbit, 2026-09-09). De-duplicating HERE rather than at the gate loop
+// keeps that loop the single, pinned call site codex-bot-review-lib.test.mjs
+// measures the advisory ordering against.
 const requests = [];
+const collectedRequestKeys = new Set();
+function addRequest(request) {
+  if (!request) return;
+  // Keyed on the COMPLETE parse, never selector+repository: the two readings of
+  // `gh pr merge 1 --body 'note&more' --admin --squash` match in selector AND
+  // repository and differ ONLY in `admin`, so a narrower key could keep the
+  // admin:false reading and erase the offence. See mergeRequestKey.
+  const key = mergeRequestKey(request);
+  if (collectedRequestKeys.has(key)) return;
+  collectedRequestKeys.add(key);
+  requests.push(request);
+}
 if (GITHUB_MERGE_TOOL.test(toolName)) {
   requests.push(mcpMergeRequest(toolInput));
 } else if (typeof toolInput.command === "string" && toolInput.command) {
@@ -138,7 +164,7 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
         "never sees. Run the merge as its own plain command, with the PR number and flags spelled out."
       );
     }
-    if (found) { requests.push(found); continue; }
+    if (found) { addRequest(found); continue; }
   }
 }
 if (requests.length === 0) passthrough();

@@ -17,6 +17,7 @@ import {
   isGitPush,
   mainPushSource,
   mcpMergeRequest,
+  mergeRequestKey,
   proofSearchDirs,
   proofValid,
   pullRequestReviewBlocked,
@@ -1585,6 +1586,14 @@ export function evaluateProductionAction({
   // Merge requests that cleared every hard gate; their advisory lookups run
   // together at the very end, after the push segments too (Codex round 8).
   const deferredAdvisories = [];
+  // Merge requests already gated in this command. The union splitter returns two
+  // readings of any command carrying a quote or an escape, and both resolve to
+  // the SAME request — gating it twice spends a `gh pr view` and an advisory
+  // lookup for a verdict already known. This hook is bounded and a hook killed
+  // mid-call emits nothing, which ALLOWS, so the waste is fail-open, not merely
+  // slow (CodeRabbit, 2026-09-09). Keyed on the COMPLETE parse — see
+  // mergeRequestKey for why selector+repo would erase an `--admin` reading.
+  const gatedRequests = new Set();
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ───────────
@@ -1642,6 +1651,11 @@ export function evaluateProductionAction({
       );
     }
     if (ghRequest) {
+      // Every text-based denial above has already run for THIS segment; only the
+      // network-bound gate is skipped, and only for a parse already gated.
+      const requestKey = mergeRequestKey(ghRequest);
+      if (gatedRequests.has(requestKey)) continue;
+      gatedRequests.add(requestKey);
       const result = gatePullRequestMerge({
         request: ghRequest,
         repoDir: actionRepoDir,

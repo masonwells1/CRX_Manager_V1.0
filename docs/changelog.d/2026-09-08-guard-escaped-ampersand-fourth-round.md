@@ -23,14 +23,14 @@ segment the guard inspects. That walk treated a backslash as an escape, because 
 shell does. But this fleet runs PowerShell and cmd.exe, and neither uses a backslash:
 PowerShell escapes with a backtick and cmd.exe with a caret.
 
-```
+```shell
 gh pr merge 123 --body x^&y --admin --squash
 ```
 
 is ONE command to cmd.exe — `x&y` is a single literal argument. The segmenter cut it in
 two:
 
-```
+```js
 ["gh pr merge 123 --body x^", "y --admin --squash"]
 ```
 
