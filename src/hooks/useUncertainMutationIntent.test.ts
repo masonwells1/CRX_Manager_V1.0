@@ -677,6 +677,65 @@ describe('useUncertainMutationIntent', () => {
     expect(freshTab.result.current.getIdempotencyKey()).not.toBe(completedKey);
   });
 
+  it('keeps a pending local mirror frozen when IndexedDB lost the record', async () => {
+    // localStorage and IndexedDB are separate stores. If the coordinator row is
+    // gone (evicted or cleared) while the mirror still says a request is pending,
+    // that request may already have committed. A fresh key here would let an
+    // edited retry run the mutation a second time, so the mirror is decided
+    // exactly like an authoritative pending record.
+    const options = {
+      operation: 'create_inventory_hold',
+      userId: 'admin-idb-evicted',
+      surface: 'inventory-page',
+      scope: 'hold-evicted',
+    };
+    const first = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => first.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = first.result.current.getIdempotencyKey();
+    first.unmount();
+    globalThis.indexedDB = new IDBFactory();
+
+    const reopened = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await expect(act(async () => reopened.result.current.beginIntent({ quantity: 6 })))
+      .rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    expect(reopened.result.current.unresolvedIntent).toEqual({ quantity: 5 });
+
+    let retried!: { quantity: number };
+    await act(async () => {
+      retried = await reopened.result.current.beginIntent({ quantity: 5 });
+    });
+    expect(retried).toEqual({ quantity: 5 });
+    expect(reopened.result.current.getIdempotencyKey()).toBe(originalKey);
+  });
+
+  it('retires the local mirror when a success resolves after IndexedDB lost the record', async () => {
+    // The pending-mirror fallback must not outlive a request known to have
+    // committed: a success retires the mirror even with no coordinator row left.
+    const options = {
+      operation: 'create_inventory_hold',
+      userId: 'admin-idb-evicted-resolve',
+      surface: 'inventory-page',
+      scope: 'hold-evicted-resolve',
+    };
+    const first = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => first.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = first.result.current.getIdempotencyKey();
+    globalThis.indexedDB = new IDBFactory();
+    await act(async () => first.result.current.resolveIntent());
+    expect(first.result.current.isIntentLocked).toBe(false);
+    first.unmount();
+
+    const next = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(next.result.current.isIntentLocked).toBe(false);
+    let fresh!: { quantity: number };
+    await act(async () => {
+      fresh = await next.result.current.beginIntent({ quantity: 6 });
+    });
+    expect(fresh).toEqual({ quantity: 6 });
+    expect(next.result.current.getIdempotencyKey()).not.toBe(originalKey);
+  });
+
   it('keeps duplicated tabs distinct and never erases a peer resolved tombstone', async () => {
     const options = {
       operation: 'record_vendor_payment',

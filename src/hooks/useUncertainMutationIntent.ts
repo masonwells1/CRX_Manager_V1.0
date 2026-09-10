@@ -360,6 +360,7 @@ async function coordinateDurableRecord<T>(
   candidateIntent: T,
   options: DurableMutationIntentOptions<T>,
   tabId: string,
+  pendingMirror: DurableMutationIntentRecord<T> | null = null,
 ): Promise<{ record: DurableMutationIntentRecord<T>; conflict: boolean }> {
   const db = await openDurableIntentDb();
   try {
@@ -372,11 +373,15 @@ async function coordinateDurableRecord<T>(
       request.onsuccess = () => {
         const stored = request.result as { storageKey?: string; record?: unknown } | undefined;
         const existingCandidate = stored?.record as Partial<DurableMutationIntentRecord<T>> | undefined;
+        // With NO coordinator row, a pending local mirror is the only evidence
+        // that an earlier request may have committed (IndexedDB evicted or
+        // cleared). Decide it like an authoritative pending record rather than
+        // letting the fresh candidate mint a second key for the same work.
         const existing = existingCandidate && isValidRecord(existingCandidate, options)
           ? existingCandidate
           : stored
             ? blockedDurableRecord(options)
-            : proposed;
+            : pendingMirror ?? proposed;
         const owned = existing.surface === options.surface
           && existing.scope === (options.scope || '');
         const candidateIdentity = fingerprintIntent(candidateIntent, options.getIntentIdentity);
@@ -692,10 +697,12 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
       const createdAtMs = Date.now();
       const retryNotAfterMs = createdAtMs + SAFE_RETRY_WINDOW_MS;
       // localStorage is only a UI mirror. It can lag behind IndexedDB when a
-      // response resolves between the two writes, so it never establishes a
-      // retry payload here. The coordinator alone restores its authoritative
-      // pending record (including conflict and expiry refusal); a resolved or
-      // absent coordinator record receives this caller's fresh candidate.
+      // response resolves between the two writes, so a coordinator record
+      // always wins: a pending one is restored (including conflict and expiry
+      // refusal) and a resolved one receives this caller's fresh candidate.
+      // Only when the coordinator has no record at all is a pending mirror
+      // offered in its place, because then it is the sole evidence that an
+      // earlier request may have committed.
       const proposed: DurableMutationIntentRecord<T> = {
         version: 4,
         status: 'pending',
@@ -719,6 +726,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           intent,
           options,
           currentClaimId,
+          mirrorRecord?.status === 'pending' ? mirrorRecord : null,
         );
         writeDurableRecord(storageKey, coordinated.record);
         applyRecord(coordinated.record);
@@ -777,6 +785,21 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     if (resolved) {
       if (storageKey) writeDurableRecord(storageKey, resolved);
       applyRecord(resolved);
+    } else if (attempt && storageKey) {
+      // No coordinator row was left to resolve (IndexedDB lost it). This request
+      // is known to have committed, so retire its pending mirror; beginIntent
+      // would otherwise restore it as unresolved. A mirror that now belongs to a
+      // different request is left alone.
+      const mirror = readDurableRecord<T>(storageKey, options);
+      if (!mirror || mirror.requestVersion === attempt.requestVersion) {
+        const retired: DurableMutationIntentRecord<T> = {
+          ...attempt,
+          status: 'resolved',
+          resolvedAtMs: Date.now(),
+        };
+        writeDurableRecord(storageKey, retired);
+        applyRecord(retired);
+      }
     }
     attemptRecordRef.current = null;
   }, [applyRecord, options, storageKey]);

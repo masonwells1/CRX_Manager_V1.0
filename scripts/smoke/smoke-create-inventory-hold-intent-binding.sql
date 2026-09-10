@@ -367,6 +367,20 @@ BEGIN
   END;
   -- ...and NULL force must fingerprint as false, not as a distinct request:
   -- a retained key from a false-force call must still see NULL as identical.
+  -- Replay section 1's committed false-force request with p_force => NULL: if
+  -- the wrapper hashed the raw flag instead of the normalized one, this
+  -- legitimate retry would raise IDEMPOTENCY_INTENT_MISMATCH.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin)::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+  v_res2 := public.create_inventory_hold(
+    v_product, v_customer, 5, 'manual', DATE '2026-12-31', 'first hold',
+    v_admin, NULL, NULL, 'smoke-hold-key-1'
+  );
+  IF (v_res2 ->> 'hold_id')::uuid IS DISTINCT FROM v_hold_id THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL force did not replay the false-force receipt (got %)', v_res2;
+  END IF;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_rep)::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_rep::text, true);
   SELECT count(*) INTO v_count FROM public.activity_feed
    WHERE related_entity_type = 'inventory_hold'
      AND description LIKE 'WARNING: Hold created with admin override%';

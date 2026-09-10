@@ -173,8 +173,14 @@ describe('gauntlet caller-side safety guards', () => {
     expect(page).toContain('if (receipt && receipt.record_id === reverseRecord.id) {');
     // Redeeming means the screen is brought back in line with the server. If the
     // refreshes are dropped the stale row survives, which is the original bug.
-    const branch = page.slice(page.indexOf('if (receipt && receipt.record_id === reverseRecord.id) {'));
-    const branchBody = branch.slice(0, branch.indexOf('} else {'));
+    // A missing marker makes indexOf return -1, and slice() then hands the
+    // assertions below the wrong text, so require both markers first.
+    const branchStart = page.indexOf('if (receipt && receipt.record_id === reverseRecord.id) {');
+    expect(branchStart).toBeGreaterThanOrEqual(0);
+    const branch = page.slice(branchStart);
+    const branchEnd = branch.indexOf('} else {');
+    expect(branchEnd).toBeGreaterThan(0);
+    const branchBody = branch.slice(0, branchEnd);
     expect(branchBody).toContain('setReverseOpen(false);');
     expect(branchBody).toContain('fetchPO();');
     expect(branchBody).toContain('fetchReceivingHistory();');
@@ -279,8 +285,14 @@ describe('gauntlet caller-side safety guards', () => {
   it('reports a surviving pending intent without opening the overage reason prompt', () => {
     const page = source('src/pages/NewVendorBill.tsx');
 
-    const branch = page.slice(page.indexOf('if (createBillIntent.getUnresolvedIntent()) {'));
-    const branchBody = branch.slice(0, branch.indexOf('return;'));
+    // Require both markers: a -1 from indexOf would slice the wrong text and
+    // could let the not.toContain assertion below pass vacuously.
+    const branchStart = page.indexOf('if (createBillIntent.getUnresolvedIntent()) {');
+    expect(branchStart).toBeGreaterThanOrEqual(0);
+    const branch = page.slice(branchStart);
+    const branchEnd = branch.indexOf('return;');
+    expect(branchEnd).toBeGreaterThan(0);
+    const branchBody = branch.slice(0, branchEnd);
 
     expect(branchBody).toContain('setOverageBlockedMessage(');
     expect(

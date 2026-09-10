@@ -1767,6 +1767,10 @@ admin/sales_rep gate, key required, request fingerprint, then `check_idempotency
 advisory lock, actor + fingerprint binding) BEFORE any mutation, then the renamed body, then receipt
 binding. Post-fix race in the same container = 1 hold, both sessions succeed with the same `hold_id`;
 the rolled-back chain `smoke-create-inventory-hold-intent-binding.sql` passes; re-apply is clean.
+Neither proof pauses a real old-body call across the migration: the cutover guard (a `BEFORE INSERT`
+trigger on `idempotency_keys`, created before the rename, that refuses an unbound hold receipt) is
+proven by an equivalent-path smoke that calls the renamed body directly, plus the same-key race run
+before and after the candidate — not by a literal pause/resume interleaving test.
 **No live apply is authorized.** Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
 and every preflight condition held: one overload, owner `postgres`, `plpgsql`, SECURITY DEFINER,
 `proconfig = {search_path=public, pg_temp}`, the pinned argument list with defaults,

@@ -21,8 +21,9 @@ This is a **separate** trigger rather than an edit to the live Section 9 guard
 (`20260826221000`), which currently protects vendor-bill, vendor-payment and
 PO-receiving money receipts. Same protection, far smaller blast radius.
 
-**Proof, by execution:** the smoke chain now calls the renamed body directly
-with no context — byte for byte what an in-flight pre-cutover call does — and
+**Proof, by execution (an equivalent path, not a literal interleaving):** the
+smoke chain now calls the renamed body directly with no context — the same
+receipt write an in-flight pre-cutover call would reach — and
 the receipt is refused, rolling the whole call back with no hold and no receipt
 left. A stale context from a different key is refused too, and an unrelated
 operation's receipt still inserts freely. **Falsified:** with the trigger
@@ -31,6 +32,11 @@ passed), the chain failed `SMOKE_FAIL: the old body wrote an UNBOUND receipt
 after cutover`. Container run with the fix:
 `pre_chain=FAIL pre_race=1_hold_loser_errors legacy_receipt=REFUSED
 post_chain=PASS post_race=1_hold_loser_replays rerun=PASS`.
+
+**Not proven by a test:** nothing pauses a real call inside the OLD public body,
+applies the migration, and resumes it. The prover's two-session same-key race
+runs before and after the candidate, not across it. The cutover guarantee rests
+on the trigger existing before the rename plus the equivalent-path smoke above.
 
 The wrapper body changed, so the replay pin was recomputed to
 `71fa8faf…0750d02`; the `rerun=PASS` leg proves it matches what the file emits.

@@ -77,7 +77,7 @@ six-file set now sits at `20260905200000` through `20260905210000`, with no `202
 file, above the applied high-water and with the repair still last). The #606 candidate, the field-acreage guard first tracked
 as #582 (`20260904185900` on disk), was applied
 live on 2026-09-05 as ledger version `20260905185938` under the bare name
-`refuse_null_job_field_acres` — that row is now the ordering high-water, which is why the commission
+`refuse_null_job_field_acres` — that row was then the ordering high-water (replaced on 2026-09-08; see the top of this file), which is why the commission
 set had to move above it. The disk file still carries its authored stamp; row 916 of
 `docs/reference/migration-history.md` records that name mismatch for the #606 lane to reconcile.
 
@@ -88,12 +88,12 @@ post-apply `pg_proc.prosrc` body and rechecks that exact pre-image at apply time
 it from migration filenames alone. **It is no longer a candidate: the 2026-09-06 read-only ledger
 query found it APPLIED LIVE as ledger name `refuse_null_job_field_acres`, version `20260905185938`
 (2026-09-05 18:59:38 UTC).** That apply was performed by the owning lane, not by this branch;
-`docs/reference/migration-history.md` row 916 still describes it as a local candidate and is stale
-until that lane updates it. Because the ledger recorded it without its timestamp prefix, the
-authored-name ordering boundary above did not move — read ordering from the NAME with care here.
+`docs/reference/migration-history.md` row 916 has since been corrected to APPLIED LIVE. Although the
+ledger recorded it without its timestamp prefix, the ordering guard synthesizes `<version>_<name>`
+for a bare-name row, so it DID move the ordering boundary until 2026-09-08 (see the top of this file).
 
 A second local candidate, `20260908130000_bind_create_inventory_hold_receipt_to_intent` (branch
-`claude/inventory-idempotency-key-reset-888161`, history row 923), is written and container-proven but
+`claude/inventory-idempotency-key-reset-888161`, history row 924), is written and container-proven but
 **NOT applied and NOT merged** — its stamp is authored above PR #592's pending `20260905*` files, and
 deliberately clear of `20260905210000`, which PR #592 occupies with
 `20260905210000_repair_commission_history_label_snapshots.sql` (two migration files sharing one

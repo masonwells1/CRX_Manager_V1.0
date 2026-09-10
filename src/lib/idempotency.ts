@@ -156,14 +156,15 @@ export function isDefinitiveRpcRejection(error: unknown): boolean {
   // makes the operator's next click mint a NEW key and duplicate the mutation --
   // exactly the double-hold this surface exists to prevent. Every PL/pgSQL
   // RAISE arrives as SQLSTATE P0001, which is otherwise definitive, so this can
-  // only be excluded by message. Matched as a substring because the server
-  // appends the operation and key to the token.
+  // only be excluded by message. Matched as a PREFIX: the server appends the
+  // operation and key AFTER the token, and the key is caller-controlled, so a
+  // refusal that merely quotes a key containing this token must stay definitive.
   // IDEMPOTENCY_CROSS_OP_KEY_REUSE is deliberately NOT excluded: that key is
   // owned by a different operation and can never succeed, so it stays
   // definitive and the caller must reset it.
   if (
     typeof candidate.message === 'string'
-    && candidate.message.includes('IDEMPOTENCY_CONCURRENT_REPLAY_RETRY')
+    && candidate.message.startsWith('IDEMPOTENCY_CONCURRENT_REPLAY_RETRY')
   ) return false;
   if (typeof candidate.code !== 'string') return false;
   const code = candidate.code.trim().toUpperCase();

@@ -1,7 +1,16 @@
-## 2026-09-07 — OPEN: the hold migration's cutover can still let an in-flight old call write an unbound receipt
+## 2026-09-07 — SUPERSEDED (was OPEN): the hold migration's cutover can still let an in-flight old call write an unbound receipt
+
+> **Superseded the same day. Do not use this entry as apply guidance.** The race below was
+> closed by a separate `BEFORE INSERT` trigger on `public.idempotency_keys`, created before the
+> rename (see `2026-09-07-create-inventory-hold-cutover-race-fixed.md`). The apply blocker this
+> entry describes is cleared on migration-history row 924, which now carries the candidate (it was
+> numbered 923 before the main merge renumbered it). Candidate `20260908130000` is still **NOT
+> applied live**, still needs Mason's explicit approval and a fresh read-only preflight, and keeps
+> one accepted residual recorded on row 924: an in-flight old-body call that passed no idempotency
+> key never touches the receipt table, so the trigger cannot see it.
 
 Fourth `gpt-5.6-sol` review of PR #624. Unlike the previous round's two staleness artifacts, this
-one is **substantive and remains OPEN**. It is recorded here and on migration-history row 923 as an
+one is **substantive and remains OPEN**. It is recorded here and on migration-history row 924 as an
 **apply blocker**, not fixed in this branch.
 
 ### The race
@@ -46,7 +55,7 @@ an already-large migration late in a session.
 
 **Deferring exposes nothing.** The window exists only during an apply of this migration, this
 migration is not applied, and applying it requires Mason's explicit approval. The risk is realised
-only if someone applies it before this is closed — hence the apply blocker on row 923.
+only if someone applies it before this is closed — hence the apply blocker on row 924.
 
 ### What is NOT claimed
 

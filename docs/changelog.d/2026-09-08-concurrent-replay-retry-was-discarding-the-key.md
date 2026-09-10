@@ -16,7 +16,8 @@ branch exists to prevent.
 
 Fixed in `src/lib/idempotency.ts`: that message is now excluded from the
 definitive set, so the key is retained and the retry reads the winner's receipt.
-Matched as a substring because the server appends the operation and key.
+Matched as a substring because the server appends the operation and key. (Tightened to a
+prefix match on 2026-09-10: see `2026-09-10-pr624-coderabbit-round-fixes.md`.)
 `IDEMPOTENCY_CROSS_OP_KEY_REUSE` deliberately stays definitive — a key owned by
 another operation can never succeed, and leaving it in place would trap the
 operator in an unfixable retry loop.

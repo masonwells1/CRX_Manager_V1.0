@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
   toast: vi.fn(),
   resetKey: vi.fn(),
+  // One scoped-key map per operation, shared across renders like the real
+  // hook's ref; cleared per test in beforeEach.
+  scopedKeys: new Map<string, Map<string, string>>(),
 }));
 
 const siblings = [
@@ -86,8 +89,9 @@ vi.mock('../components/ui/Toast', () => ({
 // undefined member throws inside the click handler, so the RPC never fires and
 // the test fails for a reason that has nothing to do with what it asserts.
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => {
-    const scopedKeys = new Map<string, string>();
+  useIdempotencyKey: (operation: string) => {
+    const scopedKeys = mocks.scopedKeys.get(operation) ?? new Map<string, string>();
+    mocks.scopedKeys.set(operation, scopedKeys);
     return {
       getKey: () => 'idem-1',
       resetKey: mocks.resetKey,
@@ -118,6 +122,7 @@ vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 describe('InventoryPage Product identity writers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.scopedKeys.clear();
     // create_inventory_hold now runs through the REAL useUncertainMutationIntent,
     // which freezes the request in IndexedDB before the RPC fires. jsdom has no
     // IndexedDB, so give each test a fresh one (same shape as the hook's own test).

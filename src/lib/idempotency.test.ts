@@ -153,6 +153,14 @@ describe('isDefinitiveRpcRejection', () => {
       code: 'P0001',
       message: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE: idempotency_key k is already in use for operation adjust_inventory',
     })).toBe(true);
+    // The key is caller-controlled and the CROSS_OP message quotes it, so a key
+    // that merely contains the concurrent-replay token must not turn that
+    // definitive refusal into a retained, forever-retried key.
+    expect(isDefinitiveRpcRejection({
+      code: 'P0001',
+      message: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE: idempotency_key IDEMPOTENCY_CONCURRENT_REPLAY_RETRY-k '
+        + 'is already in use for operation adjust_inventory; cannot reuse it for operation create_inventory_hold',
+    })).toBe(true);
   });
 
   it('treats connection-outcome-unknown codes as uncertain, not a definitive refusal', () => {

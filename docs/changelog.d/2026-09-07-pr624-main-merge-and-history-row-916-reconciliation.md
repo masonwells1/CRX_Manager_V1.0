@@ -22,11 +22,11 @@ Exactly one file conflicted: `docs/reference/migration-history.md`, at row 916
   row 924 for `20260908130000_bind_create_inventory_hold_receipt_to_intent.sql`.
 
 Resolved **by content, not by side**: `main`'s corrected row 916 was taken, and the
-branch's new row 923 was kept. Taking either side wholesale would have lost real
+branch's new row 924 was kept. Taking either side wholesale would have lost real
 information — "ours" would have silently reverted a factual correction about a live
 migration back to a false claim, and "theirs" would have dropped the new candidate row.
 
-Verified after the resolution: zero conflict markers remain; rows 916, 917 and 923 each
+Verified after the resolution: zero conflict markers remain; rows 916, 917, 923 and 924 each
 appear exactly once; row 916 now opens `**APPLIED LIVE`.
 
 ### Proof observed
@@ -41,7 +41,7 @@ appear exactly once; row 916 now opens `**APPLIED LIVE`.
 ### State recorded, not fixed here
 
 - **The migration `20260908130000` is still NOT applied to live.** Nothing in this change
-  applies it; row 923 keeps its LOCAL CANDIDATE marker. Applying it remains a hard gate
+  applies it; row 924 keeps its LOCAL CANDIDATE marker. Applying it remains a hard gate
   needing Mason's explicit in-conversation approval, and it must precede the
   `InventoryPage` fix reaching real users.
 - **PR #624 still reads `CHANGES_REQUESTED`.** All five CodeRabbit review threads are
