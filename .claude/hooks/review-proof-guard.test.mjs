@@ -8,12 +8,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const hookPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "review-proof-guard.mjs");
+const skippedAliasCases = [];
+
+function skipAliasCase(reason) {
+  skippedAliasCases.push(reason);
+  console.log(`review-proof-guard.test: ${reason} — alias case skipped`);
+}
 
 function run(payload) {
   return spawnSync(process.execPath, [hookPath], {
     encoding: "utf8",
     input: JSON.stringify(payload),
   });
+}
+
+function runRawInput(input) {
+  return spawnSync(process.execPath, [hookPath], { encoding: "utf8", input });
 }
 
 function assertEntrypointDenied(payload, reason, label) {
@@ -34,6 +44,17 @@ function assertEntrypointAllowed(payload, label) {
   assert.equal(result.signal, null, `${label}: hook must not terminate by signal`);
   assert.equal(result.stderr, "", `${label}: hook must not write stderr`);
   assert.equal(result.stdout, "", `${label}: must allow`);
+}
+
+// Unparseable hook input passes through with no decision, matching every other
+// hook in this repository (codex-push-guard, pr-merge-guard, migration-apply-guard,
+// bash-safety, unattended-autopilot). The harness always sends JSON; this records
+// the convention so a change to it is deliberate, not accidental.
+{
+  const result = runRawInput("{not json");
+  assert.equal(result.error, undefined, "unparseable hook input: hook process must spawn");
+  assert.equal(result.status, 0, "unparseable hook input exits 0");
+  assert.equal(result.stdout, "", "unparseable hook input passes through with no decision (house convention)");
 }
 
 // Native Codex apply_patch passes its patch as a raw tool_input STRING, while
@@ -878,6 +899,71 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
       assert.match(result.stdout, /"permissionDecision":"deny"/, `state-dir read must fail closed: ${JSON.stringify(payload.tool_input)}`);
     }
+    assertEntrypointDenied(
+      { tool_name: "Read", tool_input: { file_path: path.join(stateDir, "does-not-exist-message.txt") } },
+      /missing, a directory, or otherwise unresolvable/,
+      "a missing state-dir read receives a truthful read-specific message",
+    );
+    // The stop-hook acknowledgement valve is JSON, so a native Read of the EXISTING
+    // file is refused by shape — and the message now says that, instead of calling
+    // it review evidence consumed by the apply and push gates (independent review,
+    // F4). The fixture creates the file first: a read of a file that does not exist
+    // tests nothing about this message.
+    {
+      const ack = path.join(stateDir, "stop-wrap-ack.json");
+      writeFileSync(ack, "{}");
+      try {
+        assertEntrypointDenied({ tool_name: "Read", tool_input: { file_path: ack } }, /refused by shape/, "native Read of the existing stop-wrap ack valve");
+      } finally {
+        rmSync(ack, { force: true });
+      }
+    }
+    // Named NTFS streams directly in THIS checkout's state directory (independent
+    // review, F1). realpathSync.native keeps the `:stream` suffix, so the resolved
+    // name stopped ending in .json and the shape rule missed it; origin/main denied
+    // the same path through its whole-directory rule. Any stream-qualified path
+    // entering the state directory now denies, whatever the base extension.
+    if (process.platform === "win32") {
+      const streamBaseJson = path.join(stateDir, "stream-base-evidence.json");
+      const streamBaseFlag = path.join(stateDir, "stream-base.flag");
+      writeFileSync(streamBaseJson, "{}");
+      writeFileSync(streamBaseFlag, "1");
+      let ownStreamsCreated = false;
+      try {
+        writeFileSync(`${streamBaseJson}:pr612own`, "hidden");
+        writeFileSync(`${streamBaseFlag}:pr612own`, "hidden");
+        ownStreamsCreated = true;
+      } catch {
+        skipAliasCase("named NTFS stream creation refused in the state directory");
+      }
+      if (ownStreamsCreated) {
+        assert.equal(readFileSync(`${streamBaseJson}:pr612own`, "utf8"), "hidden", "the own-state named stream fixture must really exist before exercising the hook");
+        for (const target of [`${streamBaseJson}:pr612own`, `${streamBaseFlag}:pr612own`]) {
+          assertEntrypointDenied({ tool_name: "Read", tool_input: { file_path: target } }, /stream-qualified path/, `own-state named stream ${path.basename(target)}`);
+          assertEntrypointDenied({ tool_name: "NotebookRead", tool_input: { notebook_path: target } }, /stream-qualified path/, `own-state named stream via NotebookRead ${path.basename(target)}`);
+        }
+        assertEntrypointAllowed({ tool_name: "Read", tool_input: { file_path: streamBaseFlag } }, "the same flag WITHOUT a stream qualifier stays readable");
+      }
+    } else {
+      skipAliasCase("own-state named NTFS stream case is unavailable on this non-Windows filesystem");
+    }
+    // Malformed tool input (independent review, F7). A field whose text
+    // conversion throws used to crash the hook with no decision, which the
+    // harness treats as no objection. It now denies, for every tool and field.
+    for (const [tool_name, field] of [
+      ["Read", "file_path"],
+      ["NotebookRead", "notebook_path"],
+      ["Write", "file_path"],
+      ["mcp__filesystem__write_file", "path"],
+      ["apply_patch", "patch"],
+      ["Bash", "command"],
+    ]) {
+      assertEntrypointDenied({ tool_name, tool_input: { [field]: { toString: null } } }, /cannot be converted to text/, `malformed ${field} on ${tool_name}`);
+    }
+    // A native Read whose tool_input is a bare STRING naming state evidence is
+    // examined like the object form instead of being skipped (F7).
+    assertEntrypointDenied({ tool_name: "Read", tool_input: unlistedJson }, /REVIEW PROOF GUARD/, "string tool_input naming state-dir JSON");
+    assertEntrypointAllowed({ tool_name: "Read", tool_input: intentFlag }, "string tool_input naming a real non-proof state flag stays readable");
     // Windows 8.3 short aliases (round 4, HIGH). `dir /x` reports the alias the
     // volume generated for each long name; a proof read through its alias — and
     // through an aliased DIRECTORY component, which never spells `session-state`
@@ -885,7 +971,10 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
     const shortNames = new Map();
     if (process.platform === "win32") {
       for (const dir of [stateDir, path.dirname(stateDir)]) {
-        const listing = spawnSync("cmd.exe", ["/c", "dir", "/x", dir], { encoding: "utf8" }).stdout || "";
+        const probe = spawnSync("cmd.exe", ["/c", "dir", "/x", dir], { encoding: "utf8" });
+        assert.equal(probe.error, undefined, `8.3 short-name probe must start for ${dir}`);
+        assert.equal(probe.status, 0, `8.3 short-name probe must succeed for ${dir}: ${probe.stderr || "no stderr"}`);
+        const listing = probe.stdout;
         for (const line of listing.split(/\r?\n/)) {
           // `09/05/2026  08:19 AM                 2 CODEX-~1.JSO codex-review-0123abcd.json`
           const m = /^\S+\s+\S+(?:\s+[AP]M)?\s+(?:<DIR>|[\d,]+)\s+(\S*~\d\S*)\s+(.+?)\s*$/.exec(line);
@@ -925,7 +1014,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       // Not Windows, or a volume with 8.3 name generation turned off — the very
       // mitigation KNOWN_ISSUES recommends. There is no alias to open, so the
       // cases are skipped, not failed.
-      console.log("review-proof-guard.test: no 8.3 aliases on this volume — alias cases skipped");
+      skipAliasCase("no 8.3 aliases on this volume");
     }
     // A HARD link is the same file under a second name, and realpath cannot see
     // through it; inside the state directory a link count above one is refused as
@@ -946,7 +1035,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       assert.match(run({ tool_name: "Read", tool_input: { file_path: hardLink } }).stdout, /"permissionDecision":"deny"/, "proof read through a hard link inside the state dir must deny");
       assert.match(run({ tool_name: "Read", tool_input: { file_path: linkedProof } }).stdout, /"permissionDecision":"deny"/, "the hard-linked proof itself still denies by name");
     } else {
-      console.log("review-proof-guard.test: hard links unavailable on this filesystem — hard-link case skipped");
+      skipAliasCase("hard links unavailable on this filesystem");
     }
     // A symlink is the same trick with a chosen name. Creating one needs a
     // privilege on Windows; when the OS refuses, the case is recorded as skipped
@@ -971,7 +1060,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       symlinkSync(intentFlag, outsideToFlag, "file");
       assert.equal(run({ tool_name: "Read", tool_input: { file_path: outsideToFlag } }).stdout, "", "outside symlink to a non-proof file stays allowed");
     } else {
-      console.log("review-proof-guard.test: symlink creation refused by the OS — symlink alias cases skipped");
+      skipAliasCase("symlink creation refused by the OS");
     }
     // A native Read of an ordinary non-proof file through a junction OUTSIDE
     // review state remains allowed. The same fixture also records the residual:
@@ -1023,7 +1112,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       assert.equal(run({ tool_name: "Read", cwd: path.join(parentAlias, "checkout"), tool_input: { file_path: directFlag } }).stdout, "", "a parent-junction cwd must not disable a direct real state-directory flag read");
     } catch (error) {
       if (parentJunctioned) throw error;
-      console.log("review-proof-guard.test: parent-junction creation refused — parent-junction allow case skipped");
+      skipAliasCase("parent-junction creation refused");
     } finally {
       rmSync(parentJunctionRoot, { recursive: true, force: true });
     }
@@ -1060,18 +1149,46 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
             assert.match(run({ tool_name, cwd: junctionRoot, tool_input }).stdout, /"permissionDecision":"deny"/, "hard-linked evidence through the external state-directory location must deny");
           }
         } else {
-          console.log("review-proof-guard.test: hard-link creation refused on the junction target — external hard-link cases skipped");
+          skipAliasCase("hard-link creation refused on the junction target");
         }
         const viaJunction = path.join(junctionRoot, ".claude", "session-state", "migration-review-20260901120000_x.json");
+        // A name no earlier case uses: `subdir` already exists under externalDir.
+        const nestedEvidenceDir = path.join(externalDir, "f2-nested-evidence-dir");
+        const nestedEvidence = path.join(nestedEvidenceDir, "migration-review-nested.json");
+        mkdirSync(nestedEvidenceDir);
+        writeFileSync(nestedEvidence, "{\"verdict\":\"clean\"}");
         for (const payload of [
           { tool_name: "Read", tool_input: { file_path: viaJunction } },
           { tool_name: "Read", cwd: junctionRoot, tool_input: { file_path: ".claude/session-state/migration-review-20260901120000_x.json" } },
           { tool_name: "Read", cwd: junctionRoot, tool_input: { file_path: path.join(externalDir, "migration-review-20260901120000_x.json") } },
+          { tool_name: "Read", cwd: junctionRoot, tool_input: { file_path: nestedEvidence } },
           { tool_name: "NotebookRead", tool_input: { notebook_path: viaJunction } },
         ]) {
           const result = run(payload);
           assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
           assert.match(result.stdout, /"permissionDecision":"deny"/, `evidence under a JUNCTIONED state dir must deny: ${JSON.stringify(payload.tool_input)}`);
+        }
+        // Create a real named stream rather than assuming that the default
+        // `::$DATA` spelling has the same realpath behavior. POSIX records this
+        // as unavailable; a filesystem that refuses the stream is also skipped.
+        const namedStream = `${path.join(externalDir, "migration-review-20260901120000_x.json")}:pr612stream`;
+        let namedStreamCreated = false;
+        if (process.platform === "win32") {
+          try {
+            writeFileSync(namedStream, "stream-proof");
+            namedStreamCreated = true;
+          } catch {
+            skipAliasCase("named NTFS stream creation refused by the filesystem");
+          }
+        } else {
+          skipAliasCase("named NTFS stream case is unavailable on this non-Windows filesystem");
+        }
+        if (namedStreamCreated) {
+          assert.equal(readFileSync(namedStream, "utf8"), "stream-proof", "the named NTFS stream fixture must be readable before exercising the hook");
+          for (const tool_name of ["Read", "NotebookRead"]) {
+            const tool_input = tool_name === "Read" ? { file_path: namedStream } : { notebook_path: namedStream };
+            assertEntrypointDenied({ tool_name, cwd: junctionRoot, tool_input }, /stream-qualified path/, `real named NTFS stream through ${tool_name}`);
+          }
         }
         assert.equal(run({ tool_name: "Read", tool_input: { file_path: path.join(junctionRoot, ".claude", "session-state", "OVERNIGHT-INTENT.flag") } }).stdout, "", "a non-proof flag through this checkout's junctioned state dir stays allowed");
         // The payload `cwd` BELOW the checkout root (Codex GitHub App review of
@@ -1181,7 +1298,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
           assert.equal(readFileSync(`${viaJunction}::$DATA`, "utf8"), readFileSync(viaJunction, "utf8"), "on Windows the ::$DATA form must have opened the proof, so the cases above exercised the deny branch");
         }
       } else {
-        console.log("review-proof-guard.test: junction/directory-symlink creation refused — junctioned state-dir cases skipped");
+        skipAliasCase("junction/directory-symlink creation refused");
       }
     } finally {
       rmSync(junctionRoot, { recursive: true, force: true });
@@ -1191,6 +1308,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
     rmSync(fixtureRoot, { recursive: true, force: true });
   }
 }
+console.log(`review-proof-guard.test: ${skippedAliasCases.length} alias cases skipped${skippedAliasCases.length ? `: ${skippedAliasCases.join("; ")}` : ""}`);
 // …and the PROOF-FILE rule still runs first for every tool, the ledger stays
 // unreadable, a native WRITER into the directory still denies, an MCP reader
 // keeps the deny because its name proves nothing about what it does, and a

@@ -4,8 +4,11 @@
 
 Native `Read` and `NotebookRead` may open a non-JSON, single-link regular file
 inside the review state directory after `realpathSync.native` and `statSync`
-resolve and classify the target. Flags and text captures remain readable;
-named proofs, JSON evidence, and multi-link files in the state directory deny,
+resolve and classify the target. Flags, text captures and other non-JSON
+single-link files remain readable. Stream-qualified paths (NTFS alternate data
+streams) into the state directory, or onto a proof- or JSON-shaped base name,
+deny, as do named proofs, JSON evidence, and multi-link files in the state
+directory,
 including reads through Windows short directory names or the external location
 of this checkout's junctioned state directory. A legitimate non-proof alias is
 not refused solely for being an alias. Missing targets fail closed inside the

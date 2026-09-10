@@ -406,7 +406,13 @@ reachable on `main` before and after the 2026-09-05 change.
 expands short names and follows symlinks) and re-run the proof-file rule on the real name; a
 state-directory file with more than one hard link is refused, and so is ANY `.json` there whether
 or not the proof-name rule lists it (round 11 found `migration-review-*.json` was never listed).
-Flags and `.txt` captures are the only things the exemption lets a native reader open. Membership
+Only non-JSON regular files with a single hard link (flags, `.txt` captures and the like) can use
+the exemption. A stream-qualified path (an NTFS alternate data stream, `name:stream`) is refused
+when it enters the state directory or when its base name is proof- or JSON-shaped, because the
+stream suffix would otherwise hide that base name from the shape rule. A tool-input field that
+cannot be converted to text is refused for every tool. Unparseable hook input (invalid JSON on
+stdin) still passes with no decision — the same convention every other hook in `.claude/hooks`
+follows; the harness always sends JSON, so this is recorded, not endorsed. Membership
 in the directory is decided by the resolved path, by the lexical path the tool was given, and by
 the real location of this checkout's own state directory (a junctioned `session-state` strips the
 protected components from resolved paths — Codex App P1 on the round-11 head). A legitimate

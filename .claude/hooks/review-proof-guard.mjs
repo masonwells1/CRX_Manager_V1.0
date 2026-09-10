@@ -41,6 +41,7 @@ const toolInput = payload?.tool_input || payload?.toolInput || {};
 const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
 const input = toolInput && typeof toolInput === "object" ? toolInput : {};
 const toolName = String(payload?.tool_name || payload?.toolName || "");
+const READ_ONLY_SINGLE_FILE_TOOL_RE = /^(?:read|notebookread)$/i;
 const eventCwd = String(payload?.cwd || "");
 // Preserve the event-first cwd used by the shell-state checks below. Patch
 // destinations use pathCandidateCwd instead: an explicit relative tool
@@ -52,6 +53,17 @@ const pathCandidateCwd = nestedWorkingDir
   ? path.resolve(eventCwd || process.cwd(), String(nestedWorkingDir))
   : eventCwd;
 const patchPayloads = [rawPatchBody, input.patch, input.diff, input.input, input.changes];
+// A tool-input field whose text conversion throws (for example an object whose
+// toString is null) cannot name a real file or carry a real command. Left alone
+// it throws an uncaught exception further down — while the patch destinations
+// or path candidates are being built — and a hook that exits without a decision
+// is treated as no objection. Refuse it for every tool before anything reads it.
+if (Object.values(input).some((value) => value != null && typeof value === "object" && safeString(value) == null)) {
+  deny("REVIEW PROOF GUARD: a field in this tool call cannot be converted to text, so its target cannot be classified safely.");
+}
+const rawNativeReadTarget = READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName) && typeof toolInput === "string"
+  ? [toolInput]
+  : [];
 const rawPathCandidates = [
   input.file_path,
   input.filePath,
@@ -70,14 +82,29 @@ const rawPathCandidates = [
   // legitimately mention proof paths in documentation (Codex round-5). Write's
   // `content` is likewise deliberately not scanned; its target is file_path.
   ...patchPayloads.flatMap((payloadText) => extractPatchDestinations(payloadText)),
+  ...rawNativeReadTarget,
 ];
+// String() that cannot throw: an object with a non-callable toString makes
+// String() throw. The top-of-file check refuses any such input field outright;
+// this helper keeps every later conversion from crashing the hook regardless.
+function safeString(value) {
+  try {
+    return String(value);
+  } catch {
+    return null;
+  }
+}
 // Resolve `..` using the host's native path rules without touching disk. A bare
 // patch destination then matches the file it will write from the event cwd.
 const pathCandidates = rawPathCandidates.map((candidate) => {
   if (candidate == null || !pathCandidateCwd) return candidate;
-  return path.resolve(pathCandidateCwd, String(candidate));
+  const text = safeString(candidate);
+  return text == null ? null : path.resolve(pathCandidateCwd, text);
 });
-if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
+if (pathCandidates.some((candidate) => {
+  const text = safeString(candidate);
+  return text != null && reviewProofPathMentioned(text);
+})) {
   deny("REVIEW PROOF GUARD: Claude/Codex review proof files are wrapper-owned. Run the real review workflow; do not write, edit, move, or delete proof JSON directly.");
 }
 // The basename matcher above sees the NAME the tool was given, not the file the
@@ -112,7 +139,6 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 //                    ignored — pnpm-style stores hard-link every module file;
 //   "unresolvable" — missing, a directory, or a path the OS cannot resolve;
 //   "clear"        — a regular file that is none of the above.
-const READ_ONLY_SINGLE_FILE_TOOL_RE = /^(?:read|notebookread)$/i;
 const STATE_DIR_REAL_PATH_RE = /[\\/]\.claude[\\/]session-state[\\/]/i;
 const STATE_DIR_EVIDENCE_RE = /\.json$/i;
 // Membership in the state directory is decided three ways, because when
@@ -165,9 +191,31 @@ function ownStateDirsOf(startDirs) {
   return found;
 }
 const ownStateDirsReal = ownStateDirsOf([hookCwd, process.cwd(), process.env.CLAUDE_PROJECT_DIR]);
+function pathIsStateDirOrDescendant(candidate, stateDir) {
+  const relative = path.relative(stateDir, candidate);
+  return relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+// NTFS alternate data streams qualify a path component after its drive letter:
+// `x.json:stream` and `x.json::$DATA` both open bytes attached to x.json.
+// Do not mistake the drive's `C:` for a stream; only a colon following a path
+// component counts. Strip the qualifier before name classification because
+// realpathSync.native may preserve it for named streams.
+function hasNtfsStreamQualifier(value) {
+  const text = safeString(value);
+  return text != null && /(?:^|[\\/])[^\\/:]+:[^\\/]+/.test(text);
+}
+function withoutNtfsStreamQualifier(value) {
+  const text = safeString(value);
+  return text == null ? null : text.replace(/(^|[\\/])([^\\/:]+):[^\\/]+(?=[\\/]|$)/g, "$1$2");
+}
 function classifyReadTarget(candidate) {
-  const raw = String(candidate);
+  const raw = safeString(candidate);
+  if (raw == null) return "malformed";
   const lexical = path.resolve(hookCwd || process.cwd(), raw);
+  const lexicalBase = withoutNtfsStreamQualifier(lexical);
+  const streamQualified = hasNtfsStreamQualifier(raw) || hasNtfsStreamQualifier(lexical);
+  const lexicalStateDir = STATE_DIR_REAL_PATH_RE.test(lexical);
   // Resolve the path the way the operating system will OPEN it, not the way
   // `path.resolve` spells it. `path.resolve` collapses `alias/..` lexically, but
   // a POSIX open() follows the `alias` symlink FIRST and only then applies `..`:
@@ -189,14 +237,23 @@ function classifyReadTarget(candidate) {
     resolved = realpathSync.native(asOpened);
     stats = statSync(resolved);
   } catch {
+    if (streamQualified && (lexicalStateDir ||
+        reviewProofPathMentioned(lexicalBase) || STATE_DIR_EVIDENCE_RE.test(lexicalBase))) return "stream";
     return "unresolvable";
   }
   if (!stats.isFile()) return "unresolvable";
-  if (reviewProofPathMentioned(resolved) || reviewProofPathMentioned(lexical)) return "proof";
+  const resolvedBase = withoutNtfsStreamQualifier(resolved);
   const inStateDir = STATE_DIR_REAL_PATH_RE.test(resolved) ||
-    STATE_DIR_REAL_PATH_RE.test(lexical) ||
-    ownStateDirsReal.some((stateDir) => samePath(path.dirname(resolved), stateDir));
-  if (inStateDir && (STATE_DIR_EVIDENCE_RE.test(resolved) || STATE_DIR_EVIDENCE_RE.test(lexical))) return "evidence";
+    lexicalStateDir ||
+    ownStateDirsReal.some((stateDir) => pathIsStateDirOrDescendant(resolved, stateDir));
+  // A stream is denied whenever it enters this checkout's state directory. A
+  // stream attached to a proof/evidence-shaped base name is also denied outside
+  // it, since the stream suffix must not hide the base filename from the guard.
+  if (streamQualified && (inStateDir || reviewProofPathMentioned(resolvedBase) ||
+      reviewProofPathMentioned(lexicalBase) || STATE_DIR_EVIDENCE_RE.test(resolvedBase) ||
+      STATE_DIR_EVIDENCE_RE.test(lexicalBase))) return "stream";
+  if (reviewProofPathMentioned(resolvedBase) || reviewProofPathMentioned(lexicalBase)) return "proof";
+  if (inStateDir && (STATE_DIR_EVIDENCE_RE.test(resolvedBase) || STATE_DIR_EVIDENCE_RE.test(lexicalBase))) return "evidence";
   if (inStateDir && stats.nlink > 1) return "aliased";
   return "clear";
 }
@@ -206,9 +263,11 @@ if (READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName)) {
   for (const rawCandidate of rawPathCandidates) {
     if (rawCandidate == null || String(rawCandidate) === "") continue;
     const verdict = classifyReadTarget(rawCandidate);
-    if (verdict === "proof" || verdict === "evidence" || verdict === "aliased") {
-      deny("REVIEW PROOF GUARD: that path resolves to wrapper-owned evidence in the review state directory (a review proof, the applied-source ledger, or other JSON the apply and push gates consume). Run the real review workflow; evidence files are not readable through file tools. Flags and .txt captures there remain readable by their real names.");
-    }
+    if (verdict === "proof") deny("REVIEW PROOF GUARD: that path resolves to a wrapper-owned review proof or applied-source ledger. Run the real review workflow; proof files are not readable through file tools.");
+    if (verdict === "evidence") deny("REVIEW PROOF GUARD: a .json file in the review state directory is refused by shape because wrapper evidence is JSON. Use the real review workflow; only non-JSON regular files can use the native-read exception.");
+    if (verdict === "aliased") deny("REVIEW PROOF GUARD: a file in the review state directory has more than one hard link. A hard link can alias a wrapper proof, so native file reads refuse it.");
+    if (verdict === "stream") deny("REVIEW PROOF GUARD: a stream-qualified path is refused because an NTFS alternate data stream can hide a proof or JSON evidence basename.");
+    if (verdict === "malformed") deny("REVIEW PROOF GUARD: this native read target is malformed and cannot be resolved safely.");
   }
 }
 // A native or MCP file-mutation tool (Write/Edit, move_file, delete_directory,
@@ -296,6 +355,9 @@ const isCanonicalSingleFileRead = READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName) &
   stateDirCandidates.length > 0 &&
   stateDirCandidatePairs.every(({ rawCandidate }) => classifyReadTarget(rawCandidate) === "clear");
 if (stateDirCandidates.length > 0 && !isPureAckWrite && !isCanonicalSingleFileRead) {
+  if (READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName)) {
+    deny("REVIEW PROOF GUARD: this native read target is missing, a directory, or otherwise unresolvable inside the wrapper-owned review state directory, so it cannot use the single-file read exception.");
+  }
   deny("REVIEW PROOF GUARD: the review state directory (.claude/session-state) and its wrapper-owned contents cannot be created, moved, or deleted through a file tool. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
 }
 
