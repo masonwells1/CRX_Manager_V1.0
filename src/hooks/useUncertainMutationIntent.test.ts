@@ -814,6 +814,34 @@ describe('useUncertainMutationIntent', () => {
     expect(reopened.result.current.getIdempotencyKey()).toBe(originalKey);
   });
 
+  it('keeps the committed key when a peer resolved the attempt and IndexedDB then lost the record', async () => {
+    // With no coordinator row left, the resolved local mirror is the only
+    // evidence of which key committed. Dropping it would mint a fresh key, and
+    // adjust_inventory replays by key alone, so the retry would apply twice.
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-peer-resolved-evicted',
+      surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'stale-tab-evicted');
+    const staleTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'peer-tab-evicted');
+    const peerTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = staleTab.result.current.getIdempotencyKey();
+    await act(async () => {
+      await staleTab.result.current.classifyFailure({ code: 'ETIMEDOUT', message: 'socket timeout' });
+    });
+    await act(async () => peerTab.result.current.beginIntent({ quantity: 5 }));
+    expect(peerTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => peerTab.result.current.resolveIntent());
+    globalThis.indexedDB = new IDBFactory();
+
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    expect(staleTab.result.current.getIdempotencyKey()).toBe(originalKey);
+  });
+
   it('retires the local mirror when a success resolves after IndexedDB lost the record', async () => {
     // The pending-mirror fallback must not outlive a request known to have
     // committed: a success retires the mirror even with no coordinator row left.
