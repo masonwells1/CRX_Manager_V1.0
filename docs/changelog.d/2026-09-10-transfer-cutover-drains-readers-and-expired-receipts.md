@@ -56,12 +56,14 @@ Proof observed:
 - The static proof pins the isolation guard, the lock, its place after `lock_timeout`
   and before every preflight, the purge, and the whole refusal block as its exact
   complement. It reads every ordering from line-anchored statements, so a comment
-  that names a statement cannot satisfy it. A copy of the static proof was run
-  against seven broken copies of the migration, and each one failed. The copies narrowed
-  the refusal to `AND`, moved it to `clock_timestamp()` behind a comment, moved the
-  lock below the first preflight behind a comment, reset `lock_timeout`, disabled the
-  isolation guard, read the table before the lock, and added a second table lock.
-  The unmodified file passed.
+  that names a statement cannot satisfy it. It checks the gap between `lock_timeout`
+  and the lock one line at a time, because CodeQL (`js/redos`) found that a single
+  multi-line pattern there could backtrack exponentially. A copy of the static proof
+  was run against eight broken copies of the migration, and each one failed. The copies
+  narrowed the refusal to `AND`, moved it to `clock_timestamp()` behind a comment, moved
+  the lock below the first preflight behind a comment, reset `lock_timeout`, disabled
+  the isolation guard, read the table before the lock (once flush left, once indented),
+  and added a second table lock. The unmodified file passed.
 - Four new component tests cover a result for another job and a result with no job, on
   both screens. All four failed with the `job_id` comparison disabled.
 - `scripts/smoke/prove-commission-migration-plan-order.mjs` still applies the whole

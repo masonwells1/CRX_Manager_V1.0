@@ -95,7 +95,13 @@ const unexpiredReceiptRefusal = statementAt(/^DO \$receipt_preflight\$\nBEGIN\n 
 const functionRename = statementAt(/^DO \$rename\$$/m, 'the function rename');
 assert(isolationGuard < lockTimeout, 'isolation is checked before any lock is requested');
 assert(lockTimeout < receiptLock, 'the early lock wait is bounded');
-assert.match(source.slice(lockTimeout, receiptLock).split('\n').slice(1).join('\n'), /^(\s*|--.*)(\n(\s*|--.*))*$/, 'only comments separate the lock bound from the lock');
+// One line at a time: a single pattern spanning the lines backtracks
+// exponentially (CodeQL js/redos), because \s* also matches the line break.
+const linesBetweenLockBoundAndLock = source.slice(lockTimeout, receiptLock).split('\n').slice(1);
+assert(
+  linesBetweenLockBoundAndLock.every((line) => /^\s*(--[^\n]*)?$/.test(line)),
+  'only comments separate the lock bound from the lock',
+);
 assert(receiptLock < firstPreflight, 'the receipt lock precedes every preflight read');
 assert(cutoverTrigger < expiredReceiptPurge, 'purge follows the cutover trigger');
 assert(expiredReceiptPurge < unexpiredReceiptRefusal, 'purge precedes the unexpired-receipt refusal');
