@@ -1105,26 +1105,33 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
     // which distinguishes the retained resolved-target rule from the unclosable
     // check/open race. `junction` is a real Windows directory junction (no
     // developer-mode symlink privilege); its setup failure is a test failure.
-    const raceRoot = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-alias-swap-"));
-    const raceSafeDir = path.join(raceRoot, "safe");
-    const raceAlias = path.join(raceRoot, "alias");
-    const raceRead = path.join(raceAlias, "harmless.txt");
-    try {
-      mkdirSync(raceSafeDir);
-      writeFileSync(path.join(raceSafeDir, "harmless.txt"), "SAFE-BYTES");
-      const proofUnderHarmlessName = path.join(stateDir, "harmless.txt");
-      linkSync(migrationProof, proofUnderHarmlessName);
-      symlinkSync(raceSafeDir, raceAlias, "junction");
-      const verdictBeforeSwap = run({ tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: raceRead } });
-      console.log(`review-proof-guard.test: alias-swap junction regression executed; pre-open verdict=${verdictBeforeSwap.stdout === "" ? "ALLOW" : "DENY"}`);
-      assert.equal(verdictBeforeSwap.stdout, "", "ordinary non-proof file through a junction outside review state must allow");
-      rmSync(raceAlias, { recursive: true, force: true });
-      symlinkSync(stateDir, raceAlias, "junction");
-      assert.match(run({ tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: raceRead } }).stdout, /"permissionDecision":"deny"/, "a static junction alias whose resolved target is a proof must deny");
-      assert.equal(readFileSync(raceRead, "utf8"), readFileSync(migrationProof, "utf8"), "an allowed alias retargeted after the hook verdict reproduces the wrapper-proof read");
-      console.log("review-proof-guard.test: alias-swap junction residual reproduced: ALLOW before retarget, then wrapper proof bytes opened");
-    } finally {
-      rmSync(raceRoot, { recursive: true, force: true });
+    // The residual needs a hard link to put proof bytes under a harmless name, so it
+    // runs only where the hard-link probe above succeeded; elsewhere it is recorded
+    // as skipped instead of throwing from linkSync (CodeRabbit review of 308df48f5).
+    if (hardLinked) {
+      const raceRoot = mkdtempSync(path.join(os.tmpdir(), "review-proof-guard-alias-swap-"));
+      const raceSafeDir = path.join(raceRoot, "safe");
+      const raceAlias = path.join(raceRoot, "alias");
+      const raceRead = path.join(raceAlias, "harmless.txt");
+      try {
+        mkdirSync(raceSafeDir);
+        writeFileSync(path.join(raceSafeDir, "harmless.txt"), "SAFE-BYTES");
+        const proofUnderHarmlessName = path.join(stateDir, "harmless.txt");
+        linkSync(migrationProof, proofUnderHarmlessName);
+        symlinkSync(raceSafeDir, raceAlias, "junction");
+        const verdictBeforeSwap = run({ tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: raceRead } });
+        console.log(`review-proof-guard.test: alias-swap junction regression executed; pre-open verdict=${verdictBeforeSwap.stdout === "" ? "ALLOW" : "DENY"}`);
+        assert.equal(verdictBeforeSwap.stdout, "", "ordinary non-proof file through a junction outside review state must allow");
+        rmSync(raceAlias, { recursive: true, force: true });
+        symlinkSync(stateDir, raceAlias, "junction");
+        assert.match(run({ tool_name: "Read", cwd: fixtureRoot, tool_input: { file_path: raceRead } }).stdout, /"permissionDecision":"deny"/, "a static junction alias whose resolved target is a proof must deny");
+        assert.equal(readFileSync(raceRead, "utf8"), readFileSync(migrationProof, "utf8"), "an allowed alias retargeted after the hook verdict reproduces the wrapper-proof read");
+        console.log("review-proof-guard.test: alias-swap junction residual reproduced: ALLOW before retarget, then wrapper proof bytes opened");
+      } finally {
+        rmSync(raceRoot, { recursive: true, force: true });
+      }
+    } else {
+      skipAliasCase("hard links unavailable on this filesystem — alias-swap junction residual case");
     }
     // A checkout merely living below a junctioned PARENT is not itself an
     // aliased state directory. Its direct state-directory flag must remain
