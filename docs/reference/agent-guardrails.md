@@ -1,5 +1,31 @@
 # Agent guardrails — hooks & review subagents (CRX Manager)
 
+### Review-proof guard: native reads (PR #612)
+
+Native `Read` and `NotebookRead` may open a non-JSON, single-link regular file
+inside the review state directory after `realpathSync.native` and `statSync`
+resolve and classify the target. Flags, text captures and other non-JSON
+single-link files remain readable. On Windows, stream-qualified paths (NTFS
+alternate data streams) into the state directory, or onto a review-proof file
+name, deny, as do named proofs, JSON evidence, and multi-link files in the state
+directory,
+including reads through Windows short directory names or the external location
+of this checkout's junctioned state directory. A legitimate non-proof alias is
+not refused solely for being an alias. Missing targets fail closed inside the
+state directory. `Grep`, `Glob`, MCP readers, and writers keep their existing
+restrictions. The capture text can itself be gate-consumed evidence; permitting
+a read does not authorize changing it. This is a classification of the pathname
+at hook time, not a binding to the later file-tool open: alias retargeting,
+replacing a checked directory with a junction, and replacing a checked file
+with a hard link remain documented pre-hook/open races in `KNOWN_ISSUES.md`.
+The guard is a named-access speed bump; wrapper validation and protected branch
+review are the durable boundary.
+
+The proposed shell exceptions for home transcript walks and quoted `function`
+searches were withdrawn after bypasses were found. Their over-blocks remain;
+this native-reader change does not close the documented shell-side alias and
+outside-hard-link limitations in `docs/manual/KNOWN_ISSUES.md`.
+
 > Extracted from `CLAUDE.md` on 2026-06-15 to keep the always-loaded file lean. This is the full reference for the
 > automated safety net; `CLAUDE.md` keeps only a short summary + a pointer here. Regenerate the schema registry the
 > hooks read after schema changes: run the `regen-schema-registry` live-introspection workflow.
