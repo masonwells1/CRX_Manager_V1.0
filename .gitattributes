@@ -28,6 +28,19 @@
 # These migrations are already applied live and contain content-bound
 # function-body hashes. Preserve each artifact's reviewed bytes in Git so a
 # clean checkout replays the same pg_proc.prosrc bodies on every operating system.
+# 20260630180000 installs the preview_field_app_invoice_split body that
+# 20260906120000's PREFLIGHT_BODY_DRIFT pins at md5 ca33fb973d86dbf3a2788dc11fbc49a5.
+# Measured 2026-09-06: unpinned, a Windows checkout of it carries 913 CR bytes and
+# replays a body hashing 181f9d550b0416629c62353cc2f53986 instead.
+# Git already stores this file with LF, so this pin changes what a CHECKOUT writes,
+# never the reviewed bytes of an applied migration. Scope, stated precisely because
+# the pin is narrower than it first reads: eol=lf governs FUTURE checkouts, so a
+# worktree already holding this file with CRLF keeps those bytes until it is
+# re-checked-out or renormalised (git add --renormalize). Both automated apply paths
+# here -- scripts/apply-migration-file.mjs and the container prover -- already strip
+# CR before the bytes reach PostgreSQL. What this pin actually protects is a raw
+# psql -f cold rebuild: a real path, but not every path.
+supabase/migrations/20260630180000_field_app_pricing_unit_fix.sql text eol=lf
 supabase/migrations/20260717042803_supplier_pricing_phase1a.sql -text diff whitespace=cr-at-eol
 supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql text eol=lf
 supabase/migrations/20260717171331_restore_legacy_pricing_version_compat.sql text eol=lf
@@ -47,6 +60,15 @@ supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql text eol
 # verbatim, so a CRLF smudge on a Windows checkout puts CR bytes in the installed
 # prosrc and the live md5 can never reproduce. Pin the prover too, as both peers are.
 scripts/smoke/prove-next-invoice-number-year-chicago.mjs text eol=lf
+# preview_field_app_invoice_split season -> invoice date (2026-09-06, CRX-SEC-001).
+# Same rule, same reason, and it bites BEFORE the apply. The migration's preflight
+# pins md5(prosrc) ca33fb97… for the live 4-argument body it replaces; on a Windows
+# checkout with core.autocrlf=true an unpinned file is smudged to CRLF, the body
+# PostgreSQL receives carries CR bytes, and PREFLIGHT_BODY_DRIFT aborts a correct
+# migration while reporting it as drift. The prover is pinned for the same reason and
+# additionally asserts the candidate contains no CR at all.
+supabase/migrations/20260906120000_preview_field_app_season_follows_invoice_date.sql text eol=lf
+scripts/smoke/prove-preview-field-app-season.mjs text eol=lf
 
 # The six migrations applied live on 2026-08-12 whose files were recovered from
 # the applying sessions' transcripts and landed afterwards. Same rule, same
@@ -228,3 +250,8 @@ supabase/migrations/20260904160000_invoice_date_fallbacks_chicago.sql text eol=l
 scripts/smoke/prove-invoice-date-fallbacks-chicago.mjs text eol=lf
 # Byte-exact live bodies (one keeps CRLF, as production does); never EOL-converted.
 scripts/smoke/fixtures/invoice-date-fallbacks-live-bodies-20260903.sql -text diff whitespace=cr-at-eol
+# The season follow-up to 20260904160000: same shape, same reason. It pins two live function
+# bodies by md5 and its own postflight REFUSES an installed body carrying CR bytes, so a CRLF
+# checkout would install bytes the pins were never computed against and abort mid-apply.
+supabase/migrations/20260904180000_invoice_season_follows_invoice_date.sql text eol=lf
+scripts/smoke/prove-invoice-season-follows-invoice-date.mjs text eol=lf
