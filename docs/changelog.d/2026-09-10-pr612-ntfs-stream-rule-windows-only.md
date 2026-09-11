@@ -8,7 +8,9 @@ simply a differently named — and missing — file; there is no stream to hide 
 
 `hasNtfsStreamQualifier` and `withoutNtfsStreamQualifier` in `.claude/hooks/review-proof-guard.mjs`
 now apply only when `process.platform === "win32"`, the same way the guard already gates
-case-insensitive path comparison. POSIX behaviour returns to exactly what passed CI at `855020270`.
+case-insensitive path comparison. On POSIX the stream rule is inert again, as it was at `855020270`;
+the other changes since then (malformed-input refusal, bare-string Read handling, any-depth state
+membership, per-reason messages) apply on every platform.
 Windows behaviour — where the named-stream read of state-directory JSON was reproduced and closed —
 is unchanged.
 

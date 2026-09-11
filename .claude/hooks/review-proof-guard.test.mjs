@@ -964,6 +964,35 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
     // examined like the object form instead of being skipped (F7).
     assertEntrypointDenied({ tool_name: "Read", tool_input: unlistedJson }, /REVIEW PROOF GUARD/, "string tool_input naming state-dir JSON");
     assertEntrypointAllowed({ tool_name: "Read", tool_input: intentFlag }, "string tool_input naming a real non-proof state flag stays readable");
+    // The refusal covers the directory fields read BEFORE the path candidates are
+    // built — the payload's own cwd and a nested cwd/workdir — which used to crash
+    // the hook with no decision (independent review of 3b77cbc67, finding 1).
+    assertEntrypointDenied({ tool_name: "Read", cwd: { toString: null }, tool_input: { file_path: intentFlag } }, /cannot be converted to text/, "malformed payload cwd");
+    for (const [tool_name, field] of [["Read", "cwd"], ["Bash", "workdir"], ["Write", "workdir"]]) {
+      assertEntrypointDenied({ tool_name, tool_input: { file_path: intentFlag, command: "git status", [field]: { toString: null } } }, /cannot be converted to text/, `malformed ${field} on ${tool_name}`);
+    }
+    // …but an unrelated tool argument that merely carries a toString key is not a
+    // path, directory or command, and is not refused (findings 2 and 3: the first
+    // version of this check inspected every argument and over-blocked).
+    assertEntrypointAllowed({ tool_name: "mcp__db__write", tool_input: { data: { toString: "hello" } } }, "an unrelated MCP argument with a toString key stays allowed");
+    assertEntrypointAllowed({ tool_name: "mcp__i18n__put", tool_input: { entries: [{ key: "toString", toString: "x" }] } }, "an unrelated MCP array element with a toString key stays allowed");
+    // A stream on an ordinary JSON file OUTSIDE the state directory (the Windows
+    // Zone.Identifier marker on a downloaded package.json, say) is not evidence
+    // under this guard's rules and stays readable (finding 4).
+    if (process.platform === "win32") {
+      const outsideJson = path.join(fixtureRoot, "outside-package.json");
+      writeFileSync(outsideJson, "{}");
+      let outsideStream = false;
+      try {
+        writeFileSync(`${outsideJson}:Zone.Identifier`, "[ZoneTransfer]");
+        outsideStream = true;
+      } catch {
+        skipAliasCase("named NTFS stream creation refused outside the state directory");
+      }
+      if (outsideStream) {
+        assertEntrypointAllowed({ tool_name: "Read", tool_input: { file_path: `${outsideJson}:Zone.Identifier` } }, "a stream on an ordinary JSON file outside the state directory stays readable");
+      }
+    }
     // Windows 8.3 short aliases (round 4, HIGH). `dir /x` reports the alias the
     // volume generated for each long name; a proof read through its alias — and
     // through an aliased DIRECTORY component, which never spells `session-state`
@@ -993,6 +1022,8 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       if (stateDirAlias) {
         aliasCases.push({ tool_name: "Read", tool_input: { file_path: path.join(stateDirAlias, path.basename(proofAlias)) } });
         aliasCases.push({ tool_name: "Read", tool_input: { file_path: path.join(stateDirAlias, path.basename(proof)) } });
+      } else {
+        skipAliasCase("no 8.3 alias found for the state directory — directory-alias proof cases");
       }
       for (const payload of aliasCases) {
         const result = run(payload);
@@ -1004,6 +1035,8 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
       const flagAlias = shortNames.get(intentFlag);
       if (flagAlias) {
         assert.equal(run({ tool_name: "Read", tool_input: { file_path: flagAlias } }).stdout, "", "8.3 alias of a non-proof state-dir file resolves and is allowed");
+      } else {
+        skipAliasCase("no 8.3 alias found for the intent flag — non-proof alias allow case");
       }
     } else if (process.platform === "win32" && shortNames.size > 0) {
       // The volume DOES generate aliases (the directory got one) but the proof's
@@ -1031,6 +1064,8 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
           const tool_input = tool_name === "Read" ? { file_path: aliasPath } : { notebook_path: aliasPath };
           assert.match(run({ tool_name, tool_input }).stdout, /"permissionDecision":"deny"/, "hard-linked evidence through a short directory alias must deny");
         }
+      } else {
+        skipAliasCase("no 8.3 alias found for the state directory — hard-link-through-alias case");
       }
       assert.match(run({ tool_name: "Read", tool_input: { file_path: hardLink } }).stdout, /"permissionDecision":"deny"/, "proof read through a hard link inside the state dir must deny");
       assert.match(run({ tool_name: "Read", tool_input: { file_path: linkedProof } }).stdout, /"permissionDecision":"deny"/, "the hard-linked proof itself still denies by name");

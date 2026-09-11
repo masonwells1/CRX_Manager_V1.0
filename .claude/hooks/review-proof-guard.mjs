@@ -40,6 +40,22 @@ const toolInput = payload?.tool_input || payload?.toolInput || {};
 // documentation that merely discusses protected paths allowed.
 const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
 const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+// A field this hook converts to text, whose conversion throws (for example an
+// object whose toString is null), cannot name a real file, directory or command.
+// Left alone it throws an uncaught exception below — while the cwd, the patch
+// destinations or the path candidates are being built — and a hook that exits
+// without a decision is treated as no objection. Refuse it before anything reads
+// it. Only the fields this hook actually converts are checked: an unrelated tool
+// argument that merely carries a `toString` key is none of this hook's business.
+const TEXT_FIELDS_READ = [
+  "cwd", "workdir", "patch", "diff", "input", "changes", "file_path", "filePath",
+  "notebook_path", "notebookPath", "path", "target", "source", "destination", "command", "cmd",
+];
+const unconvertible = (value) => value != null && typeof value === "object" && safeString(value) == null;
+if ([payload?.cwd, payload?.tool_name, payload?.toolName].some(unconvertible) ||
+    TEXT_FIELDS_READ.some((field) => unconvertible(input[field]))) {
+  deny("REVIEW PROOF GUARD: a path, directory or command field in this tool call cannot be converted to text, so its target cannot be classified safely.");
+}
 const toolName = String(payload?.tool_name || payload?.toolName || "");
 const READ_ONLY_SINGLE_FILE_TOOL_RE = /^(?:read|notebookread)$/i;
 const eventCwd = String(payload?.cwd || "");
@@ -53,14 +69,6 @@ const pathCandidateCwd = nestedWorkingDir
   ? path.resolve(eventCwd || process.cwd(), String(nestedWorkingDir))
   : eventCwd;
 const patchPayloads = [rawPatchBody, input.patch, input.diff, input.input, input.changes];
-// A tool-input field whose text conversion throws (for example an object whose
-// toString is null) cannot name a real file or carry a real command. Left alone
-// it throws an uncaught exception further down — while the patch destinations
-// or path candidates are being built — and a hook that exits without a decision
-// is treated as no objection. Refuse it for every tool before anything reads it.
-if (Object.values(input).some((value) => value != null && typeof value === "object" && safeString(value) == null)) {
-  deny("REVIEW PROOF GUARD: a field in this tool call cannot be converted to text, so its target cannot be classified safely.");
-}
 const rawNativeReadTarget = READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName) && typeof toolInput === "string"
   ? [toolInput]
   : [];
@@ -243,7 +251,7 @@ function classifyReadTarget(candidate) {
     stats = statSync(resolved);
   } catch {
     if (streamQualified && (lexicalStateDir ||
-        reviewProofPathMentioned(lexicalBase) || STATE_DIR_EVIDENCE_RE.test(lexicalBase))) return "stream";
+        reviewProofPathMentioned(lexicalBase))) return "stream";
     return "unresolvable";
   }
   if (!stats.isFile()) return "unresolvable";
@@ -252,11 +260,10 @@ function classifyReadTarget(candidate) {
     lexicalStateDir ||
     ownStateDirsReal.some((stateDir) => pathIsStateDirOrDescendant(resolved, stateDir));
   // A stream is denied whenever it enters this checkout's state directory. A
-  // stream attached to a proof/evidence-shaped base name is also denied outside
+  // stream attached to a review-proof base name is also denied outside
   // it, since the stream suffix must not hide the base filename from the guard.
   if (streamQualified && (inStateDir || reviewProofPathMentioned(resolvedBase) ||
-      reviewProofPathMentioned(lexicalBase) || STATE_DIR_EVIDENCE_RE.test(resolvedBase) ||
-      STATE_DIR_EVIDENCE_RE.test(lexicalBase))) return "stream";
+      reviewProofPathMentioned(lexicalBase))) return "stream";
   if (reviewProofPathMentioned(resolvedBase) || reviewProofPathMentioned(lexicalBase)) return "proof";
   if (inStateDir && (STATE_DIR_EVIDENCE_RE.test(resolvedBase) || STATE_DIR_EVIDENCE_RE.test(lexicalBase))) return "evidence";
   if (inStateDir && stats.nlink > 1) return "aliased";
@@ -271,7 +278,7 @@ if (READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName)) {
     if (verdict === "proof") deny("REVIEW PROOF GUARD: that path resolves to a wrapper-owned review proof or applied-source ledger. Run the real review workflow; proof files are not readable through file tools.");
     if (verdict === "evidence") deny("REVIEW PROOF GUARD: a .json file in the review state directory is refused by shape because wrapper evidence is JSON. Use the real review workflow; only non-JSON regular files can use the native-read exception.");
     if (verdict === "aliased") deny("REVIEW PROOF GUARD: a file in the review state directory has more than one hard link. A hard link can alias a wrapper proof, so native file reads refuse it.");
-    if (verdict === "stream") deny("REVIEW PROOF GUARD: a stream-qualified path is refused because an NTFS alternate data stream can hide a proof or JSON evidence basename.");
+    if (verdict === "stream") deny("REVIEW PROOF GUARD: a stream-qualified path into the review state directory, or onto a review-proof file name, is refused because an NTFS alternate data stream can hide the base name this guard classifies.");
     if (verdict === "malformed") deny("REVIEW PROOF GUARD: this native read target is malformed and cannot be resolved safely.");
   }
 }

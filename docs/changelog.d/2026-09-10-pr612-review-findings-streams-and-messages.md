@@ -7,7 +7,7 @@ findings. This change addresses them in `.claude/hooks/review-proof-guard.mjs`:
   suffix, so `<state>\x.json:stream` stopped ending in `.json`, the shape rule missed it, and the
   native-read exception allowed it — while `origin/main` denied it through its whole-directory rule.
   A stream-qualified path is now refused when it enters the state directory, or when its base name
-  is proof- or JSON-shaped anywhere.
+  is a review-proof name anywhere (Windows only; narrowed by the two later 2026-09-10 #612 entries).
 - **Own-state membership through an external junction (LOW).** Membership is now "the recorded state
   directory or anything beneath it", not "the parent directory equals it", so a file in a
   subdirectory of a junctioned state directory's real location is recognised.

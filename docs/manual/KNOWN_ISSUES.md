@@ -407,10 +407,12 @@ expands short names and follows symlinks) and re-run the proof-file rule on the 
 state-directory file with more than one hard link is refused, and so is ANY `.json` there whether
 or not the proof-name rule lists it (round 11 found `migration-review-*.json` was never listed).
 Only non-JSON regular files with a single hard link (flags, `.txt` captures and the like) can use
-the exemption. A stream-qualified path (an NTFS alternate data stream, `name:stream`) is refused
-when it enters the state directory or when its base name is proof- or JSON-shaped, because the
-stream suffix would otherwise hide that base name from the shape rule. A tool-input field that
-cannot be converted to text is refused for every tool. Unparseable hook input (invalid JSON on
+the exemption. On Windows, a stream-qualified path (an NTFS alternate data stream, `name:stream`)
+is refused when it enters the state directory or when its base name is a review-proof name, because
+the stream suffix would otherwise hide that base name from the rules above; on POSIX a colon is an
+ordinary filename character and the rule does not apply. A path, directory (`cwd`, `workdir`) or
+command field that cannot be converted to text is refused for every tool; other tool arguments are
+not inspected. Unparseable hook input (invalid JSON on
 stdin) still passes with no decision — the same convention every other hook in `.claude/hooks`
 follows; the harness always sends JSON, so this is recorded, not endorsed. Membership
 in the directory is decided by the resolved path, by the lexical path the tool was given, and by
