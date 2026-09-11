@@ -530,6 +530,111 @@ describe('useUncertainMutationIntent', () => {
     expect(stored.claimTabIds.some((claim: string) => claim.startsWith('same-tab-b:'))).toBe(true);
   });
 
+  it('re-sends a peer-completed attempt under its original key instead of minting a second one', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-peer-resolved',
+      surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'stale-tab');
+    const staleTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'peer-tab');
+    const peerTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    // The stale tab's reply is lost, so its attempt stays pending.
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = staleTab.result.current.getIdempotencyKey();
+    await act(async () => {
+      expect(await staleTab.result.current.classifyFailure({ code: 'ETIMEDOUT', message: 'socket timeout' }))
+        .toBe('uncertain');
+    });
+
+    // A peer tab retries the same request under the same key, and it commits.
+    await act(async () => peerTab.result.current.beginIntent({ quantity: 5 }));
+    expect(peerTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => peerTab.result.current.resolveIntent());
+
+    // No storage event reaches the stale tab before its operator retries. The
+    // retry must reuse the committed key so the server replays its receipt;
+    // adjust_inventory replays by key alone, so a fresh key applies it twice.
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    expect(staleTab.result.current.getIdempotencyKey()).toBe(originalKey);
+  });
+
+  it('keeps the original key when the peer completion arrives by storage event first', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-peer-resolved-event',
+      surface: 'inventory-page',
+    };
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'stale-tab-event');
+    const staleTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'peer-tab-event');
+    const peerTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = staleTab.result.current.getIdempotencyKey();
+    await act(async () => {
+      await staleTab.result.current.classifyFailure({ code: 'ETIMEDOUT', message: 'socket timeout' });
+    });
+    await act(async () => peerTab.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => peerTab.result.current.resolveIntent());
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: storageKey,
+        newValue: window.localStorage.getItem(storageKey),
+        storageArea: window.localStorage,
+      }));
+    });
+
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    expect(staleTab.result.current.getIdempotencyKey()).toBe(originalKey);
+  });
+
+  it('gives an identical follow-up a fresh key once this tab completed its own request', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-own-follow-up',
+      surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'own-tab');
+    const { result } = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    await act(async () => result.current.beginIntent({ quantity: 5 }));
+    const firstKey = result.current.getIdempotencyKey();
+    await act(async () => result.current.resolveIntent());
+
+    // A second +5 is new work. Reusing the committed key would make the server
+    // replay the first receipt and silently skip this adjustment.
+    await act(async () => result.current.beginIntent({ quantity: 5 }));
+    expect(result.current.getIdempotencyKey()).not.toBe(firstKey);
+  });
+
+  it('lets a different request start fresh after a peer completed the stale attempt', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-peer-resolved-new',
+      surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'stale-tab-new');
+    const staleTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'peer-tab-new');
+    const peerTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = staleTab.result.current.getIdempotencyKey();
+    await act(async () => {
+      await staleTab.result.current.classifyFailure({ code: 'ETIMEDOUT', message: 'socket timeout' });
+    });
+    await act(async () => peerTab.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => peerTab.result.current.resolveIntent());
+
+    // A different payload cannot be a duplicate of the committed request.
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 6 }));
+    expect(staleTab.result.current.getIdempotencyKey()).not.toBe(originalKey);
+  });
+
   it('releases only the definitively rejected tab claim while a peer request remains in flight', async () => {
     const options = {
       operation: 'record_vendor_payment',

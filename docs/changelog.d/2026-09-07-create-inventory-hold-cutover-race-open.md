@@ -10,8 +10,9 @@
 > key never touches the receipt table, so the trigger cannot see it.
 
 Fourth `gpt-5.6-sol` review of PR #624. Unlike the previous round's two staleness artifacts, this
-one is **substantive and remains OPEN**. It is recorded here and on migration-history row 924 as an
-**apply blocker**, not fixed in this branch.
+one was **substantive**. When this entry was written it was recorded here and on migration-history
+row 924 as an **apply blocker**, not fixed in this branch. That blocker has since been cleared (see
+the note above); the sections below are historical context.
 
 ### The race
 
@@ -55,10 +56,12 @@ an already-large migration late in a session.
 
 **Deferring exposes nothing.** The window exists only during an apply of this migration, this
 migration is not applied, and applying it requires Mason's explicit approval. The risk is realised
-only if someone applies it before this is closed — hence the apply blocker on row 924.
+only if someone applies it before this is closed — hence the apply blocker row 924 carried at the
+time, since cleared.
 
 ### What is NOT claimed
 
 This entry does not claim the race is unlikely enough to ignore. Production volume is small and the
 file already instructs a quiet-window apply, but neither is a guarantee, and no attempt was made to
-measure the window. It is open work, deliberately left visible.
+measure the window. It was open work when written, deliberately left visible; the superseding
+note at the top records how it was closed.

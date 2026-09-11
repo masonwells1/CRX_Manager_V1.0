@@ -361,6 +361,7 @@ async function coordinateDurableRecord<T>(
   options: DurableMutationIntentOptions<T>,
   tabId: string,
   pendingMirror: DurableMutationIntentRecord<T> | null = null,
+  ownAttemptRequestVersion: string | null = null,
 ): Promise<{ record: DurableMutationIntentRecord<T>; conflict: boolean }> {
   const db = await openDurableIntentDb();
   try {
@@ -390,8 +391,24 @@ async function coordinateDurableRecord<T>(
         const intentExpired = Date.now() >= existing.retryNotAfterMs;
         const sameActiveIntent = sameIntent && !intentExpired;
         if (existing.status === 'resolved') {
-          result = { record: proposed, conflict: false };
-          store.put({ storageKey, record: proposed });
+          // A peer tab can finish this tab's uncertain attempt under the same
+          // key before, or without, the storage event reaching this tab. A
+          // retry of that same request must keep the committed key so the
+          // server replays its saved receipt; a fresh key would apply the
+          // work a second time. Any other request starts fresh.
+          const reopensOwnAttempt = sameActiveIntent
+            && ownAttemptRequestVersion !== null
+            && ownAttemptRequestVersion === existing.requestVersion;
+          const record = reopensOwnAttempt
+            ? {
+              ...proposed,
+              idempotencyKey: existing.idempotencyKey,
+              createdAtMs: existing.createdAtMs,
+              retryNotAfterMs: existing.retryNotAfterMs,
+            }
+            : proposed;
+          result = { record, conflict: false };
+          store.put({ storageKey, record });
         } else if (owned && (sameIntent || intentExpired)) {
           const liveClaimTabIds = retainLiveClaims(existing.claimTabIds, tabId);
           const claimed = {
@@ -727,6 +744,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           options,
           currentClaimId,
           mirrorRecord?.status === 'pending' ? mirrorRecord : null,
+          attemptRecordRef.current?.requestVersion ?? null,
         );
         writeDurableRecord(storageKey, coordinated.record);
         applyRecord(coordinated.record);
