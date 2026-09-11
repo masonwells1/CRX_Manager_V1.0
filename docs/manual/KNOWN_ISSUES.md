@@ -1770,7 +1770,34 @@ A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-rec
 duplicates one of #449's fixes — delete it rather than continuing it.
 
 
+## OPEN 2026-09-11 — an expired uncertain request locks its dialog with no in-app way to clear it
+
+**Owner:** unassigned, coordinator to assign. Product UI work, so the 2026-09-11 to 2026-09-25 guard-logic
+freeze does not apply.
+
+`useUncertainMutationIntent` keeps a request whose reply was lost as pending for a 23-hour safe retry
+window. Once that window passes, the record is still restored as pending on every visit: the dialog
+reopens locked, shows "The safe automatic retry window expired. Do not submit this mutation again",
+disables its retry button, and cannot be closed. Nothing in the app clears an expired pending record; only
+a successful retry or a positively identified server refusal releases it, and after expiry neither can
+run. The lock lives in that one browser.
+
+Pre-existing on `main` for the Inventory page Receive dialog, `QuickReceivePanel`, `ReceivingHubPanel` and
+`NewVendorBill`. PR #624 extends it to the Inventory page Adjust and Hold dialogs.
+
+**Interim:** the staff recovery steps in `docs/workflows/INVENTORY_RULES.md` ("Staff recovery", step 5):
+verify the outcome in Active Holds or View transaction history, tell an admin, and re-enter from another
+browser only if it did not go through. **Fix:** an admin "verified, clear this request" control that
+records who cleared it and what they checked.
+
+
 ## OPEN 2026-09-05 — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold (fix written and proven, not applied)
+
+**Owner:** the PR #624 lane (worktree `inventory-idempotency-key-reset-888161`), reassignable by the fleet
+coordinator. **Exposure assessment due 2026-09-18:** a read-only look at live holds for the two server
+defects the parked migration closes while it stays unapplied: a NULL `p_force` that skips the admin and
+free-stock checks, and holds created by staff whose profile is missing or inactive. The live read needs
+Mason's explicit OK at the time; the result decides whether the apply moves up.
 
 The live `create_inventory_hold` body (the `20260630173022` parked_010 body — the 2026-07-27 production
 dump proves it IS installed; earlier notes calling it "parked, never applied" were wrong) reads its
@@ -1818,6 +1845,22 @@ confirmed that request committed; the installed body replays both by key. A raci
 `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` now keeps the key instead of releasing it. After the apply, a
 retained key whose request CHANGES raises `IDEMPOTENCY_INTENT_MISMATCH`, which the page treats as
 "uncertain" and locks the dialog — acceptable, deliberate. Do not author a competing migration.
+
+**Compatibility, installed vs parked contract (2026-09-11).** The branch sends `create_inventory_hold` (10
+arguments), `adjust_inventory` (5) and `retire_inventory_item` (3) exactly the argument sets `main` sends, and
+the migration keeps the same signature, so the frontend runs on either body. Key rules: a key is re-sent only
+with its frozen request or after another tab confirmed that request committed; a racing loser's
+`IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` keeps the key; a definitive refusal releases it. Server side, the
+real-schema prover covers both bodies (`pre_race=1_hold_loser_errors`, `post_race=1_hold_loser_replays`).
+Two gaps, stated plainly: key-cleanup failures are not exercised, and there is no live old-body run (by
+design: production gets observation only, so the isolated prover is the evidence).
+
+**Known gap, not introduced here:** once the 23-hour safe retry window passes, a locked dialog shows "The
+safe automatic retry window expired", disables its retry button, cannot be closed, and reopens on every
+visit, because nothing in the app clears an expired request. The Inventory page's Receive dialog and the
+receiving and vendor-bill screens already behave this way on `main`; this PR extends it to Adjust and Hold.
+The lock lives in that one browser. Tracked as its own item: OPEN 2026-09-11 (expired uncertain
+request) above.
 
 
 ## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion

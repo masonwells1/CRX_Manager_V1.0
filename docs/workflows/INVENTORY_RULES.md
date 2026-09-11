@@ -249,6 +249,30 @@ Physical inventory verification process.
 
 ---
 
+## Staff recovery: a locked Adjust, Hold or Receive dialog
+
+If the reply to an adjustment, hold or receipt is lost, the app cannot tell whether it went through. It
+locks the dialog to that exact request so nobody can book it twice. The lock follows the person into every
+tab of the same browser and survives a reload. Plain steps for staff:
+
+1. **Amber note "The last response was uncertain ... Retry it unchanged".** Click the **Retry Exact**
+   button (Retry Exact Adjustment, Retry Exact Hold or Retry Exact Receiving). It re-sends the same request
+   under the same receipt number, so it can only finish the original, never add a second one. Do not re-type
+   the request somewhere else instead.
+2. **"... was already applied/created in another tab. Refreshing ..."** Nothing to do. The first attempt went
+   through and the page refreshes itself.
+3. **The retry fails again with a connection error.** The dialog stays locked, and it reopens the next time
+   you open Inventory. Retry once the connection is back. The retry stays available for 23 hours.
+4. **"Another page or tab has an unresolved request for this operation."** Go back to the tab or page that
+   started it and retry there, or close the other tabs and reopen Inventory.
+5. **"The safe automatic retry window expired. Do not submit this mutation again."** Do not re-enter it.
+   Check whether it went through: for a hold, look in the **Active Holds** list on the Inventory page; for
+   an adjustment or receipt, open the product row's **View transaction history** (the Transaction Ledger).
+   Tell an admin what you found (product, quantity, customer, time). If it did not go through and is still
+   needed, the admin decides who re-enters it. Today the expired dialog cannot be cleared inside the app, and
+   the lock lives only in that one browser, so the re-entry happens from a different browser or device.
+   Tracked in `docs/manual/KNOWN_ISSUES.md` (OPEN 2026-09-11 expired uncertain request).
+
 ## Safety Checklist for Inventory Changes
 
 - [ ] All stock math happens in PostgreSQL RPCs — never calculate in React
