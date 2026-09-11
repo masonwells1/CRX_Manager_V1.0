@@ -74,6 +74,16 @@ assert.match(source, /TRANSFER_INVOICE_INTENT_CUTOVER_RETRY/, 'stale cached impl
 assert(source.indexOf('CREATE TEMP TABLE crx_transfer_invoice_intent_transaction_guard') < source.indexOf('DO $preflight$'), 'transaction guard precedes preflight');
 assert(source.indexOf('CREATE TRIGGER trg_idempotency_keys_require_transfer_intent_20260908') < source.indexOf('DO $receipt_preflight$'), 'cutover trigger precedes legacy receipt scan');
 assert(source.indexOf('DO $receipt_preflight$') < source.indexOf('DO $rename$'), 'legacy receipt scan precedes function rename');
+// Sol, PR #638: drain readers too, and delete the expired unbound receipts a
+// legacy call parked on its key's advisory lock could otherwise replay.
+assert.match(source, /^LOCK TABLE public\.idempotency_keys IN ACCESS EXCLUSIVE MODE;$/m, 'receipt readers and writers are drained');
+assert(source.indexOf("SET LOCAL lock_timeout = '15s'") < source.indexOf('LOCK TABLE public.idempotency_keys'), 'the early lock wait is bounded');
+assert(source.indexOf('LOCK TABLE public.idempotency_keys') < source.indexOf('DO $preflight$'), 'the receipt lock precedes every preflight read');
+const expiredReceiptPurge = /DELETE FROM public\.idempotency_keys\n WHERE operation = 'transfer_job_to_invoice'\n   AND expires_at <= now\(\)\n   AND \(request_actor_id IS NULL OR request_fingerprint IS NULL\);/;
+assert.match(source, expiredReceiptPurge, 'expired unbound transfer receipts are deleted under the lock');
+assert.equal(source.match(/DELETE FROM public\.idempotency_keys/g)?.length, 1, 'the expired-receipt purge is the only receipt delete');
+assert(source.indexOf('CREATE TRIGGER trg_idempotency_keys_require_transfer_intent_20260908') < source.search(expiredReceiptPurge), 'purge follows the cutover trigger');
+assert(source.search(expiredReceiptPurge) < source.indexOf('DO $receipt_preflight$'), 'purge precedes the unexpired-receipt refusal');
 assert.match(source, /set_config\('crx\.transfer_invoice_intent_wrapper', '20260908', true\)/, 'wrapper owns an explicit transaction-local cutover marker');
 assert.match(source, /request_actor_id IS NULL OR request_fingerprint IS NULL/, 'legacy receipt definition is unbound');
 assert.match(source, /request_actor_id IS NULL\s+AND request_fingerprint IS NULL/, 'receipt binding cannot overwrite an existing binding');

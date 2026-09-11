@@ -176,6 +176,53 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     expect(mockResetKey).toHaveBeenCalledTimes(1);
   });
 
+  // Sol, PR #638: a legacy receipt replay is not bound to a job. A successful
+  // response for another job (or none) must not retire the key or report success.
+  it.each([
+    ['another job', { job_id: 'job-other', invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
+    ['no job', { invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
+  ])('treats a transfer result for %s as unverified and reconciles before a new key', async (_label, wrongResult) => {
+    let jobReads = 0;
+    let ticketReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        jobReads += 1;
+        return queryResult([completedJob]);
+      }
+      ticketReads += 1;
+      return queryResult([]);
+    });
+    let transferAttempts = 0;
+    mockRpc.mockImplementation(() => {
+      transferAttempts += 1;
+      return Promise.resolve(transferAttempts === 1
+        ? { data: wrongResult, error: null }
+        : { data: { job_id: 'job-transfer', invoice_id: 'invoice-1', invoice_number: 'INV-1' }, error: null });
+    });
+
+    render(<UnbilledApplicationsPanel />);
+    await screen.findByText('J-TRANSFER-4004');
+    fireEvent.click(screen.getByRole('button', { name: 'Create Invoice' }));
+    confirmCreateInvoice();
+
+    const recoveryMessage = 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', recoveryMessage));
+    await waitFor(() => {
+      expect(jobReads).toBe(2);
+      expect(ticketReads).toBe(2);
+    });
+    expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
+    expect(mockResetKey).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create Invoice' }));
+    confirmCreateInvoice();
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledTimes(2));
+    expect(mockRpc.mock.calls[1][1].p_idempotency_key).not.toBe(mockRpc.mock.calls[0][1].p_idempotency_key);
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', 'Invoice INV-1 created'));
+    expect(mockResetKey).toHaveBeenCalledTimes(1);
+  });
+
   it('removes an already-invoiced job from the backlog after invalid-result reconciliation', async () => {
     let jobReads = 0;
     mockFrom.mockImplementation((table: string) => {

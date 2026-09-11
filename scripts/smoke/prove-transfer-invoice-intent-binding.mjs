@@ -1,11 +1,12 @@
 /**
  * Disposable PostgreSQL 17 behavioral proof for the parked transfer invoice
- * intent wrapper. The container has --network none and tmpfs storage: it cannot
- * contact Supabase or retain data. A compact faithful fixture stands in for the
- * large Chicago-date body; the static proof separately pins the real preimage.
+ * intent wrapper. The containers have --network none and tmpfs storage: they
+ * cannot contact Supabase or retain data. A compact faithful fixture stands in
+ * for the large Chicago-date body; the static proof separately pins the real
+ * preimage. A second disposable container runs the falsification mutants.
  */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,6 +16,7 @@ import { assertWrappable } from '../../.claude/hooks/migration-wrappability-lib.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const migrationPath = path.join(root, 'supabase', 'migrations', '20260908130800_bind_transfer_invoice_intent.sql');
 const name = `crx-transfer-intent-${process.pid}`;
+const mutantName = `${name}-mutant`;
 const image = 'postgres:17-alpine';
 const temp = mkdtempSync(path.join(os.tmpdir(), 'crx-transfer-intent-'));
 const DOCKER_TIMEOUT_MS = 10 * 60 * 1000;
@@ -35,23 +37,49 @@ function docker(args, options = {}) {
   }
   return result;
 }
-function sql(source) {
-  return docker(['exec', '-i', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1'], { input: source }).stdout;
+function sql(source, container = name) {
+  return docker(['exec', '-i', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1'], { input: source }).stdout;
 }
-function scalar(source) {
-  return docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-Atqc', source]).stdout.trim();
+function scalar(source, container = name) {
+  return docker(['exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-Atqc', source]).stdout.trim();
 }
-function stageMigration(source) {
+function stageMigration(source, container = name) {
   const stagedPath = path.join(temp, 'migration.sql');
   writeFileSync(stagedPath, source, 'utf8');
-  docker(['cp', stagedPath, `${name}:/tmp/migration.sql`]);
+  docker(['cp', stagedPath, `${container}:/tmp/migration.sql`]);
 }
-async function ready() {
+async function ready(container = name) {
   for (let i = 0; i < 40; i += 1) {
-    if (docker(['exec', name, 'pg_isready', '-U', 'postgres'], { allowFailure: true }).status === 0) return;
+    if (docker(['exec', container, 'pg_isready', '-U', 'postgres'], { allowFailure: true }).status === 0) return;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error('disposable PostgreSQL did not become ready');
+}
+// One long-lived psql backend, so two sessions can interleave. PGAPPNAME tags
+// it in pg_stat_activity; the promise settles with psql's exit and output.
+function session(container, appName, source) {
+  const child = spawn('docker', ['exec', '-i', '-e', `PGAPPNAME=${appName}`, container, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1']);
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stdin.end(source);
+  return new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+async function waitUntil(container, predicate, label, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (scalar(predicate, container) === 't') return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`timed out waiting until ${label}`);
+}
+// Cancelling the statement aborts the session's transaction, which releases its locks.
+function cancelBackend(container, appName) {
+  scalar(`SELECT count(pg_cancel_backend(pid)) FROM pg_stat_activity WHERE application_name = '${appName}'`, container);
 }
 
 const setup = `
@@ -117,10 +145,43 @@ REVOKE ALL ON FUNCTION public.check_idempotency_intent(text,text,uuid,text) FROM
 GRANT EXECUTE ON FUNCTION public.check_idempotency_intent(text,text,uuid,text) TO postgres;
 COMMENT ON FUNCTION public.check_idempotency_intent(text,text,uuid,text) IS
   'Intent-bound idempotency receipt check. NULL = no receipt; {"found":true,"result":...} = exact actor+intent replay; raises IDEMPOTENCY_ACTOR_MISMATCH / IDEMPOTENCY_INTENT_MISMATCH otherwise. Callers must already have authorized the actor.';
+-- Same key lock, transaction-time expiry DELETE and unbound replay SELECT as the
+-- live legacy check_idempotency (20260714230000); the legacy transfer body
+-- calls it before any work (20260905200400).
+CREATE FUNCTION public.check_idempotency(p_key text, p_operation text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fixture_legacy_check$
+DECLARE v_existing public.idempotency_keys%ROWTYPE;
+BEGIN
+  IF p_key IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF btrim(p_key) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED';
+  END IF;
+  IF p_operation IS NULL OR btrim(p_operation) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_OPERATION_REQUIRED';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_key, 0));
+  DELETE FROM public.idempotency_keys WHERE idempotency_key = p_key AND expires_at < now();
+  SELECT * INTO v_existing FROM public.idempotency_keys WHERE idempotency_key = p_key;
+  IF FOUND AND v_existing.operation IS DISTINCT FROM p_operation THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_CROSS_OP_KEY_REUSE';
+  END IF;
+  IF FOUND THEN
+    RETURN v_existing.result;
+  END IF;
+  RETURN NULL;
+END;
+$fixture_legacy_check$;
+REVOKE EXECUTE ON FUNCTION public.check_idempotency(text,text) FROM PUBLIC, anon, authenticated;
 CREATE FUNCTION public.transfer_job_to_invoice(p_job_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fixture_transfer$
-DECLARE v_result jsonb;
+DECLARE v_result jsonb; v_existing jsonb;
 BEGIN
+  IF p_idempotency_key IS NOT NULL THEN
+    v_existing := check_idempotency(p_idempotency_key, 'transfer_job_to_invoice');
+    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
+  END IF;
   UPDATE public.transfer_calls SET count = count + 1;
   v_result := CASE WHEN p_job_id = '20000000-0000-0000-0000-000000000001'::uuid
     THEN jsonb_build_object('success', true, 'job_id', p_job_id, 'invoice_id', gen_random_uuid(),
@@ -137,10 +198,57 @@ REVOKE ALL ON FUNCTION public.transfer_job_to_invoice(uuid,uuid,text) FROM PUBLI
 GRANT EXECUTE ON FUNCTION public.transfer_job_to_invoice(uuid,uuid,text) TO authenticated, service_role;
 `;
 
+async function startDisposable(container) {
+  docker(['run', '-d', '--name', container, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=128m', '-e', 'POSTGRES_PASSWORD=postgres', image]);
+  await ready(container);
+  sql(setup, container);
+}
+
+// Sol, PR #638. A legacy transfer that starts while its receipt is unexpired
+// waits on the key's advisory lock inside check_idempotency() before it touches
+// idempotency_keys, so no table lock drains it. The receipt then expires, the
+// migration commits, and only then is the key lock released. The held call's
+// DELETE judges expiry by its own transaction-start now() and keeps the row, so
+// only the migration can remove it before the held SELECT replays it.
+const RACE_KEY = 'race-legacy-replay';
+const RACE_JOB = '10000000-0000-0000-0000-000000000001';
+const RACE_ACTOR = '00000000-0000-0000-0000-000000000001';
+const RACE_CACHED_INVOICE = '30000000-0000-0000-0000-000000000001';
+const OPEN_READER = 'BEGIN; SELECT count(*) FROM public.idempotency_keys; SELECT pg_sleep(120); COMMIT;';
+const READER_WAITING = "SELECT count(*) = 1 FROM pg_stat_activity WHERE application_name = 'receipt-reader' AND wait_event = 'PgSleep'";
+async function raceLegacyReplayAcrossCutover(container, migrationSource) {
+  sql(`INSERT INTO public.idempotency_keys(idempotency_key, operation, result, expires_at)
+VALUES ('${RACE_KEY}', 'transfer_job_to_invoice',
+        jsonb_build_object('success', true, 'job_id', '${RACE_JOB}', 'invoice_id', '${RACE_CACHED_INVOICE}'),
+        now() + interval '1 hour')`, container);
+  const holder = session(container, 'race-key-holder',
+    `BEGIN; SELECT pg_advisory_xact_lock(hashtextextended('crx:idempotency:${RACE_KEY}', 0)); SELECT pg_sleep(120); COMMIT;`);
+  await waitUntil(container, "SELECT count(*) = 1 FROM pg_stat_activity WHERE application_name = 'race-key-holder' AND wait_event = 'PgSleep'", 'the holder owns the key lock');
+  const legacy = session(container, 'race-legacy-call',
+    `BEGIN; SELECT public.transfer_job_to_invoice('${RACE_JOB}', '${RACE_ACTOR}', '${RACE_KEY}'); COMMIT;`);
+  await waitUntil(container, "SELECT count(*) = 1 FROM pg_stat_activity WHERE application_name = 'race-legacy-call' AND wait_event_type = 'Lock' AND wait_event = 'advisory'", 'the legacy call waits on the key lock');
+  assert.equal(
+    scalar("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a USING (pid) WHERE a.application_name = 'race-legacy-call' AND l.relation = 'public.idempotency_keys'::regclass", container),
+    '0',
+    'the held call has not touched the receipt table, so no table lock can drain it',
+  );
+  // Expire the receipt after the held call began: its transaction-start now()
+  // stays before expires_at, while the migration's now() will be after it.
+  sql(`UPDATE public.idempotency_keys SET expires_at = clock_timestamp() WHERE idempotency_key = '${RACE_KEY}'`, container);
+  assert.equal(
+    scalar(`SELECT a.xact_start < k.expires_at AND k.expires_at < clock_timestamp() FROM pg_stat_activity a, public.idempotency_keys k WHERE a.application_name = 'race-legacy-call' AND k.idempotency_key = '${RACE_KEY}'`, container),
+    't',
+    'the receipt expired after the held call began',
+  );
+  stageMigration(migrationSource, container);
+  const applied = docker(['exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql'], { allowFailure: true });
+  cancelBackend(container, 'race-key-holder');
+  const [legacyResult] = await Promise.all([legacy, holder]);
+  return { applied, legacy: legacyResult };
+}
+
 try {
-  docker(['run', '-d', '--name', name, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=128m', '-e', 'POSTGRES_PASSWORD=postgres', image]);
-  await ready();
-  sql(setup);
+  await startDisposable(name);
 
   const fixtureTransferMd5 = scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.transfer_job_to_invoice(uuid,uuid,text)'::regprocedure");
   const fixtureHelperMd5 = scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.check_idempotency_intent(text,text,uuid,text)'::regprocedure");
@@ -262,8 +370,34 @@ try {
   assert.match(refused.stderr, /TRANSFER_INVOICE_INTENT_POSTFLIGHT: browser role retains direct idempotency receipt mutation privilege/);
   assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL"), 't');
 
+  // Sol, PR #638: the early ACCESS EXCLUSIVE lock must also wait for a
+  // transaction that has only READ the receipt table (CREATE TRIGGER's SHARE
+  // ROW EXCLUSIVE would not), and lock_timeout must turn that wait into a
+  // whole-file refusal instead of an unbounded stall.
   stageMigration(staged);
-  docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql']);
+  const openReader = session(name, 'receipt-reader', OPEN_READER);
+  await waitUntil(name, READER_WAITING, 'an open transaction has read the receipt table');
+  refused = docker(['exec', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', '/tmp/migration.sql'], { allowFailure: true });
+  cancelBackend(name, 'receipt-reader');
+  await openReader;
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /canceling statement due to lock timeout/);
+  assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL"), 't');
+
+  // The purge is scoped to expired, unbound, transfer receipts.
+  sql(`INSERT INTO public.idempotency_keys(idempotency_key, operation, result, request_actor_id, request_fingerprint, expires_at) VALUES
+  ('expired-other-operation', 'other_operation', '{}'::jsonb, NULL, NULL, now() - interval '1 hour'),
+  ('expired-bound-transfer', 'transfer_job_to_invoice', '{}'::jsonb, '${RACE_ACTOR}', 'bound', now() - interval '1 hour')`);
+
+  // The successful first apply runs as the cutover session of the race.
+  const race = await raceLegacyReplayAcrossCutover(name, staged);
+  assert.equal(race.applied.status, 0, `cutover must apply while the legacy call is held:\n${race.applied.stderr}`);
+  assert.notEqual(race.legacy.status, 0, 'the held legacy call must not replay the expired receipt');
+  assert.match(race.legacy.stderr, /TRANSFER_INVOICE_INTENT_CUTOVER_RETRY/);
+  assert.doesNotMatch(race.legacy.stdout, new RegExp(RACE_CACHED_INVOICE));
+  assert.equal(scalar('SELECT count FROM public.transfer_calls'), '0', 'the held legacy call rolled back its work');
+  assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = '${RACE_KEY}'`), '0', 'the expired unbound receipt was purged and no new one landed');
+  assert.equal(scalar("SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key IN ('expired-other-operation', 'expired-bound-transfer')"), '2', 'the purge leaves other operations and bound receipts alone');
 
   const forbiddenPrivileges = ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
   for (const role of ['anon', 'authenticated']) {
@@ -375,8 +509,36 @@ $proof$;
   assert.equal(scalar("SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'prevent_unwrapped_transfer_invoice_receipt_20260908'"), '1');
   assert.equal(scalar("SELECT has_function_privilege('authenticated', 'public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)', 'EXECUTE')"), 'f');
   assert.equal(scalar("SELECT has_function_privilege('authenticated', 'public.prevent_unwrapped_transfer_invoice_receipt_20260908()', 'EXECUTE')"), 'f');
+
+  // Falsification in a second disposable instance, from the same legacy state:
+  // removing either new statement must reopen the gap it closes.
+  await startDisposable(mutantName);
+  const withoutLock = staged.replace('LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;\n', '');
+  assert.notEqual(withoutLock, staged);
+  const mutantReader = session(mutantName, 'receipt-reader', OPEN_READER);
+  await waitUntil(mutantName, READER_WAITING, 'an open transaction has read the receipt table');
+  const lockless = docker(
+    ['exec', '-i', mutantName, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1'],
+    { input: `BEGIN;\n${withoutLock}\nROLLBACK;\n`, allowFailure: true },
+  );
+  cancelBackend(mutantName, 'receipt-reader');
+  await mutantReader;
+  assert.equal(lockless.status, 0, `without the early lock, cutover should not wait for an open reader:\n${lockless.stderr}`);
+  assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL", mutantName), 't', 'the lockless probe was rolled back');
+
+  const withoutPurge = staged.replace(
+    /DELETE FROM public\.idempotency_keys\n WHERE operation = 'transfer_job_to_invoice'\n {3}AND expires_at <= now\(\)\n {3}AND \(request_actor_id IS NULL OR request_fingerprint IS NULL\);\n/,
+    '',
+  );
+  assert.notEqual(withoutPurge, staged);
+  const mutantRace = await raceLegacyReplayAcrossCutover(mutantName, withoutPurge);
+  assert.equal(mutantRace.applied.status, 0, `the purge-less cutover still applies:\n${mutantRace.applied.stderr}`);
+  assert.equal(mutantRace.legacy.status, 0, `without the purge the held legacy call succeeds:\n${mutantRace.legacy.stderr}`);
+  assert.match(mutantRace.legacy.stdout, new RegExp(RACE_CACHED_INVOICE), 'without the purge the held legacy call replays the expired cached result');
+  assert.equal(scalar('SELECT count FROM public.transfer_calls', mutantName), '0', 'the replay did no work, so the insert trigger never saw it');
   console.log('TRANSFER_INVOICE_INTENT_BINDING_PROOF_PASS');
 } finally {
   docker(['rm', '--force', name], { allowFailure: true });
+  docker(['rm', '--force', mutantName], { allowFailure: true });
   rmSync(temp, { recursive: true, force: true });
 }

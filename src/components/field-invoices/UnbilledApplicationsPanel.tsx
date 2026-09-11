@@ -9,6 +9,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   supabase,
   assertRpcResult,
+  assertTransferResultForJob,
   isTransferInvoiceResultInvalid,
   sanitizeError,
   transferInvoiceErrorMessage,
@@ -60,6 +61,8 @@ interface Section {
 }
 
 interface TransferJobInvoiceResult {
+  // Checked against the row's job before the request key is retired.
+  job_id: string;
   invoice_id: string;
   invoice_number?: string;
   invoice_count?: number;
@@ -204,7 +207,10 @@ export default function UnbilledApplicationsPanel() {
       });
       if (error) throw error;
 
-      const result = assertRpcResult<TransferJobInvoiceResult>(data, 'transfer_job_to_invoice');
+      const result = assertTransferResultForJob(
+        assertRpcResult<TransferJobInvoiceResult>(data, 'transfer_job_to_invoice'),
+        pendingJobInvoice.row.id,
+      );
       pendingJobInvoice.resetKey();
 
       const remainingJobs = jobs.filter((job) => job.id !== pendingJobInvoice.row.id);

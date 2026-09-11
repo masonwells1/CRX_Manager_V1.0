@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { notifyApplicatorDispatched, notifyApplicatorRescheduled, notifyApplicatorUndispatched } from '../lib/notificationTriggers';
-import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, isTransferInvoiceResultInvalid, RpcErrorCodes, sanitizeError, transferInvoiceErrorMessage } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, assertTransferResultForJob, hasRpcCode, isTransferInvoiceResultInvalid, RpcErrorCodes, sanitizeError, transferInvoiceErrorMessage } from '../lib/db';
 import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
@@ -199,6 +199,8 @@ interface JobDbRow {
 interface SaveJobResult { job_id: string }
 interface CompleteJobResult { record_number: string }
 interface TransferJobResult {
+  // Checked against the route's job before the request key is retired.
+  job_id: string;
   invoice_id: string;
   // single-owner path returns the invoice number; the multi-owner group path returns
   // the group fields instead (U7). invoice_id is always the anchor member to navigate to.
@@ -3146,7 +3148,7 @@ export default function JobDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
+      const result = assertTransferResultForJob(assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice'), id!);
       transferJobIdem.resetKey();
       // The invoice exists either way. Without this gate a stale transfer would clear the
       // dirty flag of whatever job is on screen and then navigate the operator off it.

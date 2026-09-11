@@ -10,15 +10,23 @@
 -- another user's or another job's transfer. Cutover deliberately refuses while
 -- an unexpired unbound transfer receipt exists; waiting for expiry is safer
 -- than silently changing the meaning of a retryable request.
--- Before that scan and before the rename, an owner-only receipt trigger takes
--- the table lock that drains existing insert writers. A cached legacy body that
--- reaches its receipt INSERT only after cutover fails with a retry signal and
--- rolls back; the new wrapper marks its transaction before invoking the body.
+-- Before any preflight, the file takes ACCESS EXCLUSIVE on the receipt table
+-- (bounded by lock_timeout), draining every reader and writer that has touched
+-- it. Under that lock it deletes expired unbound transfer receipts, because a
+-- legacy call waiting on the per-key advisory lock is not drained and would
+-- otherwise replay one after cutover. An owner-only receipt trigger then makes
+-- a cached legacy body that reaches its receipt INSERT after cutover fail with a
+-- retry signal and roll back; the new wrapper marks its transaction first.
 --
 -- First-apply prerequisite: 20260905200400 has already replaced the reviewed
 -- live preimage (md5 78b827f8509a2740ea9879364747c372) with its Chicago-date
 -- postimage (md5 85cd07a0a6b978cb066edab7df369fea). The same Chicago postimage
 -- is required again on replay when it is held under the private name.
+--
+-- The public wrapper delegates idempotency: check_idempotency_intent() answers
+-- replays, the private body writes the receipt, and the wrapper binds it.
+-- idempotency-body-check: exempt
+-- caller-analysis: transfer_job_to_invoice :: REVOKE is from PUBLIC and anon only; EXECUTE is re-granted to authenticated and service_role in the same file, and both UI callers (JobDetail, UnbilledApplicationsPanel) run as signed-in authenticated users, so neither loses access
 
 -- The sanctioned migration runner wraps this whole file in one transaction.
 -- Under autocommit, ON COMMIT DROP removes this table after CREATE and the next
@@ -28,6 +36,14 @@ CREATE TEMP TABLE crx_transfer_invoice_intent_transaction_guard (
 ) ON COMMIT DROP;
 INSERT INTO crx_transfer_invoice_intent_transaction_guard(marker) VALUES (true);
 SET LOCAL lock_timeout = '15s';
+
+-- Take the strongest receipt-table lock first and hold it to commit. It waits,
+-- for at most lock_timeout, for every transaction that has already read or
+-- written idempotency_keys, then keeps new readers and writers out, so every
+-- check below sees one stable receipt set and no weaker lock is upgraded
+-- mid-file. A legacy call still waiting on its key's advisory lock has not
+-- touched the table and is not drained; the expired-receipt purge covers it.
+LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;
 
 DO $preflight$
 DECLARE
@@ -335,10 +351,25 @@ BEFORE INSERT ON public.idempotency_keys
 FOR EACH ROW
 EXECUTE FUNCTION public.prevent_unwrapped_transfer_invoice_receipt_20260908();
 
--- CREATE TRIGGER holds SHARE ROW EXCLUSIVE on idempotency_keys until commit.
--- Existing receipt writers drain before this scan. A pre-cutover transfer that
--- reaches its receipt INSERT only after commit is rejected by the trigger above,
--- rolling its entire transaction back so the caller can retry through the wrapper.
+-- The ACCESS EXCLUSIVE lock from the top of this file is still held. A legacy
+-- call can start while its receipt is unexpired, then wait on the per-key
+-- advisory lock in check_idempotency() without touching this table, so the lock
+-- does not drain it. After cutover its DELETE judges expiry by its own
+-- transaction-start now() and keeps the row, and its SELECT would replay that
+-- unbound receipt with no actor or job check (Sol, PR #638). Delete every
+-- expired unbound transfer receipt now, so none survives cutover. These are
+-- expired retry-cache rows, not invoices or jobs; check_idempotency() already
+-- deletes the same rows the next time their key is used.
+DELETE FROM public.idempotency_keys
+ WHERE operation = 'transfer_job_to_invoice'
+   AND expires_at <= now()
+   AND (request_actor_id IS NULL OR request_fingerprint IS NULL);
+
+-- With expired rows gone, this refusal leaves no unbound transfer receipt at
+-- commit, and the trigger above rejects any new one outside the wrapper. A
+-- legacy call that therefore finds no receipt reaches its INSERT, the trigger
+-- rejects it, and its whole transaction rolls back so the caller can retry
+-- through the wrapper.
 DO $receipt_preflight$
 BEGIN
   IF EXISTS (

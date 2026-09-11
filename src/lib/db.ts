@@ -473,6 +473,21 @@ export function transferInvoiceErrorMessage(err: unknown): string | null {
 }
 
 /**
+ * A transfer screen must not retire its request key on a result for another job.
+ * A legacy receipt is scoped only to (key, operation), so a replay can carry any
+ * job's result (Sol, PR #638). A missing or different job_id throws
+ * TRANSFER_INVOICE_RESULT_INVALID, which both callers already route to
+ * reconciliation: reload the job first, and only then allow a new key.
+ */
+export function assertTransferResultForJob<T extends { job_id?: unknown }>(result: T, jobId: string): T {
+  const returnedJobId = typeof result.job_id === 'string' ? result.job_id.toLowerCase() : null;
+  if (returnedJobId === null || returnedJobId !== jobId.toLowerCase()) {
+    throw new Error(`${RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID}: transfer result is not for the requested job`);
+  }
+  return result;
+}
+
+/**
  * Untyped Supabase client alias for tables/RPCs not yet in the generated
  * `src/types/supabase.ts` (e.g., newly migrated tables applied only locally).
  * Cast to the plain SupabaseClient to bypass the Database type constraints

@@ -334,6 +334,58 @@ describe('JobDetail transfer intent recovery', () => {
     expect(mockTransferResetKey).toHaveBeenCalledTimes(2);
   });
 
+  // Sol, PR #638: a legacy receipt replay is not bound to a job. A successful
+  // response for another job (or none) must not navigate or retire the key.
+  it.each([
+    ['another job', { job_id: 'job-other', invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
+    ['no job', { invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
+  ])('does not trust a transfer result for %s and reconciles before a new key', async (_label, wrongResult) => {
+    let resolveReconciliation!: (result: { data: unknown; error: unknown }) => void;
+    const reconciliation = new Promise<{ data: unknown; error: unknown }>((resolve) => {
+      resolveReconciliation = resolve;
+    });
+    let jobReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'jobs') return buildChain({ data: [], error: null });
+      jobReads += 1;
+      return jobReads === 1
+        ? buildChain({ data: completedJob, error: null })
+        : buildChainFromPromise(reconciliation);
+    });
+    let transferAttempts = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name !== 'transfer_job_to_invoice') return Promise.resolve({ data: null, error: null });
+      transferAttempts += 1;
+      return Promise.resolve(transferAttempts === 1
+        ? { data: wrongResult, error: null }
+        : { data: { job_id: 'job-transfer', invoice_id: 'invoice-1', invoice_number: 'INV-1' }, error: null });
+    });
+
+    mountAt('/jobs/job-transfer');
+    await screen.findByRole('heading', { name: 'J-TRANSFER-3003' });
+    await confirmTransfer();
+
+    const recoveryMessage = 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', recoveryMessage));
+    await waitFor(() => expect(jobReads).toBe(2));
+    expect(mockNavigate).not.toHaveBeenCalledWith('/field-invoices/invoice-other');
+    expect(mockTransferResetKey).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Transfer to Invoice' })).toBeDisabled();
+
+    resolveReconciliation({ data: completedJob, error: null });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Transfer to Invoice' })).not.toBeDisabled());
+    expect(mockTransferResetKey).toHaveBeenCalledTimes(1);
+
+    await confirmTransfer();
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/field-invoices/invoice-1'));
+    const transferCalls = mockRpc.mock.calls.filter(([name]) => name === 'transfer_job_to_invoice');
+    expect(transferCalls).toHaveLength(2);
+    const firstKey = (transferCalls[0][1] as { p_idempotency_key: string }).p_idempotency_key;
+    const secondKey = (transferCalls[1][1] as { p_idempotency_key: string }).p_idempotency_key;
+    expect(secondKey).not.toBe(firstKey);
+    expect(mockTransferResetKey).toHaveBeenCalledTimes(2);
+  });
+
   it('removes the transfer action when reconciliation shows the first attempt already invoiced the job', async () => {
     let resolveReconciliation!: (result: { data: unknown; error: unknown }) => void;
     const reconciliation = new Promise<{ data: unknown; error: unknown }>((resolve) => {

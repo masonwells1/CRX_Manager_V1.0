@@ -52,10 +52,16 @@ with `CHICAGO_DATE_CUTOVER_RETRY`, so a backend that resolved an old PL/pgSQL pl
 drain cannot commit a stale Chicago date after the unified cutover;
 `20260905200500` was superseded before apply, so the September 30 cutover cannot commit in two
 separate migrations and neither behavior is live.
-The parked transfer wrapper installs an owner-only receipt trigger before renaming the old body.
-Its table lock drains existing receipt writers; a cached pre-cutover body that reaches the insert
-afterward fails with `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` and rolls back so the caller can retry
-through the intent-bound wrapper. The live transfer function remains unchanged until an approved apply.
+The parked transfer wrapper first takes ACCESS EXCLUSIVE on the receipt table, bounded by its
+15-second lock timeout, which drains every transaction that has already read or written it. Under
+that lock it deletes expired unbound transfer receipts: a legacy call still waiting on its key's
+advisory lock is not drained, and could otherwise replay such a receipt after cutover with no actor
+or job check. An owner-only receipt trigger then rejects a cached pre-cutover body that reaches the
+insert with `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` and rolls it back, so the caller can retry
+through the intent-bound wrapper. Residual: a legacy caller at REPEATABLE READ or SERIALIZABLE whose
+snapshot predates cutover could still read a deleted receipt. PostgREST's default is READ COMMITTED,
+and both job-invoice screens refuse a result for a different job. The live transfer function remains
+unchanged until an approved apply.
 The final label-selection candidate replaces alphabetical historical-name selection with the latest
 earned-state label at the requested cutoff for both earned and paid-only balance rows; until it is
 separately approved and applied, production can still display an older salesperson name.
