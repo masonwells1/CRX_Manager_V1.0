@@ -1,9 +1,20 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-08 against the live ledger (read-only `list_migrations`: 1000 rows,
-`max(version)` `20260908045843`, effective high-water
-`20260906120000_preview_field_app_season_follows_invoice_date`); the F2 entry retains its separate
-2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
+**Superseded 2026-09-06 header, kept for provenance — every boundary claim in this paragraph is
+superseded by the 2026-09-08 header that follows it.** That read confirmed the unprefixed-ledger-name
+trap: `20260904185900_refuse_null_job_field_acres` (PR #606, merged `719faac73`) applied live on
+2026-09-05 under the bare name `refuse_null_job_field_acres`, invisible to a name-ordered query, so
+the authored high-water at that time was `20260904185900` while a name-ordered query still returned
+`20260904180000_invoice_season_follows_invoice_date`. Identity was confirmed live, not inferred:
+`save_job` one overload at body md5 `8acf34542105a90212ddb0a5e7c5d272`, carrying that file's
+`JOB_ACRES_NOT_FINITE` refusal. F2 (`20260903160000_gate_number_generators_active_profile_role`,
+ledger version `20260904023121`) was the boundary earlier in that sequence. The row count and
+`max(version)` from that read are deliberately not repeated here — see the rule in the current header
+below; they live in `docs/reference/migration-history.md`.
+
+**Last verified: 2026-09-08 against the live ledger (read-only `list_migrations`; the figures from
+that read are recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
+separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
 there before any apply decision, and update it there — never restate it here. The reason is a trap
@@ -700,7 +711,7 @@ changed on 2026-09-04 is that it is now written down instead of only being known
 
 ---
 
-## SETTLED 2026-09-03 (basis) / FIXED IN CODE, MIGRATION PENDING LIVE APPLY (UTC fallbacks) — "invoice due dates derive from the invoice date, not the Chicago posting date"
+## SETTLED 2026-09-03 (basis) / CLOSED 2026-09-04 — BOTH UTC-fallback migrations APPLIED LIVE — "invoice due dates derive from the invoice date, not the Chicago posting date"
 
 **Report (`codex-transaction-review`, 2026-09-03):** due dates derive from `invoice_date` rather
 than the America/Chicago posting date, so a late-evening invoice lands on the wrong day. Verified
@@ -720,8 +731,16 @@ moves them to the Chicago business day (container proof
 (ledger version `20260904130047`) under Mason's in-chat OK, verified post-apply: all four bodies at
 their candidate pins, one overload each, SECDEF + `search_path` intact. That hole is CLOSED.
 
-**Two residuals remain open, both raised by the pre-apply gate and accepted rather than blocked.**
-(a) **OPEN, DEADLINE 2026-09-30 — `season` is still UTC in two of those four bodies.**
+**Of the two residuals raised by the pre-apply gate, (a) is now CLOSED and (b) remains an owner decision.**
+(a) **CLOSED 2026-09-04 — applied live as ledger version `20260904152221`
+(`20260904180000_invoice_season_follows_invoice_date`). The 2026-09-30 window is shut on the
+database side.** Post-apply read-only verification: both bodies at their candidate pins
+(`e3fc9bd9…`, `29d699a8…`), ZERO current-season-helper calls, ZERO UTC current-date tokens, one
+overload each, SECDEF + `search_path` and grants unchanged. The companion frontend fix
+(`src/pages/FieldApplicationInvoice.tsx`, which defaulted its transaction date in UTC) ships with
+PR #599 and reaches production only on merge — until then that page can still pre-fill tomorrow's
+date after ~7 pm Chicago, though the season it produces will now agree with whatever date it sends.
+Historical description of the defect follows. **WAS OPEN, DEADLINE 2026-09-30 — `season` was still UTC in two of those four bodies.**
 `_save_invoice_lineage_unaware_impl_20260827` and `_save_field_app_invoice_impl_20260714` stamp
 `season` from `current_season()` = `compute_season(CURRENT_DATE)`, which the migration did not
 change. `compute_season` rolls at month >= 10, so on **2026-09-30 after 7 pm Chicago** a row would be
@@ -729,17 +748,224 @@ dated 2026-09-30 (season 2026) while stamped `season = 2027`. Before the apply b
 therefore agreed with each other; making the date correct exposed the coupling. `season` drives
 `customer_application_rates` lookups and year-end statements. The correct pattern already exists in
 `_save_field_app_split_invoice_impl`, which derives the season from the same COALESCEd Chicago date.
-Needs a follow-up migration before 2026-09-30. Same class, later window: `next_invoice_number`
-derives its year from `extract(year FROM now())` (UTC), so a 2026-12-31 evening invoice is dated
-2026 and numbered 2027.
+**FIXED IN CODE 2026-09-04 AND APPLIED LIVE THE SAME DAY** (ledger version `20260904152221`; see
+the CLOSED note above — this paragraph is the historical description of the defect):
+`supabase/migrations/20260904180000_invoice_season_follows_invoice_date.sql` re-emits both bodies
+with `compute_season(COALESCE(<payload invoice_date>, (now() AT TIME ZONE 'America/Chicago')::date))`,
+mirroring the split-invoice pattern. The pre-apply gate found a THIRD site the original residual did
+not name: `_save_field_app_invoice_impl_20260714` also matched `customer_application_rates` on
+`car.season = current_season()`, so fixing only the stamp would have filed the invoice under one
+season and priced it at another. **Do not "simplify" this to one pre-loop variable feeding both
+sites** — that is exactly the design the prover reproduces as a defect in PHASE 8d (it files an
+edited invoice under one season and charges the other's rate, and NO static guard catches it). The
+shipped code stamps a NEW invoice from `v_season` (the invoice date's season) and binds the
+`customer_application_rates` lookup to `v_invoice_season` — the season the ROW carries, returned by
+the INSERT and read back from the UPDATE. Container proof:
+`scripts/smoke/prove-invoice-season-follows-invoice-date.mjs` — it reproduces the defect through the
+REAL installed functions (an invoice dated 2026-10-01 filed under season 2026 and charged the
+season-2026 rate), then shows both fixed on either side of the boundary, and instruments the clock
+wiring itself. **Deliberate behaviour change recorded with it:** a caller-supplied `invoice_date` in
+another season now files AND prices under that date's season, which is the rule the split-invoice
+body already follows.
+
+**Three consequences of never re-seasoning on edit — all SETTLED by Mason on 2026-09-04
+(`docs/manual/DECISION_LOG.md`, 2026-09-04 entry): an invoice is priced at the season IT is filed
+under, and an edit never rewrites an existing invoice's season.** All are confined to an EDIT that
+moves an invoice date across October 1, none is in the 2026-09-30 evening window, and all three are
+OBSERVED by prover phases 6c/6d/6e rather than inferred. Recorded here so they are not re-opened as
+bugs:
+1. On such an edit the two stamps stay divergent: `invoice_date` moves, `season` does not. The file
+   never re-seasons an existing record (that would move it onto a different year-end statement, and
+   the split-provenance triggers refuse it outright), so the "date and season agree" claim holds on
+   CREATE, not on EDIT.
+2. In a MULTI-GROWER group, an edit that also ADDS a grower prices the pre-existing invoices at
+   their stored season and the new one at the invoice date's season — **two growers on the same
+   application billed at different seasons' rates**. Before this change all of them priced from the
+   clock, so the stamps could already diverge but the prices could not.
+3. If no `customer_application_rates` row exists for the season the invoice is filed under, the fee
+   silently falls back to the service default rate. Pre-existing behaviour on a newly reachable
+   path — e.g. an override entered for the new season after the roll, since
+   `src/pages/ApplicationServiceDetail.tsx` defaults its Season box to the current season.
 (b) **OPEN OWNER DECISION** — the split-invoice body's commission-record `CURRENT_DATE` is
 deliberately retained (pinned at exactly 1 by the postflight so it cannot drift silently). It now
 *disagrees* with the Chicago-dated invoice written in the same transaction on a Chicago evening,
 where before the apply the two always agreed. Whether commissions should follow the invoice date is
 Mason's call, not a defect to fix unilaterally.
 
-Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md` and
-`docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md`.
+Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md`,
+`docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md` and
+`docs/changelog.d/2026-09-04-invoice-season-follows-invoice-date.md`.
+
+## OPEN 2026-09-04 — other paths still stamp `invoices.season` from the UTC clock
+
+Surfaced by `migration-drift-reviewer` (M8) and `rls-security-reviewer` (M5) while reviewing
+`20260904180000_invoice_season_follows_invoice_date.sql`, which closes the 2026-09-30 window for
+only the **two** invoice-creating bodies it re-emits. These are the same class and are NOT closed:
+
+- **The `invoices.season` column DEFAULT is itself the UTC clock read** —
+  `season integer NOT NULL DEFAULT current_season()`
+  (`supabase/migrations/20260213100000_phase2_billing_architecture.sql:50`). Any path that inserts
+  into `invoices` without naming `season` gets the UTC calendar day. The two fixed bodies always
+  pass `season` explicitly, so they are unaffected.
+- `issue_return_credit` — credit-memo invoice stamped `current_season()`
+  (`20260701202000_returns_rpc_gating.sql:361`).
+- The blend-ticket → invoice path — `COALESCE(v_ticket.season, current_season())` for both the stamp
+  and the rate lookup (`20260714230200_blend_ticket_order_lifecycle.sql:723,881`).
+- The delivery-split paths — `COALESCE(v_order.season, current_season())`
+  (`20260707070000_u7_delivery_split_billing.sql:654`, `20260707090000_u7_split_gate_allow_predelivery.sql:213`).
+
+**Not yet verified against the live catalog** — those are the latest occurrences in migration
+*sources*, and superseded bodies are noise. Confirm which are the currently installed bodies before
+acting. Deliberately not folded into `20260904180000`: that file has a hard 2026-09-30 deadline and
+each additional md5-pinned body widens its blast radius.
+
+### OPEN 2026-09-04 — client-side season READS still follow the browser clock, including ONE SAFETY path
+
+Separate from the server-side stamps above. Found by the adversarial sweep that caught the fifth
+invoice-date site, then corrected by a second review that caught this entry itself understating the
+severity — it originally said "reporting only", which is **wrong**.
+
+`src/utils/season.ts:14` `computeSeason(date = new Date())` uses `getMonth()` / `getFullYear()` —
+the BROWSER's clock, not Chicago's. None of its callers WRITES `season` or `invoice_date`, but one
+of them gates a safety warning:
+
+**The one that is not cosmetic — `src/pages/JobDetail.tsx:1342`.**
+`computeSeason(jobDate ? new Date(jobDate + 'T00:00:00') : new Date())` selects which season's
+`field_crop_history` row to read for the earliest harvest date, and that drives the
+**pre-harvest-interval (PHI) warning** on a chemical application. `jobDate` defaults to
+`localToday()` (`:344`), i.e. the browser clock. At the October 1 boundary a user outside Chicago
+can therefore query the WRONG season's harvest row; the query is written to degrade silently
+("No harvest row => no warning"), so the failure mode is a **suppressed PHI warning**, not a visible
+error. Narrow window and pre-existing, but it is a safety path, not a report filter, and a user
+cannot see that anything was skipped.
+
+**The cosmetic ones** — report/dialog defaults the user can change in the UI:
+`ARaging.tsx:80`, `CropPrograms.tsx:55`, `FieldProfitability.tsx:62`, `YearEndSummaryDialog.tsx:26`,
+`ReportShell.tsx:20-29`, `FieldInvoices.tsx:44`, `ApplicationRecords.tsx:36`, `Reports.tsx:94,98`,
+`SalesReports.tsx:29,33,100`. `AccountsReceivable.tsx:45` and `CustomerContextCard.tsx:46` similarly
+pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
+
+`FieldApplicationInvoice.tsx:520` is **fine** — it inherits `transactionDate`, which is now the
+Chicago business date.
+
+Deliberately NOT changed alongside the invoice-date work: that change is about what gets STORED and
+priced, and widening it would have added untested surface to a deadline-bound money PR. **Recommend
+fixing `JobDetail.tsx:1342` on its own merits**, ahead of the cosmetic ones. Tracked so the next
+person does not mistake the invoice-date sweep for a whole-app one.
+
+## SERVER HALF FIXED LIVE 2026-09-08; FRONTEND NOT YET MERGED — the field-app split PREVIEW priced from the UTC clock while SAVE priced from the invoice date
+
+**Status as of 2026-09-08: the server half IS APPLIED LIVE** (ledger version `20260908045843`), with
+Mason's explicit in-conversation approval. Verified from the live catalog — one overload, 5 arguments,
+`md5(prosrc)` `83f6600412ced085d0876a3c7339ff12`, `proacl` carrying no `anon` and no PUBLIC — and
+separately through a real PostgREST call in both the 5- and 4-argument shapes, each returning
+`42501` rather than `PGRST202`, which proves the API layer resolves the new signature AND that the
+legacy 4-argument caller still works through the DEFAULT.
+
+**The frontend half is still on PR #599 and NOT merged, so the defect is still visible to users.**
+The order is deliberate and must not be reversed: the database is backward compatible (a 4-argument
+call resolves through the DEFAULT), so DB-first is safe, whereas merging the frontend first would
+send a fifth named argument to a 4-argument function and return `PGRST202` on EVERY Preview click —
+not merely the season edge case.
+
+Historical detail from when this was a candidate:
+`supabase/migrations/20260906120000_preview_field_app_season_follows_invoice_date.sql` gives
+`preview_field_app_invoice_split` a fifth argument, `p_invoice_date date DEFAULT NULL`, and prices the
+application fee at the season the invoice is (or would be) filed under, reproducing
+`_save_field_app_invoice_impl_20260714`'s branch order exactly — an existing live member of the group
+or a single-customer edit prices at that row's STORED season; only a genuinely new invoice uses
+`compute_season(p_invoice_date)`. `src/pages/FieldApplicationInvoice.tsx` `handlePreview` now sends the
+same `transactionDate` it already sends to save. Proof:
+`scripts/smoke/prove-preview-field-app-season.mjs` → `PREVIEW_SEASON_PROOF_PASS`, which reproduces
+both windows as observed rate disagreements (1111c/acre quoted vs 2222c/acre charged) through the real
+installed functions before the candidate, shows every case agreeing after it, and catches three
+mutants — the fix removed, the stored season ignored, and the `anon` REVOKE dropped. Details in
+`docs/changelog.d/2026-09-06-preview-field-app-season-follows-invoice-date.md` and row 918 of
+`docs/reference/migration-history.md`.
+
+**This entry stays open until PR #599's frontend half is merged and observed on production.** The
+server half is applied (above); the only remaining gate is the merge itself, which needs the exact-SHA
+proof `pr-merge-guard` requires. Everything below this line is the 2026-09-04 report as written at
+the time, kept for provenance. Where it says the live function has no date or season parameter, or
+that a migration is still needed, that was true until `20260906120000` applied on 2026-09-08 and is
+NOT the live state now; the caller-side change it asks for is the frontend half on PR #599.
+
+### HISTORICAL — the original report (2026-09-04), superseded on the server side 2026-09-08
+
+Raised by the Codex GitHub App (P1) on PR #599 and **verified against the live catalog on
+2026-09-04**, after `20260904180000_invoice_season_follows_invoice_date` was applied:
+
+| body | season-helper refs | America/Chicago refs |
+|---|---|---|
+| `_save_field_app_invoice_impl_20260714` | 0 | 4 |
+| `_save_invoice_lineage_unaware_impl_20260827` | 0 | 4 |
+| `preview_field_app_invoice_split` | **1** | **0** |
+
+`20260904180000` moved the two SAVE bodies onto the invoice's own season. It did not touch
+`preview_field_app_invoice_split`, whose application-fee lookup still filters
+`car.season = <UTC clock season>` (latest source
+`supabase/migrations/20260630180000_field_app_pricing_unit_fix.sql:862`; live body md5
+`ca33fb973d86dbf3a2788dc11fbc49a5`). So the "Customers" breakdown Mason approves can display one
+application-fee rate while the save charges another.
+
+**This divergence is NEW — it is the cost of the save-side fix.** Before 2026-09-04 both sides read
+the same UTC clock, so they agreed (and were both wrong together). Now the save side is right and
+the preview is the one that can be wrong.
+
+**Severity is display-only, not a wrong charge.** `previewData` in
+`src/pages/FieldApplicationInvoice.tsx` is only passed to the breakdown component as a `preview`
+prop — it never feeds the save payload, and save recomputes the fee independently. The customer is
+billed the correct season's rate; the on-screen number Mason approves beforehand can differ.
+
+**Two windows, and the second is the big one:**
+- ~5 hours a year: 7 pm–midnight Chicago on 2026-09-30, when the clock season has rolled and the
+  invoice date has not.
+- **All year:** editing any invoice whose season differs from the current clock season — e.g.
+  re-opening a September 2026 invoice in November 2026 previews 2027 rates against a 2026 save.
+
+**Cannot be fixed in the frontend** (HISTORICAL — since 2026-09-08 the live function accepts a fifth
+argument, `p_invoice_date`; the caller change ships with PR #599). At the time the live function took 4 arguments
+(`p_locations`, `p_chemicals`, `p_application_service_id`, `p_invoice_id`) and has no date or season
+parameter, so the caller has nothing to pass. The fix needs a new migration that either accepts an
+invoice date or derives the season from `p_invoice_id`, plus a matching caller change.
+
+Deliberately NOT folded into PR #599: that PR's migration is already applied live, so holding it
+does not un-ship this divergence, and its frontend fix is what closes the 2026-09-30 window.
+**Recommended before 2026-09-30**, tracked as a follow-up.
+
+**PARTIALLY CLOSED 2026-09-04 — the stale-preview half is fixed; the server half is not.** The
+`gpt-5.6-sol` push-proof review raised a second, sharper vector that the earlier reviews missed:
+the transaction-date input did **not** invalidate a rendered preview, even though locations
+(`:1314`), chemicals (`:1367`) and the application-service selector (`:2672`) all did. So an
+operator could preview on 2026-09-30, move the date to 2026-10-01, and save with the season-2026
+per-acre rate still on screen while the save charged the season-2027 rate — approving a number that
+was not billed, with no boundary or timezone involved. `FieldApplicationInvoice.tsx:2645` now clears
+`previewData` on date change, with a regression test that fails if the clear is removed.
+
+**What was still open at the time (CLOSED on the server 2026-09-08 by `20260906120000`; the caller
+side ships with PR #599):** `preview_field_app_invoice_split` itself then priced from the UTC clock,
+so a *freshly generated* preview could still disagree with the save on a backdated or cross-boundary
+invoice. That needed the migration named at the top of this entry — the live function then had no
+date or season parameter. The fix above only removed the STALE-preview vector, which was the part
+reachable without any clock edge case at all.
+
+## OPEN 2026-09-04, DEADLINE 2026-12-31 — `next_invoice_number` takes its YEAR from the UTC clock
+
+Split out of the invoice-date/season entry above on 2026-09-04 so it is not closed along with it —
+it is the same class of defect but a different function, a different migration lineage, a narrower
+window and a later deadline.
+
+`next_invoice_number()` derives the year in the invoice number from `extract(year FROM now())`,
+which on live is UTC (`supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql:391`).
+Between 6 pm America/Chicago on 2026-12-31 and midnight UTC, an invoice is dated 2026-12-31 but
+numbered with 2027. Unlike `season`, this does not change what the customer is charged or which
+year-end statement the invoice lands on — it makes the human-readable number disagree with the date
+printed beside it, and it consumes a number out of the next year's sequence.
+
+Deliberately NOT folded into `20260904180000_invoice_season_follows_invoice_date.sql`: that file has
+a hard 2026-09-30 deadline, and adding a third md5-pinned body widens its blast radius for a window
+that does not open for another three months. Changing the year source also has sequence-uniqueness
+consequences of its own that deserve their own review.
 
 ## FIXED 2026-09-05 — the CodeRabbit gate reported "requested" without ever confirming a review was requested, and spent slots on unmergeable PRs
 
@@ -1781,7 +2007,18 @@ Keep this separate from the equal-unit exact-decimal fix, and replace the conver
 exact rational/decimal conversion in a focused follow-up.
 
 
-## OPEN 2026-09-04 — Server acreage refusal is written and proven, not yet applied
+## CLOSED 2026-09-05 — Server acreage refusal is merged and applied live
+
+**Status corrected 2026-09-06.** `20260904185900_refuse_null_job_field_acres.sql` merged as
+`719faac73` (PR #606) and was applied to production on 2026-09-05, registering in the ledger as
+version `20260905185938` under the unprefixed name `refuse_null_job_field_acres`. Confirmed
+read-only on 2026-09-06: live `save_job` is one overload at body md5
+`8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin — and the live body carries its
+`JOB_ACRES_NOT_FINITE` refusal. The "no live apply is authorized" line below is the pre-apply record
+and no longer describes production. The separate different-unit chemical conversion issue above
+remains open.
+
+### The original entry (2026-09-04, pre-apply)
 
 An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
 `null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every
