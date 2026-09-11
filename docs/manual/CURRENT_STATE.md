@@ -1,5 +1,30 @@
 # CRX Manager — Current State
 
+**Superseded 2026-09-06 header, kept for provenance — every boundary and counter claim in the next
+two paragraphs is superseded by the 2026-09-08 capture that follows them; do not number a migration
+off it.** It was last verified 2026-09-06 for the migration ledger (read-only ledger read against project
+`rhyzpcqhnizqbxphqdkr`); schema shape re-read 2026-09-05 by the live-introspection regeneration of
+`.claude/schema-registry.json` merged as PR #601.** The registry regeneration that was outstanding
+here is **DONE**, and the note that it was "being reconciled by open PRs #601 and #602" is
+superseded: #601 merged, and #602 was closed as a byte-identical duplicate of it. The registry is
+stamped `generated_at 2026-09-05` and carries `migrations_high_water` `20260904152221`. All five
+migrations previously listed here as unread by the registry are captured by that refresh —
+`20260903150100_ledger_backed_commission_history` (ledger version `20260903202611`), F2's
+`20260903160000_gate_number_generators_active_profile_role` (`20260904023121`),
+`20260903230000_commission_report_snapshot_contract` (`20260904040643`),
+`20260904160000_invoice_date_fallbacks_chicago` (`20260904130047`), and
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`).
+
+**The name-ordered high-water now UNDER-REPORTS by one file, and this is the important fact on this
+page.** A name-ordered query still returns **`20260904180000_invoice_season_follows_invoice_date`**,
+but the newest applied authored file is really **`20260904185900_refuse_null_job_field_acres`**,
+merged as `719faac73` (PR #606) and applied live on 2026-09-05 as ledger version `20260905185938`.
+It was registered under the bare name `refuse_null_job_field_acres`, with **no 14-digit prefix**, so
+name ordering cannot see it. At that read a new migration had to be numbered above the then-TRUE
+high-water `20260904185900` (since superseded — see the 2026-09-08 capture below). Identity confirmed on 2026-09-06 rather than inferred: live `save_job` is one
+overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
+the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
+carries that file's `JOB_ACRES_NOT_FINITE` refusal.
 **Last verified: 2026-09-08 for the migration ledger (read-only `list_migrations` against project
 `rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-05 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
@@ -12,6 +37,10 @@ applied live 2026-09-08; verified live 2026-09-08, 1,000 ledger rows / 993 disti
 replaced `20260905185938_refuse_null_job_field_acres` (#606, applied live 2026-09-05 under a bare
 ledger name, so its stamp was synthesized from its version), which held the boundary until then.
 A candidate must now sort above the `20260906120000` name-stamp, not above the 09-05 row.
+(Point-in-time, like every capture here: a read-only re-read on 2026-09-11 found the ledger had moved
+again — 1001 rows / 994 distinct names, `max(version)` `20260909023300`, prefixed high-water
+`20260908120000_close_pr535_live_gaps`, the PR #535 gap-closer whose file and ledger record are owned
+by open PR #646. This page states the boundary as of 2026-09-08; PR #646 restates it when it lands.)
 Seven local commission follow-ups are not applied: five older-stamp candidates
 (`20260905200000`, `20260905200200`, `20260905200300`, `20260905200400`, and
 `20260905200600`), the transfer intent wrapper `20260908130800`, and the tail repair
@@ -49,6 +78,14 @@ high-water" rule compared against it silently skips files authored `20260831*` a
 durable way to state this boundary: it is what the ordering guard compares, and it changes far less
 often than the counters.
 
+For provenance, the 2026-09-06 read observed **999 ledger rows** (992 distinct names) and
+`max(version)` **`20260905185938`**. The 2026-09-05 read saw 998 rows / 991 names / `max(version)`
+`20260904152221`, unchanged from 2026-09-04 — so the counters can sit still across a day and then
+move, and here they moved while the name-ordered boundary did NOT, which is the reverse of the usual
+warning and exactly why the unprefixed row above is easy to miss.
+**Both are a point-in-time observation, not a standing fact.** Every apply by
+any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
+not evidence that something went wrong, and it should not be re-pinned on every apply.
 For provenance, the **superseded 2026-09-05 afternoon read before #606 applied** observed **998
 ledger rows** (991 distinct names — the difference is duplicate names, from `count(distinct name)`,
 not truncation) and `max(version)` **`20260904152221`**. The evening read after #606 was the later
@@ -62,16 +99,16 @@ Worth noting alongside: those counters sat unchanged from the 2026-09-04 reading
 `20260904023121`. This refresh verified all eight generator security/grant shapes; the F2 entry in
 `docs/manual/KNOWN_ISSUES.md` carries the detailed matrix.
 
-**Disk-vs-live drift, refreshed 2026-09-08 — ONE FILE OWNED BY OPEN PR #599; PRs #535 AND #592 ARE RECONCILED.**
+**Disk-vs-live drift, refreshed 2026-09-08 — PRs #535 AND #592 ARE RECONCILED; PR #599's file landed on `main` 2026-09-11.**
 PR #535 merged on 2026-09-08 and restored its six already-live migration files to `main`:
 `20260831160000_harden_receiving_reversal_and_ap_reporting`,
 `20260831161000_require_cumulative_po_bill_confirmation`,
 `20260831162000_fail_closed_historical_commission_balance`,
 `20260831212415_guard_cycle_count_completion_revision`,
 `20260831233000_bind_section9_replays_to_intent`, and
-`20260831235900_serialize_gauntlet_write_boundaries`. The remaining known file gap is
-`20260904180000_invoice_season_follows_invoice_date`, applied live and owned by open PR #599.
-Do not reconstruct it; land its owning PR after its own review gates. The two commission-history
+`20260831235900_serialize_gauntlet_write_boundaries`. The last known file gap as of 2026-09-08,
+`20260904180000_invoice_season_follows_invoice_date` (applied live), closed when PR #599 merged on
+2026-09-11 (`791bc3d86`) and put that file on `main`. The two commission-history
 source files formerly missing from `main`,
 `20260903150100_ledger_backed_commission_history` and
 `20260903230000_commission_report_snapshot_contract`, were reconciled when PR #592 merged on
@@ -81,29 +118,52 @@ source files formerly missing from `main`,
 commission candidates sit at `20260905200000` through `20260905200600`, with no
 `20260905200500` file; the intent wrapper is `20260908130800` and the repair remains last at
 `20260908130900`). The five `20260905*` candidates are now below the 2026-09-08 live ordering
-boundary and require a future coordinated restamp before apply. The #606 candidate, the field-acreage guard first tracked
-as #582 (`20260904185900` on disk), was applied
-live on 2026-09-05 as ledger version `20260905185938` under the bare name
-`refuse_null_job_field_acres` — that row became the 2026-09-05 ordering high-water and forced the
-first commission restamp. The 2026-09-08 boundary has since moved again. The disk file still carries its authored stamp; row 916 of
+boundary and require a future coordinated restamp before apply.
+
+**Corrected 2026-09-08 against a live `list_migrations` read.** An earlier version of this paragraph
+called `20260904185900` a pending "#582 candidate" sitting above the live high-water. Every clause of
+that is now stale:
+
+- `20260904185900_refuse_null_job_field_acres` does **not** belong to PR #582. It was added to `main`
+  by **PR #606** (`719faac73`, "fix(jobs): guard server-side field acreage"), it re-emits `save_job`,
+  and it is **already applied live** under ledger version `20260905185938`.
+- PR #582's own migration is `20260903150000_job_chemicals_persist_driver`, applied live under ledger
+  version `20260903153402`.
+**The ordering boundary is unchanged by this correction**, and it is stated at the top of this page,
+not here: `20260905185938` is a **version**, not an authored name, so it is not the number a new
+migration must exceed. The authored-name high-water remains **`20260904185900`** — that row is
+registered under the bare name `refuse_null_job_field_acres` with no 14-digit prefix, which is why a
+name-ordered query cannot see it. Compare authored names to authored names; a "greater than
+high-water" rule pointed at a version silently skips files. PR #592's restamped `20260905020000` and
+`20260905020100` therefore sort correctly ABOVE the authored-name boundary and need no restamping on
+this account.
+
+The #606 candidate, the field-acreage guard first tracked as #582 (`20260904185900` on disk), was
+applied live on 2026-09-05 as ledger version `20260905185938` under the bare name
+`refuse_null_job_field_acres` — that row was the ordering high-water from 2026-09-05 until
+`20260906120000_preview_field_app_season_follows_invoice_date` applied on 2026-09-08 (the capture at
+the top of this file), which is why the commission set had to move above it. The disk file still carries its authored stamp; row 916 of
 `docs/reference/migration-history.md` records that name mismatch for the #606 lane to reconcile.
 
-The residual consequence still bites until open PR #599 merges: `main` does not fully describe production,
+PR #599's merge on 2026-09-11 closed that file gap, but the rule stands: `main` can lag production,
 so any migration whose safety argument rests on "the live body equals the last committed body" must verify against
-**live**, not against disk. The local `20260904185900` save-job candidate pins the 2026-09-03 F06
-post-apply `pg_proc.prosrc` body and rechecks that exact pre-image at apply time rather than inferring
-it from migration filenames alone.
+**live**, not against disk. The `20260904185900` save-job migration pinned the 2026-09-03 F06
+post-apply `pg_proc.prosrc` body and rechecked that exact pre-image at apply time rather than inferring
+it from migration filenames alone; it has since been applied, so live `save_job` is now at ITS body
+md5 `8acf34542105a90212ddb0a5e7c5d272`, not F06's.
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
 `20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
 file, the `save_job` re-emission (marker `chem_unit_invariant_v3`) and its client changes on `main`;
 the live apply followed separately and is now confirmed. Verified independently against production
-on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job` is at md5
+on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job` was at md5
 `18d08d5f40aea91fe13ac3e5a686c549` — the candidate body, which replaced the 20260820120000 body
 (`227ab7b6bc2023724adf6952a221d2a8`) — with exactly one overload, so no duplicate function was
-created. F06's earlier 990-row / `20260903025854` / `20260831212415` ledger figures were superseded
-first by the 993-row F06 capture, then by the 998-row afternoon capture, then by the 999-row evening
-capture, and finally by the current 1,000-row 2026-09-08 capture at the top of this file.
+created. **That md5 is now historical:** `20260904185900_refuse_null_job_field_acres` applied live on
+2026-09-05 and replaced it with `8acf34542105a90212ddb0a5e7c5d272` (still one overload). F06's
+earlier 990-row / `20260903025854` / `20260831212415` ledger figures were superseded by the 993-row
+F06 capture, then the 998-row capture, then the 999-row capture, and now the 2026-09-08 1000-row
+capture at the top of this file.
 
 **The sequencing lesson outlives the fact.** For the window between that merge and that apply, this
 file correctly recorded F06 as merged but NOT applied: `main` carried the migration while production
