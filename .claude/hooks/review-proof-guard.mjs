@@ -201,13 +201,18 @@ function pathIsStateDirOrDescendant(candidate, stateDir) {
 // Do not mistake the drive's `C:` for a stream; only a colon following a path
 // component counts. Strip the qualifier before name classification because
 // realpathSync.native may preserve it for named streams.
+// Only Windows (NTFS) treats a colon after a path component as a stream
+// qualifier. On POSIX a colon is an ordinary filename character — `x.json::$DATA`
+// is just a differently named file — so there is nothing to strip or refuse.
+const STREAMS_APPLY = process.platform === "win32";
 function hasNtfsStreamQualifier(value) {
   const text = safeString(value);
-  return text != null && /(?:^|[\\/])[^\\/:]+:[^\\/]+/.test(text);
+  return STREAMS_APPLY && text != null && /(?:^|[\\/])[^\\/:]+:[^\\/]+/.test(text);
 }
 function withoutNtfsStreamQualifier(value) {
   const text = safeString(value);
-  return text == null ? null : text.replace(/(^|[\\/])([^\\/:]+):[^\\/]+(?=[\\/]|$)/g, "$1$2");
+  if (text == null) return null;
+  return STREAMS_APPLY ? text.replace(/(^|[\\/])([^\\/:]+):[^\\/]+(?=[\\/]|$)/g, "$1$2") : text;
 }
 function classifyReadTarget(candidate) {
   const raw = safeString(candidate);
