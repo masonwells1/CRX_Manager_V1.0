@@ -8,7 +8,52 @@ import path from "node:path";
 // `git --git-dir=... push`, `git -c k=v push` — which used to bypass the gate
 // entirely (observed 2026-07-10: a `git -C` push slipped past this guard).
 const GIT_ARG = `(?:"[^"]*"|'[^']*'|\\S+)`;
-const GIT_BIN = `(?:"[^"]*[\\\\/]git(?:\\.exe)?"|'[^']*[\\\\/]git(?:\\.exe)?'|(?:\\S*[\\\\/])?git(?:\\.exe)?)`;
+
+// The BINARY was a ONE-ITEM EXTENSION LIST — `git(?:\.exe)?`, repeated in all
+// three alternatives — and that is the same "describe how a command is usually
+// written" error this repo has now hit three times (autopilot-lib enumerated
+// option SPELLINGS, then attached-vs-detached option VALUES, then the binary
+// NAME; PR #607 replaced all three with a grammar). This file never got that
+// treatment, so it still carried the original. Reproduced by EXECUTION against
+// this file's own exported predicates at 336f92e4d (2026-09-07), not by reading
+// the pattern: `git.cmd push origin HEAD:main`, `git.ps1 …`, `git.com …`,
+// `git.bat …`, `C:\Tools\git.cmd push …` and `"C:/…/git.cmd" push …` ALL
+// returned isGitPush === false, so the guard exited before the force,
+// destination, risky-diff and Codex-proof checks. `.cmd` is what Windows
+// resolves `git` to when Git ships its shim, and PATHEXT is user-configurable,
+// so this was not a corner case.
+//
+// Listing more extensions would inherit the next list's omissions. The binary is
+// described by SHAPE instead, reusing PR #607's model verbatim rather than
+// inventing a second grammar for the same problem — two different answers to
+// "what is a git command" across two guards is how the next gap appears:
+//
+//   BIN_TAIL   what may sit between the NAME and the whitespace before the
+//              subcommand, and it is exactly two things:
+//                (a) an EXTENSION — a `.` followed by the LAST dot-segment of
+//                    the final path segment, so it contains no separator, no
+//                    further dot and no quote. ANY such extension, because "what
+//                    follows the dot" is a shape, not a list: `.exe`, `.EXE`,
+//                    `.cmd`, `.bat`, `.ps1`, `.com` and whatever PATHEXT gains
+//                    next all match without being named.
+//                (b) a CLOSING QUOTE — a quoted command word ends with one, and
+//                    `"C:/Program Files/Git/bin/git.exe" push` is the ordinary
+//                    Windows spelling of a path containing a space.
+//
+// `\b` after the name is what keeps it off the neighbours: `-` is not `.`, so
+// BIN_TAIL never opens on `git-crypt`/`git-lfs`, and `h` is a word character, so
+// `\b` never even matches inside `github-release`/`gitfoo`. Bounding the
+// extension (no dot, no separator, no quote inside it) is also what keeps this
+// LINEAR — an unbounded tail can swallow the rest of the command and hand it
+// back one character at a time at every position where the name can start.
+// Measured, not assumed; the test file pins a ceiling.
+//
+// The path-prefix alternatives stay because CMD_START below anchors immediately
+// before this pattern, so (unlike #607, which has no such anchor) `\b` alone
+// cannot open on the BASENAME of `C:\Tools\git.cmd`. They lose only their
+// extension list, not their structure.
+const BIN_TAIL = `(?:\\.[^\\s'".\\\\/]*)?["']?`;
+const GIT_BIN = `(?:"[^"]*[\\\\/]git|'[^']*[\\\\/]git|(?:\\S*[\\\\/])?git)\\b${BIN_TAIL}`;
 const GIT_GLOBAL_OPTS =
   // `--config-env` must be listed here or the whole command stops looking like a
   // push: without it `git --config-env=remote.origin.pushurl=VAR push origin main`
@@ -36,14 +81,32 @@ export function isGitPush(cmd) {
 // `$verb='push'; git $verb ...` otherwise looks like a non-push and skips every
 // destination, force and proof check. Refuse the uninspectable Git invocation
 // itself, including dynamic non-pushes, rather than guessing what it becomes.
+// Token-level twin of BIN_TAIL, for the two parsers below that walk argv words
+// instead of matching the raw command text. They compared the final path segment
+// against the literal set {"git", "git.exe"} — the same one-item extension list,
+// with the same consequence: `git.cmd $verb origin main` was not seen as git at
+// all, so gitSubcommandIsDynamic missed the uninspectable subcommand and
+// unknownGitGlobalOptions missed the unlisted global option. Both verified false
+// by execution before the fix.
+//
+// The basename is the NAME plus AT MOST ONE extension, and an extension is a
+// dot-segment with no further dot — the argv-token form of BIN_TAIL(a), so the
+// two parsers and the regex agree on what a git command is. `mine.git`,
+// `git-crypt` and `git.exe.bak` are not git; `git`, `git.exe`, `git.CMD` and
+// `git.ps1` are. Tokens reach here already unquoted by splitShellArgs.
+const GIT_BASENAME_RE = /^git(?:\.[^.]*)?$/i;
+function isGitBinaryToken(token) {
+  const basename = String(token || "").replace(/\\/g, "/").split("/").pop() || "";
+  return GIT_BASENAME_RE.test(basename);
+}
+
 export function gitSubcommandIsDynamic(cmd) {
   const takesValue = new Set(["-c", "-C", "--config-env", "--git-dir", "--work-tree"]);
   const valueless = new Set(["--no-pager", "--literal-pathspecs", "--%"]);
   for (const segment of shellSegments(String(cmd || ""))) {
     const tokens = splitShellArgs(segment);
     for (let index = 0; index < tokens.length; index += 1) {
-      const binary = tokens[index].replace(/\\/g, "/").split("/").pop()?.toLowerCase();
-      if (binary !== "git" && binary !== "git.exe") continue;
+      if (!isGitBinaryToken(tokens[index])) continue;
       let subcommand = index + 1;
       while (subcommand < tokens.length) {
         const token = tokens[subcommand];
@@ -72,8 +135,7 @@ export function unknownGitGlobalOptions(cmd) {
   for (const segment of shellSegments(String(cmd || ""))) {
     const tokens = splitShellArgs(segment);
     for (let index = 0; index < tokens.length; index += 1) {
-      const binary = tokens[index].replace(/\\/g, "/").split("/").pop()?.toLowerCase();
-      if (binary !== "git" && binary !== "git.exe") continue;
+      if (!isGitBinaryToken(tokens[index])) continue;
       for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
         const token = tokens[cursor];
         if (token === "push") break;
@@ -132,9 +194,93 @@ export function pushHiddenByShellComposition(cmd) {
   const executedPushes = eachPush(unwrapped);
   if (executedPushes.length === 0) return false;
   if (executedPushes.length !== literalPushes.length) return true;
-  return executedPushes.some((push, index) =>
-    JSON.stringify(splitShellArgs(push.args)) !== JSON.stringify(splitShellArgs(literalPushes[index].args))
+  // The ARGS are compared word by word from the SAME split, not by re-splitting
+  // the unwrapped text. Deleting a quote from the whole command MANUFACTURES a
+  // word boundary that was never there: `git push "C:/scratch repo/repo.git"` is
+  // one destination word to every shell, and the unwrapped copy read it as two,
+  // so an ordinary local push was refused as a hidden one. Codex sol, 2026-09-08,
+  // finding 9; reproduced through the guard before this line changed. The helper
+  // has read it that way since 2026-07-30, so the Claude side refused it too —
+  // wiring the Codex side in only made the existing defect visible on both.
+  return literalPushes.some((push) =>
+    // Two signals, because the word-wise comparison alone cannot see the second.
+    // SUBSTITUTION: `git push $(cat ref) HEAD:main` has no quote or escape in any
+    // word, so every word reads back identically — yet the destination is decided
+    // at run time and no text analysis of it proves anything. The whole-command
+    // unwrap used to catch this incidentally by turning `$(){}` into whitespace;
+    // naming it is what keeps it after the comparison narrowed. Caught by the
+    // differential sweep over this file's other consumers, not by review.
+    SUBSTITUTION_PUNCTUATION_RE.test(push.args) ||
+    // REWRITING: a word whose quote/escape syntax means the parsers below are
+    // reading something other than what the shell will hand git.
+    splitShellWordsRaw(push.args).some((word) => shellCompositionWord(word) !== unquoteShellArg(word))
   );
+}
+
+// Text a shell computes rather than passes through: a variable, a substitution,
+// a subexpression, a brace group. In a push's ARGUMENTS this is never analysable
+// — the destination or refspec is not decided until the command runs.
+const SUBSTITUTION_PUNCTUATION_RE = /[$`(){}]/;
+
+// A drive-qualified absolute path (`C:\scratch\repo.git`, `\\server\share`) as a
+// push WORD. Its backslashes are separators, not escapes, and no shell rewriting
+// of them can produce a push to `main`: this token position is a destination or a
+// refspec, a local repository is not a GitHub branch, and no refspec starts with
+// a drive letter. Exempting it is what lets an ordinary Windows local-repo push
+// through the composition check while `git p\ush` and `HEAD:ma\in` still fail it.
+const WINDOWS_ABSOLUTE_PATH_RE = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+
+// What a shell CONSUMES from one word, for the composition comparison only —
+// deliberately shell-AGNOSTIC, unlike shellArgvWord below. The guard reads text
+// without knowing which shell will run it, so this consumes POSIX backslashes,
+// PowerShell backticks AND cmd.exe carets: any of the three could be the one that
+// rewrites the word. That makes it useless for reading a VALUE, and it is never
+// used for one — only to answer "does this word mean something else once a shell
+// has had it?".
+function shellCompositionWord(word) {
+  const text = String(word || "");
+  if (WINDOWS_ABSOLUTE_PATH_RE.test(unquoteShellArg(text))) return unquoteShellArg(text);
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if ((char === "\\" || char === "`" || char === "^") && index + 1 < text.length) {
+      out += text[index + 1];
+      index += 2;
+      continue;
+    }
+    if (char === "\\" || char === "`" || char === "^") { out += char; break; }
+    if (char === "'") {
+      // Single quotes are literal in POSIX and in PowerShell alike.
+      const close = text.indexOf("'", index + 1);
+      const end = close === -1 ? text.length : close;
+      out += text.slice(index + 1, end);
+      index = end + 1;
+      continue;
+    }
+    if (char === '"') {
+      index += 1;
+      while (index < text.length && text[index] !== '"') {
+        // Inside double quotes PowerShell consumes a backtick before anything,
+        // and POSIX consumes a backslash only before " \ ` $. A backslash before
+        // any other character is literal in BOTH — which is what keeps
+        // `"C:\scratch repo\repo.git"` intact.
+        if (text[index] === "`" && index + 1 < text.length) { out += text[index + 1]; index += 2; continue; }
+        if (text[index] === "\\" && index + 1 < text.length && ['"', "\\", "`", "$"].includes(text[index + 1])) {
+          out += text[index + 1];
+          index += 2;
+          continue;
+        }
+        out += text[index];
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
 }
 
 // EVERY push in the command, not just the first. `String.match` without /g and
@@ -165,8 +311,159 @@ function unquoteShellArg(value) {
   return text;
 }
 
+// Split a command into argv WORDS the way a shell does: only UNQUOTED
+// whitespace separates words. The previous `/"[^"]*"|'[^']*'|\S+/g` scan treated
+// a quote as a word boundary as well, so `gh api "--method"=POST …` — one word
+// to every shell — arrived here as the two tokens `--method` and `=POST`, and no
+// `--method` comparison below ever saw the option. That was the last row of the
+// PR #630 bypass table still open after the keyword normalization: measured
+// blocked:false through evaluateProductionAction.
+//
+// The token TEXT is left as typed apart from the long-standing wrapping-quote
+// strip, because callers read values — remote URLs, Windows destination paths —
+// where the raw form is the correct one. Keyword comparisons pass each word
+// through shellArgvWord below to get the form the program actually receives.
+function splitShellWordsRaw(value) {
+  const text = String(value || "");
+  const words = [];
+  let current = "";
+  let started = false;
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (/\s/.test(char)) {
+      if (started) { words.push(current); current = ""; started = false; }
+      index += 1;
+      continue;
+    }
+    started = true;
+    // A backslash binds the next character into this word, so `\"` cannot open a
+    // quote context and `\ ` cannot end the word — matching POSIX. Consumed as a
+    // PAIR and kept verbatim: on Windows the same character is a path separator,
+    // and unescaping here would corrupt a destination path.
+    if (char === "\\" && index + 1 < text.length) {
+      current += text.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (char === "'") {
+      const close = text.indexOf("'", index + 1);
+      const end = close === -1 ? text.length : close + 1;
+      current += text.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (char === '"') {
+      let cursor = index + 1;
+      while (cursor < text.length && text[cursor] !== '"') {
+        cursor += text[cursor] === "\\" && cursor + 1 < text.length ? 2 : 1;
+      }
+      const end = cursor < text.length ? cursor + 1 : text.length;
+      current += text.slice(index, end);
+      index = end;
+      continue;
+    }
+    current += char;
+    index += 1;
+  }
+  if (started) words.push(current);
+  return words;
+}
+
+// The long-standing token view: words split correctly, wrapping quotes stripped,
+// everything else as typed. Callers that read VALUES (remote URLs, Windows
+// destination paths) use this, because the raw form is the correct one there.
 function splitShellArgs(value) {
-  return String(value || "").match(/"[^"]*"|'[^']*'|\S+/g)?.map(unquoteShellArg) || [];
+  return splitShellWordsRaw(value).map(unquoteShellArg);
+}
+
+// The argv a program actually receives. Applied to the RAW word, never on top of
+// unquoteShellArg: `-X 'P"OST'` unquotes to `P"OST`, and re-reading THAT would
+// treat the surviving literal quote as syntax and resolve it back to `POST` —
+// classifying a call as a POST that is not one. That double reading is the
+// second bug CodeRabbit warned about on PR #630, and it is avoided by computing
+// this view once, from the raw word.
+export function splitShellArgv(value) {
+  return splitShellWordsRaw(value).map(shellArgvWord);
+}
+
+// The argv word the SHELL hands the program, given the word as TYPED.
+//
+// splitShellArgs above strips the quotes that WRAP a whole token, and nothing
+// more. A shell removes quote and escape syntax wherever it appears, so
+// `me""rge`, `me''rge`, `"merge"`, `me\rge` and `"me"rge` all arrive at gh as
+// the single word `merge` — and a parser comparing the word as typed matches
+// none of them. Measured through evaluateProductionAction and the merge guard,
+// not read off a pattern: `gh pr me""rge 123 --squash` and
+// `gh api --met""hod=POST …` both returned blocked:false.
+//
+// This is NOT a blanket removal of quotes and backslashes. That would be a
+// second bug in the opposite direction (CodeRabbit, PR #630): `--method='P"OST'`
+// really does pass `P"OST` to gh, so erasing the quotes would read it as POST
+// and deny a call that is not a POST at all. Only syntax the shell CONSUMES is
+// removed; a quote or backslash that survives to the program survives here:
+//
+//   * outside quotes — `\` escapes the next character, `'` and `"` open a quote
+//     context and are themselves consumed;
+//   * inside single quotes — everything is literal until the closing `'`, `\`
+//     included (POSIX gives single quotes no escape at all);
+//   * inside double quotes — `\` escapes only `"`, `\`, `` ` `` and `$`;
+//     before anything else BOTH characters are literal, which is what keeps a
+//     double-quoted Windows path (`"C:\tmp\x.json"`) intact;
+//   * an UNTERMINATED quote runs to the end of the word rather than being
+//     dropped — the fail-closed reading, since the alternative is to stop
+//     recognising a keyword because a quote was left open.
+//
+// Backslash escapes are POSIX; PowerShell leaves `\` literal. Reading them as
+// escapes is therefore the fail-closed direction for keyword comparison — it can
+// only make a gate RUN on a word PowerShell would have left alone — and that is
+// why this is used for subcommands, option names and the HTTP method, never for
+// free-form values such as `--repo`, a body field, or a destination path, where
+// a Windows separator must survive verbatim.
+//
+// ghMergeRequest has done a blunt version of this inline for flag NAMES since
+// Codex's P1 on PR #541. That fix stopped at flag names: the `pr`/`merge`
+// subcommand words one line above it, and every keyword in the two `gh api`
+// parsers, kept comparing the raw word. Naming the normalization once is what
+// stops the next keyword inheriting the same omission.
+export function shellArgvWord(word) {
+  const text = String(word || "");
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === "\\") {
+      // A trailing backslash has nothing to escape; it reaches the program.
+      if (index + 1 >= text.length) { out += "\\"; break; }
+      out += text[index + 1];
+      index += 2;
+      continue;
+    }
+    if (char === "'") {
+      const close = text.indexOf("'", index + 1);
+      const end = close === -1 ? text.length : close;
+      out += text.slice(index + 1, end);
+      index = end + 1;
+      continue;
+    }
+    if (char === '"') {
+      index += 1;
+      while (index < text.length && text[index] !== '"') {
+        if (text[index] === "\\" && index + 1 < text.length && ['"', "\\", "`", "$"].includes(text[index + 1])) {
+          out += text[index + 1];
+          index += 2;
+          continue;
+        }
+        out += text[index];
+        index += 1;
+      }
+      index += 1; // step past the closing quote (or past the end, if unterminated)
+      continue;
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
 }
 
 // Resolve the repository directory selected by one or more `git -C` options.
@@ -2000,37 +2297,104 @@ export function sessionProofDirs(root, hookCwd, listWorktrees) {
 // logic. Follow-up: production-action-guard should import these instead of
 // carrying its own copies.
 
-// gh binary reference — tolerates quoted absolute paths and gh.exe.
-const GH_BIN_RE = /(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i;
+// gh binary reference — the SAME shape rule as GIT_BIN above, not a second one.
+// This carried the identical one-item extension list (`gh(?:\.exe)?`), and with
+// the same consequence one layer up: `gh.cmd pr merge 625 --squash`,
+// `gh.ps1 …`, `gh.bat …`, `C:\Tools\gh.cmd pr merge …` and
+// `"C:/Program Files/GitHub CLI/gh.cmd" pr merge …` all returned null from
+// ghMergeRequest at 336f92e4d, so the merge gate — green-pipeline,
+// CHANGES_REQUESTED and risky-diff proof — never ran. Verified by execution.
+//
+// The command-start class is widened from `\s` to CMD_START's `[\s;&|]` for the
+// reason this file already recorded for git at line 18: `npm test&&gh pr merge
+// 625` is an ordinary shell line, the separators ARE word boundaries to the
+// shell, and requiring whitespace meant the gate saw no merge at all (also
+// reproduced by execution — false before, true after). `(` stays out, matching
+// git's treatment. Widening here is cheap: ghMergeRequest still needs the words
+// `pr` and `merge`, and the file already accepts over-matching as fail-safe
+// ("gh token anywhere still matches" in pr-merge-guard.test.mjs).
+const GH_BIN_RE = new RegExp(
+  `${CMD_START}(?:"[^"]*[\\\\/]gh|'[^']*[\\\\/]gh|(?:\\S*[\\\\/])?gh)\\b${BIN_TAIL}(?:\\s|$)`,
+  "i",
+);
+
+// The binary shape test, applied to the text AND to the argv the shell produces.
+// GH_BIN_RE needs a contiguous literal `gh`, so `g""h pr merge 123 --admin` — an
+// ordinary `gh` to every shell — matched nothing and the merge gate never ran
+// (Codex sol, 2026-09-08, finding 5). The words are resolved anyway one line
+// later; resolving them for the binary too is what stops the splice that PR #630
+// closed inside the subcommand from simply moving one word to the left.
+//
+// Still open, and named rather than half-covered: a gh invoked through ANOTHER
+// program's quoted argument (`cmd /c "gh pr merge 1"`, `bash -c 'gh pr merge 1'`,
+// `& "gh.exe" pr merge 1`) stays one argv word, so `pr` and `merge` are not
+// separate words to any parser here. Closing that means re-splitting a nested
+// command, which is a larger change than this one.
+function ghBinaryMentioned(text) {
+  return GH_BIN_RE.test(text) || GH_BIN_RE.test(splitShellArgv(text).join(" "));
+}
 
 // `gh pr merge` with global flags possibly between words (`gh -R o/r pr merge`).
 // Over-matching (e.g. `gh pr view merge-notes`) only routes a read through the
 // gate, which fails safe.
 export function ghMergeRequest(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return null;
-  const words = splitShellArgs(text);
-  const prIndex = words.findIndex((word) => word.toLowerCase() === "pr");
+  if (!ghBinaryMentioned(text)) return null;
+  // Every keyword below is compared against the word the SHELL produces, not the
+  // word as typed: `gh pr me""rge 123 --squash` reached gh as a plain merge and
+  // returned null here, so the whole merge gate never ran (measured).
+  const words = splitShellArgv(text);
+  // Options whose NEXT word is a value. Long names are matched lowercased (gh
+  // accepts them case-insensitively); short names are matched with their case
+  // intact, because gh's shorts are case-SENSITIVE and lowercasing conflates
+  // `-F` (`--body-file`) with `-f`. `-r` is not a gh flag and is kept only
+  // because consuming one extra word costs nothing.
+  const longValueFlags = new Set(["--repo", "--match-head-commit", "--subject", "--body", "--body-file"]);
+  const shortValueFlags = new Set(["-R", "-r", "-t", "-b", "-F"]);
+  const takesValue = (word) => longValueFlags.has(word.toLowerCase()) || shortValueFlags.has(word);
+  // Which words gh reads as an OPTION rather than as some option's VALUE. Every
+  // keyword test below asks this first, because a word in a value position is
+  // data: `gh pr merge 123 --body '--disable-auto' --admin --squash` performs an
+  // ADMINISTRATOR merge, and the flat `words.some(... === "--disable-auto")`
+  // scan that used to sit here stood the whole gate down on the body text
+  // (Codex sol, 2026-09-08, finding 2 — measured blocked:false end to end).
+  const isValue = new Array(words.length).fill(false);
+  for (let index = 0; index < words.length; index += 1) {
+    if (isValue[index]) continue;
+    if (takesValue(words[index]) && index + 1 < words.length) isValue[index + 1] = true;
+  }
+  const optionAt = (index) => !isValue[index];
+  const prIndex = words.findIndex((word, index) => optionAt(index) && word.toLowerCase() === "pr");
   if (prIndex === -1) return null;
-  const mergeIndex = words.findIndex((word, index) => index > prIndex && word.toLowerCase() === "merge");
+  const mergeIndex = words.findIndex((word, index) =>
+    index > prIndex && optionAt(index) && word.toLowerCase() === "merge");
   if (mergeIndex === -1) return null;
   // `--disable-auto` cancels a pending auto-merge — it does not land anything,
-  // so the gate stands down for it.
-  if (words.some((word) => word.toLowerCase() === "--disable-auto")) return null;
-  // Lowercase: membership is tested against the normalized flag name below.
-  const valueFlags = new Set(["--repo", "-r", "--match-head-commit", "--subject", "--body", "-t", "-b"]);
+  // so the gate stands down for it. Only in an option position, and only when it
+  // is actually asking to disable: `--disable-auto=false` does the opposite.
+  if (words.some((word, index) => {
+    if (!optionAt(index)) return false;
+    const lower = word.toLowerCase();
+    if (lower === "--disable-auto") return true;
+    if (!lower.startsWith("--disable-auto=")) return false;
+    const value = lower.slice("--disable-auto=".length);
+    return value === "1" || value === "t" || value === "true";
+  })) return null;
   let selector = "";
   let repo = "";
   let auto = false;
   let admin = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
-    // Flag NAMES are matched with quotes and backslashes removed: the shell
-    // concatenates `--ad""min` and `--ad\min` into `--admin` before gh ever sees
-    // them, so a parser that compares the raw word misses the flag while gh
-    // honours it (Codex bot P1 on PR #541). Values keep their original case —
-    // only the name is lowercased.
-    const stripped = word.replace(/["'\\]/g, "");
+    if (isValue[index]) continue;
+    // The shell concatenates `--ad""min` and `--ad\min` into `--admin` before gh
+    // ever sees them, so a parser that compares the raw word misses the flag
+    // while gh honours it (Codex bot P1 on PR #541). That was handled here by
+    // deleting every quote and backslash from the word; shellArgvWord above now
+    // does it for the whole argv, correctly — a quote that SURVIVES to gh
+    // (`--repo='o/"r'`) survives here too, where the blunt version erased it.
+    // Values keep their original case; only the name is lowercased.
+    const stripped = word;
     const lower = stripped.toLowerCase();
     if (lower.startsWith("--repo=")) { repo = stripped.slice("--repo=".length); continue; }
     // `--auto=false` asks gh NOT to auto-merge, so that command lands the PR
@@ -2063,15 +2427,41 @@ export function ghMergeRequest(command) {
       admin = !(value === "0" || value === "f" || value === "false");
       continue;
     }
-    if (valueFlags.has(lower)) {
+    if (takesValue(stripped)) {
+      // The value word itself is skipped by the isValue pass above, so this only
+      // has to read it — advancing the index here as well would step past the
+      // word AFTER the value.
       const value = words[index + 1] || "";
-      if (lower === "--repo" || lower === "-r") repo = value;
-      index += 1;
+      if (lower === "--repo" || stripped === "-R" || stripped === "-r") repo = value;
       continue;
     }
     if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
   return { selector, repo, auto, admin };
+}
+
+// gh parses with pflag, which accepts a short option in FOUR spellings: `-X PUT`
+// (separate), `-XPUT` (attached), `-X=PUT` (attached with an equals sign) and
+// `-iXPUT` (bundled behind boolean shorts such as `-i`/`--include`). The two
+// `gh api` parsers below recognised only the first two, so `-X=DELETE`,
+// `-iXDELETE` and `-iFbody=hello` all reported a plain GET and reached the
+// connector ungated (Codex sol, 2026-09-08, finding 1 — measured, and the
+// `-F body=x` / `-f body=x` / `--field body=x` spellings the same report listed
+// were already denied, before and after).
+//
+// Modelled by SHAPE, as the binary above is: walk the letters of a short cluster
+// and stop at the FIRST value-taking one, because everything after it is that
+// option's value, not more flags. Anything else in the cluster is a boolean.
+const GH_API_VALUE_SHORTS = "XFfHqtp";
+function ghApiShortCluster(word) {
+  if (!/^-[A-Za-z]/.test(word) || word.startsWith("--")) return null;
+  for (let index = 1; index < word.length; index += 1) {
+    const letter = word[index];
+    if (!GH_API_VALUE_SHORTS.includes(letter)) continue;
+    // The rest of the word is this option's value; empty means the NEXT word is.
+    return { letter, value: word.slice(index + 1).replace(/^=/, ""), attached: index + 1 < word.length };
+  }
+  return null;
 }
 
 // `gh api -X PUT repos/o/r/pulls/N/merge`, plus the GraphQL mergePullRequest
@@ -2081,8 +2471,8 @@ export function ghMergeRequest(command) {
 // the position-anchored `gh\s+api` regex let that exact form pass ungated).
 export function ghApiMergeRequest(command) {
   const text = String(command || "");
-  if (!GH_BIN_RE.test(text)) return null;
-  const words = splitShellArgs(text);
+  if (!ghBinaryMentioned(text)) return null;
+  const words = splitShellArgv(text);
   const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
   if (apiIndex === -1) return null;
   if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
@@ -2093,15 +2483,260 @@ export function ghApiMergeRequest(command) {
   let endpoint = "";
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
-    if (word === "-X" || word === "--method") { method = String(words[index + 1] || "").toUpperCase(); index += 1; continue; }
+    if (word === "--method") { method = String(words[index + 1] || "").toUpperCase(); index += 1; continue; }
     if (word.startsWith("--method=")) { method = word.slice("--method=".length).toUpperCase(); continue; }
-    if (/^-X\S+/i.test(word)) { method = word.slice(2).toUpperCase(); continue; }
+    const cluster = ghApiShortCluster(word);
+    if (cluster) {
+      if (cluster.letter === "X") {
+        method = String(cluster.attached ? cluster.value : words[index + 1] || "").toUpperCase();
+      }
+      if (!cluster.attached) index += 1;
+      continue;
+    }
     const normalizedEndpoint = word.replace(/^https:\/\/api\.github\.com\//i, "").replace(/^\//, "");
     if (/^repos\/[^/]+\/[^/]+\/pulls\/\d+\/merge$/i.test(normalizedEndpoint)) endpoint = normalizedEndpoint;
   }
   if (method !== "PUT" || !endpoint) return null;
   const match = endpoint.match(/^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/merge$/i);
   return match ? { selector: match[3], repo: `${match[1]}/${match[2]}`, auto: false } : null;
+}
+
+// The gh analogue of pushHiddenByShellComposition. shellArgvWord models POSIX
+// quoting, which is the right reading for a value; it deliberately does not model
+// PowerShell's backtick or cmd.exe's caret, and those are live here — PowerShell
+// is the fleet's shell. ``gh pr me`rge 123 --admin --squash`` and
+// `cmd /c "gh api --met^hod=DELETE …"` reach the program as an ordinary merge and
+// an ordinary DELETE, while every parser above reads an unknown word (Codex sol,
+// 2026-09-08, finding 3).
+//
+// Only the backtick and the caret are removed here. Quotes are NOT: erasing a
+// quote is the blanket normalization CodeRabbit objected to on PR #630, and
+// `gh api --method='P"OST'` must keep reading as the non-POST it is. The caller
+// refuses rather than analyses, for the same reason the push side does — an
+// analysis of text the shell will not run proves nothing.
+// Comparing only WHETHER each reading parses as a merge is not enough, and that
+// was the first spelling of this helper (Codex sol, 2026-09-08, SEC-002).
+// ``gh pr merge 123 --ad`min --squash`` parses as a merge BOTH ways — the raw
+// reading just records `admin: false` while gh receives `--admin`. So the whole
+// parse is compared, field by field: a difference in the administrator override,
+// the repository, the PR selector or the auto-merge flag is a difference in what
+// the command DOES, and the reading the shell will actually execute is the
+// unwrapped one. Any such difference is refused rather than analysed.
+function sameMergeRequest(a, b) {
+  if (!a || !b) return !a && !b;
+  return a.selector === b.selector
+    && a.repo === b.repo
+    && a.auto === b.auto
+    && a.admin === b.admin;
+}
+
+export function ghHiddenByShellComposition(cmd) {
+  const text = String(cmd || "");
+  const unwrapped = text
+    .replace(/`\r?\n/g, "")
+    .replace(/\^\r?\n/g, "")
+    .replace(/`(?=[^\r\n])/g, "")
+    .replace(/\^(?=[^\r\n])/g, "");
+  if (unwrapped === text) return false;
+  const hidesMerge = !sameMergeRequest(ghMergeRequest(unwrapped), ghMergeRequest(text));
+  const hidesApiMerge = !sameMergeRequest(ghApiMergeRequest(unwrapped), ghApiMergeRequest(text));
+  const hidesMutation = ghApiMutates(unwrapped) !== ghApiMutates(text);
+  return hidesMerge || hidesApiMerge || hidesMutation;
+}
+
+// Top-level command segmentation, quote-aware.
+//
+// Splitting on a bare regex splits INSIDE a quoted value, and that is not a
+// cosmetic difference: `gh pr merge 123 --body 'note&more' --admin --squash` is
+// ONE command to every shell, but a regex split hands the parsers
+// `gh pr merge 123 --body 'note` — a merge with no `--admin` — and puts the
+// override in a second segment that contains no `gh` at all. A green
+// normal-merge gate then authorizes an administrator merge (Codex sol,
+// 2026-09-08, SEC-001; introduced by this branch when `&` became a separator).
+//
+// Only UNQUOTED separators split. An unterminated quote runs to the end of the
+// input, which yields a LONGER segment.
+//
+// A LONGER segment is NOT automatically the safe direction, and believing it was
+// is what round four got wrong (Codex sol, 2026-09-09, finding 2, measured).
+// The parsers read the FIRST command of a segment, so joining two commands hides
+// the SECOND one just as surely as splitting hides the tail of the first:
+//
+//   git push origin HEAD:feature \| git push origin HEAD:main
+//
+// PowerShell does not treat `\` as an escape, so that is a real pipeline whose
+// second half pushes main. Honouring the escape produces one segment whose first
+// command is a harmless feature push.
+//
+// Splitting can hide a command and joining can hide a command, so no single
+// reading is safe and this returns the UNION of two:
+//
+//   1. the shell-accurate walk — quotes and escapes honoured, so a quoted or
+//      escaped separator does not sever a command and strand its options;
+//   2. a NAIVE walk — every separator character splits, whatever quotes or
+//      escapes surround it, so nothing a quote or escape could hide stays
+//      hidden.
+//
+// Where the shells agree the two readings are identical and de-duplicate to one.
+// Where they disagree, both meanings get inspected. Both call sites are
+// `for (const segment of ...)` loops hunting for an offence, so an extra reading
+// can only add inspection.
+//
+// A third reading — the WHOLE command, unsplit — was tried and REMOVED. It is
+// load-bearing for nothing: when the accurate walk yields one segment it IS the
+// whole command, and when it yields several the concatenation is a string no
+// shell runs as a single command. It also cost a real duplicate: it re-parsed a
+// chained merge as one more merge and fired the Codex advisory a third time for
+// `gh pr merge 123 --squash && gh pr merge 456 --squash`.
+function segmentOneReading(text, { honorQuotes, honorEscapes }) {
+  const segments = [];
+  let current = "";
+  let quote = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      // Inside DOUBLE quotes a backslash escapes the closing quote, so `\"` does
+      // not end the string (Codex sol, 2026-09-09, finding 3 — measured: closing
+      // early split `--body "note\"&more"` at the literal & and carried --admin
+      // into an uninspected segment). Single quotes have no escapes anywhere.
+      if (honorEscapes && quote === '"' && char === "\\" && index + 1 < text.length) {
+        current += char + text[index + 1];
+        index += 1;
+        continue;
+      }
+      current += char;
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (honorQuotes && (char === "'" || char === '"')) { quote = char; current += char; continue; }
+    // An ESCAPED separator is not a separator, and a quote is not the only way to
+    // escape one: PowerShell spells it ``x`&y`` and cmd.exe spells it `x^&y`,
+    // each a single argument carrying a literal `&` (Codex sol, 2026-09-08).
+    // Reading 2 below covers the shells where these are NOT escapes.
+    if (honorEscapes && (char === "\\" || char === "`" || char === "^") && index + 1 < text.length) {
+      current += char + text[index + 1];
+      index += 1;
+      continue;
+    }
+    if (char === "&" || char === "|") {
+      // `2>&1`, `>&2` and `&>file` are REDIRECTIONS, not command separators
+      // (Codex sol, 2026-09-09, finding 1 — measured: splitting at the `&` of
+      // `gh pr merge 123 --squash 2>&1 --admin` left --admin in a segment with
+      // no gh, and `main` blocks that command today). A separator `&` never sits
+      // against a redirection arrow.
+      const isRedirection = char === "&"
+        && (text[index - 1] === ">" || text[index - 1] === "<" || text[index + 1] === ">");
+      if (!isRedirection) {
+        if (text[index + 1] === char) index += 1;
+        segments.push(current);
+        current = "";
+        continue;
+      }
+    }
+    if (char === ";" || char === "\n") { segments.push(current); current = ""; continue; }
+    if (char === "\r" && text[index + 1] === "\n") { segments.push(current); current = ""; index += 1; continue; }
+    current += char;
+  }
+  segments.push(current);
+  return segments.map((segment) => segment.trim()).filter(Boolean);
+}
+
+export function splitCommandSegments(command) {
+  const text = String(command || "");
+  const seen = new Set();
+  const union = [];
+  for (const segment of [
+    ...segmentOneReading(text, { honorQuotes: true, honorEscapes: true }),
+    ...segmentOneReading(text, { honorQuotes: false, honorEscapes: false }),
+  ]) {
+    if (!segment || seen.has(segment)) continue;
+    seen.add(segment);
+    union.push(segment);
+  }
+  return union;
+}
+
+// A stable identity for a resolved merge request, so a caller can gate the same
+// request once instead of once per READING of it.
+//
+// Why this exists: splitCommandSegments returns a union, so any command carrying
+// a quote or an escape yields two segments that resolve to the SAME request.
+// Each one then costs a `gh pr view` and an advisory lookup. The merge hooks are
+// bounded (15s in Codex, 30s in Claude) and each gh call is capped at 5-10s, so
+// duplicated lookups walk toward the ceiling — and a PreToolUse hook killed
+// mid-call emits nothing, and a hook that emits nothing ALLOWS. Duplicate work
+// is therefore a fail-OPEN risk here, not merely slow (CodeRabbit, 2026-09-09).
+//
+// Keyed on the COMPLETE parse, never on selector + repository. The same review
+// proposed selector+repo; that is unsafe against this splitter, because the two
+// readings of `gh pr merge 123 --body 'note&more' --admin --squash` are
+// identical in selector AND repository and differ ONLY in `admin` (measured:
+// {"123","",false} and {"123","",true}). Collapsing them by selector+repo can
+// keep the admin:false reading and erase the very offence the gate exists to
+// refuse. Sorting over ALL own keys also means a field added to a request shape
+// later widens the key automatically, keeping distinct parses distinct rather
+// than silently merging them — the fail-safe direction for a de-duplicator.
+export function mergeRequestKey(request) {
+  if (!request || typeof request !== "object") return String(request);
+  return JSON.stringify(
+    Object.entries(request)
+      .map(([name, value]) => [name, value === undefined ? null : value])
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
+}
+
+// Does this `gh api` call MUTATE? Moved here from
+// .codex/hooks/production-action-guard.mjs on 2026-09-07 so the gh binary is
+// modelled in exactly one place: that copy carried the one-item extension list
+// this file has now replaced with BIN_TAIL, so `gh.cmd api -X POST …` and
+// `gh.ps1 api graphql -f query=mutation` reached the connector ungated (measured
+// through the guard's own evaluateProductionAction before the move).
+//
+// The `api` subcommand is found by WORD SCAN, not by position, for the same
+// reason ghApiMergeRequest above already does: a global flag may sit between the
+// binary and the subcommand (`gh -R o/r api -X POST …`), and the old
+// position-anchored `gh\s+api` test did not see that form either.
+export function ghApiMutates(command) {
+  const text = String(command || "");
+  if (!ghBinaryMentioned(text)) return false;
+  const words = splitShellArgv(text);
+  const apiIndex = words.findIndex((word) => word.toLowerCase() === "api");
+  if (apiIndex === -1) return false;
+  if (words.some((word, index) => index > apiIndex && word.toLowerCase() === "graphql") &&
+      /\bmutation\b/i.test(text)) {
+    return true;
+  }
+  let method = "GET";
+  let methodExplicit = false;
+  let hasFields = false;
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "--method") {
+      method = String(words[index + 1] || "").toUpperCase();
+      methodExplicit = true;
+      index += 1;
+    } else if (word.startsWith("--method=")) {
+      method = word.slice("--method=".length).toUpperCase();
+      methodExplicit = true;
+    } else if (["--field", "--raw-field", "--input"].includes(word) ||
+               /^(?:--field|--raw-field|--input)=/.test(word)) {
+      hasFields = true;
+    } else {
+      // Every short spelling — separate, attached, `=`-attached and bundled
+      // behind booleans — resolves through one shape walk. `-f`/`-F` supply a
+      // field, which makes gh default the request from GET to POST.
+      const cluster = ghApiShortCluster(word);
+      if (!cluster) continue;
+      if (cluster.letter === "X") {
+        method = String(cluster.attached ? cluster.value : words[index + 1] || "").toUpperCase();
+        methodExplicit = true;
+      }
+      if (cluster.letter === "f" || cluster.letter === "F") hasFields = true;
+      if (!cluster.attached) index += 1;
+    }
+  }
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) return true;
+  return !methodExplicit && hasFields; // gh defaults field-bearing API calls to POST
 }
 
 // MCP merge tool inputs — key spellings differ per connector (GitHub MCP uses
