@@ -32,7 +32,7 @@ assert.equal(wrapperMd5, 'b083dd371b091d7b70bb4cdc015c9bc8', 'runtime wrapper bo
 assert.equal(source.match(/339762db7603acca00779ca62bc86772/g)?.length, 2, 'cutover guard is pinned before and after apply');
 assert.equal(source.match(/b083dd371b091d7b70bb4cdc015c9bc8/g)?.length, 2, 'runtime wrapper is pinned before and after apply');
 assert.match(source, /CREATE TEMP TABLE crx_transfer_invoice_intent_transaction_guard[\s\S]*ON COMMIT DROP;[\s\S]*INSERT INTO crx_transfer_invoice_intent_transaction_guard/, 'autocommit refuses before shared-state changes');
-assert.match(source, /SET LOCAL lock_timeout = '15s'/, 'cutover lock wait is bounded');
+assert.match(source, /SET LOCAL lock_timeout = '5s'/, 'cutover lock wait is bounded');
 const cohort = [
   '20260905200000_commission_history_report_replay_guard.sql',
   '20260905200200_refuse_stale_commission_payment_recipient.sql',
@@ -72,18 +72,37 @@ assert(source.indexOf('REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIG
 assert.match(source, /CREATE TRIGGER trg_idempotency_keys_require_transfer_intent_20260908[\s\S]*BEFORE INSERT ON public\.idempotency_keys/, 'cutover trigger is installed on receipt insert');
 assert.match(source, /TRANSFER_INVOICE_INTENT_CUTOVER_RETRY/, 'stale cached implementations fail with a retry signal');
 assert(source.indexOf('CREATE TEMP TABLE crx_transfer_invoice_intent_transaction_guard') < source.indexOf('DO $preflight$'), 'transaction guard precedes preflight');
-assert(source.indexOf('CREATE TRIGGER trg_idempotency_keys_require_transfer_intent_20260908') < source.indexOf('DO $receipt_preflight$'), 'cutover trigger precedes legacy receipt scan');
-assert(source.indexOf('DO $receipt_preflight$') < source.indexOf('DO $rename$'), 'legacy receipt scan precedes function rename');
-// Sol, PR #638: drain readers too, and delete the expired unbound receipts a
-// legacy call parked on its key's advisory lock could otherwise replay.
-assert.match(source, /^LOCK TABLE public\.idempotency_keys IN ACCESS EXCLUSIVE MODE;$/m, 'receipt readers and writers are drained');
-assert(source.indexOf("SET LOCAL lock_timeout = '15s'") < source.indexOf('LOCK TABLE public.idempotency_keys'), 'the early lock wait is bounded');
-assert(source.indexOf('LOCK TABLE public.idempotency_keys') < source.indexOf('DO $preflight$'), 'the receipt lock precedes every preflight read');
-const expiredReceiptPurge = /DELETE FROM public\.idempotency_keys\n WHERE operation = 'transfer_job_to_invoice'\n   AND expires_at <= now\(\)\n   AND \(request_actor_id IS NULL OR request_fingerprint IS NULL\);/;
-assert.match(source, expiredReceiptPurge, 'expired unbound transfer receipts are deleted under the lock');
+// Sol, PR #638, and its follow-up reviews: drain readers too, delete the expired
+// unbound receipts a legacy call parked on its key's advisory lock could otherwise
+// replay, and refuse any isolation level that would fix the snapshot before the
+// lock. Order is read from line-anchored statements, never raw indexOf, so a
+// comment that names a statement cannot stand in for it.
+function statementAt(pattern, label) {
+  const position = source.search(pattern);
+  assert(position >= 0, `${label} is present as a statement`);
+  return position;
+}
+const isolationGuard = statementAt(/^DO \$isolation_guard\$\nBEGIN\n  IF current_setting\('transaction_isolation'\) <> 'read committed' THEN\n    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_ISOLATION: /m, 'the READ COMMITTED guard');
+const lockTimeout = statementAt(/^SET LOCAL lock_timeout = '5s';$/m, 'the lock wait bound');
+const receiptLock = statementAt(/^LOCK TABLE public\.idempotency_keys IN ACCESS EXCLUSIVE MODE;$/m, 'the receipt-table lock');
+const firstPreflight = statementAt(/^DO \$preflight\$$/m, 'the first preflight');
+const cutoverTrigger = statementAt(/^CREATE TRIGGER trg_idempotency_keys_require_transfer_intent_20260908$/m, 'the cutover trigger');
+const expiredReceiptPurge = statementAt(/^DELETE FROM public\.idempotency_keys\n WHERE operation = 'transfer_job_to_invoice'\n   AND expires_at <= now\(\)\n   AND \(request_actor_id IS NULL OR request_fingerprint IS NULL\);$/m, 'the expired-receipt purge');
+// The refusal is pinned whole: it must stay the purge's exact complement (same
+// operation, same unbound predicate, same now()), or a receipt expiring between
+// the two checks would be neither deleted nor refused.
+const unexpiredReceiptRefusal = statementAt(/^DO \$receipt_preflight\$\nBEGIN\n  IF EXISTS \(\n    SELECT 1 FROM public\.idempotency_keys\n     WHERE operation = 'transfer_job_to_invoice'\n       AND \(expires_at IS NULL OR expires_at > now\(\)\)\n       AND \(request_actor_id IS NULL OR request_fingerprint IS NULL\)\n  \) THEN\n    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_PREFLIGHT: unexpired legacy transfer_job_to_invoice receipts exist; wait for expiry before applying';\n  END IF;\nEND;\n\$receipt_preflight\$;$/m, 'the unexpired-receipt refusal');
+const functionRename = statementAt(/^DO \$rename\$$/m, 'the function rename');
+assert(isolationGuard < lockTimeout, 'isolation is checked before any lock is requested');
+assert(lockTimeout < receiptLock, 'the early lock wait is bounded');
+assert.match(source.slice(lockTimeout, receiptLock).split('\n').slice(1).join('\n'), /^(\s*|--.*)(\n(\s*|--.*))*$/, 'only comments separate the lock bound from the lock');
+assert(receiptLock < firstPreflight, 'the receipt lock precedes every preflight read');
+assert(cutoverTrigger < expiredReceiptPurge, 'purge follows the cutover trigger');
+assert(expiredReceiptPurge < unexpiredReceiptRefusal, 'purge precedes the unexpired-receipt refusal');
+assert(unexpiredReceiptRefusal < functionRename, 'legacy receipt scan precedes function rename');
+assert.equal(source.match(/^LOCK TABLE /gm)?.length, 1, 'the receipt table is the only table this file locks explicitly');
+assert.equal(source.match(/^SET (LOCAL )?lock_timeout|set_config\('lock_timeout'/gm)?.length, 1, 'the lock wait bound is set once and never raised');
 assert.equal(source.match(/DELETE FROM public\.idempotency_keys/g)?.length, 1, 'the expired-receipt purge is the only receipt delete');
-assert(source.indexOf('CREATE TRIGGER trg_idempotency_keys_require_transfer_intent_20260908') < source.search(expiredReceiptPurge), 'purge follows the cutover trigger');
-assert(source.search(expiredReceiptPurge) < source.indexOf('DO $receipt_preflight$'), 'purge precedes the unexpired-receipt refusal');
 assert.match(source, /set_config\('crx\.transfer_invoice_intent_wrapper', '20260908', true\)/, 'wrapper owns an explicit transaction-local cutover marker');
 assert.match(source, /request_actor_id IS NULL OR request_fingerprint IS NULL/, 'legacy receipt definition is unbound');
 assert.match(source, /request_actor_id IS NULL\s+AND request_fingerprint IS NULL/, 'receipt binding cannot overwrite an existing binding');

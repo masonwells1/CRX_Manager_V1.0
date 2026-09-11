@@ -384,10 +384,21 @@ try {
   assert.match(refused.stderr, /canceling statement due to lock timeout/);
   assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL"), 't');
 
+  // At REPEATABLE READ the purge and refusal would read a snapshot fixed before
+  // the lock was granted, so the file refuses to run there at all.
+  const repeatableRead = docker(
+    ['exec', '-i', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1'],
+    { input: `BEGIN ISOLATION LEVEL REPEATABLE READ;\n${staged}\nCOMMIT;\n`, allowFailure: true },
+  );
+  assert.notEqual(repeatableRead.status, 0);
+  assert.match(repeatableRead.stderr, /TRANSFER_INVOICE_INTENT_ISOLATION: apply at READ COMMITTED, not repeatable read/);
+  assert.equal(scalar("SELECT to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)') IS NULL"), 't');
+
   // The purge is scoped to expired, unbound, transfer receipts.
   sql(`INSERT INTO public.idempotency_keys(idempotency_key, operation, result, request_actor_id, request_fingerprint, expires_at) VALUES
   ('expired-other-operation', 'other_operation', '{}'::jsonb, NULL, NULL, now() - interval '1 hour'),
-  ('expired-bound-transfer', 'transfer_job_to_invoice', '{}'::jsonb, '${RACE_ACTOR}', 'bound', now() - interval '1 hour')`);
+  ('expired-bound-transfer', 'transfer_job_to_invoice', '{}'::jsonb, '${RACE_ACTOR}', 'bound', now() - interval '1 hour'),
+  ('expired-half-bound-transfer', 'transfer_job_to_invoice', '{}'::jsonb, '${RACE_ACTOR}', NULL, now() - interval '1 hour')`);
 
   // The successful first apply runs as the cutover session of the race.
   const race = await raceLegacyReplayAcrossCutover(name, staged);
@@ -398,6 +409,7 @@ try {
   assert.equal(scalar('SELECT count FROM public.transfer_calls'), '0', 'the held legacy call rolled back its work');
   assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = '${RACE_KEY}'`), '0', 'the expired unbound receipt was purged and no new one landed');
   assert.equal(scalar("SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key IN ('expired-other-operation', 'expired-bound-transfer')"), '2', 'the purge leaves other operations and bound receipts alone');
+  assert.equal(scalar("SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = 'expired-half-bound-transfer'"), '0', 'a receipt missing either binding column is unbound and is purged');
 
   const forbiddenPrivileges = ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
   for (const role of ['anon', 'authenticated']) {

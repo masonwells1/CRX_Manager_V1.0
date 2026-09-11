@@ -52,16 +52,20 @@ with `CHICAGO_DATE_CUTOVER_RETRY`, so a backend that resolved an old PL/pgSQL pl
 drain cannot commit a stale Chicago date after the unified cutover;
 `20260905200500` was superseded before apply, so the September 30 cutover cannot commit in two
 separate migrations and neither behavior is live.
-The parked transfer wrapper first takes ACCESS EXCLUSIVE on the receipt table, bounded by its
-15-second lock timeout, which drains every transaction that has already read or written it. Under
-that lock it deletes expired unbound transfer receipts: a legacy call still waiting on its key's
-advisory lock is not drained, and could otherwise replay such a receipt after cutover with no actor
-or job check. An owner-only receipt trigger then rejects a cached pre-cutover body that reaches the
-insert with `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` and rolls it back, so the caller can retry
-through the intent-bound wrapper. Residual: a legacy caller at REPEATABLE READ or SERIALIZABLE whose
-snapshot predates cutover could still read a deleted receipt. PostgREST's default is READ COMMITTED,
-and both job-invoice screens refuse a result for a different job. The live transfer function remains
-unchanged until an approved apply.
+The parked transfer wrapper refuses to run at any isolation level but READ COMMITTED, then takes
+ACCESS EXCLUSIVE on the receipt table, bounded by a 5-second lock timeout (under the 8-second
+statement timeout live sets for `authenticated`), which drains every transaction that has already
+read or written it. Under that lock it deletes expired unbound transfer receipts: a legacy call
+still waiting on its key's advisory lock is not drained, and could otherwise replay such a receipt
+after cutover with no actor or job check. An owner-only receipt trigger then rejects a cached
+pre-cutover body that reaches the insert with `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` and rolls it
+back, so the caller can retry through the intent-bound wrapper. Because of that delete, the repo's
+apply guard classes the file as destructive: it needs an attended apply whose approval names the
+receipt deletion. Residuals: a legacy caller at REPEATABLE READ or SERIALIZABLE whose snapshot
+predates cutover could still read a deleted receipt (live runs READ COMMITTED with no role
+override), and a legacy call that started before cutover can still replay a bound receipt that a
+wrapper call commits for the same key afterwards. Both job-invoice screens refuse a result for a
+different job. The live transfer function remains unchanged until an approved apply.
 The final label-selection candidate replaces alphabetical historical-name selection with the latest
 earned-state label at the requested cutoff for both earned and paid-only balance rows; until it is
 separately approved and applied, production can still display an older salesperson name.
