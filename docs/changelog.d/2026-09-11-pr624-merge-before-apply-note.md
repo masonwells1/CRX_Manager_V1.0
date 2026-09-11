@@ -27,4 +27,9 @@ Also recorded in the same entry:
 `docs/workflows/INVENTORY_RULES.md` gains a plain-English "Staff recovery" section covering the
 locked Adjust, Hold and Receive dialog states.
 
+Merged `main` at `791bc3d86` (PR #599). #599 took migration-history rows 924-926, so this
+candidate's row moved from 924 to **927** (header now "latest entry 927"), and the
+`CURRENT_STATE.md` pointer follows it. Older changelog entries keep the row number they recorded at the
+time.
+
 Docs only. No live database change: migration `20260908130000` is still parked and unapplied.
