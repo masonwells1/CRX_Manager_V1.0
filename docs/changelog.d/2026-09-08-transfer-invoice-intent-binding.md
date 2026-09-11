@@ -1,5 +1,20 @@
 ## 2026-09-08 — Bind job-to-invoice retries to the requesting user and job
 
+Delivery: SOURCE/UI-ONLY. Merging PR #638 ships the two job-invoice screens and
+repository files; it applies no SQL. The migration files in its diff are all parked
+and unapplied:
+
+- `20260908130800_bind_transfer_invoice_intent.sql` is new: the wrapper and cutover.
+- `20260908130900_repair_commission_history_label_snapshots.sql` is renamed from
+  `20260905210000_repair_commission_history_label_snapshots.sql` so it still runs
+  after the wrapper; only its ordering comment changed.
+- `20260905200200_refuse_stale_commission_payment_recipient.sql` is edited in place;
+  it has never been applied.
+
+The screens' new `job_id` check works with both contracts. Live's installed
+`transfer_job_to_invoice` returns `job_id` on its single-invoice and split paths, and
+the parked wrapper refuses any result whose `job_id` is not the requested job.
+
 Added a parked, forward-only migration that preserves the current Chicago-date
 job-to-invoice implementation as a private routine and exposes only an
 actor-bound idempotency wrapper. It refuses unexpired legacy receipts, body or
