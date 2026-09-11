@@ -1,37 +1,20 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-08 for the migration ledger.** The current incoming 2026-09-08 ledger capture is preserved below; the following 2026-09-06 capture remains as historical evidence.
+**Superseded 2026-09-06 header, kept for provenance — every boundary claim in this paragraph is
+superseded by the 2026-09-08 header that follows it.** That read confirmed the unprefixed-ledger-name
+trap: `20260904185900_refuse_null_job_field_acres` (PR #606, merged `719faac73`) applied live on
+2026-09-05 under the bare name `refuse_null_job_field_acres`, invisible to a name-ordered query, so
+the authored high-water at that time was `20260904185900` while a name-ordered query still returned
+`20260904180000_invoice_season_follows_invoice_date`. Identity was confirmed live, not inferred:
+`save_job` one overload at body md5 `8acf34542105a90212ddb0a5e7c5d272`, carrying that file's
+`JOB_ACRES_NOT_FINITE` refusal. F2 (`20260903160000_gate_number_generators_active_profile_role`,
+ledger version `20260904023121`) was the boundary earlier in that sequence. The row count and
+`max(version)` from that read are deliberately not repeated here — see the rule in the current header
+below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-06 for the migration-ledger facts; 2026-09-04 for the F2 entry.** A
-read-only ledger read on 2026-09-06 shows **999 rows / 992 distinct names**, `max(version)`
-**`20260905185938`**.
-
-**The name-ordered boundary is one file behind reality — do not number a new migration off it.** A
-name-ordered query still returns **`20260904180000_invoice_season_follows_invoice_date`** (ledger
-version `20260904152221`), but `20260904185900_refuse_null_job_field_acres` was merged (`719faac73`,
-PR #606) and applied live on 2026-09-05 under the **unprefixed** ledger name
-`refuse_null_job_field_acres`, which name ordering cannot see. The TRUE authored high-water is
-`20260904185900`. Identity confirmed on 2026-09-06, not inferred: live `save_job` is one overload at
-body md5 `8acf34542105a90212ddb0a5e7c5d272`, that file's own candidate pin, and the live body carries
-its `JOB_ACRES_NOT_FINITE` refusal.
-
-F2 (`20260903160000_gate_number_generators_active_profile_role`) applied as ledger
-version `20260904023121` and was the boundary earlier in that sequence. Read
-ordering from the NAME — it is what
-the ordering guard compares and it moves far less often than the counters — but check for an
-unprefixed ledger name before trusting it, as above. Two further reading
-traps, both hit for real on 2026-09-04: `version` and `name` are different columns and diverge, so
-reading the boundary off `version` gives a plausible wrong answer; and `max(name)` returns garbage,
-because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …) sort above digits
-— use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` here as a point-in-time
-observation, not a fact** — any lane applying a migration moves them, so
-re-read live rather than trusting them, and do not re-pin them here on every apply. Only the
-F2 item below was re-verified against live on this date (post-apply function bodies, grants, and a
-three-principal behavioral simulation); every other
-**Last verified: 2026-09-08 against the live ledger (read-only `list_migrations`: 1000 rows,
-`max(version)` `20260908045843`, effective high-water
-`20260906120000_preview_field_app_season_follows_invoice_date`); the F2 entry retains its separate
-2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
+**Last verified: 2026-09-08 against the live ledger (read-only `list_migrations`; the figures from
+that read are recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
+separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
 there before any apply decision, and update it there — never restate it here. The reason is a trap
@@ -900,12 +883,14 @@ mutants — the fix removed, the stored season ignored, and the `anon` REVOKE dr
 `docs/changelog.d/2026-09-06-preview-field-app-season-follows-invoice-date.md` and row 918 of
 `docs/reference/migration-history.md`.
 
-**This entry stays open until the migration is applied to live.** Until then production still behaves
-exactly as described below. Two things gate it: Mason's explicit approval immediately before a live
-apply, and the Codex CLI credit outage (exhausted until 2026-09-11), which blocks the exact-SHA proof
-`pr-merge-guard` requires for an agent merge. The original report follows unchanged.
+**This entry stays open until PR #599's frontend half is merged and observed on production.** The
+server half is applied (above); the only remaining gate is the merge itself, which needs the exact-SHA
+proof `pr-merge-guard` requires. Everything below this line is the 2026-09-04 report as written at
+the time, kept for provenance. Where it says the live function has no date or season parameter, or
+that a migration is still needed, that was true until `20260906120000` applied on 2026-09-08 and is
+NOT the live state now; the caller-side change it asks for is the frontend half on PR #599.
 
-### The original report (2026-09-04)
+### HISTORICAL — the original report (2026-09-04), superseded on the server side 2026-09-08
 
 Raised by the Codex GitHub App (P1) on PR #599 and **verified against the live catalog on
 2026-09-04**, after `20260904180000_invoice_season_follows_invoice_date` was applied:
@@ -938,7 +923,8 @@ billed the correct season's rate; the on-screen number Mason approves beforehand
 - **All year:** editing any invoice whose season differs from the current clock season — e.g.
   re-opening a September 2026 invoice in November 2026 previews 2027 rates against a 2026 save.
 
-**Cannot be fixed in the frontend.** The live function takes 4 arguments
+**Cannot be fixed in the frontend** (HISTORICAL — since 2026-09-08 the live function accepts a fifth
+argument, `p_invoice_date`; the caller change ships with PR #599). At the time the live function took 4 arguments
 (`p_locations`, `p_chemicals`, `p_application_service_id`, `p_invoice_id`) and has no date or season
 parameter, so the caller has nothing to pass. The fix needs a new migration that either accepts an
 invoice date or derives the season from `p_invoice_id`, plus a matching caller change.
@@ -956,11 +942,12 @@ per-acre rate still on screen while the save charged the season-2027 rate — ap
 was not billed, with no boundary or timezone involved. `FieldApplicationInvoice.tsx:2645` now clears
 `previewData` on date change, with a regression test that fails if the clear is removed.
 
-**What is still open:** `preview_field_app_invoice_split` itself continues to price from the UTC
-clock, so a *freshly generated* preview can still disagree with the save on a backdated or
-cross-boundary invoice. That still needs a migration — the live function has no date or season
-parameter. The fix above only removes the STALE-preview vector, which was the part reachable
-without any clock edge case at all.
+**What was still open at the time (CLOSED on the server 2026-09-08 by `20260906120000`; the caller
+side ships with PR #599):** `preview_field_app_invoice_split` itself then priced from the UTC clock,
+so a *freshly generated* preview could still disagree with the save on a backdated or cross-boundary
+invoice. That needed the migration named at the top of this entry — the live function then had no
+date or season parameter. The fix above only removed the STALE-preview vector, which was the part
+reachable without any clock edge case at all.
 
 ## OPEN 2026-09-04, DEADLINE 2026-12-31 — `next_invoice_number` takes its YEAR from the UTC clock
 
