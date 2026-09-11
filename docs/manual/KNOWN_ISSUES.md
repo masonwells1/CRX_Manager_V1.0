@@ -1461,9 +1461,14 @@ comments and string literals are stripped before matching (round 5: a comment me
 mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is still not handled.
 (g) The same stripping removes whole TEMPLATE LITERALS including their `${…}` interpolations, so a
 reset executed inside an interpolation is invisible, and because stripping is line-based a multi-line
-template body still reads as code. (h) Only the hit scan is stripped: `classify()` and `aliasNames()`
-still read RAW lines, so a comment or string containing `onClick=`, `.throwOnError()` or a recovery
-marker can excuse a real hit, and one containing `resetKey:` can invent an alias. (i) The
+template body still reads as code. (h) `aliasNames()` still reads RAW source, so a comment or string
+containing `resetKey:` can invent an alias. `classify()` no longer does (2026-09-10, CodeRabbit on
+PR #638): all three of its windows are read from source whose comments are masked from the top of
+the file — so a `/* … */` block opened above a window still counts — with single-line string
+literals then blanked, so comment or string text can no longer supply `onClick=`,
+`.throwOnError()` or a recovery marker. The mask is a scanner, not a lexer: a regex literal
+containing a quote leaves later comments unmasked (the old raw behaviour), one containing `/*` can
+blank real code, and a multi-line template body still reads as code. (i) The
 "no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/
 `functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
 intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes

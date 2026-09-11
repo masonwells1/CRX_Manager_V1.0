@@ -319,10 +319,17 @@ const KNOWN_UNFIXED = new Set(Object.keys(KNOWN_UNFIXED_SITES));
 /** Classify one hit from the surrounding source, or null if nothing excuses it. */
 function classify(lines: string[], lineNo: number): Reason | null {
   const self = lines[lineNo - 1] ?? '';
-  const above = lines.slice(Math.max(0, lineNo - 9), lineNo - 1).join('\n');
-  const callWindow = lines.slice(Math.max(0, lineNo - 16), lineNo - 1).join('\n');
-
   if (/^\s*(\*|\/\/)/.test(self)) return 'doc-comment';
+
+  // Every window below reads MASKED source (CodeRabbit, PR #638). stripNoise() works one
+  // line at a time and cannot see a multi-line block comment, so comment prose could
+  // supply a recovery marker, `.throwOnError()` or `onClick=` and excuse a reset with no
+  // executable guard. Comments are masked across the whole prefix up to the reset — a
+  // block opened above a window still counts — then each line's strings are blanked.
+  // stripCommentsOnly() keeps newlines, so masked[i] is still source line i + 1.
+  const masked = stripCommentsOnly(lines.slice(0, lineNo).join('\n')).split('\n').map(stripNoise);
+  const above = masked.slice(Math.max(0, lineNo - 9), lineNo - 1).join('\n');
+  const callWindow = masked.slice(Math.max(0, lineNo - 16), lineNo - 1).join('\n');
 
   // A recovery marker only excuses this reset if it is in the SAME branch. A
   // recovery branch always exits with `throw` or `return`, so any such exit between
@@ -367,7 +374,7 @@ function classify(lines: string[], lineNo: number): Reason | null {
   // for a branch to open or close, so exitsBranch has nothing to rule out. classify()
   // read only the lines ABOVE the reset, so this single-line guard form was
   // unclassifiable and every instance of it read as a defect.
-  const cleanSelf = stripNoise(self);
+  const cleanSelf = masked[lineNo - 1] ?? '';
   if (SAME_LINE_RECOVERY_GUARD.test(cleanSelf)) return 'recovery';
 
   const aboveLines = above.split('\n');
@@ -393,14 +400,14 @@ function classify(lines: string[], lineNo: number): Reason | null {
   //
   // GAP, stated (Codex round-6 MEDIUM): the mutating-call list below omits `.insert()`
   // and `.upsert()`, which therefore neither block this excuse nor set the scanner's
-  // CALL state. classify() also reads RAW lines, so an `onClick=` inside a comment or
-  // string can still excuse a real hit.
-  const rotationLines = lines.slice(Math.max(0, lineNo - 15), lineNo);
+  // CALL state. Comment and string text no longer excuses a hit: this window, like the
+  // two above, is read from the masked source built at the top of classify().
+  const rotationLines = masked.slice(Math.max(0, lineNo - 15), lineNo);
   const handlerIdx = lastIndexMatching(rotationLines, /onClick=|onChange=/);
   if (handlerIdx >= 0) {
     const between = rotationLines.slice(handlerIdx + 1);
     const mutatesBetween = between.some((l) =>
-      /\.rpc\(|functions\.invoke\(|\.update\(|\.delete\(/.test(stripNoise(l)),
+      /\.rpc\(|functions\.invoke\(|\.update\(|\.delete\(/.test(l),
     );
     if (!mutatesBetween) return 'intent-rotation';
   }
@@ -435,8 +442,9 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  *  - a whole TEMPLATE LITERAL is removed including its `${…}` interpolations, so a
  *    reset executed inside one is invisible, and a multi-line template body still
  *    reads as code because stripping is line-based;
- *  - most classify() windows and aliasNames() still read RAW lines, so a comment or
- *    string can excuse a real hit or invent an alias.
+ *  - aliasNames() still reads RAW source, so a comment or string can invent an alias.
+ *    classify() does not: it masks comments across the whole file prefix with
+ *    stripCommentsOnly() and then runs this function over each line of its windows.
  */
 function stripNoise(line: string): string {
   return line
@@ -591,7 +599,8 @@ function stripCommentsAndStrings(code: string): string {
  *
  * NOTE (Codex round-6 MEDIUM): this scans RAW source, so a comment or string containing
  * `resetKey:` can invent an alias and produce false reports. The hit scan is stripped
- * of comments and strings; alias discovery and classify() are not.
+ * of comments and strings, and classify() masks its windows (CodeRabbit, PR #638);
+ * alias discovery is not.
  *
  * WHAT THIS DOES NOT CATCH (Codex round-4 MEDIUM — stated so the guard is not trusted
  * past its reach): only a DIRECT destructure in the same file, `{ resetKey: name }`.
@@ -685,6 +694,33 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     expect(classify(['if (isDefinitiveRpcRejection(unsafeReset())) safeIdem.resetKey();'], 1)).toBeNull();
     expect(classify(['unsafe.resetKey(); if (isDefinitiveRpcRejection(error)) safe.resetKey();'], 1)).toBeNull();
     expect(classify(['if (isDefinitiveRpcRejection(error)) safe.resetKey(); unsafe.resetKey();'], 1)).toBeNull();
+  });
+
+  // CodeRabbit (PR #638, review at 0e7ee9d4b): every classify() window read RAW lines,
+  // and the per-line stripper cannot see a multi-line block comment, so comment prose
+  // could supply each of the three excuses. One row per excuse, plus positive controls
+  // proving the mask removes only comment and string text.
+  it('comment and string text above a reset cannot excuse it', () => {
+    const reset = '  idem.resetKey();';
+    // Recovery marker (aboveLines).
+    expect(classify(['  /*', '   getIdempotencyBindingRejection(error)', '  */', reset], 4)).toBeNull();
+    expect(classify(['  // if (isDefinitiveRpcRejection(error)) {', reset], 2)).toBeNull();
+    expect(classify(["  const note = 'getIdempotencyBindingRejection';", reset], 2)).toBeNull();
+    // A block comment opened ABOVE the 8-line window still masks the marker inside it.
+    const longComment = ['/*', ...Array.from({ length: 9 }, () => ' * filler'), ' getIdempotencyBindingRejection(error)', '*/', reset];
+    expect(classify(longComment, longComment.length)).toBeNull();
+    // Fire-and-forget (callWindow).
+    expect(classify(['  /*', '   await query.throwOnError();', '  */', reset], 4)).toBeNull();
+    // Intent rotation (rotationLines).
+    expect(classify(['  /*', '   <button onClick={openDialog}>', '  */', reset], 4)).toBeNull();
+    expect(classify(["  const hint = 'onChange=';", reset], 2)).toBeNull();
+
+    // Positive controls: executable evidence is still recognised, including after a
+    // block comment that closes on the same line.
+    expect(classify(['  if (getIdempotencyBindingRejection(error)) {', reset], 2)).toBe('recovery');
+    expect(classify(['  /* why */ if (isDefinitiveRpcRejection(error)) {', reset], 2)).toBe('recovery');
+    expect(classify(["  await supabase.from('t').update(row).throwOnError();", reset], 2)).toBe('throw-on-error');
+    expect(classify(['  onClick={() => {', reset], 2)).toBe('intent-rotation');
   });
 
   it('scans a meaningful number of source files', () => {
