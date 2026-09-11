@@ -144,7 +144,11 @@ Holds reserve inventory for planned quotes without actually deducting stock.
 5. Expired holds (past `expires_at`) are no longer counted
 
 ### Manual holds — server-side validated (P4-3, 2026-05-07)
-The `/inventory` page's "Create Hold" flow goes through the `create_inventory_hold()` RPC, NOT a bare table insert. The RPC takes a `FOR UPDATE` lock on the Main Warehouse inventory row and recomputes today's free inside the transaction:
+The `/inventory` page's "Create Hold" flow goes through the `create_inventory_hold()` RPC, NOT a bare table insert. The RPC takes a `FOR UPDATE` lock on the Main Warehouse inventory row and recomputes today's free inside the transaction.
+
+Local candidate `20260908130000` (NOT applied live yet) adds a per-key serialization layer in front of that body: the idempotency key is required, the caller must be an ACTIVE admin/sales_rep, and `check_idempotency_intent` locks the key and compares actor + request BEFORE the stock check, so a double-click or a retry racing the original replays the first hold instead of erroring. Today (pre-apply) the second racing call fails with `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` even though the hold exists.
+
+Free-stock formula:
 
 ```
 Today's free = quantity_available − quantity_prebooked − SUM(active hold quantities)
@@ -244,6 +248,30 @@ Physical inventory verification process.
 ### Source: `src/pages/CycleCounts.tsx`
 
 ---
+
+## Staff recovery: a locked Adjust, Hold or Receive dialog
+
+If the reply to an adjustment, hold or receipt is lost, the app cannot tell whether it went through. It
+locks the dialog to that exact request so nobody can book it twice. The lock follows the person into every
+tab of the same browser and survives a reload. Plain steps for staff:
+
+1. **Amber note "The last response was uncertain ... Retry it unchanged".** Click the **Retry Exact**
+   button (Retry Exact Adjustment, Retry Exact Hold or Retry Exact Receiving). It re-sends the same request
+   under the same receipt number, so it can only finish the original, never add a second one. Do not re-type
+   the request somewhere else instead.
+2. **"... was already applied/created in another tab. Refreshing ..."** Nothing to do. The first attempt went
+   through and the page refreshes itself.
+3. **The retry fails again with a connection error.** The dialog stays locked, and it reopens the next time
+   you open Inventory. Retry once the connection is back. The retry stays available for 23 hours.
+4. **"Another page or tab has an unresolved request for this operation."** Go back to the tab or page that
+   started it and retry there, or close the other tabs and reopen Inventory.
+5. **"The safe automatic retry window expired. Do not submit this mutation again."** Do not re-enter it.
+   Check whether it went through: for a hold, look in the **Active Holds** list on the Inventory page; for
+   an adjustment or receipt, open the product row's **View transaction history** (the Transaction Ledger).
+   Tell an admin what you found (product, quantity, customer, time). If it did not go through and is still
+   needed, the admin decides who re-enters it. Today the expired dialog cannot be cleared inside the app, and
+   the lock lives only in that one browser, so the re-entry happens from a different browser or device.
+   Tracked in `docs/manual/KNOWN_ISSUES.md` (OPEN 2026-09-11 expired uncertain request).
 
 ## Safety Checklist for Inventory Changes
 
