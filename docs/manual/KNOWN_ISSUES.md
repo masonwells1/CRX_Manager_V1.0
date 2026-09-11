@@ -334,6 +334,32 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## PARKED 2026-09-10 — the ahead-of-pending marker hardening stopped at review round twelve with two HIGH findings open
+
+**Status.** The rewrite of the migration-apply guard's ahead-of-pending override (the marker that lets a
+newer migration apply while an older one is still unapplied) lives only on the local, unpushed branch
+`claude/cycle-count-revision-ahead-of-pending` (guard code `d71f77376`, parking notes `f29f301c2`; no
+SQL). **Mason decided on 2026-09-10 to cap the review loop at round twelve:** its exact-SHA Codex proof
+returned BLOCKERS, so the branch is parked and no further review round is commissioned without a new
+decision from him. `main` keeps the older marker, which unlocks the apply without binding which files it
+covers.
+
+**Open 1 (HIGH, also on `main`) — the guard's time limit does not cover its last step.** In
+`.claude/hooks/migration-apply-lib.mjs` the reviewer-proof scan reads the whole session-state folder
+in-process with no time bound. If the hook runs past the harness's 15-second limit it prints nothing, and
+a hook that prints nothing does not block — the apply proceeds without the reviewer-proof and autopilot
+checks. `main` has the same scan and no deadline at all.
+
+**Open 2 (HIGH, branch only) — the branch's new file binding is not re-checked at the end.** The branch
+binds the marker to a digest of the pending migration files, but lists the working tree once and
+re-validates only the git refs before honouring the marker, so a file added or edited in that window can
+be missed. Not a regression: `main`'s marker binds nothing.
+
+**Pre-existing test gap, found in passing (low).** In `.claude/hooks/migration-apply-lib.test.mjs`, three
+refusals of `scripts/apply-migration-file.mjs` (`--project … --confirm`, `--name … --confirm`,
+`--project=ref`) assert only exit status 1. An uncaught crash also exits 1, so a crash on those paths
+would pass; their sibling checks also assert the refusal text.
+
 ## FIXED 2026-09-08 — receiving could record goods against the WRONG purchase order
 
 **Resolved on `main` and no longer live.** `src/pages/PurchaseOrderDetail.tsx` now carries a
