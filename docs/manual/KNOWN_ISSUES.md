@@ -53,9 +53,10 @@ drain cannot commit a stale Chicago date after the unified cutover;
 `20260905200500` was superseded before apply, so the September 30 cutover cannot commit in two
 separate migrations and neither behavior is live.
 The parked transfer wrapper refuses to run at any isolation level but READ COMMITTED, then takes
-ACCESS EXCLUSIVE on the receipt table, bounded by a 5-second lock timeout (under the 8-second
-statement timeout live sets for `authenticated`), which drains every transaction that has already
-read or written it. Under that lock it deletes expired unbound transfer receipts: a legacy call
+ACCESS EXCLUSIVE on the receipt table, which drains every transaction that has already read or
+written it. Its 5-second lock timeout bounds only the wait for that lock; the lock is then held
+until commit, so the rest of the file must commit within 3 seconds for queued receipt reads and
+writes to stay under the 8-second statement timeout live sets for `authenticated`. Under that lock it deletes expired unbound transfer receipts: a legacy call
 still waiting on its key's advisory lock is not drained, and could otherwise replay such a receipt
 after cutover with no actor or job check. An owner-only receipt trigger then rejects a cached
 pre-cutover body that reaches the insert with `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` and rolls it
@@ -1499,12 +1500,13 @@ mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is
 reset executed inside an interpolation is invisible, and because stripping is line-based a multi-line
 template body still reads as code. (h) `aliasNames()` still reads RAW source, so a comment or string
 containing `resetKey:` can invent an alias. `classify()` no longer does (2026-09-10, CodeRabbit on
-PR #638): all three of its windows are read from source whose comments are masked from the top of
-the file — so a `/* … */` block opened above a window still counts — with single-line string
-literals then blanked, so comment or string text can no longer supply `onClick=`,
-`.throwOnError()` or a recovery marker. The mask is a scanner, not a lexer: a regex literal
-containing a quote leaves later comments unmasked (the old raw behaviour), one containing `/*` can
-blank real code, and a multi-line template body still reads as code. (i) The
+PR #638): all three of its windows are read from source whose comments, string contents,
+template-literal text and regex-literal bodies are masked from the top of the file, across lines —
+so a `/* … */` block or a template opened above a window still counts, and a template's `${…}`
+interpolation stays code. Comment, string, template or regex text can no longer supply `onClick=`,
+`.throwOnError()` or a recovery marker. The mask is a scanner, not a lexer: a `/` after `)`, `]`,
+`}` or `<` is read as division, so a regex literal written there stays visible (the old
+behaviour), and a `//` inside JSX text masks the rest of its line. (i) The
 "no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/
 `functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
 intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes

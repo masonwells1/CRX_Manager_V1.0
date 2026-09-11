@@ -321,13 +321,14 @@ function classify(lines: string[], lineNo: number): Reason | null {
   const self = lines[lineNo - 1] ?? '';
   if (/^\s*(\*|\/\/)/.test(self)) return 'doc-comment';
 
-  // Every window below reads MASKED source (CodeRabbit, PR #638). stripNoise() works one
-  // line at a time and cannot see a multi-line block comment, so comment prose could
-  // supply a recovery marker, `.throwOnError()` or `onClick=` and excuse a reset with no
-  // executable guard. Comments are masked across the whole prefix up to the reset — a
-  // block opened above a window still counts — then each line's strings are blanked.
-  // stripCommentsOnly() keeps newlines, so masked[i] is still source line i + 1.
-  const masked = stripCommentsOnly(lines.slice(0, lineNo).join('\n')).split('\n').map(stripNoise);
+  // Every window below reads MASKED source (CodeRabbit, PR #638, two reviews). The
+  // per-line stripNoise() cannot see a multi-line block comment, a regex literal, or a
+  // template literal that spans lines, so any of them could supply a recovery marker,
+  // `.throwOnError()` or `onClick=` and excuse a reset with no executable guard.
+  // maskNonCode() masks all of them across the whole prefix up to the reset, so a block
+  // or template opened above a window still counts. It keeps newlines, so masked[i] is
+  // still source line i + 1.
+  const masked = maskNonCode(lines.slice(0, lineNo).join('\n')).split('\n');
   const above = masked.slice(Math.max(0, lineNo - 9), lineNo - 1).join('\n');
   const callWindow = masked.slice(Math.max(0, lineNo - 16), lineNo - 1).join('\n');
 
@@ -443,8 +444,7 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  *    reset executed inside one is invisible, and a multi-line template body still
  *    reads as code because stripping is line-based;
  *  - aliasNames() still reads RAW source, so a comment or string can invent an alias.
- *    classify() does not: it masks comments across the whole file prefix with
- *    stripCommentsOnly() and then runs this function over each line of its windows.
+ *    classify() does not use this function: it reads its windows through maskNonCode().
  */
 function stripNoise(line: string): string {
   return line
@@ -521,6 +521,144 @@ function stripCommentsOnly(code: string): string {
     out += c;
     i += 1;
   }
+  return out;
+}
+
+/**
+ * Mask everything that is not executable code, for classify()'s look-back windows.
+ *
+ * Comments, string contents, template-literal text and regex-literal bodies become spaces.
+ * Newlines are kept, so line i of the result is still line i of the input. Unlike
+ * stripCommentsOnly() and the per-line stripNoise(), this tracks all four across lines, so
+ * a regex literal on the line above a reset, or a template literal spanning several
+ * lines, cannot supply the text classify() accepts as evidence (CodeRabbit, PR #638).
+ * A template's `${…}` interpolation is code and stays visible. A quote that is not closed
+ * on its own line ends at the line break, so JSX text such as `Don't` cannot mask the
+ * lines after it.
+ *
+ * A `/` opens a regex only where an expression can start: at the beginning, after one of
+ * `( , = : [ ! & | ? { ; + - * % ~ ^`, after `=>`, or after a keyword such as `return`.
+ * Anywhere else it is division, and so is a candidate that reaches a line break before its
+ * closing `/`. This is still a scanner, not a TypeScript lexer: a regex written after `)`,
+ * `]`, `}` or `<` is read as division and its text stays visible, as it always was, and a
+ * `//` inside JSX text still masks the rest of its line.
+ */
+function maskNonCode(code: string): string {
+  let out = '';
+  let i = 0;
+  const keep = (n = 1) => {
+    out += code.slice(i, i + n);
+    i += n;
+  };
+  const blank = () => {
+    out += code[i] === '\n' ? '\n' : ' ';
+    i += 1;
+  };
+
+  function regexCanStart(): boolean {
+    let j = out.length - 1;
+    while (j >= 0 && /\s/.test(out[j])) j -= 1;
+    if (j < 0) return true;
+    if (out[j] === '>') return out[j - 1] === '=';
+    if (/[(,=:[!&|?{;+\-*%~^]/.test(out[j])) return true;
+    let k = j;
+    while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
+    return /^(return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await|instanceof)$/.test(
+      out.slice(k + 1, j + 1),
+    );
+  }
+
+  // Index just past the regex literal (flags included) that starts at `start`, or -1
+  // when no closing `/` appears before the line ends.
+  function regexEnd(start: number): number {
+    let inClass = false;
+    for (let j = start + 1; j < code.length; j += 1) {
+      const ch = code[j];
+      if (ch === '\n') return -1;
+      if (ch === '\\') {
+        if (code[j + 1] === '\n') return -1;
+        j += 1;
+      } else if (inClass) {
+        inClass = ch !== ']';
+      } else if (ch === '[') {
+        inClass = true;
+      } else if (ch === '/') {
+        let end = j + 1;
+        while (end < code.length && /[a-z]/i.test(code[end])) end += 1;
+        return end;
+      }
+    }
+    return -1;
+  }
+
+  function scanTemplate(): void {
+    while (i < code.length) {
+      if (code[i] === '\\') {
+        blank();
+        if (i < code.length) blank();
+      } else if (code[i] === '`') {
+        keep();
+        return;
+      } else if (code[i] === '$' && code[i + 1] === '{') {
+        keep(2);
+        scanCode(true);
+        if (i < code.length) keep(); // the interpolation's closing brace
+      } else {
+        blank();
+      }
+    }
+  }
+
+  // Inside an interpolation, returns at its closing brace without consuming it.
+  function scanCode(inInterpolation: boolean): void {
+    let depth = 0;
+    while (i < code.length) {
+      const c = code[i];
+      const next = code[i + 1];
+      if (c === '/' && next === '/') {
+        while (i < code.length && code[i] !== '\n') blank();
+        continue;
+      }
+      if (c === '/' && next === '*') {
+        const close = code.indexOf('*/', i + 2);
+        const end = close === -1 ? code.length : close + 2;
+        while (i < end) blank();
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        keep();
+        while (i < code.length && code[i] !== c && code[i] !== '\n') {
+          if (code[i] === '\\' && i + 1 < code.length) blank();
+          blank();
+        }
+        if (code[i] === c) keep();
+        continue;
+      }
+      if (c === '`') {
+        keep();
+        scanTemplate();
+        continue;
+      }
+      if (c === '/' && regexCanStart()) {
+        const end = regexEnd(i);
+        if (end > 0) {
+          const close = code.lastIndexOf('/', end - 1);
+          out += `/${' '.repeat(close - i - 1)}${code.slice(close, end)}`;
+          i = end;
+          continue;
+        }
+      }
+      if (inInterpolation && c === '}') {
+        if (depth === 0) return;
+        depth -= 1;
+      } else if (inInterpolation && c === '{') {
+        depth += 1;
+      }
+      keep();
+    }
+  }
+
+  scanCode(false);
   return out;
 }
 
@@ -721,6 +859,39 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     expect(classify(['  /* why */ if (isDefinitiveRpcRejection(error)) {', reset], 2)).toBe('recovery');
     expect(classify(["  await supabase.from('t').update(row).throwOnError();", reset], 2)).toBe('throw-on-error');
     expect(classify(['  onClick={() => {', reset], 2)).toBe('intent-rotation');
+  });
+
+  // CodeRabbit (PR #638, review at 00993da04): the mask above still blanked strings one
+  // line at a time and never blanked a regex literal, so a regex on the line above a
+  // reset, or a template literal spanning lines, could supply an excuse. Every negative
+  // row below excused its reset under that mask.
+  it('regex and multi-line template text above a reset cannot excuse it', () => {
+    const reset = '  idem.resetKey();';
+    // A regex literal on the line above, one row per excuse.
+    expect(classify(['  const marker = /getIdempotencyBindingRejection/;', reset], 2)).toBeNull();
+    expect(classify(['  const call = /query.throwOnError()/;', reset], 2)).toBeNull();
+    expect(classify(['  const handler = /onClick=/;', reset], 2)).toBeNull();
+    // A quote inside a regex no longer opens a false string that leaves the block
+    // comment after it unmasked.
+    const quoteThenComment = ["  const quote = /['\"]/;", '  /*', '   getIdempotencyBindingRejection(error)', '  */', reset];
+    expect(classify(quoteThenComment, 5)).toBeNull();
+    // A template literal spanning lines, one row per excuse.
+    expect(classify(['  const note = `', '    getIdempotencyBindingRejection(error)', '  `;', reset], 4)).toBeNull();
+    expect(classify(['  const note = `', '    await query.throwOnError();', '  `;', reset], 4)).toBeNull();
+    expect(classify(['  const note = `', '    <button onClick={openDialog}>', '  `;', reset], 4)).toBeNull();
+
+    // Positive controls: the code around these literals is still read as code.
+    // Division is not a regex, even with a second `/` later on the line.
+    const division = '  if (total / 2 > 1 && getIdempotencyBindingRejection(error) && n / 2) {';
+    expect(classify([division, reset], 2)).toBe('recovery');
+    // A template's interpolation is code.
+    expect(classify(['  const note = `${', '    await query.throwOnError()', '  }`;', reset], 4)).toBe('throw-on-error');
+    // An apostrophe in JSX text does not mask the next line.
+    expect(classify(["  <p>Don't retry</p>", '  if (getIdempotencyBindingRejection(error)) {', reset], 3)).toBe('recovery');
+    // A JSX closing tag `</` is not a regex, so the handler between two of them survives.
+    expect(classify(['  <b>1</b><button onClick={open}>x</button>', reset], 2)).toBe('intent-rotation');
+    // A regex literal does not hide the mutating call after it on the same line.
+    expect(classify(['  onClick={() => {', "    if (/^x/.test(v)) void supabase.rpc('save');", reset], 3)).toBeNull();
   });
 
   it('scans a meaningful number of source files', () => {

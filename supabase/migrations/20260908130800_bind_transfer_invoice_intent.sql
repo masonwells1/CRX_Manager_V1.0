@@ -55,9 +55,11 @@ BEGIN
 END;
 $isolation_guard$;
 
--- While the lock below waits, every receipt read and write in the app queues
--- behind it. 5s keeps that queue shorter than the app roles' 8s statement
--- timeout; the file refuses rather than wait longer.
+-- Every receipt read and write in the app queues behind the lock below, both
+-- while it waits and until this file commits. lock_timeout bounds only the
+-- wait: the file refuses rather than wait more than 5s. Everything after the
+-- lock must commit within 3s, so a queued request stays under the app roles'
+-- 8s statement timeout.
 SET LOCAL lock_timeout = '5s';
 
 -- Take the strongest receipt-table lock first and hold it to commit. It waits,

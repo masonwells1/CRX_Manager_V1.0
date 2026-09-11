@@ -17,9 +17,10 @@ The migration now:
   receipt committed during the wait. Live runs READ COMMITTED with no role override.
 - takes `ACCESS EXCLUSIVE` on `idempotency_keys` first, with `lock_timeout` lowered
   from 15 to 5 seconds. It waits for every transaction that has read or written the
-  table and keeps new ones out until commit. While it waits, receipt reads and writes
-  across the app queue behind it, so the wait stays under the 8-second statement
-  timeout live sets for `authenticated`.
+  table and keeps new ones out until commit. Receipt reads and writes across the app
+  queue behind it both while it waits and while it holds the lock. The 5 seconds bound
+  only the wait, so the rest of the file must commit within 3 seconds for a queued
+  request to stay under the 8-second statement timeout live sets for `authenticated`.
 - deletes expired, unbound `transfer_job_to_invoice` receipts under that lock. These are
   expired retry-cache rows, not invoices or jobs; `check_idempotency()` deletes the same
   rows the next time their key is used. Together with the existing refusal of unexpired
