@@ -844,9 +844,22 @@ priced, and widening it would have added untested surface to a deadline-bound mo
 fixing `JobDetail.tsx:1342` on its own merits**, ahead of the cosmetic ones. Tracked so the next
 person does not mistake the invoice-date sweep for a whole-app one.
 
-## FIXED IN A CANDIDATE, NOT YET LIVE 2026-09-06 — the field-app split PREVIEW prices from the UTC clock while SAVE prices from the invoice date
+## SERVER HALF FIXED LIVE 2026-09-08; FRONTEND NOT YET MERGED — the field-app split PREVIEW priced from the UTC clock while SAVE priced from the invoice date
 
-**Status as of 2026-09-06: the server half is written and container-proven, and is NOT applied live.**
+**Status as of 2026-09-08: the server half IS APPLIED LIVE** (ledger version `20260908045843`), with
+Mason's explicit in-conversation approval. Verified from the live catalog — one overload, 5 arguments,
+`md5(prosrc)` `83f6600412ced085d0876a3c7339ff12`, `proacl` carrying no `anon` and no PUBLIC — and
+separately through a real PostgREST call in both the 5- and 4-argument shapes, each returning
+`42501` rather than `PGRST202`, which proves the API layer resolves the new signature AND that the
+legacy 4-argument caller still works through the DEFAULT.
+
+**The frontend half is still on PR #599 and NOT merged, so the defect is still visible to users.**
+The order is deliberate and must not be reversed: the database is backward compatible (a 4-argument
+call resolves through the DEFAULT), so DB-first is safe, whereas merging the frontend first would
+send a fifth named argument to a 4-argument function and return `PGRST202` on EVERY Preview click —
+not merely the season edge case.
+
+Historical detail from when this was a candidate:
 `supabase/migrations/20260906120000_preview_field_app_season_follows_invoice_date.sql` gives
 `preview_field_app_invoice_split` a fifth argument, `p_invoice_date date DEFAULT NULL`, and prices the
 application fee at the season the invoice is (or would be) filed under, reproducing

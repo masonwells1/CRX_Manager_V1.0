@@ -3,6 +3,16 @@
 Closes the open `preview_field_app_invoice_split` entry in `docs/manual/KNOWN_ISSUES.md`, raised as a
 P1 by the Codex GitHub App on PR #599 and the sole HIGH finding in that PR's 2026-09-05 push-proof.
 
+> **APPLIED LIVE 2026-09-08 04:58Z**, ledger version `20260908045843`, with Mason's explicit
+> in-conversation approval. Verified from `pg_proc` (one overload, 5 args, `md5(prosrc)`
+> `83f6600412ced085d0876a3c7339ff12`, no `anon`/PUBLIC in `proacl`) and through a real PostgREST call
+> in BOTH the 5- and 4-argument shapes — each returned `42501`, not `PGRST202`, proving the API layer
+> resolves the new signature and the legacy caller still works. **The frontend half is NOT merged
+> yet**, so the defect is still user-visible; DB-first is the required order.
+> Everything below the "### Proof observed" heading describes the pre-apply candidate state and the
+> "before apply" notes near the end are kept as written, as the record of what was outstanding then —
+> they are history, not current status.
+
 ### What was wrong
 
 `20260904180000_invoice_season_follows_invoice_date` moved BOTH field-application SAVE bodies onto
@@ -222,9 +232,18 @@ container proof was re-run against the new bytes rather than the pin being edite
 ### Proof observed
 
 `node scripts/smoke/prove-preview-field-app-season.mjs` → **`PREVIEW_SEASON_PROOF_PASS`**, run against
-migration sha256 `8114f85abf5b82f1186447576d4aa92f439444d6d5e56ffd9ab9bcb815649003` and prover sha256
+migration sha256 `3f0860c98a41d857a6af37576140bd4f29aba48d1112d51bf712f934226808c4` and prover sha256
 `2100cd4ce2e5c9c01085b4ff2edcdeeb3880da38ebd6b8dabf26ba4062921625` — recorded because a proof minted
-against earlier bytes is void, and the apply gate binds the proof to the transmitted file's hash. In a
+against earlier bytes is void, and the apply gate binds the proof to the transmitted file's hash.
+
+**Re-proven 2026-09-08 after the `-- ordering-guard: ahead-of-pending` declaration was added to the
+header.** That line changed the file's hash from `8114f85abf5b82f1186447576d4aa92f439444d6d5e56ffd9ab9bcb815649003`
+to the `3f0860c9…` above. It is a SQL comment and adds no executable statement, but "a comment cannot
+change behaviour" is an argument, not evidence — so the container proof was RE-RUN against the new
+bytes rather than the recorded pin being edited to match, and it passed all twenty-seven mutation
+phases again (twenty-four refused by a named abort, three caught behaviourally). The two Codex charter
+reviews were likewise re-minted against `3f0860c9…`; the proofs bound to `8114f85a…` are void and must
+not be cited. In a
 network-less `public.ecr.aws/supabase/postgres:17.6.1.143` container. It restores the schema baseline,
 replays 58 ordered post-baseline migrations, installs production's byte-exact bodies, and applies
 `20260904160000` and `20260904180000`.
