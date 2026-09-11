@@ -1811,9 +1811,12 @@ outside its AP/receiving list, so it leaves hold receipts alone. The preflight s
 installed body hash or argument list differs from the pins, and REFUSES (`PREFLIGHT_LEGACY_RECEIPTS`) while
 any unexpired receipt written by the old body exists — such a receipt would otherwise lock its operator out
 of creating any hold for up to 24 hours after the swap, so the apply belongs in a quiet window and may need
-a second attempt. Frontend fix for the per-open `resetKey()` on the same page
-is committed on the same branch (`50acce02a`), unpushed, and must merge only after the apply. A retained
-key whose request CHANGES now raises `IDEMPOTENCY_INTENT_MISMATCH`, which the page treats as
+a second attempt. The frontend fix for the per-open `resetKey()` on the same page ships in this same PR (#624)
+and is safe to merge BEFORE the apply (re-checked 2026-09-11): it sends the installed body exactly the
+arguments `main` sends, and a key is re-sent only with its original frozen request or after another tab
+confirmed that request committed; the installed body replays both by key. A racing loser's
+`IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` now keeps the key instead of releasing it. After the apply, a
+retained key whose request CHANGES raises `IDEMPOTENCY_INTENT_MISMATCH`, which the page treats as
 "uncertain" and locks the dialog — acceptable, deliberate. Do not author a competing migration.
 
 
