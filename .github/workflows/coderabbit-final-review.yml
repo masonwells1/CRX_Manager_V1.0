@@ -51,7 +51,8 @@ concurrency:
 jobs:
   final-review-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Native reviews can take minutes; leave cleanup time beyond the six-minute poll.
+    timeout-minutes: 10
     steps:
       # pull_request_target is privileged. Checkout the trusted default branch
       # only; never fetch or execute the pull request's code in this workflow.
@@ -99,6 +100,7 @@ jobs:
               context,
               core,
               config: {
+                nativeDispatch: true,
                 quietPeriodMs: 30_000,
                 requiredChecks: [
                   {
