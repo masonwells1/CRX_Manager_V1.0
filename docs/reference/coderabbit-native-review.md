@@ -43,6 +43,11 @@ same-head review or retained attempt cannot establish attribution for another
 base: create a fresh head commit before another request. The receipt and labels
 record attempts; neither establishes merge authorization.
 
+The run API's `head_sha` can expose either the PR head or the execution base.
+It is separate from `GITHUB_SHA`; both candidate commits must match the run's
+associated pull-request record, regardless of that metadata form. Repository
+run `34699373055` is an observed PR-head example.
+
 Read and resolve all real findings, including findings outside the diff, before
 merge. Delivery success is not merge clearance. All existing exact-head,
 independent-review, CI and merge gates still apply. The legacy comment transport

@@ -859,7 +859,10 @@ async function inspectNativeDispatchReceipt({ github, owner, repo, pullNumber, h
     const originalPull = origin.pull_requests?.find((pull) => Number(pull.number) === Number(pullNumber));
     if (trusted.error || origin.id !== receipt.runId || origin.workflow_id !== trusted.workflowId
       || origin.path !== '.github/workflows/coderabbit-final-review.yml' || origin.path !== trusted.workflowPath
-      || origin.event !== 'pull_request_target' || origin.head_sha !== headSha
+      // The Actions REST run head_sha is not the execution GITHUB_SHA. Actual
+      // run 34699373055 exposes the PR head; target-event execution uses main.
+      // Bind both candidate commits through the associated pull-request record.
+      || origin.event !== 'pull_request_target' || ![headSha, baseSha].includes(origin.head_sha)
       || originalPull?.head?.sha !== headSha || originalPull?.base?.sha !== baseSha
       || !Number.isFinite(Date.parse(origin.created_at))
       || receipt.requestedAfter < Date.parse(origin.created_at)

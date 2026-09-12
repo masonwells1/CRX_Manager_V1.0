@@ -493,6 +493,7 @@ function makeHarness({
   deleteCommentFailure = false,
   gateWorkflowId = 818181,
   gateWorkflowPath = '.github/workflows/coderabbit-final-review.yml',
+  runHeadSha = BASE,
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = (existingComments ?? (liveLabels.has(DISPATCH_LABEL) ? [nativeReceipt()] : [])).map((comment) => ({ ...comment }));
@@ -553,7 +554,7 @@ function makeHarness({
           if (workflowRunFailure) throw new Error('workflow lookup failed');
           if (Number(actionRunId) === Number(runId)) {
             return { data: { id: Number(actionRunId), workflow_id: gateWorkflowId, path: gateWorkflowPath,
-              event: 'pull_request_target', head_sha: HEAD, created_at: '2026-08-30T12:00:00Z',
+              event: 'pull_request_target', head_sha: runHeadSha, created_at: '2026-08-30T12:00:00Z',
               actor: { login: 'masonwells1' }, pull_requests: [eventPullRequest] } };
           }
           if (resolvedWorkflowByRunId?.[actionRunId]) {
@@ -2928,6 +2929,26 @@ test('a failed receipt write cannot start a provider review', async () => {
   assert.equal(result.status, 'blocked');
   assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
   assert.equal(harness.receiptComments.length, 0);
+});
+
+for (const runHeadSha of [BASE, HEAD]) {
+  test(`target run metadata ${runHeadSha === BASE ? 'base' : 'observed REST PR head'} keeps exact associated head/base binding`, async () => {
+    const reviews = [];
+    const harness = makeHarness({ coderabbitReviews: reviews, runHeadSha });
+    const result = await execute(harness, { nativeDispatch: true, reviewPollMs: 1,
+      settle: async () => reviews.push(nativeReview()) });
+    assert.equal(result.status, 'reviewed');
+    assert.equal(harness.receiptComments.length, 1);
+    assert.deepEqual(harness.failures, []);
+  });
+}
+
+test('an unrelated workflow commit cannot validate a native request receipt', async () => {
+  const harness = makeHarness({ runHeadSha: NEXT_HEAD });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.match(harness.failures.join('\n'), /trusted original workflow candidate/);
 });
 
 test('a valid receipt reconciles a late review from its original failed observation run', async () => {
