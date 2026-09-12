@@ -2902,6 +2902,38 @@ test('untracked historical provider-label attempts block before spending another
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
 });
 
+test('untracked manual review commands block native dispatch without deleting their evidence', async () => {
+  for (const body of ['@coderabbitai review', '@coderabbitai full review', '@coderabbitai resume']) {
+    const command = { id: 88, body, user: { login: 'masonwells1', type: 'User' }, created_at: '2026-09-07T03:43:00Z' };
+    const harness = makeHarness({ existingComments: [command] });
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'blocked');
+    assert.equal(harness.comments.some((comment) => comment.id === command.id), true);
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  }
+});
+
+test('a late manual old-base response cannot reconcile a newer native receipt', async () => {
+  const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+  const harness = makeHarness({ pulls: [pullRequest({ labels })], eventPullRequest: pullRequest({ labels }),
+    existingComments: [nativeReceipt(), { id: 88, body: '@coderabbitai review', user: { login: 'masonwells1', type: 'User' },
+      created_at: '2026-09-07T03:43:00Z' }], coderabbitReviews: [nativeReview()] });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.reason, 'ambiguous_native_history');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+});
+
+test('retargeted PR history blocks before dispatch even after the original base is restored', async () => {
+  const harness = makeHarness();
+  harness.timeline.push({ event: 'base_ref_changed', created_at: '2026-09-07T03:43:00Z' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.equal(harness.receiptComments.length, 0);
+});
+
 test('duplicate native provider-label events cannot share one active receipt', async () => {
   const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
   const harness = makeHarness({ pulls: [pullRequest({ labels })], eventPullRequest: pullRequest({ labels }),

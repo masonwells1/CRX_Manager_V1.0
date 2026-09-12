@@ -50,8 +50,11 @@ receipt; the active receipt needs exactly one provider-label event. An
 untracked direct provider-label attempt is ambiguous because GitHub's review
 record does not attest its base. It blocks reconciliation and further dispatch
 on that PR; preserve the evidence and use a fresh PR rather than reusing a late
-review. A base edit after dispatch also invalidates the receipt even when the
-base is subsequently restored.
+review. Manual comment-based requests have no authenticated base receipt;
+preserve them and use a fresh PR for native delivery. Retargeted PRs also need
+a fresh PR, even when their original base branch has been restored. Before
+publishing a new candidate to an existing PR, verify its cached base SHA matches
+live main and refresh the same-base metadata before pushing the new head.
 
 The run API's `head_sha` can expose either the PR head or the execution base.
 It is separate from `GITHUB_SHA`; both candidate commits must match the run's
