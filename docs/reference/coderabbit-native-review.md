@@ -35,6 +35,14 @@ delivery; an approving verdict is not newly required. A `CHANGES_REQUESTED`
 review proves delivery but keeps the gate blocked. A queued/skipped status,
 empty `COMMENTED` reply artifact or dismissed review is insufficient.
 
+Each normal native attempt records a head/base receipt tied to its trusted
+Actions run before dispatch. A review must be submitted after that receipt;
+reconciliation verifies the original run's workflow, actor and candidate and
+requires both commits still to match. Receipts survive resets. A preexisting
+same-head review or retained attempt cannot establish attribution for another
+base: create a fresh head commit before another request. The receipt and labels
+record attempts; neither establishes merge authorization.
+
 Read and resolve all real findings, including findings outside the diff, before
 merge. Delivery success is not merge clearance. All existing exact-head,
 independent-review, CI and merge gates still apply. The legacy comment transport

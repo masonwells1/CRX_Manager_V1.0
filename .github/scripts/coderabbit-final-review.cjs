@@ -3,6 +3,7 @@
 const READY_LABEL = 'ready-for-coderabbit';
 const REQUESTED_LABEL = 'coderabbit-review-requested';
 const DISPATCH_LABEL = 'coderabbit-review-dispatch';
+const NATIVE_RECEIPT_PREFIX = '<!-- crx-coderabbit-native-dispatch:v1 ';
 const REVIEW_COMMAND = '@coderabbitai review';
 const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 const CODERABBIT_BOT_LOGIN = 'coderabbitai[bot]';
@@ -777,7 +778,7 @@ async function inspectExistingRequest({ github, owner, repo, pullNumber, headSha
 // status is emitted even for "Review skipped", so it is not evidence that an
 // exact-head review occurred. Require a submitted CodeRabbit review attached to
 // this head before reporting the request as reviewed.
-async function inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber, headSha }) {
+async function inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber, headSha, requestedAfter = null }) {
   try {
     const reviews = await github.paginate(
       github.rest.pulls.listReviews,
@@ -807,11 +808,69 @@ async function inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumbe
           error: new Error('CodeRabbit exact-head review record was missing its authenticated review identity or submission time'),
         };
       }
+      if (requestedAfter !== null && submittedAt <= requestedAfter) {
+        return { verified: true, reviewed: false, changesRequested: false };
+      }
     }
     return { verified: true, reviewed: Boolean(review), changesRequested: normalize(review?.state) === 'changes_requested', review };
   } catch (error) {
     return { verified: false, reviewed: false, error };
   }
+}
+
+function nativeDispatchReceiptBody({ headSha, baseSha, runId }) {
+  return `${NATIVE_RECEIPT_PREFIX}${JSON.stringify({ headSha, baseSha, runId })} -->`;
+}
+
+function parseNativeDispatchReceipt(comment) {
+  if (normalize(comment?.user?.login) !== ACTIONS_BOT_LOGIN
+    || normalize(comment?.user?.type) !== 'bot'
+    || !String(comment.body || '').startsWith(NATIVE_RECEIPT_PREFIX)) return null;
+  try {
+    const receipt = JSON.parse(comment.body.slice(NATIVE_RECEIPT_PREFIX.length, -4));
+    if (comment.body !== nativeDispatchReceiptBody(receipt)
+      || !/^[a-f0-9]{40}$/.test(receipt.headSha || '')
+      || !/^[a-f0-9]{40}$/.test(receipt.baseSha || '')
+      || !isPositiveSafeInteger(receipt.runId)
+      || !isPositiveSafeInteger(Number(comment.id))
+      || !Number.isFinite(Date.parse(comment.created_at))) return null;
+    return { ...receipt, requestedAfter: Date.parse(comment.created_at) };
+  } catch { return null; }
+}
+
+// A receipt records an attempt, never merge authorization. Independently check
+// its Actions run and original candidate; labels and an Actions login alone
+// cannot bind an old review to a new base. Keep receipts across resets so a
+// potentially late review cannot be credited to another dispatch of this head.
+async function inspectNativeDispatchReceipt({ github, owner, repo, pullNumber, headSha, baseSha, selfRunId, core }) {
+  try {
+    const comments = await github.paginate(github.rest.issues.listComments,
+      { owner, repo, issue_number: pullNumber, per_page: 100 });
+    if (!Array.isArray(comments)) throw new Error('native receipt listing was not an array');
+    const receipts = comments.map(parseNativeDispatchReceipt).filter((receipt) => receipt?.headSha === headSha);
+    if (receipts.length !== 1) throw new Error('native dispatch requires exactly one head/base receipt');
+    const receipt = receipts[0];
+    if (receipt.baseSha !== baseSha) throw new Error('native dispatch base changed; a fresh head commit is required');
+    const [response, trusted] = await Promise.all([
+      github.rest.actions.getWorkflowRun({ owner, repo, run_id: receipt.runId }),
+      resolveTrustedGateWorkflowProvenance({ github, owner, repo, selfRunId, core }),
+    ]);
+    const origin = response.data;
+    const originalPull = origin.pull_requests?.find((pull) => Number(pull.number) === Number(pullNumber));
+    if (trusted.error || origin.id !== receipt.runId || origin.workflow_id !== trusted.workflowId
+      || origin.path !== '.github/workflows/coderabbit-final-review.yml' || origin.path !== trusted.workflowPath
+      || origin.event !== 'pull_request_target' || origin.head_sha !== headSha
+      || originalPull?.head?.sha !== headSha || originalPull?.base?.sha !== baseSha
+      || !Number.isFinite(Date.parse(origin.created_at))
+      || receipt.requestedAfter < Date.parse(origin.created_at)
+      || receipt.requestedAfter > Date.now()
+      || (origin.status === 'completed' && (!Number.isFinite(Date.parse(origin.updated_at))
+        || receipt.requestedAfter > Date.parse(origin.updated_at)))) throw new Error('native receipt did not match its trusted original workflow candidate');
+    if (!isNonBlankString(origin.actor?.login)) throw new Error('native receipt original actor was missing');
+    const permission = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: origin.actor.login });
+    if (!ALLOWED_PERMISSIONS.has(normalize(permission.data.permission))) throw new Error('native receipt original actor was not authorized');
+    return { verified: true, receipt };
+  } catch (error) { return { verified: false, error }; }
 }
 
 // The single reconciliation routine. Every event that must re-derive gate state
@@ -823,6 +882,7 @@ async function inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumbe
 async function reconcileLabelEvent({
   github, owner, repo, pullNumber, core, defaultBranch, action, label, config, selfRunId,
   authorizedReadyHeadSha = null,
+  authorizedReadyBaseSha = null,
   reasonPrefix: prefixOverride,
 }) {
   const reasonPrefix = prefixOverride
@@ -857,12 +917,22 @@ async function reconcileLabelEvent({
       // Labels can be managed by triage collaborators. They record dedupe state,
       // not who authorized this review. Only the ready-event route below supplies
       // this head after verifying its actor and live candidate.
-      if (!authorizedReadyHeadSha || authorizedReadyHeadSha !== headSha) {
+      if (!authorizedReadyHeadSha || authorizedReadyHeadSha !== headSha
+        || authorizedReadyBaseSha !== pullRequest.base.sha) {
         core.setFailed(`Native review reconciliation requires a fresh authorized ${READY_LABEL} action for head ${headSha}; dispatch state was preserved.`);
         return { status: 'blocked', headSha, reason: 'native_reconciliation_requires_authorized_ready' };
       }
+      const baseSha = pullRequest.base.sha;
+      const dispatch = await inspectNativeDispatchReceipt({
+        github, owner, repo, pullNumber, headSha, baseSha, selfRunId, core,
+      });
+      if (!dispatch.verified) {
+        await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+        core.setFailed(`Native review receipt could not be verified (${dispatch.error.message}); dispatch state was preserved.`);
+        return { status: 'blocked', headSha, reason: 'unverified_native_receipt' };
+      }
       const reviewed = await inspectExactHeadCodeRabbitReview({
-        github, owner, repo, pullNumber, headSha,
+        github, owner, repo, pullNumber, headSha, requestedAfter: dispatch.receipt.requestedAfter,
       });
       await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
       if (reviewed.changesRequested) {
@@ -881,6 +951,9 @@ async function reconcileLabelEvent({
         const confirmationReasons = validateAuthorizationState(confirmationPullRequest, defaultBranch);
         if (confirmationPullRequest.head.sha !== headSha) {
           confirmationReasons.push('pull request head changed while reconciling the CodeRabbit review');
+        }
+        if (confirmationPullRequest.base.sha !== baseSha) {
+          confirmationReasons.push('pull request base changed while reconciling the CodeRabbit review');
         }
         if (!confirmationLabels.has(REQUESTED_LABEL) || !confirmationLabels.has(DISPATCH_LABEL)) {
           confirmationReasons.push('native dispatch state changed while reconciling the CodeRabbit review');
@@ -1106,7 +1179,7 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config, core
   });
 }
 
-async function nativeCandidateReasons({ github, context, core, config, headSha, dispatched }) {
+async function nativeCandidateReasons({ github, context, core, config, headSha, baseSha, dispatched }) {
   const { owner, repo } = context.repo;
   const pullNumber = context.payload.pull_request.number;
   const [pullRequest, checkBlockers, reviewBlockers] = await Promise.all([
@@ -1122,6 +1195,7 @@ async function nativeCandidateReasons({ github, context, core, config, headSha, 
   const reasons = validateAuthorizationState(pullRequest, context.payload.repository.default_branch);
   const labels = pullRequestLabelNames(pullRequest);
   if (pullRequest.head.sha !== headSha) reasons.push('pull request head changed during native review validation');
+  if (!/^[a-f0-9]{40}$/.test(baseSha || '') || pullRequest.base.sha !== baseSha) reasons.push('pull request base changed during native review validation');
   if (!labels.has(REQUESTED_LABEL)) reasons.push('requested marker was removed');
   if (dispatched) {
     if (!labels.has(DISPATCH_LABEL)) reasons.push('dispatch label was removed');
@@ -1135,12 +1209,18 @@ async function nativeCandidateReasons({ github, context, core, config, headSha, 
 async function dispatchNativeReview({ github, context, core, config, attemptState, expectedHeadSha, settle }) {
   const { owner, repo } = context.repo;
   const pullNumber = context.payload.pull_request.number;
-  const candidateArgs = { github, context, core, config, headSha: expectedHeadSha };
-  // An existing exact-head review avoids spending another review. This lookup
-  // is not attributed to this attempt; readiness is rechecked after the lookup.
+  const baseSha = context.payload.pull_request.base.sha;
+  const candidateArgs = { github, context, core, config, headSha: expectedHeadSha, baseSha };
+  // A prior same-head review lacks attribution to this new head/base request.
+  // Require a fresh head instead of laundering it through a new ready event.
   const existing = await inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber, headSha: expectedHeadSha });
   if (!existing.verified) {
     return blockCandidate({ github, owner, repo, pullNumber, core, reason: `existing CodeRabbit review could not be verified (${existing.error.message}); requested state was preserved` });
+  }
+  if (existing.reviewed) {
+    await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
+    return blockCandidate({ github, owner, repo, pullNumber, core,
+      reason: 'a prior same-head review cannot prove this head/base request; a fresh head commit is required' });
   }
   if (!existing.reviewed) {
     // Label creation is deliberate setup, not a side effect of asking for a
@@ -1158,11 +1238,24 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
   if (reasons.length) {
     return blockCandidate({ github, owner, repo, pullNumber, core, reason: reasons.join('; ') });
   }
-  if (existing.reviewed) {
-    await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
-    await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
-    core.notice(`CodeRabbit already delivered a formal review for ${expectedHeadSha}; no native dispatch was attempted. Findings still require disposition.`);
-    return { status: 'reviewed', headSha: expectedHeadSha, preexisting: true };
+
+  const comments = await github.paginate(github.rest.issues.listComments,
+    { owner, repo, issue_number: pullNumber, per_page: 100 });
+  if (!Array.isArray(comments) || comments.some((comment) => parseNativeDispatchReceipt(comment)?.headSha === expectedHeadSha)) {
+    return blockCandidate({ github, owner, repo, pullNumber, core,
+      reason: 'this head already has a potentially spent native attempt; a fresh head commit is required' });
+  }
+  const receiptResponse = await github.rest.issues.createComment({ owner, repo, issue_number: pullNumber,
+    body: nativeDispatchReceiptBody({ headSha: expectedHeadSha, baseSha, runId: context.runId }) });
+  const receipt = parseNativeDispatchReceipt(receiptResponse.data);
+  if (!receipt) throw new Error('native request receipt write was not verified');
+  const dispatch = await inspectNativeDispatchReceipt({
+    github, owner, repo, pullNumber, headSha: expectedHeadSha, baseSha, selfRunId: context.runId, core,
+  });
+  const receiptReasons = await nativeCandidateReasons({ ...candidateArgs, dispatched: false });
+  if (!dispatch.verified || receiptReasons.length) {
+    return blockCandidate({ github, owner, repo, pullNumber, core,
+      reason: dispatch.error?.message || receiptReasons.join('; ') });
   }
 
   attemptState.dispatchAttempted = true;
@@ -1185,12 +1278,13 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
     const liveLabels = pullRequestLabelNames(live);
     const invalid = validateAuthorizationState(live, context.payload.repository.default_branch);
     if (live.head.sha !== expectedHeadSha) invalid.push('head changed after dispatch');
+    if (live.base.sha !== baseSha) invalid.push('base changed after dispatch');
     if (!liveLabels.has(REQUESTED_LABEL) || !liveLabels.has(DISPATCH_LABEL)) invalid.push('native dispatch state changed');
     if (invalid.length) {
       core.setFailed(`CodeRabbit dispatch no longer covers a valid candidate: ${invalid.join('; ')}. No second request was made.`);
       return { status: 'blocked', headSha: expectedHeadSha };
     }
-    const observed = await inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber, headSha: expectedHeadSha });
+    const observed = await inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber, headSha: expectedHeadSha, requestedAfter: receipt.requestedAfter });
     if (!observed.verified) {
       core.warning(`Could not observe CodeRabbit review delivery: ${observed.error.message}`);
       continue;
@@ -1354,6 +1448,7 @@ async function runGate({ github, context, core, config, attemptState }) {
       config,
       selfRunId: context.runId,
       authorizedReadyHeadSha: expectedHeadSha,
+      authorizedReadyBaseSha: context.payload.pull_request.base.sha,
     });
   }
   if (labels.has(REQUESTED_LABEL)) {
@@ -2080,6 +2175,7 @@ module.exports = {
   REVIEW_COMMAND,
   evaluateChecks,
   reviewCommandBody,
+  nativeDispatchReceiptBody,
   run,
   validateAuthorizationState,
   validatePullRequest,
