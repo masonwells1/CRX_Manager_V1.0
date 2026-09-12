@@ -152,7 +152,7 @@ import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { assertWrappable } from '../../.claude/hooks/migration-wrappability-lib.mjs';
 
@@ -691,6 +691,36 @@ function restoreReviewedBody() {
 function previewOwner() {
   return scalar(`SELECT p.proowner::regrole::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                   WHERE n.nspname = 'public' AND p.proname = '${PREVIEW}'`);
+}
+
+function committedGenericFieldRetryFixture() {
+  const customer = randomUUID();
+  const order = randomUUID();
+  const key = `migration-crossing-${randomUUID()}`;
+  const payload = JSON.stringify({ customer_id: customer, order_id: order,
+    invoice_type: 'field_application', invoice_date: DATE_IN_SEASON, season: SEASON_NOW });
+  psql(`BEGIN;
+    INSERT INTO customers (id, farm_name) VALUES ('${customer}', '[SMOKE] committed generic field retry');
+    INSERT INTO orders (id, order_number, customer_id, salesman_id, status)
+      VALUES ('${order}', '[SMOKE]-CROSSING-${order}', '${customer}', '${ADMIN}', 'confirmed');
+    DO $auth$ BEGIN ${AUTHENTICATE} END $auth$;
+    SET LOCAL ROLE authenticated;
+    SELECT public.save_invoice('${payload}'::jsonb, '[]'::jsonb, '${key}');
+    COMMIT;`);
+  const invoice = scalar(`SELECT result->>'invoice_id' FROM idempotency_keys WHERE idempotency_key = '${key}'`);
+  assert.match(invoice, /^[0-9a-f-]{36}$/, 'base public creation must commit an invoice receipt');
+  const retrySql = `BEGIN;
+    DO $auth$ BEGIN ${AUTHENTICATE} END $auth$;
+    SET LOCAL ROLE authenticated;
+    DO $retry$ BEGIN
+      IF public.save_invoice('${payload}'::jsonb, '[]'::jsonb, '${key}') IS DISTINCT FROM '${invoice}'::uuid THEN
+        RAISE EXCEPTION 'MIGRATION_CROSSING_RETRY_CHANGED_INVOICE';
+      END IF;
+    END $retry$;
+    ROLLBACK;`;
+  psql(retrySql);
+  log('PHASE 8-committed-retry-baseline: public creation COMMITTED; identical authenticated retry returns the committed invoice before migration');
+  return retrySql;
 }
 
 function genericCreationGuardProbe(label, { expectRefusal = true, removeGuard = false } = {}) {
@@ -1829,10 +1859,15 @@ ${revokedAuth}`),
   assert.match(said(guardApply), /POSTFLIGHT_OK/, 'cross-season guard migration did not reach its postflight');
   genericCreationGuardProbe('PUBLIC_INSERT_BASELINE', { expectRefusal: false });
   log('PHASE 8-creation-baseline: authenticated public save creates a mismatched new field invoice before the generic-creation guard');
+  const committedRetrySql = committedGenericFieldRetryFixture();
   const creationApply = apply('generic-creation-guard.sql');
   assert.match(said(creationApply), /POSTFLIGHT_OK/, 'generic creation guard must reach its postflight');
   assert.equal(scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure"),
     genericCreationBodyMd5, 'PostgreSQL must agree with the reviewed public wrapper fingerprint');
+  const committedRetry = psql(committedRetrySql, { allowFailure: true });
+  assert.equal(committedRetry.status, 0,
+    `MIGRATION_CROSSING_COMMITTED_RETRY_REJECTED: ${said(committedRetry)}`);
+  log('PHASE 8-committed-retry: identical authenticated retry still returns the committed invoice after migration');
   genericCreationGuardProbe('PUBLIC_INSERT_GUARD');
   sourceSeasonCreatorProbe();
   const creationReplay = apply('generic-creation-guard.sql');
