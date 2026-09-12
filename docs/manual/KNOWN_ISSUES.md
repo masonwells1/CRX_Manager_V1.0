@@ -882,8 +882,12 @@ separately through a real PostgREST call in both the 5- and 4-argument shapes, e
 `42501` rather than `PGRST202`, which proves the API layer resolves the new signature AND that the
 legacy 4-argument caller still works through the DEFAULT.
 
-**The frontend half is still on PR #599 and NOT merged, so the defect is still visible to users.**
-The order is deliberate and must not be reversed: the database is backward compatible (a 4-argument
+**The frontend half MERGED on 2026-09-11 in PR #599 (`791bc3d86`), so the DB-first window is
+closed.** Deployment evidence read here on 2026-09-12: GitHub Production deployment `6394599950`
+for that commit reports state `success` (2026-09-11 13:57:07Z) and `https://croprxsolutions.app`
+returns 200. That is deployment evidence only — the screen-level observation that the season now
+follows the invoice date belongs to the #599 lane's own verification and is not re-checked here.
+The order was deliberate and must not be reversed: the database is backward compatible (a 4-argument
 call resolves through the DEFAULT), so DB-first is safe, whereas merging the frontend first would
 send a fifth named argument to a 4-argument function and return `PGRST202` on EVERY Preview click —
 not merely the season edge case.
@@ -1730,10 +1734,14 @@ containing `resetKey:` can invent an alias. `classify()` no longer does (2026-09
 PR #638): all three of its windows are read from source whose comments, string contents,
 template-literal text and regex-literal bodies are masked from the top of the file, across lines —
 so a `/* … */` block or a template opened above a window still counts, and a template's `${…}`
-interpolation stays code. Comment, string, template or regex text can no longer supply `onClick=`,
-`.throwOnError()` or a recovery marker. The mask is a scanner, not a lexer: a `/` after `)`, `]`,
-`}` or `<` is read as division, so a regex literal written there stays visible (the old
-behaviour), and a `//` inside JSX text masks the rest of its line. (i) The
+interpolation stays code. Comment, string and template text can no longer supply `onClick=`,
+`.throwOnError()` or a recovery marker, and neither can a regex the scanner RECOGNISES as a regex
+literal. That recognition is the limit of the guarantee, because the mask is a scanner, not a
+lexer: a `/` after `]`, `}` or `<` is still read as division, so a regex literal written in one of
+those positions stays visible and its text CAN still supply those three tokens. A `/` after `)` is
+recognised only when that `)` closes an `if`, `for`, `while`, `switch` or `catch` head (2026-09-12,
+CodeRabbit's third round on PR #638: a regex used as a control statement's body was excusing a
+reset). A `//` inside JSX text masks the rest of its line. (i) The
 "no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/
 `functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
 intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes

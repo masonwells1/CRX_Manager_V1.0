@@ -539,9 +539,11 @@ function stripCommentsOnly(code: string): string {
  * A `/` opens a regex only where an expression can start: at the beginning, after one of
  * `( , = : [ ! & | ? { ; + - * % ~ ^`, after `=>`, or after a keyword such as `return`.
  * Anywhere else it is division, and so is a candidate that reaches a line break before its
- * closing `/`. This is still a scanner, not a TypeScript lexer: a regex written after `)`,
- * `]`, `}` or `<` is read as division and its text stays visible, as it always was, and a
- * `//` inside JSX text still masks the rest of its line.
+ * closing `/`. A `)` counts only when it closes an `if`, `for`, `while`, `switch` or `catch`
+ * head, so a regex written as a control statement's BODY is masked while division after an
+ * ordinary `)` is not (CodeRabbit, PR #638). This is still a scanner, not a TypeScript lexer:
+ * a regex written after `]`, `}` or `<` is read as division and its text stays visible, as it
+ * always was, and a `//` inside JSX text still masks the rest of its line.
  */
 function maskNonCode(code: string): string {
   let out = '';
@@ -555,11 +557,26 @@ function maskNonCode(code: string): string {
     i += 1;
   };
 
+  // A `)` precedes a regex only when it closes a CONTROL statement's head, as in
+  // `if (ready) /re/.test(v)`; after any other `)` the next `/` is division. Track which
+  // `(` opened such a head and where its matching `)` landed in `out`.
+  const controlHead: boolean[] = [];
+  let controlCloseAt = -1;
+
+  function opensControlHead(): boolean {
+    let j = out.length - 1;
+    while (j >= 0 && /\s/.test(out[j])) j -= 1;
+    let k = j;
+    while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
+    return /^(if|for|while|switch|catch)$/.test(out.slice(k + 1, j + 1));
+  }
+
   function regexCanStart(): boolean {
     let j = out.length - 1;
     while (j >= 0 && /\s/.test(out[j])) j -= 1;
     if (j < 0) return true;
     if (out[j] === '>') return out[j - 1] === '=';
+    if (out[j] === ')') return controlCloseAt === j;
     if (/[(,=:[!&|?{;+\-*%~^]/.test(out[j])) return true;
     let k = j;
     while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
@@ -653,6 +670,11 @@ function maskNonCode(code: string): string {
         depth -= 1;
       } else if (inInterpolation && c === '{') {
         depth += 1;
+      }
+      if (c === '(') {
+        controlHead.push(opensControlHead());
+      } else if (c === ')' && controlHead.pop()) {
+        controlCloseAt = out.length;
       }
       keep();
     }
@@ -892,6 +914,21 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     expect(classify(['  <b>1</b><button onClick={open}>x</button>', reset], 2)).toBe('intent-rotation');
     // A regex literal does not hide the mutating call after it on the same line.
     expect(classify(['  onClick={() => {', "    if (/^x/.test(v)) void supabase.rpc('save');", reset], 3)).toBeNull();
+  });
+
+  // CodeRabbit (PR #638, review at fb1c7cd0f): `regexCanStart()` rejected `/` after `)`, so a
+  // regex written as a control statement's BODY stayed visible and could supply an excuse.
+  it('a regex used as a control-statement body cannot excuse a reset', () => {
+    const reset = '  idem.resetKey();';
+    expect(classify(['  if (ready) /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  while (more) /query.throwOnError()/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  for (const v of values) /onClick=/.test(v);', reset], 2)).toBeNull();
+
+    // Positive controls: only a control head's `)` opens a regex, so division after an
+    // ordinary `)` still reads as code, and an executable body is still recognised.
+    expect(classify(['  const rate = (a + b) / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    expect(classify(['  if (isReady) total = count / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    expect(classify(['  if (ready) handleRecovery(getIdempotencyBindingRejection(error));', reset], 2)).toBe('recovery');
   });
 
   it('scans a meaningful number of source files', () => {

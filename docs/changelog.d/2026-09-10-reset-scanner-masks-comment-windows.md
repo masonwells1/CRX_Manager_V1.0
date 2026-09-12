@@ -42,6 +42,18 @@ Proof observed:
 Not verified here: the full `vitest` suite, which CI runs. The mask is still a scanner,
 not a lexer:
 
-- a `/` after `)`, `]`, `}` or `<` is read as division, so a regex literal written there
-  stays visible, which is the old behaviour
+- a `/` after `]`, `}` or `<` is read as division, so a regex literal written there stays
+  visible, which is the old behaviour. A `/` after `)` is masked only when that `)` closes an
+  `if`, `for`, `while`, `switch` or `catch` head — the third-round fix below
 - a `//` inside JSX text masks the rest of its line
+
+Third round — CodeRabbit's review at `fb1c7cd0f` found the `)` half of that limitation was
+exploitable: `regexCanStart()` rejected `/` after any `)`, so a regex written as a control
+statement's BODY (`if (ready) /getIdempotencyBindingRejection/.test(value);`) stayed visible and
+`classify()` read the marker inside it as executable recovery evidence. `maskNonCode()` now tracks
+which `(` opened a control head and masks a regex after that head's `)` only. Proof observed: the
+three new negative cases (an `if`, a `while` and a `for` body) were added FIRST and the `if` case
+failed against the unfixed mask with `expected 'recovery' to be null`; after the fix all 22 tests in
+the file pass, including the repo-wide sweep and the exact pins, so no current site was excused this
+way. Three positive controls hold: division after an ordinary `)`, division inside a control
+statement's body, and an executable recovery call as that body.

@@ -99,7 +99,7 @@ Worth noting alongside: those counters sat unchanged from the 2026-09-04 reading
 `20260904023121`. This refresh verified all eight generator security/grant shapes; the F2 entry in
 `docs/manual/KNOWN_ISSUES.md` carries the detailed matrix.
 
-**Disk-vs-live drift, refreshed 2026-09-08 — PRs #535 AND #592 ARE RECONCILED; PR #599's file landed on `main` 2026-09-11.**
+**Disk-vs-live drift — live-ledger read 2026-09-08, file ownership updated 2026-09-11. PRs #535 AND #592 ARE RECONCILED; PR #599's file landed on `main` 2026-09-11 (`791bc3d86`).** The two dates are separate on purpose: the ledger observation is the 09-08 read, the 09-11 date is a later merge.
 PR #535 merged on 2026-09-08 and restored its six already-live migration files to `main`:
 `20260831160000_harden_receiving_reversal_and_ap_reporting`,
 `20260831161000_require_cumulative_po_bill_confirmation`,
