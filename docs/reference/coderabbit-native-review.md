@@ -43,6 +43,16 @@ same-head review or retained attempt cannot establish attribution for another
 base: create a fresh head commit before another request. The receipt and labels
 record attempts; neither establishes merge authorization.
 
+The workflow also checks the persistent provider-label history. Earlier normal
+attempts must have a verified original run and a completed formal review of
+their earlier head before a new attempt starts. Each event needs its own
+receipt; the active receipt needs exactly one provider-label event. An
+untracked direct provider-label attempt is ambiguous because GitHub's review
+record does not attest its base. It blocks reconciliation and further dispatch
+on that PR; preserve the evidence and use a fresh PR rather than reusing a late
+review. A base edit after dispatch also invalidates the receipt even when the
+base is subsequently restored.
+
 The run API's `head_sha` can expose either the PR head or the execution base.
 It is separate from `GITHUB_SHA`; both candidate commits must match the run's
 associated pull-request record, regardless of that metadata form. Repository

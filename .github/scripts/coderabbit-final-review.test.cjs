@@ -497,7 +497,8 @@ function makeHarness({
 } = {}) {
   const liveLabels = new Set(pulls[0].labels.map((label) => label.name));
   const comments = (existingComments ?? (liveLabels.has(DISPATCH_LABEL) ? [nativeReceipt()] : [])).map((comment) => ({ ...comment }));
-  const timeline = [];
+  const timeline = liveLabels.has(DISPATCH_LABEL) ? [{ event: 'labeled', label: { name: DISPATCH_LABEL },
+    actor: { login: 'github-actions[bot]' }, created_at: nativeReceipt().created_at }] : [];
   const errors = [];
   const failures = [];
   const notices = [];
@@ -724,6 +725,7 @@ function makeHarness({
 
   return {
     comments,
+    timeline,
     // Legacy command comments the GATE is responsible for. Native receipts are
     // counted separately, because they do not ask CodeRabbit for a review.
     // CodeRabbit's acknowledgement is a real
@@ -2835,6 +2837,70 @@ function nativeReceipt(overrides = {}) {
     created_at: '2026-09-08T03:43:00Z',
     body: nativeDispatchReceiptBody({ headSha: HEAD, baseSha: BASE, runId: 909090 }), ...overrides };
 }
+
+test('a late old-base out-of-band review cannot satisfy a newer same-head receipt', async () => {
+  const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+  const harness = makeHarness({ pulls: [pullRequest({ labels })], eventPullRequest: pullRequest({ labels }),
+    coderabbitReviews: [nativeReview()] });
+  harness.timeline.unshift({ event: 'labeled', label: { name: DISPATCH_LABEL },
+    actor: { login: 'outside-collaborator' }, created_at: '2026-09-07T03:43:00Z' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.reason, 'ambiguous_native_history');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+});
+
+test('untracked historical provider-label attempts block before spending another review', async () => {
+  const harness = makeHarness({ coderabbitReviews: [] });
+  harness.timeline.push({ event: 'labeled', label: { name: DISPATCH_LABEL },
+    actor: { login: 'github-actions[bot]' }, created_at: '2026-09-07T03:43:00Z' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 0);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+});
+
+test('duplicate native provider-label events cannot share one active receipt', async () => {
+  const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+  const harness = makeHarness({ pulls: [pullRequest({ labels })], eventPullRequest: pullRequest({ labels }),
+    coderabbitReviews: [nativeReview()] });
+  harness.timeline.push({ ...harness.timeline[0] });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.reason, 'ambiguous_native_history');
+});
+
+test('a base edit and restoration after dispatch cannot reuse the active receipt', async () => {
+  const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+  const harness = makeHarness({ pulls: [pullRequest({ labels })], eventPullRequest: pullRequest({ labels }),
+    coderabbitReviews: [nativeReview()] });
+  harness.timeline.push({ event: 'base_ref_changed', created_at: '2026-09-08T04:43:00Z' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.reason, 'ambiguous_native_history');
+});
+
+test('a completed trusted earlier-head native attempt permits the normal follow-up request', async () => {
+  const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+  const oldReceipt = nativeReceipt({ id: 90, created_at: '2026-09-07T03:43:00Z',
+    body: nativeDispatchReceiptBody({ headSha: NEXT_HEAD, baseSha: BASE, runId: 808080 }) });
+  const harness = makeHarness({ pulls: [pullRequest({ labels })], eventPullRequest: pullRequest({ labels }),
+    existingComments: [oldReceipt, nativeReceipt()], coderabbitReviews: [
+      nativeReview({ id: 5012391470, commit_id: NEXT_HEAD, submitted_at: '2026-09-07T03:45:00Z' }), nativeReview(),
+    ] });
+  harness.timeline.unshift({ event: 'labeled', label: { name: DISPATCH_LABEL },
+    actor: { login: 'github-actions[bot]' }, created_at: '2026-09-07T03:43:01Z' });
+  const originalGetRun = harness.github.rest.actions.getWorkflowRun;
+  harness.github.rest.actions.getWorkflowRun = async (args) => args.run_id === 808080
+    ? { data: { ...(await originalGetRun({ ...args, run_id: 909090 })).data, id: 808080,
+      status: 'completed', created_at: '2026-09-07T03:42:00Z', updated_at: '2026-09-07T03:46:00Z',
+      pull_requests: [{ number: harness.context.payload.pull_request.number, head: { sha: NEXT_HEAD }, base: { sha: BASE } }] } }
+    : originalGetRun(args);
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'reviewed');
+  assert.equal(harness.actionsComments.length, 0);
+});
 
 test('an authenticated outside-diff-only report reconciles without another dispatch', async () => {
   const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];

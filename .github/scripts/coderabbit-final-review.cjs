@@ -877,7 +877,67 @@ async function inspectNativeDispatchReceipt({ github, owner, repo, pullNumber, h
     if (!isNonBlankString(origin.actor?.login)) throw new Error('native receipt original actor was missing');
     const permission = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: origin.actor.login });
     if (!ALLOWED_PERMISSIONS.has(normalize(permission.data.permission))) throw new Error('native receipt original actor was not authorized');
-    return { verified: true, receipt };
+    return { verified: true, receipt, origin };
+  } catch (error) { return { verified: false, error }; }
+}
+
+// GitHub reviews attest the head, but not the PR base. Before trusting a
+// response, exclude older provider-label requests that might still finish on
+// this head. Retained receipts alone cannot settle an earlier attempt.
+async function inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha, selfRunId, core, activeReceipt = null }) {
+  try {
+    const [events, comments] = await Promise.all([
+      github.paginate(github.rest.issues.listEventsForTimeline, { owner, repo, issue_number: pullNumber, per_page: 100 }),
+      github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pullNumber, per_page: 100 }),
+    ]);
+    if (!Array.isArray(events) || !Array.isArray(comments)) throw new Error('native attempt history could not be verified');
+    const dispatches = events.filter((event) => event.event === 'labeled' && event.label?.name === DISPATCH_LABEL);
+    const receipts = comments.map(parseNativeDispatchReceipt).filter(Boolean);
+    if (activeReceipt && events.some((event) => event.event === 'base_ref_changed'
+      && (!Number.isFinite(Date.parse(event.created_at))
+        || Date.parse(event.created_at) >= Math.floor(activeReceipt.requestedAfter / 1000) * 1000))) {
+      throw new Error('the PR base was edited after native dispatch; use a fresh head commit');
+    }
+    let activeEvents = 0;
+    const settledReceipts = new Set();
+    for (const event of dispatches) {
+      const dispatchedAt = Date.parse(event.created_at);
+      if (!Number.isFinite(dispatchedAt) || dispatchedAt > Date.now() + 999) throw new Error('native dispatch history has no trustworthy timestamp');
+      // GitHub issue-event timestamps have second precision. A native request
+      // must have exactly one Actions label event after its receipt.
+      if (activeReceipt && dispatchedAt >= Math.floor(activeReceipt.requestedAfter / 1000) * 1000) {
+        if (normalize(event.actor?.login) !== ACTIONS_BOT_LOGIN || ++activeEvents > 1) {
+          throw new Error('an out-of-band or duplicate native request overlaps this receipt; use a fresh PR');
+        }
+        continue;
+      }
+      const matching = receipts.filter((receipt) => receipt.headSha !== headSha
+        && receipt.requestedAfter <= dispatchedAt + 999);
+      // Choose the most recent receipt preceding the event, never an arbitrary
+      // earlier receipt whose completed review could launder another request.
+      matching.sort((a, b) => b.requestedAfter - a.requestedAfter);
+      const previous = matching[0];
+      if (!previous || settledReceipts.has(previous.runId) || normalize(event.actor?.login) !== ACTIONS_BOT_LOGIN
+        || (matching[1] && matching[1].requestedAfter === previous.requestedAfter)) {
+        throw new Error('an untracked native review attempt cannot be attributed to a head/base; use a fresh PR');
+      }
+      const trusted = await inspectNativeDispatchReceipt({ github, owner, repo, pullNumber,
+        headSha: previous.headSha, baseSha: previous.baseSha, selfRunId, core });
+      const finished = await inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber,
+        headSha: previous.headSha, requestedAfter: dispatchedAt });
+      const settledBefore = activeReceipt?.requestedAfter ?? Date.now();
+      if (!trusted.verified || trusted.origin.status !== 'completed'
+        || !Number.isFinite(Date.parse(trusted.origin.updated_at))
+        || dispatchedAt < Math.floor(Date.parse(trusted.origin.created_at) / 1000) * 1000
+        || dispatchedAt > Date.parse(trusted.origin.updated_at) + 999
+        || !finished.verified || !finished.reviewed
+        || Date.parse(finished.review?.submitted_at) >= settledBefore) {
+        throw new Error('an earlier native request has not been independently settled before this attempt; use a fresh PR');
+      }
+      settledReceipts.add(previous.runId);
+    }
+    if (activeReceipt && activeEvents !== 1) throw new Error('the active native receipt has no unique provider-label event');
+    return { verified: true };
   } catch (error) { return { verified: false, error }; }
 }
 
@@ -942,6 +1002,13 @@ async function reconcileLabelEvent({
       const reviewed = await inspectExactHeadCodeRabbitReview({
         github, owner, repo, pullNumber, headSha, requestedAfter: dispatch.receipt.requestedAfter,
       });
+      const history = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha, selfRunId, core,
+        activeReceipt: dispatch.receipt });
+      if (!history.verified) {
+        await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
+        core.setFailed(`Native review history is ambiguous (${history.error.message}); dispatch state was preserved.`);
+        return { status: 'blocked', headSha, reason: 'ambiguous_native_history' };
+      }
       await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
       if (reviewed.changesRequested) {
         core.setFailed(`CodeRabbit delivered a review for ${headSha} and requested changes; dispatch state was preserved.`);
@@ -967,6 +1034,9 @@ async function reconcileLabelEvent({
           confirmationReasons.push('native dispatch state changed while reconciling the CodeRabbit review');
         }
         confirmationReasons.push(...checkBlockers, ...reviewDecisionBlockers);
+        const finalHistory = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha, selfRunId, core,
+          activeReceipt: dispatch.receipt });
+        if (!finalHistory.verified) confirmationReasons.push(finalHistory.error.message);
         if (confirmationReasons.length > 0) {
           core.setFailed(`CodeRabbit reviewed dispatched head ${headSha}, but ${confirmationReasons.join('; ')}. The dispatch state was preserved and no second review will be posted.`);
           return { status: 'blocked', headSha, reviewed: true };
@@ -1290,6 +1360,11 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
     return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
       reason: 'this head already has a potentially spent native attempt; a fresh head commit is required' });
   }
+
+  const priorHistory = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha: expectedHeadSha,
+    selfRunId: context.runId, core });
+  if (!priorHistory.verified) return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
+    reason: priorHistory.error.message });
   attemptState.nativePreexistingCommentIds = new Set(comments.map((comment) => comment.id));
   attemptState.nativeReceiptBody = nativeDispatchReceiptBody({ headSha: expectedHeadSha, baseSha, runId: context.runId });
   const receiptResponse = await github.rest.issues.createComment({ owner, repo, issue_number: pullNumber,
@@ -1300,9 +1375,11 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
     github, owner, repo, pullNumber, headSha: expectedHeadSha, baseSha, selfRunId: context.runId, core,
   });
   const receiptValidation = await nativeCandidateReasons({ ...candidateArgs, dispatched: false });
-  if (!dispatch.verified || receiptValidation.reasons.length) {
+  const receiptHistory = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha: expectedHeadSha,
+    selfRunId: context.runId, core });
+  if (!dispatch.verified || !receiptHistory.verified || receiptValidation.reasons.length) {
     return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
-      reason: dispatch.error?.message || receiptValidation.reasons.join('; ') });
+      reason: dispatch.error?.message || receiptHistory.error?.message || receiptValidation.reasons.join('; ') });
   }
 
   attemptState.dispatchAttempted = true;
@@ -1339,11 +1416,20 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
       continue;
     }
     if (!observed.reviewed) continue;
+    const history = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha: expectedHeadSha,
+      selfRunId: context.runId, core, activeReceipt: receipt });
+    if (!history.verified) {
+      core.setFailed(`Native review history is ambiguous (${history.error.message}); dispatch state was preserved.`);
+      return { status: 'blocked', headSha: expectedHeadSha, reason: 'ambiguous_native_history' };
+    }
     const finalValidation = await nativeCandidateReasons({ ...candidateArgs, dispatched: true });
     const finalReasons = finalValidation.reasons;
     if (finalValidation.invalidCandidate) return resetCandidate({ github, owner, repo, pullNumber, core,
       reason: `native final validation invalidated the candidate: ${finalReasons.join('; ')}` });
     if (observed.changesRequested) finalReasons.push('CodeRabbit requested changes on this exact head');
+    const finalHistory = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha: expectedHeadSha,
+      selfRunId: context.runId, core, activeReceipt: receipt });
+    if (!finalHistory.verified) finalReasons.push(finalHistory.error.message);
     if (finalReasons.length) {
       core.setFailed(`CodeRabbit delivered a review for ${expectedHeadSha}, but ${finalReasons.join('; ')}. Dispatch state was preserved.`);
       return { status: 'blocked', headSha: expectedHeadSha, reviewed: true };
