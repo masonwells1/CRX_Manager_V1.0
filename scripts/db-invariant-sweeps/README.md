@@ -25,6 +25,10 @@ This runner makes those queries **standing executable gates** that run **before*
 - `predicates/*.sql` — one file per invariant class. Each returns **rows = violations** and must output
   a stable **`violation_key`** column (a routine identity like `fn_name(arg types)`).
 - `allowlist.json` — per-predicate exemptions, each with a dated justification.
+- `allowlist-match.mjs` — shared deterministic matcher and read-only contract query. Actor exceptions
+  match the exact parameter and every reviewed function/dependency definition, owner, direct ACL and
+  effective `anon`/`authenticated`/`service_role` EXECUTE surface. A missing or changed contract
+  leaves the violation visible. Predicate detection SQL and its approved fingerprints are unchanged.
 
 ### Predicates shipped
 
@@ -116,9 +120,13 @@ Two modes, auto-selected:
 
 - **Claude mode (default / practical).** With no `SUPABASE_DB_URL`+`psql`, the runner prints each
   predicate's SQL inside a bannered block. The practical caller is **Claude Code via the Supabase MCP**:
-  run each block read-only with `mcp__…__execute_sql` (project `rhyzpcqhnizqbxphqdkr`), paste the JSON
-  rows back, and compare each returned `violation_key` against the allowlist for that predicate. Any
-  key **not** allowlisted is a real finding.
+  run each wrapped SELECT read-only with `mcp__…__execute_sql` (project `rhyzpcqhnizqbxphqdkr`). Each
+  returns a `sweep_result` packet containing `predicate`, `rows`, and `function_contracts` from one
+  database statement/snapshot. Capture those packets as a private local JSON array and run
+  `node scripts/db-invariant-sweeps/run-sweeps.mjs --adjudicate <captured.json>`; use `--only <names>`
+  for an explicit subset. Missing/duplicate/unknown packets are errors. Do **not** compare keys alone:
+  the same parameter/contract matcher runs in MCP adjudication and linked-psql execution. Captured
+  JSON is not proof of freshness: actual read-only execution must still occur in the current session.
 
   ```
   node scripts/db-invariant-sweeps/run-sweeps.mjs
@@ -180,6 +188,20 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs --explain <predicate>  # header 
   a finding. Allowlisting a real hole defeats the entire control.
 - **Re-verify** an entry whenever the underlying function is next edited — a body change can turn a
   safe disposition into a live hole while the allowlist still says "safe."
+- Actor exceptions additionally require `suspect_param` and `reviewed_contracts`, a map of exact
+  schema-qualified function identities to database-side contract digests. Include the public function,
+  `auth.uid()`, and every private/role helper materially relied on in the semantic review. Identity-only
+  actor exceptions are refused, even if an old entry remains. Never refresh pins merely to make a gate
+  green: inspect and independently review the changed function/dependency first. Remove stale unused
+  exceptions instead of preserving a future suppression path.
+- Run `node scripts/db-invariant-sweeps/allowlist-match.test.mjs` for parameter/contract fail-closed
+  checks and the actual captured-result CLI. It is registered in `test:correction-guards` on Linux and
+  Windows. This is an allowance-narrowing change, not a reopening of capped detector/lexer hardening.
+- Run `npm run proof:actor-allowlist` for networkless disposable PostgreSQL proof using the real
+  detector, contract SELECT and matcher. Public actor-check removal and private-helper-only drift
+  must actually allow forged attribution in the disposable mutant and remain unallowlisted. New
+  direct/inherited EXECUTE permission, owner, identity-source and missing-dependency drift must
+  also fail closed. No live schema/data or detector predicate is changed by this proof.
 - The allowlist is itself a Codex artifact: hand Codex the allowlist **diff** to attack (per §5 of the
   review) — adjudicating exemptions is exactly what a second model is good at.
 

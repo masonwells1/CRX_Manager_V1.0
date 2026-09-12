@@ -352,13 +352,13 @@
     {
       "predicate": "actor-forgery",
       "violation_key": "cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Reverified live pg_get_functiondef 2026-09-12 by independent RLS reviewer: body requires auth.uid() (10), rejects non-null unequal p_performed_by (11), derives v_actor := COALESCE(p_performed_by,auth.uid()) (12), necessarily the caller, role-checks it (19), and attributes all writes to v_actor. Predicate structural noise, not an actor-forgery hole; re-verify on function edits.",
-      "dated": "2026-06-10"
-    },
-    {
-      "predicate": "actor-forgery",
-      "violation_key": "transfer_job_to_invoice(p_job_id uuid, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "2026-06-11: attribution-only p_performed_by (allocate_payment precedent). Live body (rewritten by 20260611002255 transfer_job_invoice_column_fixes, whose header explicitly dispositions this) authorizes via auth.uid() + role gate - corroborated by predicates (b) ungated-secdef-mutators and (d) auth-bound-role-ungated both clearing it on the live catalog 2026-06-11. p_performed_by only feeds COALESCE(p_performed_by, auth.uid()) attribution columns. Candidate for the standing defense-in-depth ACTOR_MISMATCH sweep, not an escalation."
+      "justification": "Reverified live pg_get_functiondef 2026-09-12 by independent RLS reviewer: body requires auth.uid() (10), rejects non-null unequal p_performed_by (11), derives v_actor := COALESCE(p_performed_by,auth.uid()) (12), necessarily the caller, role-checks it (19), and attributes all writes to v_actor. Predicate structural noise, not an actor-forgery hole; re-verify on function edits. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public.cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)": "21da58c0c8f22d933ddd6938f5927194"
+      }
     },
     {
       "predicate": "auth-bound-role-ungated",
@@ -501,122 +501,254 @@
     {
       "predicate": "actor-forgery",
       "violation_key": "cancel_purchase_order(p_po_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public wrapper locks/forwards only; owner-only _section9_cancel_purchase_order_serialized binds auth.uid() (body line10), rejects non-null differing actor (12-14), role-gates bound actor (15-17), writes actor from v_actor (56,67). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public wrapper locks/forwards only; owner-only _section9_cancel_purchase_order_serialized binds auth.uid() (body line10), rejects non-null differing actor (12-14), role-gates bound actor (15-17), writes actor from v_actor (56,67). This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._section9_cancel_purchase_order_serialized(p_po_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)": "34987663d1aba2c5634c345b211b8d31",
+        "public.cancel_purchase_order(p_po_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)": "857c474e1b3e8da4aa7927cdbb3e16e4"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "complete_delivery(p_delivery_id uuid, p_signed_by text, p_performed_by uuid, p_quantities jsonb, p_issue_type text, p_issue_notes text, p_idempotency_key text, p_completed_at timestamp with time zone)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_signed_by is text signature-name data, not user identity. Actual p_performed_by rejects non-null mismatch against auth.uid()-bound v_actor; active admin/sales_rep or assigned-driver authorization precedes writes and is repeated by owner-only delegate. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_signed_by is text signature-name data, not user identity. Actual p_performed_by rejects non-null mismatch against auth.uid()-bound v_actor; active admin/sales_rep or assigned-driver authorization precedes writes and is repeated by owner-only delegate. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_signed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._complete_delivery_period_preflight_impl(p_delivery_id uuid, p_signed_by text, p_performed_by uuid, p_quantities jsonb, p_issue_type text, p_issue_notes text, p_idempotency_key text, p_completed_at timestamp with time zone)": "9f7bf84ab636a8f7971cfa76b1244f95",
+        "public.complete_delivery(p_delivery_id uuid, p_signed_by text, p_performed_by uuid, p_quantities jsonb, p_issue_type text, p_issue_notes text, p_idempotency_key text, p_completed_at timestamp with time zone)": "8d196ef3dcdea365519f69e2ae55aec5"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "complete_job(p_job_id uuid, p_applied_info jsonb, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body binds v_actor from auth.uid() (3), strictly rejects p_performed_by IS DISTINCT FROM v_actor before writes (38-41), authorizes bound role/applicator (74-127); subsequent forwarding is guaranteed-equal. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body binds v_actor from auth.uid() (3), strictly rejects p_performed_by IS DISTINCT FROM v_actor before writes (38-41), authorizes bound role/applicator (74-127); subsequent forwarding is guaranteed-equal. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._is_dispatched_to_me(p_job_id uuid)": "e85f1e55bfdc46de230145cf80e4a894",
+        "public.complete_job(p_job_id uuid, p_applied_info jsonb, p_performed_by uuid, p_idempotency_key text)": "46ca21c73268b7916785ad56a6843660",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
+        "public.is_applicator()": "f6cbd3d4daceee70e8532189ab2aff57",
+        "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "convert_quote_to_order(p_quote_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint, p_below_cost_reason text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public wrapper first invokes _begin_below_cost_money_write, which binds auth.uid(), rejects non-null mismatch, requires active admin/sales_rep; owner-only delegate independently repeats auth bind/refusal (13-17) before role/ownership checks (19-32). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public wrapper first invokes _begin_below_cost_money_write, which binds auth.uid(), rejects non-null mismatch, requires active admin/sales_rep; owner-only delegate independently repeats auth bind/refusal (13-17) before role/ownership checks (19-32). This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
+        "public._convert_quote_to_order_below_cost_impl_20260810(p_quote_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint)": "a953cf134640aa762743850a1dc46105",
+        "public.convert_quote_to_order(p_quote_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint, p_below_cost_reason text)": "791356967c0bca796f2d21b4eb2dec7d"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "create_application_record_from_blend_ticket(p_blend_ticket_id uuid, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body binds auth.uid() (3), strictly rejects NULL or differing actor (25-28), then role-gates bound actor (29-31); subsequent attribution is guaranteed-equal. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body binds auth.uid() (3), strictly rejects NULL or differing actor (25-28), then role-gates bound actor (29-31); subsequent attribution is guaranteed-equal. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public.create_application_record_from_blend_ticket(p_blend_ticket_id uuid, p_performed_by uuid, p_idempotency_key text)": "41a246e182a8628890bfb9a38850267d",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
+        "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "create_direct_order(p_customer_id uuid, p_order_date date, p_order_name text, p_notes text, p_items jsonb, p_performed_by uuid, p_idempotency_key text, p_customer_po_number text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public common guard binds auth.uid() and rejects supplied non-null mismatch; owner-only delegate independently binds actor (21), rejects mismatch (23-25), role-gates (27-31), uses v_actor for inventory/activity (136-139,159-168). Omitted actor never changes authority. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public common guard binds auth.uid() and rejects supplied non-null mismatch; owner-only delegate independently binds actor (21), rejects mismatch (23-25), role-gates (27-31), uses v_actor for inventory/activity (136-139,159-168). Omitted actor never changes authority. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
+        "public._create_direct_order_below_cost_impl_20260810(p_customer_id uuid, p_order_date date, p_order_name text, p_notes text, p_items jsonb, p_performed_by uuid, p_idempotency_key text, p_customer_po_number text)": "11c0dae1e99f7ec484051d82aa4bee1d",
+        "public.create_direct_order(p_customer_id uuid, p_order_date date, p_order_name text, p_notes text, p_items jsonb, p_performed_by uuid, p_idempotency_key text, p_customer_po_number text)": "914355a8a419481821113fd0634e8d67"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "create_rush_order(p_customer_id uuid, p_items jsonb, p_notes text, p_customer_po_number text, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public common guard binds auth.uid(), rejects supplied non-null mismatch; owner-only delegate independently binds (20-21), refuses mismatch (22-24), role-gates (25-31), attributes writes to v_actor (145-147,154-163). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public common guard binds auth.uid(), rejects supplied non-null mismatch; owner-only delegate independently binds (20-21), refuses mismatch (22-24), role-gates (25-31), attributes writes to v_actor (145-147,154-163). This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
+        "public._create_rush_order_below_cost_impl_20260810(p_customer_id uuid, p_items jsonb, p_notes text, p_customer_po_number text, p_performed_by uuid, p_idempotency_key text)": "e621b83b35e7298cd239254910cf184b",
+        "public.create_rush_order(p_customer_id uuid, p_items jsonb, p_notes text, p_customer_po_number text, p_performed_by uuid, p_idempotency_key text)": "973554b9c57b2186585e6ef3c1199b99"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "delete_purchase_order(p_po_id uuid, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper locks/forwards only; owner-only delegate binds auth.uid() (6), rejects non-null mismatch (8-10), requires active admin on v_actor (12-14), attributes activity to v_actor (43-46). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper locks/forwards only; owner-only delegate binds auth.uid() (6), rejects non-null mismatch (8-10), requires active admin on v_actor (12-14), attributes activity to v_actor (43-46). This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._section9_delete_purchase_order_serialized(p_po_id uuid, p_performed_by uuid, p_idempotency_key text)": "e49e44be634c6c17ce850dccd750b9dd",
+        "public.delete_purchase_order(p_po_id uuid, p_performed_by uuid, p_idempotency_key text)": "db1439cc2b9bd9813f5fbbf5baa772dd"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "duplicate_quote(p_source_quote_id uuid, p_performed_by uuid, p_idempotency_key text, p_below_cost_reason text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write with bound signed-in authority; owner-only delegate repeats auth bind/refusal (13-17), active role gate (20-22), attributes writes to v_actor (48-55,142-150). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write with bound signed-in authority; owner-only delegate repeats auth bind/refusal (13-17), active role gate (20-22), attributes writes to v_actor (48-55,142-150). This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
+        "public._duplicate_quote_below_cost_impl_20260810(p_source_quote_id uuid, p_performed_by uuid, p_idempotency_key text)": "54facc028bebc1de6f23a6527a65c0aa",
+        "public.duplicate_quote(p_source_quote_id uuid, p_performed_by uuid, p_idempotency_key text, p_below_cost_reason text)": "3ba36a0a0fcce9cc8a0dd34a3de6e71c"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "get_profitability_report(p_group_by text, p_start_date date, p_end_date date)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector (customer/product/month), not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector (customer/product/month), not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_group_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public.get_profitability_report(p_group_by text, p_start_date date, p_end_date date)": "0ca11ab7bcec750d8c5f9b9ae05c3734"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "get_receiving_log(p_limit integer, p_offset integer, p_vendor text, p_condition text, p_received_by uuid, p_date_from date, p_date_to date)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_received_by is only nullable UUID read-only receiving-record filter (rr.received_by = p_received_by). Function separately requires active admin/sales_rep from auth.uid(); no attribution write or role lookup based on filter. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_received_by is only nullable UUID read-only receiving-record filter (rr.received_by = p_received_by). Function separately requires active admin/sales_rep from auth.uid(); no attribution write or role lookup based on filter. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_received_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public.get_receiving_log(p_limit integer, p_offset integer, p_vendor text, p_condition text, p_received_by uuid, p_date_from date, p_date_to date)": "b0fdf3ca1e08db8664875f2cf274d8a9"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "get_sales_summary_report(p_group_by text, p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector, not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY; grouping only uses CASE p_group_by. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector, not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY; grouping only uses CASE p_group_by. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_group_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public.get_sales_summary_report(p_group_by text, p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)": "b3328c2390d410f0fb05d6116d962567"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "price_order(p_order_id uuid, p_items jsonb, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write: auth.uid() bind, non-null mismatch refusal, active admin/sales_rep role gate before forwarding. Owner-only delegated implementation independently repeats actor/role validation; no caller-param authority. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write: auth.uid() bind, non-null mismatch refusal, active admin/sales_rep role gate before forwarding. Owner-only delegated implementation independently repeats actor/role validation; no caller-param authority. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
+        "public._price_order_below_cost_impl_20260810(p_order_id uuid, p_items jsonb, p_performed_by uuid, p_idempotency_key text)": "f59c79c9db46e59c12e8b8f8046c1efd",
+        "public.price_order(p_order_id uuid, p_items jsonb, p_performed_by uuid, p_idempotency_key text)": "bd561ed928e9880942ec35fac81d1698"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "restore_quote_version(p_quote_id uuid, p_version_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint, p_below_cost_reason text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write: auth.uid() bind, non-null mismatch refusal, active admin/sales_rep role gate before forwarding. Owner-only delegate repeats actor/role checks; no parameter-based authority. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write: auth.uid() bind, non-null mismatch refusal, active admin/sales_rep role gate before forwarding. Owner-only delegate repeats actor/role checks; no parameter-based authority. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
+        "public._restore_quote_version_below_cost_impl_20260810(p_quote_id uuid, p_version_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint)": "274e356d46ecf328f55b6e0a5872f14b",
+        "public.restore_quote_version(p_quote_id uuid, p_version_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint, p_below_cost_reason text)": "f4b556d776e597fd70f2f083413710a2"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "save_purchase_order(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Owner-only _section9_save_purchase_order_serialized binds v_actor := auth.uid(), strictly rejects p_performed_by IS DISTINCT FROM v_actor before replay/mutation, then requires is_admin() OR is_sales_rep(); both helpers use active auth.uid() identity. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Owner-only _section9_save_purchase_order_serialized binds v_actor := auth.uid(), strictly rejects p_performed_by IS DISTINCT FROM v_actor before replay/mutation, then requires is_admin() OR is_sales_rep(); both helpers use active auth.uid() identity. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._section9_save_purchase_order_serialized(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text)": "d2d4f93908a5824047254ed5eea7697c",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
+        "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0",
+        "public.save_purchase_order(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text)": "83373a602215eb4d88818a55ef5cc5a3"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "save_quote(p_quote_id uuid, p_quote_payload jsonb, p_sections jsonb, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write with auth.uid() authority and mismatch/active-role gates. Owner-only delegated implementation independently strictly checks supplied actor (including NULL) before writes. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write with auth.uid() authority and mismatch/active-role gates. Owner-only delegated implementation independently strictly checks supplied actor (including NULL) before writes. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
+        "public._save_quote_below_cost_impl_20260810(p_quote_id uuid, p_quote_payload jsonb, p_sections jsonb, p_performed_by uuid, p_idempotency_key text)": "4c554f49c0f528a4666b750fda4c0fe5",
+        "public.save_quote(p_quote_id uuid, p_quote_payload jsonb, p_sections jsonb, p_performed_by uuid, p_idempotency_key text)": "003e286aa2652d8e5b234a5deeffd7f8"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "submit_purchase_order(p_po_id uuid, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Owner-only _section9_submit_purchase_order_serialized binds auth.uid(), strictly rejects p_performed_by IS DISTINCT FROM v_actor before replay/mutation, then active is_admin() OR is_sales_rep(). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Owner-only _section9_submit_purchase_order_serialized binds auth.uid(), strictly rejects p_performed_by IS DISTINCT FROM v_actor before replay/mutation, then active is_admin() OR is_sales_rep(). This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._section9_submit_purchase_order_serialized(p_po_id uuid, p_performed_by uuid, p_idempotency_key text)": "6c9c70d93fcb6372dceea45535c5d200",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
+        "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0",
+        "public.submit_purchase_order(p_po_id uuid, p_performed_by uuid, p_idempotency_key text)": "f82f9fda2dafc054ee0a31bbcd78494c"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "unapply_credit_memo(p_credit_memo_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public body binds auth.uid(), strictly rejects supplied actor IS DISTINCT FROM v_actor, requires active admin before replay/delegation. Owner-only delegate independently repeats protections. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public body binds auth.uid(), strictly rejects supplied actor IS DISTINCT FROM v_actor, requires active admin before replay/delegation. Owner-only delegate independently repeats protections. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._unapply_return_credit_guard_impl_20260826(p_credit_memo_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)": "0715f7907a8ac0de4d5ca7a0ee0559d3",
+        "public.unapply_credit_memo(p_credit_memo_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)": "c948e5d8fb620ecb53fc07d83e67ec60"
+      }
     },
     {
       "predicate": "actor-forgery",
       "violation_key": "update_order_items(p_order_id uuid, p_items jsonb, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write: auth.uid() bind, supplied non-null actor mismatch refusal, active admin/sales_rep gate. Owner-only delegated implementation repeats actor/role checks before any write. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write: auth.uid() bind, supplied non-null actor mismatch refusal, active admin/sales_rep gate. Owner-only delegated implementation repeats actor/role checks before any write. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
+        "public._update_order_items_below_cost_impl_20260810(p_order_id uuid, p_items jsonb, p_performed_by uuid, p_idempotency_key text)": "f3383d1310ebc679ff4f885af1d7c2f4",
+        "public.update_order_items(p_order_id uuid, p_items jsonb, p_performed_by uuid, p_idempotency_key text)": "85749e3d180896ed61734127ff9db7a0"
+      }
     },
     {
       "predicate": "actor-forgery-fin-audit",
       "violation_key": "cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body requires auth.uid() (10), rejects supplied non-null differing actor (11), then COALESCE(p_performed_by,auth.uid()) (12) necessarily equals caller. Role gate (19) and inventory/delivery/invoice/activity writes use this v_actor (72-73,160,170,185-186). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
-      "dated": "2026-09-12"
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body requires auth.uid() (10), rejects supplied non-null differing actor (11), then COALESCE(p_performed_by,auth.uid()) (12) necessarily equals caller. Role gate (19) and inventory/delivery/invoice/activity writes use this v_actor (72-73,160,170,185-186). This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "dated": "2026-09-12",
+      "suspect_param": "p_performed_by",
+      "reviewed_contracts": {
+        "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
+        "public.cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)": "21da58c0c8f22d933ddd6938f5927194"
+      }
     }
   ]
 }
