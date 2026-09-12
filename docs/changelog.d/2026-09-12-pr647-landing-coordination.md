@@ -8,4 +8,6 @@ Independent review identified an old-review reuse gap when a PR is retargeted wi
 
 The run validator supports both base-commit and PR-head forms of Actions REST metadata while requiring the associated PR's exact head and base. A live repository run confirmed the PR-head form; 174 transport cases cover both supported forms and reject an unrelated workflow commit.
 
+An observed outside-diff-only CodeRabbit report omitted its usual actionable-comments header. Recognition now accepts its authenticated exact-head record with unquoted run/range metadata and the terminal review stamp; quoted or incomplete lookalikes stay pending. There are 176 focused transport cases.
+
 The introducing PR's bootstrap and the first normal request after merge are observed separately under `docs/reference/coderabbit-native-review.md`. This work changes no live database data and does not apply PR #624's parked migration. Rollback is a protected revert of the review-delivery repair.

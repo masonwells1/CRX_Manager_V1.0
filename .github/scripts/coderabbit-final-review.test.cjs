@@ -2836,6 +2836,31 @@ function nativeReceipt(overrides = {}) {
     body: nativeDispatchReceiptBody({ headSha: HEAD, baseSha: BASE, runId: 909090 }), ...overrides };
 }
 
+test('an authenticated outside-diff-only report reconciles without another dispatch', async () => {
+  const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+  const body = `> Outside diff range comments (1)\n\n**Run ID**: \`e9f9b055-d221-4d3d-a5f7-26d027a9e259\`\n\nReviewing files that changed from the base of the PR and between ${NEXT_HEAD} and ${HEAD}.\n\n<!-- This is an auto-generated comment by CodeRabbit for review status -->`;
+  const harness = makeHarness({ pulls: [pullRequest({ labels })], eventPullRequest: pullRequest({ labels }),
+    coderabbitReviews: [nativeReview({ body })] });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'reviewed');
+  assert.equal(harness.actionsComments.length, 0);
+});
+
+test('outside-diff report lookalikes stay pending without exact review metadata', async () => {
+  const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+  const run = '**Run ID**: `e9f9b055-d221-4d3d-a5f7-26d027a9e259`';
+  const range = `Reviewing files that changed from the base of the PR and between ${NEXT_HEAD} and ${HEAD}.`;
+  const stamp = '<!-- This is an auto-generated comment by CodeRabbit for review status -->';
+  for (const body of [ `${run}\n${range}`, `${range}\n${stamp}`, `${run}\n${stamp}`,
+    `> ${run}\n> ${range}\n${stamp}`, `${run}\n${range.replace(HEAD + '.', BASE + '.')}\n${stamp}` ]) {
+    const harness = makeHarness({ pulls: [pullRequest({ labels })], eventPullRequest: pullRequest({ labels }),
+      coderabbitReviews: [nativeReview({ body })] });
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'pending');
+    assert.equal(harness.actionsComments.length, 0);
+  }
+});
+
 test('a retargeted same-head PR cannot reconcile a review of its former base', async () => {
   const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
   const retargeted = pullRequest({ labels, baseSha: NEXT_BASE });

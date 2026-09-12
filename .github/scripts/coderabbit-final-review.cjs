@@ -791,11 +791,16 @@ async function inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumbe
         || String(candidate?.commit_id || '') !== String(headSha)
       ) return false;
       if (['approved', 'changes_requested'].includes(normalize(candidate?.state))) return true;
-      // CodeRabbit's real COMMENTED review records carry this exact summary.
-      // Empty COMMENTED records are bot reply artifacts, and accepting either
-      // would turn "Review skipped" into false review evidence.
+      // Outside-diff-only reports omit the actionable-comments summary. Require
+      // their unquoted run metadata, exact reviewed head and terminal stamp.
+      // Empty COMMENTED records are bot reply artifacts, not review evidence.
+      const body = String(candidate?.body || '').trim();
+      const reviewedRange = body.match(/^Reviewing files that changed from the base of the PR and between [a-f0-9]{40} and ([a-f0-9]{40})\.$/m);
+      const outsideDiffReport = /^\*\*Run ID\*\*: `[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`$/m.test(body)
+        && reviewedRange?.[1] === headSha
+        && body.endsWith('<!-- This is an auto-generated comment by CodeRabbit for review status -->');
       return normalize(candidate?.state) === 'commented'
-        && /^\*\*actionable comments posted:\s*\d+\*\*/.test(normalize(candidate?.body));
+        && (/^\*\*actionable comments posted:\s*\d+\*\*/.test(normalize(body)) || outsideDiffReport);
     });
     if (review) {
       const reviewId = Number(review.id);
