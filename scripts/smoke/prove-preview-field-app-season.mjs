@@ -1160,6 +1160,15 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   `, { user: 'supabase_admin' });
   psql(smokeSetup);
 
+  const specs = JSON.parse(readFileSync(path.join(ROOT, 'scripts/smoke/smoke-specs.json'), 'utf8')).specs;
+  const genericChain = specs.save_invoice;
+  assert.ok(genericChain.covers.includes('save_invoice'), 'registered generic chain must cover save_invoice');
+  const genericChainSql = readFileSync(path.join(ROOT, 'scripts/smoke', genericChain.chain), 'utf8');
+  const baselineGenericChainResult = psql(genericChainSql, { allowFailure: true });
+  assert.equal(baselineGenericChainResult.status, 3, 'registered generic baseline chain must end in rollback');
+  assert.match(said(baselineGenericChainResult), /SMOKE_PASS_ROLLBACK/, 'registered generic invoice edit baseline chain failed');
+  log('PHASE 1e-generic: registered save_invoice edit chain passes against the live-pinned entry/routing/writer BEFORE the creation guard');
+
   SEASON_NOW = Number(scalar('SELECT current_season()'));
   assert.ok(Number.isInteger(SEASON_NOW) && SEASON_NOW > 2000, `could not read current_season(): ${SEASON_NOW}`);
   DATE_IN_SEASON = `${SEASON_NOW}-09-30`;
@@ -1893,7 +1902,6 @@ RETURNS void LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN; END $$;`, { wrap: true 
   log('PHASE 8h: mutant caught -- neutralizing the private assertion makes the forbidden preview succeed');
 
   // Run the registered full public business chain inside this disposable database.
-  const specs = JSON.parse(readFileSync(path.join(ROOT, 'scripts/smoke/smoke-specs.json'), 'utf8')).specs;
   const fullChain = specs.save_field_app_invoice;
   assert.ok(fullChain.covers.includes(PREVIEW), 'registered chain must cover the public preview');
   const fullChainSql = readFileSync(path.join(ROOT, 'scripts/smoke', fullChain.chain), 'utf8');
@@ -1901,6 +1909,13 @@ RETURNS void LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN; END $$;`, { wrap: true 
   assert.equal(fullChainResult.status, 3, 'registered public chain must end in rollback');
   assert.match(said(fullChainResult), /SMOKE_PASS_ROLLBACK/, 'registered public business chain failed');
   log('PHASE 9: registered save_field_app_invoice public split/post/idempotency business chain reached SMOKE_PASS_ROLLBACK');
+
+  // The creation guard also changes save_invoice. Its registered edit chain is
+  // independent of the field-specific chain above and must execute as well.
+  const genericChainResult = psql(genericChainSql, { allowFailure: true });
+  assert.equal(genericChainResult.status, 3, 'registered generic chain must end in rollback');
+  assert.match(said(genericChainResult), /SMOKE_PASS_ROLLBACK/, 'registered generic invoice edit business chain failed');
+  log('PHASE 9b: registered save_invoice fee/share/customer/type/edit business chain reached SMOKE_PASS_ROLLBACK');
 
   log('\nPREVIEW_SEASON_PROOF_PASS all phases, including season immutability, cross-season refusal, replay drift, rollback, enabled-state guard, and behavioural mutation proofs -- behaved as required');
 } finally {
