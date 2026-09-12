@@ -90,7 +90,7 @@ ${deliverySafe}`);
   psql(deliveryUnsafe);
   result = sweep(entries);
   check(result.rows.some((row) => row.violation_key === deliveryKey && row.suspect_param === 'p_performed_by'), 'removing real actor guard produces a different actor finding under the SAME function identity');
-  check(result.remaining.some((row) => row.violation_key === deliveryKey), 'changed public body is not hidden by its previous exemption');
+  check(result.remaining.some((row) => row.violation_key === deliveryKey && row.suspect_param === 'p_signed_by'), 'changed public body is not hidden by its previous exemption');
   psql(`SET request.jwt.claim.sub = '${uid}'; SELECT public.complete_delivery('signature data', '${other}');`);
   check(psql('SELECT actor_user_id::text FROM public.financial_audit_log;') === other, 'public-body mutant actually forges actor in disposable DB');
   psql(`TRUNCATE public.financial_audit_log; ${deliverySafe}`);

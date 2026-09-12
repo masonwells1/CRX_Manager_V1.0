@@ -507,7 +507,9 @@
       "reviewed_contracts": {
         "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
         "public._section9_cancel_purchase_order_serialized(p_po_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)": "34987663d1aba2c5634c345b211b8d31",
-        "public.cancel_purchase_order(p_po_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)": "857c474e1b3e8da4aa7927cdbb3e16e4"
+        "public.cancel_purchase_order(p_po_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)": "857c474e1b3e8da4aa7927cdbb3e16e4",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
+        "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0"
       }
     },
     {

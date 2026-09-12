@@ -673,6 +673,46 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
     expect(mockRpc.mock.calls.some((call) => call[0] === 'preview_field_app_invoice_split')).toBe(false);
     expect(mockRpc.mock.calls.some((call) => call[0] === 'save_field_app_invoice')).toBe(false);
   });
+
+  it('rechecks the filed season after an admin opens the over-label-rate override', async () => {
+    const existingFrom = mockFrom.getMockImplementation()!;
+    const overrideFrom = makeFromMock({
+      app_settings: { data: [{ setting_value: 'block' }] },
+      invoice_items: { data: [{
+        id: 'chem-over-rate', product_id: 'product-over-rate', description: 'Over-rate product',
+        rate_per_acre: 2, rate_unit: 'oz', quantity: 80, unit_size: 'oz',
+        unit_price_cents: 100, extended_cents: 8000, cost_cents: 50, sort_order: 0,
+      }] },
+      products: { data: [{
+        id: 'product-over-rate', max_label_rate: 1, max_label_rate_unit: 'oz',
+        rei_hours: null, phi_days: null,
+      }] },
+    });
+    mockFrom.mockImplementation((table: string) =>
+      ['app_settings', 'invoice_items', 'products'].includes(table) ? overrideFrom(table) : existingFrom(table),
+    );
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toHaveValue('2026-04-29');
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    expect(await screen.findByRole('dialog', { name: 'Over-label-rate override' })).toBeInTheDocument();
+    expect(mockRpc.mock.calls.some((call) => call[0] === 'save_field_app_invoice')).toBe(false);
+
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+    fireEvent.change(screen.getByLabelText(/Reason for the override/), { target: { value: 'Authorized label-rate exception' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Override & Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Over-label-rate override' })).not.toBeInTheDocument());
+
+    expect(mockToast).toHaveBeenCalledWith('error',
+      'This invoice is filed in season 2026. Choose a date from 2025-10-01 through 2026-09-30.',
+    );
+    expect(mockRpc.mock.calls.some((call) => call[0] === 'save_field_app_invoice')).toBe(false);
+    expect(mockFrom.mock.calls.some((call) => call[0] === 'activity_feed')).toBe(false);
+  });
 });
 
 describe('FieldApplicationInvoice — existing GROUP member invoice', () => {

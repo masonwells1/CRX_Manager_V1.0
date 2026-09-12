@@ -231,12 +231,12 @@ if (args.includes('--adjudicate')) {
     });
     const ok = summary.every((item) => item.status === 'PASS');
     console.log(JSON.stringify({ ok, execution: 'captured-results-only', summary }, null, 2));
-    process.exit(ok ? 0 : 1);
+    process.exitCode = ok ? 0 : 1;
   } catch (error) {
     console.error(`Invalid captured sweep results: ${error.message}`);
-    process.exit(2);
+    process.exitCode = 2;
   }
-}
+} else {
 
 const psql = hasPsql();
 
@@ -359,3 +359,4 @@ else
   );
 
 process.exit(failed ? 1 : 0);
+}

@@ -903,7 +903,11 @@ try {
   apply('20260727174805_migration_history.sql');
 
   const migrations = selectedMigrations();
-  assert.ok(migrations.includes(CANDIDATE), 'preview candidate must remain in the ledger-selected migration list');
+  const candidateIndex = migrations.indexOf(CANDIDATE);
+  const guardIndex = migrations.indexOf(CROSS_SEASON_GUARD);
+  assert.notEqual(candidateIndex, -1, 'preview candidate must remain in the ledger-selected migration list');
+  assert.notEqual(guardIndex, -1, 'cross-season guard must remain in the ledger-selected migration list');
+  assert.ok(guardIndex > candidateIndex, 'cross-season guard must follow the preview candidate');
   const stopIdx = migrations.findIndex((m) => path.basename(m) === REPLAY_STOP_BEFORE);
   assert.notEqual(stopIdx, -1, `replay stop marker ${REPLAY_STOP_BEFORE} is not in the ledger-selected list`);
   for (const [index, migration] of migrations.slice(0, stopIdx).entries()) {

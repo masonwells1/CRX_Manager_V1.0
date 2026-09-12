@@ -102,3 +102,43 @@ provenance branch, erase historical disclosure, or reopen deliberately capped gu
 
 This document is not itself clearance for a HIGH finding. Fixes must retain
 executable prevention checks and observed behavior. The session is not yet archive-ready.
+
+## Later September 12 checkpoint — supersedes earlier pending-review status
+
+PR #652 published `15742bdabd74ef20c17f295961e2042656a8ca15` on the same main base
+and obtained fresh whole-branch Sol/high CLEAN proof. Its corrected implementation CI
+passed. The actual Codex P1 was replied to and resolved after the contract-bound repair.
+Two sanctioned CodeRabbit ready-label requests failed acknowledgement and cleared their
+commands/labels. A separate command posted under the owner's GitHub account at 15:59:33Z
+was acknowledged at 15:59:39Z; this continuation did not post that command. CodeRabbit's
+actual review `5187068983` completed at 16:10:33Z on published head `15742bd`, with
+CHANGES_REQUESTED and five comments. A skipped status or the failed workflow is not
+clearance, and the human-account success does not prove the automated path repaired.
+
+All five comments have local corrections: verified active-role helper contract pins,
+specific original `p_signed_by` public-drift assertion, non-abrupt/exclusive captured-result
+adjudication, selected preview/guard migration membership and order, and rendered admin
+override cross-season refusal. Independent security and compliance re-reviews are CLEAN;
+483 matcher/CLI assertions, 31 actual disposable actor-forgery checks, and 31 invoice UI
+tests passed. The corrected season prover also reached `SMOKE_PASS_ROLLBACK` and
+`PREVIEW_SEASON_PROOF_PASS`. Broader checks, fresh corrected-commit proof, normal push,
+and corrected-head CodeRabbit review still bind these local changes. The guard migration
+remains NOT APPLIED and unchanged; no merge or live apply is authorized.
+
+The separate #582 client follow-up is now PR #653, frozen/published head
+`34e1471df7e36c027f8e17a70d55b3506ef1c1bf`, fresh whole-branch Sol/high CLEAN,
+184 focused and 5,277 full-suite tests passed with 123 skipped. GitHub checks are running;
+auto-merge is OFF. It preserves numeric RPC payload shapes and has no migration.
+The old OPEN row above is historical, not evidence those local fixes remain unimplemented.
+
+Peer-stop reconciliation remains unpublished at `0833f142ea1c5f15edb2a2d12ccf40b7e4c3b884`
+and BLOCKED: fresh Sol found two HIGH boundary failures and one MED overflow issue.
+All three were independently reproduced in held-state tests and registered in the normal
+prompt/correction suite. The three failing cases and preservation handoff remain local;
+there is no push or clean clearance. Do not guess a raw closing tag proves owner authority.
+
+Existing other-owned #635 and #638 remain unfinished; #638 has moved beyond the earlier
+head recorded above and still reports CHANGES_REQUESTED. Do not take over either lane
+or treat merged commission report #592 as clearance for its follow-up. The 152 P2 entries
+remain INVENTORIED / NOT INDIVIDUALLY RE-PROVEN. Final archive still needs accepted
+residual ownership or explicit approved deferral, not a blanket passing-suite claim.

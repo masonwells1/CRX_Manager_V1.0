@@ -18,6 +18,10 @@ function check(condition, message) { assert.ok(condition, message); assertions +
 try {
   equal(actorEntries.length, 21, '20 new exceptions plus bound legacy cancel_delivery; no stale transfer exemption');
   check(!actorEntries.some((entry) => entry.violation_key.startsWith('transfer_job_to_invoice(')), 'remove unused identity-only exemption');
+  const cancelPurchaseOrder = actorEntries.find((entry) => entry.violation_key.startsWith('cancel_purchase_order('));
+  for (const helper of ['public.is_admin()', 'public.is_sales_rep()']) {
+    check(Object.hasOwn(cancelPurchaseOrder.reviewed_contracts, helper), `cancel_purchase_order must pin its ${helper} role gate`);
+  }
   for (const entry of actorEntries) {
     const row = { violation_key: entry.violation_key, suspect_param: entry.suspect_param };
     check(typeof entry.suspect_param === 'string' && entry.suspect_param.length > 0, `${entry.violation_key}: exact parameter required`);
@@ -59,7 +63,7 @@ try {
   // Force captured/print modes without reading, printing, or using any connection secret.
   const env = { ...process.env, SUPABASE_DB_URL: '', DB_SWEEPS_REQUIRE_LIVE: '' };
   const runner = path.join(root, 'scripts/db-invariant-sweeps/run-sweeps.mjs');
-  const run = (extra = []) => spawnSync(process.execPath, [runner, '--adjudicate', capture, '--only', 'actor-forgery', ...extra], { cwd: root, env, encoding: 'utf8' });
+  const run = (extra = []) => spawnSync(process.execPath, [runner, '--adjudicate', capture, '--only', 'actor-forgery', ...extra], { cwd: root, env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
   const packet = { predicate: 'actor-forgery', rows: [signed], function_contracts: deliveryCatalog };
   writeFileSync(capture, JSON.stringify([packet]));
   let result = run();
@@ -69,6 +73,11 @@ try {
   result = run();
   equal(result.status, 1, 'real actor-param row fails the actual CLI');
   equal(JSON.parse(result.stdout).summary[0].violations, [forged], 'CLI uses same parameter-bound matcher');
+  const largeRows = Array.from({ length: 5000 }, (_, index) => ({ ...forged, fixture_index: index }));
+  writeFileSync(capture, JSON.stringify([{ ...packet, rows: largeRows }]));
+  result = run();
+  equal(result.status, 1, 'large unallowlisted capture retains failure exit code');
+  equal(JSON.parse(result.stdout).summary[0].violations, largeRows, 'piped adjudication flushes the complete JSON without falling through into live/print mode');
   writeFileSync(capture, JSON.stringify([{ ...packet, function_contracts: [] }]));
   equal(run().status, 1, 'missing live contracts fail actual CLI');
   writeFileSync(capture, JSON.stringify([{ ...packet, rows: [{}] }]));
