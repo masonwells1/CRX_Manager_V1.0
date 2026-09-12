@@ -1212,7 +1212,8 @@ async function nativeCandidateReasons({ github, context, core, config, headSha, 
     if (!labels.has(READY_LABEL)) reasons.push('ready label was removed');
     if (labels.has(DISPATCH_LABEL)) reasons.push('another native dispatch is already present');
   }
-  return { reasons: [...reasons, ...checkBlockers, ...reviewBlockers], invalidCandidate };
+  return { reasons: [...reasons, ...checkBlockers, ...reviewBlockers],
+    invalidCandidate: invalidCandidate || (dispatched && (!labels.has(REQUESTED_LABEL) || !labels.has(DISPATCH_LABEL))) };
 }
 
 async function recoverUndispatchedNativeReceipt({ github, context, core, attemptState, reason }) {
@@ -1220,8 +1221,8 @@ async function recoverUndispatchedNativeReceipt({ github, context, core, attempt
   const pullNumber = context.payload.pull_request.number;
   const headSha = context.payload.pull_request.head.sha;
   try {
-    const comments = await github.paginate(github.rest.issues.listComments,
-      { owner, repo, issue_number: pullNumber, per_page: 100 });
+    const comments = attemptState.nativeReceiptBody ? await github.paginate(github.rest.issues.listComments,
+      { owner, repo, issue_number: pullNumber, per_page: 100 }) : [];
     if (!Array.isArray(comments)) throw new Error('receipt recovery listing was not an array');
     const receipts = comments.filter((comment) => parseNativeDispatchReceipt(comment)?.headSha === headSha);
     if (receipts.length > 1 || receipts.some((comment) => comment.body !== attemptState.nativeReceiptBody
@@ -1232,14 +1233,14 @@ async function recoverUndispatchedNativeReceipt({ github, context, core, attempt
       try { await github.rest.issues.deleteComment({ owner, repo, comment_id: receipt.id }); }
       catch (error) { core.warning(`Receipt removal response failed; verifying absence: ${error.message}`); }
     }
-    const remaining = await github.paginate(github.rest.issues.listComments,
-      { owner, repo, issue_number: pullNumber, per_page: 100 });
+    const remaining = attemptState.nativeReceiptBody ? await github.paginate(github.rest.issues.listComments,
+      { owner, repo, issue_number: pullNumber, per_page: 100 }) : [];
     if (!Array.isArray(remaining) || remaining.some((comment) => parseNativeDispatchReceipt(comment)?.headSha === headSha)) {
       throw new Error('receipt removal could not be confirmed');
     }
     const failures = await removeLabelsIndependently(github, owner, repo, pullNumber, [REQUESTED_LABEL, READY_LABEL]);
     if (failures.length) throw new Error(`label cleanup failed: ${failures.join('; ')}`);
-    core.setFailed(`CodeRabbit was not dispatched (${reason}); the same-run receipt was removed and absence verified. Re-apply ${READY_LABEL} after correcting the blocker; a new commit is unnecessary.`);
+    core.setFailed(`CodeRabbit was not dispatched (${reason}); unspent state was cleared after verified cleanup. Re-apply ${READY_LABEL} after correcting the blocker; a new commit is unnecessary.`);
     return { status: 'blocked', headSha, reason };
   } catch (error) {
     try { await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL); }
@@ -1250,6 +1251,7 @@ async function recoverUndispatchedNativeReceipt({ github, context, core, attempt
 }
 
 async function dispatchNativeReview({ github, context, core, config, attemptState, expectedHeadSha, settle }) {
+  attemptState.nativeDispatchStarted = true;
   const { owner, repo } = context.repo;
   const pullNumber = context.payload.pull_request.number;
   const baseSha = context.payload.pull_request.base.sha;
@@ -1258,11 +1260,10 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
   // Require a fresh head instead of laundering it through a new ready event.
   const existing = await inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber, headSha: expectedHeadSha });
   if (!existing.verified) {
-    return blockCandidate({ github, owner, repo, pullNumber, core, reason: `existing CodeRabbit review could not be verified (${existing.error.message}); requested state was preserved` });
+    return recoverUndispatchedNativeReceipt({ github, context, core, attemptState, reason: `existing CodeRabbit review could not be verified (${existing.error.message})` });
   }
   if (existing.reviewed) {
-    await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
-    return blockCandidate({ github, owner, repo, pullNumber, core,
+    return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
       reason: 'a prior same-head review cannot prove this head/base request; a fresh head commit is required' });
   }
   if (!existing.reviewed) {
@@ -1272,8 +1273,7 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
       const label = await github.rest.issues.getLabel({ owner, repo, name: DISPATCH_LABEL });
       if (label.data?.name !== DISPATCH_LABEL) throw new Error('unexpected provider label identity');
     } catch (error) {
-      await removeLabelIfPresent(github, owner, repo, pullNumber, REQUESTED_LABEL);
-      return blockCandidate({ github, owner, repo, pullNumber, core, reason: `configured provider label ${DISPATCH_LABEL} is unavailable (${error.message}); no dispatch was attempted` });
+      return recoverUndispatchedNativeReceipt({ github, context, core, attemptState, reason: `configured provider label ${DISPATCH_LABEL} is unavailable (${error.message}); no dispatch was attempted` });
     }
   }
   const validation = await nativeCandidateReasons({ ...candidateArgs, dispatched: false });
@@ -1281,13 +1281,13 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
   if (validation.invalidCandidate) return resetCandidate({ github, owner, repo, pullNumber, core, reason: reasons.join('; ') });
   if (existing.changesRequested) reasons.push('CodeRabbit requested changes on this exact head');
   if (reasons.length) {
-    return blockCandidate({ github, owner, repo, pullNumber, core, reason: reasons.join('; ') });
+    return recoverUndispatchedNativeReceipt({ github, context, core, attemptState, reason: reasons.join('; ') });
   }
 
   const comments = await github.paginate(github.rest.issues.listComments,
     { owner, repo, issue_number: pullNumber, per_page: 100 });
   if (!Array.isArray(comments) || comments.some((comment) => parseNativeDispatchReceipt(comment)?.headSha === expectedHeadSha)) {
-    return blockCandidate({ github, owner, repo, pullNumber, core,
+    return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
       reason: 'this head already has a potentially spent native attempt; a fresh head commit is required' });
   }
   attemptState.nativePreexistingCommentIds = new Set(comments.map((comment) => comment.id));
@@ -1330,8 +1330,8 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
       reason: `native polling invalidated the candidate: ${invalid.join('; ')}` });
     if (!liveLabels.has(REQUESTED_LABEL) || !liveLabels.has(DISPATCH_LABEL)) invalid.push('native dispatch state changed');
     if (invalid.length) {
-      core.setFailed(`CodeRabbit dispatch no longer covers a valid candidate: ${invalid.join('; ')}. No second request was made.`);
-      return { status: 'blocked', headSha: expectedHeadSha };
+      return resetCandidate({ github, owner, repo, pullNumber, core,
+        reason: `native polling invalidated dispatch state: ${invalid.join('; ')}` });
     }
     const observed = await inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber, headSha: expectedHeadSha, requestedAfter: receipt.requestedAfter });
     if (!observed.verified) {
@@ -2124,7 +2124,7 @@ async function run(args) {
       core.setFailed(`CodeRabbit native dispatch failed unexpectedly for ${headSha} (${unexpectedError.message}); ${REQUESTED_LABEL} was preserved because the provider may have observed ${DISPATCH_LABEL}.`);
       return { status: 'blocked', headSha, reason: unexpectedError.message };
     }
-    if (attemptState.nativeReceiptBody) return recoverUndispatchedNativeReceipt({
+    if (attemptState.nativeDispatchStarted) return recoverUndispatchedNativeReceipt({
       github, context, core, attemptState, reason: unexpectedError.message,
     });
     let verificationSucceeded = false;

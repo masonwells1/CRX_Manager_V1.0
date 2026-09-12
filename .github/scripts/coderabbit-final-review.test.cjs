@@ -3207,8 +3207,75 @@ test('native provider lookup cannot race a newly failing required check into a d
   const result = await execute(harness, { nativeDispatch: true });
   assert.equal(result.status, 'blocked');
   assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.equal(harness.receiptComments.length, 0);
   assert.match(harness.failures.join('\n'), /foundation/);
+  const retry = makeHarness({ existingComments: harness.comments });
+  assert.equal((await execute(retry, { nativeDispatch: true })).status, 'pending');
 });
+
+test('a review blocker before receipt creation clears only the unspent marker', async () => {
+  const harness = makeHarness();
+  harness.github.rest.issues.getLabel = async ({ name }) => {
+    harness.github.graphql = async () => ({ repository: { pullRequest: { reviewDecision: 'CHANGES_REQUESTED' } } });
+    return { data: { name } };
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.equal(harness.receiptComments.length, 0);
+});
+
+test('unknown review lookup before receipt creation does not strand an unspent marker', async () => {
+  const harness = makeHarness();
+  harness.github.rest.pulls.listReviews = async () => { throw new Error('review lookup unavailable'); };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.equal(harness.receiptComments.length, 0);
+});
+
+test('pre-dispatch recovery preserves a provider label observed from another writer', async () => {
+  const harness = makeHarness();
+  harness.github.rest.issues.getLabel = async ({ name }) => {
+    harness.liveLabels.add(DISPATCH_LABEL);
+    return { data: { name } };
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+  assert.equal(harness.receiptComments.length, 0);
+});
+
+for (const label of [REQUESTED_LABEL, DISPATCH_LABEL]) {
+  test(`native polling resets a removed ${label} without a queued reset`, async () => {
+    const harness = makeHarness();
+    const result = await execute(harness, { nativeDispatch: true, reviewPollMs: 1,
+      settle: async () => harness.liveLabels.delete(label) });
+    assert.equal(result.status, 'reset');
+    assert.equal(harness.receiptComments.length, 1);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  });
+  test(`final delivery validation resets a removed ${label} and retains the receipt`, async () => {
+    const harness = makeHarness();
+    const originalReviews = harness.github.rest.pulls.listReviews;
+    harness.github.rest.pulls.listReviews = async (request) => {
+      if (harness.receiptComments.length) {
+        harness.liveLabels.delete(label);
+        return { data: [nativeReview()] };
+      }
+      return originalReviews(request);
+    };
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'reset');
+    assert.equal(harness.receiptComments.length, 1);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  });
+}
 
 test('native ambiguous state with an old legacy command is never cleared by a label event', async () => {
   const labels = [REQUESTED_LABEL];
