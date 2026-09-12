@@ -68,6 +68,7 @@ scripts/smoke/prove-next-invoice-number-year-chicago.mjs text eol=lf
 # migration while reporting it as drift. The prover is pinned for the same reason and
 # additionally asserts the candidate contains no CR at all.
 supabase/migrations/20260906120000_preview_field_app_season_follows_invoice_date.sql text eol=lf
+supabase/migrations/20260908190000_field_app_invoice_cross_season_edit_guard.sql text eol=lf
 scripts/smoke/prove-preview-field-app-season.mjs text eol=lf
 
 # The six migrations applied live on 2026-08-12 whose files were recovered from

@@ -352,7 +352,7 @@
     {
       "predicate": "actor-forgery",
       "violation_key": "cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "FALSE POSITIVE (non-canonical token): body DOES strict-actor-check (IF p_performed_by IS NOT NULL AND auth.uid() IS DISTINCT FROM p_performed_by THEN RAISE 'actor mismatch') and gates role on the auth.uid()-derived actor (admin/sales_rep, is_active). Flagged only because it raises 'actor mismatch' (with a space) instead of the canonical ACTOR_MISMATCH token. Verified live 2026-06-10. HARDENING: canonicalize the raised token to ACTOR_MISMATCH.",
+      "justification": "Reverified live pg_get_functiondef 2026-09-12 by independent RLS reviewer: body requires auth.uid() (10), rejects non-null unequal p_performed_by (11), derives v_actor := COALESCE(p_performed_by,auth.uid()) (12), necessarily the caller, role-checks it (19), and attributes all writes to v_actor. Predicate structural noise, not an actor-forgery hole; re-verify on function edits.",
       "dated": "2026-06-10"
     },
     {
@@ -497,6 +497,126 @@
       "violation_key": "po_item:e81c9c15-e1fb-4093-8e91-79cd161c8e21:fully_received_incomplete",
       "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Gen Callisto High Quality - 1 Gal, ordered 126 / received 0 (fully_received_incomplete). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
       "dated": "2026-08-07"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "cancel_purchase_order(p_po_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public wrapper locks/forwards only; owner-only _section9_cancel_purchase_order_serialized binds auth.uid() (body line10), rejects non-null differing actor (12-14), role-gates bound actor (15-17), writes actor from v_actor (56,67). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "complete_delivery(p_delivery_id uuid, p_signed_by text, p_performed_by uuid, p_quantities jsonb, p_issue_type text, p_issue_notes text, p_idempotency_key text, p_completed_at timestamp with time zone)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_signed_by is text signature-name data, not user identity. Actual p_performed_by rejects non-null mismatch against auth.uid()-bound v_actor; active admin/sales_rep or assigned-driver authorization precedes writes and is repeated by owner-only delegate. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "complete_job(p_job_id uuid, p_applied_info jsonb, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body binds v_actor from auth.uid() (3), strictly rejects p_performed_by IS DISTINCT FROM v_actor before writes (38-41), authorizes bound role/applicator (74-127); subsequent forwarding is guaranteed-equal. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "convert_quote_to_order(p_quote_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint, p_below_cost_reason text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public wrapper first invokes _begin_below_cost_money_write, which binds auth.uid(), rejects non-null mismatch, requires active admin/sales_rep; owner-only delegate independently repeats auth bind/refusal (13-17) before role/ownership checks (19-32). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "create_application_record_from_blend_ticket(p_blend_ticket_id uuid, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body binds auth.uid() (3), strictly rejects NULL or differing actor (25-28), then role-gates bound actor (29-31); subsequent attribution is guaranteed-equal. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "create_direct_order(p_customer_id uuid, p_order_date date, p_order_name text, p_notes text, p_items jsonb, p_performed_by uuid, p_idempotency_key text, p_customer_po_number text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public common guard binds auth.uid() and rejects supplied non-null mismatch; owner-only delegate independently binds actor (21), rejects mismatch (23-25), role-gates (27-31), uses v_actor for inventory/activity (136-139,159-168). Omitted actor never changes authority. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "create_rush_order(p_customer_id uuid, p_items jsonb, p_notes text, p_customer_po_number text, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public common guard binds auth.uid(), rejects supplied non-null mismatch; owner-only delegate independently binds (20-21), refuses mismatch (22-24), role-gates (25-31), attributes writes to v_actor (145-147,154-163). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "delete_purchase_order(p_po_id uuid, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper locks/forwards only; owner-only delegate binds auth.uid() (6), rejects non-null mismatch (8-10), requires active admin on v_actor (12-14), attributes activity to v_actor (43-46). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "duplicate_quote(p_source_quote_id uuid, p_performed_by uuid, p_idempotency_key text, p_below_cost_reason text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write with bound signed-in authority; owner-only delegate repeats auth bind/refusal (13-17), active role gate (20-22), attributes writes to v_actor (48-55,142-150). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "get_profitability_report(p_group_by text, p_start_date date, p_end_date date)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector (customer/product/month), not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "get_receiving_log(p_limit integer, p_offset integer, p_vendor text, p_condition text, p_received_by uuid, p_date_from date, p_date_to date)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_received_by is only nullable UUID read-only receiving-record filter (rr.received_by = p_received_by). Function separately requires active admin/sales_rep from auth.uid(); no attribution write or role lookup based on filter. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "get_sales_summary_report(p_group_by text, p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector, not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY; grouping only uses CASE p_group_by. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "price_order(p_order_id uuid, p_items jsonb, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write: auth.uid() bind, non-null mismatch refusal, active admin/sales_rep role gate before forwarding. Owner-only delegated implementation independently repeats actor/role validation; no caller-param authority. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "restore_quote_version(p_quote_id uuid, p_version_id uuid, p_performed_by uuid, p_idempotency_key text, p_expected_row_version bigint, p_below_cost_reason text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write: auth.uid() bind, non-null mismatch refusal, active admin/sales_rep role gate before forwarding. Owner-only delegate repeats actor/role checks; no parameter-based authority. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "save_purchase_order(p_po_id uuid, p_po_payload jsonb, p_items jsonb, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Owner-only _section9_save_purchase_order_serialized binds v_actor := auth.uid(), strictly rejects p_performed_by IS DISTINCT FROM v_actor before replay/mutation, then requires is_admin() OR is_sales_rep(); both helpers use active auth.uid() identity. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "save_quote(p_quote_id uuid, p_quote_payload jsonb, p_sections jsonb, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write with auth.uid() authority and mismatch/active-role gates. Owner-only delegated implementation independently strictly checks supplied actor (including NULL) before writes. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "submit_purchase_order(p_po_id uuid, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Owner-only _section9_submit_purchase_order_serialized binds auth.uid(), strictly rejects p_performed_by IS DISTINCT FROM v_actor before replay/mutation, then active is_admin() OR is_sales_rep(). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "unapply_credit_memo(p_credit_memo_id uuid, p_reason text, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Public body binds auth.uid(), strictly rejects supplied actor IS DISTINCT FROM v_actor, requires active admin before replay/delegation. Owner-only delegate independently repeats protections. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "update_order_items(p_order_id uuid, p_items jsonb, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write: auth.uid() bind, supplied non-null actor mismatch refusal, active admin/sales_rep gate. Owner-only delegated implementation repeats actor/role checks before any write. This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
+    },
+    {
+      "predicate": "actor-forgery-fin-audit",
+      "violation_key": "cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Live body requires auth.uid() (10), rejects supplied non-null differing actor (11), then COALESCE(p_performed_by,auth.uid()) (12) necessarily equals caller. Role gate (19) and inventory/delivery/invoice/activity writes use this v_actor (72-73,160,170,185-186). This is scanner noise, not an accepted actor-forgery hole; re-verify public and dependency bodies whenever edited.",
+      "dated": "2026-09-12"
     }
   ]
 }

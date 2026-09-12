@@ -1,5 +1,21 @@
 # Known Issues — Consolidated
 
+## 2026-09-12 follow-up — filed-season date-edit guard is not deployed
+
+PR #599 merged September 11 with invoice-date season stamping and preview parity. Its
+original migrations are already live and must not be reapplied. The later filed-season edit
+guard is not part of that merge: September 12 read-only live inspection confirms its helpers
+and invoice trigger are absent. A separate current-main candidate adds preview refusal and
+table-level protection against changing the filed season or crossing its date boundary.
+Fresh review also found and closed a restoration bypass in that candidate; the disposable
+proof observes restore-plus-date and restore-only rejection, valid corrected restoration,
+and targeted removal of the new check reproducing the bypass. This is local proof, not deployment.
+
+The operative decision is in `DECISION_LOG.md` (September 8 continuation). Delivery and live
+apply remain separate gates. The session closeout and still-open audit follow-ups are recorded
+in `docs/handoffs/2026-09-12-pr-comment-session-closeout.md`; historical audit counts do not
+constitute a current defect list or clearance of the remaining P2 inventory.
+
 **Superseded 2026-09-06 header, kept for provenance — every boundary claim in this paragraph is
 superseded by the 2026-09-08 header that follows it.** That read confirmed the unprefixed-ledger-name
 trap: `20260904185900_refuse_null_job_field_acres` (PR #606, merged `719faac73`) applied live on
