@@ -288,6 +288,7 @@ export const RpcErrorCodes = {
   // Field-application invoice edit guard: the invoice keeps its filed season, so
   // changing its date across the October 1 boundary is refused by preview and save.
   INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED: 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED',
+  FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED: 'FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED',
   INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED: 'INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED',
   // record_job_pre_notifications — field-app #40 pre-application customer notice
   INVALID_SUBJECT: 'INVALID_SUBJECT',

@@ -163,6 +163,7 @@ const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
 const CANDIDATE = path.join(MIGRATIONS, '20260906120000_preview_field_app_season_follows_invoice_date.sql');
 const CROSS_SEASON_GUARD = path.join(MIGRATIONS, '20260908190000_field_app_invoice_cross_season_edit_guard.sql');
+const GENERIC_CREATION_GUARD = path.join(MIGRATIONS, '20260912165758_refuse_generic_field_invoice_creation.sql');
 const SAVE_SIDE = path.join(MIGRATIONS, '20260904180000_invoice_season_follows_invoice_date.sql');
 const PREDECESSOR = path.join(MIGRATIONS, '20260904160000_invoice_date_fallbacks_chicago.sql');
 // The migration that last emitted the 4-argument preview body live still runs.
@@ -179,6 +180,7 @@ const LIVE_PREVIEW_BODY_MD5 = 'ca33fb973d86dbf3a2788dc11fbc49a5';
 const CANDIDATE_BODY_MD5 = '83f6600412ced085d0876a3c7339ff12';
 const SAVE_IMPL = '_save_field_app_invoice_impl_20260714';
 const GENERIC_SAVE_IMPL = '_save_invoice_lineage_unaware_impl_20260827';
+const GENERIC_ROUTING_SOURCE = path.join(MIGRATIONS, '20260827041500_preserve_generated_invoice_lineage_and_finish_cutover.sql');
 const ADMIN = '00000000-0000-4000-8000-00000000e001';
 // Three distinguishable rates, so a wrong answer can never be mistaken for a right one:
 // if a lookup misses BOTH seeded seasons it falls back to the service default, a third value.
@@ -287,6 +289,37 @@ function publicHasExecute() {
 const workDir = mkdtempSync(path.join(tmpdir(), 'crx-preview-season-'));
 const candidateSql = readFileSync(CANDIDATE, 'utf8');
 const crossSeasonGuardSql = readFileSync(CROSS_SEASON_GUARD, 'utf8');
+// This prover deliberately stops the bulk replay before August 17's baseline/live body
+// mismatch. Restore the actual August 27 routing layer as well as the captured writer:
+// otherwise public save_invoice still calls an older writer and the valid-date control
+// tests that old independent-clock fallback, not the live path. No mocked RPC delegate.
+const genericRoutingSql = readFileSync(GENERIC_ROUTING_SOURCE, 'utf8').replaceAll('\r\n', '\n')
+  .match(/CREATE FUNCTION public\._save_invoice_scoped_impl\([\s\S]*?\$function\$;/)?.[0];
+assert.ok(genericRoutingSql, 'current generic routing declaration must be found in its applied migration');
+assert.equal(md5(plpgsqlBody(genericRoutingSql, 'CREATE FUNCTION public._save_invoice_scoped_impl(')),
+  '622210352fd3c9fa3e293a8e48957429', 'routing source must match September 12 read-only live body');
+const genericCreationGuardSql = readFileSync(GENERIC_CREATION_GUARD, 'utf8');
+assertWrappable(genericCreationGuardSql, path.basename(GENERIC_CREATION_GUARD));
+const genericCreationBodyMd5 = md5(plpgsqlBody(
+  genericCreationGuardSql, 'CREATE OR REPLACE FUNCTION public.save_invoice(',
+));
+assert.ok(genericCreationGuardSql.includes(genericCreationBodyMd5),
+  `creation guard must pin its actual body MD5 ${genericCreationBodyMd5}`);
+const genericCreationRefusal = `  IF NULLIF(p_invoice->>'id', '') IS NULL AND p_invoice->>'invoice_type' = 'field_application' THEN
+    RAISE EXCEPTION
+      'FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED: create field invoices through the field-application, job-transfer or blend-ticket workflow'
+      USING ERRCODE = 'check_violation';
+  END IF;
+`;
+assert.equal(genericCreationGuardSql.split(genericCreationRefusal).length, 2, 'generic creation refusal must appear exactly once');
+const originalGenericEntrySql = genericCreationGuardSql
+  .match(/CREATE OR REPLACE FUNCTION public\.save_invoice\([\s\S]*?\$function\$;/)?.[0]
+  .replace(genericCreationRefusal, '');
+assert.ok(originalGenericEntrySql, 'mutation must restore the actual original public wrapper');
+assert.equal(md5(plpgsqlBody(originalGenericEntrySql, 'CREATE OR REPLACE FUNCTION public.save_invoice(')),
+  '9a34478d405a1a3b8233cabcdfb39691', 'removing only the refusal must recover the byte-identical live wrapper body');
+const reviewedGenericEntrySql = genericCreationGuardSql
+  .match(/CREATE OR REPLACE FUNCTION public\.save_invoice\([\s\S]*?\$function\$;/)?.[0];
 assertWrappable(crossSeasonGuardSql, path.basename(CROSS_SEASON_GUARD));
 const crossSeasonTriggerBodyMd5 = md5(plpgsqlBody(
   crossSeasonGuardSql,
@@ -660,6 +693,164 @@ function previewOwner() {
                   WHERE n.nspname = 'public' AND p.proname = '${PREVIEW}'`);
 }
 
+function genericCreationGuardProbe(label, { expectRefusal = true, removeGuard = false } = {}) {
+  const sql = `BEGIN;
+${removeGuard ? originalGenericEntrySql : ''}
+DO $probe$
+DECLARE
+  v_customer uuid; v_order uuid; v_invoice uuid; v_retry uuid;
+  v_key text := 'season-create-' || gen_random_uuid()::text;
+BEGIN
+${AUTHENTICATE}
+  INSERT INTO customers (farm_name) VALUES ('[SMOKE] generic creation ${label}') RETURNING id INTO v_customer;
+  INSERT INTO orders (order_number, customer_id, salesman_id, status)
+    VALUES ('[SMOKE]-CREATE-' || gen_random_uuid()::text, v_customer, '${ADMIN}'::uuid, 'confirmed')
+    RETURNING id INTO v_order;
+  SET LOCAL ROLE authenticated;
+
+  -- Exercise the public authenticated RPC, not an owner-only delegate or a direct insert.
+  ${expectRefusal ? 'BEGIN' : ''}
+    v_invoice := public.save_invoice(
+      jsonb_build_object('customer_id', v_customer, 'order_id', v_order,
+        'invoice_type', 'field_application', 'invoice_date', '${DATE_IN_SEASON}',
+        'season', ${SEASON_NOW + 1}), '[]'::jsonb, v_key);
+    ${expectRefusal ? `RAISE EXCEPTION 'GENERIC_CREATION_GUARD_MISSING: public save created a mismatched field invoice';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM invoices WHERE order_id = v_order)
+     OR EXISTS (SELECT 1 FROM idempotency_keys WHERE idempotency_key = v_key) THEN
+    RAISE EXCEPTION 'GENERIC_CREATION_REFUSAL_LEAKED: invoice or receipt survived';
+  END IF;` : `
+  IF NOT EXISTS (SELECT 1 FROM invoices WHERE id = v_invoice
+       AND invoice_type = 'field_application' AND season = ${SEASON_NOW + 1}
+       AND invoice_date = DATE '${DATE_IN_SEASON}') THEN
+    RAISE EXCEPTION 'GENERIC_CREATION_BYPASS_NOT_OBSERVED';
+  END IF;`}
+
+  ${expectRefusal ? `
+  -- NEW field invoices must use a dedicated creator, even if their supplied season matches.
+  BEGIN
+    PERFORM public.save_invoice(jsonb_build_object('customer_id', v_customer, 'order_id', v_order,
+      'invoice_type', 'field_application', 'invoice_date', '${DATE_IN_SEASON}',
+      'season', ${SEASON_NOW}), '[]'::jsonb, NULL);
+    RAISE EXCEPTION 'MATCHING_GENERIC_FIELD_CREATION_NOT_REFUSED';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;` : ''}
+
+  -- Normal generic chemical creates and same-key retries still work. A refused key is reusable.
+  v_invoice := public.save_invoice(jsonb_build_object('customer_id', v_customer, 'order_id', v_order,
+    'invoice_type', 'chemical_sale', 'invoice_date', '${DATE_IN_SEASON}',
+    'season', ${SEASON_NOW}), '[]'::jsonb, ${expectRefusal ? 'v_key' : "v_key || '-valid'"});
+  v_retry := public.save_invoice(jsonb_build_object('customer_id', v_customer, 'order_id', v_order,
+    'invoice_type', 'chemical_sale', 'invoice_date', '${DATE_IN_SEASON}',
+    'season', ${SEASON_NOW}), '[]'::jsonb, ${expectRefusal ? 'v_key' : "v_key || '-valid'"});
+  IF v_retry IS DISTINCT FROM v_invoice THEN RAISE EXCEPTION 'VALID_CREATION_RETRY_CHANGED_ID'; END IF;
+  v_invoice := public.save_invoice(jsonb_build_object('customer_id', v_customer, 'order_id', v_order,
+    'invoice_type', 'chemical_sale', 'invoice_date', '${DATE_NEXT_SEASON}'), '[]'::jsonb, NULL);
+  IF (SELECT season FROM invoices WHERE id = v_invoice) IS DISTINCT FROM ${SEASON_NOW + 1} THEN
+    RAISE EXCEPTION 'VALID_CREATION_DID_NOT_DERIVE_SEASON';
+  END IF;
+  -- Preserve the existing explicit-season compatibility rule for OTHER invoice types.
+  v_invoice := public.save_invoice(jsonb_build_object('customer_id', v_customer,
+    'invoice_type', 'misc_charge', 'invoice_date', '${DATE_IN_SEASON}',
+    'season', ${SEASON_NOW + 1}), '[]'::jsonb, NULL);
+  IF (SELECT season FROM invoices WHERE id = v_invoice) IS DISTINCT FROM ${SEASON_NOW + 1} THEN
+    RAISE EXCEPTION 'OTHER_TYPE_EXPLICIT_SEASON_CHANGED';
+  END IF;
+  RAISE EXCEPTION 'GENERIC_CREATION_ROLLBACK ${label} ${expectRefusal ? 'REFUSED' : 'BYPASS_OBSERVED'}';
+END
+$probe$;`;
+  const out = psql(sql, { allowFailure: true });
+  assert.equal(out.status, 3, `${label}: public creation probe must roll back`);
+  assert.match(said(out), new RegExp(`GENERIC_CREATION_ROLLBACK ${label} ${expectRefusal ? 'REFUSED' : 'BYPASS_OBSERVED'}`),
+    `${label}: public creation probe did not reach its behavioral marker`);
+}
+
+function sourceSeasonCreatorProbe() {
+  const sql = `BEGIN;
+DO $probe$
+DECLARE v_customer uuid; v_field uuid; v_job uuid; v_ticket uuid; v_invoice uuid; v_result jsonb;
+BEGIN
+${AUTHENTICATE}
+  INSERT INTO customers (farm_name) VALUES ('[SMOKE] prior-season creator') RETURNING id INTO v_customer;
+  INSERT INTO fields (customer_id, field_name, total_acres)
+    VALUES (v_customer, '[SMOKE] prior-season field', ${ACRES}) RETURNING id INTO v_field;
+  INSERT INTO jobs (job_number, customer_id, status, job_date, season, created_by)
+    VALUES ('[SMOKE]-SOURCE-JOB-' || gen_random_uuid()::text, v_customer, 'scheduled',
+      make_date(${SEASON_NOW - 1}, 9, 30), ${SEASON_NOW - 1}, '${ADMIN}'::uuid) RETURNING id INTO v_job;
+  INSERT INTO job_fields (job_id, field_id, acres_to_treat, sort_order)
+    VALUES (v_job, v_field, ${ACRES}, 1);
+  UPDATE jobs SET status = 'in_progress' WHERE id = v_job;
+  UPDATE jobs SET status = 'completed' WHERE id = v_job;
+  INSERT INTO blend_tickets (ticket_number, uploaded_by, customer_id, status, review_status,
+    payment_status, season, total_acres, source)
+    VALUES ('[SMOKE]-SOURCE-BLEND-' || gen_random_uuid()::text, '${ADMIN}'::uuid,
+      v_customer, 'completed', 'approved', 'unbilled', ${SEASON_NOW - 1}, ${ACRES}, 'manual')
+    RETURNING id INTO v_ticket;
+  INSERT INTO blend_ticket_fields (blend_ticket_id, field_id, customer_id, actual_acres)
+    VALUES (v_ticket, v_field, v_customer, ${ACRES});
+  SET LOCAL ROLE authenticated;
+  v_result := public.transfer_job_to_invoice(v_job, '${ADMIN}'::uuid, 'source-job-' || v_job::text);
+  v_invoice := (v_result->>'invoice_id')::uuid;
+  IF NOT EXISTS (SELECT 1 FROM invoices WHERE id = v_invoice AND invoice_type = 'field_application'
+      AND job_id = v_job AND season = ${SEASON_NOW - 1} AND invoice_date = CURRENT_DATE) THEN
+    RAISE EXCEPTION 'SOURCE_SEASON_JOB_CREATOR_CHANGED: %', v_result;
+  END IF;
+  v_result := public.create_invoice_from_blend_ticket(v_ticket, '${ADMIN}'::uuid, 'source-blend-' || v_ticket::text);
+  v_invoice := (v_result->'invoice_ids'->>0)::uuid;
+  IF NOT EXISTS (SELECT 1 FROM invoices WHERE id = v_invoice AND invoice_type = 'field_application'
+      AND blend_ticket_id = v_ticket AND season = ${SEASON_NOW - 1} AND invoice_date = CURRENT_DATE) THEN
+    RAISE EXCEPTION 'SOURCE_SEASON_BLEND_CREATOR_CHANGED: %', v_result;
+  END IF;
+  RAISE EXCEPTION 'SOURCE_SEASON_CREATORS_ROLLBACK';
+END
+$probe$;`;
+  const out = psql(sql, { allowFailure: true });
+  assert.equal(out.status, 3, 'source-season creator controls must roll back');
+  assert.match(said(out), /SOURCE_SEASON_CREATORS_ROLLBACK/, 'prior-season public job/blend creators must remain callable');
+}
+
+function genericCreationReplayDriftProbes() {
+  const publicOid = "'public.save_invoice(jsonb,jsonb,text)'::regprocedure";
+  const bodyMd5 = () => scalar(`SELECT md5(prosrc) FROM pg_proc WHERE oid = ${publicOid}`);
+  const rogueBodySql = reviewedGenericEntrySql.replace('  PERFORM public._begin_below_cost_money_write',
+    "  PERFORM 1; -- outside-lane body drift\n  PERFORM public._begin_below_cost_money_write");
+  assert.notEqual(rogueBodySql, reviewedGenericEntrySql, 'public-body drift mutation must be real');
+  psql(rogueBodySql, { wrap: true });
+  const outsideHash = bodyMd5();
+  const bodyReplay = psql('\\i /tmp/generic-creation-guard.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(bodyReplay.status, 0, 'unknown public wrapper body must refuse replay');
+  assert.match(said(bodyReplay), /PREFLIGHT_GENERIC_FIELD_CREATION_DRIFT/, 'unknown body must fail before replacement');
+  assert.equal(bodyMd5(), outsideHash, 'aborted replay must preserve the outside body');
+  psql(reviewedGenericEntrySql, { wrap: true });
+
+  psql('GRANT EXECUTE ON FUNCTION public.save_invoice(jsonb,jsonb,text) TO anon;', { wrap: true });
+  const aclReplay = psql('\\i /tmp/generic-creation-guard.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(aclReplay.status, 0, 'outside anon grant must refuse replay');
+  assert.match(said(aclReplay), /PREFLIGHT_GENERIC_FIELD_CREATION_DRIFT/, 'ACL must fail before replacement');
+  assert.equal(scalar(`SELECT has_function_privilege('anon', ${publicOid}, 'EXECUTE')`), 't', 'aborted replay must preserve the outside ACL');
+  psql('REVOKE EXECUTE ON FUNCTION public.save_invoice(jsonb,jsonb,text) FROM anon;', { wrap: true });
+
+  psql("CREATE FUNCTION public.save_invoice(jsonb,jsonb,text,text) RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$;", { wrap: true });
+  const overloadReplay = psql('\\i /tmp/generic-creation-guard.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(overloadReplay.status, 0, 'public shadow overload must refuse replay');
+  assert.match(said(overloadReplay), /PREFLIGHT_GENERIC_FIELD_CREATION_DRIFT/, 'overload must fail before replacement');
+  assert.equal(scalar("SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname='save_invoice'"), '2', 'aborted replay must preserve shadow overload');
+  psql('DROP FUNCTION public.save_invoice(jsonb,jsonb,text,text);', { wrap: true });
+
+  const postflightPin = `AND md5(p.prosrc) = '${genericCreationBodyMd5}'`;
+  assert.equal(genericCreationGuardSql.split(postflightPin).length, 2, 'exact postflight pin must occur once');
+  copyText(genericCreationGuardSql.replace(postflightPin, `AND md5(p.prosrc) = '${'1'.repeat(32)}'`),
+    'generic-creation-wrong-postflight.sql', workDir);
+  const badPostflight = psql('\\i /tmp/generic-creation-wrong-postflight.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(badPostflight.status, 0, 'wrong candidate body pin must refuse installation');
+  assert.match(said(badPostflight), /POSTFLIGHT_GENERIC_FIELD_CREATION_CONTRACT/, 'wrong body pin must fail at postflight');
+  assert.equal(bodyMd5(), genericCreationBodyMd5, 'mutations/refused applies must leave the reviewed public body');
+  genericCreationGuardProbe('PUBLIC_CREATION_DRIFT_ROLLBACK');
+}
+
 function crossSeasonGuardProbe(label) {
   const sql = `
 DO $probe$
@@ -756,6 +947,12 @@ ${AUTHENTICATE}
     '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
   IF (SELECT i.invoice_date FROM invoices i WHERE i.id = v_inv) IS DISTINCT FROM DATE '${DATE_IN_SEASON}' - 1 THEN
     RAISE EXCEPTION 'SAME_SEASON_EDIT_BLOCKED: allowed date did not persist';
+  END IF;
+  -- The new generic-creation refusal must not prohibit supported edits of an existing field invoice.
+  PERFORM public.save_invoice(jsonb_build_object('id', v_inv, 'invoice_type', 'field_application',
+    'invoice_date', '${DATE_IN_SEASON}'), '[]'::jsonb, NULL);
+  IF (SELECT invoice_date FROM invoices WHERE id = v_inv) IS DISTINCT FROM DATE '${DATE_IN_SEASON}' THEN
+    RAISE EXCEPTION 'EXISTING_GENERIC_FIELD_EDIT_BLOCKED';
   END IF;
 
   RAISE EXCEPTION 'GUARD_PROBE_ROLLBACK ${label}';
@@ -905,9 +1102,12 @@ try {
   const migrations = selectedMigrations();
   const candidateIndex = migrations.indexOf(CANDIDATE);
   const guardIndex = migrations.indexOf(CROSS_SEASON_GUARD);
+  const creationGuardIndex = migrations.indexOf(GENERIC_CREATION_GUARD);
   assert.notEqual(candidateIndex, -1, 'preview candidate must remain in the ledger-selected migration list');
   assert.notEqual(guardIndex, -1, 'cross-season guard must remain in the ledger-selected migration list');
   assert.ok(guardIndex > candidateIndex, 'cross-season guard must follow the preview candidate');
+  assert.notEqual(creationGuardIndex, -1, 'creation guard must remain in the ledger-selected migration list');
+  assert.ok(creationGuardIndex > guardIndex, 'creation guard must follow the filed-season edit guard');
   const stopIdx = migrations.findIndex((m) => path.basename(m) === REPLAY_STOP_BEFORE);
   assert.notEqual(stopIdx, -1, `replay stop marker ${REPLAY_STOP_BEFORE} is not in the ledger-selected list`);
   for (const [index, migration] of migrations.slice(0, stopIdx).entries()) {
@@ -927,6 +1127,14 @@ ${predOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904160000 predecessor did not rea
   assert.match(`${saveOut.stdout}
 ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did not reach its own POSTFLIGHT_OK');
   log('PHASE 1a: 20260904160000 and 20260904180000 applied -- the container is now in the state production is in');
+  psql(genericRoutingSql.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION'), { wrap: true });
+  assert.equal(scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure"),
+    '9a34478d405a1a3b8233cabcdfb39691', 'public generic RPC entry must match September 12 live body');
+  assert.equal(scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public._save_invoice_scoped_impl(jsonb,jsonb,text)'::regprocedure"),
+    '622210352fd3c9fa3e293a8e48957429', 'installed generic routing must match the live body');
+  assert.equal(scalar(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.${GENERIC_SAVE_IMPL}(jsonb,jsonb,text)'::regprocedure`),
+    'e3fc9bd9c1da4b2eb8082e91781e4915', 'installed generic writer must match the live body');
+  log('PHASE 1a-generic: actual public entry, scoped routing, and date-aware generic writer match read-only live fingerprints');
 
   // The precondition everything else rests on: this container's preview function IS live's.
   assert.equal(previewBodyMd5(), LIVE_PREVIEW_BODY_MD5,
@@ -980,6 +1188,7 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
 
   copyLf(CANDIDATE, 'candidate.sql', workDir);
   copyLf(CROSS_SEASON_GUARD, 'cross-season-guard.sql', workDir);
+  copyLf(GENERIC_CREATION_GUARD, 'generic-creation-guard.sql', workDir);
   copyText(asReplace(realCreate), 'restore-body.sql', workDir);
 
   // ---- PHASE 2d/2e: the apply-time guards, tested against the REAL pre-apply state -----
@@ -1609,6 +1818,21 @@ ${revokedAuth}`),
   // ---- PHASE 8: owner-approved cross-season edit refusal -----------------------------
   const guardApply = apply('cross-season-guard.sql');
   assert.match(said(guardApply), /POSTFLIGHT_OK/, 'cross-season guard migration did not reach its postflight');
+  genericCreationGuardProbe('PUBLIC_INSERT_BASELINE', { expectRefusal: false });
+  log('PHASE 8-creation-baseline: authenticated public save creates a mismatched new field invoice before the generic-creation guard');
+  const creationApply = apply('generic-creation-guard.sql');
+  assert.match(said(creationApply), /POSTFLIGHT_OK/, 'generic creation guard must reach its postflight');
+  assert.equal(scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure"),
+    genericCreationBodyMd5, 'PostgreSQL must agree with the reviewed public wrapper fingerprint');
+  genericCreationGuardProbe('PUBLIC_INSERT_GUARD');
+  sourceSeasonCreatorProbe();
+  const creationReplay = apply('generic-creation-guard.sql');
+  assert.match(said(creationReplay), /POSTFLIGHT_OK/, 'exact generic creation guard replay must pass');
+  genericCreationGuardProbe('PUBLIC_INSERT_REPLAY');
+  genericCreationGuardProbe('PUBLIC_INSERT_MUTANT', { expectRefusal: false, removeGuard: true });
+  genericCreationGuardProbe('PUBLIC_INSERT_MUTANT_ROLLBACK');
+  genericCreationReplayDriftProbes();
+  log('PHASE 8-creation: public authenticated NEW-field refusal rollback, valid nonfield creation/date/season/retry, existing type compatibility, exact replay, and removed-refusal behavioral mutation observed');
   crossSeasonGuardProbe('REAL_GUARD');
   restoreGuardProbe('REAL_RESTORE');
   log('PHASE 8a: preview/save and restore-plus-date/restore-only paths refuse cross-season edits, roll back, and allow valid within-season edits/restoration');

@@ -5,6 +5,13 @@
 > **2026-07-13 note:** the section-by-section inventory below (Atomic Save/Delete, Order & Delivery, Invoice & Payments, …) is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 >
 > **Prior baselines:** 2026-06-23 live: 228 callable RPCs + 51 trigger functions. 2026-06-29 branch HEAD (local, pre-live-merge): 270 callable RPCs + 56 trigger functions.
+
+**Local generic-creation follow-up, September 12 (NOT APPLIED; no live-count change):**
+`20260912165758_refuse_generic_field_invoice_creation.sql` retains the existing
+`save_invoice(jsonb,jsonb,text)` public RPC contract and adds only an early refusal to
+CREATE `field_application` invoices through it. Dedicated field-app/job/blend creators
+remain the supported creation paths. Existing generic field edits, other types and all
+below-cost/idempotency delegation remain unchanged. A universal INSERT draft was rejected.
 >
 > **2026-08-09 update (retires the earlier candidate warning):** those function and trigger changes **are live**. The candidates `20260808150100` / `20260808150200` / `20260808150400` were re-issued forward and applied on 2026-08-09 as `20260809170500` / `20260809170600` / `20260809170800` (ledger versions `20260809203222`, `20260809204044`, `20260809204855`), together with `20260809170700` and `20260809170900`. Production now carries the restored `batch_apply_prepayments` actor guard, the cancel-order `quantity_remaining` zeroing, and the whole-cent rounding trigger function `public._round_money_to_whole_cents`. Per-migration proof: `docs/reference/migration-history.md` rows 857–861.
 >

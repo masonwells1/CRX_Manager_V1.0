@@ -142,3 +142,34 @@ head recorded above and still reports CHANGES_REQUESTED. Do not take over either
 or treat merged commission report #592 as clearance for its follow-up. The 152 P2 entries
 remain INVENTORIED / NOT INDIVIDUALLY RE-PROVEN. Final archive still needs accepted
 residual ownership or explicit approved deferral, not a blanket passing-suite claim.
+
+## New HIGH on the corrected candidate — September 12, 16:43Z
+
+The five CodeRabbit corrections were committed locally as `d93106e8e17ab54a4a33ef319172b331d23fa2fa`.
+Fresh whole-branch Sol/high returned **BLOCKERS**: the generic public save path can create
+a field-application invoice with a caller-supplied season disagreeing with its date. The
+UPDATE-only guard misses creation. No push proof was minted and the local commit was not
+pushed. Earlier CLEAN proof or passing tests do not clear this corrected candidate.
+
+Root reproduced mismatched creation through the public authenticated RPC in disposable
+PostgreSQL. Compatibility review rejected a universal INSERT guard because job/blend
+creators deliberately preserve source season. The rejected draft is preserved ignored,
+not a migration candidate. Active `20260912165758_refuse_generic_field_invoice_creation.sql`
+instead refuses NEW field invoices through public generic save, preserving dedicated
+creators, existing generic field edits, below-cost/idempotency, other types and history.
+Actual public routing is restored from its applied source and live-fingerprint checked;
+refusal/rollback, valid nonfield creation/retry, existing generic field edits, source-season
+controls, replay drift and removal of only the refusal passed in the final extended prover
+with `PREVIEW_SEASON_PROOF_PASS` and registered `SMOKE_PASS_ROLLBACK`, exit 0. The mutation
+restored the byte-identical original live wrapper and brought the public creation bypass
+back. Job/blend compatibility controls executed their installed baseline public creators;
+only the generic entry/routing/writer are specifically current-live fingerprint pinned.
+Three fresh focused security/drift/compliance reviews are CLEAN. A new frozen whole-branch
+exact-commit proof and current checks remain required; these do not clear old `d93106e8e`.
+Both guard migrations are NOT APPLIED. No merge or live apply is authorized.
+
+PR #653 implementation CI is now all green; its exact-head CodeRabbit review remains
+missing. The peer-stop guard and other-owned follow-ups remain open as recorded above.
+The root hook denied the normal shell SQL validation command; that is a validation-path
+blocker, not a passed check, and was not bypassed. Separate hard-rule audit and drift slice
+passed; the drift slice's printed live layer was not run by that command.

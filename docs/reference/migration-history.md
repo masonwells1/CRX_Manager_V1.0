@@ -53,7 +53,7 @@ reconciling row counts as a drift signal does not get a false alarm from an unex
 | `20260904130047` | `20260904160000_invoice_date_fallbacks_chicago` (row 911) | 997 |
 | `20260904152221` | `20260904180000_invoice_season_follows_invoice_date` (row 912) | 998 |
 | `20260905185938` | `20260904185900_refuse_null_job_field_acres` (row 916) — **ledger name is the unprefixed `refuse_null_job_field_acres`** | 999 |
-**Live-ledger capture — 2026-09-08. THIS IS THE CURRENT BOUNDARY.** A read-only `list_migrations`
+**Live-ledger capture — 2026-09-08, historical boundary (superseded by September 12 above).** A read-only `list_migrations`
 on project `rhyzpcqhnizqbxphqdkr` records **1000 ledger rows** (993 distinct names), live
 `max(version)` **`20260908045843`**, and effective ordering high-water
 **`20260906120000_preview_field_app_season_follows_invoice_date`** — applied live 2026-09-08 under
@@ -1879,6 +1879,8 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | 927 | 20260908190000 | **LOCAL CANDIDATE — NOT APPLIED.** `20260908190000_field_app_invoice_cross_season_edit_guard.sql` is a separate current-main follow-up to merged #599; preserves immutable filed season and rejects cross-season date edits/restoration. Read-only September 12: helper functions and trigger absent; live preview remains MD5 `83f6600412ced085d0876a3c7339ff12`. Preview signature/defaults remain unchanged. Disposable preview/save/restoration mutation proof and the registered public split/save/post/idempotency chain reached `PREVIEW_SEASON_PROOF_PASS`; fresh exact-commit reviews remain required for each corrected candidate. Live apply remains owner-gated. |
 
 ## Filed-season guard ordering note — 2026-09-12
+
+| Local follow-up | 20260912165758 | **LOCAL CANDIDATE — NOT APPLIED.** `20260912165758_refuse_generic_field_invoice_creation.sql` adds an early NEW-field-application refusal to the exact live public `save_invoice` wrapper. Creation must use dedicated field-app/job/blend writers; existing generic field edits and deliberate source-season job/blend creation are preserved. Original below-cost/idempotency delegation, signature, defaults, owner, search path, ACL, other types and historical rows remain unchanged. The public authenticated regression reproduced the HIGH bypass. A universal INSERT-trigger draft was rejected for breaking source-season creators and is preserved outside the migration inventory. Corrected disposable proof and fresh exact-commit review remain required; no merge or live apply authorized. |
 
 This authored stamp is above the September 12 effective live high-water `20260908120000`.
 Re-read the ledger and pending queue immediately before apply; this note is not apply permission

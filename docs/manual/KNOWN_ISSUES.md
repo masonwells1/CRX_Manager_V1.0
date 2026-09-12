@@ -1,5 +1,13 @@
 # Known Issues — Consolidated
 
+**Last verified: 2026-09-12 for the read-only live ledger and scoped filed-season/generic-save
+contracts; other historical issues retain their own dated verification and are not re-certified.**
+The current ledger capture is maintained only in `docs/reference/migration-history.md`.
+Live generic save still has original body md5 `9a34478d405a1a3b8233cabcdfb39691`, and live
+preview remains `83f6600412ced085d0876a3c7339ff12`; the filed-season helpers are absent.
+The later local creation guard below is not live. The September 8 ledger header and older
+disk/PR statuses further down are historical, not current apply or delivery guidance.
+
 ## 2026-09-12 follow-up — filed-season date-edit guard is not deployed
 
 PR #599 merged September 11 with invoice-date season stamping and preview parity. Its
@@ -10,6 +18,17 @@ table-level protection against changing the filed season or crossing its date bo
 Fresh review also found and closed a restoration bypass in that candidate; the disposable
 proof observes restore-plus-date and restore-only rejection, valid corrected restoration,
 and targeted removal of the new check reproducing the bypass. This is local proof, not deployment.
+
+Fresh whole-branch review of local corrected commit `d93106e8e` then found a HIGH creation
+bypass through generic `save_invoice`, which the UPDATE-only trigger misses. Root reproduced
+it through the public authenticated RPC. Compatibility review rejected a universal INSERT
+guard because legitimate job/blend creators carry source season with today's invoice date.
+The active new migration `20260912165758_refuse_generic_field_invoice_creation.sql` instead
+refuses NEW generic field-invoice creation, preserving dedicated creators and existing edits.
+Disposable public-RPC refusal/rollback/retry, source-season compatibility, replay drift and
+removal-of-only-the-refusal tests passed; all three focused reviewers are clean. Both guard
+migrations remain unapplied. A newly frozen exact-head review, normal validation/publication
+and actual CodeRabbit re-review are still required; `d93106e8e`'s BLOCKERS is not clearance.
 
 The operative decision is in `DECISION_LOG.md` (September 8 continuation). Delivery and live
 apply remain separate gates. The session closeout and still-open audit follow-ups are recorded
