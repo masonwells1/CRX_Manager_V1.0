@@ -1,4 +1,4 @@
-# Migration History (latest entry 927)
+# Migration History (latest entry 928)
 
 > **PRE-APPLY LIVE EVIDENCE (read this first).** The most recent read-only
 > `list_migrations` observation is at the top of this file, immediately below.
@@ -9,7 +9,7 @@
 and latest authored-name prefix **`20260908120000`**. The September 12 schema-registry refresh
 used all six live introspection queries, not a timestamp-only update. Order new files by authored
 names, with source-name resolution for bare ledger names; do not substitute apply-time versions.
-The guard candidate in row 927 is written but unapplied and sorts above that authored boundary.
+The guard candidates in rows 927–928 are written but unapplied and sort above that authored boundary.
 Re-read both the live ledger and pending queue immediately before any owner-authorized apply.
 
 ### Historical September 6 boundary (superseded; not current apply guidance)
@@ -1880,7 +1880,7 @@ These 10 historical migrations apply by timestamp order like all others; they si
 
 ## Filed-season guard ordering note — 2026-09-12
 
-| Local follow-up | 20260912165758 | **LOCAL CANDIDATE — NOT APPLIED.** `20260912165758_refuse_generic_field_invoice_creation.sql` adds an early NEW-field-application refusal to the exact live public `save_invoice` wrapper. Creation must use dedicated field-app/job/blend writers; existing generic field edits and deliberate source-season job/blend creation are preserved. Original below-cost/idempotency delegation, signature, defaults, owner, search path, ACL, other types and historical rows remain unchanged. The public authenticated regression reproduced the HIGH bypass. A universal INSERT-trigger draft was rejected for breaking source-season creators and is preserved outside the migration inventory. Corrected disposable proof and fresh exact-commit review remain required; no merge or live apply authorized. |
+| 928 | 20260912165758 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260912165758_refuse_generic_field_invoice_creation.sql`. SQL sha256: `8f2dadaac0ec35ffedd6f45a1c6c25033afb37217f440ab1ca739aaff968afa7`. Adds an early NEW-field-application refusal to the exact live public `save_invoice` wrapper. Creation must use dedicated field-app/job/blend writers; existing generic field edits and deliberate source-season job/blend creation are preserved. Original below-cost/idempotency delegation, signature, defaults, owner, search path, ACL, other types and historical rows remain unchanged. The public authenticated regression reproduced the HIGH bypass. A universal INSERT-trigger draft was rejected for breaking source-season creators and is preserved outside the migration inventory. Root observed the final disposable proof; fresh whole-branch Sol/high CLEAN covers published `e974438b9`, not subsequent metadata corrections. No merge or live apply authorized. |
 
 This authored stamp is above the September 12 effective live high-water `20260908120000`.
 Re-read the ledger and pending queue immediately before apply; this note is not apply permission
