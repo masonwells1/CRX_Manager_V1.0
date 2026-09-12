@@ -31,18 +31,25 @@ and diverge, so reading the boundary off `version` gives a plausible wrong answe
 returns garbage, because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …)
 sort above digits — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` in
 that capture as a point-in-time observation, not a fact** — any lane applying a migration moves
-them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05.
+them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-08.
 The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
+remaining one-file disk-vs-live migration drift and its open owner PR #599.
 
-Six local commission candidates (`20260905200000` through `20260905210000`, excluding superseded `20260905200500`) remain unapplied;
-the complete six-file set was restamped together on 2026-09-05 evening, after a #606 apply moved the
-live ordering boundary above most of the set, and the set's relative order was preserved during the
-restamp. This file deliberately does not name that boundary — re-read it from the live-ledger capture
+Seven local commission candidates remain unapplied: five older-stamp files (`20260905200000`,
+`20260905200200`, `20260905200300`, `20260905200400`, and `20260905200600`), transfer intent
+`20260908130800`, and tail repair `20260908130900`. The original six-file set (those five plus
+the repair) was restamped together on 2026-09-05 evening, after a #606 apply moved the live
+ordering boundary above most of the set. The live boundary has since moved again, so the five
+`20260905*` files now require a future coordinated restamp before any apply; preserve their
+relative order, keep transfer intent after the Chicago cutover, and keep the repair last. This
+file deliberately does not name that moving boundary — re-read it from the live-ledger capture
 in `docs/reference/migration-history.md` before any apply decision.
-The label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
+The label repair followed `20260905020100` -> `20260905190000` -> `20260905210000` ->
+`20260908130000` -> `20260908130900`; its final 2026-09-08 move keeps it after the
+`20260908130800` transfer wrapper so it still runs last and clears PR #535's separate parked
+`20260908120000` version. It
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
 now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes. The settlement-recipient guard closes the live case where a batch prepared for A
@@ -57,6 +64,21 @@ with `CHICAGO_DATE_CUTOVER_RETRY`, so a backend that resolved an old PL/pgSQL pl
 drain cannot commit a stale Chicago date after the unified cutover;
 `20260905200500` was superseded before apply, so the September 30 cutover cannot commit in two
 separate migrations and neither behavior is live.
+The parked transfer wrapper refuses to run at any isolation level but READ COMMITTED, then takes
+ACCESS EXCLUSIVE on the receipt table, which drains every transaction that has already read or
+written it. Its 5-second lock timeout bounds only the wait for that lock; the lock is then held
+until commit, so the rest of the file must commit within 3 seconds for queued receipt reads and
+writes to stay under the 8-second statement timeout live sets for `authenticated`. Under that lock it deletes expired unbound transfer receipts: a legacy call
+still waiting on its key's advisory lock is not drained, and could otherwise replay such a receipt
+after cutover with no actor or job check. An owner-only receipt trigger then rejects a cached
+pre-cutover body that reaches the insert with `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` and rolls it
+back, so the caller can retry through the intent-bound wrapper. Because of that delete, the repo's
+apply guard classes the file as destructive: it needs an attended apply whose approval names the
+receipt deletion. Residuals: a legacy caller at REPEATABLE READ or SERIALIZABLE whose snapshot
+predates cutover could still read a deleted receipt (live runs READ COMMITTED with no role
+override), and a legacy call that started before cutover can still replay a bound receipt that a
+wrapper call commits for the same key afterwards. Both job-invoice screens refuse a result for a
+different job. The live transfer function remains unchanged until an approved apply.
 The final label-selection candidate replaces alphabetical historical-name selection with the latest
 earned-state label at the requested cutoff for both earned and paid-only balance rows; until it is
 separately approved and applied, production can still display an older salesperson name.
@@ -111,7 +133,7 @@ they applied later the same day at `20260903124710` and `20260903124741`, so **a
 see the PR #535 paragraph near the top of this file, which is the current statement. This block is
 kept as the point-in-time record of the 990-row read, not as current state. Read ordering from the
 authored NAME, not `version` — searching this ledger by version stamp finds none of them even though
-all are applied. See the OPEN 2026-09-03 entry below for the source-on-branch-only consequence.
+all are applied. See the now-resolved 2026-09-03 entry below for the historical source-on-branch-only consequence.
 The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
 that evidence supports the six pending return-credit candidates without superseding the newer ledger
 capture above.
@@ -460,14 +482,13 @@ instrumentation. Both migrations are applied and must not be edited.
 
 ---
 
-## OPEN 2026-09-03 — six migrations applied live on 2026-09-03 have no file on `main`
+## RESOLVED 2026-09-08 — six migrations applied live on 2026-09-03 now have files on `main`
 
-**Severity: LOW while it lasts — live is HEALTHY. This is a source-of-truth gap, not a defect.**
-All six migrations from PR #535's branch `codex/gauntlet-s9-safety-20260831` were applied live on
-2026-09-03. Their files exist only on that unmerged branch; `origin/main` does not contain them
-(verified 2026-09-03 by a GitHub read of `refs/heads/main`, which returns 404 for the first file).
-This entry originally listed four; the last two applied later the same day and are added here rather
-than left to a second entry:
+**Resolution:** PR #535 merged on 2026-09-08 and landed all six exact migration files on `main`.
+From 2026-09-03 until that merge, the files existed only on branch
+`codex/gauntlet-s9-safety-20260831`; live stayed healthy, but source control did not fully describe
+production. This entry originally listed four; the last two applied later the same day and are
+included here for provenance:
 
 | Authored name | Ledger version |
 |---|---|
@@ -486,11 +507,10 @@ last two migrations not yet being applied — is **CLEARED**: both applied on 20
 `update_vendor_bill` was verified live as a single 9-argument overload accepting
 `p_confirm_po_overage` and `p_po_overage_reason`, so the branch's call resolves.
 
-**Consequence while this is open.** PR #581 (schema-registry refresh) is parked behind #535: its
-Codex proof returned BLOCKERS because the registry asserts a live high-water whose `20260831*`
-migrations have no file on `main`. #535 must merge before #581, and no separate registry refresh
-should be run in the meantime — #581 redoes it. `npm run agent-health` reports the same condition as
-a session-staleness WARN, which is expected and not a new finding.
+**Historical consequence while this was open.** PR #581's schema-registry refresh was parked behind
+#535 because the registry asserted a live high-water whose `20260831*` migrations had no file on
+`main`. PR #535's merge removed that ordering blocker; any registry refresh still follows its own
+current proof gates.
 
 **This is the FOURTH occurrence of this class.** See the CLOSED 2026-08-11 entry ("three migrations
 are live but their source files are not yet on `main`") and the CLOSED 2026-08-13 entry ("six
@@ -500,7 +520,7 @@ files automatically. Each occurrence has been closed individually by landing the
 recurrence itself is the standing finding, and a ledger-vs-tracked-files reconciliation check is the
 durable fix.
 
-**Closes when PR #535 merges**, which lands all six files under `supabase/migrations/`.
+**Closed by PR #535's 2026-09-08 merge**, which landed all six files under `supabase/migrations/`.
 
 ---
 
@@ -862,8 +882,12 @@ separately through a real PostgREST call in both the 5- and 4-argument shapes, e
 `42501` rather than `PGRST202`, which proves the API layer resolves the new signature AND that the
 legacy 4-argument caller still works through the DEFAULT.
 
-**The frontend half is still on PR #599 and NOT merged, so the defect is still visible to users.**
-The order is deliberate and must not be reversed: the database is backward compatible (a 4-argument
+**The frontend half MERGED on 2026-09-11 in PR #599 (`791bc3d86`), so the DB-first window is
+closed.** Deployment evidence read here on 2026-09-12: GitHub Production deployment `6394599950`
+for that commit reports state `success` (2026-09-11 13:57:07Z) and `https://croprxsolutions.app`
+returns 200. That is deployment evidence only — the screen-level observation that the season now
+follows the invoice date belongs to the #599 lane's own verification and is not re-checked here.
+The order was deliberate and must not be reversed: the database is backward compatible (a 4-argument
 call resolves through the DEFAULT), so DB-first is safe, whereas merging the frontend first would
 send a fifth named argument to a 4-argument function and return `PGRST202` on EVERY Preview click —
 not merely the season edge case.
@@ -1705,9 +1729,19 @@ comments and string literals are stripped before matching (round 5: a comment me
 mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is still not handled.
 (g) The same stripping removes whole TEMPLATE LITERALS including their `${…}` interpolations, so a
 reset executed inside an interpolation is invisible, and because stripping is line-based a multi-line
-template body still reads as code. (h) Only the hit scan is stripped: `classify()` and `aliasNames()`
-still read RAW lines, so a comment or string containing `onClick=`, `.throwOnError()` or a recovery
-marker can excuse a real hit, and one containing `resetKey:` can invent an alias. (i) The
+template body still reads as code. (h) `aliasNames()` still reads RAW source, so a comment or string
+containing `resetKey:` can invent an alias. `classify()` no longer does (2026-09-10, CodeRabbit on
+PR #638): all three of its windows are read from source whose comments, string contents,
+template-literal text and regex-literal bodies are masked from the top of the file, across lines —
+so a `/* … */` block or a template opened above a window still counts, and a template's `${…}`
+interpolation stays code. Comment, string and template text can no longer supply `onClick=`,
+`.throwOnError()` or a recovery marker, and neither can a regex the scanner RECOGNISES as a regex
+literal. That recognition is the limit of the guarantee, because the mask is a scanner, not a
+lexer: a `/` after `]`, `}` or `<` is still read as division, so a regex literal written in one of
+those positions stays visible and its text CAN still supply those three tokens. A `/` after `)` is
+recognised only when that `)` closes an `if`, `for`, `while`, `switch` or `catch` head (2026-09-12,
+CodeRabbit's third round on PR #638: a regex used as a control statement's body was excusing a
+reset). A `//` inside JSX text masks the rest of its line. (i) The
 "no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/
 `functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
 intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes
