@@ -198,9 +198,13 @@ freeze the candidate commit → apply `ready-for-coderabbit` → resolve one Cod
 **CodeRabbit (standing policy, automation updated 2026-08-30):** automatic reviews are disabled.
 Finish the Codex review first, bring the branch current and green, freeze the release-candidate
 commit, record its head SHA, then apply `ready-for-coderabbit`. The trusted default-branch workflow
-rechecks the exact head and PR/check state, records `coderabbit-review-requested`, and posts exactly
-`@coderabbitai review` once. If it fails, it removes the ready label and posts nothing; correct the
-named blocker and relabel. Read the review and fix any real issue before merging; nitpicks may be
+rechecks the exact head and PR/check state, records `coderabbit-review-requested`, then adds
+`coderabbit-review-dispatch` to trigger CodeRabbit's native label opt-in. It waits up to six minutes
+for an authenticated formal review of that exact commit. A skipped status or empty reply artifact
+does not count. A timeout or uncertain dispatch fails while preserving dedupe labels; never clear
+them blindly to retry. After observing the actual review, re-apply `ready-for-coderabbit` to
+reconcile without another request. See `docs/reference/coderabbit-native-review.md` for setup and
+recovery. Read the review and fix any real issue before merging; nitpicks may be
 dismissed with a one-line reason. A fix or base update that changes the commit clears the workflow
 labels and requires restarted checks, a refreshed exact-HEAD Codex proof when the corrected diff is
 Codex-worthy, a newly frozen and recorded SHA, and one follow-up ready-label trigger. Never use
