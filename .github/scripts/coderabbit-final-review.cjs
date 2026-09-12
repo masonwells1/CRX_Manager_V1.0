@@ -1024,7 +1024,12 @@ async function reconcileLabelEvent({
         // Re-read the candidate and its provenance-bound checks before
         // accepting the review; a push or label removal can race this event.
         const [confirmationPullRequest, checkBlockers, reviewDecisionBlockers] = await Promise.all([
-          getPullRequestWithResolvedMergeability({ github, owner, repo, pullNumber }),
+          getPullRequestWithResolvedMergeability({
+            github, owner, repo, pullNumber,
+            attempts: config.mergeabilityPollAttempts ?? DEFAULT_MERGEABILITY_POLL_ATTEMPTS,
+            pollMs: config.mergeabilityPollMs ?? DEFAULT_MERGEABILITY_POLL_MS,
+            settle: config.settle || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))),
+          }),
           collectCheckBlockers({ github, owner, repo, headSha, config, core, selfRunId }),
           collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
         ]);

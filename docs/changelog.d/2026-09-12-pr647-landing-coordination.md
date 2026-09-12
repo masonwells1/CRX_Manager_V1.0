@@ -13,6 +13,7 @@ An observed outside-diff-only CodeRabbit report omitted its usual actionable-com
 GitHub Codex's subsequent P2 findings were corrected before the paid review bootstrap. All controlled and unexpected failures before the provider call share verified unspent-state recovery, including blockers before receipt creation. A verified receipt belonging to the current run is removed and its absence confirmed; unknown cleanup or an observed provider label retains deduplication state. Once the provider call has been attempted, recovery never removes that receipt. Polling and final delivery validation reset invalid candidates and removed native labels directly, preserving receipts without depending on a queued reset. There are 194 focused transport cases.
 
 The introducing PR's bootstrap and the first normal request after merge are observed separately under `docs/reference/coderabbit-native-review.md`. This work changes no live database data and does not apply PR #624's parked migration. Rollback is a protected revert of the review-delivery repair.
+
 # Native attempt history follow-up
 
 

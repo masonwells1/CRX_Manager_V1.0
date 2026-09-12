@@ -2767,6 +2767,35 @@ test('a ready relabel reconciles a substantive exact-head native review without 
   assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
 });
 
+test('native delivered-review reconciliation retries transient unknown mergeability without redispatching', async () => {
+  const dispatched = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL] });
+  const unknown = { ...dispatched, mergeable: null, mergeable_state: 'unknown' };
+  const waits = [];
+  const harness = makeHarness({
+    pulls: [dispatched, dispatched, unknown, dispatched],
+    eventPullRequest: dispatched,
+    coderabbitReviews: [{
+      id: 5012391473,
+      submitted_at: '2026-09-08T03:44:00Z',
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      commit_id: HEAD,
+      state: 'COMMENTED',
+      body: '**Actionable comments posted: 0**',
+    }],
+  });
+  const result = await execute(harness, {
+    nativeDispatch: true,
+    mergeabilityPollAttempts: 3,
+    mergeabilityPollMs: 17,
+    settle: async (milliseconds) => waits.push(milliseconds),
+  });
+
+  assert.equal(result.status, 'reviewed');
+  assert.deepEqual(waits, [17]);
+  assert.equal(harness.actionsComments.length, 0);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+});
+
 test('a native review is not accepted when its head changes during reconciliation', async () => {
   const dispatched = pullRequest({ labels: [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL] });
   const harness = makeHarness({
