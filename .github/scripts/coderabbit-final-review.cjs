@@ -1290,16 +1290,22 @@ async function recoverUndispatchedNativeReceipt({ github, context, core, attempt
   const { owner, repo } = context.repo;
   const pullNumber = context.payload.pull_request.number;
   const headSha = context.payload.pull_request.head.sha;
+  let receipts = [];
+  let cleanupStarted = false;
+  const confirmProviderAbsent = async () => {
+    const live = (await github.rest.pulls.get({ owner, repo, pull_number: pullNumber })).data;
+    if (pullRequestLabelNames(live).has(DISPATCH_LABEL)) throw new Error('a provider dispatch label is present');
+  };
   try {
     const comments = attemptState.nativeReceiptBody ? await github.paginate(github.rest.issues.listComments,
       { owner, repo, issue_number: pullNumber, per_page: 100 }) : [];
     if (!Array.isArray(comments)) throw new Error('receipt recovery listing was not an array');
-    const receipts = comments.filter((comment) => parseNativeDispatchReceipt(comment)?.headSha === headSha);
+    receipts = comments.filter((comment) => parseNativeDispatchReceipt(comment)?.headSha === headSha);
     if (receipts.length > 1 || receipts.some((comment) => comment.body !== attemptState.nativeReceiptBody
       || attemptState.nativePreexistingCommentIds.has(comment.id))) throw new Error('receipt ownership was ambiguous');
-    const live = (await github.rest.pulls.get({ owner, repo, pull_number: pullNumber })).data;
-    if (pullRequestLabelNames(live).has(DISPATCH_LABEL)) throw new Error('a provider dispatch label is present');
+    await confirmProviderAbsent();
     for (const receipt of receipts) {
+      cleanupStarted = true;
       try { await github.rest.issues.deleteComment({ owner, repo, comment_id: receipt.id }); }
       catch (error) { core.warning(`Receipt removal response failed; verifying absence: ${error.message}`); }
     }
@@ -1308,11 +1314,28 @@ async function recoverUndispatchedNativeReceipt({ github, context, core, attempt
     if (!Array.isArray(remaining) || remaining.some((comment) => parseNativeDispatchReceipt(comment)?.headSha === headSha)) {
       throw new Error('receipt removal could not be confirmed');
     }
+    await confirmProviderAbsent();
+    cleanupStarted = true;
     const failures = await removeLabelsIndependently(github, owner, repo, pullNumber, [REQUESTED_LABEL, READY_LABEL]);
     if (failures.length) throw new Error(`label cleanup failed: ${failures.join('; ')}`);
+    await confirmProviderAbsent();
     core.setFailed(`CodeRabbit was not dispatched (${reason}); unspent state was cleared after verified cleanup. Re-apply ${READY_LABEL} after correcting the blocker; a new commit is unnecessary.`);
     return { status: 'blocked', headSha, reason };
   } catch (error) {
+    if (cleanupStarted) {
+      // A provider write can race either cleanup. Keep a spent/unknown marker
+      // and the original receipt evidence. This comment is deliberately NOT a
+      // dispatch receipt: recreating its server timestamp could credit a late
+      // response to a different request. Ambiguous history remains blocked.
+      try { await github.rest.issues.addLabels({ owner, repo, issue_number: pullNumber, labels: [REQUESTED_LABEL] }); }
+      catch (restoreError) { core.warning(`Could not restore requested state: ${restoreError.message}`); }
+      if (receipts.length) {
+        try { await github.rest.issues.createComment({ owner, repo, issue_number: pullNumber,
+          body: `Native recovery evidence (not a dispatch receipt or review authorization):\n${JSON.stringify({ headSha, runId: context.runId,
+            receipts: receipts.map(({ id, created_at, body }) => ({ id, created_at, body })) })}` }); }
+        catch (evidenceError) { core.warning(`Could not preserve recovery evidence: ${evidenceError.message}`); }
+      }
+    }
     try { await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL); }
     catch (cleanupError) { core.warning(`Could not clear ready state: ${cleanupError.message}`); }
     core.setFailed(`Undispatched native receipt recovery could not be confirmed (${error.message}); remaining deduplication state was preserved. No provider call was attempted.`);

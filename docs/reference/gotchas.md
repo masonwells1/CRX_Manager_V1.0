@@ -317,15 +317,17 @@ misleading green CodeRabbit status is no longer backstopped by a missing approva
 blocked. Nothing but this check stands between "CodeRabbit never actually ran" and a merge. Since
 2026-08-30 the normal trigger
 is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
-accidental duplicate. If CodeRabbit itself confirms a delivery failure or rate limit on the same
-frozen head, deliberately remove `coderabbit-review-requested`, **wait for the resulting reset run to
-finish**, and only then reapply `ready-for-coderabbit`; that is a paid retry, not the normal path.
-The wait is load-bearing rather than politeness: removing the marker fires an asynchronous
-`unlabeled` run that clears **both** labels, so a ready label reapplied while that run is still
-queued is cleared by it and nothing is posted. Confirm both labels are gone before relabelling. Never merge from the ordinary check row alone —
+accidental duplicate. Native attempts retain a trusted head/base receipt even after a reset.
+For pending or uncertain delivery, preserve requested/dispatch state and check the actual formal
+review. After late delivery, reapply `ready-for-coderabbit` to reconcile the existing request;
+do not remove and re-add the provider label. A retained same-head attempt cannot be retried as
+unspent merely by clearing labels: use a fresh candidate after verifying earlier delivery, or
+preserve ambiguous out-of-band evidence and use a fresh PR. Only the workflow's verified cleanup
+before any provider call permits a same-head retry. Follow
+`docs/reference/coderabbit-native-review.md` for native and bootstrap recovery. Never merge from the ordinary check row alone —
 confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
 `CHANGES_REQUESTED` verdict. An approving review is not required (removed 2026-09-02); when one
-*does* exist, require the hidden marker SHA, that authenticated `APPROVED` review's `commit_id`, and
+*does* exist, require the native receipt's head SHA, that authenticated `APPROVED` review's `commit_id`, and
 the live PR head to match. The generic Actions-authored marker is dedupe evidence, not an
 independent trust identity.
 

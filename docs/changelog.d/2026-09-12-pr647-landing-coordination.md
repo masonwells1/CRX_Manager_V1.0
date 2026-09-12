@@ -15,6 +15,7 @@ GitHub Codex's subsequent P2 findings were corrected before the paid review boot
 The introducing PR's bootstrap and the first normal request after merge are observed separately under `docs/reference/coderabbit-native-review.md`. This work changes no live database data and does not apply PR #624's parked migration. Rollback is a protected revert of the review-delivery repair.
 # Native attempt history follow-up
 
+
 Independent review identified that a late review from an out-of-band label
 request could otherwise satisfy a newer receipt for the same head and a
 different base. Persistent label history now excludes untracked, duplicate,

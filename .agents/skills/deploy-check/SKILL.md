@@ -131,12 +131,18 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 4. Freeze the candidate after the separate Codex review is clean, record its head SHA, then apply
    **`ready-for-coderabbit`**. The default-branch workflow rechecks the exact head,
    draft/conflict/auto-merge state, actor permission, required checks, and every reported
-   non-CodeRabbit check before posting exactly `@coderabbitai review` once with a hidden SHA marker.
-   The generic Actions-authored marker is dedupe evidence, not merge authorization. If it fails, it removes
-   the ready label and posts nothing; correct the named blocker and relabel. Read the resulting
+   non-CodeRabbit check before recording a trusted head/base receipt and adding
+   `coderabbit-review-dispatch` once. The receipt and labels record attempts, not merge
+   authorization. Require an actual substantive formal review of the frozen SHA. Pending or
+   uncertain delivery preserves dedupe state; after late delivery, reapply the ready label to
+   reconcile without another request. Never clear and re-add the provider label to retry. Only
+   verified cleanup before any provider call permits a same-head retry; retained attempts need
+   a fresh candidate, and ambiguous out-of-band requests need a fresh PR. Follow
+   `docs/reference/coderabbit-native-review.md`, including its introducing-PR bootstrap. Read the resulting
    review and fix every real issue; nitpicks may be dismissed with a one-line reason. If a fix or
-   base update creates a new commit, the workflow clears both state labels and deletes the
-   already-posted command whether or not the head moved (Actions-authored canonical commands only);
+   base update creates a new commit, the workflow resets its labels and obsolete canonical
+   Actions-authored legacy commands, but retains native receipts. Removing a provider label
+   cannot cancel an accepted review; verify earlier delivery before another request;
    restart required checks,
    rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy, freeze and record the
    new SHA, and apply the ready label for one follow-up review. Never use `@coderabbitai resume`, and reserve
@@ -146,7 +152,7 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    agent merge gates refuse to merge over one. Before merge, verify live `main` protection still
    requires a current branch and every required check green; `enforce_admins` is off and no agent
    may act on that exemption. Confirm CodeRabbit actually reviewed the frozen candidate, and when
-   it HAS approved, require the marker SHA, that authenticated approval's `commit_id`, and the
+   it HAS approved, require the native receipt's head SHA, that authenticated approval's `commit_id`, and the
    final `headRefOid` to match; recheck every reported check and auto-merge OFF.
    Ordinary green CodeRabbit or generic Actions status rows are insufficient. A separate exact-SHA
    `gpt-5.6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration

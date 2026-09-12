@@ -66,6 +66,12 @@ production workflow explicitly selects native dispatch.
 
 ## Pending or uncertain requests
 
+Unspent cleanup rechecks provider-label absence after removing a receipt and
+after clearing labels. A raced or unknown cleanup restores the requested
+marker and preserves the original receipt details as recovery evidence. This
+evidence is deliberately not a replacement dispatch receipt and cannot credit
+a late review with a newly created timestamp.
+
 A provider-label write may have succeeded even when its HTTP response fails.
 Timeouts, missing review evidence and ambiguous writes therefore fail closed
 and preserve dedupe state. Do not clear and re-add the provider label to retry.

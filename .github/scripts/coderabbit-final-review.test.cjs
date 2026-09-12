@@ -735,10 +735,14 @@ function makeHarness({
     // about CodeRabbit's behaviour instead.
     get actionsComments() {
       return comments.filter((comment) => comment.user?.login === 'github-actions[bot]'
-        && !comment.body?.startsWith('<!-- crx-coderabbit-native-dispatch:'));
+        && !comment.body?.startsWith('<!-- crx-coderabbit-native-dispatch:')
+        && !comment.body?.startsWith('Native recovery evidence ('));
     },
     get receiptComments() {
       return comments.filter((comment) => comment.body?.startsWith('<!-- crx-coderabbit-native-dispatch:'));
+    },
+    get recoveryComments() {
+      return comments.filter((comment) => comment.body?.startsWith('Native recovery evidence ('));
     },
     context,
     core,
@@ -2850,6 +2854,41 @@ test('a late old-base out-of-band review cannot satisfy a newer same-head receip
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
   assert.equal(harness.liveLabels.has(READY_LABEL), false);
+});
+
+test('provider dispatch racing receipt deletion preserves unknown state and original evidence', async () => {
+  const harness = makeHarness({ commentFailure: 'ambiguous', coderabbitAcknowledgement: 'silent' });
+  const originalDelete = harness.github.rest.issues.deleteComment;
+  harness.github.rest.issues.deleteComment = async (args) => {
+    await originalDelete(args);
+    harness.liveLabels.add(DISPATCH_LABEL);
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.match(result.reason, /provider dispatch label is present/);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.receiptComments.length, 0);
+  assert.equal(harness.recoveryComments.length, 1);
+  assert.match(harness.recoveryComments[0].body, /not a dispatch receipt or review authorization/);
+  assert.match(harness.recoveryComments[0].body, /"receipts":\[\{"id":1,"created_at":/);
+});
+
+test('provider dispatch racing requested-marker removal restores unknown state', async () => {
+  const harness = makeHarness({ commentFailure: 'ambiguous', coderabbitAcknowledgement: 'silent' });
+  const originalRemove = harness.github.rest.issues.removeLabel;
+  harness.github.rest.issues.removeLabel = async (args) => {
+    await originalRemove(args);
+    if (args.name === REQUESTED_LABEL) harness.liveLabels.add(DISPATCH_LABEL);
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.match(result.reason, /provider dispatch label is present/);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.recoveryComments.length, 1);
 });
 
 test('untracked historical provider-label attempts block before spending another review', async () => {
