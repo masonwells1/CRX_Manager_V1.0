@@ -604,7 +604,7 @@ function makeHarness({
               id: comments.length + 1,
               body,
               created_at: new Date().toISOString(),
-              user: { login: 'github-actions[bot]' },
+              user: { login: 'github-actions[bot]', type: 'Bot' },
             });
             maybeAcknowledge();
             throw new Error('connection closed after write');
@@ -2956,6 +2956,79 @@ test('a failed receipt write cannot start a provider review', async () => {
   assert.equal(harness.receiptComments.length, 0);
 });
 
+test('an accepted receipt with a failed response is removed before same-head retry', async () => {
+  const harness = makeHarness({ commentFailure: 'ambiguous' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 0);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  const retry = makeHarness({ existingComments: harness.comments });
+  const retried = await execute(retry, { nativeDispatch: true });
+  assert.equal(retried.status, 'pending');
+  assert.equal(retry.receiptComments.length, 1);
+  assert.equal(retry.liveLabels.has(DISPATCH_LABEL), true);
+});
+
+test('an unconfirmed pre-dispatch receipt cleanup preserves its dedupe marker', async () => {
+  const harness = makeHarness({ commentFailure: 'ambiguous', deleteCommentFailure: true });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+});
+
+test('post-receipt validation failure cleans an undispatched same-run receipt', async () => {
+  const harness = makeHarness({ runHeadSha: NEXT_HEAD });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 0);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+});
+
+test('a thrown post-receipt validation failure recovers the undispatched receipt', async () => {
+  const harness = makeHarness();
+  const originalChecks = harness.github.rest.checks.listForRef;
+  harness.github.rest.checks.listForRef = async (request) => {
+    if (harness.receiptComments.length) throw new Error('validation unavailable');
+    return originalChecks(request);
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 0);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+});
+
+test('receipt lookup failure cannot claim pre-dispatch cleanup succeeded', async () => {
+  const harness = makeHarness();
+  const originalList = harness.github.rest.issues.listComments;
+  harness.github.rest.issues.listComments = async (request) => {
+    if (harness.receiptComments.length) throw new Error('receipt lookup unavailable');
+    return originalList(request);
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+});
+
+test('a provider call failure never enters undispatched receipt cleanup', async () => {
+  const harness = makeHarness();
+  const originalAdd = harness.github.rest.issues.addLabels;
+  harness.github.rest.issues.addLabels = async (request) => {
+    if (request.labels.includes(DISPATCH_LABEL)) throw new Error('provider response unavailable');
+    return originalAdd(request);
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
+});
+
 for (const runHeadSha of [BASE, HEAD]) {
   test(`target run metadata ${runHeadSha === BASE ? 'base' : 'observed REST PR head'} keeps exact associated head/base binding`, async () => {
     const reviews = [];
@@ -3021,10 +3094,50 @@ test('a base change while CodeRabbit is working cannot make an old review count'
         return { data: { ...response.data, base: { ref: 'main', sha: NEXT_BASE } } };
       };
     } });
-  assert.equal(result.status, 'blocked');
-  assert.match(harness.failures.join('\n'), /base changed after dispatch/);
+  assert.equal(result.status, 'reset');
+  assert.match(harness.notices.join('\n'), /base changed after dispatch/);
   assert.equal(harness.receiptComments.length, 1);
-  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+});
+
+for (const change of [ { head: { sha: NEXT_HEAD, ref: 'feature' } }, { draft: true },
+  { auto_merge: { enabled_by: { login: 'masonwells1' } } }, { state: 'closed' } ]) {
+  test(`native polling resets a changed candidate without a queued reset: ${Object.keys(change)[0]}`, async () => {
+    const harness = makeHarness();
+    const originalGet = harness.github.rest.pulls.get;
+    const result = await execute(harness, { nativeDispatch: true, reviewPollMs: 1,
+      settle: async () => {
+        harness.github.rest.pulls.get = async (request) => {
+          const response = await originalGet(request);
+          return { data: { ...response.data, ...change } };
+        };
+      } });
+    assert.equal(result.status, 'reset');
+    assert.equal(harness.receiptComments.length, 1);
+    assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  });
+}
+
+test('a head change during final delivery validation resets labels and retains the receipt', async () => {
+  const harness = makeHarness();
+  const originalReviews = harness.github.rest.pulls.listReviews;
+  const originalGet = harness.github.rest.pulls.get;
+  harness.github.rest.pulls.listReviews = async (request) => {
+    if (harness.receiptComments.length) {
+      harness.github.rest.pulls.get = async (pullRequestArgs) => {
+        const response = await originalGet(pullRequestArgs);
+        return { data: { ...response.data, head: { sha: NEXT_HEAD, ref: 'feature' } } };
+      };
+      return { data: [nativeReview()] };
+    }
+    return originalReviews(request);
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'reset');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
 });
 
 for (const [action, eventLabel, permission] of [
