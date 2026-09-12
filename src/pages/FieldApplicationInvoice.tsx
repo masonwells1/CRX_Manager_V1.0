@@ -34,7 +34,7 @@ import {
   type GuardrailMode,
 } from '../lib/labelGuardrailSetting';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
-import { computeSeason } from '../utils/season';
+import { computeSeason, seasonEndDate, seasonStartDate } from '../utils/season';
 import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
 import type { CustomerSharesBasis } from '../components/field-app/customerSplit';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
@@ -153,6 +153,8 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
 function fieldAppError(err: unknown): string {
   if (hasRpcCode(err, RpcErrorCodes.ZERO_APPLIED_ACRES)) return 'A location has 0 or blank applied acres. Open the Locations tab and enter the acres sprayed for each field.';
   if (hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)) return 'Your sign-in could not be verified. Refresh the page and try again.';
+  if (hasRpcCode(err, RpcErrorCodes.INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED)) return 'This invoice date is outside the season it was filed under. Keep the date inside the allowed range shown below the Transaction Date.';
+  if (hasRpcCode(err, RpcErrorCodes.INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED)) return 'This invoice is already filed in a season that cannot be changed. Keep the transaction date inside the allowed range shown below.';
   // U7: this invoice is one member of a multi-owner split group — it can't be reversed
   // member-by-member (that would reopen the job while the other owners' invoices stay live).
   if (hasRpcCode(err, RpcErrorCodes.JOB_BILLED_AS_GROUP)) return 'This job was invoiced as a multi-owner split. To return it to scheduling, void each owner’s invoice — voiding the last one reopens the job.';
@@ -226,6 +228,11 @@ export default function FieldApplicationInvoice() {
   // where the user is sitting — otherwise a salesman on Pacific time creates 2026-09-30
   // invoices while Chicago is already on 2026-10-01, landing them in the wrong season.
   const [transactionDate, setTransactionDate] = useState(todayInBusinessTz());
+  // An existing invoice keeps this server-stamped season for its lifetime. The date may
+  // move within that season, but crossing October 1 would make the header date disagree
+  // with the year-end filing and application-service rate. The database enforces the same
+  // rule; this snapshot gives the operator an immediate, actionable explanation.
+  const [filedSeason, setFiledSeason] = useState<number | null>(null);
   const [notes, setNotes] = useState(''); // header_notes (printed)
   // #33: ChemMan billing details. Header/footer notes + PO + due date already
   // existed on invoices; payment_terms / internal_notes / discount are new (migration
@@ -422,6 +429,18 @@ export default function FieldApplicationInvoice() {
   const blocker = useUnsavedChanges(dirty);
 
   const isNew = !id;
+  const transactionSeason = useMemo(() => {
+    if (!transactionDate) return null;
+    const parsed = new Date(`${transactionDate}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? null : computeSeason(parsed);
+  }, [transactionDate]);
+  const crossSeasonDateEdit = !isNew
+    && filedSeason !== null
+    && transactionSeason !== null
+    && transactionSeason !== filedSeason;
+  const filedSeasonDateMessage = filedSeason === null
+    ? ''
+    : `This invoice is filed in season ${filedSeason}. Choose a date from ${seasonStartDate(filedSeason)} through ${seasonEndDate(filedSeason)}.`;
   // #24: only an ADMIN may attribute the invoice to another consultant. The save
   // RPC rejects a non-admin who sets salesman_id to anyone but themselves
   // ([B1.5]), so the picker is read-only for sales_reps and a non-admin save
@@ -846,6 +865,8 @@ export default function FieldApplicationInvoice() {
     }
     setInvoiceNumber((invoice.invoice_number as string) || '');
     setTransactionDate((invoice.invoice_date as string) || '');
+    const loadedSeason = Number(invoice.season);
+    setFiledSeason(Number.isInteger(loadedSeason) ? loadedSeason : null);
     setNotes((invoice.header_notes as string) || '');
     // #33: load the ChemMan billing details from the loaded invoice. These header
     // fields are uniform across a split group (the save RPC writes them to every
@@ -1205,6 +1226,12 @@ export default function FieldApplicationInvoice() {
   }, [id, toast, navigate]);
 
   useEffect(() => {
+    // App.tsx reuses this component when navigating between /new and /:id. Never let
+    // the previous invoice's filed season leak into the next route while it loads.
+    setFiledSeason(null);
+  }, [id]);
+
+  useEffect(() => {
     fetchInvoice();
   }, [fetchInvoice]);
 
@@ -1386,6 +1413,10 @@ export default function FieldApplicationInvoice() {
   };
 
   const handlePreview = async () => {
+    if (crossSeasonDateEdit) {
+      toast('error', filedSeasonDateMessage);
+      return;
+    }
     if (locations.length === 0) {
       toast('error', 'Select at least one location first');
       return;
@@ -1455,6 +1486,10 @@ export default function FieldApplicationInvoice() {
   // silent data corruption). 'cannot_compare' / 'no_label_max' never gate a save.
   const handleSave = async () => {
     if (!profile) return;
+    if (crossSeasonDateEdit) {
+      toast('error', filedSeasonDateMessage);
+      return;
+    }
     if (!transactionDate) {
       toast('error', 'Choose a transaction date before saving.');
       return;
@@ -1533,6 +1568,12 @@ export default function FieldApplicationInvoice() {
 
   const performSave = async (overrideReasonForAudit?: string) => {
     if (!profile) return;
+    // performSave is also reached from the admin label-rate override modal, so repeat
+    // the season gate here rather than relying only on handleSave's normal button path.
+    if (crossSeasonDateEdit) {
+      toast('error', filedSeasonDateMessage);
+      return;
+    }
     // The date input can be cleared even though new invoices start on today's Chicago
     // business date. Sending an empty string reaches the date cast in PostgreSQL and
     // produces a raw RPC error instead of using the server fallback, so refuse it here
@@ -2678,8 +2719,15 @@ export default function FieldApplicationInvoice() {
               // Mason approves is not the one billed (Codex push-proof review, 2026-09-04).
               onChange={(e) => { setTransactionDate(e.target.value); setDirty(true); invalidatePreview(); }}
               disabled={!canEdit}
-              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
+              aria-invalid={crossSeasonDateEdit || undefined}
+              aria-describedby={crossSeasonDateEdit ? 'field-app-invoice-season-date-error' : undefined}
+              className={`w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50 ${crossSeasonDateEdit ? 'border-red-500 bg-red-50' : ''}`}
             />
+            {crossSeasonDateEdit && (
+              <p id="field-app-invoice-season-date-error" className="mt-1 text-xs text-red-700" role="alert">
+                {filedSeasonDateMessage}
+              </p>
+            )}
           </div>
           {/* #24: Consultant selector (invoices.salesman_id). Editable only by an
               admin — the save RPC rejects a non-admin attributing to another user,

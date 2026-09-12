@@ -285,6 +285,10 @@ export const RpcErrorCodes = {
   DUPLICATE_LOT: 'DUPLICATE_LOT',
   // save_field_app_invoice / post_invoice_group — per-acre billing guard (field-acre billing)
   ZERO_APPLIED_ACRES: 'ZERO_APPLIED_ACRES',
+  // Field-application invoice edit guard: the invoice keeps its filed season, so
+  // changing its date across the October 1 boundary is refused by preview and save.
+  INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED: 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED',
+  INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED: 'INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED',
   // record_job_pre_notifications — field-app #40 pre-application customer notice
   INVALID_SUBJECT: 'INVALID_SUBJECT',
   INVALID_MESSAGE: 'INVALID_MESSAGE',

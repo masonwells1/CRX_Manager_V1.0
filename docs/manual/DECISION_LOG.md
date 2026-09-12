@@ -1,11 +1,27 @@
 # Decision Log
 
-Last verified: 2026-09-04
+Last verified: 2026-09-12
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-08 — field-application date edits stay inside the invoice's filed season
+
+**Source:** the continuation of PR #599: Codex explained the cross-October-1 disagreement,
+recommended keeping the filed season and rejecting cross-season date edits, and Mason directed
+"continue 599". Reconciled September 12 after #599 merged without this follow-up.
+
+**Decision.** Existing field-application invoices keep their filed season. A date can move within
+that season but cannot cross its October 1 boundary. Every database writer must also refuse to
+change the filed season, preventing a season-first/date-second bypass. New invoices still derive
+season from their invoice date. Preview and save follow the same rule.
+
+This supersedes only the September 4 accepted consequence of editing across October 1 while
+adding a grower. It does not re-season existing invoices, unify mixed historical groups, change
+the filed-season price lookup, or revive the closed posting-date due-date direction (#591).
+The new guard is a separate follow-up to merged #599 and remains unapplied pending live approval.
 
 ## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
 

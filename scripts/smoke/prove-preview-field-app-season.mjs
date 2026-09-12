@@ -154,6 +154,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { assertWrappable } from '../../.claude/hooks/migration-wrappability-lib.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const NAME = `crx-preview-season-${process.pid}-${Date.now().toString(36)}`;
@@ -161,6 +162,7 @@ const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
 const CANDIDATE = path.join(MIGRATIONS, '20260906120000_preview_field_app_season_follows_invoice_date.sql');
+const CROSS_SEASON_GUARD = path.join(MIGRATIONS, '20260908190000_field_app_invoice_cross_season_edit_guard.sql');
 const SAVE_SIDE = path.join(MIGRATIONS, '20260904180000_invoice_season_follows_invoice_date.sql');
 const PREDECESSOR = path.join(MIGRATIONS, '20260904160000_invoice_date_fallbacks_chicago.sql');
 // The migration that last emitted the 4-argument preview body live still runs.
@@ -176,6 +178,7 @@ const LIVE_PREVIEW_BODY_MD5 = 'ca33fb973d86dbf3a2788dc11fbc49a5';
 // The body this file installs. Both the migration's replay preflight and its postflight pin it.
 const CANDIDATE_BODY_MD5 = '83f6600412ced085d0876a3c7339ff12';
 const SAVE_IMPL = '_save_field_app_invoice_impl_20260714';
+const GENERIC_SAVE_IMPL = '_save_invoice_lineage_unaware_impl_20260827';
 const ADMIN = '00000000-0000-4000-8000-00000000e001';
 // Three distinguishable rates, so a wrong answer can never be mistaken for a right one:
 // if a lookup misses BOTH seeded seasons it falls back to the service default, a third value.
@@ -196,6 +199,17 @@ let DATE_NEXT_SEASON = ''; // Y-10-01: the next season
 
 const log = (m) => process.stdout.write(`${m}\n`);
 const md5 = (s) => createHash('md5').update(s, 'utf8').digest('hex');
+function plpgsqlBody(sql, functionHeader) {
+  const headerAt = sql.indexOf(functionHeader);
+  assert.notEqual(headerAt, -1, `missing function header: ${functionHeader}`);
+  const delimiter = 'AS $function$';
+  const bodyAt = sql.indexOf(delimiter, headerAt);
+  assert.notEqual(bodyAt, -1, `missing body delimiter after: ${functionHeader}`);
+  const start = bodyAt + delimiter.length;
+  const end = sql.indexOf('$function$;', start);
+  assert.notEqual(end, -1, `missing closing body delimiter after: ${functionHeader}`);
+  return sql.slice(start, end);
+}
 
 function docker(args, options = {}) {
   const result = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 120 * 1024 * 1024, ...options });
@@ -272,12 +286,28 @@ function publicHasExecute() {
 
 const workDir = mkdtempSync(path.join(tmpdir(), 'crx-preview-season-'));
 const candidateSql = readFileSync(CANDIDATE, 'utf8');
+const crossSeasonGuardSql = readFileSync(CROSS_SEASON_GUARD, 'utf8');
+assertWrappable(crossSeasonGuardSql, path.basename(CROSS_SEASON_GUARD));
+const crossSeasonTriggerBodyMd5 = md5(plpgsqlBody(
+  crossSeasonGuardSql,
+  'CREATE OR REPLACE FUNCTION public.guard_field_app_invoice_season_date()',
+));
 assert.equal(candidateSql.includes('\r'), false, 'candidate must be LF');
 assert.ok(candidateSql.includes(`DROP FUNCTION IF EXISTS public.${PREVIEW}(jsonb, jsonb, uuid, uuid);`), 'candidate must drop the old 4-argument signature');
 assert.ok(/REVOKE EXECUTE ON FUNCTION public\.preview_field_app_invoice_split\(jsonb, jsonb, uuid, uuid, date\) FROM anon;/.test(candidateSql), 'candidate must revoke the anon grant a fresh CREATE re-acquires');
 assert.ok(candidateSql.includes('$preflight$'), 'candidate must carry an in-transaction preflight');
 assert.ok(candidateSql.includes('$postflight$'), 'candidate must carry an in-transaction postflight');
 assert.ok(candidateSql.includes(LIVE_PREVIEW_BODY_MD5), 'the preflight must pin the reviewed live body md5');
+assert.equal(crossSeasonGuardSql.includes('\r'), false, 'cross-season guard migration must be LF');
+assert.ok(crossSeasonGuardSql.includes('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED'), 'cross-season guard must raise the stable refusal token');
+assert.ok(crossSeasonGuardSql.includes('aa_guard_field_app_invoice_season_date'), 'cross-season guard must protect the invoices table');
+assert.ok(crossSeasonGuardSql.includes('_preview_field_app_invoice_split_impl_20260908'), 'cross-season guard must preserve preview behind a checked wrapper');
+assert.ok(crossSeasonGuardSql.includes('LOCK TABLE public.invoices IN SHARE ROW EXCLUSIVE MODE;'), 'cross-season cutover must drain invoice writers');
+assert.ok(crossSeasonGuardSql.includes("v_trigger_enabled <> 'O'"), 'cross-season postflight must pin the trigger enabled state');
+assert.ok(
+  crossSeasonGuardSql.includes(`md5(p.prosrc) = '${crossSeasonTriggerBodyMd5}'`),
+  `cross-season trigger body pin must match ${crossSeasonTriggerBodyMd5}`,
+);
 // Only the EXECUTABLE body matters here; the header comment names current_season() to say
 // what was replaced, and a substring check over the whole file would flag that prose.
 const candidateBody = (() => {
@@ -630,6 +660,218 @@ function previewOwner() {
                   WHERE n.nspname = 'public' AND p.proname = '${PREVIEW}'`);
 }
 
+function crossSeasonGuardProbe(label) {
+  const sql = `
+DO $probe$
+DECLARE
+  v_cust uuid; v_field uuid; v_svc uuid; v_inv uuid; v_res jsonb; v_preview jsonb;
+  v_before_date date; v_before_season integer; v_before_total bigint; v_before_items int;
+BEGIN
+${AUTHENTICATE}
+  INSERT INTO customers (farm_name) VALUES ('[SMOKE] guard ${label} ' || substr(gen_random_uuid()::text, 1, 8)) RETURNING id INTO v_cust;
+  INSERT INTO fields (customer_id, field_name, total_acres) VALUES (v_cust, '[SMOKE] guard field ${label}', ${ACRES}) RETURNING id INTO v_field;
+  INSERT INTO application_services (name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
+    VALUES ('[SMOKE] guard service ${label}', ${RATE_DEFAULT}, 0, true) RETURNING id INTO v_svc;
+  INSERT INTO customer_application_rates (customer_id, application_service_id, rate_per_acre_cents, season)
+    VALUES (v_cust, v_svc, ${RATE_CUR}, ${SEASON_NOW}), (v_cust, v_svc, ${RATE_NEXT}, ${SEASON_NOW + 1});
+
+  v_res := ${SAVE_IMPL}(
+    NULL, jsonb_build_object('invoice_date', '${DATE_IN_SEASON}'),
+    jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
+    '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
+  SELECT i.id, i.invoice_date, i.season, i.total_amount_cents INTO v_inv, v_before_date, v_before_season, v_before_total
+    FROM invoices i WHERE i.customer_id = v_cust AND i.invoice_type = 'field_application' AND i.deleted_at IS NULL;
+  SELECT count(*) INTO v_before_items FROM invoice_items ii WHERE ii.invoice_id = v_inv;
+
+  -- Exact two-step bypass raised by security review: generic save_invoice first changes
+  -- only the stored season, then changes only the date. The first step must now fail,
+  -- and the second must independently fail against the original filed season.
+  BEGIN
+    PERFORM ${GENERIC_SAVE_IMPL}(
+      jsonb_build_object('id', v_inv, 'invoice_type', 'field_application', 'season', ${SEASON_NOW + 1}),
+      '[]'::jsonb,
+      NULL);
+    RAISE EXCEPTION 'SEASON_GUARD_MISSING: generic save changed the filed season';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM ${GENERIC_SAVE_IMPL}(
+      jsonb_build_object('id', v_inv, 'invoice_type', 'field_application', 'invoice_date', '${DATE_NEXT_SEASON}'),
+      '[]'::jsonb,
+      NULL);
+    RAISE EXCEPTION 'GENERIC_DATE_GUARD_MISSING: generic save changed the date across seasons';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    v_preview := ${PREVIEW}(
+      jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
+      '[]'::jsonb, v_svc, v_inv, DATE '${DATE_NEXT_SEASON}');
+    RAISE EXCEPTION 'PREVIEW_GUARD_MISSING: cross-season preview returned %', v_preview;
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    v_res := ${SAVE_IMPL}(
+      v_inv, jsonb_build_object('invoice_date', '${DATE_NEXT_SEASON}'),
+      jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
+      '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
+    RAISE EXCEPTION 'SAVE_GUARD_MISSING: cross-season save returned %', v_res;
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+
+  IF (SELECT i.invoice_date FROM invoices i WHERE i.id = v_inv) IS DISTINCT FROM v_before_date
+     OR (SELECT i.season FROM invoices i WHERE i.id = v_inv) IS DISTINCT FROM v_before_season
+     OR (SELECT i.total_amount_cents FROM invoices i WHERE i.id = v_inv) IS DISTINCT FROM v_before_total
+     OR (SELECT count(*) FROM invoice_items ii WHERE ii.invoice_id = v_inv) IS DISTINCT FROM v_before_items THEN
+    RAISE EXCEPTION 'GUARD_ROLLBACK_FAILED: refused save changed invoice header or lines';
+  END IF;
+
+  -- Restoration must validate the pending NEW row even while OLD is soft-deleted.
+  UPDATE invoices SET deleted_at = now() WHERE id = v_inv;
+  BEGIN
+    UPDATE invoices SET deleted_at = NULL, invoice_date = DATE '${DATE_NEXT_SEASON}' WHERE id = v_inv;
+    RAISE EXCEPTION 'RESTORE_DATE_GUARD_MISSING: restored invoice crossed its filed season';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+  IF (SELECT deleted_at FROM invoices WHERE id = v_inv) IS NULL
+     OR (SELECT invoice_date FROM invoices WHERE id = v_inv) IS DISTINCT FROM v_before_date THEN
+    RAISE EXCEPTION 'RESTORE_GUARD_ROLLBACK_FAILED: refused restoration changed the invoice';
+  END IF;
+  UPDATE invoices SET deleted_at = NULL WHERE id = v_inv;
+
+  -- Moving one day inside the filed season remains valid in both paths.
+  v_preview := ${PREVIEW}(
+    jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
+    '[]'::jsonb, v_svc, v_inv, DATE '${DATE_IN_SEASON}' - 1);
+  v_res := ${SAVE_IMPL}(
+    v_inv, jsonb_build_object('invoice_date', (DATE '${DATE_IN_SEASON}' - 1)::text),
+    jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
+    '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
+  IF (SELECT i.invoice_date FROM invoices i WHERE i.id = v_inv) IS DISTINCT FROM DATE '${DATE_IN_SEASON}' - 1 THEN
+    RAISE EXCEPTION 'SAME_SEASON_EDIT_BLOCKED: allowed date did not persist';
+  END IF;
+
+  RAISE EXCEPTION 'GUARD_PROBE_ROLLBACK ${label}';
+END
+$probe$;`;
+  const out = psql(sql, { allowFailure: true });
+  assert.equal(out.status, 3, `${label}: guard probe must end in its rollback marker`);
+  assert.match(said(out), new RegExp(`GUARD_PROBE_ROLLBACK ${label}`), `${label}: guard probe did not reach its rollback marker`);
+  return out;
+}
+
+function restoreGuardProbe(label, neutralizeNewRowCheck = false) {
+  let mutant = '';
+  if (neutralizeNewRowCheck) {
+    const create = crossSeasonGuardSql.match(/CREATE OR REPLACE FUNCTION public\.guard_field_app_invoice_season_date\(\)[\s\S]*?\$function\$;/)?.[0];
+    assert.ok(create, 'restoration mutation must isolate the actual trigger declaration');
+    mutant = create.replace('IF public.compute_season(NEW.invoice_date) IS DISTINCT FROM NEW.season THEN', 'IF false THEN');
+    assert.notEqual(mutant, create, 'restoration mutation must remove the NEW-row season check');
+  }
+  const sql = `BEGIN;
+${mutant}
+DO $probe$
+DECLARE v_cust uuid; v_field uuid; v_inv uuid; v_res jsonb;
+BEGIN
+${AUTHENTICATE}
+  INSERT INTO customers (farm_name) VALUES ('[SMOKE] restore ${label}') RETURNING id INTO v_cust;
+  INSERT INTO fields (customer_id, field_name, total_acres)
+    VALUES (v_cust, '[SMOKE] restore field', ${ACRES}) RETURNING id INTO v_field;
+  v_res := ${SAVE_IMPL}(NULL, jsonb_build_object('invoice_date', '${DATE_IN_SEASON}'),
+    jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
+    '[]'::jsonb, '${ADMIN}'::uuid, NULL, NULL);
+  SELECT id INTO v_inv FROM invoices WHERE customer_id = v_cust AND invoice_type = 'field_application';
+  -- Stand in for a historical deleted row that was mismatched before this guard existed.
+  ALTER TABLE invoices DISABLE TRIGGER aa_guard_field_app_invoice_season_date;
+  UPDATE invoices SET deleted_at = now(), invoice_date = DATE '${DATE_NEXT_SEASON}' WHERE id = v_inv;
+  ALTER TABLE invoices ENABLE TRIGGER aa_guard_field_app_invoice_season_date;
+  ${neutralizeNewRowCheck ? `
+  UPDATE invoices SET deleted_at = NULL WHERE id = v_inv;
+  IF (SELECT deleted_at FROM invoices WHERE id = v_inv) IS NOT NULL THEN
+    RAISE EXCEPTION 'RESTORE_MUTANT_DID_NOT_RESTORE';
+  END IF;` : `
+  BEGIN
+    UPDATE invoices SET deleted_at = NULL WHERE id = v_inv;
+    RAISE EXCEPTION 'RESTORE_ONLY_GUARD_MISSING';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+  IF (SELECT deleted_at FROM invoices WHERE id = v_inv) IS NULL THEN
+    RAISE EXCEPTION 'RESTORE_ONLY_ROLLBACK_FAILED';
+  END IF;
+  UPDATE invoices SET deleted_at = NULL, invoice_date = DATE '${DATE_IN_SEASON}' WHERE id = v_inv;`}
+  RAISE EXCEPTION 'RESTORE_PROBE_ROLLBACK ${label}';
+END
+$probe$;`;
+  const out = psql(sql, { allowFailure: true });
+  assert.equal(out.status, 3, `${label}: restoration probe must roll back`);
+  assert.match(said(out), new RegExp(`RESTORE_PROBE_ROLLBACK ${label}`), `${label}: restoration check did not reach its marker`);
+}
+
+function saveGuardRemovedProbe(label) {
+  const sql = `BEGIN;
+DROP TRIGGER aa_guard_field_app_invoice_season_date ON public.invoices;
+DO $probe$
+DECLARE v_cust uuid; v_field uuid; v_inv uuid; v_res jsonb;
+BEGIN
+${AUTHENTICATE}
+  INSERT INTO customers (farm_name) VALUES ('[SMOKE] save mutant ${label}') RETURNING id INTO v_cust;
+  INSERT INTO fields (customer_id, field_name, total_acres) VALUES (v_cust, '[SMOKE] save mutant field', ${ACRES}) RETURNING id INTO v_field;
+  v_res := ${SAVE_IMPL}(NULL, jsonb_build_object('invoice_date', '${DATE_IN_SEASON}'),
+    jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
+    '[]'::jsonb, '${ADMIN}'::uuid, NULL, NULL);
+  SELECT i.id INTO v_inv FROM invoices i WHERE i.customer_id = v_cust AND i.invoice_type = 'field_application';
+  PERFORM ${GENERIC_SAVE_IMPL}(
+    jsonb_build_object('id', v_inv, 'invoice_type', 'field_application', 'season', ${SEASON_NOW + 1}),
+    '[]'::jsonb,
+    NULL);
+  PERFORM ${GENERIC_SAVE_IMPL}(
+    jsonb_build_object('id', v_inv, 'invoice_type', 'field_application', 'invoice_date', '${DATE_NEXT_SEASON}'),
+    '[]'::jsonb,
+    NULL);
+  IF NOT EXISTS (SELECT 1 FROM invoices i WHERE i.id = v_inv AND i.season = ${SEASON_NOW + 1} AND i.invoice_date = DATE '${DATE_NEXT_SEASON}') THEN
+    RAISE EXCEPTION 'TWO_STEP_BYPASS_DID_NOT_COMPLETE ${label}';
+  END IF;
+  RAISE EXCEPTION 'SAVE_GUARD_REMOVED ${label}';
+END
+$probe$;`;
+  const out = psql(sql, { allowFailure: true });
+  assert.match(said(out), new RegExp(`SAVE_GUARD_REMOVED ${label}`), 'dropping the trigger must make the forbidden save succeed');
+  assert.doesNotMatch(said(out), /INVOICE_(FILED_SEASON|SEASON_DATE)_CHANGE_NOT_ALLOWED/, 'no second save guard may hide a missing table trigger');
+}
+
+function previewGuardRemovedProbe(label) {
+  const sql = `BEGIN;
+CREATE OR REPLACE FUNCTION public._assert_field_app_invoice_date_in_filed_season(p_invoice_id uuid, p_invoice_date date)
+RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $noop$ BEGIN RETURN; END $noop$;
+DO $probe$
+DECLARE v_cust uuid; v_field uuid; v_inv uuid; v_res jsonb; v_preview jsonb;
+BEGIN
+${AUTHENTICATE}
+  INSERT INTO customers (farm_name) VALUES ('[SMOKE] preview mutant ${label}') RETURNING id INTO v_cust;
+  INSERT INTO fields (customer_id, field_name, total_acres) VALUES (v_cust, '[SMOKE] preview mutant field', ${ACRES}) RETURNING id INTO v_field;
+  v_res := ${SAVE_IMPL}(NULL, jsonb_build_object('invoice_date', '${DATE_IN_SEASON}'),
+    jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
+    '[]'::jsonb, '${ADMIN}'::uuid, NULL, NULL);
+  SELECT i.id INTO v_inv FROM invoices i WHERE i.customer_id = v_cust AND i.invoice_type = 'field_application';
+  v_preview := ${PREVIEW}(jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
+    '[]'::jsonb, NULL, v_inv, DATE '${DATE_NEXT_SEASON}');
+  RAISE EXCEPTION 'PREVIEW_GUARD_REMOVED ${label} result=%', v_preview;
+END
+$probe$;`;
+  const out = psql(sql, { allowFailure: true });
+  assert.match(said(out), new RegExp(`PREVIEW_GUARD_REMOVED ${label}`), 'neutralizing the assertion must make the forbidden preview succeed');
+  assert.doesNotMatch(said(out), /INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED/, 'no second preview guard may hide a missing assertion');
+}
+
 try {
   docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1536m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
   waitForDatabase();
@@ -661,7 +903,7 @@ try {
   apply('20260727174805_migration_history.sql');
 
   const migrations = selectedMigrations();
-  assert.equal(migrations.at(-1), CANDIDATE, 'candidate must be the final ledger-selected migration');
+  assert.ok(migrations.includes(CANDIDATE), 'preview candidate must remain in the ledger-selected migration list');
   const stopIdx = migrations.findIndex((m) => path.basename(m) === REPLAY_STOP_BEFORE);
   assert.notEqual(stopIdx, -1, `replay stop marker ${REPLAY_STOP_BEFORE} is not in the ledger-selected list`);
   for (const [index, migration] of migrations.slice(0, stopIdx).entries()) {
@@ -733,6 +975,7 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   log(`PHASE 2c: DEFECT REPRODUCED (all-year window) -- reopening an invoice filed under season ${beforeReopen.storedSeason}: preview quoted ${beforeReopen.previewRate}c/acre, save charged ${beforeReopen.savedRate}c/acre`);
 
   copyLf(CANDIDATE, 'candidate.sql', workDir);
+  copyLf(CROSS_SEASON_GUARD, 'cross-season-guard.sql', workDir);
   copyText(asReplace(realCreate), 'restore-body.sql', workDir);
 
   // ---- PHASE 2d/2e: the apply-time guards, tested against the REAL pre-apply state -----
@@ -1359,7 +1602,79 @@ ${revokedAuth}`),
   assertAgrees(parityProbe('FINAL_CROSS_EDIT', { mode: 'reopen', createDate: DATE_IN_SEASON, invoiceDate: DATE_NEXT_SEASON, withDate: true }));
   log('PHASE 7: real candidate reinstalled over the mutants -- owner, grants, signature and behaviour back to live posture');
 
-  log('\nPREVIEW_SEASON_PROOF_PASS all phases, including all twenty-seven mutation phases -- twenty-four refused by a named abort, three caught behaviourally -- behaved as required');
+  // ---- PHASE 8: owner-approved cross-season edit refusal -----------------------------
+  const guardApply = apply('cross-season-guard.sql');
+  assert.match(said(guardApply), /POSTFLIGHT_OK/, 'cross-season guard migration did not reach its postflight');
+  crossSeasonGuardProbe('REAL_GUARD');
+  restoreGuardProbe('REAL_RESTORE');
+  log('PHASE 8a: preview/save and restore-plus-date/restore-only paths refuse cross-season edits, roll back, and allow valid within-season edits/restoration');
+
+  // Apply again to exercise the migration's replay branch and ensure the public wrapper is
+  // not renamed a second time.
+  const replayGuard = apply('cross-season-guard.sql');
+  assert.match(said(replayGuard), /POSTFLIGHT_OK/, 'cross-season guard replay did not reach its postflight');
+  assert.equal(previewSignatureCount(), 1, 'guard replay must leave exactly one public preview signature');
+  log('PHASE 8b: cross-season guard replays cleanly with one public preview signature');
+
+  psql(`GRANT EXECUTE ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date) TO anon;`, { wrap: true });
+  const replayPublicAclDrift = psql('\\i /tmp/cross-season-guard.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(replayPublicAclDrift.status, 0, 'replay over a drifted public ACL must abort');
+  assert.match(said(replayPublicAclDrift), /PREFLIGHT_PREVIEW_ACL_DRIFT/, 'public ACL drift must abort before rewrite');
+  assert.equal(scalar(`SELECT has_function_privilege('anon', 'public.${PREVIEW}(jsonb,jsonb,uuid,uuid,date)', 'EXECUTE')`), 't', 'aborted replay must preserve the outside public ACL change');
+  psql(`REVOKE EXECUTE ON FUNCTION public.${PREVIEW}(jsonb, jsonb, uuid, uuid, date) FROM anon;`, { wrap: true });
+  log('PHASE 8c: replay ACL mutant caught -- an outside public grant aborts before rewrite and survives the refusal');
+
+  psql('GRANT EXECUTE ON FUNCTION public._preview_field_app_invoice_split_impl_20260908(jsonb, jsonb, uuid, uuid, date) TO authenticated;', { wrap: true });
+  const replayPrivateAclDrift = psql('\\i /tmp/cross-season-guard.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(replayPrivateAclDrift.status, 0, 'replay over a drifted private ACL must abort');
+  assert.match(said(replayPrivateAclDrift), /PREFLIGHT_PRIVATE_ACL_DRIFT/, 'private ACL drift must abort before rewrite');
+  assert.equal(scalar("SELECT has_function_privilege('authenticated', 'public._preview_field_app_invoice_split_impl_20260908(jsonb,jsonb,uuid,uuid,date)', 'EXECUTE')"), 't', 'aborted replay must preserve the outside private ACL change');
+  psql('REVOKE EXECUTE ON FUNCTION public._preview_field_app_invoice_split_impl_20260908(jsonb, jsonb, uuid, uuid, date) FROM authenticated;', { wrap: true });
+  log('PHASE 8d: replay ACL mutant caught -- an outside private grant aborts before rewrite and survives the refusal');
+
+  psql(`CREATE FUNCTION public._assert_field_app_invoice_date_in_filed_season(uuid, date, text)
+RETURNS void LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN; END $$;`, { wrap: true });
+  const replayShadowOverload = psql('\\i /tmp/cross-season-guard.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(replayShadowOverload.status, 0, 'replay with a private shadow overload must abort');
+  assert.match(said(replayShadowOverload), /PREFLIGHT_REPLAY_SHAPE_DRIFT/, 'private shadow overload must abort before rewrite');
+  assert.equal(scalar(`SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname='_assert_field_app_invoice_date_in_filed_season'`), '2', 'aborted replay must preserve the shadow overload');
+  psql('DROP FUNCTION public._assert_field_app_invoice_date_in_filed_season(uuid, date, text);', { wrap: true });
+  log('PHASE 8e: replay overload mutant caught -- a private shadow overload aborts before rewrite and survives the refusal');
+
+  const postflightMarker = 'DO $postflight$';
+  assert.equal(crossSeasonGuardSql.split(postflightMarker).length - 1, 1, 'trigger-state mutant requires one postflight marker');
+  copyText(
+    crossSeasonGuardSql.replace(
+      postflightMarker,
+      "ALTER TABLE public.invoices DISABLE TRIGGER aa_guard_field_app_invoice_season_date;\n\nDO $postflight$",
+    ),
+    'cross-season-trigger-disabled.sql',
+    workDir,
+  );
+  const disabledTrigger = psql('\\i /tmp/cross-season-trigger-disabled.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(disabledTrigger.status, 0, 'a disabled guard trigger must abort the migration postflight');
+  assert.match(said(disabledTrigger), /POSTFLIGHT_TRIGGER/, 'disabled trigger must abort at POSTFLIGHT_TRIGGER');
+  crossSeasonGuardProbe('DISABLED_TRIGGER_ROLLBACK');
+  log('PHASE 8f: mutant caught and rolled back -- disabling the trigger aborts the migration postflight and leaves the real guard active');
+
+  saveGuardRemovedProbe('TRIGGER_MUTANT');
+  log('PHASE 8g: mutant caught -- dropping the invoices trigger permits the exact two-step stored-season then date bypass');
+  restoreGuardProbe('MUTANT_RESTORE', true);
+  log('PHASE 8g-restoration: mutant caught -- removing only the NEW-row season check permits restoration of a mismatched deleted invoice');
+  previewGuardRemovedProbe('PREVIEW_MUTANT');
+  log('PHASE 8h: mutant caught -- neutralizing the private assertion makes the forbidden preview succeed');
+
+  // Run the registered full public business chain inside this disposable database.
+  const specs = JSON.parse(readFileSync(path.join(ROOT, 'scripts/smoke/smoke-specs.json'), 'utf8')).specs;
+  const fullChain = specs.save_field_app_invoice;
+  assert.ok(fullChain.covers.includes(PREVIEW), 'registered chain must cover the public preview');
+  const fullChainSql = readFileSync(path.join(ROOT, 'scripts/smoke', fullChain.chain), 'utf8');
+  const fullChainResult = psql(fullChainSql, { allowFailure: true });
+  assert.equal(fullChainResult.status, 3, 'registered public chain must end in rollback');
+  assert.match(said(fullChainResult), /SMOKE_PASS_ROLLBACK/, 'registered public business chain failed');
+  log('PHASE 9: registered save_field_app_invoice public split/post/idempotency business chain reached SMOKE_PASS_ROLLBACK');
+
+  log('\nPREVIEW_SEASON_PROOF_PASS all phases, including season immutability, cross-season refusal, replay drift, rollback, enabled-state guard, and behavioural mutation proofs -- behaved as required');
 } finally {
   docker(['rm', '-f', NAME], { allowFailure: true });
 }

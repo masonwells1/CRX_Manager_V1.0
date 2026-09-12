@@ -47,7 +47,12 @@ vi.mock('../lib/db', () => ({
   assertRpcResult: <T,>(data: T) => data,
   checkMutationResult: () => {},
   sanitizeError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-  RpcErrorCodes: { ZERO_APPLIED_ACRES: 'ZERO_APPLIED_ACRES', ACTOR_MISMATCH: 'ACTOR_MISMATCH' },
+  RpcErrorCodes: {
+    ZERO_APPLIED_ACRES: 'ZERO_APPLIED_ACRES',
+    ACTOR_MISMATCH: 'ACTOR_MISMATCH',
+    INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED: 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED',
+    INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED: 'INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED',
+  },
   hasRpcCode: (err: unknown, code: string) => {
     const m = err instanceof Error ? err.message : String(err ?? '');
     return m === code || m.startsWith(`${code}:`) || m.startsWith(`${code} `);
@@ -602,6 +607,7 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
               invoice_number: 'INV-1001',
               invoice_type: 'field_application',
               invoice_date: '2026-04-29',
+              season: 2026,
               header_notes: '',
               status: 'draft',
               application_service_id: null,
@@ -639,6 +645,33 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
     await renderPage();
     await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
     expect(screen.queryByText(/part of a/i)).not.toBeInTheDocument();
+  });
+
+  it('blocks Preview and Save when an existing invoice date crosses its filed-season boundary', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Preview$/i })).toBeInTheDocument());
+
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This invoice is filed in season 2026. Choose a date from 2025-10-01 through 2026-09-30.',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'This invoice is filed in season 2026. Choose a date from 2025-10-01 through 2026-09-30.',
+    );
+    expect(mockRpc.mock.calls.some((call) => call[0] === 'preview_field_app_invoice_split')).toBe(false);
+    expect(mockRpc.mock.calls.some((call) => call[0] === 'save_field_app_invoice')).toBe(false);
   });
 });
 

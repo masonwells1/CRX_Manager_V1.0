@@ -28,7 +28,8 @@
  *     write keyword as a defense-in-depth guard (see SQL_WRITE_GUARD below).
  *   - Returns rows = violations. Expected ZERO rows after subtracting allowlist entries.
  *   - MUST output a stable key column named `violation_key` (a function identity like
- *     'fn_name(arg types)' or any stable identifier) — this is what allowlist.json matches on.
+ *     'fn_name(arg types)' or any stable identifier). Actor exceptions ALSO require the exact
+ *     suspect_param and unchanged reviewed function/authorization-dependency contracts.
  *
  * Usage:
  *   node run-sweeps.mjs                 # run all predicates (psql mode if possible, else Claude mode)
@@ -36,6 +37,7 @@
  *   node run-sweeps.mjs --explain <p>   # print one predicate's header + SQL + allowlist entries
  *   node run-sweeps.mjs --json          # (psql mode) emit machine-readable result summary
  *   node run-sweeps.mjs --strict        # require a real linked-live run; exit 2 (not print-only) if live unreachable
+ *   node run-sweeps.mjs --adjudicate <captured.json> # apply the SAME matcher to captured MCP sweep_result packets
  *
  * Exit codes: 0 = all clear (or Claude-mode print, which never fails the build on its own),
  *             1 = at least one unallowlisted violation (psql mode),
@@ -47,6 +49,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { buildSweepQuery, subtractAllowlist } from './allowlist-match.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PREDICATE_DIR = join(__dirname, 'predicates');
@@ -112,28 +115,26 @@ function hasPsql() {
 }
 
 /** Execute a predicate via psql, returning {rows: [...], error: string|null}. */
-function runViaPsql(predicate) {
-  // Wrap the predicate so psql returns JSON we can parse regardless of column shape.
-  const wrapped = `SELECT coalesce(json_agg(t), '[]'::json) FROM (\n${stripTrailingSemicolon(
-    predicate.sql,
-  )}\n) t;`;
+function runViaPsql(predicate, entries) {
+  // One snapshot: a changed function/dependency cannot be compared to a separately cached catalog.
+  const wrapped = buildSweepQuery(predicate, entries);
   const res = spawnSync(
     'psql',
     [process.env.SUPABASE_DB_URL, '-tAX', '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-c', wrapped],
     { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
   );
   if (res.status !== 0) {
-    return { rows: null, error: (res.stderr || res.stdout || 'psql failed').trim() };
+    return { rows: null, function_contracts: [], error: (res.stderr || res.stdout || 'psql failed').trim() };
   }
   try {
-    return { rows: JSON.parse(res.stdout.trim() || '[]'), error: null };
+    const packet = JSON.parse(res.stdout.trim());
+    if (packet.predicate !== predicate.name || !Array.isArray(packet.rows)) {
+      throw new TypeError('Invalid sweep_result packet.');
+    }
+    return { ...packet, error: null };
   } catch (e) {
     return { rows: null, error: `could not parse psql JSON output: ${e.message}\n${res.stdout}` };
   }
-}
-
-function stripTrailingSemicolon(sql) {
-  return sql.replace(/;\s*$/, '');
 }
 
 function assertReadOnly(predicate) {
@@ -145,20 +146,6 @@ function assertReadOnly(predicate) {
     );
     process.exit(2);
   }
-}
-
-/** Subtract allowlist entries from violation rows; returns the unallowlisted remainder. */
-function subtractAllowlist(rows, entries) {
-  const allowed = new Set(entries.map((e) => e.violation_key));
-  return rows.filter((r) => {
-    if (!('violation_key' in r)) {
-      console.error(
-        `Predicate output row is missing the required "violation_key" column: ${JSON.stringify(r)}`,
-      );
-      process.exit(2);
-    }
-    return !allowed.has(r.violation_key);
-  });
 }
 
 // ---------- CLI ----------
@@ -192,6 +179,7 @@ if (args.includes('--explain')) {
   console.log(`\n--- allowlist entries (${entries.length}) ---`);
   for (const e of entries) {
     console.log(`  • ${e.violation_key}\n      ${e.justification} [${e.dated}]`);
+    if (e.reviewed_contracts) console.log(JSON.stringify({ suspect_param: e.suspect_param, reviewed_contracts: e.reviewed_contracts }, null, 2));
   }
   process.exit(0);
 }
@@ -217,6 +205,39 @@ if (args.includes('--only')) {
 // Default: run all (or --only-selected) predicates.
 const jsonMode = args.includes('--json');
 const strict = args.includes('--strict') || process.env.DB_SWEEPS_REQUIRE_LIVE === '1';
+
+if (args.includes('--adjudicate')) {
+  // This validates captured results; it never claims that this process executed a linked-live sweep.
+  if (strict) {
+    console.error('--strict requires live execution; it cannot be combined with captured-result adjudication.');
+    process.exit(2);
+  }
+  try {
+    const capturePath = args[args.indexOf('--adjudicate') + 1];
+    if (!capturePath || capturePath.startsWith('--')) throw new TypeError('--adjudicate requires a captured JSON file.');
+    const packets = JSON.parse(readFileSync(capturePath, 'utf8'));
+    if (!Array.isArray(packets) || packets.length !== selectedPredicates.length) {
+      throw new TypeError('Capture must contain exactly one sweep_result packet for each selected predicate (use --only for a subset).');
+    }
+    const names = new Set();
+    const summary = packets.map((packet) => {
+      if (!packet || !selectedPredicates.some((p) => p.name === packet.predicate) || names.has(packet.predicate)) {
+        throw new TypeError('Capture contains an unknown or duplicate predicate.');
+      }
+      names.add(packet.predicate);
+      const remaining = subtractAllowlist(packet.rows, allowlistFor(allowlist, packet.predicate), packet.function_contracts);
+      return { predicate: packet.predicate, status: remaining.length === 0 ? 'PASS' : 'FAIL',
+        total_rows: packet.rows.length, allowlisted: packet.rows.length - remaining.length, violations: remaining };
+    });
+    const ok = summary.every((item) => item.status === 'PASS');
+    console.log(JSON.stringify({ ok, execution: 'captured-results-only', summary }, null, 2));
+    process.exit(ok ? 0 : 1);
+  } catch (error) {
+    console.error(`Invalid captured sweep results: ${error.message}`);
+    process.exit(2);
+  }
+}
+
 const psql = hasPsql();
 
 // --strict / DB_SWEEPS_REQUIRE_LIVE: a printed sweep is NOT a passed sweep. When a real
@@ -252,11 +273,14 @@ if (!psql) {
       ' db-invariant-sweeps — CLAUDE MODE (SUPABASE_DB_URL/psql not available)',
       '════════════════════════════════════════════════════════════════════════',
       '',
-      ' Run each predicate below READ-ONLY via the Supabase MCP execute_sql tool',
-      ' (project rhyzpcqhnizqbxphqdkr), then compare the returned rows against the',
-      ' allowlist for that predicate. A predicate PASSES iff every returned',
-      ' violation_key is present in allowlist.json for that predicate. Any',
-      ' violation_key NOT in the allowlist is a REAL FINDING — investigate via',
+      ' Run each wrapped predicate below READ-ONLY via Supabase MCP execute_sql',
+      ' (project rhyzpcqhnizqbxphqdkr). Each returns one sweep_result packet with',
+      ' rows AND reviewed dependency contracts from the same database snapshot.',
+      ' Capture the returned packets as a LOCAL/private JSON array; run this',
+      ' runner with --adjudicate <captured.json> (and --only for a subset).',
+      ' A key-only comparison is NOT sufficient: actor exceptions require the',
+      ' exact suspect_param and every unchanged reviewed definition/owner/ACL.',
+      ' Missing or changed contracts leave the flag visible. Investigate via',
       ' pg_get_functiondef and either (a) seed a justified allowlist entry citing',
       ' the live definition, or (b) report/fix it. NEVER allowlist a real hole.',
       '',
@@ -272,16 +296,17 @@ if (!psql) {
     const firstHeader = p.header.split('\n').find((l) => l.trim());
     if (firstHeader) console.log(`│ ${firstHeader}`);
     console.log(`└${'─'.repeat(60)}`);
-    console.log(p.sql.trim());
+    console.log(buildSweepQuery(p, entries));
     if (entries.length) {
-      console.log(`-- expected/allowlisted violation_keys for ${p.name}:`);
-      for (const e of entries) console.log(`--   ${e.violation_key}`);
+      console.log(`-- candidate exception keys for ${p.name} (NOT key-only authorization):`);
+      for (const e of entries) console.log(`--   ${e.violation_key}${e.suspect_param ? ` [suspect_param=${e.suspect_param}; reviewed contracts required]` : ''}`);
     }
     console.log('');
   }
   console.log(
     '\nClaude: after running all of the above, report per-predicate counts and any\n' +
-      'violation_key not in the allowlist. Exit status of THIS process is 0 (print-only).',
+      'unallowlisted rows using --adjudicate, NOT key-only subtraction. The local\n' +
+      'adjudicator does not certify capture freshness. THIS print-only process exits 0.',
   );
   process.exit(0);
 }
@@ -291,15 +316,21 @@ let failed = false;
 const summary = [];
 for (const p of selectedPredicates) {
   assertReadOnly(p);
-  const { rows, error } = runViaPsql(p);
+  const entries = allowlistFor(allowlist, p.name);
+  const { rows, function_contracts, error } = runViaPsql(p, entries);
   if (error) {
     failed = true;
     summary.push({ predicate: p.name, status: 'ERROR', error });
     if (!jsonMode) console.error(`✗ ${p.name}: ERROR\n  ${error}`);
     continue;
   }
-  const entries = allowlistFor(allowlist, p.name);
-  const remaining = subtractAllowlist(rows, entries);
+  let remaining;
+  try {
+    remaining = subtractAllowlist(rows, entries, function_contracts);
+  } catch (contractError) {
+    console.error(`Invalid predicate contract for ${p.name}: ${contractError.message}`);
+    process.exit(2);
+  }
   const status = remaining.length === 0 ? 'PASS' : 'FAIL';
   if (status === 'FAIL') failed = true;
   summary.push({
