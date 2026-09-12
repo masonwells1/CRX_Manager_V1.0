@@ -198,10 +198,25 @@ function exactDecimal(value: string | number): ExactDecimal | null {
 
   let coefficient = BigInt((match[2] || '0') + fraction);
   if (match[1] === '-') coefficient = -coefficient;
+  if (coefficient === 0n) return { coefficient: 0n, scale: 0 };
 
   const scale = fraction.length - exponent;
   if (scale >= 0) return { coefficient, scale };
   return { coefficient: coefficient * (10n ** BigInt(-scale)), scale: 0 };
+}
+
+/** Refuse acreage that the existing numeric save payload would silently change. */
+export function fieldAcresSurvivesSave(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed === '') return true; // Established blank-field meaning: zero acres.
+  const parsed = parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return false;
+  const original = exactDecimal(trimmed);
+  const submitted = exactDecimal(String(parsed));
+  if (original == null || submitted == null) return false;
+  // Underflow must not allocate an exponent-sized integer just to compare with zero.
+  if (parsed === 0) return original.coefficient === 0n;
+  return compareExactDecimal(original, submitted) === 0;
 }
 
 function compareExactDecimal(left: ExactDecimal, right: ExactDecimal): number {
@@ -221,17 +236,28 @@ function multiplyExactDecimal(left: ExactDecimal, right: ExactDecimal): ExactDec
 /**
  * Exact mirror of SQL's inclusive comparison over the canonical numeric values serialized
  * by the save payload:
- * abs(qty - rate * acres) <= greatest(0.0001, least(0.00005 * acres, 0.1)).
+ * abs(qty - convert(rate * acres)) <= greatest(0.0001, least(convert(0.00005 * acres), convert(0.1))).
+ * Unit sizes default to identity for the equal-unit path.
  */
-function quantityIsWithinSqlTolerance(quantityText: string, rateText: string, acresText: string): boolean {
+function quantityIsWithinSqlTolerance(
+  quantityText: string,
+  rateText: string,
+  acresText: string,
+  sourceSize = 1,
+  targetSize = 1,
+): boolean {
   const quantity = exactDecimal(quantityText);
   const rate = exactDecimal(rateText);
   const acreage = exactDecimal(acresText);
   if (quantity == null || rate == null || acreage == null) return false;
 
-  const expected = multiplyExactDecimal(rate, acreage);
-  const comparisonScale = Math.max(quantity.scale, expected.scale);
-  const quantityScaled = quantity.coefficient * (10n ** BigInt(comparisonScale - quantity.scale));
+  // Cross-multiply integer unit sizes instead of dividing or rounding converted decimals.
+  const source: ExactDecimal = { coefficient: BigInt(sourceSize), scale: 0 };
+  const target: ExactDecimal = { coefficient: BigInt(targetSize), scale: 0 };
+  const comparedQuantity = multiplyExactDecimal(quantity, target);
+  const expected = multiplyExactDecimal(multiplyExactDecimal(rate, acreage), source);
+  const comparisonScale = Math.max(comparedQuantity.scale, expected.scale);
+  const quantityScaled = comparedQuantity.coefficient * (10n ** BigInt(comparisonScale - comparedQuantity.scale));
   const expectedScaled = expected.coefficient * (10n ** BigInt(comparisonScale - expected.scale));
   const difference: ExactDecimal = {
     coefficient: quantityScaled >= expectedScaled
@@ -241,15 +267,17 @@ function quantityIsWithinSqlTolerance(quantityText: string, rateText: string, ac
   };
 
   const acreageSlack: ExactDecimal = {
-    coefficient: RATE_ROUNDING_PER_ACRE.coefficient * acreage.coefficient,
+    coefficient: RATE_ROUNDING_PER_ACRE.coefficient * acreage.coefficient * source.coefficient,
     scale: RATE_ROUNDING_PER_ACRE.scale + acreage.scale,
   };
-  const cappedSlack = compareExactDecimal(acreageSlack, MAX_QUANTITY_TOLERANCE) <= 0
+  const convertedCap = multiplyExactDecimal(MAX_QUANTITY_TOLERANCE, source);
+  const convertedFloor = multiplyExactDecimal(MIN_QUANTITY_TOLERANCE, target);
+  const cappedSlack = compareExactDecimal(acreageSlack, convertedCap) <= 0
     ? acreageSlack
-    : MAX_QUANTITY_TOLERANCE;
-  const tolerance = compareExactDecimal(cappedSlack, MIN_QUANTITY_TOLERANCE) >= 0
+    : convertedCap;
+  const tolerance = compareExactDecimal(cappedSlack, convertedFloor) >= 0
     ? cappedSlack
-    : MIN_QUANTITY_TOLERANCE;
+    : convertedFloor;
 
   return compareExactDecimal(difference, tolerance) <= 0;
 }
@@ -765,7 +793,7 @@ const NO_HAZARD: ChemBillingHazard = { hazard: false, quantityUnit: '', priceUni
  */
 export function chemLineBillingHazard(
   row: { quantity: string; rate_per_acre: string; rate_unit?: string | null; unit?: string | null },
-  acres: number,
+  acres: number | string,
   productForm?: 'liquid' | 'dry' | null,
 ): ChemBillingHazard {
   const rateBaseRaw = baseUnitOfRate(row.rate_unit);
@@ -828,7 +856,7 @@ export function chemLineBillingHazard(
 
   if (quantityUnit === priceUnit) return NO_HAZARD;
 
-  // `quantity` is stored through fmt4, so allow 4-dp slack plus a relative epsilon.
+  // Prove the inclusive server tolerance with exact decimals, not a float epsilon.
   // PROOF OF SAFETY, and the only one: the quantity is what rate × acres reads once carried
   // into the unit the price is quoted in. Requires a usable rate and acreage — without them
   // nothing is proven, so the row stays flagged rather than escaping.
@@ -842,22 +870,18 @@ export function chemLineBillingHazard(
   // stops the acreage term from being sized by the acreage figure itself — uncapped it is
   // a caller-sized allowance, the exact defect class as the relative epsilon (|carried| ×
   // 1e-6) this replaced, which at a carried 100,000 accepted a 0.1 gap (CodeRabbit Major,
-  // 2026-08-24). Both converted terms fall back to the flat 0.0001 when the converter
-  // cannot size them — the strict reading — and LEAST against that fallback tightens, not
-  // widens. No term scales with the number under test, and no term is unbounded.
+  // 2026-08-24). Unknown unit sizes cannot prove safety and leave the row flagged.
+  // No term scales with the number under test, and no term is unbounded.
   const rate = parseFloat(row.rate_per_acre);
-  if (Number.isFinite(rate) && rate > 0 && acres > 0) {
-    const carried = fieldAppPricedQuantity(rate * acres, quantityUnit, priceUnit, productForm ?? null);
-    if (carried != null) {
-      const slack = Math.max(
-        1e-4,
-        Math.min(
-          fieldAppPricedQuantity(0.00005 * acres, quantityUnit, priceUnit, productForm ?? null) ?? 1e-4,
-          fieldAppPricedQuantity(0.1, quantityUnit, priceUnit, productForm ?? null) ?? 1e-4,
-        ),
-      );
-      if (Math.abs(qty - carried) <= slack) return NO_HAZARD;
-    }
+  const acreage = exactDecimal(acres);
+  const sizes = productForm === 'dry' ? DRY_UNIT_SIZE : LIQUID_UNIT_SIZE;
+  const sourceSize = sizes[quantityUnit];
+  const targetSize = sizes[priceUnit];
+  if (Number.isFinite(rate) && rate > 0 && acreage != null && acreage.coefficient > 0n
+      && Number.isSafeInteger(sourceSize) && sourceSize > 0
+      && Number.isSafeInteger(targetSize) && targetSize > 0
+      && quantityIsWithinSqlTolerance(String(qty), String(rate), String(acres), sourceSize, targetSize)) {
+    return NO_HAZARD;
   }
 
   // What this quantity SHOULD read if it were carried into the price's unit. Acreage plays
