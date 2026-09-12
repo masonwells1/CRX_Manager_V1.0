@@ -1998,8 +1998,9 @@ duplicates one of #449's fixes — delete it rather than continuing it.
 
 ## OPEN 2026-09-11 — an expired uncertain request locks its dialog with no in-app way to clear it
 
-**Owner:** unassigned, coordinator to assign. Product UI work, so the 2026-09-11 to 2026-09-25 guard-logic
-freeze does not apply.
+**Owner:** Codex PR #624 landing coordinator. Recovery design and verification plan due 2026-09-18;
+implementation gets a separate product queue slot under section 8 of the approved 2026-09-11 backlog
+plan. Product UI work, so the 2026-09-11 to 2026-09-25 guard-logic freeze does not apply.
 
 `useUncertainMutationIntent` keeps a request whose reply was lost as pending for a 23-hour safe retry
 window. Once that window passes, the record is still restored as pending on every visit: the dialog
