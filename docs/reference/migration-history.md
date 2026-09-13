@@ -4,7 +4,7 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live-ledger capture — 2026-09-12, current boundary.** Read-only production inspection records
+**Live-ledger capture — 2026-09-13, current boundary.** Read-only production inspection records
 **1001 ledger rows / 994 distinct names**, latest apply-time version **`20260909023300`**,
 and latest authored-name prefix **`20260908120000`**. The September 12 schema-registry refresh
 used all six live introspection queries, not a timestamp-only update. Order new files by authored

@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-12 for the read-only live ledger and scoped filed-season/generic-save
+**Last verified: 2026-09-13 for the read-only live ledger and scoped filed-season/generic-save
 contracts; other historical issues retain their own dated verification and are not re-certified.**
 The current ledger capture is maintained only in `docs/reference/migration-history.md`.
 Live generic save still has original body md5 `9a34478d405a1a3b8233cabcdfb39691`, and live
@@ -35,10 +35,16 @@ Do not manufacture actor/payload bindings for legacy generic receipts or delete/
 Both phases pin the original OID/defaults/owner/search path/ACL and leave source creators alone.
 Corrected full disposable transition/concurrency/mutation proof passed with
 `PREVIEW_SEASON_PROOF_PASS` and both registered business-chain `SMOKE_PASS_ROLLBACK`
-markers. The newly frozen exact-head review remains pending; older CLEAN reports do not
-clear this candidate. The edit guard and both
-cutover phases remain unapplied. Normal publication/CI and actual CodeRabbit review are also
-required; neither `d93106e8e` nor `f6cb05b369` BLOCKERS is clearance.
+markers. Published corrected head `7a0ed406b1` subsequently passed exact-head Sol/high
+CLEAN and full GitHub implementation/SQL/Windows checks. Both original Codex cutover
+threads have published-head runtime/proof dispositions and are resolved. Current-head
+Codex P2 `3998769135` also requests an explicit LF rule for phase two; the metadata-only
+local correction is verified, but its next current-main exact-head proof/publication
+and actual CodeRabbit review remain pending. The edit guard and both cutover phases
+remain unapplied. September 13 read-only checks reconfirm original live function pins,
+absent guard helpers/trigger and no valid generic receipts or active mixed-season/date
+mismatch cases now. This is not a future apply guarantee. Neither the earlier
+`d93106e8e` nor `f6cb05b369` BLOCKERS is clearance for any later candidate.
 
 The operative decision is in `DECISION_LOG.md` (September 8 continuation). Delivery and live
 apply remain separate gates. The session closeout and still-open audit follow-ups are recorded

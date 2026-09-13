@@ -1,26 +1,36 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-12 for the live migration ledger and the scoped invoice/job RPC
+**Last verified: 2026-09-13 for the live migration ledger and the scoped invoice/job RPC
 contracts below; this is not a re-certification of every historical entry on this page.**
-The fresh read-only ledger agrees with the current September 12 capture in
+The fresh read-only ledger agrees with the current September 13 capture in
 `docs/reference/migration-history.md`: authored-name boundary `20260908120000`, with bare
 names resolved by the canonical ordering rules. That capture supersedes the September 8
 ordering guidance and older registry metadata below. This branch's registry was regenerated
 September 12 using all six live introspection queries; it records already-applied identities,
-not either pending guard as applied.
+not any of the three pending guard migrations as applied. Today's verification does
+not claim another six-query registry regeneration; that structural capture remains September 12.
 
 Live `save_invoice(jsonb,jsonb,text)` remains the original wrapper at body md5
 `9a34478d405a1a3b8233cabcdfb39691`; `preview_field_app_invoice_split` remains at
 `83f6600412ced085d0876a3c7339ff12`. The filed-season helpers are absent. Live `save_job`
 remains the null-acreage refusal body `8acf34542105a90212ddb0a5e7c5d272`.
-Both the filed-season edit guard and `20260912165758_refuse_generic_field_invoice_creation.sql`
-remain **LOCAL CANDIDATES — NOT APPLIED**. Public-save creation/refusal, retries, existing
+The filed-season edit guard, phase-one `20260912165758_refuse_generic_field_invoice_creation.sql`,
+and phase-two `20260913040359_finish_generic_field_invoice_cutover.sql` all remain
+**LOCAL CANDIDATES — NOT APPLIED**. Public-save creation/refusal, retries, existing
 edits, prior-season job/blend creation, replay drift and a byte-identical original-wrapper
 mutation passed in disposable PostgreSQL. This is local behavior proof, not live deployment.
 Original #592 and #599 are merged; their distinct later follow-ups are not thereby cleared.
 See the September 12 session closeout for current review gates and remaining obligations.
 
-## Historical captures — superseded by the scoped September 12 header above
+Published #652 head `7a0ed406b1` has executed retry-safe two-phase proof, exact-head
+Sol/high CLEAN and green implementation CI. Its two original Codex cutover findings
+have exact-head dispositions and resolved threads. A new-head Codex P2 about phase-two
+LF checkout has a local metadata-only correction; its next exact-head proof/publication
+and actual CodeRabbit review remain pending. September 13 live inspection found no
+valid generic save receipts, active mixed-season groups or active field date/season
+mismatches now; these are point-in-time pre-apply checks, not a future apply guarantee.
+
+## Historical captures — superseded by the scoped September 13 header above
 
 **Superseded 2026-09-06 header, kept for provenance — every boundary and counter claim in the next
 two paragraphs is superseded by the 2026-09-08 capture that follows them; do not number a migration
