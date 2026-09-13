@@ -455,10 +455,11 @@ export default function ReceivingHubPanel() {
       <Modal
         open={!!receiveTarget}
         onClose={() => {
-          if (receiveIntent.isIntentLocked) return;
+          if (receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked) return;
           setReceiveTarget(null);
           setReceiveQty('');
         }}
+        closeDisabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked}
         title="Receive Stock"
       >
         <div className="space-y-4">
@@ -494,7 +495,7 @@ export default function ReceivingHubPanel() {
             <p className="text-[11px] text-secondary mt-1">Receives the full remaining quantity to Main Warehouse in good condition. For a partial/damaged receipt or a printed receipt, open the PO.</p>
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" disabled={receiveIntent.isIntentLocked} onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>
+            <Button variant="ghost" disabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked} onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>
             <Button
               icon={<PackagePlus className="w-4 h-4" />}
               onClick={handleReceiveConfirm}

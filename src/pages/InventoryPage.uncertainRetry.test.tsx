@@ -187,6 +187,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     fireEvent.change(within(dialog).getByLabelText(/quantity received/i), { target: { value: '3' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^receive$/i }));
     await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved once')));
+    expect(within(dialog).getByText(/these goods were recorded once/i)).toBeInTheDocument();
     expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
     expect(mocks.captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tags: expect.objectContaining({ operation: 'receive_po_items' }) }));
     expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
@@ -293,6 +294,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
       await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('was saved once')));
       expect(mocks.toast.mock.calls.filter(([variant]) => variant === 'success')).toEqual([]);
       expect(dialog).toBeInTheDocument();
+      expect(within(dialog).getByText(operation === 'adjust_inventory' ? /this adjustment was recorded once/i : /this hold was recorded once/i)).toBeInTheDocument();
       expect(mocks.toast.mock.calls.filter(([variant]) => variant === 'error')).toEqual([]);
       await waitFor(() => expect(callsTo('get_inventory_position').length).toBeGreaterThan(beforeRefresh));
       const committed = callsTo(operation)[0];

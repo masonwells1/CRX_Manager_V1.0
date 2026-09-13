@@ -963,11 +963,12 @@ export default function VendorBillDetail() {
       <Modal
         open={payModalOpen}
         onClose={() => {
-          if (!paymentIntent.isIntentLocked) {
+          if (!paymentIntent.isIntentLocked || paymentIntent.isForeignIntentLocked) {
             setPayModalOpen(false);
             setPayModalBillId(null);
           }
         }}
+        closeDisabled={paymentIntent.isIntentLocked && !paymentIntent.isForeignIntentLocked}
         title="Record Payment"
       >
         <div className="space-y-4">
@@ -1043,7 +1044,7 @@ export default function VendorBillDetail() {
                 setPayModalOpen(false);
                 setPayModalBillId(null);
               }}
-              disabled={paymentIntent.isIntentLocked}
+              disabled={paymentIntent.isIntentLocked && !paymentIntent.isForeignIntentLocked}
             >
               Cancel
             </Button>

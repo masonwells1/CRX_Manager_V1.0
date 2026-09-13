@@ -131,6 +131,7 @@ describe('QuickReceivePanel Product identity', () => {
   it.each([false, true])('distinguishes siblings and receives only the returned PO allocation, cleanup blocked=%s', async (cleanupBlocked) => {
     let cleanupSpy: ReturnType<typeof vi.spyOn> | undefined;
     if (cleanupBlocked) {
+      // afterEach restores this persistent transport fault between parameter cases.
       vi.mocked(Sentry.captureException).mockImplementation((_error, context) => {
         if (context && typeof context === 'object' && 'tags' in context && context.tags?.source === 'durable-intent-resolve') throw new Error('Reporting transport failed');
         return 'captured';
@@ -179,6 +180,7 @@ describe('QuickReceivePanel Product identity', () => {
     ));
     if (cleanupBlocked) {
       await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved once')));
+      expect(screen.getByText(/these goods were recorded once/i)).toBeInTheDocument();
       expect(screen.queryByText(/shipment received!/i)).toBeNull();
       expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tags: expect.objectContaining({ source: 'durable-intent-resolve', operation: 'receive_po_items' }) }));
       expect(screen.queryByRole('button', { name: 'Receive Another Shipment' })).toBeNull();

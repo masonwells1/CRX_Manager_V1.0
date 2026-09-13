@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ReactNode } from 'react';
-import { render, screen, cleanup, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent, act, within } from '@testing-library/react';
 
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { IDBFactory } from 'fake-indexeddb';
@@ -150,6 +150,7 @@ describe('VendorBillDetail record-payment recovery', () => {
     expect(H.captureException).toHaveBeenCalled();
     expect(screen.getByLabelText(/Payment Amount/)).toHaveValue(100);
     expect(screen.getByLabelText(/Payment Amount/)).toBeDisabled();
+    expect(screen.getByText(/this payment was recorded once/i)).toBeInTheDocument();
     expect(H.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
     expect(H.rpc).toHaveBeenCalledTimes(1);
     const args = H.rpc.mock.calls[0][1] as { p_amount_cents: number; p_idempotency_key: string };
@@ -164,6 +165,33 @@ describe('VendorBillDetail record-payment recovery', () => {
     await waitFor(() => expect(screen.queryByLabelText(/Payment Amount/)).toBeNull());
     expect(H.rpc).toHaveBeenCalledTimes(2);
     expect(H.rpc.mock.calls[1][1]).toEqual(args);
+  });
+
+  it.each(['Cancel', 'Close'])('allows %s on a foreign payment lock and preserves the saved payment key', async (control) => {
+    H.rpc.mockResolvedValue({ data: null, error: { code: 'ETIMEDOUT', message: 'socket timeout' } });
+    const initial = render(<MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}><Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Record Payment' })).getByRole('button', { name: 'Record Payment' }));
+    await screen.findByRole('button', { name: /retry exact payment/i });
+    // Wait for classification and its durable write before simulating another tab.
+    await waitFor(() => expect(H.toast).toHaveBeenCalledWith('warning', expect.stringContaining('payment may already be recorded')));
+    const sharedKey = `crx:uncertain-mutation:v4:${JSON.stringify(['record_vendor_payment', 'admin-user'])}`;
+    const saved = window.localStorage.getItem(sharedKey);
+    expect(saved).not.toBeNull();
+    initial.unmount();
+    window.sessionStorage.clear();
+    globalThis.indexedDB = new IDBFactory();
+    const peerRecord = { ...JSON.parse(saved!), surface: 'other-payment-page', claimTabIds: ['another-tab'] };
+    window.localStorage.setItem(sharedKey, JSON.stringify(peerRecord));
+    render(<MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}><Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    const dialog = screen.getByRole('dialog', { name: 'Record Payment' });
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /retry exact payment/i })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: control })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: control }));
+    expect(screen.queryByRole('dialog', { name: 'Record Payment' })).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(sharedKey)!)).toEqual(peerRecord);
+    expect(H.rpc).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes and preserves the frozen form when bookkeeping fails on a recovered committed payment', async () => {

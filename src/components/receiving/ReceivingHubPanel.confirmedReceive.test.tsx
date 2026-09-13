@@ -42,6 +42,35 @@ describe('ReceivingHubPanel confirmed receipt', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it.each(['Cancel', 'Close'])('allows %s while another surface owns the saved receipt and preserves its key', async (control) => {
+    mocks.rpc.mockImplementation(async (name: string) => name === 'receive_po_items'
+      ? { data: null, error: { code: 'ETIMEDOUT', message: 'socket timeout' } }
+      : { data: [], error: null });
+    const initial = render(<MemoryRouter><ReceivingHubPanel /></MemoryRouter>);
+    fireEvent.click((await screen.findAllByRole('button', { name: /receive/i }))[0]);
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Receive Stock' })).getByRole('button', { name: /^receive$/i }));
+    await screen.findByRole('button', { name: /retry exact receiving/i });
+    // Wait for classification and its durable write, not merely beginIntent's lock.
+    await waitFor(() => expect(mocks.toast.mock.calls.some(([kind]) => kind === 'error')).toBe(true));
+    const sharedKey = `crx:uncertain-mutation:v4:${JSON.stringify(['receive_po_items', 'receiver-1'])}`;
+    const saved = window.localStorage.getItem(sharedKey);
+    expect(saved).not.toBeNull();
+    initial.unmount();
+    window.sessionStorage.clear();
+    globalThis.indexedDB = new IDBFactory();
+    const peerRecord = { ...JSON.parse(saved!), surface: 'quick-receive', claimTabIds: ['another-tab'] };
+    window.localStorage.setItem(sharedKey, JSON.stringify(peerRecord));
+    render(<MemoryRouter><ReceivingHubPanel /></MemoryRouter>);
+    fireEvent.click((await screen.findAllByRole('button', { name: /receive/i }))[0]);
+    const dialog = await screen.findByRole('dialog', { name: 'Receive Stock' });
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /retry exact receiving/i })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: control })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: control }));
+    expect(screen.queryByRole('dialog', { name: 'Receive Stock' })).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(sharedKey)!)).toEqual(peerRecord);
+    expect(mocks.rpc.mock.calls.filter(([name]) => name === 'receive_po_items')).toHaveLength(1);
+  });
+
   it('refreshes the committed line off the board while keeping the same frozen receipt retryable', async () => {
     const removeItem = Storage.prototype.removeItem;
     const cleanupSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
@@ -70,7 +99,9 @@ describe('ReceivingHubPanel confirmed receipt', () => {
     // A shared resolved tombstone must not erase this tab's pending
     // acknowledgment or unlock a different receipt under the same notice.
     const sharedKey = `crx:uncertain-mutation:v4:${JSON.stringify(['receive_po_items', 'receiver-1'])}`;
-    fireEvent(window, new StorageEvent('storage', { key: sharedKey, storageArea: window.localStorage, newValue: window.localStorage.getItem(sharedKey) }));
+    const sharedRecord = window.localStorage.getItem(sharedKey);
+    expect(sharedRecord).not.toBeNull();
+    fireEvent(window, new StorageEvent('storage', { key: sharedKey, storageArea: window.localStorage, newValue: sharedRecord }));
     expect(screen.getByRole('dialog', { name: 'Receive Stock' })).toBeInTheDocument();
     expect(within(dialog).getByText(/these goods were recorded once/i)).toBeInTheDocument();
     cleanupSpy.mockRestore();
