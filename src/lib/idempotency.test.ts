@@ -134,6 +134,35 @@ describe('isDefinitiveRpcRejection', () => {
     expect(isDefinitiveRpcRejection(new TypeError('Failed to fetch'))).toBe(false);
   });
 
+  it('keeps the key when a racing transaction with the SAME key already committed', () => {
+    // The live BEFORE INSERT guard (20260714230000) raises this when another
+    // transaction using the same key won the race. The winner COMMITTED, so
+    // the work exists: retiring the key here makes the operator's next click
+    // mint a new key and create a duplicate. It arrives as P0001 with the
+    // operation and key appended, so the full server message must be matched.
+    const serverMessage =
+      'IDEMPOTENCY_CONCURRENT_REPLAY_RETRY: operation create_inventory_hold with key '
+      + 'hold-abc completed concurrently; retry to read its saved result';
+    expect(isDefinitiveRpcRejection({ code: 'P0001', message: serverMessage })).toBe(false);
+    expect(isDefinitiveRpcRejection(
+      { code: 'P0001', message: 'IDEMPOTENCY_CONCURRENT_REPLAY_RETRY' },
+    )).toBe(false);
+    // A key owned by ANOTHER operation can never succeed, so it stays
+    // definitive -- the caller must reset it rather than retry forever.
+    expect(isDefinitiveRpcRejection({
+      code: 'P0001',
+      message: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE: idempotency_key k is already in use for operation adjust_inventory',
+    })).toBe(true);
+    // The key is caller-controlled and the CROSS_OP message quotes it, so a key
+    // that merely contains the concurrent-replay token must not turn that
+    // definitive refusal into a retained, forever-retried key.
+    expect(isDefinitiveRpcRejection({
+      code: 'P0001',
+      message: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE: idempotency_key IDEMPOTENCY_CONCURRENT_REPLAY_RETRY-k '
+        + 'is already in use for operation adjust_inventory; cannot reuse it for operation create_inventory_hold',
+    })).toBe(true);
+  });
+
   it('treats connection-outcome-unknown codes as uncertain, not a definitive refusal', () => {
     // Class 08 (connection_exception): the link can drop after the server
     // already committed, so these must never retire the idempotency key.
