@@ -298,6 +298,7 @@ export default function VendorBillDetail() {
 
     let request: NonNullable<typeof paymentIntent.unresolvedIntent>;
     let payKey: string;
+    const wasLockedReplay = paymentIntent.isIntentLocked;
     try {
       if (!paymentIntent.isIntentLocked) setPaymentCleanupFailed(false);
       request = await paymentIntent.beginIntent({
@@ -316,7 +317,11 @@ export default function VendorBillDetail() {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         tags: { source: 'durable-intent', page: 'vendor-bill-detail' },
       });
-      toast('error', 'Payment could not be safely prepared. Nothing was recorded; refresh and try again.');
+      toast('error', wasLockedReplay
+        ? paymentCleanupFailed
+          ? 'This payment was already recorded once. This retry could not be prepared, so nothing further was sent. Do not record this payment again on another device. Reload and check payment history before retrying unchanged.'
+          : 'This retry could not be prepared, so nothing further was sent. An earlier attempt may already have recorded this payment. Do not record this payment again on another device. Reload and check payment history before retrying unchanged.'
+        : 'Payment could not be safely prepared. Nothing was recorded; refresh and try again.');
       return;
     }
 

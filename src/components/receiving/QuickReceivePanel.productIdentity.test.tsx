@@ -194,6 +194,18 @@ describe('QuickReceivePanel Product identity', () => {
       const acknowledgmentKey = Object.keys(window.sessionStorage).find((key) => key.startsWith('crx:uncertain-mutation-ack:v1:'));
       expect(acknowledgmentKey).toBeDefined();
       expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
+      const setItem = Storage.prototype.setItem;
+      const preparationSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+        if (this === window.localStorage && key.startsWith('crx:uncertain-mutation:v4:') && key.includes('receive_po_items')) throw new Error('Retry preparation storage unavailable');
+        return setItem.call(this, key, value);
+      });
+      fireEvent.click(screen.getByRole('button', { name: /retry exact receiving/i }));
+      await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('error', expect.stringContaining('These goods were already recorded once.')));
+      expect(mocks.toast).toHaveBeenCalledWith('error', expect.stringContaining('Do not receive these goods again on another device.'));
+      expect(mocks.rpc.mock.calls.filter(([name]) => name === 'receive_po_items')).toHaveLength(1);
+      expect(screen.getByText(/these goods were recorded once/i)).toBeInTheDocument();
+      expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
+      preparationSpy.mockRestore();
       cleanupSpy?.mockRestore();
       fireEvent.click(screen.getByRole('button', { name: /retry exact receiving/i }));
       expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();

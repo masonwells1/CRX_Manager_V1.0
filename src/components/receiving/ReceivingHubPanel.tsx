@@ -214,6 +214,7 @@ export default function ReceivingHubPanel() {
     }
     let request: NonNullable<typeof receiveIntent.unresolvedIntent>;
     let idemKey: string;
+    const wasLockedReplay = receiveIntent.isIntentLocked;
     try {
       if (!receiveIntent.isIntentLocked) setReceiveCleanupFailed(false);
       request = await receiveIntent.beginIntent({
@@ -225,7 +226,11 @@ export default function ReceivingHubPanel() {
       idemKey = receiveIntent.getIdempotencyKey();
     } catch (error) {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { tags: { source: 'durable-intent', page: 'receiving-hub' } });
-      toast('error', 'Receiving could not be safely prepared. Nothing was received; refresh and try again.');
+      toast('error', wasLockedReplay
+        ? receiveCleanupFailed
+          ? 'These goods were already recorded once. This retry could not be prepared, so nothing further was sent. Do not receive these goods again on another device. Reload and check receiving history before retrying unchanged.'
+          : 'This retry could not be prepared, so nothing further was sent. An earlier attempt may already have recorded these goods. Do not receive these goods again on another device. Reload and check receiving history before retrying unchanged.'
+        : 'Receiving could not be safely prepared. Nothing was received; refresh and try again.');
       return;
     }
     await runCriticalAction({

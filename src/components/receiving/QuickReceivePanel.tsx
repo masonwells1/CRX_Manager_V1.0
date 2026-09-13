@@ -403,7 +403,9 @@ export default function QuickReceivePanel() {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
           extra: { context: 'coordinate_quick_receive_retry' },
         });
-        toast('error', 'Cannot safely coordinate this retry with another tab. No inventory was changed.');
+        toast('error', receiptCleanupFailed
+          ? 'These goods were already recorded once. This retry could not be prepared, so nothing further was sent. Do not receive these goods again on another device. Reload and check receiving history before retrying unchanged.'
+          : 'This retry could not be prepared, so nothing further was sent. An earlier attempt may already have recorded these goods. Do not receive these goods again on another device. Reload and check receiving history before retrying unchanged.');
         return;
       }
     } else {

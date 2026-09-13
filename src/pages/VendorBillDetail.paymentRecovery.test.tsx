@@ -163,6 +163,18 @@ describe('VendorBillDetail record-payment recovery', () => {
     expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
     fireEvent.click(screen.getByRole('button', { name: 'Record Payment' }));
     expect(screen.getByLabelText(/Payment Amount/)).toHaveValue(100);
+    const setItem = Storage.prototype.setItem;
+    const preparationSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (this === window.localStorage && key.startsWith('crx:uncertain-mutation:v4:') && key.includes('record_vendor_payment')) throw new Error('Retry preparation storage unavailable');
+      return setItem.call(this, key, value);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /retry exact payment/i }));
+    await waitFor(() => expect(H.toast).toHaveBeenCalledWith('error', expect.stringContaining('This payment was already recorded once.')));
+    expect(H.toast).toHaveBeenCalledWith('error', expect.stringContaining('Do not record this payment again on another device.'));
+    expect(H.rpc).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/this payment was recorded once/i)).toBeInTheDocument();
+    expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
+    preparationSpy.mockRestore();
     cleanupSpy.mockRestore();
     fireEvent.click(screen.getByRole('button', { name: /retry exact payment/i }));
     await waitFor(() => expect(screen.queryByLabelText(/Payment Amount/)).toBeNull());
