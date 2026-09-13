@@ -42,6 +42,7 @@ type LegacyDurableMutationIntentCandidate<T> = {
 
 const DURABLE_INTENT_PREFIX = 'crx:uncertain-mutation:v4:';
 const LEGACY_SESSION_PREFIX = 'crx:uncertain-mutation:v1:';
+const ACKNOWLEDGMENT_PREFIX = 'crx:uncertain-mutation-ack:v1:';
 const DURABLE_INTENT_TAB_ID = 'crx:durable-mutation:tab-id';
 const DURABLE_INTENT_LIVE_CLAIM_PREFIX = 'crx:durable-mutation:live-claim:';
 const DURABLE_INTENT_DB = 'crx_durable_mutation_intents';
@@ -324,6 +325,47 @@ function writeDurableRecord<T>(storageKey: string, record: DurableMutationIntent
   }
 }
 
+function readAcknowledgmentRecord<T>(
+  key: string | null,
+  options: DurableMutationIntentOptions<T> | undefined,
+): DurableMutationIntentRecord<T> | null {
+  if (!key || !options || typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    const record = JSON.parse(raw) as Partial<DurableMutationIntentRecord<T>>;
+    return isValidRecord(record, options) && record.status === 'pending'
+      && record.surface === options.surface && record.scope === (options.scope || '')
+      ? record : blockedDurableRecord(options);
+  } catch {
+    return blockedDurableRecord(options);
+  }
+}
+
+function writeAcknowledgmentRecord<T>(key: string | null, record: DurableMutationIntentRecord<T>): void {
+  if (!key) return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(record));
+  } catch {
+    throw new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE');
+  }
+}
+
+function clearAcknowledgmentRecord<T>(
+  key: string | null,
+  options: DurableMutationIntentOptions<T> | undefined,
+  expectedVersion: string | null,
+): void {
+  if (!key) return;
+  const record = readAcknowledgmentRecord(key, options);
+  if (!record || record.requestVersion !== expectedVersion) return;
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    throw new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE');
+  }
+}
+
 function removeDurableRecord(storageKey: string | null): void {
   if (!storageKey || typeof window === 'undefined') return;
   try {
@@ -384,6 +426,13 @@ async function coordinateDurableRecord<T>(
           : stored
             ? blockedDurableRecord(options)
             : localMirror ?? proposed;
+        if (ownAttemptRequestVersion !== null && existing.requestVersion !== ownAttemptRequestVersion) {
+          // A newer shared request cannot acknowledge this tab's older one.
+          // Keep reconciliation locked instead of minting another receipt.
+          result = { record: existing, conflict: true };
+          if (!stored) store.put({ storageKey, record: existing });
+          return;
+        }
         const owned = existing.surface === options.surface
           && existing.scope === (options.scope || '');
         const candidateIdentity = fingerprintIntent(candidateIntent, options.getIntentIdentity);
@@ -392,6 +441,11 @@ async function coordinateDurableRecord<T>(
         const intentExpired = Date.now() >= existing.retryNotAfterMs;
         const sameActiveIntent = sameIntent && !intentExpired;
         if (existing.status === 'resolved') {
+          if (ownAttemptRequestVersion !== null && intentExpired) {
+            result = { record: existing, conflict: true };
+            if (!stored) store.put({ storageKey, record: existing });
+            return;
+          }
           // A peer tab can finish this tab's uncertain attempt under the same
           // key before, or without, the storage event reaching this tab. A
           // retry of that same request must keep the committed key so the
@@ -608,22 +662,32 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   getIntentIdentityRef.current = options?.getIntentIdentity;
   const tabIdRef = useRef<string | null>(null);
   if (tabIdRef.current === null && typeof window !== 'undefined') tabIdRef.current = currentPageClaimId();
+  // Physical tabs have independent sessionStorage, including duplicated tabs.
+  // The stable tab prefix survives reload; the page claim UUID does not.
+  const acknowledgmentKey = storageKey && options && tabIdRef.current
+    ? `${ACKNOWLEDGMENT_PREFIX}${JSON.stringify([options.operation, options.userId,
+      surface, scope, tabIdRef.current.slice(0, tabIdRef.current.lastIndexOf(':'))])}`
+    : null;
   const initialRecord = readDurableRecord<T>(storageKey, options);
-  const initialPending = initialRecord?.status === 'pending';
+  const savedAttempt = readAcknowledgmentRecord<T>(acknowledgmentKey, options);
+  const initialVisible = savedAttempt ?? initialRecord;
+  const initialPending = initialVisible?.status === 'pending';
   const initialOwned = initialPending
-    && initialRecord.surface === surface
-    && initialRecord.scope === scope;
+    && initialVisible.surface === surface
+    && initialVisible.scope === scope;
   const activeIdentityRef = useRef(identityToken);
-  const recordRef = useRef<DurableMutationIntentRecord<T> | null>(initialRecord);
-  const attemptRecordRef = useRef<DurableMutationIntentRecord<T> | null>(initialOwned ? initialRecord : null);
-  const idempotencyKeyRef = useRef<string | null>(initialPending ? initialRecord.idempotencyKey : null);
-  const intentRef = useRef<T | null>(initialOwned ? initialRecord.intent : null);
-  const retryNotAfterRef = useRef<number | null>(initialPending ? initialRecord.retryNotAfterMs : null);
-  const [unresolvedIntent, setUnresolvedIntent] = useState<T | null>(initialOwned ? initialRecord.intent : null);
+  const recordRef = useRef<DurableMutationIntentRecord<T> | null>(
+    savedAttempt?.surface === '__reconciliation_required__' ? savedAttempt : initialRecord ?? initialVisible,
+  );
+  const attemptRecordRef = useRef<DurableMutationIntentRecord<T> | null>(savedAttempt ?? (initialOwned ? initialVisible : null));
+  const idempotencyKeyRef = useRef<string | null>(initialPending ? initialVisible.idempotencyKey : null);
+  const intentRef = useRef<T | null>(initialOwned ? initialVisible.intent : null);
+  const retryNotAfterRef = useRef<number | null>(initialPending ? initialVisible.retryNotAfterMs : null);
+  const [unresolvedIntent, setUnresolvedIntent] = useState<T | null>(initialOwned ? initialVisible.intent : null);
   const [hasUnresolvedRecord, setHasUnresolvedRecord] = useState(initialPending);
   const [isForeignIntentLocked, setIsForeignIntentLocked] = useState(Boolean(initialPending && !initialOwned));
   const [retryNotAfterMs, setRetryNotAfterMs] = useState<number | null>(
-    initialPending ? initialRecord.retryNotAfterMs : null,
+    initialPending ? initialVisible.retryNotAfterMs : null,
   );
   const [, setExpiryRevision] = useState(0);
 
@@ -632,13 +696,12 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     // the result. Unlocking early would present identical new work while
     // beginIntent still correctly replays this attempt's committed receipt.
     const attempt = attemptRecordRef.current;
-    const visible = record?.status === 'resolved'
-      && attempt?.requestVersion === record.requestVersion
-      && attempt.surface === surface && attempt.scope === scope
+    const visible = attempt?.surface === '__reconciliation_required__'
+      || (attempt?.status === 'pending' && attempt.surface === surface && attempt.scope === scope)
       ? attempt : record;
     const pending = visible?.status === 'pending';
     const owned = pending && visible.surface === surface && visible.scope === scope;
-    recordRef.current = record;
+    recordRef.current = attempt?.surface === '__reconciliation_required__' ? attempt : record ?? attempt;
     idempotencyKeyRef.current = pending ? visible.idempotencyKey : null;
     intentRef.current = owned ? visible.intent : null;
     retryNotAfterRef.current = pending ? visible.retryNotAfterMs : null;
@@ -651,13 +714,33 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   const activateCurrentIdentity = useCallback((force = false) => {
     if (!storageKey) return;
     if (!force && activeIdentityRef.current === identityToken) return;
+    if (activeIdentityRef.current !== identityToken) {
+      attemptRecordRef.current = readAcknowledgmentRecord<T>(acknowledgmentKey, options);
+    }
     activeIdentityRef.current = identityToken;
     applyRecord(readDurableRecord<T>(storageKey, options));
-  }, [applyRecord, identityToken, options, storageKey]);
+  }, [acknowledgmentKey, applyRecord, identityToken, options, storageKey]);
 
   useEffect(() => {
     activateCurrentIdentity();
   }, [activateCurrentIdentity]);
+
+  useEffect(() => {
+    const attempt = attemptRecordRef.current;
+    if (!attempt || attempt.status !== 'pending'
+      || attempt.surface !== surface || attempt.scope !== scope) return;
+    try {
+      // Restored pending requests need the same per-tab acknowledgment record
+      // before a peer can resolve their shared durable tombstone.
+      writeAcknowledgmentRecord(acknowledgmentKey, attempt);
+    } catch {
+      if (options) {
+        const blocked = blockedDurableRecord<T>(options);
+        attemptRecordRef.current = blocked;
+        applyRecord(blocked);
+      }
+    }
+  }, [acknowledgmentKey, applyRecord, options, scope, surface]);
 
   useEffect(() => {
     const claimId = tabIdRef.current;
@@ -757,9 +840,13 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           attemptRecordRef.current?.requestVersion ?? null,
         );
         writeDurableRecord(storageKey, coordinated.record);
-        applyRecord(coordinated.record);
-        if (coordinated.conflict) throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
+        if (coordinated.conflict) {
+          applyRecord(coordinated.record);
+          throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
+        }
+        writeAcknowledgmentRecord(acknowledgmentKey, coordinated.record);
         attemptRecordRef.current = coordinated.record;
+        applyRecord(coordinated.record);
         return coordinated.record.intent;
       } catch (error) {
         releaseLiveClaim(currentClaimId);
@@ -771,7 +858,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     setUnresolvedIntent(intent);
     setHasUnresolvedRecord(true);
     return intent;
-  }, [activateCurrentIdentity, applyRecord, options, scope, storageKey, surface]);
+  }, [acknowledgmentKey, activateCurrentIdentity, applyRecord, options, scope, storageKey, surface]);
 
   const getIdempotencyKey = useCallback((): string => {
     activateCurrentIdentity(true);
@@ -812,6 +899,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     );
     if (resolved) {
       if (storageKey) writeDurableRecord(storageKey, resolved);
+      clearAcknowledgmentRecord(acknowledgmentKey, options, attempt?.requestVersion ?? null);
       attemptRecordRef.current = null;
       applyRecord(resolved);
     } else if (attempt && storageKey) {
@@ -827,12 +915,13 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           resolvedAtMs: Date.now(),
         };
         writeDurableRecord(storageKey, retired);
+        clearAcknowledgmentRecord(acknowledgmentKey, options, attempt.requestVersion);
         attemptRecordRef.current = null;
         applyRecord(retired);
       }
     }
     attemptRecordRef.current = null;
-  }, [applyRecord, options, storageKey]);
+  }, [acknowledgmentKey, applyRecord, options, storageKey]);
 
   const classifyFailure = useCallback(async (error: unknown): Promise<MutationFailureDisposition> => {
     const attempt = attemptRecordRef.current;
@@ -857,17 +946,23 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           tabIdRef.current,
         );
         if (outcome.deleted) {
+          clearAcknowledgmentRecord(acknowledgmentKey, options, attempt?.requestVersion ?? null);
+          attemptRecordRef.current = null;
           removeDurableRecord(storageKey);
           applyRecord(null);
         } else if (outcome.current) {
           if (storageKey) writeDurableRecord(storageKey, outcome.current);
-          if (outcome.current.status === 'resolved') attemptRecordRef.current = null;
+          if (outcome.current.status === 'resolved') {
+            clearAcknowledgmentRecord(acknowledgmentKey, options, attempt?.requestVersion ?? null);
+            attemptRecordRef.current = null;
+          }
           applyRecord(outcome.current);
           if (outcome.current.status === 'resolved') {
             attemptRecordRef.current = null;
             return 'resolved';
           }
         }
+        clearAcknowledgmentRecord(acknowledgmentKey, options, attempt?.requestVersion ?? null);
         attemptRecordRef.current = null;
         return 'definitive';
       }
@@ -879,6 +974,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           && current.requestVersion === attempt.requestVersion
           && current.status === 'resolved'
         ) {
+          clearAcknowledgmentRecord(acknowledgmentKey, options, attempt.requestVersion);
           attemptRecordRef.current = null;
           applyRecord(current);
           return 'resolved';
@@ -904,7 +1000,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
       // report an uncertain outcome instead of throwing past the caller.
       return 'uncertain';
     }
-  }, [applyRecord, options, storageKey]);
+  }, [acknowledgmentKey, applyRecord, options, storageKey]);
 
   // Same value as `unresolvedIntent`, read from the ref instead of state.
   // `unresolvedIntent` is React state, so a caller that awaits classifyFailure()

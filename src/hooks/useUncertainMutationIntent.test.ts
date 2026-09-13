@@ -425,6 +425,9 @@ describe('useUncertainMutationIntent', () => {
     const originalKey = first.result.current.getIdempotencyKey();
     first.unmount();
     window.localStorage.clear();
+    // Exercise IndexedDB-only recovery, without the newly durable per-tab
+    // acknowledgment record providing an earlier safe recovery path.
+    window.sessionStorage.clear();
 
     const reopened = renderHook(() => useUncertainMutationIntent(options));
     expect(reopened.result.current.isIntentLocked).toBe(false);
@@ -598,6 +601,69 @@ describe('useUncertainMutationIntent', () => {
     expect(staleTab.result.current.isIntentLocked).toBe(false);
     await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
     expect(staleTab.result.current.getIdempotencyKey()).not.toBe(originalKey);
+  });
+
+  it('retains a peer-completed exact retry through reload until this tab acknowledges it', async () => {
+    const options = {
+      operation: 'adjust_inventory', userId: 'admin-peer-reload', surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reload-original');
+    const original = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => original.result.current.beginIntent({ quantity: 5 }));
+    const committedKey = original.result.current.getIdempotencyKey();
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reload-peer');
+    const peer = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => peer.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => peer.result.current.resolveIntent());
+    original.unmount();
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reload-original');
+    const reopened = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    expect(reopened.result.current.unresolvedIntent).toEqual({ quantity: 5 });
+    await act(async () => reopened.result.current.beginIntent({ quantity: 5 }));
+    expect(reopened.result.current.getIdempotencyKey()).toBe(committedKey);
+    await act(async () => reopened.result.current.resolveIntent());
+    reopened.unmount();
+    const acknowledged = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(acknowledged.result.current.isIntentLocked).toBe(false);
+    await act(async () => acknowledged.result.current.beginIntent({ quantity: 5 }));
+    expect(acknowledged.result.current.getIdempotencyKey()).not.toBe(committedKey);
+  });
+
+  it('keeps an older unacknowledged request locked if a peer completes newer work before reload', async () => {
+    const options = {
+      operation: 'adjust_inventory', userId: 'admin-older-ack-reload', surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'older-original');
+    const original = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => original.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = original.result.current.getIdempotencyKey();
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'older-peer');
+    const peer = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => peer.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => peer.result.current.resolveIntent());
+    await act(async () => peer.result.current.beginIntent({ quantity: 10 }));
+    const newerKey = peer.result.current.getIdempotencyKey();
+    expect(newerKey).not.toBe(originalKey);
+    await act(async () => peer.result.current.resolveIntent());
+    original.unmount();
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'older-original');
+    const reopened = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    expect(reopened.result.current.unresolvedIntent).toEqual({ quantity: 5 });
+    await act(async () => {
+      await expect(reopened.result.current.beginIntent({ quantity: 5 }))
+        .rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    });
+    expect(() => reopened.result.current.getIdempotencyKey())
+      .toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    const durable = JSON.parse(Object.entries(window.localStorage)
+      .find(([key]) => key.startsWith('crx:uncertain-mutation:v4:'))![1]);
+    expect(durable.idempotencyKey).toBe(newerKey);
+    expect(durable.status).toBe('resolved');
   });
 
   it('gives an identical follow-up a fresh key once this tab completed its own request', async () => {
@@ -960,7 +1026,7 @@ describe('useUncertainMutationIntent', () => {
     });
     expect(disposition).toBe('uncertain');
     expect(staleTab.result.current.isIntentLocked).toBe(true);
-    expect(staleTab.result.current.unresolvedIntent).toEqual({ amount: 2_500 });
+    expect(staleTab.result.current.unresolvedIntent).toEqual({ amount: 10_000 });
     expect(() => staleTab.result.current.getIdempotencyKey())
       .toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
     expect(newTab.result.current.getIdempotencyKey()).toBe(newerKey);
