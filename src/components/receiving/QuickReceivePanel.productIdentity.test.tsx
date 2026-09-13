@@ -131,7 +131,10 @@ describe('QuickReceivePanel Product identity', () => {
   it.each([false, true])('distinguishes siblings and receives only the returned PO allocation, cleanup blocked=%s', async (cleanupBlocked) => {
     let cleanupSpy: ReturnType<typeof vi.spyOn> | undefined;
     if (cleanupBlocked) {
-      vi.mocked(Sentry.captureException).mockImplementationOnce(() => { throw new Error('Reporting transport failed'); });
+      vi.mocked(Sentry.captureException).mockImplementation((_error, context) => {
+        if (context && typeof context === 'object' && 'tags' in context && context.tags?.source === 'durable-intent-resolve') throw new Error('Reporting transport failed');
+        return 'captured';
+      });
       const removeItem = Storage.prototype.removeItem;
       cleanupSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
         if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
@@ -177,7 +180,7 @@ describe('QuickReceivePanel Product identity', () => {
     if (cleanupBlocked) {
       await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved once')));
       expect(screen.queryByText(/shipment received!/i)).toBeNull();
-      expect(Sentry.captureException).toHaveBeenCalled();
+      expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tags: expect.objectContaining({ source: 'durable-intent-resolve', operation: 'receive_po_items' }) }));
       expect(screen.queryByRole('button', { name: 'Receive Another Shipment' })).toBeNull();
       expect(screen.getByRole('button', { name: /back to edit/i })).toBeDisabled();
       expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);

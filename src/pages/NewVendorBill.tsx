@@ -227,6 +227,7 @@ export default function NewVendorBill() {
       dueDateObj.setDate(dueDateObj.getDate() + paymentTermsDays);
       const computedDueDate = formatLocalDate(dueDateObj);
 
+      if (!createBillIntent.isIntentLocked) setBillCleanupFailed(false);
       const request = createBillIntent.unresolvedIntent
         ? await createBillIntent.beginIntent(createBillIntent.unresolvedIntent)
         : await createBillIntent.beginIntent({
@@ -505,7 +506,7 @@ export default function NewVendorBill() {
             ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
             : billCleanupFailed
             ? 'This bill was recorded once. Browser cleanup failed; retry this same bill unchanged. If it stays locked after reloading, report it before creating another bill on this device.'
-            : 'The last response was uncertain. These fields are locked so a second bill cannot be created. Retry this exact bill to reconcile it.'}
+            : 'This saved bill request needs reconciliation before another can be created. Retry this exact bill unchanged.'}
         </div>
       )}
       {overageBlockedMessage && (

@@ -110,7 +110,7 @@ describe('NewVendorBill PO-overage handling', () => {
     await fillAndSave();
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('vendor bill was saved once')));
     expect(mockNavigate).not.toHaveBeenCalled();
-    expect(Sentry.captureException).toHaveBeenCalled();
+    expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tags: expect.objectContaining({ source: 'durable-intent-resolve', operation: 'create_vendor_bill' }) }));
     expect(mockToast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
     expect(mockToast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
     expect(mockRpc).toHaveBeenCalledTimes(1);

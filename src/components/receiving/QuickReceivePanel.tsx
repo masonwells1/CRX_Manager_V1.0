@@ -395,6 +395,7 @@ export default function QuickReceivePanel() {
     if (!profile) return;
 
     let request = receiveIntent.unresolvedIntent;
+    if (!receiveIntent.isIntentLocked) setReceiptCleanupFailed(false);
     if (request) {
       try {
         request = await receiveIntent.beginIntent(request);
@@ -522,7 +523,7 @@ export default function QuickReceivePanel() {
   /* ─── reset for another receive ─── */
   const handleReset = () => {
     if (receiveIntent.isIntentLocked) {
-      toast('warning', 'Finish reconciling the locked receipt before starting another shipment.');
+      toast('warning', receiveIntent.isForeignIntentLocked ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE : 'Finish reconciling the locked receipt before starting another shipment.');
       return;
     }
     setStep('add_items');
@@ -793,7 +794,7 @@ export default function QuickReceivePanel() {
                   ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
                   : receiptCleanupFailed
                   ? 'These goods were recorded once. Browser cleanup failed; retry this same receipt unchanged. If it stays locked after reloading, report it before recording another shipment on this device.'
-                  : 'The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice.'}
+                  : 'This saved receiving request needs reconciliation before another shipment can be recorded. Retry it unchanged so inventory cannot be received twice.'}
               </div>
             )}
 

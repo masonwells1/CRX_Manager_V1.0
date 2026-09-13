@@ -183,6 +183,7 @@ export default function InventoryPage() {
   const [holdNotes, setHoldNotes] = useState('');
   const [holdExpires, setHoldExpires] = useState('');
   const [holdWarning, setHoldWarning] = useState('');
+  const [holdCleanupFailed, setHoldCleanupFailed] = useState(false);
 
   const [selectedId, setSelectedId] = useState('');
   const [receiveQty, setReceiveQty] = useState('');
@@ -190,6 +191,7 @@ export default function InventoryPage() {
   const [receivePOItemId, setReceivePOItemId] = useState('');
   const [availablePOs, setAvailablePOs] = useState<Array<{id: string; po_number: string; ordered: number; received: number; unit_cost: number; purchase_order_id: string; product_id: string; unit_size: string | null}>>([]);
   const [adjustQty, setAdjustQty] = useState('');
+  const [adjustCleanupFailed, setAdjustCleanupFailed] = useState(false);
   const [adjustNote, setAdjustNote] = useState('');
   const [products, setProducts] = useState<PickerProduct[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -489,7 +491,7 @@ export default function InventoryPage() {
   const [forceHoldOpen, setForceHoldOpen] = useState(false);
   const [forceHoldServerMessage, setForceHoldServerMessage] = useState('');
 
-  type HoldRpcOutcome = 'created' | 'replayed' | 'uncertain';
+  type HoldRpcOutcome = 'created' | 'replayed' | 'uncertain' | 'cleanup-pending';
   const HOLD_UNCERTAIN_MESSAGE =
     'The hold may already be created. Retry the locked request unchanged to reconcile it.';
   const HOLD_REPLAYED_MESSAGE =
@@ -500,6 +502,7 @@ export default function InventoryPage() {
     // beginIntent returns the FROZEN intent while one is unresolved, so a retry
     // re-sends the original product, customer, quantity, expiry, notes and
     // force flag under the original key no matter what the form now shows.
+    if (!createHoldIntent.isIntentLocked) setHoldCleanupFailed(false);
     const request = await createHoldIntent.beginIntent({
       productId: holdProductId,
       customerId: holdCustomerId || null,
@@ -538,9 +541,14 @@ export default function InventoryPage() {
     }
     try {
       await createHoldIntent.resolveIntent();
+      setHoldCleanupFailed(false);
     } catch (resolveError) {
-      Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'inventory', operation: 'create_inventory_hold' } });
-      toast('warning', 'The hold was saved, but this browser could not finish its retry record. Inventory has been refreshed; keep any locked retry unchanged.');
+      setHoldCleanupFailed(true);
+      try {
+        Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'inventory', operation: 'create_inventory_hold' } });
+      } catch { /* Reporting cannot change the confirmed hold. */ }
+      toast('warning', 'The hold was saved once. This form stays locked to the same hold because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before creating another hold on this device.');
+      return 'cleanup-pending';
     }
     return outcome;
   };
@@ -594,6 +602,11 @@ export default function InventoryPage() {
       const frozen = createHoldIntent.isIntentLocked ? createHoldIntent.getUnresolvedIntent() : null;
       const force = frozen?.force ?? false;
       const outcome = await callCreateHoldRpc(force, frozen?.forceReason ?? null);
+      if (outcome === 'cleanup-pending') {
+        fetchInventory();
+        fetchHolds();
+        return;
+      }
       if (outcome === 'uncertain') {
         toast('warning', HOLD_UNCERTAIN_MESSAGE);
         return;
@@ -630,6 +643,11 @@ export default function InventoryPage() {
     try {
       const outcome = await callCreateHoldRpc(true, reason);
       setForceHoldOpen(false);
+      if (outcome === 'cleanup-pending') {
+        fetchInventory();
+        fetchHolds();
+        return;
+      }
       if (outcome === 'uncertain') {
         // The hold dialog stays open, locked to the forced payload, so the
         // retry re-sends the same override under the same key.
@@ -798,6 +816,7 @@ export default function InventoryPage() {
 
     await runCriticalAction({
       action: async () => {
+        if (!receivePoIntent.isIntentLocked) setReceiveCleanupFailed(false);
         const request = await receivePoIntent.beginIntent({
           items: [{ po_item_id: receivePOItemId, quantity: qty }],
           performedBy: profile.id,
@@ -880,6 +899,7 @@ export default function InventoryPage() {
         // beginIntent returns the FROZEN intent while one is unresolved, so a
         // retry re-sends the original row, delta and note under the original
         // key no matter what the form now shows.
+        if (!adjustIntent.isIntentLocked) setAdjustCleanupFailed(false);
         const request = await adjustIntent.beginIntent({
           inventoryId: selectedId,
           delta: qty,
@@ -895,6 +915,7 @@ export default function InventoryPage() {
           p_idempotency_key: idemKey,
         });
         let completedElsewhere = false;
+        let cleanupFailed = false;
         if (error) {
           const disposition = await adjustIntent.classifyFailure(error);
           if (disposition === 'resolved') {
@@ -911,15 +932,22 @@ export default function InventoryPage() {
         }
         try {
           await adjustIntent.resolveIntent();
+          setAdjustCleanupFailed(false);
         } catch (resolveError) {
-          Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'inventory', operation: 'adjust_inventory' } });
-          toast('warning', 'The adjustment was saved, but this browser could not finish its retry record. Inventory has been refreshed; keep any locked retry unchanged.');
+          cleanupFailed = true;
+          setAdjustCleanupFailed(true);
+          try {
+            Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'inventory', operation: 'adjust_inventory' } });
+          } catch { /* Reporting cannot change the confirmed adjustment. */ }
+          toast('warning', 'The adjustment was saved once. This form stays locked to the same adjustment because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before applying another adjustment on this device.');
         }
-        return { delta: request.delta, completedElsewhere };
+        return { delta: request.delta, completedElsewhere, cleanupFailed };
       },
       toast: (variant, message) => toast(variant, variant === 'error' ? inventoryIntentErrorMessage(message) : message),
       sentryTag: 'adjust_inventory',
-      onSuccess: ({ delta, completedElsewhere }) => {
+      onSuccess: ({ delta, completedElsewhere, cleanupFailed }) => {
+        fetchInventory();
+        if (cleanupFailed) return;
         if (completedElsewhere) {
           toast('warning', 'This adjustment was already applied in another tab. Refreshing instead of applying it twice.');
         } else {
@@ -928,7 +956,6 @@ export default function InventoryPage() {
         setAdjustOpen(false);
         setAdjustQty('');
         setAdjustNote('');
-        fetchInventory();
       },
     });
   };
@@ -1697,7 +1724,9 @@ export default function InventoryPage() {
                 ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
                 : createHoldIntent.isRetryExpired
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
-                : 'The last response was uncertain. This hold request is locked so stock cannot be reserved twice. Retry it unchanged to reconcile the result.'}
+                : holdCleanupFailed
+                ? 'This hold was recorded once. Browser cleanup failed; retry this same hold unchanged. If it stays locked after reloading, report it before creating another hold on this device.'
+                : 'This saved hold request needs reconciliation before another can be created. Retry it unchanged so stock cannot be reserved twice.'}
             </div>
           )}
           <div>
@@ -1900,7 +1929,7 @@ export default function InventoryPage() {
       </Modal>
 
       {/* Receive Modal */}
-      <Modal open={receiveOpen} onClose={() => { if (!receivePoIntent.isIntentLocked || receivePoIntent.isForeignIntentLocked) setReceiveOpen(false); }} title="Receive" accent="Shipment">
+      <Modal open={receiveOpen} closeDisabled={receivePoIntent.isIntentLocked && !receivePoIntent.isForeignIntentLocked} onClose={() => { if (!receivePoIntent.isIntentLocked || receivePoIntent.isForeignIntentLocked) setReceiveOpen(false); }} title="Receive" accent="Shipment">
         <div className="space-y-4">
           {receivePoIntent.isIntentLocked && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
@@ -1910,10 +1939,10 @@ export default function InventoryPage() {
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
                 : receiveCleanupFailed
                 ? 'These goods were recorded once. Browser cleanup failed; retry this same receipt unchanged. If it stays locked after reloading, report it before recording another receipt on this device.'
-                : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
+                : 'This saved receiving request needs reconciliation before another can be recorded. Retry it unchanged so stock cannot be received twice.'}
             </div>
           )}
-          {availablePOs.length === 0 ? (
+          {receivePoIntent.isForeignIntentLocked ? null : availablePOs.length === 0 ? (
             <div className="text-amber-600 text-sm bg-amber-50 p-3 rounded">
               No open purchase orders found for this product. Create a purchase order first.
             </div>
@@ -1975,7 +2004,9 @@ export default function InventoryPage() {
                     ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
                     : adjustIntent.isRetryExpired
                     ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
-                    : 'The last response was uncertain. This adjustment is locked so stock cannot be adjusted twice. Retry it unchanged to reconcile the result.'}
+                    : adjustCleanupFailed
+                    ? 'This adjustment was recorded once. Browser cleanup failed; retry this same adjustment unchanged. If it stays locked after reloading, report it before applying another adjustment on this device.'
+                    : 'This saved adjustment needs reconciliation before another can be applied. Retry it unchanged so stock cannot be adjusted twice.'}
                 </div>
               )}
               {selectedRow && (

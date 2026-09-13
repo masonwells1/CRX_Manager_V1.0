@@ -299,6 +299,7 @@ export default function VendorBillDetail() {
     let request: NonNullable<typeof paymentIntent.unresolvedIntent>;
     let payKey: string;
     try {
+      if (!paymentIntent.isIntentLocked) setPaymentCleanupFailed(false);
       request = await paymentIntent.beginIntent({
         amountCents,
         args: {
@@ -983,7 +984,7 @@ export default function VendorBillDetail() {
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
                 : paymentCleanupFailed
                 ? 'This payment was recorded once. Browser cleanup failed; retry this same payment unchanged. If it stays locked after reloading, report it before recording another payment on this device.'
-                : 'The last response was uncertain. These fields are locked so a second payment cannot be created. Retry this exact payment to reconcile it.'}
+                : 'This saved payment request needs reconciliation before another can be recorded. Retry this exact payment unchanged.'}
             </div>
           )}
 

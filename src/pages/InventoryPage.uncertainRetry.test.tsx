@@ -259,7 +259,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     { operation: 'adjust_inventory', fault: 'acknowledgment' },
     { operation: 'create_inventory_hold', fault: 'acknowledgment' },
   ] as const)(
-    'reports confirmed $operation success and refreshes when cleanup fails in $fault',
+    'keeps confirmed $operation frozen and refreshes when cleanup fails in $fault',
     async ({ operation, fault }) => {
       const originalSetItem = Storage.prototype.setItem;
       const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
@@ -290,8 +290,9 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
         fireEvent.change(within(dialog).getByLabelText(/^quantity$/i), { target: { value: '3' } });
         fireEvent.click(within(dialog).getByRole('button', { name: /^create hold$/i }));
       }
-      await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('success', operation === 'adjust_inventory' ? 'Adjusted by 50 units' : 'Hold created successfully'));
-      expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('was saved'));
+      await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('was saved once')));
+      expect(mocks.toast.mock.calls.filter(([variant]) => variant === 'success')).toEqual([]);
+      expect(dialog).toBeInTheDocument();
       expect(mocks.toast.mock.calls.filter(([variant]) => variant === 'error')).toEqual([]);
       await waitFor(() => expect(callsTo('get_inventory_position').length).toBeGreaterThan(beforeRefresh));
       const committed = callsTo(operation)[0];
@@ -308,6 +309,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
       fireEvent.click(retry);
       await waitFor(() => expect(callsTo(operation)).toHaveLength(2));
       expect(callsTo(operation)[1]).toEqual(committed);
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     },
   );
 
@@ -536,6 +538,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
         await within(dialog).findByRole('button', { name: /SKU-A/i });
       }
       expect(within(dialog).getByRole('button', { name: /^cancel$/i })).toBeEnabled();
+      if (operation === 'receive_po_items') expect(within(dialog).queryByText(/create a purchase order first/i)).toBeNull();
       fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
       dialog = await reopen();
@@ -545,6 +548,43 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
       expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual(frozen);
     },
   );
+
+  it('keeps a confirmed ADMIN OVERRIDE frozen until acknowledgment cleanup recovers', async () => {
+    let attempts = 0;
+    let cleanupSpy: ReturnType<typeof vi.spyOn> | undefined;
+    respond({ create_inventory_hold: () => {
+      attempts += 1;
+      if (attempts === 1) return { data: null, error: { code: 'P0001', message: 'INSUFFICIENT_HOLD_INVENTORY: only 2 units are free' } };
+      if (attempts === 2) {
+        const removeItem = Storage.prototype.removeItem;
+        cleanupSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+          if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) throw new Error('Acknowledgment cleanup blocked');
+          return removeItem.call(this, key);
+        });
+      }
+      return { data: { hold_id: 'forced-hold-saved' }, error: null };
+    } });
+    await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /create hold/i }));
+    const dialog = screen.getByRole('dialog', { name: /create.*hold/i });
+    fireEvent.click(await within(dialog).findByRole('button', { name: /SKU-A/i }));
+    fireEvent.change(within(dialog).getByLabelText(/^quantity$/i), { target: { value: '3' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create hold$/i }));
+    const forceDialog = await screen.findByRole('dialog', { name: /force-create hold/i });
+    fireEvent.change(within(forceDialog).getByLabelText(/reason/i), { target: { value: 'physical stock confirmed' } });
+    fireEvent.click(within(forceDialog).getByRole('button', { name: /force-create hold/i }));
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('hold was saved once')));
+    expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'success' || kind === 'error')).toEqual([]);
+    const frozenDialog = screen.getByRole('dialog', { name: /^create.*hold$/i });
+    expect(frozenDialog).toBeInTheDocument();
+    const forced = callsTo('create_inventory_hold')[1];
+    expect(forced).toMatchObject({ p_force: true, p_force_reason: 'physical stock confirmed' });
+    cleanupSpy?.mockRestore();
+    fireEvent.click(within(frozenDialog).getByRole('button', { name: /retry exact hold/i }));
+    await waitFor(() => expect(callsTo('create_inventory_hold')).toHaveLength(3));
+    expect(callsTo('create_inventory_hold')[2]).toEqual(forced);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
 
   it('retries a lost ADMIN OVERRIDE under the SAME key with the frozen force flag and reason', async () => {
     let attempts = 0;

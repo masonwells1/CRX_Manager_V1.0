@@ -56,7 +56,7 @@ describe('ReceivingHubPanel confirmed receipt', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /^receive$/i }));
     await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved once')));
     expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
-    expect(Sentry.captureException).toHaveBeenCalled();
+    expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tags: expect.objectContaining({ source: 'durable-intent-resolve', operation: 'receive_po_items' }) }));
     expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
     expect(screen.getByRole('dialog', { name: 'Receive Stock' })).toBeInTheDocument();
     await screen.findByText(/nothing on order/i);
@@ -67,6 +67,12 @@ describe('ReceivingHubPanel confirmed receipt', () => {
     const acknowledgmentKey = Object.keys(window.sessionStorage).find((key) => key.startsWith('crx:uncertain-mutation-ack:v1:'));
     expect(acknowledgmentKey).toBeDefined();
     expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(first.p_idempotency_key);
+    // A shared resolved tombstone must not erase this tab's pending
+    // acknowledgment or unlock a different receipt under the same notice.
+    const sharedKey = `crx:uncertain-mutation:v4:${JSON.stringify(['receive_po_items', 'receiver-1'])}`;
+    fireEvent(window, new StorageEvent('storage', { key: sharedKey, storageArea: window.localStorage, newValue: window.localStorage.getItem(sharedKey) }));
+    expect(screen.getByRole('dialog', { name: 'Receive Stock' })).toBeInTheDocument();
+    expect(within(dialog).getByText(/these goods were recorded once/i)).toBeInTheDocument();
     cleanupSpy.mockRestore();
     const retryDialog = await screen.findByRole('dialog', { name: 'Receive Stock' });
     fireEvent.click(within(retryDialog).getByRole('button', { name: /retry exact receiving/i }));

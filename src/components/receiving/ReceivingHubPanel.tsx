@@ -215,6 +215,7 @@ export default function ReceivingHubPanel() {
     let request: NonNullable<typeof receiveIntent.unresolvedIntent>;
     let idemKey: string;
     try {
+      if (!receiveIntent.isIntentLocked) setReceiveCleanupFailed(false);
       request = await receiveIntent.beginIntent({
         items: [{ po_item_id: receiveTarget.line.po_item_id, quantity: qty, condition: 'good' }],
         performedBy: profile.id,
@@ -469,7 +470,7 @@ export default function ReceivingHubPanel() {
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
                 : receiveCleanupFailed
                 ? 'These goods were recorded once. Browser cleanup failed; retry this same receipt unchanged. If it stays locked after reloading, report it before recording another receipt on this device.'
-                : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
+                : 'This saved receiving request needs reconciliation before another can be recorded. Retry it unchanged so stock cannot be received twice.'}
             </div>
           )}
           <p className="text-sm text-secondary">
