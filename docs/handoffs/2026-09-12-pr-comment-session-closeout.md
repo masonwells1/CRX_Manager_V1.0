@@ -173,3 +173,23 @@ missing. The peer-stop guard and other-owned follow-ups remain open as recorded 
 The root hook denied the normal shell SQL validation command; that is a validation-path
 blocker, not a passed check, and was not bypassed. Separate hard-rule audit and drift slice
 passed; the drift slice's printed live layer was not run by that command.
+
+### September 12 resumed correction - pending retry-safe cutover
+
+The one-phase generic creation refusal subsequently FAILED the COMMITTED old-invoice retry
+regression. Exact-head Sol/high on `f6cb05b369` returned BLOCKERS at 18:15Z; the executable
+failure and OPEN disposition were preserved in `7d4c666f`. Earlier passes/CLEAN labels above
+do not clear that later candidate. Mason approved continuing the recommended invoice-first
+sequence, not merging or applying production changes.
+
+The same still-unapplied 165758 proposal is now phase 1, preserving original generic behavior
+with a transitional shared advisory/READ COMMITTED/fresh-catalog V1 fence. New pending
+`20260913040359_finish_generic_field_invoice_cutover.sql` is phase 2: separate committed phase 1,
+exclusive access or refusal, no other open/prepared work, stable scan with NO valid generic
+receipt, then early NEW generic field refusal. No receipt binding is invented or data deleted.
+All phases remain NOT APPLIED. Parent observed the final corrected Docker proof exit 0
+with `PREVIEW_SEASON_PROOF_PASS` and both registered business-chain rollback markers.
+The full unit suite passed (5,246 passed, 123 skipped), as did lint/typecheck/build,
+agent-workflows/dependencies/docs and focused drift. Four fresh scoped read-only production
+sweeps returned zero violations and their capture adjudicated clean. Exact-head Sol/high,
+normal commit/push/CI and actual CodeRabbit review remain in progress or pending.

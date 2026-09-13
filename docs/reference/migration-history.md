@@ -1,4 +1,4 @@
-# Migration History (latest entry 928)
+# Migration History (latest entry 929)
 
 > **PRE-APPLY LIVE EVIDENCE (read this first).** The most recent read-only
 > `list_migrations` observation is at the top of this file, immediately below.
@@ -9,7 +9,7 @@
 and latest authored-name prefix **`20260908120000`**. The September 12 schema-registry refresh
 used all six live introspection queries, not a timestamp-only update. Order new files by authored
 names, with source-name resolution for bare ledger names; do not substitute apply-time versions.
-The guard candidates in rows 927–928 are written but unapplied and sort above that authored boundary.
+The guard candidates in rows 927–929 are written but unapplied and sort above that authored boundary.
 Re-read both the live ledger and pending queue immediately before any owner-authorized apply.
 
 ### Historical September 6 boundary (superseded; not current apply guidance)
@@ -1880,7 +1880,8 @@ These 10 historical migrations apply by timestamp order like all others; they si
 
 ## Filed-season guard ordering note — 2026-09-12
 
-| 928 | 20260912165758 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260912165758_refuse_generic_field_invoice_creation.sql`. SQL sha256: `8f2dadaac0ec35ffedd6f45a1c6c25033afb37217f440ab1ca739aaff968afa7`. Adds an early NEW-field-application refusal to the exact live public `save_invoice` wrapper. Creation must use dedicated field-app/job/blend writers; existing generic field edits and deliberate source-season job/blend creation are preserved. Original below-cost/idempotency delegation, signature, defaults, owner, search path, ACL, other types and historical rows remain unchanged. The public authenticated regression reproduced the HIGH bypass. A universal INSERT-trigger draft was rejected for breaking source-season creators and is preserved outside the migration inventory. Root observed the final disposable proof; fresh whole-branch Sol/high CLEAN covers published `e974438b9`, not subsequent metadata corrections. No merge or live apply authorized. |
+| 928 | 20260912165758 | **LOCAL CANDIDATE — NOT APPLIED. PHASE 1.** File: `20260912165758_refuse_generic_field_invoice_creation.sql`. SQL sha256: `defbd9cee0a24dc640c70a13208bc306956c5c9bd2cc97534f4cb7321e5b8029`. The earlier one-phase refusal failed the committed-retry regression and is superseded IN THIS UNAPPLIED proposal. Install a fail-fast shared advisory barrier, transitional READ COMMITTED requirement and fresh V1 catalog fence while preserving original creation/below-cost/key-only receipt/delegation semantics. Commit this migration separately before phase 2; never bundle both. Owner, signature, defaults, search path, ACL and original OID remain pinned. Runtime and fresh whole-branch Sol/high review are pending for the corrected candidate; no merge or live apply authorized. |
+| 929 | 20260913040359 | **LOCAL CANDIDATE — NOT APPLIED. PHASE 2.** File: `20260913040359_finish_generic_field_invoice_cutover.sql`. SQL sha256: `aa632dcceaaa446e80f092fd56c1f7398818099242cea283641f68f93fef2bd9`. Require committed phase 1, exclusive advisory access, one READ COMMITTED transaction, stats visibility, no other open/prepared transaction and no still-valid generic save receipt (NULL or exact expiry boundary included). Refusal preserves phase 1 and existing retries; wait for natural expiry, never delete/backfill receipts. Only after safe cutover install NEW generic field-invoice refusal before unchanged below-cost/key-only receipt/delegation. Dedicated source-season creators, other types, existing edits and original OID remain unchanged. Current-candidate proof/review/publication remain required; no merge or live apply authorized. |
 
 This authored stamp is above the September 12 effective live high-water `20260908120000`.
 Re-read the ledger and pending queue immediately before apply; this note is not apply permission

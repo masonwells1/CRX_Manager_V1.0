@@ -149,7 +149,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -163,7 +163,8 @@ const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
 const CANDIDATE = path.join(MIGRATIONS, '20260906120000_preview_field_app_season_follows_invoice_date.sql');
 const CROSS_SEASON_GUARD = path.join(MIGRATIONS, '20260908190000_field_app_invoice_cross_season_edit_guard.sql');
-const GENERIC_CREATION_GUARD = path.join(MIGRATIONS, '20260912165758_refuse_generic_field_invoice_creation.sql');
+const GENERIC_CUTOVER_BARRIER = path.join(MIGRATIONS, '20260912165758_refuse_generic_field_invoice_creation.sql');
+const GENERIC_CREATION_GUARD = path.join(MIGRATIONS, '20260913040359_finish_generic_field_invoice_cutover.sql');
 const SAVE_SIDE = path.join(MIGRATIONS, '20260904180000_invoice_season_follows_invoice_date.sql');
 const PREDECESSOR = path.join(MIGRATIONS, '20260904160000_invoice_date_fallbacks_chicago.sql');
 // The migration that last emitted the 4-argument preview body live still runs.
@@ -225,6 +226,31 @@ function psql(sql, options = {}) {
     ['exec', '-i', NAME, 'psql', '-U', options.user ?? 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', ...(options.wrap ? ['-1'] : [])],
     { input: sql, allowFailure: options.allowFailure },
   );
+}
+function persistentPsql(label) {
+  const child = spawn('docker', ['exec', '-i', '-e', `PGAPPNAME=${label}`, NAME,
+    'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-Atq', '-v', 'ON_ERROR_STOP=1'],
+  { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const result = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (status) => resolve({ status, stdout, stderr }));
+  });
+  return {
+    async send(sql, marker) {
+      child.stdin.write(`${sql}\n`);
+      const deadline = Date.now() + 10000;
+      while (!stdout.includes(marker)) {
+        assert.ok(child.exitCode === null, `persistent session exited: ${stderr}`);
+        assert.ok(Date.now() < deadline, `persistent session timed out at ${marker}: ${stderr}`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    },
+    async finish() { child.stdin.end(); return result; },
+    stop() { child.kill(); },
+  };
 }
 function scalar(sql) {
   return docker(['exec', '-i', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-Atq', '-v', 'ON_ERROR_STOP=1'], { input: sql }).stdout.trim();
@@ -299,6 +325,13 @@ assert.ok(genericRoutingSql, 'current generic routing declaration must be found 
 assert.equal(md5(plpgsqlBody(genericRoutingSql, 'CREATE FUNCTION public._save_invoice_scoped_impl(')),
   '622210352fd3c9fa3e293a8e48957429', 'routing source must match September 12 read-only live body');
 const genericCreationGuardSql = readFileSync(GENERIC_CREATION_GUARD, 'utf8');
+const genericCutoverBarrierSql = readFileSync(GENERIC_CUTOVER_BARRIER, 'utf8');
+assertWrappable(genericCutoverBarrierSql, path.basename(GENERIC_CUTOVER_BARRIER));
+const genericBarrierBodyMd5 = md5(plpgsqlBody(
+  genericCutoverBarrierSql, 'CREATE OR REPLACE FUNCTION public.save_invoice(',
+));
+assert.ok(genericCutoverBarrierSql.includes(genericBarrierBodyMd5),
+  `cutover barrier must pin its actual body MD5 ${genericBarrierBodyMd5}`);
 assertWrappable(genericCreationGuardSql, path.basename(GENERIC_CREATION_GUARD));
 const genericCreationBodyMd5 = md5(plpgsqlBody(
   genericCreationGuardSql, 'CREATE OR REPLACE FUNCTION public.save_invoice(',
@@ -720,7 +753,150 @@ function committedGenericFieldRetryFixture() {
     ROLLBACK;`;
   psql(retrySql);
   log('PHASE 8-committed-retry-baseline: public creation COMMITTED; identical authenticated retry returns the committed invoice before migration');
-  return retrySql;
+  return { retrySql, key, invoice, payload };
+}
+
+async function genericCutoverProof(fixture) {
+  const bodyMd5 = () => scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure");
+  const cached = persistentPsql(`cutover-cached-${randomUUID()}`);
+  const worker = persistentPsql(`cutover-worker-${randomUUID()}`);
+  const retryPrepared = `BEGIN;
+    DO $auth$ BEGIN ${AUTHENTICATE} END $auth$; SET LOCAL ROLE authenticated;
+    DO $retry$ DECLARE v_id uuid; BEGIN
+      EXECUTE 'EXECUTE cached_generic_retry' INTO v_id;
+      IF v_id IS DISTINCT FROM '${fixture.invoice}'::uuid THEN
+        RAISE EXCEPTION 'CACHED_RETRY_CHANGED_INVOICE';
+      END IF;
+    END $retry$; ROLLBACK;`;
+  try {
+    for (const sql of [genericCutoverBarrierSql, genericCreationGuardSql]) {
+      const unwrapped = psql(sql, { allowFailure: true });
+      assert.notEqual(unwrapped.status, 0); assert.match(said(unwrapped), /GENERIC_FIELD_CUTOVER_NOT_IN_TRANSACTION/);
+      assert.equal(bodyMd5(), '9a34478d405a1a3b8233cabcdfb39691');
+    }
+    for (const phase1 of [genericCutoverBarrierSql,
+      `SAVEPOINT phase1; ${genericCutoverBarrierSql} RELEASE SAVEPOINT phase1;`]) {
+      const bundled = psql(`BEGIN; ${phase1}\n${genericCreationGuardSql}`, { allowFailure: true });
+      assert.notEqual(bundled.status, 0); assert.match(said(bundled), /GENERIC_FIELD_CUTOVER_BARRIER_UNCOMMITTED/);
+      assert.equal(bodyMd5(), '9a34478d405a1a3b8233cabcdfb39691');
+    }
+    // SQL PREPARE is session-local and distinct from two-phase prepared transactions.
+    await cached.send(`PREPARE cached_generic_retry AS SELECT public.save_invoice(
+      '${fixture.payload}'::jsonb, '[]'::jsonb, '${fixture.key}');
+      SELECT 'CACHE_READY_V0';`, 'CACHE_READY_V0');
+    await worker.send("BEGIN; SELECT 'OLD_TRANSACTION_OPEN';", 'OLD_TRANSACTION_OPEN');
+    assert.match(said(apply('generic-cutover-barrier.sql')), /POSTFLIGHT_OK/);
+    assert.equal(bodyMd5(), genericBarrierBodyMd5);
+    const oldOpen = psql('\\i /tmp/generic-creation-guard.sql', { wrap: true, allowFailure: true });
+    assert.notEqual(oldOpen.status, 0);
+    assert.match(said(oldOpen), /GENERIC_FIELD_CUTOVER_NOT_QUIET/);
+    await worker.send("ROLLBACK; SELECT 'OLD_TRANSACTION_DRAINED';", 'OLD_TRANSACTION_DRAINED');
+    await cached.send(`${retryPrepared} SELECT 'CACHE_RETRY_V1';`, 'CACHE_RETRY_V1');
+    // A prepared invocation made under V0 must now run V1's isolation check.
+    await cached.send(`BEGIN ISOLATION LEVEL REPEATABLE READ;
+      DO $auth$ BEGIN ${AUTHENTICATE} END $auth$; SET LOCAL ROLE authenticated;
+      DO $rr$ BEGIN
+        BEGIN EXECUTE 'EXECUTE cached_generic_retry'; RAISE EXCEPTION 'CACHE_STILL_V0';
+        EXCEPTION WHEN serialization_failure THEN
+          IF SQLERRM NOT LIKE 'GENERIC_FIELD_CUTOVER_ISOLATION:%' THEN RAISE; END IF;
+        END;
+      END $rr$; ROLLBACK; SELECT 'CACHE_INVALIDATED_TO_V1';`, 'CACHE_INVALIDATED_TO_V1');
+    assert.match(said(apply('generic-cutover-barrier.sql')), /POSTFLIGHT_OK/);
+    psql(fixture.retrySql);
+    for (const sql of [genericCutoverBarrierSql, genericCreationGuardSql]) {
+      const originalOid = scalar("SELECT 'public.save_invoice(jsonb,jsonb,text)'::regprocedure::oid");
+      const changedIdentity = sql.replace('CREATE OR REPLACE FUNCTION public.save_invoice(',
+        'DROP FUNCTION public.save_invoice(jsonb,jsonb,text);\nCREATE FUNCTION public.save_invoice(');
+      // Phase 2 must reach postflight, so simulate expiry only inside this aborted mutant.
+      const identity = psql(`BEGIN; UPDATE public.idempotency_keys SET expires_at = transaction_timestamp() - interval '1 second'
+        WHERE idempotency_key = '${fixture.key}';\n${changedIdentity}`, { allowFailure: true });
+      assert.notEqual(identity.status, 0); assert.match(said(identity), /POSTFLIGHT_GENERIC_FIELD_CREATION_IDENTITY/);
+      assert.equal(scalar("SELECT 'public.save_invoice(jsonb,jsonb,text)'::regprocedure::oid"), originalOid);
+      assert.equal(bodyMd5(), genericBarrierBodyMd5);
+    }
+
+    await worker.send("BEGIN; SELECT pg_catalog.pg_advisory_xact_lock_shared(20260912,652); SELECT 'SHARED_HELD';", 'SHARED_HELD');
+    const busy = psql('\\i /tmp/generic-creation-guard.sql', { wrap: true, allowFailure: true });
+    assert.notEqual(busy.status, 0); assert.match(said(busy), /GENERIC_FIELD_CUTOVER_BUSY/);
+    await worker.send("ROLLBACK; SELECT 'SHARED_RELEASED';", 'SHARED_RELEASED');
+
+    await worker.send("BEGIN; SELECT pg_catalog.pg_advisory_xact_lock(20260912,652); SELECT 'EXCLUSIVE_HELD';", 'EXCLUSIVE_HELD');
+    const during = psql(fixture.retrySql, { allowFailure: true });
+    assert.notEqual(during.status, 0); assert.match(said(during), /GENERIC_FIELD_CUTOVER_IN_PROGRESS/);
+    await worker.send("ROLLBACK; SELECT 'EXCLUSIVE_RELEASED';", 'EXCLUSIVE_RELEASED');
+    psql(fixture.retrySql);
+
+    const active = psql('\\i /tmp/generic-creation-guard.sql', { wrap: true, allowFailure: true });
+    assert.notEqual(active.status, 0); assert.match(said(active), /GENERIC_FIELD_CUTOVER_ACTIVE_RECEIPTS/);
+    assert.equal(bodyMd5(), genericBarrierBodyMd5, 'receipt refusal must leave the retry-compatible V1 body');
+    await cached.send(`${retryPrepared} SELECT 'CACHE_RETRY_AFTER_REFUSAL';`, 'CACHE_RETRY_AFTER_REFUSAL');
+
+    // Null expiry and exact boundary remain valid. Change only this disposable fixture.
+    for (const expiry of ['NULL', 'transaction_timestamp()']) {
+      const boundary = psql(`BEGIN; UPDATE public.idempotency_keys SET expires_at = ${expiry}
+        WHERE idempotency_key = '${fixture.key}'; \\i /tmp/generic-creation-guard.sql`, { allowFailure: true });
+      assert.notEqual(boundary.status, 0); assert.match(said(boundary), /GENERIC_FIELD_CUTOVER_ACTIVE_RECEIPTS/);
+      assert.equal(bodyMd5(), genericBarrierBodyMd5);
+    }
+
+    // Omitting receipt refusal recreates the original HIGH; the aborted mutant rolls back.
+    const receiptGate = /  IF v_body = '[0-9a-f]+' AND EXISTS \([\s\S]*?GENERIC_FIELD_CUTOVER_ACTIVE_RECEIPTS[\s\S]*?  END IF;/;
+    assert.equal(genericCreationGuardSql.match(new RegExp(receiptGate.source, 'g'))?.length, 1);
+    const unsafe = psql(`BEGIN; ${genericCreationGuardSql.replace(receiptGate, '')}\n${fixture.retrySql}`, { allowFailure: true });
+    assert.notEqual(unsafe.status, 0); assert.match(said(unsafe), /FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED/);
+    assert.equal(bodyMd5(), genericBarrierBodyMd5);
+    psql(fixture.retrySql);
+
+    // Prepare a real transaction in this disposable DB: not a SQL PREPARE statement.
+    psql("BEGIN; SELECT 1; PREPARE TRANSACTION 'generic-cutover-proof';");
+    const prepared = psql('\\i /tmp/generic-creation-guard.sql', { wrap: true, allowFailure: true });
+    assert.notEqual(prepared.status, 0); assert.match(said(prepared), /GENERIC_FIELD_CUTOVER_PREPARED_XACT/);
+    psql("ROLLBACK PREPARED 'generic-cutover-proof';");
+
+    // Retain the SAME session prepared under V0 across the actual V1 -> V2 cutover.
+      // Natural expiry is simulated by expiring our own committed fixture, never deleting it.
+      psql(`UPDATE public.idempotency_keys SET expires_at = transaction_timestamp() - interval '1 second'
+        WHERE idempotency_key = '${fixture.key}';`);
+      assert.match(said(apply('generic-creation-guard.sql')), /POSTFLIGHT_OK/);
+      assert.equal(bodyMd5(), genericCreationBodyMd5);
+      await cached.send(`BEGIN;
+        DO $auth$ BEGIN ${AUTHENTICATE} END $auth$; SET LOCAL ROLE authenticated;
+        DO $final$ BEGIN
+          BEGIN EXECUTE 'EXECUTE cached_generic_retry'; RAISE EXCEPTION 'CACHE_STILL_V1';
+          EXCEPTION WHEN check_violation THEN
+            IF SQLERRM NOT LIKE 'FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED:%' THEN RAISE; END IF;
+          END;
+        END $final$; ROLLBACK; SELECT 'CACHE_INVALIDATED_TO_V2';`, 'CACHE_INVALIDATED_TO_V2');
+      const ended = await cached.finish(); assert.equal(ended.status, 0, said(ended));
+      const workerEnded = await worker.finish(); assert.equal(workerEnded.status, 0, said(workerEnded));
+
+    // Execute the actual V1 body (renamed only for this container fixture) against V2's
+    // catalog to observe its fresh-SPI fence, including the null-key path.
+    const oldBody = genericCutoverBarrierSql.match(/CREATE OR REPLACE FUNCTION public\.save_invoice\([\s\S]*?\$function\$;/)[0];
+    psql(oldBody.replace('public.save_invoice(', 'public._smoke_cached_generic_v1('), { wrap: true });
+    const stale = psql(`SELECT public._smoke_cached_generic_v1('${fixture.payload}'::jsonb, '[]'::jsonb, NULL);`, { allowFailure: true });
+    assert.notEqual(stale.status, 0); assert.match(said(stale), /GENERIC_FIELD_CUTOVER_STALE_CALL/);
+    psql('DROP FUNCTION public._smoke_cached_generic_v1(jsonb,jsonb,text);');
+    const finalRetry = psql(fixture.retrySql, { allowFailure: true });
+    assert.notEqual(finalRetry.status, 0); assert.match(said(finalRetry), /FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED/);
+    const alternate = randomUUID();
+    psql(`INSERT INTO auth.users (id,email,raw_user_meta_data) VALUES
+      ('${alternate}', '${alternate}@example.invalid', '{"role":"admin"}');
+      INSERT INTO public.profiles (id,email,role,is_active) VALUES
+      ('${alternate}', '${alternate}@example.invalid', 'admin', true)
+      ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, is_active = true;`);
+    for (const [actor, payload] of [[ADMIN, fixture.payload], [alternate, fixture.payload],
+      [ADMIN, JSON.stringify({ ...JSON.parse(fixture.payload), season: SEASON_NOW + 1 })]]) {
+      const refused = psql(`BEGIN;
+        DO $auth$ BEGIN ${AUTHENTICATE.replaceAll(ADMIN, actor)} END $auth$;
+        SET LOCAL ROLE authenticated;
+        SELECT public.save_invoice('${payload}'::jsonb, '[]'::jsonb, '${fixture.key}');`, { allowFailure: true });
+      assert.notEqual(refused.status, 0); assert.match(said(refused), /FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED/);
+    }
+    assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = '${fixture.key}'`), '1');
+    assert.equal(scalar(`SELECT count(*) FROM public.invoices WHERE id = '${fixture.invoice}'`), '1');
+    log('PHASE 8-cutover: committed retry preserved until expiry; busy/in-flight/prepared/active/null/boundary gates and receipt-removal mutant observed; persistent SQL PREPARE invalidates across both phases; old V1 null-key body rejects against fresh V2 catalog');
+  } finally { cached.stop(); worker.stop(); }
 }
 
 function genericCreationGuardProbe(label, { expectRefusal = true, removeGuard = false } = {}) {
@@ -870,9 +1046,9 @@ function genericCreationReplayDriftProbes() {
   assert.equal(scalar("SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname='save_invoice'"), '2', 'aborted replay must preserve shadow overload');
   psql('DROP FUNCTION public.save_invoice(jsonb,jsonb,text,text);', { wrap: true });
 
-  const postflightPin = `AND md5(p.prosrc) = '${genericCreationBodyMd5}'`;
+  const postflightPin = `(SELECT md5(prosrc) FROM pg_proc WHERE oid = v_oid) IS DISTINCT FROM '${genericCreationBodyMd5}'`;
   assert.equal(genericCreationGuardSql.split(postflightPin).length, 2, 'exact postflight pin must occur once');
-  copyText(genericCreationGuardSql.replace(postflightPin, `AND md5(p.prosrc) = '${'1'.repeat(32)}'`),
+  copyText(genericCreationGuardSql.replace(postflightPin, `(SELECT md5(prosrc) FROM pg_proc WHERE oid = v_oid) IS DISTINCT FROM '${'1'.repeat(32)}'`),
     'generic-creation-wrong-postflight.sql', workDir);
   const badPostflight = psql('\\i /tmp/generic-creation-wrong-postflight.sql', { wrap: true, allowFailure: true });
   assert.notEqual(badPostflight.status, 0, 'wrong candidate body pin must refuse installation');
@@ -1100,7 +1276,8 @@ $probe$;`;
 }
 
 try {
-  docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1536m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
+  docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1536m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE,
+    'postgres', '-D', '/etc/postgresql', '-c', 'max_prepared_transactions=2']);
   waitForDatabase();
 
   // ---- PHASE 1: reproduce production's schema ---------------------------------------
@@ -1133,11 +1310,14 @@ try {
   const candidateIndex = migrations.indexOf(CANDIDATE);
   const guardIndex = migrations.indexOf(CROSS_SEASON_GUARD);
   const creationGuardIndex = migrations.indexOf(GENERIC_CREATION_GUARD);
+  const barrierIndex = migrations.indexOf(GENERIC_CUTOVER_BARRIER);
   assert.notEqual(candidateIndex, -1, 'preview candidate must remain in the ledger-selected migration list');
   assert.notEqual(guardIndex, -1, 'cross-season guard must remain in the ledger-selected migration list');
   assert.ok(guardIndex > candidateIndex, 'cross-season guard must follow the preview candidate');
   assert.notEqual(creationGuardIndex, -1, 'creation guard must remain in the ledger-selected migration list');
   assert.ok(creationGuardIndex > guardIndex, 'creation guard must follow the filed-season edit guard');
+  assert.ok(barrierIndex > guardIndex && creationGuardIndex > barrierIndex,
+    'separately committed cutover barrier must precede final creation refusal');
   const stopIdx = migrations.findIndex((m) => path.basename(m) === REPLAY_STOP_BEFORE);
   assert.notEqual(stopIdx, -1, `replay stop marker ${REPLAY_STOP_BEFORE} is not in the ledger-selected list`);
   for (const [index, migration] of migrations.slice(0, stopIdx).entries()) {
@@ -1228,6 +1408,7 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   copyLf(CANDIDATE, 'candidate.sql', workDir);
   copyLf(CROSS_SEASON_GUARD, 'cross-season-guard.sql', workDir);
   copyLf(GENERIC_CREATION_GUARD, 'generic-creation-guard.sql', workDir);
+  copyLf(GENERIC_CUTOVER_BARRIER, 'generic-cutover-barrier.sql', workDir);
   copyText(asReplace(realCreate), 'restore-body.sql', workDir);
 
   // ---- PHASE 2d/2e: the apply-time guards, tested against the REAL pre-apply state -----
@@ -1859,15 +2040,8 @@ ${revokedAuth}`),
   assert.match(said(guardApply), /POSTFLIGHT_OK/, 'cross-season guard migration did not reach its postflight');
   genericCreationGuardProbe('PUBLIC_INSERT_BASELINE', { expectRefusal: false });
   log('PHASE 8-creation-baseline: authenticated public save creates a mismatched new field invoice before the generic-creation guard');
-  const committedRetrySql = committedGenericFieldRetryFixture();
-  const creationApply = apply('generic-creation-guard.sql');
-  assert.match(said(creationApply), /POSTFLIGHT_OK/, 'generic creation guard must reach its postflight');
-  assert.equal(scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure"),
-    genericCreationBodyMd5, 'PostgreSQL must agree with the reviewed public wrapper fingerprint');
-  const committedRetry = psql(committedRetrySql, { allowFailure: true });
-  assert.equal(committedRetry.status, 0,
-    `MIGRATION_CROSSING_COMMITTED_RETRY_REJECTED: ${said(committedRetry)}`);
-  log('PHASE 8-committed-retry: identical authenticated retry still returns the committed invoice after migration');
+  const committedFixture = committedGenericFieldRetryFixture();
+  await genericCutoverProof(committedFixture);
   genericCreationGuardProbe('PUBLIC_INSERT_GUARD');
   sourceSeasonCreatorProbe();
   const creationReplay = apply('generic-creation-guard.sql');

@@ -1,5 +1,10 @@
 ## 2026-09-12 - Field-application invoice creation season guard (local, not applied)
 
+Historical checkpoint, superseded by `2026-09-12-generic-field-retry-safe-cutover.md`:
+the subsequent committed-retry regression FAILED the one-phase refusal. The still-unapplied
+165758 proposal is now phase 1; a separate pending 20260913040359 phase 2 installs refusal
+only after the receipt/request cutover gates pass. The older passes below are not clearance.
+
 The fresh whole-branch review of the five CodeRabbit corrections found a HIGH creation
 bypass: generic `save_invoice` accepted a caller-supplied season disagreeing with a new
 field-application invoice's transaction date. The existing filed-season candidate trigger

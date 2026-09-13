@@ -23,12 +23,22 @@ Fresh whole-branch review of local corrected commit `d93106e8e` then found a HIG
 bypass through generic `save_invoice`, which the UPDATE-only trigger misses. Root reproduced
 it through the public authenticated RPC. Compatibility review rejected a universal INSERT
 guard because legitimate job/blend creators carry source season with today's invoice date.
-The active new migration `20260912165758_refuse_generic_field_invoice_creation.sql` instead
-refuses NEW generic field-invoice creation, preserving dedicated creators and existing edits.
-Disposable public-RPC refusal/rollback/retry, source-season compatibility, replay drift and
-removal-of-only-the-refusal tests passed; all three focused reviewers are clean. Both guard
-migrations remain unapplied. A newly frozen exact-head review, normal validation/publication
-and actual CodeRabbit re-review are still required; `d93106e8e`'s BLOCKERS is not clearance.
+The earlier one-phase refusal in `20260912165758_refuse_generic_field_invoice_creation.sql`
+then failed the added COMMITTED-retry transition regression (Sol/high `f6cb05b369`, 18:15Z).
+It remains NOT APPLIED and is now repurposed as phase 1: preserve original generic creation,
+below-cost and key-only receipt semantics while installing a fail-fast shared barrier,
+transitional READ COMMITTED requirement and fresh V1 catalog fence. New phase 2,
+`20260913040359_finish_generic_field_invoice_cutover.sql`, requires phase 1 separately
+committed, no old open/prepared work and no still-valid generic receipt before installing
+NEW-field refusal. Refusal leaves existing legitimate retries working until natural expiry.
+Do not manufacture actor/payload bindings for legacy generic receipts or delete/backfill them.
+Both phases pin the original OID/defaults/owner/search path/ACL and leave source creators alone.
+Corrected full disposable transition/concurrency/mutation proof passed with
+`PREVIEW_SEASON_PROOF_PASS` and both registered business-chain `SMOKE_PASS_ROLLBACK`
+markers. The newly frozen exact-head review remains pending; older CLEAN reports do not
+clear this candidate. The edit guard and both
+cutover phases remain unapplied. Normal publication/CI and actual CodeRabbit review are also
+required; neither `d93106e8e` nor `f6cb05b369` BLOCKERS is clearance.
 
 The operative decision is in `DECISION_LOG.md` (September 8 continuation). Delivery and live
 apply remain separate gates. The session closeout and still-open audit follow-ups are recorded
