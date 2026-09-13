@@ -186,6 +186,7 @@ export default function InventoryPage() {
 
   const [selectedId, setSelectedId] = useState('');
   const [receiveQty, setReceiveQty] = useState('');
+  const [receiveCleanupFailed, setReceiveCleanupFailed] = useState(false);
   const [receivePOItemId, setReceivePOItemId] = useState('');
   const [availablePOs, setAvailablePOs] = useState<Array<{id: string; po_number: string; ordered: number; received: number; unit_cost: number; purchase_order_id: string; product_id: string; unit_size: string | null}>>([]);
   const [adjustQty, setAdjustQty] = useState('');
@@ -811,6 +812,7 @@ export default function InventoryPage() {
           p_idempotency_key: idemKey,
         });
         let completedElsewhere = false;
+        let cleanupFailed = false;
         if (error) {
           const receipt = getIdempotencyMismatchResult(error, 'receive_po_items');
           const recordIds = receipt?.receiving_record_ids;
@@ -833,20 +835,26 @@ export default function InventoryPage() {
         }
         try {
           await receivePoIntent.resolveIntent();
+          setReceiveCleanupFailed(false);
         } catch (resolveError) {
-          Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'inventory', operation: 'receive_po_items' } });
-          toast('warning', 'The receipt was saved, but this browser could not finish its retry record. Keep any locked retry unchanged.');
+          cleanupFailed = true;
+          setReceiveCleanupFailed(true);
+          try {
+            Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'inventory', operation: 'receive_po_items' } });
+          } catch { /* Reporting cannot change the confirmed receipt. */ }
+          toast('warning', 'The receipt was saved once. This form stays locked to the same receipt because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before recording another receipt on this device.');
         }
-        return { quantity: request.quantity, completedElsewhere };
+        return { quantity: request.quantity, completedElsewhere, cleanupFailed };
       },
       toast,
       sentryTag: 'receive_po_items',
-      onSuccess: ({ quantity: receivedQuantity, completedElsewhere }) => {
+      onSuccess: ({ quantity: receivedQuantity, completedElsewhere, cleanupFailed }) => {
+        fetchInventory();
+        if (cleanupFailed) return;
         if (!completedElsewhere) toast('success', `Received ${receivedQuantity} units`);
         setReceiveOpen(false);
         setReceiveQty('');
         setReceivePOItemId('');
-        fetchInventory();
       },
     });
   };
@@ -1892,7 +1900,7 @@ export default function InventoryPage() {
       </Modal>
 
       {/* Receive Modal */}
-      <Modal open={receiveOpen} onClose={() => { if (!receivePoIntent.isIntentLocked) setReceiveOpen(false); }} title="Receive" accent="Shipment">
+      <Modal open={receiveOpen} onClose={() => { if (!receivePoIntent.isIntentLocked || receivePoIntent.isForeignIntentLocked) setReceiveOpen(false); }} title="Receive" accent="Shipment">
         <div className="space-y-4">
           {receivePoIntent.isIntentLocked && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
@@ -1900,6 +1908,8 @@ export default function InventoryPage() {
                 ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
                 : receivePoIntent.isRetryExpired
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                : receiveCleanupFailed
+                ? 'These goods were recorded once. Browser cleanup failed; retry this same receipt unchanged. If it stays locked after reloading, report it before recording another receipt on this device.'
                 : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
             </div>
           )}
@@ -1933,7 +1943,7 @@ export default function InventoryPage() {
             </>
           )}
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" disabled={receivePoIntent.isIntentLocked} onClick={() => setReceiveOpen(false)}>Cancel</Button>
+            <Button variant="secondary" disabled={receivePoIntent.isIntentLocked && !receivePoIntent.isForeignIntentLocked} onClick={() => setReceiveOpen(false)}>Cancel</Button>
             {availablePOs.length > 0 && (
               <Button onClick={handleReceive} disabled={receivePoIntent.isForeignIntentLocked || receivePoIntent.isRetryExpired}>
                 {receivePoIntent.isIntentLocked ? 'Retry Exact Receiving' : 'Receive'}

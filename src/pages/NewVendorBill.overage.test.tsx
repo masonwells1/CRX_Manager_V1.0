@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
+import { Sentry } from '../lib/sentry';
 
 /**
  * Renders the REAL NewVendorBill page and drives a real PO-overage rejection.
@@ -91,9 +92,9 @@ describe('NewVendorBill PO-overage handling', () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(['success', 'saved receipt'] as const)('opens a confirmed bill after %s even when acknowledgment cleanup fails', async (outcome) => {
+  it.each(['success', 'saved receipt'] as const)('keeps a confirmed bill frozen after %s until acknowledgment cleanup recovers', async (outcome) => {
     const removeItem = Storage.prototype.removeItem;
-    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+    const cleanupSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
       if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
         throw new Error('Acknowledgment cleanup blocked');
       }
@@ -107,14 +108,22 @@ describe('NewVendorBill PO-overage handling', () => {
       } });
     render(<NewVendorBill />);
     await fillAndSave();
-    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/accounts-payable/bills/committed-bill'));
-    expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('vendor bill was saved'));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('vendor bill was saved once')));
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(Sentry.captureException).toHaveBeenCalled();
+    expect(mockToast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
     expect(mockToast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
     expect(mockRpc).toHaveBeenCalledTimes(1);
     const args = mockRpc.mock.calls[0][1] as { p_idempotency_key: string };
     const acknowledgmentKey = Object.keys(window.sessionStorage).find((key) => key.startsWith('crx:uncertain-mutation-ack:v1:'));
     expect(acknowledgmentKey).toBeDefined();
     expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
+    const first = mockRpc.mock.calls[0][1];
+    cleanupSpy.mockRestore();
+    fireEvent.click(screen.getByRole('button', { name: /retry exact bill/i }));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/accounts-payable/bills/committed-bill'));
+    expect(mockRpc).toHaveBeenCalledTimes(2);
+    expect(mockRpc.mock.calls[1][1]).toEqual(first);
   });
 
   it('prompts for a reason on an ordinary overage and sends the confirmation on retry', async () => {

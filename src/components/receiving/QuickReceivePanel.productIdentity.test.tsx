@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import QuickReceivePanel from './QuickReceivePanel';
+import { Sentry } from '../../lib/sentry';
 
 const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
@@ -127,10 +128,12 @@ describe('QuickReceivePanel Product identity', () => {
     });
   });
 
-  it.each([false, true])('distinguishes siblings and completes receipt with cleanup blocked=%s', async (cleanupBlocked) => {
+  it.each([false, true])('distinguishes siblings and receives only the returned PO allocation, cleanup blocked=%s', async (cleanupBlocked) => {
+    let cleanupSpy: ReturnType<typeof vi.spyOn> | undefined;
     if (cleanupBlocked) {
+      vi.mocked(Sentry.captureException).mockImplementationOnce(() => { throw new Error('Reporting transport failed'); });
       const removeItem = Storage.prototype.removeItem;
-      vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      cleanupSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
         if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
           throw new Error('Acknowledgment cleanup blocked');
         }
@@ -171,9 +174,13 @@ describe('QuickReceivePanel Product identity', () => {
         })],
       }),
     ));
-    expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
     if (cleanupBlocked) {
-      expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved'));
+      await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved once')));
+      expect(screen.queryByText(/shipment received!/i)).toBeNull();
+      expect(Sentry.captureException).toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Receive Another Shipment' })).toBeNull();
+      expect(screen.getByRole('button', { name: /back to edit/i })).toBeDisabled();
+      expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
       expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
       const receivingCalls = mocks.rpc.mock.calls.filter(([name]) => name === 'receive_po_items');
       expect(receivingCalls).toHaveLength(1);
@@ -181,6 +188,37 @@ describe('QuickReceivePanel Product identity', () => {
       const acknowledgmentKey = Object.keys(window.sessionStorage).find((key) => key.startsWith('crx:uncertain-mutation-ack:v1:'));
       expect(acknowledgmentKey).toBeDefined();
       expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
+      cleanupSpy?.mockRestore();
+      fireEvent.click(screen.getByRole('button', { name: /retry exact receiving/i }));
+      expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
+      const replayCalls = mocks.rpc.mock.calls.filter(([name]) => name === 'receive_po_items');
+      expect(replayCalls).toHaveLength(2);
+      expect(replayCalls[1][1]).toEqual(args);
+
+      // Only after A's cleanup succeeds may B become a new receipt, with B's
+      // allocation and a new key instead of a hidden replay of A.
+      mocks.rpc.mockImplementation(async (name: string) => name === 'match_quick_receive_items'
+        ? { data: [{
+          product_id: 'product-a', product_name: 'Same Name', quantity_requested: 2,
+          quantity_unmatched: 0, has_multiple_costs: false,
+          allocations: [{ po_item_id: 'po-item-for-a', purchase_order_id: 'po-a', po_number: 'PO-A', quantity_allocated: 2, unit_cost: 25 }],
+        }], error: null }
+        : { data: { receiving_record_ids: [] }, error: null });
+      fireEvent.click(screen.getByRole('button', { name: 'Receive Another Shipment' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+      fireEvent.click(await screen.findByRole('button', { name: /select product/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /SKU-A.*Family A/i }));
+      fireEvent.change(screen.getByRole('spinbutton', { name: /quantity received/i }), { target: { value: '2' } });
+      fireEvent.click(screen.getByRole('button', { name: /review & match \(1 item\)/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /confirm & receive/i }));
+      expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
+      const finalCalls = mocks.rpc.mock.calls.filter(([name]) => name === 'receive_po_items');
+      expect(finalCalls).toHaveLength(3);
+      const nextArgs = finalCalls[2][1] as { p_items: Array<{ po_item_id: string; quantity: number }>; p_idempotency_key: string };
+      expect(nextArgs.p_items).toEqual([expect.objectContaining({ po_item_id: 'po-item-for-a', quantity: 2 })]);
+      expect(nextArgs.p_idempotency_key).not.toBe(args.p_idempotency_key);
+    } else {
+      expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
     }
   });
 

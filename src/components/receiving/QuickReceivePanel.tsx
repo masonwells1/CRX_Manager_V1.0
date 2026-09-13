@@ -127,6 +127,7 @@ export default function QuickReceivePanel() {
   /* ─── step 3 / submission ─── */
   const [saving, setSaving] = useState(false);
   const [receiveCount, setReceiveCount] = useState(0);
+  const [receiptCleanupFailed, setReceiptCleanupFailed] = useState(false);
 
   useEffect(() => {
     const recovered = receiveIntent.unresolvedIntent;
@@ -295,11 +296,17 @@ export default function QuickReceivePanel() {
       result = assertRpcResult<Record<string, unknown>>(data, 'receive_po_items');
     }
 
+    let cleanupFailed = false;
     try {
       await receiveIntent.resolveIntent();
+      setReceiptCleanupFailed(false);
     } catch (resolveError) {
-      Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'quick-receiving', operation: 'receive_po_items' } });
-      toast('warning', 'The receipt was saved, but this browser could not finish its retry record. Keep any locked retry unchanged.');
+      cleanupFailed = true;
+      setReceiptCleanupFailed(true);
+      try {
+        Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'quick-receiving', operation: 'receive_po_items' } });
+      } catch { /* Reporting cannot change the confirmed receipt. */ }
+      toast('warning', 'The receipt was saved once. This form stays locked to the same receipt because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before recording another receipt on this device.');
     }
 
     const receivingRecordIds = result.receiving_record_ids;
@@ -371,6 +378,7 @@ export default function QuickReceivePanel() {
     }
 
     setReceiveCount(request.itemsPayload.length);
+    if (cleanupFailed) return;
     setStep('success');
     toast('success', `Successfully received ${request.itemsPayload.length} item(s)`);
   };
@@ -513,6 +521,10 @@ export default function QuickReceivePanel() {
 
   /* ─── reset for another receive ─── */
   const handleReset = () => {
+    if (receiveIntent.isIntentLocked) {
+      toast('warning', 'Finish reconciling the locked receipt before starting another shipment.');
+      return;
+    }
     setStep('add_items');
     setItems([]);
     setExpandedItems(new Set());
@@ -779,6 +791,8 @@ export default function QuickReceivePanel() {
                   ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
                   : receiveIntent.isRetryExpired
                   ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                  : receiptCleanupFailed
+                  ? 'These goods were recorded once. Browser cleanup failed; retry this same receipt unchanged. If it stays locked after reloading, report it before recording another shipment on this device.'
                   : 'The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice.'}
               </div>
             )}
@@ -1059,6 +1073,7 @@ export default function QuickReceivePanel() {
                 icon={<RotateCcw className="w-4 h-4" />}
                 showChevron={false}
                 onClick={handleReset}
+                disabled={receiveIntent.isIntentLocked}
               >
                 Receive Another Shipment
               </Button>

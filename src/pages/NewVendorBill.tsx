@@ -58,6 +58,7 @@ export default function NewVendorBill() {
     getIntentIdentity: (intent) => intent.args,
   });
   const [saving, setSaving] = useState(false);
+  const [billCleanupFailed, setBillCleanupFailed] = useState(false);
   const [overageMessage, setOverageMessage] = useState<string | null>(null);
   // Separate from overageMessage on purpose. overageMessage OPENS ReasonModal, whose
   // confirm path calls handleSave(true, reason). That path cannot work while a pending
@@ -161,9 +162,15 @@ export default function NewVendorBill() {
   const resolveConfirmedBillIntent = async () => {
     try {
       await createBillIntent.resolveIntent();
+      setBillCleanupFailed(false);
+      return true;
     } catch (resolveError) {
-      Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'new-vendor-bill', operation: 'create_vendor_bill' } });
-      toast('warning', 'The vendor bill was saved, but this browser could not finish its retry record. Keep any locked retry unchanged.');
+      setBillCleanupFailed(true);
+      try {
+        Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'new-vendor-bill', operation: 'create_vendor_bill' } });
+      } catch { /* Reporting cannot change the confirmed bill. */ }
+      toast('warning', 'The vendor bill was saved once. This form stays locked to the same bill because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before creating another bill on this device.');
+      return false;
     }
   };
 
@@ -287,7 +294,7 @@ export default function NewVendorBill() {
       if (error) {
         const receipt = getIdempotencyMismatchResult(error, 'create_vendor_bill');
         if (typeof receipt?.bill_id === 'string') {
-          await resolveConfirmedBillIntent();
+          if (!await resolveConfirmedBillIntent()) return;
           toast('warning', 'The earlier vendor bill already completed. Opening it instead of creating a duplicate.');
           navigate(`/accounts-payable/bills/${receipt.bill_id}`);
           return;
@@ -305,7 +312,7 @@ export default function NewVendorBill() {
         return;
       }
       const createdBillId = assertRpcResult<string>(data, 'create_vendor_bill');
-      await resolveConfirmedBillIntent();
+      if (!await resolveConfirmedBillIntent()) return;
 
       toast('success', 'Vendor bill created');
       navigate(`/accounts-payable/bills/${createdBillId}`);
@@ -496,6 +503,8 @@ export default function NewVendorBill() {
             ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
             : createBillIntent.isRetryExpired
             ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+            : billCleanupFailed
+            ? 'This bill was recorded once. Browser cleanup failed; retry this same bill unchanged. If it stays locked after reloading, report it before creating another bill on this device.'
             : 'The last response was uncertain. These fields are locked so a second bill cannot be created. Retry this exact bill to reconcile it.'}
         </div>
       )}

@@ -97,6 +97,7 @@ export default function ReceivingHubPanel() {
   const [receiveTarget, setReceiveTarget] = useState<{ line: POLine; product_name: string } | null>(null);
   const [receiveQty, setReceiveQty] = useState('');
   const [receiving, setReceiving] = useState(false);
+  const [receiveCleanupFailed, setReceiveCleanupFailed] = useState(false);
 
   useEffect(() => {
     const recovered = receiveIntent.unresolvedIntent;
@@ -229,6 +230,7 @@ export default function ReceivingHubPanel() {
     await runCriticalAction({
       action: async () => {
         let completedElsewhere = false;
+        let cleanupFailed = false;
         const { data, error } = await supabase.rpc('receive_po_items', {
           p_items: request.items,
           p_performed_by: request.performedBy,
@@ -257,22 +259,28 @@ export default function ReceivingHubPanel() {
         }
         try {
           await receiveIntent.resolveIntent();
+          setReceiveCleanupFailed(false);
         } catch (resolveError) {
-          Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'receiving-hub', operation: 'receive_po_items' } });
-          toast('warning', 'The receipt was saved, but this browser could not finish its retry record. Keep any locked retry unchanged.');
+          cleanupFailed = true;
+          setReceiveCleanupFailed(true);
+          try {
+            Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'receiving-hub', operation: 'receive_po_items' } });
+          } catch { /* Reporting cannot change the confirmed receipt. */ }
+          toast('warning', 'The receipt was saved once. This form stays locked to the same receipt because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before recording another receipt on this device.');
         }
-        return completedElsewhere;
+        return { completedElsewhere, cleanupFailed };
       },
       toast,
       setLoading: setReceiving,
       sentryTag: 'receive_po_items',
-      onSuccess: (completedElsewhere) => {
+      onSuccess: ({ completedElsewhere, cleanupFailed }) => {
+        setRefreshKey((k) => k + 1);
+        if (cleanupFailed) return;
         if (!completedElsewhere) {
           toast('success', `Received ${fmtUnits(request.items[0].quantity)} of ${request.productName}`);
         }
         setReceiveTarget(null);
         setReceiveQty('');
-        setRefreshKey((k) => k + 1);
       },
     });
   };
@@ -459,6 +467,8 @@ export default function ReceivingHubPanel() {
                 ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
                 : receiveIntent.isRetryExpired
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
+                : receiveCleanupFailed
+                ? 'These goods were recorded once. Browser cleanup failed; retry this same receipt unchanged. If it stays locked after reloading, report it before recording another receipt on this device.'
                 : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
             </div>
           )}

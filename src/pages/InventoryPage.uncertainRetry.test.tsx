@@ -161,7 +161,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     });
   });
 
-  it('closes and refreshes a confirmed receipt when acknowledgment cleanup fails, preserving its exact retry', async () => {
+  it('refreshes a confirmed receipt and keeps its frozen form retryable when acknowledgment cleanup fails', async () => {
     mocks.from.mockImplementation((table: string) => {
       if (table === 'products') return query(products);
       if (table === 'purchase_order_items') return query([{
@@ -186,23 +186,24 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     fireEvent.change(within(dialog).getByLabelText(/purchase order/i), { target: { value: 'receive-line-a' } });
     fireEvent.change(within(dialog).getByLabelText(/quantity received/i), { target: { value: '3' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^receive$/i }));
-    await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('success', 'Received 3 units'));
-    expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved'));
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved once')));
+    expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
+    expect(mocks.captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tags: expect.objectContaining({ operation: 'receive_po_items' }) }));
     expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: /receive.*shipment/i })).toBeNull());
+    expect(screen.getByRole('dialog', { name: /receive.*shipment/i })).toBeInTheDocument();
     await waitFor(() => expect(callsTo('get_inventory_position').length).toBeGreaterThan(refreshesBefore));
     const first = callsTo('receive_po_items')[0];
     const acknowledgmentKey = Object.keys(window.sessionStorage).find((key) => key.startsWith('crx:uncertain-mutation-ack:v1:'));
     expect(acknowledgmentKey).toBeDefined();
     expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(first.p_idempotency_key as string);
     cleanupSpy.mockRestore();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Receive Shipment' })[0]);
     const retryDialog = await screen.findByRole('dialog', { name: /receive.*shipment/i });
     expect(within(retryDialog).getByLabelText(/quantity received/i)).toHaveValue(3);
     expect(within(retryDialog).getByLabelText(/quantity received/i)).toBeDisabled();
     fireEvent.click(within(retryDialog).getByRole('button', { name: /retry exact receiving/i }));
     await waitFor(() => expect(callsTo('receive_po_items')).toHaveLength(2));
     expect(callsTo('receive_po_items')[1]).toEqual(first);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /receive.*shipment/i })).toBeNull());
   });
 
   it('retries a lost adjustment under the SAME key and payload, and refuses to close or edit meanwhile', async () => {
@@ -477,16 +478,30 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     });
   });
 
-  it.each(['adjust_inventory', 'create_inventory_hold'] as const)(
+  it.each(['adjust_inventory', 'create_inventory_hold', 'receive_po_items'] as const)(
     'allows dismissing another tab\'s %s dialog while retaining its frozen key and blocking mutations',
     async (operation) => {
       respond({ [operation]: () => ({ data: null, error: LOST_REPLY }) });
+      if (operation === 'receive_po_items') {
+        mocks.from.mockImplementation((table: string) => table === 'products' ? query(products)
+          : table === 'purchase_order_items' ? query([{
+            id: 'receive-line-a', quantity_ordered: 100, quantity_received: 0,
+            unit_cost: 10, unit_size: '2.5 GL', product_id: 'product-a', purchase_order_id: 'po-a',
+            purchase_orders: { po_number: 'PO-A', status: 'submitted' },
+          }]) : query([]));
+      }
       const initial = await renderPage();
       let dialog: HTMLElement;
       if (operation === 'adjust_inventory') {
         dialog = await openAdjustForRow(0);
         fireEvent.change(within(dialog).getByLabelText(/adjustment quantity/i), { target: { value: '50' } });
         fireEvent.click(within(dialog).getByRole('button', { name: /^apply adjustment$/i }));
+      } else if (operation === 'receive_po_items') {
+        fireEvent.click(screen.getAllByRole('button', { name: 'Receive Shipment' })[0]);
+        dialog = await screen.findByRole('dialog', { name: /receive.*shipment/i });
+        fireEvent.change(within(dialog).getByLabelText(/purchase order/i), { target: { value: 'receive-line-a' } });
+        fireEvent.change(within(dialog).getByLabelText(/quantity received/i), { target: { value: '3' } });
+        fireEvent.click(within(dialog).getByRole('button', { name: /^receive$/i }));
       } else {
         fireEvent.click(screen.getByRole('button', { name: /create hold/i }));
         dialog = screen.getByRole('dialog', { name: /create.*hold/i });
@@ -496,7 +511,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
       }
       await waitFor(() => expect(callsTo(operation)).toHaveLength(1));
       await waitFor(() => expect(within(dialog).getByRole('button', { name: /retry exact/i })).toBeEnabled());
-      await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(operation === 'adjust_inventory' ? 'error' : 'warning', expect.any(String)));
+      await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(operation === 'create_inventory_hold' ? 'warning' : 'error', expect.any(String)));
       initial.unmount();
       // A second tab has neither this page's acknowledgment nor its claim.
       window.sessionStorage.clear();
@@ -507,11 +522,16 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
       await renderPage();
       const reopen = async () => {
         if (operation === 'adjust_inventory') return openAdjustForRow(0);
+        if (operation === 'receive_po_items') {
+          fireEvent.click(screen.getAllByRole('button', { name: 'Receive Shipment' })[0]);
+          return screen.getByRole('dialog', { name: /receive.*shipment/i });
+        }
         fireEvent.click(screen.getByRole('button', { name: /create hold/i }));
         return screen.getByRole('dialog', { name: /create.*hold/i });
       };
       dialog = await reopen();
-      expect(within(dialog).getByRole('button', { name: /retry exact/i })).toBeDisabled();
+      if (operation === 'receive_po_items') expect(within(dialog).queryByRole('button', { name: /retry exact/i })).toBeNull();
+      else expect(within(dialog).getByRole('button', { name: /retry exact/i })).toBeDisabled();
       if (operation === 'create_inventory_hold') {
         await within(dialog).findByRole('button', { name: /SKU-A/i });
       }
@@ -519,7 +539,8 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
       fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
       dialog = await reopen();
-      expect(within(dialog).getByRole('button', { name: /retry exact/i })).toBeDisabled();
+      if (operation === 'receive_po_items') expect(within(dialog).queryByRole('button', { name: /retry exact/i })).toBeNull();
+      else expect(within(dialog).getByRole('button', { name: /retry exact/i })).toBeDisabled();
       expect(callsTo(operation)).toHaveLength(1);
       expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual(frozen);
     },
