@@ -257,7 +257,7 @@ tab of the same browser and survives a reload. Plain steps for staff:
 
 1. **Amber note "The last response was uncertain ... Retry it unchanged".** Click the **Retry Exact**
    button (Retry Exact Adjustment, Retry Exact Hold or Retry Exact Receiving). It re-sends the same request
-   under the same receipt number, so it can only finish the original, never add a second one. Do not re-type
+   under the same request key, so it can only finish the original, never add a second one. Do not re-type
    the request somewhere else instead.
 2. **"... was already applied/created in another tab. Refreshing ..."** Nothing to do. The first attempt went
    through and the page refreshes itself.

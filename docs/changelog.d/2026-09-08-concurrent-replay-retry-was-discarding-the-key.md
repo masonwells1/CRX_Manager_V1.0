@@ -8,7 +8,7 @@ lets one win and tells the loser
 `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY: ... completed concurrently; retry to read
 its saved result`. The winner COMMITTED — the hold exists.
 
-Every PL/pgSQL error arrives as SQLSTATE `P0001`, which `isDefinitiveRpcRejection`
+This concurrent-replay exception arrives as SQLSTATE `P0001`, which `isDefinitiveRpcRejection`
 treats as a definitive refusal. So the loser's durable retry key was deleted. The
 operator saw an error, clicked again, a fresh key was minted, and a **second hold**
 was created for a request that had already succeeded — the exact double-hold this

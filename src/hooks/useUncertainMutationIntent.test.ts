@@ -997,17 +997,19 @@ describe('useUncertainMutationIntent', () => {
     const original = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
     await act(async () => original.result.current.beginIntent({ quantity: 5 }));
     const key = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
-    const newer = { ...JSON.parse(window.localStorage.getItem(key)!), requestVersion: 'newer-request', idempotencyKey: 'newer-receipt-key', intent: { quantity: 6 }, intentIdentity: JSON.stringify({ quantity: 6 }), claimTabIds: ['newer-tab:claim'] };
+    const newer = { ...JSON.parse(window.localStorage.getItem(key)!), requestVersion: 'newer-request', idempotencyKey: `${options.operation}:${options.userId}:newer-receipt`, intent: { quantity: 6 }, intentIdentity: JSON.stringify({ quantity: 6 }), claimTabIds: ['newer-tab:claim'] };
     window.localStorage.setItem(key, JSON.stringify(newer));
     globalThis.indexedDB = new IDBFactory();
     await act(async () => original.result.current.resolveIntent());
     expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual(newer);
     original.unmount();
-    const reloaded = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
     const acknowledgementKeys = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
       .filter((entry) => entry?.startsWith('crx:uncertain-mutation-ack:') && entry.includes(options.userId));
     expect(acknowledgementKeys).toEqual([]);
-    expect(reloaded.result.current.isForeignIntentLocked).toBe(true);
+    const reloaded = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(reloaded.result.current.unresolvedIntent).toEqual({ quantity: 6 });
+    expect(reloaded.result.current.getIdempotencyKey()).toBe(newer.idempotencyKey);
+    expect(reloaded.result.current.isForeignIntentLocked).toBe(false);
     expect(reloaded.result.current.isIntentLocked).toBe(true);
   });
 
