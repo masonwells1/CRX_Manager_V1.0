@@ -140,7 +140,7 @@ if (requests.some((request) => request?.admin)) {
     "the diff or the deadline. Use the ordinary merge instead: an approving review is NOT required " +
     "(removed 2026-09-02), so a green, up-to-date candidate with no `CHANGES_REQUESTED` verdict merges " +
     "without `--admin`. If a review did ask for changes, resolve it first — apply the " +
-    "`ready-for-coderabbit` label and let the default-branch workflow post the review command once, " +
+    "`ready-for-coderabbit` label and let the default-branch workflow dispatch the native review once, " +
     "then fix what it finds. Do not post `@coderabbitai review` by hand — that routes around the label " +
     "gate. If the merge is still blocked, hand the PR to Mason and say why."
   );
@@ -338,7 +338,7 @@ function gateRequest(request) {
       `PR MERGE NOTICE: reviewDecision=${String(pr.reviewDecision || "").toUpperCase() || "<none>"} — merging ` +
       "without a current approval, which main no longer requires (Mason, 2026-09-02). If CodeRabbit has " +
       "not reviewed this candidate, apply the `ready-for-coderabbit` label — the default-branch " +
-      "workflow revalidates this exact head and posts the review command once. Do not post " +
+      "workflow revalidates this exact head and dispatches the native review once. Do not post " +
       "`@coderabbitai review` by hand; that routes around the label gate. Read the review and fix " +
       "what it finds first.\n"
     );
