@@ -539,7 +539,7 @@ function stripCommentsOnly(code: string): string {
  * A `/` opens a regex only where an expression can start: at the beginning, after one of
  * `( , = : [ ! & | ? { ; + - * % ~ ^`, after `=>`, or after a keyword such as `return`.
  * Anywhere else it is division, and so is a candidate that reaches a line break before its
- * closing `/`. A `)` counts only when it closes an `if`, `for`, `while`, `switch` or `catch`
+ * closing `/`. A `)` counts only when it closes an `if`, `for` (including `for await`), `while`, `switch` or `catch`
  * head, so a regex written as a control statement's BODY is masked while division after an
  * ordinary `)` is not (CodeRabbit, PR #638). This is still a scanner, not a TypeScript lexer:
  * a regex written after `]`, `}` or `<` is read as division and its text stays visible, as it
@@ -563,12 +563,21 @@ function maskNonCode(code: string): string {
   const controlHead: boolean[] = [];
   let controlCloseAt = -1;
 
-  function opensControlHead(): boolean {
-    let j = out.length - 1;
+  // The identifier ending at or before `end` in `out` (whitespace skipped), and the index just
+  // before it.
+  function wordBefore(end: number): [string, number] {
+    let j = end;
     while (j >= 0 && /\s/.test(out[j])) j -= 1;
     let k = j;
     while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
-    return /^(if|for|while|switch|catch)$/.test(out.slice(k + 1, j + 1));
+    return [out.slice(k + 1, j + 1), k];
+  }
+
+  function opensControlHead(): boolean {
+    const [word, before] = wordBefore(out.length - 1);
+    // `for await (…)` opens a `for` head; a bare `await (…)` does not.
+    if (word === 'await') return wordBefore(before)[0] === 'for';
+    return /^(if|for|while|switch|catch)$/.test(word);
   }
 
   function regexCanStart(): boolean {
@@ -923,10 +932,13 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     expect(classify(['  if (ready) /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
     expect(classify(['  while (more) /query.throwOnError()/.test(value);', reset], 2)).toBeNull();
     expect(classify(['  for (const v of values) /onClick=/.test(v);', reset], 2)).toBeNull();
+    expect(classify(['  for await (const v of values) /getIdempotencyBindingRejection/.test(v);', reset], 2)).toBeNull();
 
     // Positive controls: only a control head's `)` opens a regex, so division after an
     // ordinary `)` still reads as code, and an executable body is still recognised.
     expect(classify(['  const rate = (a + b) / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    // A bare `await (…)` is not a control head: the `/` after it is still division.
+    expect(classify(['  const rate = await (a + b) / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
     expect(classify(['  if (isReady) total = count / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
     expect(classify(['  if (ready) handleRecovery(getIdempotencyBindingRejection(error));', reset], 2)).toBe('recovery');
   });

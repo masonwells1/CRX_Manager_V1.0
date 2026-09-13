@@ -114,9 +114,9 @@ source files formerly missing from `main`,
 `20260903230000_commission_report_snapshot_contract`, were reconciled when PR #592 merged on
 2026-09-08. That PR also carried two NOT-YET-APPLIED files originally named
 `20260905020000_commission_history_report_replay_guard` and
-`20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: five
-commission candidates sit at `20260905200000` through `20260905200600`, with no
-`20260905200500` file; the intent wrapper is `20260908130800` and the repair remains last at
+`20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: the five
+commission candidates are exactly `20260905200000`, `20260905200200`, `20260905200300`,
+`20260905200400` and `20260905200600`; the intent wrapper is `20260908130800` and the repair remains last at
 `20260908130900`). The five `20260905*` candidates are now below the 2026-09-08 live ordering
 boundary and require a future coordinated restamp before apply.
 

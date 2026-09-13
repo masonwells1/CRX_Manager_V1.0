@@ -44,7 +44,8 @@ not a lexer:
 
 - a `/` after `]`, `}` or `<` is read as division, so a regex literal written there stays
   visible, which is the old behaviour. A `/` after `)` is masked only when that `)` closes an
-  `if`, `for`, `while`, `switch` or `catch` head — the third-round fix below
+  `if`, `for` (including `for await`), `while`, `switch` or `catch` head — the third- and
+  fourth-round fixes below
 - a `//` inside JSX text masks the rest of its line
 
 Third round — CodeRabbit's review at `fb1c7cd0f` found the `)` half of that limitation was
@@ -57,3 +58,11 @@ failed against the unfixed mask with `expected 'recovery' to be null`; after the
 the file pass, including the repo-wide sweep and the exact pins, so no current site was excused this
 way. Three positive controls hold: division after an ordinary `)`, division inside a control
 statement's body, and an executable recovery call as that body.
+
+Fourth round — CodeRabbit's review of delivery PR #663 at `392415f64` found that the head check read
+only the word immediately before `(`, which in `for await (const v of values)` is `await`, so a
+regex written as that loop's body stayed visible and excused a reset. `opensControlHead()` now
+accepts `await` when the word before it is `for`, and nothing else. Proof observed: the new
+`for await` negative case was added FIRST and failed against the unfixed check with
+`expected 'recovery' to be null`; a new positive control keeps a bare `await (a + b) / 2` read as
+division, so a lone `await` still opens no control head.

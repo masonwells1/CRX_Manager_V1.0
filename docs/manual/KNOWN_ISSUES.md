@@ -35,7 +35,8 @@ them, so re-read live rather than trusting them. Only the ledger header was re-r
 The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-remaining one-file disk-vs-live migration drift and its open owner PR #599.
+disk-vs-live migration record, including PR #599's file, which reached `main` when that PR merged on
+2026-09-11 (`791bc3d86`).
 
 Seven local commission candidates remain unapplied: five older-stamp files (`20260905200000`,
 `20260905200200`, `20260905200300`, `20260905200400`, and `20260905200600`), transfer intent
@@ -758,8 +759,8 @@ database side.** Post-apply read-only verification: both bodies at their candida
 (`e3fc9bd9…`, `29d699a8…`), ZERO current-season-helper calls, ZERO UTC current-date tokens, one
 overload each, SECDEF + `search_path` and grants unchanged. The companion frontend fix
 (`src/pages/FieldApplicationInvoice.tsx`, which defaulted its transaction date in UTC) ships with
-PR #599 and reaches production only on merge — until then that page can still pre-fill tomorrow's
-date after ~7 pm Chicago, though the season it produces will now agree with whatever date it sends.
+PR #599, which merged on 2026-09-11 (`791bc3d86`); before that merge the page could pre-fill tomorrow's
+date after ~7 pm Chicago, though the season it produced already agreed with whatever date it sent.
 Historical description of the defect follows. **WAS OPEN, DEADLINE 2026-09-30 — `season` was still UTC in two of those four bodies.**
 `_save_invoice_lineage_unaware_impl_20260827` and `_save_field_app_invoice_impl_20260714` stamp
 `season` from `current_season()` = `compute_season(CURRENT_DATE)`, which the migration did not
@@ -873,7 +874,7 @@ priced, and widening it would have added untested surface to a deadline-bound mo
 fixing `JobDetail.tsx:1342` on its own merits**, ahead of the cosmetic ones. Tracked so the next
 person does not mistake the invoice-date sweep for a whole-app one.
 
-## SERVER HALF FIXED LIVE 2026-09-08; FRONTEND NOT YET MERGED — the field-app split PREVIEW priced from the UTC clock while SAVE priced from the invoice date
+## FIXED — SERVER HALF APPLIED LIVE 2026-09-08, FRONTEND MERGED 2026-09-11 (PR #599) — the field-app split PREVIEW priced from the UTC clock while SAVE priced from the invoice date
 
 **Status as of 2026-09-08: the server half IS APPLIED LIVE** (ledger version `20260908045843`), with
 Mason's explicit in-conversation approval. Verified from the live catalog — one overload, 5 arguments,
@@ -907,12 +908,12 @@ mutants — the fix removed, the stored season ignored, and the `anon` REVOKE dr
 `docs/changelog.d/2026-09-06-preview-field-app-season-follows-invoice-date.md` and row 918 of
 `docs/reference/migration-history.md`.
 
-**This entry stays open until PR #599's frontend half is merged and observed on production.** The
-server half is applied (above); the only remaining gate is the merge itself, which needs the exact-SHA
-proof `pr-merge-guard` requires. Everything below this line is the 2026-09-04 report as written at
+**Both halves have shipped:** the server half applied live on 2026-09-08 and the frontend half merged
+on 2026-09-11 (above). No merge gate remains; the only open item is the screen-level observation,
+which belongs to the #599 lane. Everything below this line is the 2026-09-04 report as written at
 the time, kept for provenance. Where it says the live function has no date or season parameter, or
 that a migration is still needed, that was true until `20260906120000` applied on 2026-09-08 and is
-NOT the live state now; the caller-side change it asks for is the frontend half on PR #599.
+NOT the live state now; the caller-side change it asks for shipped as the frontend half of PR #599.
 
 ### HISTORICAL — the original report (2026-09-04), superseded on the server side 2026-09-08
 
@@ -1739,7 +1740,7 @@ interpolation stays code. Comment, string and template text can no longer supply
 literal. That recognition is the limit of the guarantee, because the mask is a scanner, not a
 lexer: a `/` after `]`, `}` or `<` is still read as division, so a regex literal written in one of
 those positions stays visible and its text CAN still supply those three tokens. A `/` after `)` is
-recognised only when that `)` closes an `if`, `for`, `while`, `switch` or `catch` head (2026-09-12,
+recognised only when that `)` closes an `if`, `for` (including `for await`), `while`, `switch` or `catch` head (2026-09-12,
 CodeRabbit's third round on PR #638: a regex used as a control statement's body was excusing a
 reset). A `//` inside JSX text masks the rest of its line. (i) The
 "no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/

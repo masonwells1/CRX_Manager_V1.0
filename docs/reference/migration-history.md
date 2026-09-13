@@ -43,6 +43,7 @@ reconciling row counts as a drift signal does not get a false alarm from an unex
 | `20260904130047` | `20260904160000_invoice_date_fallbacks_chicago` (row 911) | 997 |
 | `20260904152221` | `20260904180000_invoice_season_follows_invoice_date` (row 912) | 998 |
 | `20260905185938` | `20260904185900_refuse_null_job_field_acres` (row 916) — **ledger name is the unprefixed `refuse_null_job_field_acres`** | 999 |
+
 **Live-ledger capture — 2026-09-08. THIS IS THE CURRENT BOUNDARY.** A read-only `list_migrations`
 on project `rhyzpcqhnizqbxphqdkr` records **1,000 ledger rows** (993 distinct names), live
 `max(version)` **`20260908045843`**, and effective ordering high-water
@@ -97,8 +98,9 @@ enabled, admin-only RLS, zero non-owner ledger grants, and every reviewed functi
 live `[E2E]` fixture rows were created.
 
 **Concurrent documentation integration.** Row 916 below came from merged PR #606. The later
-commission candidates continue at rows 917-921 so every history sequence is unique. Open PR #599
-still carries a separate row-912 claim and must reconcile its documentation before it can merge.
+commission candidates continue at rows 917-921 so every history sequence is unique. PR #599, which
+then carried a separate row-912 claim, reconciled its documentation and merged on 2026-09-11
+(`791bc3d86`).
 
 **Superseded 2026-09-03 15:34 UTC header, kept for F06 live-apply provenance.** The guarded F06
 apply returned HTTP 201 with query hash
