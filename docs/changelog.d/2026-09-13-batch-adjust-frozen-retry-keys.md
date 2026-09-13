@@ -138,6 +138,19 @@ approved a small change to the shared hook.
   sent nothing, and Cancel refreshed the page once. The binding-rejected-only
   refresh is covered by the component test only.
 
+**Codex (gpt-5.6-sol, high) exact-SHA review of `d1f348069`: BLOCKERS, 1 HIGH —
+open, with Mason.** A tab that is suspended while another tab's batch freezes and
+is then resolved handles both storage events only after storage already says
+"resolved" (the hook re-reads the current value, not the event's `newValue`), so
+it never shows the frozen batch and its own stale form can send a fresh
+adjustment. Counter-position recorded for Mason: that is a separate click in
+another tab, and the same double adjustment happens with no lost reply at all
+(tab A succeeds, tab C then submits the same typed adjustment), which no
+idempotency key can distinguish. Compliance-reviewer on the same SHA: 0 BLOCKER /
+0 HIGH / 2 MED (no test for the in-transaction key mismatch against a newer
+pending request; "Finished in another tab" is also shown for conflicts that are
+not a finished batch) / 5 LOW — not yet fixed.
+
 **Proof.**
 - `src/components/inventory/BatchAdjustModal.retry.test.tsx` renders the real
   modal and hook (fake-indexeddb) inside a stand-in page whose `onSuccess` clears
