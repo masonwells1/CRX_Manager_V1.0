@@ -126,7 +126,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `unapply_credit_memo(p_credit_memo_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor. Un-applies a credit memo from the invoices it was applied to, restoring their balances.
 
 ## Inventory & Receiving
-- `adjust_inventory()` — manual inventory adjustment with reason
+- `adjust_inventory(p_inventory_id, p_delta, p_reason, p_performed_by, p_idempotency_key)` → jsonb `{status, new_quantity, product_id}` — admin-only manual inventory adjustment with reason. **Live body** replays a saved receipt on the key alone, before it authenticates or role-checks the caller. **LOCAL CANDIDATE `20260911120000` (not applied):** authenticates, refuses a forged `p_performed_by`, and requires an active admin BEFORE any receipt lookup; requires a key; refuses NULL/NaN/infinite deltas; replays only a receipt bound to the same actor and the same request (`check_idempotency_intent`).
 - `manual_inventory_add()` — add inventory manually (does not override product unit cost)
 - `receive_po_items(p_items, p_performed_by, p_idempotency_key, p_allow_over_receive)` — per-item condition/lot/notes/storage, creates receiving records. **LIVE (`20260714230000`, 2026-07-15):** linewise PO completion; actual overreceive requires admin plus per-item `over_receive_reason`, which is appended to the server audit note.
 - `release_inventory_hold()` — release a specific inventory hold
