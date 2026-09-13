@@ -358,6 +358,9 @@ function clearAcknowledgmentRecord<T>(
 ): void {
   if (!key) return;
   const record = readAcknowledgmentRecord(key, options);
+  if (record?.surface === '__reconciliation_required__') {
+    throw new Error('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE');
+  }
   if (!record || record.requestVersion !== expectedVersion) return;
   try {
     window.sessionStorage.removeItem(key);

@@ -1047,6 +1047,59 @@ describe('useUncertainMutationIntent', () => {
     expect(next.result.current.getIdempotencyKey()).not.toBe(originalKey);
   });
 
+  it.each(['unreadable', 'malformed'] as const)('rejects cleanup for an %s acknowledgment and preserves the exact confirmed retry', async (fault) => {
+    const options = { operation: 'record_vendor_payment', userId: `ack-cleanup-${fault}`,
+      surface: 'vendor-bill-detail', scope: 'bill-cleanup' };
+    const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    await act(async () => result.current.beginIntent({ amount: 10000 }));
+    const originalKey = result.current.getIdempotencyKey();
+    const acknowledgmentKey = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
+      .find((key) => key?.startsWith('crx:uncertain-mutation-ack:v1:'))!;
+    const saved = window.sessionStorage.getItem(acknowledgmentKey)!;
+    const originalGetItem = Storage.prototype.getItem;
+    const readSpy = fault === 'unreadable'
+      ? vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key) {
+        if (this === window.sessionStorage && key === acknowledgmentKey) throw new Error('acknowledgment read failed');
+        return originalGetItem.call(this, key);
+      }) : null;
+    if (fault === 'malformed') window.sessionStorage.setItem(acknowledgmentKey, '{not-json');
+    try {
+      await expect(act(async () => result.current.resolveIntent()))
+        .rejects.toThrow('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE');
+      expect(result.current.isIntentLocked).toBe(true);
+      expect(result.current.unresolvedIntent).toEqual({ amount: 10000 });
+    } finally {
+      readSpy?.mockRestore();
+      window.sessionStorage.setItem(acknowledgmentKey, saved);
+    }
+    // The coordinator is already resolved; preparation must reconcile that
+    // receipt before the key can be read again, without minting fresh work.
+    expect(() => result.current.getIdempotencyKey()).toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    await act(async () => {
+      expect(await result.current.beginIntent({ amount: 10000 })).toEqual({ amount: 10000 });
+    });
+    expect(result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => result.current.resolveIntent());
+    expect(result.current.isIntentLocked).toBe(false);
+    expect(window.sessionStorage.getItem(acknowledgmentKey)).toBeNull();
+  });
+
+  it('leaves a valid acknowledgment for a genuinely different request version untouched', async () => {
+    const options = { operation: 'record_vendor_payment', userId: 'ack-newer-valid',
+      surface: 'vendor-bill-detail', scope: 'bill-cleanup' };
+    const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    await act(async () => result.current.beginIntent({ amount: 10000 }));
+    const acknowledgmentKey = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
+      .find((key) => key?.startsWith('crx:uncertain-mutation-ack:v1:'))!;
+    const newer = { ...JSON.parse(window.sessionStorage.getItem(acknowledgmentKey)!), requestVersion: 'valid-newer-request',
+      idempotencyKey: `${options.operation}:${options.userId}:valid-newer`, intent: { amount: 20000 },
+      intentIdentity: JSON.stringify({ amount: 20000 }) };
+    window.sessionStorage.setItem(acknowledgmentKey, JSON.stringify(newer));
+    await act(async () => result.current.resolveIntent());
+    expect(JSON.parse(window.sessionStorage.getItem(acknowledgmentKey)!)).toEqual(newer);
+    expect(result.current.isIntentLocked).toBe(false);
+  });
+
   it('clears only the completed acknowledgement when a newer mirror survives coordinator eviction', async () => {
     const options = { operation: 'create_inventory_hold', userId: 'admin-newer-mirror-resolve', surface: 'inventory-page' };
     const original = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));

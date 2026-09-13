@@ -182,6 +182,42 @@ describe('VendorBillDetail record-payment recovery', () => {
     expect(H.rpc.mock.calls[1][1]).toEqual(args);
   });
 
+  it('keeps a confirmed payment open when acknowledgment reads fail during cleanup', async () => {
+    let blockReads = false;
+    const getItem = Storage.prototype.getItem;
+    const readSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (blockReads && this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new Error('Acknowledgment read unavailable after commit');
+      }
+      return getItem.call(this, key);
+    });
+    H.rpc.mockImplementation(() => {
+      blockReads = true;
+      return Promise.resolve({ data: COMMITTED_PAYMENT_ID, error: null });
+    });
+    render(<MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}>
+      <Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes>
+    </MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    const dialog = screen.getByRole('dialog', { name: 'Record Payment' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Record Payment' }));
+    await waitFor(() => expect(H.toast).toHaveBeenCalledWith('warning', expect.stringContaining('payment was recorded once')));
+    expect(H.rpc).toHaveBeenCalledTimes(1);
+    const args = H.rpc.mock.calls[0][1];
+    expect(screen.getByLabelText(/Payment Amount/)).toHaveValue(100);
+    expect(screen.getByLabelText(/Payment Amount/)).toBeDisabled();
+    expect(screen.getByText(/this payment was recorded once/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(H.toast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
+    blockReads = false;
+    readSpy.mockRestore();
+    H.rpc.mockResolvedValue({ data: COMMITTED_PAYMENT_ID, error: null });
+    fireEvent.click(screen.getByRole('button', { name: /retry exact payment/i }));
+    await waitFor(() => expect(screen.queryByLabelText(/Payment Amount/)).toBeNull());
+    expect(H.rpc).toHaveBeenCalledTimes(2);
+    expect(H.rpc.mock.calls[1][1]).toEqual(args);
+  });
+
   it.each(['Cancel', 'Close'])('allows %s on a foreign payment lock and preserves the saved payment key', async (control) => {
     H.rpc.mockResolvedValue({ data: null, error: { code: 'ETIMEDOUT', message: 'socket timeout' } });
     const initial = render(<MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}><Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes></MemoryRouter>);
