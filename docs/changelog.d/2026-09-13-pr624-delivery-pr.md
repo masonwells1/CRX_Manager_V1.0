@@ -24,3 +24,12 @@ Source-only. Migration `20260908130000` is still NOT applied.
   without building the recovery control first.
 - **Collision note.** Two sessions merged the same main commit onto #624 within seconds. The duplicate
   push was rejected as non-fast-forward, and the two merges were content-identical. Nothing was forced.
+- **CodeRabbit round on delivery PR #666** (review 5191138201, CHANGES_REQUESTED on `492331008`).
+  Two findings, both verified and fixed:
+  - Row 927 in `docs/reference/migration-history.md` still said "Row numbered 924 matches ... latest entry 924",
+    left over from the 924 -> 927 renumber. It now says 927.
+  - `stageSql` in the real-schema prover threw from its `finally` block, so a temp-file cleanup failure
+    could hide the staging error that caused it. Cleanup errors are now logged when staging already failed,
+    and rethrown only when cleanup is the sole failure.
+  The fix changes the head, so under the #647 rules it is delivered through another fresh PR.
+  #666 stays open and preserved.

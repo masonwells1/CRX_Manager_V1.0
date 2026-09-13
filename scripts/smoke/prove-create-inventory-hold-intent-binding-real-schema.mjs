@@ -62,8 +62,22 @@ function scalar(sql) {
 }
 function stageSql(file, name) {
   const staged = path.join(tmpdir(), `${NAME}-${name}`);
+  // A cleanup failure must not replace the staging error that caused it, so
+  // cleanup errors are only rethrown when staging itself succeeded.
+  let stagingError = null;
+  let cleanupError = null;
   try { writeFileSync(staged, readFileSync(file, 'utf8').replaceAll('\r\n', '\n'), 'utf8'); docker(['cp', staged, `${NAME}:/tmp/${name}`]); }
-  finally { try { unlinkSync(staged); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
+  catch (e) { stagingError = e; throw e; }
+  finally {
+    try { unlinkSync(staged); }
+    catch (e) {
+      if (e.code !== 'ENOENT') {
+        if (stagingError) console.error(`cleanup of ${staged} also failed: ${e.message}`);
+        else cleanupError = e;
+      }
+    }
+  }
+  if (cleanupError) throw cleanupError;
 }
 function apply(name, allowFailure = false) {
   const r = docker([...psqlArgs(), '-1', '-f', `/tmp/${name}`], { allowFailure });
