@@ -298,6 +298,9 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     fireEvent.click(within(holdDialog()).getByRole('button', { name: /retry exact hold/i }));
     await waitFor(() => expect(callsTo('create_inventory_hold')).toHaveLength(2));
     const second = callsTo('create_inventory_hold')[1];
+    // Two missing keys would also compare equal, so require a real key first.
+    expect(typeof first.p_idempotency_key).toBe('string');
+    expect(first.p_idempotency_key).not.toBe('');
     expect(second.p_idempotency_key).toBe(first.p_idempotency_key);
     expect(second.p_product_id).toBe('product-a');
     expect(second.p_quantity).toBe(3);
@@ -306,6 +309,34 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /create.*hold/i })).not.toBeInTheDocument());
     expect(mocks.toast).toHaveBeenCalledWith('success', 'Hold created successfully');
+  });
+
+  it('a reload restores a lost hold with its product and customer lists loaded, so the frozen target is named before Retry', async () => {
+    respond({ create_inventory_hold: () => ({ data: null, error: LOST_REPLY }) });
+    const beforeReload = render(<MemoryRouter><InventoryPage /></MemoryRouter>);
+    await screen.findAllByRole('button', { name: 'Manual Adjustment' });
+
+    fireEvent.click(screen.getByRole('button', { name: /create hold/i }));
+    const dialog = screen.getByRole('dialog', { name: /create.*hold/i });
+    fireEvent.click(await within(dialog).findByRole('button', { name: /SKU-A/i }));
+    fireEvent.change(within(dialog).getByLabelText(/^quantity$/i), { target: { value: '3' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create hold$/i }));
+    await waitFor(() => expect(
+      within(screen.getByRole('dialog', { name: /create.*hold/i })).getByRole('button', { name: /retry exact hold/i }),
+    ).toBeInTheDocument());
+
+    // A reload: the page is torn down, the durable record stays in storage, and
+    // the new page reopens the hold on its own, without openHoldModal.
+    beforeReload.unmount();
+    mocks.from.mockClear();
+    render(<MemoryRouter><InventoryPage /></MemoryRouter>);
+
+    const recovered = await screen.findByRole('dialog', { name: /create.*hold/i });
+    const tablesRead = mocks.from.mock.calls.map((call) => call[0]);
+    expect(tablesRead).toContain('products');
+    expect(tablesRead).toContain('customers');
+    expect((await within(recovered).findAllByText(/Product A|SKU-A/)).length).toBeGreaterThan(0);
+    expect(within(recovered).getByRole('button', { name: /retry exact hold/i })).toBeInTheDocument();
   });
 
   it('retries a lost ADMIN OVERRIDE under the SAME key with the frozen force flag and reason', async () => {
@@ -336,6 +367,8 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
 
     await waitFor(() => expect(callsTo('create_inventory_hold')).toHaveLength(2));
     const forced = callsTo('create_inventory_hold')[1];
+    expect(typeof forced.p_idempotency_key).toBe('string');
+    expect(forced.p_idempotency_key).not.toBe('');
     expect(forced.p_force).toBe(true);
     expect(forced.p_force_reason).toBe('physical stock confirmed');
 

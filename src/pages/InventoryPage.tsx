@@ -398,7 +398,7 @@ export default function InventoryPage() {
     if (activeTab === 'forecast' && forecastData.length === 0) fetchForecast();
   }, [activeTab, forecastData.length, fetchForecast]);
 
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
       .select('*, product_family:product_families(name)')
@@ -410,9 +410,9 @@ export default function InventoryPage() {
       return;
     }
     setProducts((data || []) as unknown as PickerProduct[]);
-  };
+  }, [toast]);
 
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     const { data, error } = await supabase
       .from('customers')
       .select('id, farm_name')
@@ -423,7 +423,16 @@ export default function InventoryPage() {
       return;
     }
     setCustomers((data || []) as Customer[]);
-  };
+  }, []);
+
+  // Load the hold dialog's pickers whenever it opens, however it was opened. A
+  // reload restores an unresolved hold without openHoldModal; without this the
+  // frozen product and customer would show as blanks next to an enabled Retry.
+  useEffect(() => {
+    if (!holdOpen) return;
+    fetchProducts();
+    fetchCustomers();
+  }, [holdOpen, fetchProducts, fetchCustomers]);
 
   const openAddModal = () => {
     fetchProducts();
@@ -439,8 +448,6 @@ export default function InventoryPage() {
   };
 
   const openHoldModal = () => {
-    fetchProducts();
-    fetchCustomers();
     setProductSearch('');
     // While a hold is unresolved the dialog shows and retries THAT frozen
     // request; clearing the form here would hide what is about to be retried.

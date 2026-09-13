@@ -33,3 +33,17 @@ Source-only. Migration `20260908130000` is still NOT applied.
     and rethrown only when cleanup is the sole failure.
   The fix changes the head, so under the #647 rules it is delivered through another fresh PR.
   #666 stays open and preserved.
+- **CodeRabbit round on delivery PR #670** (review 5191350534, CHANGES_REQUESTED on `80531fb64`).
+  Three findings, all verified and fixed:
+  - **A reloaded hold opened with empty pickers.** The recovery effect in `InventoryPage.tsx` opened a
+    reloaded hold without loading products or customers, so the frozen request showed as blanks next to an
+    enabled Retry. The pickers now load whenever the hold dialog opens, however it was opened (a holdOpen effect; `fetchProducts`/`fetchCustomers` became `useCallback`), so the admin-override retry timing is unchanged.
+    - A new rendered-page test reloads the page mid-hold and requires both lists to load and the frozen
+      product to be named.
+  - **The wrapper pin was never checked against the wrapper body.** A new test proves the LF-normalized
+    sha256 of the wrapper body equals `v_wrapper_pin`.
+    - It is deliberately separate from `hasIntentBindingContract`: a hash inside the contract would make
+      every clause-deletion mutation test fail for the hash instead of for its own clause.
+  - **The hold retry tests could pass with no key.** The ordinary and forced tests now require a real
+    non-empty key before comparing keys.
+  The fixes change the head, so they are delivered through another fresh PR. #666 and #670 stay open.

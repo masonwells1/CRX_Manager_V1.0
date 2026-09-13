@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -123,6 +124,23 @@ function hasIntentBindingContract(sql: string) {
 }
 
 describe('create_inventory_hold receipt binding (20260908130000)', () => {
+  // A re-run of the migration hashes the installed wrapper and refuses on
+  // PREFLIGHT_WRAPPER_DRIFT, so the pin must match the body this file installs.
+  // Kept out of hasIntentBindingContract on purpose: any body edit breaks the
+  // hash, which would make every clause-deletion mutation test below fail for
+  // the hash instead of proving its own clause is load-bearing.
+  it('pins the exact wrapper body it installs (LF-normalized sha256 equals v_wrapper_pin)', () => {
+    const wrapperStart = migration.indexOf('CREATE OR REPLACE FUNCTION public.create_inventory_hold(');
+    const bodyStart = migration.indexOf('$function$', wrapperStart) + '$function$'.length;
+    const bodyEnd = migration.indexOf('$function$;', wrapperStart);
+    expect(wrapperStart).toBeGreaterThanOrEqual(0);
+    expect(bodyEnd).toBeGreaterThan(bodyStart);
+    const pin = /v_wrapper_pin text := '([0-9a-f]{64})';/.exec(migration)?.[1];
+    expect(pin).toBeDefined();
+    const bodySha = createHash('sha256').update(migration.slice(bodyStart, bodyEnd), 'utf8').digest('hex');
+    expect(bodySha).toBe(pin);
+  });
+
   it('is the newest migration on disk and still marked NOT APPLIED', () => {
     const ordered = readdirSync(join(root, 'supabase', 'migrations'))
       .filter((name) => /^\d{14}_.+\.sql$/.test(name))
