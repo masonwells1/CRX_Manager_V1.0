@@ -2098,6 +2098,48 @@ try {
   assert.equal(dedupeAdminVerdict.blocked, true, "de-duplication must not drop the --admin reading of a quoted-body merge");
   assert.match(String(dedupeAdminVerdict.reason), /--admin/, "the denial names the administrator override, not some unrelated gate");
 
+  // ── round 7: DISTINCT merges share one time budget ─────────────────────────
+  // CodeRabbit, 2026-09-10 (Major), on the round-6 de-duplication: it removed
+  // duplicate readings but left DISTINCT requests unbounded, so a command naming
+  // several merges ran each one's gh/git calls in series with nothing bounding
+  // the total. A hook killed at its timeout emits nothing, and a hook that emits
+  // nothing ALLOWS — so enough slow-but-successful calls turned every denial
+  // still to come into an allow. A virtual clock stands in for the slow GitHub:
+  // a real sleep would make this suite as slow as the attack it models.
+  const threeMerges = "gh pr merge 123 --squash && gh pr merge 456 --squash && gh pr merge 789 --squash";
+  const budgetRun = (msPerGhCall) => {
+    let virtualNow = 1_000_000;
+    const resolved = [];
+    const slowGh = (args) => {
+      if (Array.isArray(args) && args.includes("graphql")) throw new Error("advisory unavailable"); // fail-open
+      if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+      if (Array.isArray(args)) resolved.push(args.find((arg) => /^\d+$/.test(String(arg))));
+      virtualNow += msPerGhCall; // a SUCCESSFUL call that took this long
+      return mainPrJson;
+    };
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: threeMerges },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: slowGh,
+      clock: () => virtualNow,
+      hardGateDeadlineMs: virtualNow + 12_500, // the real hook's: 15s less its 2.5s reserve
+    });
+    return { verdict, resolved: resolved.filter(Boolean) };
+  };
+
+  const slow = budgetRun(4_000);
+  assert.equal(slow.verdict.blocked, true, "merges whose calls would outrun the hook are DENIED, not left for the hook to be killed mid-call");
+  assert.match(String(slow.verdict.reason), /time limit/, "the denial is the budget's — not a fail-open notice or an unrelated gate");
+  assert.equal(slow.resolved.includes("789"), false, "the budget refuses BEFORE a call that could not finish, so the last merge is never started");
+
+  // CONTROL: the same three merges on a responsive GitHub are allowed, and each
+  // is resolved. The budget bounds the series; it does not forbid a chain.
+  const fast = budgetRun(10);
+  assert.equal(fast.verdict.blocked, false, "CONTROL: three clean merges on a fast GitHub are allowed");
+  assert.deepEqual([...new Set(fast.resolved)].sort(), ["123", "456", "789"], "CONTROL: every merge in the chain is resolved and gated");
+
   // ── round 9: the GitHub-connector merge tool must get the advisory too ─────
   // Codex HIGH on the exact-SHA proof of dc965401f — a regression round 8
   // introduced. Moving the lookup out of gatePullRequestMerge() left the

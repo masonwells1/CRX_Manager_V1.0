@@ -2685,6 +2685,52 @@ export function mergeRequestKey(request) {
   );
 }
 
+// A shared time budget for a hook's NETWORK-BOUND hard gates.
+//
+// Why this exists: a PreToolUse hook killed at its timeout emits nothing, and a
+// hook that emits nothing ALLOWS. Both merge guards run their hard gates as a
+// series of blocking gh/git calls, each capped at its own timeout, and nothing
+// bounded the SERIES. One command naming several merges, or one slow GitHub,
+// could walk them past the hook's deadline and turn every denial still to come
+// into an allow. mergeRequestKey removed DUPLICATE readings; it left DISTINCT
+// requests unbounded (CodeRabbit, 2026-09-10).
+//
+// admit() is asked before each call. It refuses a call that could not finish
+// before the deadline even at its full per-call timeout, and once it refuses it
+// stays refused — so a caller can deny on `exhausted` even when some catch inside
+// a gate turned the refusal into a different verdict. Refusing EARLY is the
+// point: the guard must still be alive to write its denial.
+export function createHardGateBudget({ deadlineMs, callTimeoutMs, clock = () => Date.now() }) {
+  let exhausted = false;
+  return {
+    get exhausted() { return exhausted; },
+    admit() {
+      if (!exhausted && clock() + callTimeoutMs > deadlineMs) exhausted = true;
+      return !exhausted;
+    },
+  };
+}
+
+// When this hook process must be finished, measured from PROCESS START rather
+// than from whenever a caller asks: the hook's timeout clock starts at spawn, so
+// time spent loading modules and reading stdin is already gone. reserveMs covers
+// what process.uptime() cannot see (the launcher shell on Windows) plus writing
+// the verdict.
+export function hookDeadlineMs(hookTimeoutMs, reserveMs) {
+  return Date.now() - Math.round(process.uptime() * 1000) + hookTimeoutMs - reserveMs;
+}
+
+// One wording for both guards, so a merge refused for time reads the same from
+// Claude and from Codex.
+export function hardGateBudgetDenial(prefix) {
+  return (
+    `${prefix}: the merge checks could not finish inside this hook's time limit, so the merge is denied ` +
+    "(fail closed). A hook cut off mid-check says nothing, and saying nothing would ALLOW the merge. This " +
+    "happens when GitHub is slow or one command chains several merges — run one `gh pr merge <number>` " +
+    "per command and retry."
+  );
+}
+
 // Does this `gh api` call MUTATE? Moved here from
 // .codex/hooks/production-action-guard.mjs on 2026-09-07 so the gh binary is
 // modelled in exactly one place: that copy carried the one-item extension list

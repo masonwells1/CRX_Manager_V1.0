@@ -11,6 +11,9 @@ import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   claudeProofValid,
   contentIsRisky,
+  createHardGateBudget,
+  hardGateBudgetDenial,
+  hookDeadlineMs,
   shellArgvWord,
   splitShellArgv,
   ghApiMutates,
@@ -3093,6 +3096,42 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
     assert.ok(elapsedMs < 250, `the union segmenter stays linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
   }
+}
+
+// ── createHardGateBudget / hookDeadlineMs (CodeRabbit, 2026-09-10) ──────────
+// Both merge guards ran their hard gates as a series of blocking calls with
+// nothing bounding the series, and a hook killed at its timeout ALLOWS. The
+// budget refuses a call that could not finish in time, before it starts.
+{
+  let t = 0;
+  const budget = createHardGateBudget({ deadlineMs: 10_000, callTimeoutMs: 4_000, clock: () => t });
+  assert.equal(budget.admit(), true, "a call that can finish before the deadline is admitted");
+  t = 6_000;
+  assert.equal(budget.admit(), true, "admitted exactly at the edge: 6s + a 4s cap lands ON the deadline, not past it");
+  t = 6_001;
+  assert.equal(budget.admit(), false, "a call that could run past the deadline is refused BEFORE it starts");
+  assert.equal(budget.exhausted, true, "a refusal marks the budget exhausted");
+  t = 0;
+  assert.equal(
+    budget.admit(),
+    false,
+    "once refused, always refused — a caller can deny on `exhausted` even if a catch rewrote the refusal",
+  );
+
+  const wallClock = createHardGateBudget({ deadlineMs: Date.now() + 60_000, callTimeoutMs: 1_000 });
+  assert.equal(wallClock.admit(), true, "the default clock is the wall clock");
+
+  const processStartedAt = Date.now() - process.uptime() * 1000;
+  assert.ok(
+    Math.abs(hookDeadlineMs(15_000, 2_500) - (processStartedAt + 12_500)) < 50,
+    "the hook deadline is measured from PROCESS start — time spent loading and reading stdin is already gone",
+  );
+
+  assert.match(
+    hardGateBudgetDenial("PR MERGE GATE"),
+    /^PR MERGE GATE: .*time limit.*fail closed/s,
+    "the denial names the gate, the cause, and that it fails closed",
+  );
 }
 
 console.log("OK - codex push shared library checks passed.");

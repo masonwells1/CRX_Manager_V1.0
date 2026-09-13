@@ -323,6 +323,41 @@ ok(
   "listWorktreesFromProjectDir actually shells out to `git worktree list --porcelain`",
 );
 
+// ── round 7: the hard gates share one time budget (CodeRabbit, 2026-09-10) ──
+// gateRequest() cannot be driven in-process (it needs a real gh), so the wiring
+// is pinned here and the behaviour is proven on the Codex side, which injects gh
+// and a clock. Every gh call a hard gate makes must spend the shared budget, and
+// the advisory lookup must NOT: it fails open by design, and a slow GitHub there
+// must not become a denial.
+const gateRequestSource = guardSource.slice(
+  guardSource.indexOf("function gateRequest("),
+  guardSource.indexOf("const advisoryQueue = [];"),
+);
+ok(gateRequestSource.length > 0, "gateRequest() is present to inspect");
+eq(
+  (gateRequestSource.match(/\bhardGateGh\(/g) || []).length,
+  3,
+  "gateRequest()'s three gh calls — PR resolve, changed files, full diff — all spend the shared budget",
+);
+eq(
+  (gateRequestSource.match(/(?<![A-Za-z])gh\(/g) || []).length,
+  0,
+  "no hard gate calls gh() directly, around the budget",
+);
+ok(
+  /function\s+listWorktreesFromProjectDir\(\)\s*\{\s*if \(!hardGateBudget\.admit\(\)\) deny\(/.test(guardSource),
+  "the proof scan's git call spends the shared budget too",
+);
+const advisorySource = guardSource.slice(
+  guardSource.indexOf("function codexAdvisory("),
+  guardSource.indexOf("function gateRequest("),
+);
+eq(
+  (advisorySource.match(/\bhardGateGh\(/g) || []).length,
+  0,
+  "the fail-open advisory stays OFF the hard-gate budget",
+);
+
 // ── the objection check must never be exempt for --auto (Codex High, PR #559) ─
 // Every other gate in this gateRequest() exempts auto-merge, because GitHub holds
 // a queued auto-merge until its own requirements are met. The requirement that

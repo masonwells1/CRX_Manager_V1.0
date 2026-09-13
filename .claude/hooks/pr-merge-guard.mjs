@@ -29,9 +29,12 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   contentIsRisky,
+  createHardGateBudget,
   describeRiskyContent,
   ghApiMergeRequest,
   ghHiddenByShellComposition,
+  hardGateBudgetDenial,
+  hookDeadlineMs,
   splitCommandSegments,
   ghMergeRequest,
   mcpMergeRequest,
@@ -194,17 +197,38 @@ const projectDir = path.resolve(
   payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
 );
 
+// The hard gates spend ONE budget between them (see createHardGateBudget). The
+// timeout mirrors this hook's entry in .claude/settings.json; the reserve covers
+// what process.uptime() cannot see plus writing the verdict. The advisory lookup
+// is NOT on this budget: it keeps its own deadline and fails open by design, so a
+// slow GitHub there must not turn into a denial.
+const HOOK_TIMEOUT_MS = 30_000;
+const HOOK_RESERVE_MS = 3_000;
+const GH_CALL_TIMEOUT_MS = 10_000;
+const hardGateBudget = createHardGateBudget({
+  deadlineMs: hookDeadlineMs(HOOK_TIMEOUT_MS, HOOK_RESERVE_MS),
+  callTimeoutMs: GH_CALL_TIMEOUT_MS,
+});
+
 function gh(args) {
   return execFileSync("gh", args, {
     cwd: projectDir,
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: GH_CALL_TIMEOUT_MS,
     stdio: ["ignore", "pipe", "ignore"],
     maxBuffer: 16 * 1024 * 1024,
   });
 }
 
+// Every gh call a HARD gate makes goes through here. deny() exits, so a refused
+// call can never be caught and reinterpreted by the gate that made it.
+function hardGateGh(args) {
+  if (!hardGateBudget.admit()) deny(hardGateBudgetDenial("PR MERGE GATE"));
+  return gh(args);
+}
+
 function listWorktreesFromProjectDir() {
+  if (!hardGateBudget.admit()) deny(hardGateBudgetDenial("PR MERGE GATE"));
   return execFileSync("git", ["worktree", "list", "--porcelain"], {
     cwd: projectDir,
     encoding: "utf8",
@@ -332,7 +356,7 @@ function gateRequest(request) {
     // old local base validated while GitHub merged onto newer main content).
     viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest");
     if (request.repo) viewArgs.push("--repo", request.repo);
-    pr = JSON.parse(gh(viewArgs));
+    pr = JSON.parse(hardGateGh(viewArgs));
     if (!pr?.baseRefName || !pr?.headRefOid || !pr?.baseRefOid) {
       throw new Error("GitHub did not return baseRefName, baseRefOid, and headRefOid");
     }
@@ -405,7 +429,7 @@ function gateRequest(request) {
     if (request.selector) diffArgs.push(String(request.selector));
     diffArgs.push("--name-only");
     if (request.repo) diffArgs.push("--repo", request.repo);
-    files = gh(diffArgs).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    files = hardGateGh(diffArgs).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   } catch (error) {
     deny(`PR MERGE GATE: could not inspect this pull request's changed files, so the merge is denied (fail closed). ${error?.message || error}`);
   }
@@ -418,7 +442,7 @@ function gateRequest(request) {
       const diffArgs = ["pr", "diff"];
       if (request.selector) diffArgs.push(String(request.selector));
       if (request.repo) diffArgs.push("--repo", request.repo);
-      contentDiffText = gh(diffArgs);
+      contentDiffText = hardGateGh(diffArgs);
       contentFlagged = contentIsRisky(contentDiffText);
     } catch (error) {
       deny(`PR MERGE GATE: could not inspect this pull request's full diff for money/security risk, so the merge is denied (fail closed). ${error?.message || error}`);

@@ -7,10 +7,13 @@ import path from "node:path";
 
 import {
   contentIsRisky,
+  createHardGateBudget,
   extractPatchDestinations,
   ghApiMergeRequest,
   ghApiMutates,
   ghHiddenByShellComposition,
+  hardGateBudgetDenial,
+  hookDeadlineMs,
   splitCommandSegments,
   ghMergeRequest,
   gitPushCwd,
@@ -1232,6 +1235,15 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
 // third of the hook's 15s so the notices below can still be written.
 const CODEX_ADVISORY_BUDGET_MS = 5_000;
 
+// The hard gates' share of this hook (see createHardGateBudget). The timeout
+// mirrors this hook's entry in .codex/hooks.json and the per-call cap mirrors
+// defaultRunGit/defaultRunGh; if either changes, change it here too. The reserve
+// covers the PowerShell launcher, which process.uptime() cannot see, plus
+// writing the verdict.
+const CODEX_HOOK_TIMEOUT_MS = 15_000;
+const CODEX_HOOK_RESERVE_MS = 2_500;
+const CODEX_CALL_TIMEOUT_MS = 5_000;
+
 // `deadlineMs` is SHARED across every merge in one command (Codex round 8,
 // SEC-001): the caller computes it once and passes the same value to each
 // deferred lookup, so N chained merges spend one budget between them rather
@@ -1309,6 +1321,11 @@ export function evaluateProductionAction({
   nowMs = Date.now(),
   runGit = defaultRunGit,
   runGh = defaultRunGh,
+  // When the network-bound merge gates stop admitting calls. main() passes the
+  // real hook deadline, measured from process start; a direct caller (the test
+  // suite) gets a fresh budget per evaluation. See createHardGateBudget.
+  hardGateDeadlineMs = Date.now() + CODEX_HOOK_TIMEOUT_MS - CODEX_HOOK_RESERVE_MS,
+  clock = () => Date.now(),
 } = {}) {
   const name = String(toolName);
   const baseRepoDir = path.resolve(repoDir);
@@ -1383,6 +1400,21 @@ export function evaluateProductionAction({
     }
   }
 
+  // Every git/gh call a merge's HARD gates make goes through this budget; the
+  // advisory lookups keep the raw runners and their own deadline (they fail
+  // open by design). A refused call throws, which the gate turns into a denial.
+  const hardGateBudget = createHardGateBudget({
+    deadlineMs: hardGateDeadlineMs,
+    callTimeoutMs: CODEX_CALL_TIMEOUT_MS,
+    clock,
+  });
+  const budgeted = (run) => (...args) => {
+    if (!hardGateBudget.admit()) throw new Error("hard-gate time budget exhausted");
+    return run(...args);
+  };
+  const gateRunGit = budgeted(runGit);
+  const gateRunGh = budgeted(runGh);
+
   if (GITHUB_MERGE_TOOL.test(name)) {
     const request = mcpMergeRequest(toolInput);
     if (!request.selector) {
@@ -1394,9 +1426,11 @@ export function evaluateProductionAction({
       request,
       repoDir: actionRepoDir,
       nowMs,
-      runGit,
-      runGh,
+      runGit: gateRunGit,
+      runGh: gateRunGh,
     });
+    // Checked before `blocked`: a gate that swallowed the refusal must not allow.
+    if (hardGateBudget.exhausted) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE"));
     if (result.blocked) return result;
     // The connector merges exactly ONE pull request per call, so there is no
     // later segment for the advisory to starve: this IS the command's allow
@@ -1660,9 +1694,11 @@ export function evaluateProductionAction({
         request: ghRequest,
         repoDir: actionRepoDir,
         nowMs,
-        runGit,
-        runGh,
+        runGit: gateRunGit,
+        runGh: gateRunGh,
       });
+      // mergeRequestKey drops duplicate readings; this bounds DISTINCT merges.
+      if (hardGateBudget.exhausted) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE"));
       if (result.blocked) return result;
       // Cleared every hard gate. Its advisory lookup is DEFERRED until every
       // merge in this command has done the same (Codex round 8, SEC-001).
@@ -1765,6 +1801,7 @@ async function main() {
     toolInput: payload.tool_input ?? payload.toolInput ?? {},
     eventCwd: payload.cwd ?? "",
     repoDir: process.env.CODEX_PROJECT_DIR || process.cwd(),
+    hardGateDeadlineMs: hookDeadlineMs(CODEX_HOOK_TIMEOUT_MS, CODEX_HOOK_RESERVE_MS),
   });
   // Codex treats allow payloads as noisy/failed hook output. Silence means allow.
   if (!result.blocked) return;
