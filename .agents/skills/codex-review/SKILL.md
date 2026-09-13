@@ -207,7 +207,10 @@ reconcile without another request. See `docs/reference/coderabbit-native-review.
 recovery. Read the review and fix any real issue before merging; nitpicks may be
 dismissed with a one-line reason. A fix or base update that changes the commit clears the workflow
 labels and requires restarted checks, a refreshed exact-HEAD Codex proof when the corrected diff is
-Codex-worthy, a newly frozen and recorded SHA, and one follow-up ready-label trigger. Never use
+Codex-worthy, a newly frozen and recorded SHA, and a fresh delivery PR before the
+ready-label trigger. Normal delivery verifies the original opened head/base for
+the entire PR lifetime; preserve previous PRs and findings. The provider skipped
+same-PR incremental review with this configuration. Never use
 `@coderabbitai resume`, and reserve `@coderabbitai full review` for a deliberately justified
 complete reread. An approving GitHub review is **NOT** required to merge: Mason removed
 `required_pull_request_reviews` from `main` on 2026-09-02, so CI is the merge gate. A

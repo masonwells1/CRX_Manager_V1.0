@@ -1,4 +1,5 @@
 name: CodeRabbit final review gate
+run-name: CodeRabbit gate ${{ github.event.action }} PR ${{ github.event.pull_request.number }} head ${{ github.event.pull_request.head.sha }} base ${{ github.event.pull_request.base.sha }}
 
 # `pull_request_target` ONLY. Do NOT add `pull_request_review` (or any other
 # pull-request event) back to this workflow.
@@ -21,7 +22,7 @@ name: CodeRabbit final review gate
 # refuses to run on any event other than pull_request_target` (drives run()).
 on:
   pull_request_target:
-    types: [labeled, unlabeled, synchronize, closed, reopened, converted_to_draft, ready_for_review, auto_merge_enabled, auto_merge_disabled, edited]
+    types: [opened, labeled, unlabeled, synchronize, closed, reopened, converted_to_draft, ready_for_review, auto_merge_enabled, auto_merge_disabled, edited]
 
 permissions:
   # Required by actions.getWorkflowRun to bind required checks to their trusted workflow.

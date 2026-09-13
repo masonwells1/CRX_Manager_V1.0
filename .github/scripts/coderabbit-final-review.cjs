@@ -4,6 +4,7 @@ const READY_LABEL = 'ready-for-coderabbit';
 const REQUESTED_LABEL = 'coderabbit-review-requested';
 const DISPATCH_LABEL = 'coderabbit-review-dispatch';
 const NATIVE_RECEIPT_PREFIX = '<!-- crx-coderabbit-native-dispatch:v1 ';
+const CANDIDATE_BIRTH_PREFIX = '<!-- crx-coderabbit-candidate-birth:v1 ';
 const REVIEW_COMMAND = '@coderabbitai review';
 const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 const CODERABBIT_BOT_LOGIN = 'coderabbitai[bot]';
@@ -843,6 +844,102 @@ function parseNativeDispatchReceipt(comment) {
   } catch { return null; }
 }
 
+function candidateBirthBody({ headSha, baseSha, executionSha, runId, repoId, repoFullName, pullNumber, creatorId, prCreatedAt }) {
+  return `${CANDIDATE_BIRTH_PREFIX}${JSON.stringify({ headSha, baseSha, executionSha, runId, repoId, repoFullName, pullNumber, creatorId, prCreatedAt })} -->`;
+}
+
+function parseCandidateBirth(comment) {
+  if (normalize(comment?.user?.login) !== ACTIONS_BOT_LOGIN
+    || normalize(comment?.user?.type) !== 'bot'
+    || !String(comment.body || '').startsWith(CANDIDATE_BIRTH_PREFIX)) return null;
+  try {
+    const birth = JSON.parse(comment.body.slice(CANDIDATE_BIRTH_PREFIX.length, -4));
+    if (comment.body !== candidateBirthBody(birth)
+      || !/^[a-f0-9]{40}$/.test(birth.headSha || '')
+      || !/^[a-f0-9]{40}$/.test(birth.baseSha || '')
+      || birth.executionSha !== birth.baseSha
+      || ![birth.runId, birth.repoId, birth.pullNumber, birth.creatorId].every(isPositiveSafeInteger)
+      || !isNonBlankString(birth.repoFullName)
+      || !isPositiveSafeInteger(Number(comment.id))
+      || !Number.isFinite(Date.parse(birth.prCreatedAt))
+      || !Number.isFinite(Date.parse(comment.created_at))
+      || Date.parse(birth.prCreatedAt) > Date.parse(comment.created_at)
+      || comment.updated_at !== comment.created_at) return null;
+    return { ...birth, recordedAt: Date.parse(comment.created_at) };
+  } catch { return null; }
+}
+
+// Capture the ORIGINAL opened webhook, never a later REST PR/event response.
+// GitHub's activity-event payloads can expose current head/base values. This
+// snapshot is context evidence only; it never grants dispatch or merge authority.
+async function recordCandidateBirth({ github, context, core }) {
+  const pull = context.payload.pull_request;
+  const repository = context.payload.repository;
+  const snapshot = {
+    headSha: pull.head?.sha, baseSha: pull.base?.sha, executionSha: context.sha,
+    runId: context.runId, repoId: repository.id,
+    repoFullName: `${context.repo.owner}/${context.repo.repo}`,
+    pullNumber: pull.number, creatorId: pull.user?.id, prCreatedAt: pull.created_at,
+  };
+  const body = candidateBirthBody(snapshot);
+  const recordedAt = new Date().toISOString();
+  if (pull.base?.ref !== repository.default_branch
+    || repository.default_branch !== 'main'
+    || !parseCandidateBirth({ id: 1, body, created_at: recordedAt,
+      updated_at: recordedAt, user: { login: ACTIONS_BOT_LOGIN, type: 'Bot' } })) {
+    throw new Error('the original opened webhook did not identify a valid candidate birth');
+  }
+  const { owner, repo } = context.repo;
+  const comments = await github.paginate(github.rest.issues.listComments,
+    { owner, repo, issue_number: pull.number, per_page: 100 });
+  if (!Array.isArray(comments)) throw new Error('candidate birth listing could not be verified');
+  const existing = comments.filter((comment) => normalize(comment.user?.login) === ACTIONS_BOT_LOGIN
+    && String(comment.body || '').startsWith(CANDIDATE_BIRTH_PREFIX));
+  if (existing.length > 0) {
+    const birth = existing.length === 1 ? parseCandidateBirth(existing[0]) : null;
+    if (!birth || birth.headSha !== snapshot.headSha || birth.baseSha !== snapshot.baseSha
+      || birth.prCreatedAt !== snapshot.prCreatedAt || birth.creatorId !== snapshot.creatorId
+      || birth.repoId !== snapshot.repoId || birth.repoFullName !== snapshot.repoFullName
+      || birth.pullNumber !== snapshot.pullNumber) throw new Error('candidate birth is conflicting or unverifiable; use a fresh PR');
+    core.notice('Original candidate birth already recorded; no duplicate snapshot was posted.');
+    return { status: 'birth_recorded', duplicate: true };
+  }
+  const response = await github.rest.issues.createComment({ owner, repo, issue_number: pull.number, body });
+  if (!parseCandidateBirth(response.data)) throw new Error('candidate birth post could not be verified; do not overwrite uncertain state');
+  return { status: 'birth_recorded', duplicate: false };
+}
+
+async function inspectCandidateBirth({ github, owner, repo, pullNumber, headSha, baseSha, selfRunId, core, comments }) {
+  const candidates = comments.filter((comment) => normalize(comment.user?.login) === ACTIONS_BOT_LOGIN
+    && String(comment.body || '').startsWith(CANDIDATE_BIRTH_PREFIX));
+  const birth = candidates.length === 1 ? parseCandidateBirth(candidates[0]) : null;
+  if (!birth || birth.pullNumber !== pullNumber || birth.repoFullName !== `${owner}/${repo}`) {
+    throw new Error('immutable original candidate birth is missing or unverifiable; use a fresh PR after the trusted opened workflow is available');
+  }
+  if (birth.headSha !== headSha || birth.baseSha !== baseSha) {
+    throw new Error('candidate head or base changed since PR creation; preserve this PR and use a fresh PR');
+  }
+  const [response, trusted] = await Promise.all([
+    github.rest.actions.getWorkflowRun({ owner, repo, run_id: birth.runId }),
+    resolveTrustedGateWorkflowProvenance({ github, owner, repo, selfRunId, core }),
+  ]);
+  const origin = response.data;
+  const originalPull = origin.pull_requests?.find((pull) => Number(pull.number) === pullNumber);
+  if (trusted.error || origin.id !== birth.runId || origin.workflow_id !== trusted.workflowId
+    || origin.path !== '.github/workflows/coderabbit-final-review.yml' || origin.path !== trusted.workflowPath
+    || origin.display_title !== `CodeRabbit gate opened PR ${pullNumber} head ${headSha} base ${baseSha}`
+    || origin.event !== 'pull_request_target' || ![headSha, baseSha].includes(origin.head_sha)
+    || originalPull?.head?.sha !== headSha || originalPull?.base?.sha !== baseSha
+    || origin.repository?.id !== birth.repoId || origin.repository?.full_name !== birth.repoFullName
+    || origin.actor?.id !== birth.creatorId || origin.status !== 'completed' || origin.conclusion !== 'success'
+    || !Number.isFinite(Date.parse(origin.created_at)) || !Number.isFinite(Date.parse(origin.updated_at))
+    || Date.parse(birth.prCreatedAt) > Date.parse(origin.created_at)
+    || birth.recordedAt < Date.parse(origin.created_at) || birth.recordedAt > Date.parse(origin.updated_at)) {
+    throw new Error('candidate birth did not match its trusted original workflow candidate');
+  }
+  return birth;
+}
+
 // A receipt records an attempt, never merge authorization. Independently check
 // its Actions run and original candidate; labels and an Actions login alone
 // cannot bind an old review to a new base. Keep receipts across resets so a
@@ -855,7 +952,7 @@ async function inspectNativeDispatchReceipt({ github, owner, repo, pullNumber, h
     const receipts = comments.map(parseNativeDispatchReceipt).filter((receipt) => receipt?.headSha === headSha);
     if (receipts.length !== 1) throw new Error('native dispatch requires exactly one head/base receipt');
     const receipt = receipts[0];
-    if (receipt.baseSha !== baseSha) throw new Error('native dispatch base changed; a fresh head commit is required');
+    if (receipt.baseSha !== baseSha) throw new Error('native dispatch base changed; a fresh delivery PR is required');
     const [response, trusted] = await Promise.all([
       github.rest.actions.getWorkflowRun({ owner, repo, run_id: receipt.runId }),
       resolveTrustedGateWorkflowProvenance({ github, owner, repo, selfRunId, core }),
@@ -884,43 +981,26 @@ async function inspectNativeDispatchReceipt({ github, owner, repo, pullNumber, h
 // GitHub reviews attest the head, but not the PR base. Before trusting a
 // response, exclude older provider-label requests that might still finish on
 // this head. Retained receipts alone cannot settle an earlier attempt.
-async function inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha, selfRunId, core, activeReceipt = null }) {
+async function inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha, selfRunId, core, activeReceipt = null, baseSha = activeReceipt?.baseSha }) {
   try {
     const [events, comments] = await Promise.all([
       github.paginate(github.rest.issues.listEventsForTimeline, { owner, repo, issue_number: pullNumber, per_page: 100 }),
       github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pullNumber, per_page: 100 }),
     ]);
     if (!Array.isArray(events) || !Array.isArray(comments)) throw new Error('native attempt history could not be verified');
-    // Only repository-authorized intent belongs to authorized request history.
-    // A public comment cannot permanently invalidate a protected candidate.
-    // This is not a claim about CodeRabbit's own command permissions: comments
-    // never supply dispatch authorization or review clearance. Provider review,
-    // receipt, base, retarget and final-state checks remain independently required.
-    const commandPermissions = new Map();
-    for (const comment of comments) {
-      if (normalize(comment.user?.login) === CODERABBIT_BOT_LOGIN
-        || !/^\s*@coderabbitai\s+(?:full\s+review|review|resume)\s*$/im.test(String(comment.body || ''))) continue;
-      const username = comment.user?.login;
-      if (!isNonBlankString(username)) throw new Error('comment request actor could not be verified');
-      if (!commandPermissions.has(normalize(username))) {
-        const permission = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });
-        const level = normalize(permission.data?.permission);
-        if (!['admin', 'maintain', 'write', 'triage', 'read', 'none'].includes(level)) {
-          throw new Error('comment request actor permission could not be verified');
-        }
-        commandPermissions.set(normalize(username), level);
-      }
-      if (ALLOWED_PERMISSIONS.has(commandPermissions.get(normalize(username)))) {
-        throw new Error('untracked authorized comment-based review requests cannot attest their candidate base; preserve this PR and use a fresh PR');
-      }
-    }
+    // Permissions now cannot prove permissions when an old command was posted.
+    // Instead require one head/base tuple for the WHOLE PR lifetime. Any manual
+    // or late request on this unchanged candidate has the same review context;
+    // no comment is used as authorization, and no provider permission rule is assumed.
+    const birth = await inspectCandidateBirth({ github, owner, repo, pullNumber, headSha, baseSha,
+      selfRunId, core, comments });
     const dispatches = events.filter((event) => event.event === 'labeled' && event.label?.name === DISPATCH_LABEL);
     const receipts = comments.map(parseNativeDispatchReceipt).filter(Boolean);
-    if (events.some((event) => event.event === 'base_ref_changed')) {
-      throw new Error('the PR was retargeted and older out-of-band requests cannot attest their base; use a fresh PR');
+    if (events.some((event) => ['base_ref_changed', 'base_ref_force_pushed', 'head_ref_force_pushed'].includes(event.event))
+      || receipts.some((receipt) => receipt.headSha !== birth.headSha || receipt.baseSha !== birth.baseSha)) {
+      throw new Error('the PR candidate was retargeted, rewritten or changed; preserve it and use a fresh PR');
     }
     let activeEvents = 0;
-    const settledReceipts = new Set();
     for (const event of dispatches) {
       const dispatchedAt = Date.parse(event.created_at);
       if (!Number.isFinite(dispatchedAt) || dispatchedAt > Date.now() + 999) throw new Error('native dispatch history has no trustworthy timestamp');
@@ -932,30 +1012,7 @@ async function inspectNativeAttemptHistory({ github, owner, repo, pullNumber, he
         }
         continue;
       }
-      const matching = receipts.filter((receipt) => receipt.headSha !== headSha
-        && receipt.requestedAfter <= dispatchedAt + 999);
-      // Choose the most recent receipt preceding the event, never an arbitrary
-      // earlier receipt whose completed review could launder another request.
-      matching.sort((a, b) => b.requestedAfter - a.requestedAfter);
-      const previous = matching[0];
-      if (!previous || settledReceipts.has(previous.runId) || normalize(event.actor?.login) !== ACTIONS_BOT_LOGIN
-        || (matching[1] && matching[1].requestedAfter === previous.requestedAfter)) {
-        throw new Error('an untracked native review attempt cannot be attributed to a head/base; use a fresh PR');
-      }
-      const trusted = await inspectNativeDispatchReceipt({ github, owner, repo, pullNumber,
-        headSha: previous.headSha, baseSha: previous.baseSha, selfRunId, core });
-      const finished = await inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber,
-        headSha: previous.headSha, requestedAfter: dispatchedAt });
-      const settledBefore = activeReceipt?.requestedAfter ?? Date.now();
-      if (!trusted.verified || trusted.origin.status !== 'completed'
-        || !Number.isFinite(Date.parse(trusted.origin.updated_at))
-        || dispatchedAt < Math.floor(Date.parse(trusted.origin.created_at) / 1000) * 1000
-        || dispatchedAt > Date.parse(trusted.origin.updated_at) + 999
-        || !finished.verified || !finished.reviewed
-        || Date.parse(finished.review?.submitted_at) >= settledBefore) {
-        throw new Error('an earlier native request has not been independently settled before this attempt; use a fresh PR');
-      }
-      settledReceipts.add(previous.runId);
+      throw new Error('an untracked native review attempt cannot be attributed to this unchanged candidate; use a fresh PR');
     }
     if (activeReceipt && activeEvents !== 1) throw new Error('the active native receipt has no unique provider-label event');
     return { verified: true };
@@ -1383,7 +1440,7 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
   }
   if (existing.reviewed) {
     return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
-      reason: 'a prior same-head review cannot prove this head/base request; a fresh head commit is required' });
+      reason: 'a prior same-head review cannot prove this head/base request; a fresh delivery PR is required' });
   }
   if (!existing.reviewed) {
     // Label creation is deliberate setup, not a side effect of asking for a
@@ -1407,11 +1464,11 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
     { owner, repo, issue_number: pullNumber, per_page: 100 });
   if (!Array.isArray(comments) || comments.some((comment) => parseNativeDispatchReceipt(comment)?.headSha === expectedHeadSha)) {
     return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
-      reason: 'this head already has a potentially spent native attempt; a fresh head commit is required' });
+      reason: 'this head already has a potentially spent native attempt; a fresh delivery PR is required' });
   }
 
   const priorHistory = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha: expectedHeadSha,
-    selfRunId: context.runId, core });
+    baseSha, selfRunId: context.runId, core });
   if (!priorHistory.verified) return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
     reason: priorHistory.error.message });
   attemptState.nativePreexistingCommentIds = new Set(comments.map((comment) => comment.id));
@@ -1425,7 +1482,7 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
   });
   const receiptValidation = await nativeCandidateReasons({ ...candidateArgs, dispatched: false });
   const receiptHistory = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha: expectedHeadSha,
-    selfRunId: context.runId, core });
+    baseSha, selfRunId: context.runId, core });
   if (!dispatch.verified || !receiptHistory.verified || receiptValidation.reasons.length) {
     return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
       reason: dispatch.error?.message || receiptHistory.error?.message || receiptValidation.reasons.join('; ') });
@@ -1502,6 +1559,10 @@ async function runGate({ github, context, core, config, attemptState }) {
   const ackPollMs = config.ackPollMs ?? DEFAULT_ACK_POLL_MS;
   const settle = config.settle
     || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+
+  if (action === 'opened' && config.nativeDispatch === true) {
+    return recordCandidateBirth({ github, context, core });
+  }
 
   const baseBranchChanged = action === 'edited' && Boolean(context.payload.changes?.base);
   const requestedLabelRemoved = action === 'unlabeled'
@@ -2366,6 +2427,7 @@ module.exports = {
   evaluateChecks,
   reviewCommandBody,
   nativeDispatchReceiptBody,
+  candidateBirthBody,
   run,
   validateAuthorizationState,
   validatePullRequest,

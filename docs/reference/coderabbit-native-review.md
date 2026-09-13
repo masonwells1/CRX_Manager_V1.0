@@ -1,7 +1,8 @@
 # CodeRabbit native review requests
 
 The operator applies `ready-for-coderabbit` after the candidate is frozen,
-current, green and independently reviewed. The privileged `pull_request_target`
+current, green and independently reviewed. Complete and freeze the candidate
+before opening its delivery PR. The privileged `pull_request_target`
 workflow runs trusted default-branch code and checks the actor's permission,
 head, branch, draft/conflict state, auto-merge, check provenance and outstanding
 review decision. After its quiet period and final checks, it records
@@ -40,28 +41,34 @@ Actions run before dispatch. A review must be submitted after that receipt;
 reconciliation verifies the original run's workflow, actor and candidate and
 requires both commits still to match. Receipts survive resets. A preexisting
 same-head review or retained attempt cannot establish attribution for another
-base: create a fresh head commit before another request. The receipt and labels
+base: preserve the PR and create a fresh delivery PR before another request. The receipt and labels
 record attempts; neither establishes merge authorization.
 
-The workflow also checks the persistent provider-label history. Earlier normal
-attempts must have a verified original run and a completed formal review of
-their earlier head before a new attempt starts. Each event needs its own
-receipt; the active receipt needs exactly one provider-label event. An
-untracked direct provider-label attempt is ambiguous because GitHub's review
-record does not attest its base. It blocks reconciliation and further dispatch
-on that PR; preserve the evidence and use a fresh PR rather than reusing a late
-review. Repository-authorized manual comment-based requests have no authenticated
-base receipt; preserve them and use a fresh PR for native delivery. Before
-classifying command intent, the workflow reads the commenter's GitHub repository
-permission. Write, maintain and admin commands retain the ambiguity block;
-verified read, triage and no-access comments cannot permanently poison authorized
-history. Missing actors and unknown permission lookups fail closed. Comments
-never establish a dispatch receipt or review clearance. This classification does
-not establish CodeRabbit's own command-permission contract; actual delivery and
-all receipt, candidate, retarget and final-state checks still apply. Retargeted PRs also need
-a fresh PR, even when their original base branch has been restored. Before
-publishing a new candidate to an existing PR, verify its cached base SHA matches
-live main and refresh the same-base metadata before pushing the new head.
+The trusted workflow records the original `opened` webhook's head and base.
+Its run name also includes the action, PR number and both original SHAs; receipt
+inspection checks that name on the authenticated original workflow run. Later
+REST PR and activity-event payloads can expose current values, so they cannot
+reconstruct this original context. The snapshot comment is an index to that
+run, never a grant of authority. Missing, edited, duplicate or mismatched
+snapshots block dispatch before provider quota is spent.
+
+Normal delivery requires the candidate to retain its original head and base
+for the whole PR lifetime. Changed candidates, retargets and head/base force
+pushes require a fresh delivery PR. This prevents an old command from another
+base being credited to a new request, without guessing the commenter's historical
+permission or asserting that CodeRabbit ignores public commands. Manual comments
+on an unchanged candidate cannot change its review context and remain preserved;
+they never authorize a dispatch or merge. The active dispatch receipt still needs
+exactly one provider-label event. Untracked or duplicate provider-label attempts
+remain blocked and require a fresh PR.
+
+The positive opt-in label delivered a first review but a same-PR follow-up at
+another head was observed to skip with `incremental reviews are disabled`.
+Keep `auto_incremental_review: false`: enabling it could spend quota on an
+unvalidated push. Finish corrections and required checks before opening a fresh
+delivery PR; preserve the previous PR, branch, comments and findings. PRs opened
+before the trusted opened capture becomes available also need a fresh PR for
+normal native delivery. The introducing repair uses only the approved bootstrap.
 
 The run API's `head_sha` can expose either the PR head or the execution base.
 It is separate from `GITHUB_SHA`; both candidate commits must match the run's

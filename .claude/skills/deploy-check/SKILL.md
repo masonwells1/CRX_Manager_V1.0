@@ -137,7 +137,9 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    uncertain delivery preserves dedupe state; after late delivery, reapply the ready label to
    reconcile without another request. Never clear and re-add the provider label to retry. Only
    verified cleanup before any provider call permits a same-head retry; retained attempts need
-   a fresh candidate, and ambiguous out-of-band requests need a fresh PR. Follow
+   a fresh delivery PR, and ambiguous out-of-band requests need a fresh PR. Normal
+   native delivery also requires the head/base captured by the trusted opened
+   workflow to remain unchanged throughout the PR lifetime. Follow
    `docs/reference/coderabbit-native-review.md`, including its introducing-PR bootstrap. Read the resulting
    review and fix every real issue; nitpicks may be dismissed with a one-line reason. If a fix or
    base update creates a new commit, the workflow resets its labels and obsolete canonical
@@ -145,7 +147,9 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    cannot cancel an accepted review; verify earlier delivery before another request;
    restart required checks,
    rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy, freeze and record the
-   new SHA, and apply the ready label for one follow-up review. Never use `@coderabbitai resume`, and reserve
+   new SHA, open a fresh delivery PR, then apply the ready label for one review.
+   Preserve the prior PR and its findings; the provider skipped same-PR incremental
+   review with the current configuration. Never use `@coderabbitai resume`, and reserve
    `@coderabbitai full review` for a deliberately justified complete reread. An approving GitHub
    review is **NOT** required to merge: Mason removed `required_pull_request_reviews` from `main`
    on 2026-09-02, so CI is the merge gate. A `CHANGES_REQUESTED` verdict still blocks, and both
