@@ -891,13 +891,28 @@ async function inspectNativeAttemptHistory({ github, owner, repo, pullNumber, he
       github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pullNumber, per_page: 100 }),
     ]);
     if (!Array.isArray(events) || !Array.isArray(comments)) throw new Error('native attempt history could not be verified');
-    // Comment requests have no authenticated head/base dispatch receipt. Even
-    // a later old-head response cannot prove that every such request settled.
-    // Keep this evidence and use a fresh PR; never delete human commands to
-    // turn ambiguous history into an apparently unused review slot.
-    if (comments.some((comment) => normalize(comment.user?.login) !== CODERABBIT_BOT_LOGIN
-      && /^\s*@coderabbitai\s+(?:full\s+review|review|resume)\s*$/im.test(String(comment.body || '')))) {
-      throw new Error('untracked comment-based review requests cannot attest their candidate base; preserve this PR and use a fresh PR');
+    // Only repository-authorized intent belongs to authorized request history.
+    // A public comment cannot permanently invalidate a protected candidate.
+    // This is not a claim about CodeRabbit's own command permissions: comments
+    // never supply dispatch authorization or review clearance. Provider review,
+    // receipt, base, retarget and final-state checks remain independently required.
+    const commandPermissions = new Map();
+    for (const comment of comments) {
+      if (normalize(comment.user?.login) === CODERABBIT_BOT_LOGIN
+        || !/^\s*@coderabbitai\s+(?:full\s+review|review|resume)\s*$/im.test(String(comment.body || ''))) continue;
+      const username = comment.user?.login;
+      if (!isNonBlankString(username)) throw new Error('comment request actor could not be verified');
+      if (!commandPermissions.has(normalize(username))) {
+        const permission = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });
+        const level = normalize(permission.data?.permission);
+        if (!['admin', 'maintain', 'write', 'triage', 'read', 'none'].includes(level)) {
+          throw new Error('comment request actor permission could not be verified');
+        }
+        commandPermissions.set(normalize(username), level);
+      }
+      if (ALLOWED_PERMISSIONS.has(commandPermissions.get(normalize(username)))) {
+        throw new Error('untracked authorized comment-based review requests cannot attest their candidate base; preserve this PR and use a fresh PR');
+      }
     }
     const dispatches = events.filter((event) => event.event === 'labeled' && event.label?.name === DISPATCH_LABEL);
     const receipts = comments.map(parseNativeDispatchReceipt).filter(Boolean);

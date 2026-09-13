@@ -50,8 +50,15 @@ receipt; the active receipt needs exactly one provider-label event. An
 untracked direct provider-label attempt is ambiguous because GitHub's review
 record does not attest its base. It blocks reconciliation and further dispatch
 on that PR; preserve the evidence and use a fresh PR rather than reusing a late
-review. Manual comment-based requests have no authenticated base receipt;
-preserve them and use a fresh PR for native delivery. Retargeted PRs also need
+review. Repository-authorized manual comment-based requests have no authenticated
+base receipt; preserve them and use a fresh PR for native delivery. Before
+classifying command intent, the workflow reads the commenter's GitHub repository
+permission. Write, maintain and admin commands retain the ambiguity block;
+verified read, triage and no-access comments cannot permanently poison authorized
+history. Missing actors and unknown permission lookups fail closed. Comments
+never establish a dispatch receipt or review clearance. This classification does
+not establish CodeRabbit's own command-permission contract; actual delivery and
+all receipt, candidate, retarget and final-state checks still apply. Retargeted PRs also need
 a fresh PR, even when their original base branch has been restored. Before
 publishing a new candidate to an existing PR, verify its cached base SHA matches
 live main and refresh the same-base metadata before pushing the new head.

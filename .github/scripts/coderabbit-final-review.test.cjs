@@ -2931,7 +2931,7 @@ test('untracked historical provider-label attempts block before spending another
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
 });
 
-test('untracked manual review commands block native dispatch without deleting their evidence', async () => {
+test('untracked authorized manual review commands block native dispatch without deleting their evidence', async () => {
   for (const body of ['@coderabbitai review', '@coderabbitai full review', '@coderabbitai resume']) {
     const command = { id: 88, body, user: { login: 'masonwells1', type: 'User' }, created_at: '2026-09-07T03:43:00Z' };
     const harness = makeHarness({ existingComments: [command] });
@@ -2940,6 +2940,60 @@ test('untracked manual review commands block native dispatch without deleting th
     assert.equal(harness.comments.some((comment) => comment.id === command.id), true);
     assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
     assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  }
+});
+
+test('public and low-permission commands cannot permanently poison authorized native history', async () => {
+  for (const permission of ['none', 'read', 'triage']) {
+    for (const body of ['@coderabbitai review', '@coderabbitai full review', '@coderabbitai resume']) {
+      const command = { id: 88, body, user: { login: 'public-commenter', type: 'User' },
+        created_at: '2026-09-07T03:43:00Z' };
+      const harness = makeHarness({ existingComments: [command] });
+      const lookup = harness.github.rest.repos.getCollaboratorPermissionLevel;
+      harness.github.rest.repos.getCollaboratorPermissionLevel = async (args) => args.username === 'public-commenter'
+        ? { data: { permission } } : lookup(args);
+      const reviews = [];
+      harness.github.rest.pulls.listReviews = async () => ({ data: reviews });
+      const result = await execute(harness, { nativeDispatch: true, reviewPollAttempts: 1, reviewPollMs: 1,
+        settle: async () => reviews.push(nativeReview()) });
+      assert.equal(result.status, 'reviewed');
+      assert.equal(harness.comments.some((comment) => comment.id === command.id), true);
+      assert.equal(harness.receiptComments.length, 1);
+      assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+    }
+  }
+});
+
+test('unknown manual-command permissions block without deleting evidence or spending a review', async () => {
+  for (const response of ['unavailable', 'malformed', 'missing actor']) {
+    const command = { id: 88, body: '@coderabbitai review', user: { login: 'unknown-commenter', type: 'User' },
+      created_at: '2026-09-07T03:43:00Z' };
+    if (response === 'missing actor') command.user.login = '';
+    const harness = makeHarness({ existingComments: [command] });
+    const lookup = harness.github.rest.repos.getCollaboratorPermissionLevel;
+    harness.github.rest.repos.getCollaboratorPermissionLevel = async (args) => args.username === 'unknown-commenter'
+      ? response === 'unavailable' ? Promise.reject(new Error('permission API unavailable')) : { data: {} }
+      : lookup(args);
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'blocked');
+    assert.equal(harness.comments.some((comment) => comment.id === command.id), true);
+    assert.equal(harness.receiptComments.length, 0);
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  }
+});
+
+test('write maintain and admin manual commands retain the base-ambiguity block', async () => {
+  for (const permission of ['write', 'maintain', 'admin']) {
+    const command = { id: 88, body: '@coderabbitai review', user: { login: 'authorized-commenter', type: 'User' },
+      created_at: '2026-09-07T03:43:00Z' };
+    const harness = makeHarness({ existingComments: [command] });
+    const lookup = harness.github.rest.repos.getCollaboratorPermissionLevel;
+    harness.github.rest.repos.getCollaboratorPermissionLevel = async (args) => args.username === 'authorized-commenter'
+      ? { data: { permission } } : lookup(args);
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'blocked');
+    assert.equal(harness.comments.some((comment) => comment.id === command.id), true);
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
   }
 });
 
