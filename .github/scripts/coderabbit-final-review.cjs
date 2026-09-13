@@ -10,6 +10,7 @@ const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 const CODERABBIT_BOT_LOGIN = 'coderabbitai[bot]';
 const GITHUB_ACTIONS_APP_ID = 15368;
 const GATE_CHECK_NAME = 'final-review-gate';
+const TRUSTED_GATE_CHECK_NAMES = new Set([GATE_CHECK_NAME, 'coderabbit candidate snapshot']);
 const RESET_ACTIONS = new Set([
   'synchronize',
   'closed',
@@ -614,12 +615,12 @@ function isCompletedTrustedGateCheck(check, trustedGateWorkflow) {
   // The checks/jobs APIs expose per-invocation database IDs, not a stable YAML
   // job-key field. The workflow test therefore pins this trusted workflow to its
   // sole job key; this runtime check binds the resulting check run to Actions,
-  // the exact workflow identity, and that job name.
+  // the exact workflow identity, and either display name of that single job.
   return check
     && typeof check === 'object'
     && check.status === 'completed'
     && Number(check.app?.id) === GITHUB_ACTIONS_APP_ID
-    && normalize(check.name) === GATE_CHECK_NAME
+    && TRUSTED_GATE_CHECK_NAMES.has(normalize(check.name))
     && Number(check.workflow_id) === Number(trustedGateWorkflow.workflowId)
     && String(check.workflow_path || '') === String(trustedGateWorkflow.workflowPath);
 }

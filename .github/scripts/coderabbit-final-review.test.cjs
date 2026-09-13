@@ -899,6 +899,34 @@ test('a completed failure from an earlier trusted gate run does not wedge a retr
   assert.deepEqual(harness.failures, []);
 });
 
+test('a completed trusted snapshot failure does not wedge a ready-label retry', async () => {
+  const snapshot = completedCheck('CodeRabbit candidate snapshot', 'failure');
+  snapshot.workflow_id = 818181;
+  snapshot.workflow_path = '.github/workflows/coderabbit-final-review.yml';
+  const harness = makeHarness({checkRuns: [completedCheck('foundation'), snapshot]});
+  const result = await execute(harness);
+  assert.equal(result.status, 'requested');
+  assert.deepEqual(harness.failures, []);
+});
+
+test('snapshot names retain completion, app and workflow provenance requirements', async () => {
+  for (const mutation of [
+    {status: 'in_progress', conclusion: null},
+    {app: {id: 99999}},
+    {workflow_id: 919191, workflow_path: '.github/workflows/not-the-gate.yml'},
+  ]) {
+    const snapshot = completedCheck('CodeRabbit candidate snapshot', 'failure');
+    Object.assign(snapshot, {
+      workflow_id: 818181,
+      workflow_path: '.github/workflows/coderabbit-final-review.yml',
+    }, mutation);
+    const harness = makeHarness({checkRuns: [completedCheck('foundation'), snapshot]});
+    const result = await execute(harness);
+    assert.notEqual(result.status, 'requested');
+    assert.match(harness.failures.join('\n'), /CodeRabbit candidate snapshot/);
+  }
+});
+
 test('a completed same-name failure from another workflow still blocks', async () => {
   const untrustedFailure = completedCheck('final-review-gate', 'failure');
   untrustedFailure.workflow_id = undefined;
