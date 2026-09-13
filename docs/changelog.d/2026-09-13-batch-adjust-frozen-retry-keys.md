@@ -76,6 +76,31 @@ the same key; tab A then showed "Finished in another tab" and "Finished elsewher
 sent nothing (still 2 requests, 1 stock move, stock 105); Cancel closed it and
 refreshed tab A's page once.
 
+**Codex (gpt-5.6-sol, high) exact-SHA review of `e07bf3cda`: BLOCKERS, 1 HIGH, 1
+MEDIUM.**
+- HIGH — a passive peer tab could still double-move stock: the guard only covered
+  the tab whose own submit left the batch unconfirmed. A tab that merely observed
+  the shared frozen batch (with its own form holding the same delta and reason)
+  re-enabled when another tab resolved it. Fixed: an open dialog that has shown a
+  frozen batch — frozen by itself or only observed — is blocked when that batch
+  unfreezes without this dialog resolving it, and closing it refreshes the page
+  even if it submitted nothing. Regression test adds a passive third tab; it fails
+  against the `e07bf3cda` modal. Real-browser proof in two real tabs of the
+  temporary harness (live key-only fake contract, shared localStorage): passive
+  tab C typed +5 and a reason but never submitted; tab A's +5 committed with its
+  reply lost; tab C showed the frozen batch through the real `storage` event; tab
+  A's "Retry 1 Unchanged" replayed the receipt under the same key; tab C then
+  showed "Finished in another tab", its "Adjust 1 Product" button reported
+  `disabled`, and a real click sent nothing (still 2 requests, 1 stock move, stock
+  105); Cancel closed it and refreshed tab C's page once.
+- MEDIUM — the tests described an intent-bound server contract from the unapplied
+  migration `20260911120000`. The fake `adjust_inventory` now models the live
+  key-only contract (a reused key silently replays the stored receipt whatever
+  the payload); the fresh-key test proves distinct keys through the stock-move
+  counter under that contract, and the binding-rejection test is marked as
+  injecting the codes the pending migration would add. The fix itself never
+  pairs one key with two payloads, so it does not depend on that migration.
+
 **Proof.**
 - `src/components/inventory/BatchAdjustModal.retry.test.tsx` renders the real
   modal and hook (fake-indexeddb) inside a stand-in page whose `onSuccess` clears

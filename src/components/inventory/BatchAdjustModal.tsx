@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -58,7 +58,9 @@ export function buildAdjustmentCalls(
  * A row's key is the frozen batch key plus the row. The batch key only exists
  * while one exact batch (rows, delta, reason) is frozen, so a retry of that batch
  * re-sends every row under the key it was first sent with, and any change to the
- * rows, delta or reason is a different batch with a different key.
+ * rows, delta or reason is a different batch with a different key. The live
+ * adjust_inventory replays on the key alone, so this pairing — never one key for
+ * two payloads — is what makes a replay return the right receipt.
  */
 // eslint-disable-next-line react-refresh/only-export-components
 export function batchRowIdempotencyKey(batchKey: string, inventoryId: string): string {
@@ -134,8 +136,10 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
   // dialog closes, even when the current selection no longer contains them (e.g.
   // a frozen batch retried after a reload with a different selection).
   const [lastBatchRows, setLastBatchRows] = useState<BatchAdjustIntent['rows']>([]);
-  // True while this dialog's last submit ended with the batch still frozen.
-  const [leftBatchUnconfirmed, setLeftBatchUnconfirmed] = useState(false);
+  // True once this open dialog has shown a frozen batch — whether this dialog
+  // froze it or only observed it (another tab's lost reply) — and cleared only
+  // when this dialog resolves that batch itself, or closes.
+  const [sawFrozenBatch, setSawFrozenBatch] = useState(false);
   // The Inventory page's onSuccess clears the selection, which empties `items`.
   // Calling it mid-dialog would wipe the per-row results the operator still needs,
   // so it runs when the dialog closes — whenever stock moved or may have moved.
@@ -158,12 +162,18 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     }),
   });
   const frozen = batchIntent.unresolvedIntent;
-  // This dialog left the batch frozen, and it is no longer frozen: another tab or
-  // window retried and finished it. Every non-adjusted result shown here is now
-  // stale — that tab's retry may have moved any of those rows — so nothing may be
-  // sent from this dialog (a new batch would use fresh keys and move stock twice).
-  // Closing refreshes the page with authoritative stock.
-  const finishedElsewhere = leftBatchUnconfirmed && !frozen;
+
+  useEffect(() => {
+    if (open && frozen) setSawFrozenBatch(true);
+  }, [open, frozen]);
+
+  // This open dialog showed a frozen batch, and it is no longer frozen, and this
+  // dialog did not resolve it: another tab or window retried and finished it.
+  // Whatever this dialog shows or holds in its form is now stale — that tab's
+  // retry may have moved any of those rows — so nothing may be sent from here (a
+  // new batch would use fresh keys and move stock a second time). Closing
+  // refreshes the page with authoritative stock.
+  const finishedElsewhere = sawFrozenBatch && !frozen;
 
   // A non-finite entry (e.g. 1e400 → Infinity) would be frozen as null by JSON.
   const parsedDelta = Number(uniformDelta);
@@ -173,12 +183,12 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
   const pendingItems = items.filter((it) => !SETTLED.has(rowResults[it.id]?.outcome));
 
   const resetAndClose = () => {
-    const refreshPage = stockMayHaveChangedRef.current;
+    const refreshPage = stockMayHaveChangedRef.current || finishedElsewhere;
     stockMayHaveChangedRef.current = false;
     setRowResults({});
     setRowMessages({});
     setLastBatchRows([]);
-    setLeftBatchUnconfirmed(false);
+    setSawFrozenBatch(false);
     setReason('');
     setUniformDelta('');
     if (refreshPage) onSuccess();
@@ -305,6 +315,10 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       // dialog never shows final results under an "Unconfirmed batch" banner.
       let resolveFailed = false;
       if (uncertainCount === 0) {
+        // This dialog is resolving the batch itself, so the unfreeze that follows
+        // is not "finished elsewhere". If resolving fails the batch stays frozen
+        // and the effect above records it as seen again.
+        setSawFrozenBatch(false);
         try {
           await batchIntent.resolveIntent();
         } catch (err) {
@@ -318,7 +332,6 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       setRowResults(results);
       setRowMessages(messages);
       setLastBatchRows(request.rows);
-      setLeftBatchUnconfirmed(uncertainCount > 0);
 
       const signedDelta = `${request.delta > 0 ? '+' : ''}${request.delta}`;
       if (newlyAdjusted > 0) {
@@ -360,7 +373,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
   const displayRows = listedRows.map((row) => ({
     id: row.inventoryId,
     name: row.productName,
-    qty: frozen ? null : quantityById.get(row.inventoryId) ?? null,
+    qty: frozen || finishedElsewhere ? null : quantityById.get(row.inventoryId) ?? null,
   }));
   const actionCount = frozen
     ? frozen.rows.filter((row) => !SETTLED.has(rowResults[row.inventoryId]?.outcome)).length
@@ -414,7 +427,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
           })}
         </div>
 
-        {!frozen && negativeCount > 0 && (
+        {!frozen && !finishedElsewhere && negativeCount > 0 && (
           <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900">
             <strong>Warning:</strong> this adjustment will drive {negativeCount} product{negativeCount !== 1 ? 's' : ''} below zero. Verify with a physical count before proceeding.
           </div>

@@ -5,10 +5,14 @@ import { IDBFactory } from 'fake-indexeddb';
 
 /**
  * Renders the REAL BatchAdjustModal inside a stand-in for the Inventory page
- * against a fake adjust_inventory that behaves like the database: it moves stock
- * once per new key, stores a receipt, replays that receipt for the same key and
- * payload, and refuses a key reused for a different payload (the bound-receipt
- * contract of migration 20260911120000).
+ * against a fake adjust_inventory that models the LIVE contract: it moves stock
+ * once per new key, stores a receipt, and replays that receipt for the same key
+ * whatever payload arrives — key + operation only, with no actor or payload
+ * binding (see the KNOWN LIMIT note in src/lib/idempotency.ts). Under that
+ * contract a reused key silently replays an old result, so the stock-move counter
+ * is what proves each new adjustment got a fresh key and each retry did not.
+ * The binding-rejection case injects the error codes that the pending, unapplied
+ * migration 20260911120000 would add; nothing else relies on that migration.
  *
  * The stand-in page does what InventoryPage does: its onSuccess clears the
  * selection (so `items` becomes empty) and its onClose closes the dialog. A
@@ -55,7 +59,7 @@ type AdjustArgs = {
 function createFakeDatabase() {
   const stock = new Map<string, number>();
   const moves = new Map<string, number>();
-  const receipts = new Map<string, { payload: string; result: Record<string, unknown> }>();
+  const receipts = new Map<string, Record<string, unknown>>();
   const calls: AdjustArgs[] = [];
   // Rows whose NEXT successful commit loses its reply.
   const loseNextReply = new Set<string>();
@@ -67,20 +71,15 @@ function createFakeDatabase() {
     const refusal = refuse.get(args.p_inventory_id);
     if (refusal) return { data: null, error: refusal };
 
-    const payload = JSON.stringify([args.p_inventory_id, args.p_delta, args.p_reason, args.p_performed_by]);
+    // Live contract: the receipt is found by key alone and replayed as-is.
     const receipt = receipts.get(args.p_idempotency_key);
-    if (receipt) {
-      if (receipt.payload !== payload) {
-        return { data: null, error: { code: '22023', message: 'IDEMPOTENCY_INTENT_MISMATCH' } };
-      }
-      return { data: receipt.result, error: null };
-    }
+    if (receipt) return { data: receipt, error: null };
 
     const next = (stock.get(args.p_inventory_id) ?? 100) + args.p_delta;
     stock.set(args.p_inventory_id, next);
     moves.set(args.p_inventory_id, (moves.get(args.p_inventory_id) ?? 0) + 1);
     const result = { status: 'adjusted', new_quantity: next, product_id: `product-${args.p_inventory_id}` };
-    receipts.set(args.p_idempotency_key, { payload, result });
+    receipts.set(args.p_idempotency_key, result);
 
     if (loseNextReply.delete(args.p_inventory_id)) {
       // Committed, then the connection dropped: no code a server would send.
@@ -154,6 +153,13 @@ async function pressEscape() {
   });
 }
 
+/** What a browser does in every other tab after this tab writes the stored batch. */
+async function deliverStorageEventToOtherTabs() {
+  await act(async () => {
+    window.dispatchEvent(new StorageEvent('storage', { key: BATCH_INTENT_STORAGE_KEY, storageArea: window.localStorage }));
+  });
+}
+
 /** Clicks a submit button and waits until that submit has fully settled. */
 async function submit(name: RegExp, scope: Scope = screen) {
   const toastsBefore = mockToast.mock.calls.length;
@@ -219,10 +225,7 @@ describe('BatchAdjustModal retry keys', () => {
     expect(db.calls[1].p_idempotency_key).toBe(db.calls[0].p_idempotency_key);
     expect(db.moves.get('inv-a')).toBe(1);
 
-    // The browser tells Tab A that the stored batch changed.
-    await act(async () => {
-      window.dispatchEvent(new StorageEvent('storage', { key: BATCH_INTENT_STORAGE_KEY, storageArea: window.localStorage }));
-    });
+    await deliverStorageEventToOtherTabs();
 
     // Tab A lost its frozen lock, but it must not offer a fresh adjustment: its
     // form still holds +5 and a new batch would move the stock a second time.
@@ -242,6 +245,50 @@ describe('BatchAdjustModal retry keys', () => {
     await click(/Cancel/, tabA.scope);
     expect(tabA.onSuccess).toHaveBeenCalledTimes(1);
     expect(tabA.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks a passive tab that only watched the batch freeze and resolve elsewhere', async () => {
+    const db = createFakeDatabase();
+    db.loseNextReply.add('inv-a');
+
+    // Tab C is open with the same adjustment typed but never submits.
+    const tabC = renderPage(db, { selectOnOpen: ['inv-a'] });
+    fillForm('5', 'Cycle count correction', tabC.scope);
+
+    // Tab A submits it; the stock move commits and the reply is lost.
+    const tabA = renderPage(db, { selectOnOpen: ['inv-a'] });
+    fillForm('5', 'Cycle count correction', tabA.scope);
+    await submit(/Adjust 1 Product/, tabA.scope);
+    expect(db.moves.get('inv-a')).toBe(1);
+
+    // Tab C hears about the frozen batch and shows it locked.
+    await deliverStorageEventToOtherTabs();
+    await waitFor(() => expect(tabC.scope.getByText(/Unconfirmed batch/)).toBeTruthy());
+
+    // Tab A retries, replays the receipt, and resolves the batch itself.
+    await submit(/Retry 1 Unchanged/, tabA.scope);
+    expect(tabA.onClose).toHaveBeenCalledTimes(1);
+    expect(db.calls).toHaveLength(2);
+    expect(db.moves.get('inv-a')).toBe(1);
+
+    await deliverStorageEventToOtherTabs();
+
+    // Tab C's own form still holds +5 and a reason; it must not become a fresh
+    // adjustment of stock that has already moved.
+    await waitFor(() => expect(tabC.scope.getByText(/Finished in another tab/)).toBeTruthy());
+    expect(tabC.scope.queryByText(/Unconfirmed batch/)).toBeNull();
+    const adjustButton = tabC.scope.getByRole('button', { name: /Adjust/ }) as HTMLButtonElement;
+    expect(adjustButton.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(adjustButton);
+    });
+    expect(db.calls).toHaveLength(2);
+    expect(db.moves.get('inv-a')).toBe(1);
+    expect(db.stock.get('inv-a')).toBe(105);
+
+    // Tab C submitted nothing, but its page is stale: closing still refreshes it.
+    await click(/Cancel/, tabC.scope);
+    expect(tabC.onSuccess).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes the page when closed with a row that may already have moved stock', async () => {
@@ -345,14 +392,18 @@ describe('BatchAdjustModal retry keys', () => {
     expect(db.moves.get('inv-a')).toBe(1);
     expect(db.moves.get('inv-b')).toBeUndefined();
     // The batch unfroze, but Bicep's result is still on screen although only
-    // Atrazine is selected.
+    // Atrazine is selected — and this dialog resolved it, so it is not
+    // "finished elsewhere".
     expect(screen.queryByText(/Unconfirmed batch/)).toBeNull();
+    expect(screen.queryByText(/Finished in another tab/)).toBeNull();
     expect(screen.getByText('Bicep II Magnum')).toBeTruthy();
     expect(screen.getByText('Refused — nothing changed')).toBeTruthy();
     expect(second.onSuccess).not.toHaveBeenCalled();
   });
 
   it('uses a fresh key when the payload changes', async () => {
+    // Under the live key-only contract a reused key would silently replay the
+    // first receipt, so three stock moves prove three distinct keys.
     const db = createFakeDatabase();
     const { onClose } = renderPage(db, { selectOnOpen: ['inv-a'] });
 
@@ -378,6 +429,8 @@ describe('BatchAdjustModal retry keys', () => {
   });
 
   it('shows a binding rejection distinctly, never retries it, and does not stay frozen', async () => {
+    // Injected: IDEMPOTENCY_ACTOR_MISMATCH is what the pending migration
+    // 20260911120000 would raise; the live function cannot return it yet.
     const db = createFakeDatabase();
     db.refuse.set('inv-b', { code: 'P0001', message: 'IDEMPOTENCY_ACTOR_MISMATCH' });
     const { onClose, onSuccess } = renderPage(db, { selectOnOpen: ['inv-a', 'inv-b'] });
