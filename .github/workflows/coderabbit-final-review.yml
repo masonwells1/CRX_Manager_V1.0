@@ -51,8 +51,8 @@ concurrency:
 
 jobs:
   final-review-gate:
-    # Snapshot success records context; it must not look like completed review.
-    name: ${{ github.event.action == 'opened' && 'CodeRabbit candidate snapshot' || 'final-review-gate' }}
+    # Lifecycle success includes ignored/reset events; it never attests review delivery.
+    name: ${{ github.event.action == 'opened' && 'CodeRabbit candidate snapshot' || 'CodeRabbit candidate lifecycle' }}
     runs-on: ubuntu-latest
     # Native reviews can take minutes; leave cleanup time beyond the six-minute poll.
     timeout-minutes: 10

@@ -357,13 +357,14 @@ test('the trusted final-review workflow has only the final-review-gate job', () 
     'execution provenance must come from the trusted workflow context');
 });
 
-test('successful opened snapshots have a distinct check context from final review', () => {
+test('snapshot and lifecycle checks never use a name that attests completed review', () => {
   const workflow = fs.readFileSync(path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'), 'utf8');
   const name = workflow.match(/^ {4}name: \$\{\{ github\.event\.action == 'opened' && '([^']+)' \|\| '([^']+)' \}\}$/m);
   assert.ok(name, 'the sole trusted job must select its check context using the event action');
   assert.equal(name[1], 'CodeRabbit candidate snapshot');
   assert.notEqual(name[1], 'final-review-gate', 'snapshot success must not report final-review success');
-  assert.equal(name[2], 'final-review-gate', 'ready-label delivery retains its authenticated check context');
+  assert.equal(name[2], 'CodeRabbit candidate lifecycle');
+  assert.notEqual(name[2], 'final-review-gate', 'ignored, reset and unrelated events must not report final-review success');
   assertOnlyTrustedGateJob(workflow);
 });
 
@@ -902,30 +903,34 @@ test('a completed failure from an earlier trusted gate run does not wedge a retr
 });
 
 test('a completed trusted snapshot failure does not wedge a ready-label retry', async () => {
-  const snapshot = completedCheck('CodeRabbit candidate snapshot', 'failure');
-  snapshot.workflow_id = 818181;
-  snapshot.workflow_path = '.github/workflows/coderabbit-final-review.yml';
-  const harness = makeHarness({checkRuns: [completedCheck('foundation'), snapshot]});
-  const result = await execute(harness);
-  assert.equal(result.status, 'requested');
-  assert.deepEqual(harness.failures, []);
-});
-
-test('snapshot names retain completion, app and workflow provenance requirements', async () => {
-  for (const mutation of [
-    {status: 'in_progress', conclusion: null},
-    {app: {id: 99999}},
-    {workflow_id: 919191, workflow_path: '.github/workflows/not-the-gate.yml'},
-  ]) {
-    const snapshot = completedCheck('CodeRabbit candidate snapshot', 'failure');
-    Object.assign(snapshot, {
-      workflow_id: 818181,
-      workflow_path: '.github/workflows/coderabbit-final-review.yml',
-    }, mutation);
+  for (const name of ['CodeRabbit candidate snapshot', 'CodeRabbit candidate lifecycle']) {
+    const snapshot = completedCheck(name, 'failure');
+    snapshot.workflow_id = 818181;
+    snapshot.workflow_path = '.github/workflows/coderabbit-final-review.yml';
     const harness = makeHarness({checkRuns: [completedCheck('foundation'), snapshot]});
     const result = await execute(harness);
-    assert.notEqual(result.status, 'requested');
-    assert.match(harness.failures.join('\n'), /CodeRabbit candidate snapshot/);
+    assert.equal(result.status, 'requested');
+    assert.deepEqual(harness.failures, []);
+  }
+});
+
+test('snapshot and lifecycle names retain completion, app and workflow provenance requirements', async () => {
+  for (const name of ['CodeRabbit candidate snapshot', 'CodeRabbit candidate lifecycle']) {
+    for (const mutation of [
+      {status: 'in_progress', conclusion: null},
+      {app: {id: 99999}},
+      {workflow_id: 919191, workflow_path: '.github/workflows/not-the-gate.yml'},
+    ]) {
+      const snapshot = completedCheck(name, 'failure');
+      Object.assign(snapshot, {
+        workflow_id: 818181,
+        workflow_path: '.github/workflows/coderabbit-final-review.yml',
+      }, mutation);
+      const harness = makeHarness({checkRuns: [completedCheck('foundation'), snapshot]});
+      const result = await execute(harness);
+      assert.notEqual(result.status, 'requested');
+      assert.ok(harness.failures.join('\n').includes(name));
+    }
   }
 });
 
