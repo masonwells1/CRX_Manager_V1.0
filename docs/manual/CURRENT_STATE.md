@@ -25,22 +25,21 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-08 for the migration ledger (read-only `list_migrations` against project
+**Last verified: 2026-09-11 for the migration ledger (read-only ledger query against project
 `rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-05 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
 migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
 `20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
 ordering high-water is the newest applied row's effective stamp:
-**`20260906120000_preview_field_app_season_follows_invoice_date`** (ledger version `20260908045843`,
-applied live 2026-09-08; verified live 2026-09-08, 1000 ledger rows / 993 distinct names). It
-replaced `20260905185938_refuse_null_job_field_acres` (#606, applied live 2026-09-05 under a bare
-ledger name, so its stamp was synthesized from its version), which held the boundary until then.
-A candidate must now sort above the `20260906120000` name-stamp, not above the 09-05 row.
-(Point-in-time, like every capture here: a read-only re-read on 2026-09-11 found the ledger had moved
-again — 1001 rows / 994 distinct names, `max(version)` `20260909023300`, prefixed high-water
-`20260908120000_close_pr535_live_gaps`, the PR #535 gap-closer whose file and ledger record are owned
-by open PR #646. This page states the boundary as of 2026-09-08; PR #646 restates it when it lands.)
+**`20260908120000_close_pr535_live_gaps`** (row 923, ledger version `20260909023300`, applied live
+2026-09-08; verified live 2026-09-08, 1001 ledger rows). It replaced
+`20260906120000_preview_field_app_season_follows_invoice_date` (ledger version `20260908045843`,
+applied earlier the same day), which in turn replaced `20260905185938_refuse_null_job_field_acres`
+(#606, applied live 2026-09-05 under a bare ledger name, so its stamp was synthesized from its
+version). A candidate must now sort above the `20260908120000` name-stamp.
+Re-read read-only 2026-09-11: unchanged —
+1001 ledger rows / 994 distinct names, `max(version)` `20260909023300`, same high-water.
 Six local commission follow-ups (`20260905200000` through `20260905210000`, with no `20260905200500` file) are not applied. The
 six-file set was restamped together above that row on 2026-09-05 evening, preserving its order;
 five had sorted below the new high-water and the ordering guard would have refused them.
