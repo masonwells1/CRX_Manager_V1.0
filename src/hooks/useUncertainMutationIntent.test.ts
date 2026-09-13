@@ -464,6 +464,108 @@ describe('useUncertainMutationIntent', () => {
       .toBe(firstTab.result.current.getIdempotencyKey());
   });
 
+  describe('retrying one specific pending request (requireIdempotencyKey)', () => {
+    const options = {
+      operation: 'adjust_inventory_batch',
+      userId: 'admin-required-key',
+      surface: 'inventory-batch-adjust',
+      getIntentIdentity: (intent: { batch: string }) => intent,
+    };
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
+    const deliverStorageEvent = () => act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: storageKey,
+        newValue: window.localStorage.getItem(storageKey),
+        storageArea: window.localStorage,
+      }));
+    });
+
+    function renderTwoTabs() {
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'required-key-tab-a');
+      const firstTab = renderHook(() => useUncertainMutationIntent(options));
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'required-key-tab-b');
+      const secondTab = renderHook(() => useUncertainMutationIntent(options));
+      return { firstTab, secondTab };
+    }
+
+    it('retries under the required key while that request is still pending', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      deliverStorageEvent();
+      expect(secondTab.result.current.getPendingIdempotencyKey()).toBe(originalKey);
+
+      await act(async () => secondTab.result.current.beginIntent(
+        { batch: 'B-1' },
+        { requireIdempotencyKey: originalKey },
+      ));
+      expect(secondTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    });
+
+    it('fails closed without minting a new key when a peer resolved the request first', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      deliverStorageEvent();
+      const shownKey = secondTab.result.current.getPendingIdempotencyKey()!;
+
+      // The peer finishes the request; this tab has not heard about it yet.
+      await act(async () => firstTab.result.current.resolveIntent());
+      expect(secondTab.result.current.getUnresolvedIntent()).toEqual({ batch: 'B-1' });
+
+      await act(async () => {
+        await expect(secondTab.result.current.beginIntent(
+          { batch: 'B-1' },
+          { requireIdempotencyKey: shownKey },
+        )).rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+      });
+      const stored = JSON.parse(window.localStorage.getItem(storageKey)!);
+      expect(stored.status).toBe('resolved');
+      expect(stored.idempotencyKey).toBe(originalKey);
+      expect(secondTab.result.current.unresolvedIntent).toBeNull();
+      expect(() => secondTab.result.current.getIdempotencyKey()).toThrow();
+    });
+
+    it('fails closed inside the durable transaction when only the local mirror is stale', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      const pendingMirror = window.localStorage.getItem(storageKey)!;
+      await act(async () => firstTab.result.current.resolveIntent());
+      // IndexedDB holds the resolved record; localStorage still says pending.
+      window.localStorage.setItem(storageKey, pendingMirror);
+
+      await act(async () => {
+        await expect(secondTab.result.current.beginIntent(
+          { batch: 'B-1' },
+          { requireIdempotencyKey: originalKey },
+        )).rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+      });
+      const stored = JSON.parse(window.localStorage.getItem(storageKey)!);
+      expect(stored.status).toBe('resolved');
+      expect(stored.idempotencyKey).toBe(originalKey);
+      expect(secondTab.result.current.unresolvedIntent).toBeNull();
+    });
+
+    it('fails closed when the request was replaced by a newer pending one', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      await act(async () => firstTab.result.current.resolveIntent());
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const newerKey = firstTab.result.current.getIdempotencyKey();
+      expect(newerKey).not.toBe(originalKey);
+
+      await act(async () => {
+        await expect(secondTab.result.current.beginIntent(
+          { batch: 'B-1' },
+          { requireIdempotencyKey: originalKey },
+        )).rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+      });
+      expect(JSON.parse(window.localStorage.getItem(storageKey)!).idempotencyKey).toBe(newerKey);
+    });
+  });
+
   it('rejects a different concurrent request from the same surface instead of reporting the winner as its result', async () => {
     window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'tab-a');
     const firstTab = renderHook(() => useUncertainMutationIntent<{ bill: string }>({

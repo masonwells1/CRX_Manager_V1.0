@@ -291,6 +291,39 @@ describe('BatchAdjustModal retry keys', () => {
     expect(tabC.onSuccess).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses a retry clicked after another tab finished the batch but before this tab heard about it', async () => {
+    const db = createFakeDatabase();
+    db.loseNextReply.add('inv-a');
+
+    // Tab A: the stock move commits but its reply is lost, so the batch freezes.
+    const tabA = renderPage(db, { selectOnOpen: ['inv-a'] });
+    fillForm('5', 'Cycle count correction', tabA.scope);
+    await submit(/Adjust 1 Product/, tabA.scope);
+    expect(db.moves.get('inv-a')).toBe(1);
+
+    // Tab B retries the frozen batch and resolves it.
+    const tabB = renderPage(db, { selectOnOpen: ['inv-a'], startOpen: false });
+    await click(/Select and open batch adjust/, tabB.scope);
+    await waitFor(() => expect(tabB.scope.getByText(/Unconfirmed batch/)).toBeTruthy());
+    await submit(/Retry 1 Unchanged/, tabB.scope);
+    expect(db.calls).toHaveLength(2);
+
+    // No storage event reaches tab A: it still shows the frozen batch and an
+    // enabled retry button, and the operator clicks it.
+    expect(tabA.scope.getByText(/Unconfirmed batch/)).toBeTruthy();
+    await submit(/Retry 1 Unchanged/, tabA.scope);
+
+    expect(mockToast).toHaveBeenLastCalledWith('warning', expect.stringContaining('finished in another tab'));
+    expect(db.calls).toHaveLength(2);
+    expect(db.moves.get('inv-a')).toBe(1);
+    expect(db.stock.get('inv-a')).toBe(105);
+    await waitFor(() => expect(tabA.scope.getByText(/Finished in another tab/)).toBeTruthy());
+    expect((tabA.scope.getByRole('button', { name: /Adjust/ }) as HTMLButtonElement).disabled).toBe(true);
+
+    await click(/Cancel/, tabA.scope);
+    expect(tabA.onSuccess).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes the page when closed with a row that may already have moved stock', async () => {
     const db = createFakeDatabase();
     db.loseNextReply.add('inv-a');
@@ -448,6 +481,23 @@ describe('BatchAdjustModal retry keys', () => {
     expect((screen.getByRole('button', { name: /Adjust 0 Products/ }) as HTMLButtonElement).disabled).toBe(true);
 
     // Closing hands the refresh to the page, once.
+    await click(/Cancel/);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the page on close when every row was binding-rejected', async () => {
+    // Injected, as above. Nothing moved in this attempt, but an earlier one under
+    // the key may have, so the page must not keep showing its old quantities.
+    const db = createFakeDatabase();
+    db.refuse.set('inv-b', { code: '22023', message: 'IDEMPOTENCY_INTENT_MISMATCH' });
+    const { onClose, onSuccess } = renderPage(db, { selectOnOpen: ['inv-b'] });
+
+    fillForm('4', 'Recount');
+    await submit(/Adjust 1 Product/);
+    expect(screen.getByText('Check stock history')).toBeTruthy();
+    expect(db.moves.size).toBe(0);
+
     await click(/Cancel/);
     expect(onSuccess).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);

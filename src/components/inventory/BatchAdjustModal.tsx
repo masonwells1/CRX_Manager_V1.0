@@ -215,9 +215,19 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       return;
     }
 
-    // A frozen batch is retried exactly as it was sent; form validation only
-    // applies to a new batch.
+    // A frozen batch is retried exactly as it was sent, and only under the key it
+    // was frozen with; form validation only applies to a new batch.
     let candidate = batchIntent.getUnresolvedIntent();
+    const retryingFrozenBatch = candidate !== null;
+    const frozenBatchKey = batchIntent.getPendingIdempotencyKey();
+    if (!candidate && (frozen || sawFrozenBatch)) {
+      // This dialog showed a frozen batch that another tab has already resolved,
+      // and this render has not caught up. Its form is stale: a new batch would
+      // use fresh keys and could move the stock a second time.
+      setSawFrozenBatch(true);
+      toast('warning', FINISHED_ELSEWHERE_MESSAGE);
+      return;
+    }
     if (!candidate) {
       if (!reason.trim()) {
         toast('error', 'Please enter a reason for the adjustment');
@@ -246,11 +256,20 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       let request: BatchAdjustIntent;
       let batchKey: string;
       try {
-        request = await batchIntent.beginIntent(candidate);
+        // A missing key ('') can never match, so the retry fails closed.
+        request = await batchIntent.beginIntent(
+          candidate,
+          retryingFrozenBatch ? { requireIdempotencyKey: frozenBatchKey ?? '' } : undefined,
+        );
         batchKey = batchIntent.getIdempotencyKey();
       } catch (err) {
         const message = err instanceof Error ? err.message : '';
-        if (message === UNCERTAIN_MUTATION_INTENT_CONFLICT) toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+        if (message === UNCERTAIN_MUTATION_INTENT_CONFLICT && retryingFrozenBatch) {
+          // The frozen batch was resolved or replaced in another tab after this
+          // dialog read it. Nothing was sent.
+          setSawFrozenBatch(true);
+          toast('warning', FINISHED_ELSEWHERE_MESSAGE);
+        } else if (message === UNCERTAIN_MUTATION_INTENT_CONFLICT) toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
         else if (message === UNCERTAIN_MUTATION_RETRY_EXPIRED) toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
         else toast('error', sanitizeError(err));
         return;
@@ -307,7 +326,9 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       const refusedCount = outcomes.filter((o) => o === 'refused').length;
       const bindingCount = outcomes.filter((o) => o === 'binding_rejected').length;
       const adjustedCount = outcomes.filter((o) => o === 'adjusted').length;
-      if (newlyAdjusted > 0 || uncertainCount > 0) stockMayHaveChangedRef.current = true;
+      // A binding rejection means an earlier attempt under this key may have moved
+      // stock, so the page must reload authoritative quantities on close too.
+      if (newlyAdjusted > 0 || uncertainCount > 0 || bindingCount > 0) stockMayHaveChangedRef.current = true;
 
       // Only unfreeze once no row is left uncertain. A refused or binding-rejected
       // row committed nothing under its key, so a later, deliberately new batch

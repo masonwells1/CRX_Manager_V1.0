@@ -101,6 +101,43 @@ MEDIUM.**
   injecting the codes the pending migration would add. The fix itself never
   pairs one key with two payloads, so it does not depend on that migration.
 
+**Codex (gpt-5.6-sol, high) exact-SHA review of `493a279f7`: BLOCKERS, 1 HIGH, 1
+MEDIUM.** This was the third review round, so per `ship.md` it went to Mason, who
+approved a small change to the shared hook.
+- HIGH — check-then-act race: the dialog checked "finished elsewhere" at render
+  time, then called `beginIntent()`. If another tab resolved the frozen batch in
+  between, `beginIntent()` found a resolved record and started a new request with
+  a new key, so the retry could move stock twice. Fixed in
+  `src/hooks/useUncertainMutationIntent.ts` with an additive, opt-in option:
+  `beginIntent(intent, { requireIdempotencyKey })` proceeds only while that exact
+  request is still pending under that key — checked before and again inside the
+  IndexedDB transaction — and otherwise throws
+  `UNCERTAIN_MUTATION_INTENT_CONFLICT` without writing a new record. A new
+  `getPendingIdempotencyKey()` reads the frozen key without claiming anything.
+  Callers that do not pass the option are unchanged. The dialog passes the key
+  whenever it retries a frozen batch, shows "Finished in another tab" on that
+  conflict, and also refuses a click whose render still showed a frozen batch
+  that is already gone.
+- MEDIUM — a batch whose only results were binding rejections closed without
+  refreshing the page. Binding rejections now count as "stock may have changed".
+- Proof: new modal tests (a retry clicked after another tab resolved the batch
+  but before this tab heard about it sends nothing; a binding-rejected-only batch
+  refreshes on close) both fail against the `493a279f7` modal and hook. Four new
+  hook tests (retry under a still-pending key; fail closed after a peer resolved
+  it; fail closed when only the localStorage mirror is stale and IndexedDB says
+  resolved; fail closed when a newer request replaced it) fail against the
+  `493a279f7` hook, and disabling only the in-transaction check makes the
+  stale-mirror test fail. Full suite, typecheck and lint pass. Real browser
+  (temporary harness, live key-only fake contract): tab A's +5 committed with its
+  reply lost and froze; the stored batch was then marked resolved in IndexedDB and
+  localStorage from inside tab A, exactly as a peer's resolve writes it (a tab
+  never receives storage events for its own writes, so tab A still showed
+  "Unconfirmed batch" and an enabled "Retry 1 Unchanged"); a real click on Retry
+  sent nothing (still 1 request, 1 stock move, stock 105) and showed "Finished in
+  another tab"; the Adjust button then reported `disabled`, a real click on it
+  sent nothing, and Cancel refreshed the page once. The binding-rejected-only
+  refresh is covered by the component test only.
+
 **Proof.**
 - `src/components/inventory/BatchAdjustModal.retry.test.tsx` renders the real
   modal and hook (fake-indexeddb) inside a stand-in page whose `onSuccess` clears
