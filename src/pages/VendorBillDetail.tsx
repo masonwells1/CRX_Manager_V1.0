@@ -367,7 +367,7 @@ export default function VendorBillDetail() {
           try {
             Sentry.captureException(
               resolveError instanceof Error ? resolveError : new Error(String(resolveError)),
-              { tags: { source: 'durable-intent-resolve', page: 'vendor-bill-detail' } },
+              { tags: { source: 'durable-intent-resolve', page: 'vendor-bill-detail', operation: 'record_vendor_payment' } },
             );
           } catch { /* Reporting cannot change the confirmed payment. */ }
           toast('warning', 'The earlier payment was recorded once. This form stays locked to the same payment because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before recording another payment on this device.');

@@ -399,7 +399,6 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
     expect(within(dialog).getByRole('button', { name: /Retry Exact Receiving/i })).toBeDisabled();
     fireEvent.click(within(dialog).getByRole('button', { name: control }));
     expect(screen.queryByRole('dialog', { name: /receive.*items/i })).not.toBeInTheDocument();
-    expect(mocks.intent.isIntentLocked).toBe(true);
     expect(mocks.resolveIntent).not.toHaveBeenCalled();
     expect(mocks.rpc).not.toHaveBeenCalledWith('receive_po_items', expect.anything());
   });

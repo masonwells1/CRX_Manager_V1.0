@@ -104,6 +104,8 @@ describe('ReceivingHubPanel confirmed receipt', () => {
     fireEvent(window, new StorageEvent('storage', { key: sharedKey, storageArea: window.localStorage, newValue: sharedRecord }));
     expect(screen.getByRole('dialog', { name: 'Receive Stock' })).toBeInTheDocument();
     expect(within(dialog).getByText(/these goods were recorded once/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
     cleanupSpy.mockRestore();
     const retryDialog = await screen.findByRole('dialog', { name: 'Receive Stock' });
     fireEvent.click(within(retryDialog).getByRole('button', { name: /retry exact receiving/i }));

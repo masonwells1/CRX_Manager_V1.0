@@ -1423,7 +1423,7 @@ export default function PurchaseOrderDetail() {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="secondary" onClick={() => setReceiveOpen(false)}>
+              <Button variant="secondary" onClick={() => setReceiveOpen(false)} disabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked}>
                 Cancel
               </Button>
               <Button

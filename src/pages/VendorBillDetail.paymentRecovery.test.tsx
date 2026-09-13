@@ -151,6 +151,9 @@ describe('VendorBillDetail record-payment recovery', () => {
     expect(screen.getByLabelText(/Payment Amount/)).toHaveValue(100);
     expect(screen.getByLabelText(/Payment Amount/)).toBeDisabled();
     expect(screen.getByText(/this payment was recorded once/i)).toBeInTheDocument();
+    const frozenDialog = screen.getByRole('dialog', { name: 'Record Payment' });
+    expect(within(frozenDialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(frozenDialog).getByRole('button', { name: 'Close' })).toBeDisabled();
     expect(H.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
     expect(H.rpc).toHaveBeenCalledTimes(1);
     const args = H.rpc.mock.calls[0][1] as { p_amount_cents: number; p_idempotency_key: string };
@@ -235,6 +238,7 @@ describe('VendorBillDetail record-payment recovery', () => {
     });
     expect(H.rpc).toHaveBeenCalledTimes(1);
     expect(H.rpc.mock.calls[0][0]).toBe('record_vendor_payment');
+    expect(H.captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tags: { source: 'durable-intent-resolve', page: 'vendor-bill-detail', operation: 'record_vendor_payment' } }));
     // Exact whole cents reached the RPC — no floating-point dollars.
     expect((H.rpc.mock.calls[0][1] as { p_amount_cents: number }).p_amount_cents).toBe(10_000);
   });

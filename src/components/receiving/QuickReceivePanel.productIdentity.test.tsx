@@ -98,6 +98,7 @@ describe('QuickReceivePanel Product identity', () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(Sentry.captureException).mockReset();
     window.sessionStorage.clear();
     window.localStorage.clear();
     globalThis.indexedDB = new IDBFactory();
@@ -131,7 +132,7 @@ describe('QuickReceivePanel Product identity', () => {
   it.each([false, true])('distinguishes siblings and receives only the returned PO allocation, cleanup blocked=%s', async (cleanupBlocked) => {
     let cleanupSpy: ReturnType<typeof vi.spyOn> | undefined;
     if (cleanupBlocked) {
-      // afterEach restores this persistent transport fault between parameter cases.
+      // beforeEach explicitly resets this module-factory mock before every test.
       vi.mocked(Sentry.captureException).mockImplementation((_error, context) => {
         if (context && typeof context === 'object' && 'tags' in context && context.tags?.source === 'durable-intent-resolve') throw new Error('Reporting transport failed');
         return 'captured';
@@ -326,6 +327,35 @@ describe('QuickReceivePanel Product identity', () => {
     ));
     expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
     await waitFor(() => expect(window.localStorage.getItem(storageKey)).toContain('"status":"resolved"'));
+  });
+
+  it.each(['foreign', 'corrupt'])('allows Back to Edit under a %s saved-request lock without receiving or clearing it', async (kind) => {
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify(['receive_po_items', 'user-1'])}`;
+    window.localStorage.setItem(storageKey, kind === 'corrupt' ? '{truncated' : JSON.stringify({
+      version: 4, status: 'pending', requestVersion: 'foreign-version', claimTabIds: ['another-tab'], resolvedAtMs: null,
+      operation: 'receive_po_items', userId: 'user-1', surface: 'receiving-hub', scope: '',
+      idempotencyKey: 'receive_po_items:user-1:foreign-key', intentIdentity: 'foreign-intent',
+      createdAtMs: Date.now(), retryNotAfterMs: Date.now() + 60_000, intent: {},
+    }));
+    render(<MemoryRouter><QuickReceivePanel /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    fireEvent.click(await screen.findByRole('button', { name: /select product/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /SKU-B.*Family B/i }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: /quantity received/i }), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: /review & match \(1 item\)/i }));
+    expect(await screen.findByText(/a saved request for this operation needs reconciliation/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry exact receiving/i })).toBeDisabled();
+    const savedBefore = window.localStorage.getItem(storageKey);
+    expect(savedBefore).not.toBeNull();
+    const back = screen.getByRole('button', { name: /back to edit/i });
+    expect(back).toBeEnabled();
+    fireEvent.click(back);
+    expect(screen.getByRole('spinbutton', { name: /quantity received/i })).toHaveValue(3);
+    expect(window.localStorage.getItem(storageKey)).toBe(savedBefore);
+    fireEvent.click(screen.getByRole('button', { name: /review & match \(1 item\)/i }));
+    expect(await screen.findByRole('button', { name: /retry exact receiving/i })).toBeDisabled();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('receive_po_items', expect.anything());
+    expect(window.localStorage.getItem(storageKey)).toBe(savedBefore);
   });
 
   it('keeps an expired request locked and never calls the receiving RPC', async () => {

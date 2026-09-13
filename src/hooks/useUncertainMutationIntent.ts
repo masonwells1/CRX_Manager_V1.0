@@ -67,7 +67,7 @@ export const UNCERTAIN_MUTATION_INTENT_CONFLICT = 'DURABLE_MUTATION_INTENT_CONFL
 export const UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE =
   'The safe automatic retry window expired. Do not submit this mutation again. Verify the authoritative record and reconcile it manually.';
 export const UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE =
-  'Another page or tab has an unresolved request for this operation. Return there to retry it unchanged, or verify the authoritative record before reconciling it manually.';
+  'A saved request for this operation needs reconciliation. If another page or tab owns it, return there to retry it unchanged. Otherwise verify the authoritative record and reconcile it manually before starting another request.';
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);

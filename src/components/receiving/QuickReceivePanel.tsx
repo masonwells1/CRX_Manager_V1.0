@@ -1022,7 +1022,7 @@ export default function QuickReceivePanel() {
                 <Button
                   variant="secondary"
                   onClick={() => setStep('add_items')}
-                  disabled={receiveIntent.isIntentLocked}
+                  disabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked}
                 >
                   ← Back to Edit
                 </Button>
