@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -123,6 +124,19 @@ function hasIntentBindingContract(sql: string) {
 }
 
 describe('create_inventory_hold receipt binding (20260908130000)', () => {
+  it('pins the normalized emitted wrapper body rather than only a literal declaration', () => {
+    const start = migration.indexOf('CREATE OR REPLACE FUNCTION public.create_inventory_hold(');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const bodyMarker = 'AS $function$';
+    const markerStart = migration.indexOf(bodyMarker, start);
+    expect(markerStart).toBeGreaterThan(start);
+    const bodyStart = markerStart + bodyMarker.length;
+    const bodyEnd = migration.indexOf('$function$;', bodyStart);
+    expect(bodyEnd).toBeGreaterThan(bodyStart);
+    const hash = createHash('sha256').update(migration.slice(bodyStart, bodyEnd), 'utf8').digest('hex');
+    expect(migration).toContain(`v_wrapper_pin text := '${hash}';`);
+  });
+
   it('orders after its required predecessor and is still marked NOT APPLIED', () => {
     const ordered = readdirSync(join(root, 'supabase', 'migrations'))
       .filter((name) => /^\d{14}_.+\.sql$/.test(name))

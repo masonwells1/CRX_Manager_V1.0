@@ -299,6 +299,61 @@ describe('useUncertainMutationIntent', () => {
     expect(window.localStorage.length).toBe(0);
   });
 
+  it('preserves a saved receipt through inline-options rerenders when later acknowledgment writes fail', async () => {
+    const options = { operation: 'record_vendor_payment', userId: 'ack-rerender-admin',
+      surface: 'vendor-bill-detail', scope: 'ack-rerender-bill' };
+    const { result, rerender } = renderHook(() =>
+      useUncertainMutationIntent<{ amount: number }>({ ...options }));
+    await act(async () => result.current.beginIntent({ amount: 10000 }));
+    const originalKey = result.current.getIdempotencyKey();
+    const originalSetItem = Storage.prototype.setItem;
+    const ackWrites = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new DOMException('later acknowledgment write failed', 'QuotaExceededError');
+      }
+      return originalSetItem.call(this, key, value);
+    });
+    try {
+      act(() => rerender());
+      act(() => rerender());
+      expect(ackWrites.mock.calls.filter(([key]) => key.startsWith('crx:uncertain-mutation-ack:v1:'))).toHaveLength(0);
+      expect(result.current.isForeignIntentLocked).toBe(false);
+      expect(result.current.unresolvedIntent).toEqual({ amount: 10000 });
+      expect(result.current.getIdempotencyKey()).toBe(originalKey);
+    } finally {
+      ackWrites.mockRestore();
+    }
+    await act(async () => {
+      expect(await result.current.beginIntent({ amount: 10000 })).toEqual({ amount: 10000 });
+    });
+    expect(result.current.getIdempotencyKey()).toBe(originalKey);
+  });
+
+  it('still requires acknowledgment persistence when switching back to a saved route identity', async () => {
+    const { result, rerender } = renderHook(({ scope }: { scope: string }) =>
+      useUncertainMutationIntent<{ amount: number }>({ operation: 'record_vendor_payment',
+        userId: 'ack-route-admin', surface: 'vendor-bill-detail', scope }),
+    { initialProps: { scope: 'bill-a' } });
+    await act(async () => result.current.beginIntent({ amount: 10000 }));
+    act(() => rerender({ scope: 'bill-b' }));
+    const originalSetItem = Storage.prototype.setItem;
+    const ackWrites = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new DOMException('new identity acknowledgment unavailable', 'QuotaExceededError');
+      }
+      return originalSetItem.call(this, key, value);
+    });
+    try {
+      act(() => rerender({ scope: 'bill-a' }));
+      expect(ackWrites.mock.calls.some(([key]) => key.startsWith('crx:uncertain-mutation-ack:v1:'))).toBe(true);
+      expect(result.current.isIntentLocked).toBe(true);
+      expect(result.current.isForeignIntentLocked).toBe(true);
+      expect(() => result.current.getIdempotencyKey()).toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    } finally {
+      ackWrites.mockRestore();
+    }
+  });
+
   it('switches route scope without deleting the unresolved record owned by the prior route', async () => {
     const { result, rerender } = renderHook(
       ({ scope }: { scope: string }) => useUncertainMutationIntent<{ billId: string }>({

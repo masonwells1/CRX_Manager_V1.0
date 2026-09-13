@@ -684,6 +684,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     savedAttempt?.surface === '__reconciliation_required__' ? savedAttempt : initialRecord ?? initialVisible,
   );
   const attemptRecordRef = useRef<DurableMutationIntentRecord<T> | null>(savedAttempt ?? (initialOwned ? initialVisible : null));
+  const persistedAcknowledgmentIdentityRef = useRef<string | null>(null);
   const idempotencyKeyRef = useRef<string | null>(initialPending ? initialVisible.idempotencyKey : null);
   const intentRef = useRef<T | null>(initialOwned ? initialVisible.intent : null);
   const retryNotAfterRef = useRef<number | null>(initialPending ? initialVisible.retryNotAfterMs : null);
@@ -719,6 +720,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     if (!storageKey) return;
     if (!force && activeIdentityRef.current === identityToken) return;
     if (activeIdentityRef.current !== identityToken) {
+      persistedAcknowledgmentIdentityRef.current = null;
       attemptRecordRef.current = readAcknowledgmentRecord<T>(acknowledgmentKey, options);
     }
     activeIdentityRef.current = identityToken;
@@ -733,10 +735,13 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     const attempt = attemptRecordRef.current;
     if (!attempt || attempt.status !== 'pending'
       || attempt.surface !== surface || attempt.scope !== scope) return;
+    const acknowledgmentIdentity = JSON.stringify([acknowledgmentKey, surface, scope, attempt.requestVersion]);
+    if (persistedAcknowledgmentIdentityRef.current === acknowledgmentIdentity) return;
     try {
       // Restored pending requests need the same per-tab acknowledgment record
       // before a peer can resolve their shared durable tombstone.
       writeAcknowledgmentRecord(acknowledgmentKey, attempt);
+      persistedAcknowledgmentIdentityRef.current = acknowledgmentIdentity;
     } catch {
       if (options) {
         const blocked = blockedDurableRecord<T>(options);
@@ -849,6 +854,9 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
         }
         writeAcknowledgmentRecord(acknowledgmentKey, coordinated.record);
+        persistedAcknowledgmentIdentityRef.current = JSON.stringify([
+          acknowledgmentKey, surface, scope, coordinated.record.requestVersion,
+        ]);
         attemptRecordRef.current = coordinated.record;
         applyRecord(coordinated.record);
         return coordinated.record.intent;

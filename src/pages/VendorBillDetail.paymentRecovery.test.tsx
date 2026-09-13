@@ -237,8 +237,8 @@ describe('VendorBillDetail record-payment recovery', () => {
     const submit = submitButtons[submitButtons.length - 1];
     await act(async () => { fireEvent.click(submit); });
 
-    // The operator must be told the payment already completed, and the modal
-    // must close instead of spinning on a payment the vendor already received.
+    // The operator is told the payment already completed. Cleanup failure keeps
+    // the form open with the confirmed amount so retry replays this same payment.
     await waitFor(() => {
       expect(H.toast).toHaveBeenCalledWith(
         'warning',
