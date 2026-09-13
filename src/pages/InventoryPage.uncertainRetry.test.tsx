@@ -161,6 +161,50 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     });
   });
 
+  it('closes and refreshes a confirmed receipt when acknowledgment cleanup fails, preserving its exact retry', async () => {
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'products') return query(products);
+      if (table === 'purchase_order_items') return query([{
+        id: 'receive-line-a', quantity_ordered: 100, quantity_received: 0,
+        unit_cost: 10, unit_size: '2.5 GL', product_id: 'product-a', purchase_order_id: 'po-a',
+        purchase_orders: { po_number: 'PO-A', status: 'submitted' },
+      }]);
+      return query([]);
+    });
+    respond({ receive_po_items: () => ({ data: { receiving_record_ids: ['receipt-a'] }, error: null }) });
+    const removeItem = Storage.prototype.removeItem;
+    const cleanupSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new Error('Acknowledgment cleanup blocked');
+      }
+      return removeItem.call(this, key);
+    });
+    await renderPage();
+    const refreshesBefore = callsTo('get_inventory_position').length;
+    fireEvent.click(screen.getAllByRole('button', { name: 'Receive Shipment' })[0]);
+    const dialog = await screen.findByRole('dialog', { name: /receive.*shipment/i });
+    fireEvent.change(within(dialog).getByLabelText(/purchase order/i), { target: { value: 'receive-line-a' } });
+    fireEvent.change(within(dialog).getByLabelText(/quantity received/i), { target: { value: '3' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^receive$/i }));
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('success', 'Received 3 units'));
+    expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved'));
+    expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /receive.*shipment/i })).toBeNull());
+    await waitFor(() => expect(callsTo('get_inventory_position').length).toBeGreaterThan(refreshesBefore));
+    const first = callsTo('receive_po_items')[0];
+    const acknowledgmentKey = Object.keys(window.sessionStorage).find((key) => key.startsWith('crx:uncertain-mutation-ack:v1:'));
+    expect(acknowledgmentKey).toBeDefined();
+    expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(first.p_idempotency_key as string);
+    cleanupSpy.mockRestore();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Receive Shipment' })[0]);
+    const retryDialog = await screen.findByRole('dialog', { name: /receive.*shipment/i });
+    expect(within(retryDialog).getByLabelText(/quantity received/i)).toHaveValue(3);
+    expect(within(retryDialog).getByLabelText(/quantity received/i)).toBeDisabled();
+    fireEvent.click(within(retryDialog).getByRole('button', { name: /retry exact receiving/i }));
+    await waitFor(() => expect(callsTo('receive_po_items')).toHaveLength(2));
+    expect(callsTo('receive_po_items')[1]).toEqual(first);
+  });
+
   it('retries a lost adjustment under the SAME key and payload, and refuses to close or edit meanwhile', async () => {
     let attempts = 0;
     respond({

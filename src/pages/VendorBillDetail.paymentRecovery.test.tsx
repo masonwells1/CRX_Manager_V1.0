@@ -75,7 +75,6 @@ vi.mock('../lib/db', async (importOriginal) => {
       rpc: (...args: unknown[]) => H.rpc(...args),
     },
     checkMutationResult: vi.fn(),
-    assertRpcResult: (data: unknown) => data,
   };
 });
 
@@ -124,6 +123,36 @@ describe('VendorBillDetail record-payment recovery', () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('closes a confirmed payment and preserves its retry key when acknowledgment cleanup fails', async () => {
+    const removeItem = Storage.prototype.removeItem;
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new Error('Acknowledgment cleanup blocked');
+      }
+      return removeItem.call(this, key);
+    });
+    H.rpc.mockResolvedValue({ data: COMMITTED_PAYMENT_ID, error: null });
+    render(
+      <MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}>
+        <Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    const buttons = await screen.findAllByRole('button', { name: 'Record Payment' });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(H.toast).toHaveBeenCalledWith('success', 'Payment of $100.00 recorded'));
+    expect(H.toast).toHaveBeenCalledWith('warning', expect.stringContaining('payment was recorded'));
+    await waitFor(() => expect(screen.queryByLabelText(/Payment Amount/)).toBeNull());
+    expect(H.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
+    expect(H.rpc).toHaveBeenCalledTimes(1);
+    const args = H.rpc.mock.calls[0][1] as { p_amount_cents: number; p_idempotency_key: string };
+    expect(args.p_amount_cents).toBe(10_000);
+    const acknowledgmentKey = Object.keys(window.sessionStorage).find((key) => key.startsWith('crx:uncertain-mutation-ack:v1:'));
+    expect(acknowledgmentKey).toBeDefined();
+    expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
   });
 
   it('still refreshes and warns when durable-intent bookkeeping fails on a committed payment', async () => {

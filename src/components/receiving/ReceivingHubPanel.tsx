@@ -255,7 +255,12 @@ export default function ReceivingHubPanel() {
         } else {
           assertRpcResult(data, 'receive_po_items');
         }
-        await receiveIntent.resolveIntent();
+        try {
+          await receiveIntent.resolveIntent();
+        } catch (resolveError) {
+          Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'receiving-hub', operation: 'receive_po_items' } });
+          toast('warning', 'The receipt was saved, but this browser could not finish its retry record. Keep any locked retry unchanged.');
+        }
         return completedElsewhere;
       },
       toast,

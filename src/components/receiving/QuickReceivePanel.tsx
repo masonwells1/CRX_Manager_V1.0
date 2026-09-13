@@ -295,7 +295,12 @@ export default function QuickReceivePanel() {
       result = assertRpcResult<Record<string, unknown>>(data, 'receive_po_items');
     }
 
-    await receiveIntent.resolveIntent();
+    try {
+      await receiveIntent.resolveIntent();
+    } catch (resolveError) {
+      Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'quick-receiving', operation: 'receive_po_items' } });
+      toast('warning', 'The receipt was saved, but this browser could not finish its retry record. Keep any locked retry unchanged.');
+    }
 
     const receivingRecordIds = result.receiving_record_ids;
     const hasReceivingRecordIds = (

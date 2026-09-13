@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import QuickReceivePanel from './QuickReceivePanel';
 
@@ -83,16 +83,18 @@ vi.mock('../ui/Toast', () => ({
   useToast: () => ({ toast: mocks.toast }),
 }));
 
-vi.mock('../../lib/db', () => ({
-  supabase: { from: vi.fn(() => productQuery()), rpc: mocks.rpc },
-  assertRpcResult: (value: unknown) => value,
-}));
+vi.mock('../../lib/db', async () => {
+  const actual = await vi.importActual<typeof import('../../lib/db')>('../../lib/db');
+  return { ...actual, supabase: { from: vi.fn(() => productQuery()), rpc: mocks.rpc } };
+});
 
 vi.mock('../../lib/notificationTriggers', () => ({
   notifyDamagedReceiving: vi.fn(),
 }));
+vi.mock('../../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 
 describe('QuickReceivePanel Product identity', () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
@@ -125,7 +127,16 @@ describe('QuickReceivePanel Product identity', () => {
     });
   });
 
-  it('distinguishes siblings, matches UUID B, and receives only its returned PO allocation', async () => {
+  it.each([false, true])('distinguishes siblings and completes receipt with cleanup blocked=%s', async (cleanupBlocked) => {
+    if (cleanupBlocked) {
+      const removeItem = Storage.prototype.removeItem;
+      vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+        if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+          throw new Error('Acknowledgment cleanup blocked');
+        }
+        return removeItem.call(this, key);
+      });
+    }
     render(
       <MemoryRouter>
         <QuickReceivePanel />
@@ -161,6 +172,16 @@ describe('QuickReceivePanel Product identity', () => {
       }),
     ));
     expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
+    if (cleanupBlocked) {
+      expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('receipt was saved'));
+      expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
+      const receivingCalls = mocks.rpc.mock.calls.filter(([name]) => name === 'receive_po_items');
+      expect(receivingCalls).toHaveLength(1);
+      const args = receivingCalls[0][1] as { p_idempotency_key: string };
+      const acknowledgmentKey = Object.keys(window.sessionStorage).find((key) => key.startsWith('crx:uncertain-mutation-ack:v1:'));
+      expect(acknowledgmentKey).toBeDefined();
+      expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
+    }
   });
 
   it('restores a locked request after reload and retries its frozen payload without revalidation', async () => {

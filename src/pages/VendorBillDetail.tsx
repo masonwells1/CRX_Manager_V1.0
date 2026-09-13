@@ -325,7 +325,12 @@ export default function VendorBillDetail() {
       });
       if (error) throw error;
       assertRpcResult<string>(data, 'record_vendor_payment');
-      await paymentIntent.resolveIntent();
+      try {
+        await paymentIntent.resolveIntent();
+      } catch (resolveError) {
+        Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'vendor-bill-detail', operation: 'record_vendor_payment' } });
+        toast('warning', 'The payment was recorded, but this browser could not finish its retry record. Keep any locked retry unchanged.');
+      }
 
       toast('success', `Payment of ${fmt(request.amountCents)} recorded`);
       setPayModalOpen(false);

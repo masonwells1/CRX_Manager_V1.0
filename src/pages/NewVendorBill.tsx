@@ -15,6 +15,7 @@ import ReasonModal from '../components/ui/ReasonModal';
 import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { Sentry } from '../lib/sentry';
 import {
   UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
   UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
@@ -157,6 +158,15 @@ export default function NewVendorBill() {
     }
   };
 
+  const resolveConfirmedBillIntent = async () => {
+    try {
+      await createBillIntent.resolveIntent();
+    } catch (resolveError) {
+      Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'new-vendor-bill', operation: 'create_vendor_bill' } });
+      toast('warning', 'The vendor bill was saved, but this browser could not finish its retry record. Keep any locked retry unchanged.');
+    }
+  };
+
   const handleSave = async (confirmPoOverage = false, poOverageReason = '') => {
     if (createBillIntent.isForeignIntentLocked) {
       toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
@@ -277,7 +287,7 @@ export default function NewVendorBill() {
       if (error) {
         const receipt = getIdempotencyMismatchResult(error, 'create_vendor_bill');
         if (typeof receipt?.bill_id === 'string') {
-          await createBillIntent.resolveIntent();
+          await resolveConfirmedBillIntent();
           toast('warning', 'The earlier vendor bill already completed. Opening it instead of creating a duplicate.');
           navigate(`/accounts-payable/bills/${receipt.bill_id}`);
           return;
@@ -295,7 +305,7 @@ export default function NewVendorBill() {
         return;
       }
       const createdBillId = assertRpcResult<string>(data, 'create_vendor_bill');
-      await createBillIntent.resolveIntent();
+      await resolveConfirmedBillIntent();
 
       toast('success', 'Vendor bill created');
       navigate(`/accounts-payable/bills/${createdBillId}`);

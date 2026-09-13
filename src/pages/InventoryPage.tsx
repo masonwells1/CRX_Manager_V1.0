@@ -713,6 +713,13 @@ export default function InventoryPage() {
     // Do not rotate the key here. A prior receive may have committed before a
     // lost response; reopening must retain that key so edited input fails closed.
     if (receivePoIntent.isIntentLocked) {
+      const frozen = receivePoIntent.getUnresolvedIntent();
+      if (frozen) {
+        setSelectedId(frozen.inventoryId);
+        setReceiveQty(String(frozen.quantity));
+        setReceivePOItemId(frozen.selectedPO.id);
+        setAvailablePOs([frozen.selectedPO]);
+      }
       setReceiveOpen(true);
       return;
     }
@@ -824,7 +831,12 @@ export default function InventoryPage() {
         } else {
           assertRpcResult(data, 'receive_po_items');
         }
-        await receivePoIntent.resolveIntent();
+        try {
+          await receivePoIntent.resolveIntent();
+        } catch (resolveError) {
+          Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'inventory', operation: 'receive_po_items' } });
+          toast('warning', 'The receipt was saved, but this browser could not finish its retry record. Keep any locked retry unchanged.');
+        }
         return { quantity: request.quantity, completedElsewhere };
       },
       toast,
