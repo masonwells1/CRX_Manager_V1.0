@@ -2,13 +2,19 @@
 
 The 2026-09-11 backlog plan (Astra round 2 APPROVE WITH CHANGES; Mason's rule "if it approves I agree
 with it all") lived only in one session's scratch directory. It is now
-`docs/plans/2026-09-11-open-pr-backlog-plan.md`, copied verbatim with a status header.
+`docs/plans/2026-09-11-open-pr-backlog-plan.md`, a frozen record of the approved text. The live queue
+state (owner per PR, sequencing, open coordinator decisions) is not kept in the plan: it moved to
+`docs/manual/CURRENT_STATE.md` under "Open-PR landing queue". Landing step 3 carries a note that the
+repository's `ship.md`, merge guard, and native-review reference describe the label request path
+instead of a hand-posted request; reconciling them is open item PR #647.
 
 Section 6 of that plan requires a denial baseline at the start of the 2026-09-11 to 2026-09-25 guard
 freeze. `docs/reports/2026-09-11-guard-denial-baseline.md` records it: the exact read-only command
-(`scripts/claude-usage-report.mjs` at `a8656debb`, window 2026-09-04 to 2026-09-11), 1,199 attributed
-denials out of 36,228 unique tool calls (3.31%) by category and tool, the read-looking share, repeated
-identical refusals, session concentration, a measured time-lost proxy (median five seconds from a
-denial to the next tool call, about four hours over the week), the fields that could not be measured,
-and the exact command for the 2026-09-25 re-measure. No denied command text is quoted; the export
-stays in scratch. Documentation only; no guard logic, source, or migration bytes changed.
+(`scripts/claude-usage-report.mjs` at `a8656debb`, window 2026-09-04 to 2026-09-11), 1,199 raw
+classifier hits out of 36,228 unique tool calls (3.31%), at most 1,151 (3.18%) after removing known
+false positives, by category and tool, the read-looking share, repeated identical refusals, session
+concentration, a measured time-lost proxy (each denied call counted once: median five seconds from a
+denial to the next tool call, about three and a half hours over the week), the fields that could not
+be measured, and the exact re-measure command for 2026-09-25 pinned to the same script revision. No
+denied command text is quoted; the export stays in scratch. Documentation only; no guard logic,
+source, or migration bytes changed.

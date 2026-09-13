@@ -7,9 +7,12 @@ same command and window length, per section 6 of `docs/plans/2026-09-11-open-pr-
 ## How it was measured
 
 Read-only. The script reads the Claude Code transcripts on this PC and sends nothing anywhere.
+`SCRATCH_DIR` is any directory outside a git checkout (the script refuses to write the export inside
+one); the re-measure command at the end of this report uses the same variable.
 
 ```
-node scripts/claude-usage-report.mjs --start 2026-09-04 --end 2026-09-11 --denials <scratch>/denials-baseline-0904-0911.json
+SCRATCH_DIR="C:/Users/<you>/AppData/Local/Temp/claude-usage"   # outside any git checkout
+node scripts/claude-usage-report.mjs --start 2026-09-04 --end 2026-09-11 --denials "$SCRATCH_DIR/denials-baseline-0904-0911.json"
 ```
 
 - Script at commit `a8656debb` (PR #613), unchanged on `main` at capture time.
@@ -29,7 +32,8 @@ node scripts/claude-usage-report.mjs --start 2026-09-04 --end 2026-09-11 --denia
 | Human prompts (Mason-authored, main transcripts only) | 995 |
 | API calls | 33,139 |
 | Unique tool calls (attempted operations) | 36,228 |
-| Hook denials (attributed) | 1,199 = 3.31% of unique tool calls |
+| Hook denials, raw classifier hits (attributed) | 1,199 = 3.31% of unique tool calls |
+| Hook denials, corrected for known false positives | at most 1,151 = 3.18% (the 48 hold-latch rows that were reads, not refusals, removed; other result-text false positives are possible, see "Missing data") |
 | Sessions with at least one denial | 96 |
 | Cache-read tokens | 6,076,209,319 |
 | Output tokens | 22,962,108 |
@@ -90,18 +94,21 @@ denials (36 to 51 denials each).
 ### Estimated time lost
 
 Proxy: wall-clock from each denial result to the session's next tool call (the retry, workaround,
-or next step), measured over 1,418 denial results in the window (this count includes a denial that
-was answered more than once and is therefore higher than the 1,199 attributed denials above).
+or next step). Each denied tool call is counted once, by its `tool_use_id`: the transcripts hold
+1,427 result records for the 1,199 denials (228 are duplicate copies of a result that was recorded
+more than once) and only the first copy is kept. 1,196 of the 1,199 had a later tool call in the
+same transcript. Re-run 2026-09-13 over the same window; the first capture summed every record and
+reported 4.0 h.
 
 | Category | Median to next tool call | 90th percentile | Sum, capped at 10 min per denial |
 |---|---|---|---|
-| review-proof | 5 s | 19 s | 2.0 h |
-| maintenance-producer | 5 s | 17 s | 0.9 h |
-| other-hook | 9 s | 24 s | 0.5 h |
-| hold-latch | 9 s | 24 s | 0.6 h (14.1 h uncapped: the latch is meant to stop the session, so long gaps are Mason's, not lost) |
-| All | 5 s | | 4.0 h |
+| review-proof | 5 s | 19 s | 1.5 h |
+| maintenance-producer | 5 s | 16 s | 0.8 h |
+| other-hook | 8 s | 24 s | 0.4 h |
+| hold-latch | 9 s | 26 s | 0.6 h (14.1 h uncapped: the latch is meant to stop the session, so long gaps are Mason's, not lost) |
+| All | 5 s | | 3.4 h |
 
-Direct agent time lost to denials over the week was about four hours. The larger cost identified in the
+Direct agent time lost to denials over the week was about three and a half hours. The larger cost identified in the
 2026-09-10 review is indirect: 15 of 50 merged PRs and 8 of 16 open PRs in the week were guard, CI, or
 harness work, much of it opened to fix a false positive. Neither figure is a reason to change a guard
 on its own; the freeze holds to 2026-09-25.
@@ -117,8 +124,8 @@ usually re-issued in another form immediately.
 
 - The category classifier reads the tool RESULT text. A `Read` or `grep` whose output contains a guard's
   own wording is counted as a denial of that kind (visible in hold-latch and in single-digit rows of
-  the others). The 2026-09-25 measurement should either keep the same classifier for comparability or
-  report both raw and result-text-corrected counts.
+  the others). The 2026-09-25 measurement keeps the same classifier (pinned script revision, below)
+  for comparability AND reports both the raw and the corrected count, as the figures table above does.
 - Denials are attributed per tool call; a refusal that made the agent stop the whole task is not
   distinguished from one it worked around in five seconds.
 - The MEMORY.md size-guard refusals are a memory-hygiene signal, not a repository guard signal; they
@@ -127,8 +134,18 @@ usually re-issued in another form immediately.
 
 ## Re-measure on 2026-09-25
 
+Run the script at the same revision as the baseline, `a8656debb`, so a later classifier change cannot
+make the counts incomparable:
+
 ```
-node scripts/claude-usage-report.mjs --start 2026-09-18 --end 2026-09-25 --denials <scratch>/denials-0918-0925.json
+SCRATCH_DIR="C:/Users/<you>/AppData/Local/Temp/claude-usage"   # outside any git checkout
+git show a8656debb:scripts/claude-usage-report.mjs > "$SCRATCH_DIR/claude-usage-report-a8656debb.mjs"
+node "$SCRATCH_DIR/claude-usage-report-a8656debb.mjs" --start 2026-09-18 --end 2026-09-25 --denials "$SCRATCH_DIR/denials-0918-0925.json"
 ```
 
-Report the same table, plus outcomes A–E from the plan, with denominators (unique tool calls, sessions).
+If the checked-out script is used instead, record its revision first
+(`git log -1 --format=%h -- scripts/claude-usage-report.mjs`) and compare it with `a8656debb` before
+comparing any count; a different revision must be called out next to every figure.
+
+Report the same tables (raw and corrected denial counts, the deduplicated time-lost proxy), plus
+outcomes A–E from the plan, with denominators (unique tool calls, sessions).

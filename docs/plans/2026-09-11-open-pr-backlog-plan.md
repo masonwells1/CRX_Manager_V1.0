@@ -1,4 +1,4 @@
-<!-- Copied verbatim from the efficiency-review session's approved plan (2026-09-11). Status: IN FORCE. Section 8 is the running follow-up log; later edits go through a normal PR. -->
+<!-- Frozen record of the plan approved 2026-09-11 (copied from the efficiency-review session's scratch copy). Sections 0-7 are the approved text and are edited only to answer a review finding, through a normal PR. Live queue state (owner per PR, sequencing, open coordinator decisions, follow-ups) is NOT kept here: see docs/manual/CURRENT_STATE.md, "Open-PR landing queue". -->
 
 # CRX Manager backlog plan — approved 2026-09-11
 
@@ -6,13 +6,15 @@ Status: Astra (gpt-6-astra, read-only) round 2 verdict APPROVE WITH CHANGES; all
 
 Main at approval: 71761db7d. Open PRs (15): 650, 647, 646, 638, 635, 634, 631, 630, 626, 624, 612, 605, 599, 544, 449.
 
+Owner assignments are tracked in `docs/manual/CURRENT_STATE.md` ("Open-PR landing queue"), not here. The owner labels in section 2 ("this review session", "coordinator", "existing session", "new small session") are the placeholders as approved on 2026-09-11; a PR whose owner is not named in CURRENT_STATE.md is blocked until the coordinator assigns one.
+
 ## 0. Ground rules
 
 - ONE owner per PR (a named session + checkout). ONE coordinator (the fleet orchestrator session) owns the landing queue. Workers never merge; they hand a frozen head to the coordinator. Replacing an owner needs an explicit handoff message.
 - LANDING CHECKLIST (every PR):
   1. Update branch to current main.
   2. All CI checks green and the repo's own pre-review gates satisfied BEFORE a CodeRabbit slot is spent.
-  3. Freeze the head. CodeRabbit review of THAT head, requested by Mason or by the one session he authorized in chat.
+  3. Freeze the head. CodeRabbit review of THAT head, requested by Mason or by the one session he authorized in chat. (Note added 2026-09-13: the repository's own instructions describe a different request path. `.claude/commands/ship.md` and `.claude/hooks/pr-merge-guard.mjs` require the `ready-for-coderabbit` label workflow and forbid posting the command by hand, and `docs/reference/coderabbit-native-review.md` on main documents that trusted label path. This step records Mason's 2026-09-11 decision, made while the label path had not delivered a review in this repository. Reconciling the two is open item PR #647 and is Mason's decision; until then the coordinator follows this step, and this plan edits neither harness file.)
   4. Resolve every finding, including outside-diff items in review BODIES. A zero thread count is not "no findings".
   5. RESTART RULE: any corrective commit restarts checks, freezes a new head, and needs review of the new head. Any main change invalidates the base-bound proof and requires re-integration.
   6. Fresh exact-SHA gpt-5.6-sol/high proof matching head AND current main, no older than 30 minutes, from the sanctioned proof producer. (Stronger than the repo's risk-based rule; deliberately kept for every PR in this queue and budgeted for.)
@@ -49,7 +51,7 @@ Scheduling rule (coordinator): a READY #599 takes the next product landing slot 
 - #647: resume only after the coordinator recommends a CodeRabbit request strategy in cost/reliability terms and Mason authorizes it; the coordinator performs the setup. Mason is not asked to design the mechanism.
 - #605: parked. A settings.json-only extraction is a SEPARATE decision for Mason with exact scope and behavioral allow/deny proof; not pre-authorized.
 - #544: parked. Owner task due 2026-09-18: classify its 5 open Codex P1s "present on main today" vs "introduced by this candidate"; only the former go to KNOWN_ISSUES with an owner. Do not delete the branch.
-- #635: parked with a dated disposition (owner: a new session; due 2026-09-17). The disposition distinguishes: future authenticated requests, direct signed-URL creation, existing bearer URLs, CDN-cached responses after expiry, and already-downloaded copies; verifies the applicable expiry/cache behavior; recommends a supported mitigation or an escalation path (revocation via provider support is possible per current docs). It does not authorize contacting support, deleting objects, rotating keys, or applying policy. The narrow subset (remove the permanent uploader exception + UI helper that never mints signed URLs) is assessed separately with an accurate "reduces, not revokes" claim. MASON then accepts the residual risk or authorizes the mitigation.
+- #635: parked with a dated disposition (owner: a new session; due 2026-09-17). The disposition distinguishes: future authenticated requests, direct signed-URL creation, existing bearer URLs, CDN-cached responses after expiry, and already-downloaded copies; verifies the applicable expiry/cache behavior; recommends a supported mitigation or an escalation path (revocation via provider support: the Supabase Storage guide "Serving assets: Downloads", section "Signed URLs", https://supabase.com/docs/guides/storage/serving/downloads, states "If you need to revoke signed URLs, contact Supabase support"; checked 2026-09-13. The historical `create_signed_url()` reference in this repository is not evidence for this). It does not authorize contacting support, deleting objects, rotating keys, or applying policy. The narrow subset (remove the permanent uploader exception + UI helper that never mints signed URLs) is assessed separately with an accurate "reduces, not revokes" claim. MASON then accepts the residual risk or authorizes the mitigation.
 
 ## 4. CLOSE (branch kept; comment links the reason)
 
@@ -73,9 +75,6 @@ Owner: assigned by the coordinator to one session; manifest due 2026-09-24. List
 
 Worktree/branch cleanup (126 worktrees, 64 remote branches): separate reversible task after the queue drains. Any live migration apply. Any change to settings.json.
 
-## 8. Follow-ups discovered during execution (2026-09-11)
+## 8. Follow-ups discovered during execution
 
-- PRODUCT (not guard, not frozen): expired pending-request records leave a locked dialog that cannot be closed and reopens on every visit once the 23-hour safe-retry window passes. Pre-existing on main for Inventory Receive, QuickReceive, ReceivingHub, NewVendorBill; #624 extends it to Adjust and Hold. Interim: the staff recovery procedure in INVENTORY_RULES (ships with #624). Fix: an admin "verified, clear this request" control. Owner: unassigned; coordinator to assign a session and a queue slot. Recorded in KNOWN_ISSUES by the #624 lane.
-- #612: PARKED by Mason's own answer in the #612 lane's chat (~02:10Z). Lane closed; head f415258e0; two codex-connector threads answered in prose and left open for the 09-25 resume.
-- #624 sequencing: #599 first, then #624 with its docs batch (staff procedure, KNOWN_ISSUES owner + 09-18 date, compatibility note, stale-line fix, PR description) in ONE push, one review slot (14:22Z earliest), SOURCE-ONLY merge. Pending Mason's answer in the #624 lane's chat.
-- Coordinator decisions outstanding: KNOWN_ISSUES owner for the 09-18 exposure assessment (suggested: #624 lane, reassignable); #624 vs #638 landing order (decides who renumbers ledger row 924).
+Moved on 2026-09-13 to `docs/manual/CURRENT_STATE.md`, section "Open-PR landing queue", together with the owner map and the open coordinator decisions, so this file stays the frozen approved text and the live queue state has one home.
