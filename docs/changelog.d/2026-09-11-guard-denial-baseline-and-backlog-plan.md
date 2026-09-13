@@ -4,11 +4,10 @@ The 2026-09-11 backlog plan (Astra round 2 APPROVE WITH CHANGES; Mason's rule "i
 with it all") lived only in one session's scratch directory. It is now
 `docs/plans/2026-09-11-open-pr-backlog-plan.md`, a frozen record of the approved text. The live queue
 state (owner per PR, sequencing, open coordinator decisions) is not kept in the plan: it moved to
-`docs/manual/CURRENT_STATE.md` under "Open-PR landing queue". Landing step 3 was amended on 2026-09-13:
-the `ready-for-coderabbit` label workflow is the request path; a hand-posted request is allowed only
-where the label path cannot serve a re-reviewed head and only with Mason's per-request authorization
-in chat, recorded in the reservation record; making the label path serve re-reviewed heads is open
-item PR #647.
+`docs/manual/CURRENT_STATE.md` under "Open-PR landing queue". Landing step 3 was amended on 2026-09-13 to
+the repository contract: reviews are requested only through the `ready-for-coderabbit` label
+workflow, a hand-posted request authorizes nothing, and a corrected head lands through a fresh
+delivery PR or the candidate waits on PR #647.
 
 Section 6 of that plan requires a denial baseline at the start of the 2026-09-11 to 2026-09-25 guard
 freeze. `docs/reports/2026-09-11-guard-denial-baseline.md` records it: the exact read-only command
