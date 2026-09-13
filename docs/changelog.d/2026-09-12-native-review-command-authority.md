@@ -1,0 +1,7 @@
+## 2026-09-12 - Native command history uses verified repository authority
+
+The independent reviewer identified a delivery denial of service: any public PR comment containing a review command permanently poisoned native request history. Command intent is now classified using the commenter's verified GitHub repository permission. Write, maintain and admin commands retain the existing base-ambiguity block; read, triage and no-access comments are preserved without permanently invalidating authorized history. Missing identities, unknown permissions and failed permission lookups remain blocked.
+
+Focused cases execute public commands through a submitted native review, preserve command evidence, and verify authorized and unknown actors cannot spend a review or bypass the existing history block. Dispatch receipts, head/base binding, trusted workflow provenance, formal provider review, retarget history, deduplication, independent review and merge checks remain required.
+
+This local correction follows the independent reviewer's recommendation; it does not assert that CodeRabbit ignores outside commands. The provider permission/correlation inquiry remains open as support case #33298. A fresh exact-candidate independent review must assess the changed classifier before publishing. Mason has authorized up to four additional review rounds and a protected merge only when all gates are clean; no database apply, permission, billing or credential change is included.
