@@ -674,6 +674,42 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
     expect(mockRpc.mock.calls.some((call) => call[0] === 'save_field_app_invoice')).toBe(false);
   });
 
+  it('keeps an unchanged divergent stored date usable without permitting another out-of-season date', async () => {
+    mockFrom.mockImplementation(makeFromMock({
+      invoices: { data: [{ id: 'inv-solo', invoice_number: 'INV-SOURCE',
+        invoice_type: 'field_application', invoice_date: '2026-10-05', season: 2026,
+        status: 'draft', invoice_group_id: null, application_service_id: null,
+        total_amount_cents: 0 }] },
+      field_app_locations: { data: [] }, invoice_items: { data: [] }, invoice_shares: { data: [] },
+    }));
+    await renderPage();
+    await screen.findByText(/Field Application INV-SOURCE/);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    await waitFor(() => expect(mockRpc.mock.calls.some(([name]) => name === 'preview_field_app_invoice_split')).toBe(true));
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-06' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('filed in season 2026');
+  });
+
+  it('keeps the unsaved-changes modal available while the next invoice loads', async () => {
+    const pendingHeader = new Promise<{ data: unknown; error: null }>(() => {});
+    const fallback = makeFromMock({});
+    mockFrom.mockImplementation((table: string) => {
+      const chain = fallback(table) as Record<string, unknown>;
+      if (table === 'invoices') chain.maybeSingle = vi.fn(() => pendingHeader);
+      return chain;
+    });
+    mockUseUnsavedChanges.mockReturnValue({ state: 'blocked', reset: mockBlockerReset, proceed: mockBlockerProceed });
+    await renderPage();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading invoice');
+    expect(screen.getByRole('alertdialog', { name: 'Unsaved Changes' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Stay/i }));
+    expect(mockBlockerReset).toHaveBeenCalled();
+  });
+
   it('rechecks the filed season after an admin opens the over-label-rate override', async () => {
     const existingFrom = mockFrom.getMockImplementation()!;
     const overrideFrom = makeFromMock({

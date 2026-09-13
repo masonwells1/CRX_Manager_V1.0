@@ -226,6 +226,7 @@ export default function FieldApplicationInvoice() {
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [loadedInvoice, setLoadedInvoice] = useState<{ id: string; route: number } | null>(null);
+  const [filedDate, setFiledDate] = useState<string | null>(null);
   // todayInBusinessTz(), NOT new Date().toISOString() and NOT localToday().
   // toISOString() converts to UTC, so from ~7 pm Chicago this pre-filled TOMORROW — the same
   // UTC/Chicago bug the server-side invoice_date fallbacks fixed on 2026-09-04. Because this
@@ -444,6 +445,7 @@ export default function FieldApplicationInvoice() {
     return Number.isNaN(parsed.getTime()) ? null : computeSeason(parsed);
   }, [transactionDate]);
   const crossSeasonDateEdit = !isNew
+    && transactionDate !== filedDate
     && filedSeason !== null
     && transactionSeason !== null
     && transactionSeason !== filedSeason;
@@ -914,6 +916,7 @@ export default function FieldApplicationInvoice() {
           return Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
         })();
     const loadedInvoiceDate = (invoice.invoice_date as string) || '';
+    setFiledDate(loadedInvoiceDate);
     let stampedDate = '';
     if (loadedInvoiceDate) {
       const d = new Date(loadedInvoiceDate + 'T00:00:00Z');
@@ -1257,6 +1260,7 @@ export default function FieldApplicationInvoice() {
     // App.tsx reuses this component when navigating between /new and /:id. Never let
     // the previous invoice's filed season leak into the next route while it loads.
     setFiledSeason(null);
+    setFiledDate(null);
     return () => { invoiceLoadRef.current.request += 1; };
   }, [id]);
 
@@ -2517,7 +2521,14 @@ export default function FieldApplicationInvoice() {
   };
 
   if (!isNew && (loadedInvoice?.id !== id || loadedInvoice.route !== invoiceLoadRef.current.route)) {
-    return <Card><p role="status" className="p-4">Loading invoice…</p></Card>;
+    return <>
+      <Card><p role="status" className="p-4">Loading invoice…</p></Card>
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
+    </>;
   }
 
   return (

@@ -51,6 +51,9 @@ try {
   equal(subtractAllowlist([signed, forged], [delivery], deliveryCatalog), [forged], 'PR652 P1: signature-name exception must not clear actual actor parameter');
 
   const legacy = { predicate: 'fin-prepay-balance', violation_key: 'opaque-existing-baseline' };
+  const futureActor = { predicate: 'actor-forgery-inventory', violation_key: delivery.violation_key };
+  equal(subtractAllowlist([signed], [futureActor], deliveryCatalog), [signed],
+    'an actor-shaped detector row cannot fall back to identity-only matching under a new predicate name');
   equal(subtractAllowlist([{ violation_key: legacy.violation_key }, { violation_key: 'new' }], [legacy]), [{ violation_key: 'new' }], 'unrelated non-actor baselines unchanged');
   assert.throws(() => subtractAllowlist([{}], []), /violation_key/); assertions += 1;
   const query = functionContractSql(["public.untrusted('); DELETE FROM profiles; --)"]);

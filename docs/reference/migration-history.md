@@ -1,15 +1,23 @@
-# Migration History (latest entry 929)
+# Migration History (latest entry 930)
 
 > **PRE-APPLY LIVE EVIDENCE (read this first).** The most recent read-only
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live-ledger capture — 2026-09-13, current boundary.** Read-only production inspection records
+**Live-ledger capture — 2026-09-13 15:39 UTC, current boundary.** Read-only Supabase MCP
+`list_migrations` inspection records
 **1001 ledger rows / 994 distinct names**, latest apply-time version **`20260909023300`**,
-and latest authored-name prefix **`20260908120000`**. The September 12 schema-registry refresh
-used all six live introspection queries, not a timestamp-only update. Order new files by authored
-names, with source-name resolution for bare ledger names; do not substitute apply-time versions.
-The guard candidates in rows 927–929 are written but unapplied and sort above that authored boundary.
+and latest authored-name prefix **`20260908120000`**. The effective ordering stamp was calculated
+**row by row across all 1001 rows**: use the 14-digit timestamp in that row's `name`; only when
+its name lacks a 14-digit timestamp, use that row's `version`. The effective maximum is
+**`20260908120000`**, from name `20260908120000_close_pr535_live_gaps`, whose apply-time version
+is `20260909023300`. The largest fallback stamp is **`20260905185938`**, from the bare name
+`refuse_null_job_field_acres`; it is below the effective maximum. This is neither a name-only
+maximum nor a blanket `max(version)` comparison or inferred source-name substitution.
+The September 12 schema-registry refresh used all six live introspection queries, not a
+timestamp-only update. The guard candidates in rows 927–930 are written but unapplied, absent
+from this captured ledger, and sort strictly above the current effective boundary; in particular,
+the new row-930 filename stamp **`20260913152700` > `20260908120000`**.
 Re-read both the live ledger and pending queue immediately before any owner-authorized apply.
 
 ### Historical September 6 boundary (superseded; not current apply guidance)
@@ -1880,10 +1888,27 @@ These 10 historical migrations apply by timestamp order like all others; they si
 
 ## Filed-season guard ordering note — 2026-09-12
 
+| # | Authored timestamp | Description |
+|---|--------------------|-------------|
 | 928 | 20260912165758 | **LOCAL CANDIDATE — NOT APPLIED. PHASE 1.** File: `20260912165758_refuse_generic_field_invoice_creation.sql`. SQL sha256: `defbd9cee0a24dc640c70a13208bc306956c5c9bd2cc97534f4cb7321e5b8029`. The earlier one-phase refusal failed the committed-retry regression and is superseded IN THIS UNAPPLIED proposal. Install a fail-fast shared advisory barrier, transitional READ COMMITTED requirement and fresh V1 catalog fence while preserving original creation/below-cost/key-only receipt/delegation semantics. Commit this migration separately before phase 2; never bundle both. Owner, signature, defaults, search path, ACL and original OID remain pinned. Runtime and fresh whole-branch Sol/high review are pending for the corrected candidate; no merge or live apply authorized. |
 | 929 | 20260913040359 | **LOCAL CANDIDATE — NOT APPLIED. PHASE 2.** File: `20260913040359_finish_generic_field_invoice_cutover.sql`. SQL sha256: `aa632dcceaaa446e80f092fd56c1f7398818099242cea283641f68f93fef2bd9`. Require committed phase 1, exclusive advisory access, one READ COMMITTED transaction, stats visibility, no other open/prepared transaction and no still-valid generic save receipt (NULL or exact expiry boundary included). Refusal preserves phase 1 and existing retries; wait for natural expiry, never delete/backfill receipts. Only after safe cutover install NEW generic field-invoice refusal before unchanged below-cost/key-only receipt/delegation. Dedicated source-season creators, other types, existing edits and original OID remain unchanged. Current-candidate proof/review/publication remain required; no merge or live apply authorized. |
 
+## Unchanged source-date correction — 2026-09-13
+
+| # | Authored timestamp | Description |
+|---|--------------------|-------------|
+| 930 | 20260913152700 | **LOCAL CANDIDATE — NOT APPLIED.** `20260913152700_preserve_unchanged_source_invoice_dates.sql` follows row 927 without editing its migration. Preserve each existing invoice's unchanged stored date and restoration, including legitimate prior-season job/blend creators; retain immutable filed season, each-member filed-season pricing, NEW out-of-season date/type refusal, owner-only guards and unchanged trigger shape. Claude's HIGH was reproduced for BOTH public creator previews; corrected final behavior and independent review remain required. No table/column/type/public grant/pricing or business-row rewrite; no live apply authorized. |
+
 This authored stamp is above the September 12 effective live high-water `20260908120000`.
+The additive correction `20260913152700_preserve_unchanged_source_invoice_dates.sql`
+must follow `20260908190000`; it remains LOCAL and UNAPPLIED. It preserves each
+existing stored date and unchanged-date restoration while retaining immutable
+filed season and NEW out-of-season date/type-change refusal. No type, table,
+public grant, pricing, or business-row rewrite is introduced. Its predecessor
+and corrected guard-pair fingerprints, owner-only ACL, enabled trigger shape,
+and replay path are checked before and after replacement. The full final
+sequence must pass the extended source-creator preview/save/restore proof and
+fresh independent whole-candidate review before delivery; a merge is not live apply.
 Re-read the ledger and pending queue immediately before apply; this note is not apply permission
 or an ahead-of-pending gate waiver. Never edit/reapply the two already-live original season migrations.
 

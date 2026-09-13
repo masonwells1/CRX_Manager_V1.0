@@ -18,6 +18,16 @@ RPC refuse CREATE `field_application` invoices. Dedicated field-app/job/blend cr
 remain the supported creation paths; existing generic field edits, other types and
 below-cost/idempotency delegation remain unchanged. A universal INSERT draft was rejected.
 
+Phase 2 also REQUIRES total database transaction quiescence: no other open
+transaction (`pg_stat_activity.xact_start IS NOT NULL`) and no prepared transaction,
+including background workers, autovacuum, and scheduled jobs. This is a hard
+apply-time prerequisite, not merely recommended quiet customer traffic. A refused
+phase 2 rolls back completely, leaving phase 1 and legitimate receipt retries in
+place. In a later separately authorized rollout, wait for natural receipt expiry
+and a genuinely quiet window, rerun the live preconditions, then retry through the
+full governed review/apply gate. Never delete receipts, terminate background work,
+disable jobs, or force the apply to get past a refusal.
+
 The phase-one wrapper has three explicit `40001` refusals that roll back without
 changing an invoice. `InvoiceDetail` retries only the RPC request, retaining its
 original idempotency key and frozen invoice/items/approval reason:
@@ -29,7 +39,16 @@ is observed. There are at most three requests. An exhausted refusal returns to
 the normal error handler with the key retained for a later identical retry.
 Other SQL errors and uncertain transport failures are never automatically retried.
 `runCriticalAction` remains reporting/loading-state handling, not mutation replay.
->
+
+**Unchanged source dates, September 13 (LOCAL; NOT APPLIED):**
+`20260913152700_preserve_unchanged_source_invoice_dates.sql` follows the existing
+guard and preserves each invoice member's own unchanged stored date, including
+prior-season job/blend invoices created with today's date. Preview still prices
+each member from its own filed season. Unchanged-date restoration does not
+re-season the invoice. Date/type changes, including during restoration, still
+validate the pending NEW row; every filed-season change remains refused. No
+public signature, type, grant, or pricing implementation changes.
+
 > **2026-08-09 update (retires the earlier candidate warning):** those function and trigger changes **are live**. The candidates `20260808150100` / `20260808150200` / `20260808150400` were re-issued forward and applied on 2026-08-09 as `20260809170500` / `20260809170600` / `20260809170800` (ledger versions `20260809203222`, `20260809204044`, `20260809204855`), together with `20260809170700` and `20260809170900`. Production now carries the restored `batch_apply_prepayments` actor guard, the cancel-order `quantity_remaining` zeroing, and the whole-cent rounding trigger function `public._round_money_to_whole_cents`. Per-migration proof: `docs/reference/migration-history.md` rows 857–861.
 >
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.

@@ -5,6 +5,10 @@
  */
 
 const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
+  [/^GENERIC_FIELD_CUTOVER_(?:IN_PROGRESS|ISOLATION|STALE_CALL)(?::|$)/,
+   'No invoice was changed. An invoice update is finishing; wait a moment, then try Save again'],
+  [/^FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED(?::|$)/,
+   'Create this field invoice from its job, blend ticket, or the Field Application screen'],
   [/^CUSTOMER_SCOPE_DENIED\b/i,
    'You can only work with customers assigned to you'],
   [/^RETURN_NOT_FOUND\b/i,

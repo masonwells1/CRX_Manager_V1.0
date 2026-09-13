@@ -9,14 +9,24 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-09-08 — field-application date edits stay inside the invoice's filed season
 
-**Source:** the continuation of PR #599: Codex explained the cross-October-1 disagreement,
-recommended keeping the filed season and rejecting cross-season date edits, and Mason directed
-"continue 599". Reconciled September 12 after #599 merged without this follow-up.
+**Source:** the September 8 continuation of PR #599. Codex's final owner-facing recommendation
+was "preserve season immutability but refuse edits that move an existing invoice across the
+October 1 season boundary." Mason's next response was "continue 599" (September 8 Chicago /
+September 9 UTC). Codex immediately explained that it was continuing with that recommended
+rule. This records approval of the preceding recommendation, not a standalone continuation
+quote interpreted without its context. Reconciled September 12 after #599 merged without
+this follow-up; exact exchange rechecked September 13 during Claude's adversarial review.
 
 **Decision.** Existing field-application invoices keep their filed season. A date can move within
 that season but cannot cross its October 1 boundary. Every database writer must also refuse to
 change the filed season, preventing a season-first/date-second bypass. New invoices still derive
 season from their invoice date. Preview and save follow the same rule.
+
+**Compatibility clarification, September 13:** an unchanged stored date is not a date edit.
+Dedicated job/blend creators deliberately preserve the source season while stamping today's
+date. Those existing invoices must remain usable and restorable at that same stored date,
+with their own filed-season pricing. A later changed date must still fit the filed season;
+no creator re-seasoning, group-wide price unification, or business-row rewrite is authorized.
 
 This supersedes only the September 4 accepted consequence of editing across October 1 while
 adding a grower. It does not re-season existing invoices, unify mixed historical groups, change

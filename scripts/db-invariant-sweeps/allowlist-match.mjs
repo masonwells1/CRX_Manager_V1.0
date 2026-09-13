@@ -26,6 +26,7 @@ export function subtractAllowlist(rows, entries, functionContracts = []) {
     return !entries.some((entry) => {
       if (entry.violation_key !== row.violation_key) return false;
       const bound = ACTOR_PREDICATES.has(entry.predicate) ||
+        Object.hasOwn(row, 'suspect_param') ||
         Object.hasOwn(entry, 'suspect_param') || Object.hasOwn(entry, 'reviewed_contracts');
       if (!bound) return true; // Unchanged non-actor/data baselines retain their existing contract.
       const reviewed = entry.reviewed_contracts;

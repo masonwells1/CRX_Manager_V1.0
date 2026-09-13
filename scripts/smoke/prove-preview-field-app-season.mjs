@@ -163,6 +163,7 @@ const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
 const CANDIDATE = path.join(MIGRATIONS, '20260906120000_preview_field_app_season_follows_invoice_date.sql');
 const CROSS_SEASON_GUARD = path.join(MIGRATIONS, '20260908190000_field_app_invoice_cross_season_edit_guard.sql');
+const UNCHANGED_DATE_GUARD = path.join(MIGRATIONS, '20260913152700_preserve_unchanged_source_invoice_dates.sql');
 const GENERIC_CUTOVER_BARRIER = path.join(MIGRATIONS, '20260912165758_refuse_generic_field_invoice_creation.sql');
 const GENERIC_CREATION_GUARD = path.join(MIGRATIONS, '20260913040359_finish_generic_field_invoice_cutover.sql');
 const SAVE_SIDE = path.join(MIGRATIONS, '20260904180000_invoice_season_follows_invoice_date.sql');
@@ -315,6 +316,16 @@ function publicHasExecute() {
 const workDir = mkdtempSync(path.join(tmpdir(), 'crx-preview-season-'));
 const candidateSql = readFileSync(CANDIDATE, 'utf8');
 const crossSeasonGuardSql = readFileSync(CROSS_SEASON_GUARD, 'utf8');
+const unchangedDateGuardSql = readFileSync(UNCHANGED_DATE_GUARD, 'utf8');
+const unchangedAssertMd5 = md5(plpgsqlBody(unchangedDateGuardSql,
+  'CREATE OR REPLACE FUNCTION public._assert_field_app_invoice_date_in_filed_season('));
+const unchangedTriggerMd5 = md5(plpgsqlBody(unchangedDateGuardSql,
+  'CREATE OR REPLACE FUNCTION public.guard_field_app_invoice_season_date('));
+assert.equal(unchangedDateGuardSql.includes('\r'), false, 'unchanged-date correction must use LF');
+assertWrappable(unchangedDateGuardSql, path.basename(UNCHANGED_DATE_GUARD));
+assert.ok(unchangedDateGuardSql.includes(`'${unchangedAssertMd5}'`)
+  && unchangedDateGuardSql.includes(`'${unchangedTriggerMd5}'`),
+`unchanged-date body pins must match assertion=${unchangedAssertMd5}, trigger=${unchangedTriggerMd5}`);
 // This prover deliberately stops the bulk replay before August 17's baseline/live body
 // mismatch. Restore the actual August 27 routing layer as well as the captured writer:
 // otherwise public save_invoice still calls an older writer and the valid-date control
@@ -582,7 +593,7 @@ $probe$;`;
  *      match is a property of the reviewed body, which this migration re-emits verbatim; it is not
  *      reachable through save, which writes one live invoice per customer per group.)
  */
-function groupProbe(label, { createDate, invoiceDate }) {
+function groupProbe(label, { createDate, invoiceDate, historicalFixture = false }) {
   const locations = `jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES}))`;
   const sql = `
 DO $probe$
@@ -636,8 +647,12 @@ ${AUTHENTICATE}
   -- date's season, so two growers on the same application can sit in different seasons. Driving
   -- that through the save RPC would take a second save with a changed split; the UPDATE below
   -- reaches the same end state directly, which is the point of the fixture.
+  ${historicalFixture ? `-- Reconstruct an already-existing historical split only in this disposable transaction.
+  ALTER TABLE invoices DISABLE TRIGGER aa_guard_field_app_invoice_season_date;
+  UPDATE invoices SET season = ${SEASON_NOW} WHERE invoice_group_id = v_group AND customer_id = v_a;` : ''}
   UPDATE invoices SET season = ${SEASON_NOW + 1}
    WHERE invoice_group_id = v_group AND customer_id = v_b AND deleted_at IS NULL;
+  ${historicalFixture ? 'ALTER TABLE invoices ENABLE TRIGGER aa_guard_field_app_invoice_season_date;' : ''}
 
   -- A soft-deleted sibling for A, in a third season. Only customer_id and the defaults are needed;
   -- balance_cents is generated and must never be written (schema-registry generated_columns).
@@ -674,6 +689,27 @@ ${AUTHENTICATE}
   IF v_saved_a IS NULL OR v_saved_b IS NULL THEN
     RAISE EXCEPTION 'PROBE_SETUP ${label}: one of the two members has no application-fee line after save (result %)', v_res;
   END IF;
+  ${historicalFixture ? `
+  -- B's own season admits this new date, but A's does not: the group helper must
+  -- see A and reject a B-targeted preview/save, not just validate the target row.
+  SELECT id INTO v_inv FROM invoices WHERE invoice_group_id = v_group AND customer_id = v_b AND deleted_at IS NULL;
+  BEGIN
+    PERFORM ${PREVIEW}(${locations}, '[]'::jsonb, v_svc, v_inv, DATE '${invoiceDate}' + 1);
+    RAISE EXCEPTION 'UNCHANGED_GROUP_PREVIEW_DATE_GUARD_MISSING';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM ${SAVE_IMPL}(v_inv, jsonb_build_object('invoice_date', (DATE '${invoiceDate}' + 1)::text),
+      ${locations}, '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
+    RAISE EXCEPTION 'UNCHANGED_GROUP_SAVE_DATE_GUARD_MISSING';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM invoices WHERE invoice_group_id = v_group AND deleted_at IS NULL
+      AND invoice_date IS DISTINCT FROM DATE '${invoiceDate}') THEN
+    RAISE EXCEPTION 'UNCHANGED_GROUP_REFUSAL_ROLLBACK_FAILED';
+  END IF;` : ''}
 
   RAISE EXCEPTION 'PROBE_ROLLBACK ${label} preview_a=% saved_a=% preview_b=% saved_b=% season_a=% season_b=%',
     v_preview_a, v_saved_a, v_preview_b, v_saved_b, v_season_a, v_season_b;
@@ -976,7 +1012,7 @@ $probe$;`;
     `${label}: public creation probe did not reach its behavioral marker`);
 }
 
-function sourceSeasonCreatorProbe() {
+function sourceSeasonCreatorProbe(expectBlocked = false) {
   // This is the historical replay's creator control, not an assertion about later
   // Chicago compatibility overlays. Its inspected INSERT stamps CURRENT_DATE.
   // Refuse a changed baseline rather than silently substituting a date expression.
@@ -985,11 +1021,18 @@ function sourceSeasonCreatorProbe() {
   const sql = `BEGIN;
 DO $probe$
 DECLARE v_customer uuid; v_field uuid; v_job uuid; v_ticket uuid; v_invoice uuid; v_result jsonb;
+  v_blocked_creators text := '';
+  v_ids uuid[] := '{}'::uuid[]; v_svc uuid; v_locations jsonb;
 BEGIN
 ${AUTHENTICATE}
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] prior-season creator') RETURNING id INTO v_customer;
   INSERT INTO fields (customer_id, field_name, total_acres)
     VALUES (v_customer, '[SMOKE] prior-season field', ${ACRES}) RETURNING id INTO v_field;
+  INSERT INTO application_services (name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
+    VALUES ('[SMOKE] prior-season service', ${RATE_DEFAULT}, 0, true) RETURNING id INTO v_svc;
+  INSERT INTO customer_application_rates (customer_id, application_service_id, rate_per_acre_cents, season)
+    VALUES (v_customer, v_svc, ${RATE_CUR}, ${SEASON_NOW - 1}), (v_customer, v_svc, ${RATE_NEXT}, ${SEASON_NOW});
+  v_locations := jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES}));
   INSERT INTO jobs (job_number, customer_id, status, job_date, season, created_by)
     VALUES ('[SMOKE]-SOURCE-JOB-' || gen_random_uuid()::text, v_customer, 'scheduled',
       make_date(${SEASON_NOW - 1}, 9, 30), ${SEASON_NOW - 1}, '${ADMIN}'::uuid) RETURNING id INTO v_job;
@@ -1011,18 +1054,128 @@ ${AUTHENTICATE}
       AND job_id = v_job AND season = ${SEASON_NOW - 1} AND invoice_date = CURRENT_DATE) THEN
     RAISE EXCEPTION 'SOURCE_SEASON_JOB_CREATOR_CHANGED: %', v_result;
   END IF;
+  v_ids := array_append(v_ids, v_invoice);
+  -- Creation alone is not compatibility proof: existing source-season invoices must
+  -- remain previewable at their unchanged stored date after the edit guard installs.
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split('[]'::jsonb, '[]'::jsonb,
+      NULL, v_invoice, CURRENT_DATE);
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+    v_blocked_creators := v_blocked_creators || ' job';
+  END;
   v_result := public.create_invoice_from_blend_ticket(v_ticket, '${ADMIN}'::uuid, 'source-blend-' || v_ticket::text);
   v_invoice := (v_result->'invoice_ids'->>0)::uuid;
   IF NOT EXISTS (SELECT 1 FROM invoices WHERE id = v_invoice AND invoice_type = 'field_application'
       AND blend_ticket_id = v_ticket AND season = ${SEASON_NOW - 1} AND invoice_date = CURRENT_DATE) THEN
     RAISE EXCEPTION 'SOURCE_SEASON_BLEND_CREATOR_CHANGED: %', v_result;
   END IF;
+  v_ids := array_append(v_ids, v_invoice);
+  BEGIN
+    PERFORM public.preview_field_app_invoice_split('[]'::jsonb, '[]'::jsonb,
+      NULL, v_invoice, CURRENT_DATE);
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+    v_blocked_creators := v_blocked_creators || ' blend';
+  END;
+  IF v_blocked_creators <> '' THEN
+    RAISE EXCEPTION 'SOURCE_SEASON_EXISTING_PREVIEW_BLOCKED:%', v_blocked_creators;
+  END IF;
+  FOREACH v_invoice IN ARRAY v_ids LOOP
+    SET LOCAL ROLE authenticated;
+    v_result := public.preview_field_app_invoice_split(v_locations, '[]'::jsonb,
+      v_svc, v_invoice, CURRENT_DATE);
+    IF (v_result->>'grand_total_cents')::bigint IS DISTINCT FROM ${RATE_CUR * ACRES}::bigint THEN
+      RAISE EXCEPTION 'SOURCE_SEASON_PRICE_CHANGED: %', v_result;
+    END IF;
+    -- Job/blend quantity invoices use the generic editor, not a conversion into
+    -- the per-acre builder. Exercise that public save at the original date.
+    PERFORM public.save_invoice(jsonb_build_object('id', v_invoice,
+      'invoice_type', 'field_application', 'invoice_date', CURRENT_DATE::text),
+      '[]'::jsonb, 'source-edit-' || v_invoice::text);
+    -- Direct invoice UPDATE is deliberately revoked from authenticated. Exercise
+    -- the all-writer trigger as the existing owner, never grant test-only access.
+    SET LOCAL ROLE postgres;
+    UPDATE invoices SET deleted_at = now() WHERE id = v_invoice;
+    BEGIN
+      UPDATE invoices SET deleted_at = NULL, invoice_date = CURRENT_DATE + 1 WHERE id = v_invoice;
+      RAISE EXCEPTION 'SOURCE_RESTORE_DATE_GUARD_MISSING';
+    EXCEPTION WHEN check_violation THEN
+      IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+    END;
+    UPDATE invoices SET deleted_at = NULL WHERE id = v_invoice;
+    SET LOCAL ROLE authenticated;
+    BEGIN
+      PERFORM public.save_invoice(jsonb_build_object('id', v_invoice,
+        'invoice_type', 'field_application', 'invoice_date', (CURRENT_DATE + 1)::text),
+        '[]'::jsonb, 'source-date-edit-' || v_invoice::text);
+      RAISE EXCEPTION 'SOURCE_DATE_GUARD_MISSING';
+    EXCEPTION WHEN check_violation THEN
+      IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+    END;
+    SET LOCAL ROLE postgres;
+    BEGIN
+      UPDATE invoices SET season = ${SEASON_NOW} WHERE id = v_invoice;
+      RAISE EXCEPTION 'SOURCE_FILED_SEASON_GUARD_MISSING';
+    EXCEPTION WHEN check_violation THEN
+      IF SQLERRM NOT LIKE 'INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+    END;
+    IF NOT EXISTS (SELECT 1 FROM invoices WHERE id = v_invoice
+        AND season = ${SEASON_NOW - 1} AND invoice_date = CURRENT_DATE AND deleted_at IS NULL) THEN
+      RAISE EXCEPTION 'SOURCE_UNCHANGED_DATE_SAVE_RESTORE_CHANGED_INVOICE';
+    END IF;
+  END LOOP;
   RAISE EXCEPTION 'SOURCE_SEASON_CREATORS_ROLLBACK';
 END
 $probe$;`;
   const out = psql(sql, { allowFailure: true });
   assert.equal(out.status, 3, 'source-season creator controls must roll back');
-  assert.match(said(out), /SOURCE_SEASON_CREATORS_ROLLBACK/, 'prior-season public job/blend creators must remain callable');
+  assert.match(said(out), expectBlocked ? /SOURCE_SEASON_EXISTING_PREVIEW_BLOCKED: job blend/ : /SOURCE_SEASON_CREATORS_ROLLBACK/,
+    expectBlocked ? 'historical guard must reproduce both unchanged-date preview refusals'
+      : 'prior-season public job/blend creation, filed-rate preview, save, restore, and date/season refusals must remain callable');
+}
+
+function unchangedDateDriftProbes() {
+  const assertHeader = 'CREATE OR REPLACE FUNCTION public._assert_field_app_invoice_date_in_filed_season(';
+  const declaration = (sql) => {
+    const start = sql.indexOf(assertHeader);
+    const end = sql.indexOf('$function$;', start);
+    assert.ok(start >= 0 && end > start, 'unchanged-date mutation must isolate the real assertion');
+    return sql.slice(start, end + '$function$;'.length);
+  };
+  const helperOid = "'public._assert_field_app_invoice_date_in_filed_season(uuid,date)'::regprocedure";
+  psql(declaration(crossSeasonGuardSql), { wrap: true });
+  sourceSeasonCreatorProbe(true);
+  const partialPair = psql('\\i /tmp/unchanged-date-guard.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(partialPair.status, 0, 'mixed predecessor/corrected pair must refuse installation');
+  assert.match(said(partialPair), /PREFLIGHT_UNCHANGED_DATE_BODY/);
+  assert.equal(scalar(`SELECT md5(prosrc) FROM pg_proc WHERE oid = ${helperOid}`),
+    '2a4a3b079b4f18d07730fc1aa11eae96', 'refused partial-pair apply must not overwrite outside bytes');
+  psql(declaration(unchangedDateGuardSql), { wrap: true });
+  sourceSeasonCreatorProbe();
+
+  psql('GRANT EXECUTE ON FUNCTION public._assert_field_app_invoice_date_in_filed_season(uuid,date) TO anon;', { wrap: true });
+  const acl = psql('\\i /tmp/unchanged-date-guard.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(acl.status, 0, 'outside ACL drift must refuse unchanged-date replay');
+  assert.match(said(acl), /PREFLIGHT_UNCHANGED_DATE_ACL/);
+  assert.equal(scalar(`SELECT has_function_privilege('anon', ${helperOid}, 'EXECUTE')`), 't', 'refused ACL replay preserves outside grant');
+  psql('REVOKE EXECUTE ON FUNCTION public._assert_field_app_invoice_date_in_filed_season(uuid,date) FROM anon;', { wrap: true });
+
+  psql('ALTER TABLE invoices DISABLE TRIGGER aa_guard_field_app_invoice_season_date;', { wrap: true });
+  const trigger = psql('\\i /tmp/unchanged-date-guard.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(trigger.status, 0, 'disabled trigger must refuse unchanged-date replay');
+  assert.match(said(trigger), /PREFLIGHT_UNCHANGED_DATE_TRIGGER/);
+  psql('ALTER TABLE invoices ENABLE TRIGGER aa_guard_field_app_invoice_season_date;', { wrap: true });
+
+  const pin = `AND md5(p.prosrc) = '${unchangedAssertMd5}'`;
+  assert.equal(unchangedDateGuardSql.split(pin).length, 2, 'corrected postflight pin must occur exactly once');
+  copyText(unchangedDateGuardSql.replace(pin, "AND md5(p.prosrc) = '00000000000000000000000000000000'"),
+    'unchanged-date-wrong-postflight.sql', workDir);
+  const postflight = psql('\\i /tmp/unchanged-date-wrong-postflight.sql', { wrap: true, allowFailure: true });
+  assert.notEqual(postflight.status, 0, 'wrong corrected body pin must roll back replay');
+  assert.match(said(postflight), /POSTFLIGHT_UNCHANGED_DATE_BODY/);
+  assert.equal(scalar(`SELECT md5(prosrc) FROM pg_proc WHERE oid = ${helperOid}`), unchangedAssertMd5);
+  assert.match(said(apply('unchanged-date-guard.sql')), /POSTFLIGHT_UNCHANGED_DATE_OK/);
 }
 
 function genericCreationReplayDriftProbes() {
@@ -1414,6 +1567,7 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
 
   copyLf(CANDIDATE, 'candidate.sql', workDir);
   copyLf(CROSS_SEASON_GUARD, 'cross-season-guard.sql', workDir);
+  copyLf(UNCHANGED_DATE_GUARD, 'unchanged-date-guard.sql', workDir);
   copyLf(GENERIC_CREATION_GUARD, 'generic-creation-guard.sql', workDir);
   copyLf(GENERIC_CUTOVER_BARRIER, 'generic-cutover-barrier.sql', workDir);
   copyText(asReplace(realCreate), 'restore-body.sql', workDir);
@@ -2050,7 +2204,8 @@ ${revokedAuth}`),
   const committedFixture = committedGenericFieldRetryFixture();
   await genericCutoverProof(committedFixture);
   genericCreationGuardProbe('PUBLIC_INSERT_GUARD');
-  sourceSeasonCreatorProbe();
+  sourceSeasonCreatorProbe(true);
+  log('PHASE 8-source-defect: historical guard blocks BOTH job/blend previews at their unchanged stored dates');
   const creationReplay = apply('generic-creation-guard.sql');
   assert.match(said(creationReplay), /POSTFLIGHT_OK/, 'exact generic creation guard replay must pass');
   genericCreationGuardProbe('PUBLIC_INSERT_REPLAY');
@@ -2116,6 +2271,25 @@ RETURNS void LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN; END $$;`, { wrap: true 
   log('PHASE 8g-restoration: mutant caught -- removing only the NEW-row season check permits restoration of a mismatched deleted invoice');
   previewGuardRemovedProbe('PREVIEW_MUTANT');
   log('PHASE 8h: mutant caught -- neutralizing the private assertion makes the forbidden preview succeed');
+
+  // The historical guard checks above remain historical controls. The complete
+  // final migration sequence must also preserve unchanged source-created dates.
+  assert.match(said(apply('unchanged-date-guard.sql')), /POSTFLIGHT_UNCHANGED_DATE_OK/);
+  sourceSeasonCreatorProbe();
+  crossSeasonGuardProbe('UNCHANGED_DATE_CORRECTION');
+  const unchangedGroup = groupProbe('UNCHANGED_DATE_GROUP', {
+    createDate: DATE_NEXT_SEASON, invoiceDate: DATE_NEXT_SEASON, historicalFixture: true,
+  });
+  assert.equal(unchangedGroup.previewA, RATE_CUR);
+  assert.equal(unchangedGroup.savedA, RATE_CUR);
+  assert.equal(unchangedGroup.previewB, RATE_GROUP_B);
+  assert.equal(unchangedGroup.savedB, RATE_GROUP_B);
+  assert.equal(unchangedGroup.seasonA, SEASON_NOW);
+  assert.equal(unchangedGroup.seasonB, SEASON_NOW + 1);
+  unchangedDateDriftProbes();
+  assert.match(said(apply('unchanged-date-guard.sql')), /POSTFLIGHT_UNCHANGED_DATE_OK/);
+  sourceSeasonCreatorProbe();
+  log('PHASE 8i: final correction and replay preserve job/blend unchanged dates while refusing new out-of-season date edits and season changes');
 
   // Run the registered full public business chain inside this disposable database.
   const fullChain = specs.save_field_app_invoice;

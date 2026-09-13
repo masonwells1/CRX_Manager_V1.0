@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import { sanitizeError } from '../lib/errorSanitizer';
 
 const { mockFrom, mockRpc, mockToast, mockNavigate, intentKeys, nextIntentKey } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
@@ -51,7 +52,7 @@ vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
-  sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  sanitizeError: (e: unknown) => sanitizeError(e),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -619,7 +620,8 @@ describe('InvoiceDetail — cutover refusal retries', () => {
     renderInvoiceDetail('inv-cutover');
     await screen.findByText('INV-CUTOVER', { selector: 'h1' });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('GENERIC_FIELD_CUTOVER_STALE_CALL')));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error',
+      'No invoice was changed. An invoice update is finishing; wait a moment, then try Save again'));
     expect(mockRpc.mock.calls.filter(([name]) => name === 'save_invoice')).toHaveLength(3);
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', 'Invoice saved'));

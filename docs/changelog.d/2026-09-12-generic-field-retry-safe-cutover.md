@@ -17,8 +17,11 @@ transactions with full stats visibility, and locks receipts for a stable scan.
 ANY still-valid generic save receipt blocks installation, including NULL expiry
 and expiry equal to the transaction timestamp. This leaves legitimate retries
 working under phase 1 until natural expiry. Apply phases separately, never in a
-single batch transaction or savepoint; quiet traffic is recommended to reduce
-temporary retry responses, not permission to bypass refusal.
+single batch transaction or savepoint. Total transaction quiescence is mandatory
+at phase-two installation, including background workers and scheduled jobs;
+quiet customer traffic alone is insufficient. A refusal leaves phase one intact.
+Wait for natural receipt expiry and a genuinely quiet window, then recheck and
+retry only through the full governed apply gate; never bypass the refusal.
 
 After safe cutover, final public save is the original pinned wrapper plus the
 NEW field-application refusal. The transitional advisory/isolation/version checks

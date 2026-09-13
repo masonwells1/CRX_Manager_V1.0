@@ -2,6 +2,18 @@ import { describe, it, expect } from 'vitest';
 import { sanitizeError } from './errorSanitizer';
 
 describe('sanitizeError', () => {
+  it.each(['IN_PROGRESS', 'ISOLATION', 'STALE_CALL'])('explains exhausted %s cutover refusals without raw database tokens', (token) => {
+    expect(sanitizeError({ code: '40001', message: `GENERIC_FIELD_CUTOVER_${token}: diagnostic detail` }))
+      .toBe('No invoice was changed. An invoice update is finishing; wait a moment, then try Save again');
+    expect(sanitizeError(`GENERIC_FIELD_CUTOVER_${token}_UNKNOWN`))
+      .toBe(`GENERIC_FIELD_CUTOVER_${token}_UNKNOWN`);
+  });
+
+  it('directs generic field creation to its supported creators', () => {
+    expect(sanitizeError('FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED: use dedicated creators'))
+      .toBe('Create this field invoice from its job, blend ticket, or the Field Application screen');
+  });
+
   it('maps return-credit and customer-scope tokens to operator guidance', () => {
     expect(sanitizeError('CUSTOMER_SCOPE_DENIED')).toBe('You can only work with customers assigned to you');
     expect(sanitizeError('RETURN_CREDIT_UNIT_MISMATCH')).toContain('original sale');
