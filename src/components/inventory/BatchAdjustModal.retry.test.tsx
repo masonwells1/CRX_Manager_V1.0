@@ -1,4 +1,4 @@
-import { act, configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
@@ -39,6 +39,10 @@ import BatchAdjustModal from './BatchAdjustModal';
 // Each submit ends with IndexedDB coordination (resolveIntent) before the button
 // re-enables. Under a loaded full-suite run that can outlast the 1s default.
 configure({ asyncUtilTimeout: 5000 });
+
+// The key useUncertainMutationIntent stores the batch under for this operation
+// and user. A browser fires a `storage` event with it in every OTHER tab.
+const BATCH_INTENT_STORAGE_KEY = `crx:uncertain-mutation:v4:${JSON.stringify(['adjust_inventory_batch', 'admin-1'])}`;
 
 type AdjustArgs = {
   p_inventory_id: string;
@@ -89,6 +93,7 @@ function createFakeDatabase() {
 }
 
 type FakeDatabase = ReturnType<typeof createFakeDatabase>;
+type Scope = Pick<typeof screen, 'getByPlaceholderText' | 'findByRole' | 'queryByRole' | 'getByRole' | 'getByText' | 'queryByText'>;
 
 const PRODUCTS = [
   { id: 'inv-a', product_id: 'p-a', product_name: 'Atrazine 4L' },
@@ -125,18 +130,18 @@ function renderPage(db: FakeDatabase, options: { selectOnOpen: string[]; startOp
   }
 
   const view = render(<InventoryPageStandIn />);
-  return { ...view, onClose, onSuccess };
+  return { ...view, onClose, onSuccess, scope: within(view.container) as Scope };
 }
 
-function fillForm(delta: string, reason: string) {
-  fireEvent.change(screen.getByPlaceholderText('e.g. 5 or -3'), { target: { value: delta } });
-  fireEvent.change(screen.getByPlaceholderText('e.g. Cycle count correction, Damaged goods'), {
+function fillForm(delta: string, reason: string, scope: Scope = screen) {
+  fireEvent.change(scope.getByPlaceholderText('e.g. 5 or -3'), { target: { value: delta } });
+  fireEvent.change(scope.getByPlaceholderText('e.g. Cycle count correction, Damaged goods'), {
     target: { value: reason },
   });
 }
 
-async function click(name: RegExp) {
-  const button = await screen.findByRole('button', { name });
+async function click(name: RegExp, scope: Scope = screen) {
+  const button = await scope.findByRole('button', { name });
   await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
   await act(async () => {
     fireEvent.click(button);
@@ -150,11 +155,11 @@ async function pressEscape() {
 }
 
 /** Clicks a submit button and waits until that submit has fully settled. */
-async function submit(name: RegExp) {
+async function submit(name: RegExp, scope: Scope = screen) {
   const toastsBefore = mockToast.mock.calls.length;
-  await click(name);
+  await click(name, scope);
   await waitFor(() => expect(mockToast.mock.calls.length).toBe(toastsBefore + 1));
-  await waitFor(() => expect(screen.queryByRole('button', { name: /Cancel/ })?.hasAttribute('disabled') ?? false).toBe(false));
+  await waitFor(() => expect(scope.queryByRole('button', { name: /Cancel/ })?.hasAttribute('disabled') ?? false).toBe(false));
 }
 
 describe('BatchAdjustModal retry keys', () => {
@@ -191,6 +196,52 @@ describe('BatchAdjustModal retry keys', () => {
     expect(db.stock.get('inv-a')).toBe(105);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks a fresh submission when another tab finishes the unconfirmed batch', async () => {
+    const db = createFakeDatabase();
+    db.loseNextReply.add('inv-a');
+
+    // Tab A: the stock move commits but its reply is lost, so the batch freezes.
+    const tabA = renderPage(db, { selectOnOpen: ['inv-a'] });
+    fillForm('5', 'Cycle count correction', tabA.scope);
+    await submit(/Adjust 1 Product/, tabA.scope);
+    expect(tabA.scope.getByText('Not confirmed — retry')).toBeTruthy();
+    expect(db.moves.get('inv-a')).toBe(1);
+
+    // Tab B (a second live page on the same browser storage) retries the frozen
+    // batch, gets the stored receipt, and resolves it.
+    const tabB = renderPage(db, { selectOnOpen: ['inv-a'], startOpen: false });
+    await click(/Select and open batch adjust/, tabB.scope);
+    await waitFor(() => expect(tabB.scope.getByText(/Unconfirmed batch/)).toBeTruthy());
+    await submit(/Retry 1 Unchanged/, tabB.scope);
+    expect(db.calls).toHaveLength(2);
+    expect(db.calls[1].p_idempotency_key).toBe(db.calls[0].p_idempotency_key);
+    expect(db.moves.get('inv-a')).toBe(1);
+
+    // The browser tells Tab A that the stored batch changed.
+    await act(async () => {
+      window.dispatchEvent(new StorageEvent('storage', { key: BATCH_INTENT_STORAGE_KEY, storageArea: window.localStorage }));
+    });
+
+    // Tab A lost its frozen lock, but it must not offer a fresh adjustment: its
+    // form still holds +5 and a new batch would move the stock a second time.
+    await waitFor(() => expect(tabA.scope.getByText(/Finished in another tab/)).toBeTruthy());
+    expect(tabA.scope.queryByText(/Unconfirmed batch/)).toBeNull();
+    expect(tabA.scope.getByText('Finished elsewhere — check stock')).toBeTruthy();
+    const adjustButton = tabA.scope.getByRole('button', { name: /Adjust/ }) as HTMLButtonElement;
+    expect(adjustButton.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(adjustButton);
+    });
+    expect(db.calls).toHaveLength(2);
+    expect(db.moves.get('inv-a')).toBe(1);
+    expect(db.stock.get('inv-a')).toBe(105);
+
+    // Closing hands the refresh to the page so it loads authoritative stock.
+    await click(/Cancel/, tabA.scope);
+    expect(tabA.onSuccess).toHaveBeenCalledTimes(1);
+    expect(tabA.onClose).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes the page when closed with a row that may already have moved stock', async () => {

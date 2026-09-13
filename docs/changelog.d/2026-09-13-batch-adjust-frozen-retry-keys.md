@@ -57,6 +57,25 @@ replay after reload can log the batch to the activity feed twice (stock
 unaffected); two tabs submitting an identical new batch at once share one key
 (hook design).
 
+**Codex (gpt-5.6-sol, high) exact-SHA review of `f14672bc1`: BLOCKERS, 1 HIGH.**
+Peer-tab completion could double-move stock: tab A's reply is lost and the batch
+freezes; tab B retries the shared batch key, gets the receipt, and resolves it;
+tab A's storage listener drops its frozen lock while its form still holds the
+delta and reason, so its enabled Adjust button would send the same adjustment
+under a fresh key. Fixed: when a batch this dialog left unconfirmed is no longer
+frozen, the dialog treats every non-adjusted result as stale ("Finished
+elsewhere — check stock"), shows a "Finished in another tab" banner, disables the
+form and submit (and `handleSubmit` refuses), and refreshes the page on close.
+Regression test renders two live page stand-ins on the same browser storage and
+delivers the `storage` event to tab A; it fails against the `f14672bc1` modal.
+Real-browser proof in two real tabs of the temporary harness (fake database in
+shared localStorage): tab A's +5 committed with its reply lost and froze; tab B
+opened the same frozen batch and "Retry 1 Unchanged" replayed the receipt under
+the same key; tab A then showed "Finished in another tab" and "Finished elsewhere
+— check stock", its "Adjust 1 Product" button reported `disabled` and a real click
+sent nothing (still 2 requests, 1 stock move, stock 105); Cancel closed it and
+refreshed tab A's page once.
+
 **Proof.**
 - `src/components/inventory/BatchAdjustModal.retry.test.tsx` renders the real
   modal and hook (fake-indexeddb) inside a stand-in page whose `onSuccess` clears

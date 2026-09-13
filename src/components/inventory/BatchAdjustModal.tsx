@@ -111,6 +111,10 @@ const OUTCOME_CLASS: Record<RowOutcome, string> = {
   binding_rejected: 'text-red-700 font-medium',
 };
 
+const FINISHED_ELSEWHERE_LABEL = 'Finished elsewhere — check stock';
+const FINISHED_ELSEWHERE_MESSAGE =
+  'This batch was finished in another tab or window. Close this dialog to load current stock before adjusting these products again.';
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -130,6 +134,8 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
   // dialog closes, even when the current selection no longer contains them (e.g.
   // a frozen batch retried after a reload with a different selection).
   const [lastBatchRows, setLastBatchRows] = useState<BatchAdjustIntent['rows']>([]);
+  // True while this dialog's last submit ended with the batch still frozen.
+  const [leftBatchUnconfirmed, setLeftBatchUnconfirmed] = useState(false);
   // The Inventory page's onSuccess clears the selection, which empties `items`.
   // Calling it mid-dialog would wipe the per-row results the operator still needs,
   // so it runs when the dialog closes — whenever stock moved or may have moved.
@@ -152,6 +158,12 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     }),
   });
   const frozen = batchIntent.unresolvedIntent;
+  // This dialog left the batch frozen, and it is no longer frozen: another tab or
+  // window retried and finished it. Every non-adjusted result shown here is now
+  // stale — that tab's retry may have moved any of those rows — so nothing may be
+  // sent from this dialog (a new batch would use fresh keys and move stock twice).
+  // Closing refreshes the page with authoritative stock.
+  const finishedElsewhere = leftBatchUnconfirmed && !frozen;
 
   // A non-finite entry (e.g. 1e400 → Infinity) would be frozen as null by JSON.
   const parsedDelta = Number(uniformDelta);
@@ -166,6 +178,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     setRowResults({});
     setRowMessages({});
     setLastBatchRows([]);
+    setLeftBatchUnconfirmed(false);
     setReason('');
     setUniformDelta('');
     if (refreshPage) onSuccess();
@@ -179,6 +192,10 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
 
   const handleSubmit = async () => {
     if (saving) return;
+    if (finishedElsewhere) {
+      toast('warning', FINISHED_ELSEWHERE_MESSAGE);
+      return;
+    }
     if (batchIntent.isForeignIntentLocked) {
       toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
       return;
@@ -301,6 +318,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       setRowResults(results);
       setRowMessages(messages);
       setLastBatchRows(request.rows);
+      setLeftBatchUnconfirmed(uncertainCount > 0);
 
       const signedDelta = `${request.delta > 0 ? '+' : ''}${request.delta}`;
       if (newlyAdjusted > 0) {
@@ -361,13 +379,21 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
           </div>
         )}
 
+        {finishedElsewhere && (
+          <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900" role="status">
+            <strong>Finished in another tab:</strong> {FINISHED_ELSEWHERE_MESSAGE}
+          </div>
+        )}
+
         {/* Preview list */}
         <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg divide-y">
           {displayRows.map((row) => {
             const outcome = rowResults[row.id]?.outcome;
             const projected = row.qty === null ? null : row.qty + delta;
             const willGoNegative = hasDelta && projected !== null && projected < 0;
-            const label = outcome === 'refused' && frozen ? 'Refused — will retry' : outcome ? OUTCOME_LABEL[outcome] : null;
+            let label: string | null = outcome ? OUTCOME_LABEL[outcome] : null;
+            if (outcome === 'refused' && frozen) label = 'Refused — will retry';
+            if (outcome && outcome !== 'adjusted' && finishedElsewhere) label = FINISHED_ELSEWHERE_LABEL;
             return (
               <div key={row.id} className="px-3 py-2 text-sm" data-testid={`batch-row-${row.id}`}>
                 <div className="flex items-center justify-between">
@@ -380,7 +406,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
                     </span>
                   ) : null}
                 </div>
-                {outcome && outcome !== 'adjusted' && rowMessages[row.id] && (
+                {outcome && outcome !== 'adjusted' && !finishedElsewhere && rowMessages[row.id] && (
                   <p className="text-xs text-secondary mt-0.5">{rowMessages[row.id]}</p>
                 )}
               </div>
@@ -400,7 +426,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
           value={frozen ? String(frozen.delta) : uniformDelta}
           onChange={(e) => setUniformDelta(e.target.value)}
           placeholder="e.g. 5 or -3"
-          disabled={Boolean(frozen)}
+          disabled={Boolean(frozen) || finishedElsewhere}
         />
 
         <Input
@@ -408,7 +434,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
           value={frozen ? frozen.reason : reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder="e.g. Cycle count correction, Damaged goods"
-          disabled={Boolean(frozen)}
+          disabled={Boolean(frozen) || finishedElsewhere}
         />
 
         <div className="flex justify-end gap-2 pt-2">
@@ -416,7 +442,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
           <Button
             onClick={handleSubmit}
             loading={saving}
-            disabled={!frozen && (delta === 0 || !reason.trim() || pendingItems.length === 0)}
+            disabled={finishedElsewhere || (!frozen && (delta === 0 || !reason.trim() || pendingItems.length === 0))}
           >
             {frozen
               ? `Retry ${actionCount} Unchanged`
