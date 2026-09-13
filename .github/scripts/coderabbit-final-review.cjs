@@ -875,6 +875,11 @@ function parseCandidateBirth(comment) {
 async function recordCandidateBirth({ github, context, core }) {
   const pull = context.payload.pull_request;
   const repository = context.payload.repository;
+  if (isNonBlankString(repository.default_branch) && isNonBlankString(pull.base?.ref)
+    && pull.base.ref !== repository.default_branch) {
+    core.notice('Non-default-base PR does not require a production review candidate snapshot.');
+    return { status: 'ignored', reason: 'non_default_base' };
+  }
   const snapshot = {
     headSha: pull.head?.sha, baseSha: pull.base?.sha, executionSha: context.sha,
     runId: context.runId, repoId: repository.id,

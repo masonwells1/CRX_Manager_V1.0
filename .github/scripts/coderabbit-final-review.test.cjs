@@ -3547,6 +3547,23 @@ test('native ambiguous state with an old legacy command is never cleared by a la
   assert.equal(harness.comments.length, 2);
 });
 
+test('feature and staging PR opens are ignored without any production snapshot or GitHub writes', async () => {
+  for (const base of ['feature/inventory', 'staging']) {
+    const harness = makeNativeHarness({ action: 'opened' });
+    harness.comments.splice(0);
+    harness.context.payload.pull_request.base.ref = base;
+    harness.github.paginate = async () => { throw new Error('non-main opened must not read GitHub'); };
+    harness.github.rest.issues.createComment = async () => { throw new Error('non-main opened must not write GitHub'); };
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'ignored');
+    assert.equal(result.reason, 'non_default_base');
+    assert.equal(harness.comments.length, 0);
+    assert.equal(harness.receiptComments.length, 0);
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+    assert.equal(harness.failures.length, 0);
+  }
+});
+
 test('opened capture uses the original webhook even when later PR reads expose a different candidate', async () => {
   const harness = makeNativeHarness({ action: 'opened', pulls: [pullRequest({ head: NEXT_HEAD, baseSha: NEXT_BASE })] });
   harness.comments.splice(0);

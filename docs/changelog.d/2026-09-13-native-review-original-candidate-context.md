@@ -1,5 +1,7 @@
 ## 2026-09-13 - Preserve the original native-review candidate context
 
+GitHub's final-candidate P2 also identified a spurious failed check for newly opened PRs aimed at feature or staging branches. Such opens now return an ignored status before snapshot capture or GitHub reads/writes. A focused regression executes both branch targets and verifies no failure, snapshot, receipt or provider request; production-main capture retains its existing validation.
+
 The GitHub Codex review found that current repository permissions cannot establish a commenter's authority when an old review command was posted. A former writer could now appear read-only, allowing a delayed old-base review to be mistaken for a newer dispatch. This supersedes the September 12 current-permission classifier.
 
 The trusted opened workflow now captures the original head/base and stamps both SHAs, the PR number and event action into the workflow run name. Native history verifies the captured record against that completed trusted run and requires the candidate to retain its original head/base for the PR lifetime. Changed candidates and retarget/force-push histories require a fresh delivery PR. Public comments on an unchanged candidate cannot permanently poison its context; comments never grant dispatch or merge authority. Provider-label history, deduplication, actor authorization, actual formal review, independent proof and final checks still apply.
