@@ -133,9 +133,10 @@ function respond(handlers: Record<string, () => { data: unknown; error: unknown 
 }
 
 async function renderPage() {
-  render(<MemoryRouter><InventoryPage /></MemoryRouter>);
+  const view = render(<MemoryRouter><InventoryPage /></MemoryRouter>);
   // Wait for the grid, so the row action buttons exist.
   await screen.findAllByRole('button', { name: 'Manual Adjustment' });
+  return view;
 }
 
 function adjustDialog() {
@@ -295,6 +296,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     expect(within(holdDialog()).getByLabelText(/notes/i)).toBeDisabled();
     expect(within(holdDialog()).getByRole('button', { name: /^cancel$/i })).toBeDisabled();
 
+    await waitFor(() => expect(within(holdDialog()).getByRole('button', { name: /retry exact hold/i })).toBeEnabled());
     fireEvent.click(within(holdDialog()).getByRole('button', { name: /retry exact hold/i }));
     await waitFor(() => expect(callsTo('create_inventory_hold')).toHaveLength(2));
     const second = callsTo('create_inventory_hold')[1];
@@ -306,6 +308,45 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /create.*hold/i })).not.toBeInTheDocument());
     expect(mocks.toast).toHaveBeenCalledWith('success', 'Hold created successfully');
+  });
+
+  it('shows the frozen product and customer after a lost hold is recovered on reload', async () => {
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'products') return query(products);
+      if (table === 'customers') return query([{ id: 'customer-a', farm_name: 'Farm A' }]);
+      return query([]);
+    });
+    let attempts = 0;
+    respond({
+      create_inventory_hold: () => ++attempts === 1
+        ? { data: null, error: LOST_REPLY }
+        : { data: { hold_id: 'hold-1' }, error: null },
+    });
+    const initial = await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /create hold/i }));
+    const dialog = screen.getByRole('dialog', { name: /create.*hold/i });
+    fireEvent.click(await within(dialog).findByRole('button', { name: /SKU-A/i }));
+    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'customer-a' } });
+    fireEvent.change(within(dialog).getByLabelText(/^quantity$/i), { target: { value: '3' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create hold$/i }));
+    await within(dialog).findByRole('button', { name: /retry exact hold/i });
+    const original = callsTo('create_inventory_hold')[0];
+    initial.unmount();
+
+    await renderPage();
+    const recovered = screen.getByRole('dialog', { name: /create.*hold/i });
+    expect(await within(recovered).findByRole('button', { name: /SKU-A/i })).toBeInTheDocument();
+    expect(await within(recovered).findByRole('option', { name: 'Farm A' })).toHaveProperty('selected', true);
+    expect(within(recovered).getByRole('combobox')).toBeDisabled();
+    expect(callsTo('create_inventory_hold')).toHaveLength(1);
+    fireEvent.click(within(recovered).getByRole('button', { name: /retry exact hold/i }));
+    await waitFor(() => expect(callsTo('create_inventory_hold')).toHaveLength(2));
+    expect(callsTo('create_inventory_hold')[1]).toMatchObject({
+      p_product_id: original.p_product_id,
+      p_customer_id: original.p_customer_id,
+      p_quantity: original.p_quantity,
+      p_idempotency_key: original.p_idempotency_key,
+    });
   });
 
   it('retries a lost ADMIN OVERRIDE under the SAME key with the frozen force flag and reason', async () => {
@@ -343,6 +384,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     // button, which must re-send the override, not a plain hold.
     const holdDialog = () => screen.getByRole('dialog', { name: /^create.*hold$/i });
     await waitFor(() => expect(within(holdDialog()).getByRole('button', { name: /retry exact hold/i })).toBeInTheDocument());
+    await waitFor(() => expect(within(holdDialog()).getByRole('button', { name: /retry exact hold/i })).toBeEnabled());
     fireEvent.click(within(holdDialog()).getByRole('button', { name: /retry exact hold/i }));
 
     await waitFor(() => expect(callsTo('create_inventory_hold')).toHaveLength(3));

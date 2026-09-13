@@ -366,18 +366,6 @@ export default function InventoryPage() {
   }, [adjustIntent.unresolvedIntent]);
 
   useEffect(() => {
-    const recovered = createHoldIntent.unresolvedIntent;
-    if (!recovered) return;
-    setHoldProductId(recovered.productId);
-    setHoldQty(String(recovered.quantity));
-    setHoldCustomerId(recovered.customerId ?? '');
-    setHoldNotes(recovered.notes ?? '');
-    setHoldExpires(recovered.expiresAt ?? '');
-    setHoldWarning('');
-    setHoldOpen(true);
-  }, [createHoldIntent.unresolvedIntent]);
-
-  useEffect(() => {
     fetchInventory();
     fetchHolds();
   }, [fetchInventory, fetchHolds]);
@@ -398,7 +386,7 @@ export default function InventoryPage() {
     if (activeTab === 'forecast' && forecastData.length === 0) fetchForecast();
   }, [activeTab, forecastData.length, fetchForecast]);
 
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
       .select('*, product_family:product_families(name)')
@@ -410,9 +398,9 @@ export default function InventoryPage() {
       return;
     }
     setProducts((data || []) as unknown as PickerProduct[]);
-  };
+  }, [toast]);
 
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     const { data, error } = await supabase
       .from('customers')
       .select('id, farm_name')
@@ -423,7 +411,22 @@ export default function InventoryPage() {
       return;
     }
     setCustomers((data || []) as Customer[]);
-  };
+  }, []);
+
+  useEffect(() => {
+    const recovered = createHoldIntent.unresolvedIntent;
+    if (!recovered) return;
+    void fetchProducts();
+    void fetchCustomers();
+    setProductSearch('');
+    setHoldProductId(recovered.productId);
+    setHoldQty(String(recovered.quantity));
+    setHoldCustomerId(recovered.customerId ?? '');
+    setHoldNotes(recovered.notes ?? '');
+    setHoldExpires(recovered.expiresAt ?? '');
+    setHoldWarning('');
+    setHoldOpen(true);
+  }, [createHoldIntent.unresolvedIntent, fetchProducts, fetchCustomers]);
 
   const openAddModal = () => {
     fetchProducts();

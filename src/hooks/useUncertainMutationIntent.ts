@@ -628,16 +628,24 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   const [, setExpiryRevision] = useState(0);
 
   const applyRecord = useCallback((record: DurableMutationIntentRecord<T> | null) => {
-    const pending = record?.status === 'pending';
-    const owned = pending && record.surface === surface && record.scope === scope;
+    // A peer completion is still this tab's retry until its handler acknowledges
+    // the result. Unlocking early would present identical new work while
+    // beginIntent still correctly replays this attempt's committed receipt.
+    const attempt = attemptRecordRef.current;
+    const visible = record?.status === 'resolved'
+      && attempt?.requestVersion === record.requestVersion
+      && attempt.surface === surface && attempt.scope === scope
+      ? attempt : record;
+    const pending = visible?.status === 'pending';
+    const owned = pending && visible.surface === surface && visible.scope === scope;
     recordRef.current = record;
-    idempotencyKeyRef.current = pending ? record.idempotencyKey : null;
-    intentRef.current = owned ? record.intent : null;
-    retryNotAfterRef.current = pending ? record.retryNotAfterMs : null;
-    setUnresolvedIntent(owned ? record.intent : null);
+    idempotencyKeyRef.current = pending ? visible.idempotencyKey : null;
+    intentRef.current = owned ? visible.intent : null;
+    retryNotAfterRef.current = pending ? visible.retryNotAfterMs : null;
+    setUnresolvedIntent(owned ? visible.intent : null);
     setHasUnresolvedRecord(pending);
     setIsForeignIntentLocked(Boolean(pending && !owned));
-    setRetryNotAfterMs(pending ? record.retryNotAfterMs : null);
+    setRetryNotAfterMs(pending ? visible.retryNotAfterMs : null);
   }, [scope, surface]);
 
   const activateCurrentIdentity = useCallback((force = false) => {
@@ -804,6 +812,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     );
     if (resolved) {
       if (storageKey) writeDurableRecord(storageKey, resolved);
+      attemptRecordRef.current = null;
       applyRecord(resolved);
     } else if (attempt && storageKey) {
       // No coordinator row was left to resolve (IndexedDB lost it). This request
@@ -818,6 +827,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           resolvedAtMs: Date.now(),
         };
         writeDurableRecord(storageKey, retired);
+        attemptRecordRef.current = null;
         applyRecord(retired);
       }
     }
@@ -851,6 +861,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           applyRecord(null);
         } else if (outcome.current) {
           if (storageKey) writeDurableRecord(storageKey, outcome.current);
+          if (outcome.current.status === 'resolved') attemptRecordRef.current = null;
           applyRecord(outcome.current);
           if (outcome.current.status === 'resolved') {
             attemptRecordRef.current = null;
@@ -863,15 +874,16 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
       const current = await readCoordinatedRecord(storageKey, options);
       if (current) {
         if (storageKey) writeDurableRecord(storageKey, current);
-        applyRecord(current);
         if (
           attempt
           && current.requestVersion === attempt.requestVersion
           && current.status === 'resolved'
         ) {
           attemptRecordRef.current = null;
+          applyRecord(current);
           return 'resolved';
         }
+        applyRecord(current);
         return 'uncertain';
       }
       if (attempt && options && storageKey && attempt.status === 'pending') {

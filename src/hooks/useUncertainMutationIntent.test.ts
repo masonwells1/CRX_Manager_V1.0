@@ -588,8 +588,16 @@ describe('useUncertainMutationIntent', () => {
       }));
     });
 
+    // The completed receipt remains an explicit retry, not an unlocked form
+    // that could misrepresent a new identical adjustment as applied.
+    expect(staleTab.result.current.isIntentLocked).toBe(true);
+    expect(staleTab.result.current.unresolvedIntent).toEqual({ quantity: 5 });
     await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
     expect(staleTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => staleTab.result.current.resolveIntent());
+    expect(staleTab.result.current.isIntentLocked).toBe(false);
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    expect(staleTab.result.current.getIdempotencyKey()).not.toBe(originalKey);
   });
 
   it('gives an identical follow-up a fresh key once this tab completed its own request', async () => {
