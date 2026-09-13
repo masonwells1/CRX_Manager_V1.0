@@ -328,7 +328,8 @@ before any provider call permits a same-head retry. Follow
 confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
 `CHANGES_REQUESTED` verdict. An approving review is not required (removed 2026-09-02); when one
 *does* exist, require the native receipt's head SHA, that authenticated `APPROVED` review's `commit_id`, and
-the live PR head to match. The generic Actions-authored marker is dedupe evidence, not an
+the live PR head to match. Also require the receipt base SHA and live PR base SHA to match
+the expected base; native delivery validates both head and base commits. The generic Actions-authored marker is dedupe evidence, not an
 independent trust identity.
 
 ---

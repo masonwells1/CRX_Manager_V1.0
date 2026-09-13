@@ -1,5 +1,5 @@
 name: CodeRabbit final review gate
-run-name: CodeRabbit gate ${{ github.event.action }} PR ${{ github.event.pull_request.number }} head ${{ github.event.pull_request.head.sha }} base ${{ github.event.pull_request.base.sha }}
+run-name: CodeRabbit gate ${{ github.event.action }} PR ${{ github.event.pull_request.number }} head ${{ github.event.pull_request.head.sha }} base ${{ github.event.pull_request.base.sha }} execution ${{ github.sha }}
 
 # `pull_request_target` ONLY. Do NOT add `pull_request_review` (or any other
 # pull-request event) back to this workflow.

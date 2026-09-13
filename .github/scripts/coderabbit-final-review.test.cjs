@@ -353,6 +353,8 @@ test('the trusted final-review workflow has only the final-review-gate job', () 
     'utf8',
   );
   assertOnlyTrustedGateJob(workflow);
+  assert.match(workflow, /^run-name: .*execution \$\{\{ github\.sha \}\}$/m,
+    'execution provenance must come from the trusted workflow context');
 });
 
 test('successful opened snapshots have a distinct check context from final review', () => {
@@ -2733,7 +2735,7 @@ test('the live gate rejects a required GitHub Actions check resolved to another 
 
 function makeNativeHarness(options = {}) {
   const birth = {
-    headSha: HEAD, baseSha: BASE, executionSha: BASE, runId: 505050,
+    headSha: HEAD, baseSha: BASE, executionSha: options.birthExecutionSha ?? BASE, runId: 505050,
     repoId: 123456, repoFullName: 'masonwells1/FarmRx', pullNumber: 42,
     creatorId: 1234, prCreatedAt: '2026-09-06T03:42:00Z',
   };
@@ -2743,8 +2745,8 @@ function makeNativeHarness(options = {}) {
   };
   const birthRun = {
     id: birth.runId, workflow_id: 818181, path: '.github/workflows/coderabbit-final-review.yml',
-    display_title: `CodeRabbit gate opened PR 42 head ${HEAD} base ${BASE}`,
-    event: 'pull_request_target', head_sha: BASE, actor: { id: birth.creatorId, login: 'masonwells1' },
+    display_title: `CodeRabbit gate opened PR 42 head ${HEAD} base ${BASE} execution ${birth.executionSha}`,
+    event: 'pull_request_target', head_sha: options.birthRunHeadSha ?? BASE, actor: { id: birth.creatorId, login: 'masonwells1' },
     repository: { id: birth.repoId, full_name: birth.repoFullName },
     pull_requests: [{ number: 42, head: { sha: HEAD }, base: { sha: BASE } }],
     status: 'completed', conclusion: 'success', created_at: '2026-09-06T03:42:01Z', updated_at: '2026-09-06T03:44:00Z',
@@ -3616,6 +3618,55 @@ test('opened capture uses the original webhook even when later PR reads expose a
   assert.equal(harness.receiptComments.length, 0);
   assert.equal((await execute(harness, { nativeDispatch: true })).duplicate, true);
   assert.equal(harness.comments.length, 1);
+});
+
+test('opened capture validates an independent execution SHA and never substitutes it for the PR base', async () => {
+  const harness = makeNativeHarness({action: 'opened'});
+  harness.comments.splice(0);
+  harness.context.sha = NEXT_BASE;
+  const result = await execute(harness, {nativeDispatch: true});
+  assert.equal(result.status, 'birth_recorded');
+  const birth = JSON.parse(harness.comments[0].body.slice('<!-- crx-coderabbit-candidate-birth:v1 '.length, -4));
+  assert.equal(birth.executionSha, NEXT_BASE);
+  assert.equal(birth.baseSha, BASE);
+  assert.equal(birth.headSha, HEAD);
+  assert.equal(harness.receiptComments.length, 0);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+});
+
+test('original execution provenance may differ while original head and base stay authenticated', async () => {
+  for (const birthRunHeadSha of [HEAD, BASE, NEXT_BASE]) {
+    const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
+    const harness = makeNativeHarness({birthExecutionSha: NEXT_BASE, birthRunHeadSha,
+      pulls: [pullRequest({labels})], eventPullRequest: pullRequest({labels}),
+      coderabbitReviews: [nativeReview()]});
+    const result = await execute(harness, {nativeDispatch: true});
+    assert.equal(result.status, 'reviewed');
+    assert.deepEqual(harness.failures, []);
+  }
+});
+
+test('malformed or unauthenticated execution provenance blocks before provider spending', async () => {
+  for (const birthExecutionSha of ['invalid', null, NEXT_BASE]) {
+    const harness = makeNativeHarness({birthExecutionSha});
+    const birth = harness.comments.find((comment) => comment.body?.startsWith('<!-- crx-coderabbit-candidate-birth:'));
+    const decoded = JSON.parse(birth.body.slice('<!-- crx-coderabbit-candidate-birth:v1 '.length, -4));
+    decoded.executionSha = birthExecutionSha;
+    birth.body = candidateBirthBody(decoded);
+    if (birthExecutionSha === NEXT_BASE) {
+      const lookup = harness.github.rest.actions.getWorkflowRun;
+      harness.github.rest.actions.getWorkflowRun = async (args) => {
+        const response = await lookup(args);
+        if (args.run_id === 505050) response.data = {...response.data,
+          display_title: `CodeRabbit gate opened PR 42 head ${HEAD} base ${BASE} execution ${BASE}`};
+        return response;
+      };
+    }
+    const result = await execute(harness, {nativeDispatch: true});
+    assert.equal(result.status, 'blocked');
+    assert.equal(harness.receiptComments.length, 0);
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  }
 });
 
 test('a former administrator now read-only cannot launder a late review from the original base', async () => {

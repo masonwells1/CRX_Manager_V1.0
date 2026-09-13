@@ -858,7 +858,7 @@ function parseCandidateBirth(comment) {
     if (comment.body !== candidateBirthBody(birth)
       || !/^[a-f0-9]{40}$/.test(birth.headSha || '')
       || !/^[a-f0-9]{40}$/.test(birth.baseSha || '')
-      || birth.executionSha !== birth.baseSha
+      || !/^[a-f0-9]{40}$/.test(birth.executionSha || '')
       || ![birth.runId, birth.repoId, birth.pullNumber, birth.creatorId].every(isPositiveSafeInteger)
       || !isNonBlankString(birth.repoFullName)
       || !isPositiveSafeInteger(Number(comment.id))
@@ -933,8 +933,8 @@ async function inspectCandidateBirth({ github, owner, repo, pullNumber, headSha,
   const originalPull = origin.pull_requests?.find((pull) => Number(pull.number) === pullNumber);
   if (trusted.error || origin.id !== birth.runId || origin.workflow_id !== trusted.workflowId
     || origin.path !== '.github/workflows/coderabbit-final-review.yml' || origin.path !== trusted.workflowPath
-    || origin.display_title !== `CodeRabbit gate opened PR ${pullNumber} head ${headSha} base ${baseSha}`
-    || origin.event !== 'pull_request_target' || ![headSha, baseSha].includes(origin.head_sha)
+    || origin.display_title !== `CodeRabbit gate opened PR ${pullNumber} head ${headSha} base ${baseSha} execution ${birth.executionSha}`
+    || origin.event !== 'pull_request_target' || ![headSha, baseSha, birth.executionSha].includes(origin.head_sha)
     || originalPull?.head?.sha !== headSha || originalPull?.base?.sha !== baseSha
     || origin.repository?.id !== birth.repoId || origin.repository?.full_name !== birth.repoFullName
     || origin.actor?.id !== birth.creatorId || origin.status !== 'completed' || origin.conclusion !== 'success'

@@ -47,7 +47,10 @@ record attempts; neither establishes merge authorization.
 The trusted workflow records the original `opened` webhook's head and base.
 Its opened job reports `CodeRabbit candidate snapshot`, a separate check context;
 snapshot success never reports completed `final-review-gate` review delivery.
-Its run name also includes the action, PR number and both original SHAs; receipt
+Its run name also includes the action, PR number, both original SHAs and the independent
+execution SHA from the trusted default branch; execution is provenance, never the PR base.
+All three SHAs are validated independently, and the execution value must match the
+authenticated original run name. A changed live PR head or base still requires a fresh PR. Receipt
 inspection checks that name on the authenticated original workflow run. Later
 REST PR and activity-event payloads can expose current values, so they cannot
 reconstruct this original context. The snapshot comment is an index to that

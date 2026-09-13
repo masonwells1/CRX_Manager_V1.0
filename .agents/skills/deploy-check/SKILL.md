@@ -13,7 +13,7 @@ environment safety, and production readiness.
 Codex, and Mason alike. The landing path is:
 
 **push a branch → open a PR → finish required checks → freeze the candidate →
-apply `ready-for-coderabbit` → let the default-branch workflow post `@coderabbitai review` once →
+apply `ready-for-coderabbit` → let the default-branch workflow record its receipt and add `coderabbit-review-dispatch` once →
 read and resolve that final review → merge with
 `--match-head-commit <reviewed-head-sha>`.** The **merge** is what deploys production via Vercel's
 git integration; Vercel's one-click rollback is the accepted safety net.
