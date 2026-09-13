@@ -34,12 +34,22 @@ plain failure and never reset the key.
 - Non-finite quantities (e.g. `1e400`) are treated as zero instead of being
   frozen as `null`.
 
-**Review.** compliance-reviewer: 0 BLOCKER / 2 HIGH / 5 MED / 4 LOW. Fixed: both
-HIGH (mid-dialog `onSuccess` emptied the results; tests used a no-op `onSuccess`
-that hid it), row results now bound to their batch key, banner no longer promises
-safety for products adjusted another way, exact request counts in tests,
-non-finite quantity, "Refused — will retry" label inside a frozen batch. Deferred
-with reason: a binding-rejected row unfreezes the batch (per the
+**Review.** compliance-reviewer round 1: 0 BLOCKER / 2 HIGH / 5 MED / 4 LOW.
+Fixed: both HIGH (mid-dialog `onSuccess` emptied the results; tests used a no-op
+`onSuccess` that hid it), row results now bound to their batch key, banner no
+longer promises safety for products adjusted another way, exact request counts in
+tests, non-finite quantity, "Refused — will retry" label inside a frozen batch.
+Round 2: 0 BLOCKER / 0 HIGH / 1 MED / 6 LOW. Fixed: the last submitted batch's
+rows stay listed until the dialog closes, so a refused or "Check stock history"
+row is not hidden when a frozen batch is retried after a reload with a different
+selection (MED); closing after a not-confirmed row also refreshes the page; a
+failed "batch finished" write shows a warning instead of plain success;
+`buildAdjustmentCalls` now requires a key function; tests cover Escape close,
+refresh-on-close after retry and refusal, and a refused row re-sent under its
+same key inside a frozen batch. Deferred: the frozen "Retry N Unchanged" count can
+differ from rows sent when a batch is adopted from another tab (cosmetic; the
+send is correct); no test injects a `resolveIntent` storage failure. Deferred
+from round 1 with reason: a binding-rejected row unfreezes the batch (per the
 `getIdempotencyBindingRejection` contract the key can never succeed, and keeping
 it frozen would trap the dialog until the 23h window expires); an expired frozen
 record has no discard control (hook-wide behaviour shared by every surface); a
@@ -67,7 +77,10 @@ unaffected); two tabs submitting an identical new batch at once share one key
   one move per adjustment (stock 100 → 105 → 102). The harness was deleted.
 
 **Not verified.** No real adjustment was submitted in the running app against
-Supabase: that would change live stock. After a full page reload a frozen batch
+Supabase: that would change live stock. The real-browser run exercised the
+round-1 code; the round-2 changes (last batch rows kept listed, refresh after a
+not-confirmed close, resolve-failure warning, required key function) are covered
+by the component tests that render the real modal, not by a second browser run. After a full page reload a frozen batch
 is only visible once an admin selects any row and opens Batch Adjust (surfacing
 it without a selection needs an `InventoryPage.tsx` change that would collide
 with open PR #624).

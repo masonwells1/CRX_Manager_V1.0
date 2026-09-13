@@ -31,13 +31,17 @@ interface RpcCall {
   p_idempotency_key: string;
 }
 
-/** Exported for testing */
+/**
+ * Exported for testing. `getKey` is required on purpose: a random key per call
+ * cannot be replayed after a lost reply, which is exactly the double-move this
+ * modal used to cause.
+ */
 // eslint-disable-next-line react-refresh/only-export-components
 export function buildAdjustmentCalls(
   items: AdjustmentItem[],
   reason: string,
   userId: string,
-  getKey: (item: AdjustmentItem) => string = () => crypto.randomUUID(),
+  getKey: (item: AdjustmentItem) => string,
 ): RpcCall[] {
   return items
     .filter((it) => it.delta !== 0)
@@ -122,10 +126,14 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
   const [saving, setSaving] = useState(false);
   const [rowResults, setRowResults] = useState<Record<string, RowResult>>({});
   const [rowMessages, setRowMessages] = useState<Record<string, string>>({});
+  // The rows of the last batch this dialog sent. Its results stay listed until the
+  // dialog closes, even when the current selection no longer contains them (e.g.
+  // a frozen batch retried after a reload with a different selection).
+  const [lastBatchRows, setLastBatchRows] = useState<BatchAdjustIntent['rows']>([]);
   // The Inventory page's onSuccess clears the selection, which empties `items`.
-  // Calling it mid-dialog would wipe the per-row results the operator still needs
-  // (which rows were refused or must be checked), so it runs when the dialog closes.
-  const adjustedSinceOpenRef = useRef(false);
+  // Calling it mid-dialog would wipe the per-row results the operator still needs,
+  // so it runs when the dialog closes — whenever stock moved or may have moved.
+  const stockMayHaveChangedRef = useRef(false);
 
   // adjust_inventory replays on the idempotency key. A batch whose reply was lost
   // may already have moved some stock, so the exact batch is frozen until every
@@ -153,13 +161,14 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
   const pendingItems = items.filter((it) => !SETTLED.has(rowResults[it.id]?.outcome));
 
   const resetAndClose = () => {
-    const adjusted = adjustedSinceOpenRef.current;
-    adjustedSinceOpenRef.current = false;
+    const refreshPage = stockMayHaveChangedRef.current;
+    stockMayHaveChangedRef.current = false;
     setRowResults({});
     setRowMessages({});
+    setLastBatchRows([]);
     setReason('');
     setUniformDelta('');
-    if (adjusted) onSuccess();
+    if (refreshPage) onSuccess();
     onClose();
   };
 
@@ -271,16 +280,19 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       const refusedCount = outcomes.filter((o) => o === 'refused').length;
       const bindingCount = outcomes.filter((o) => o === 'binding_rejected').length;
       const adjustedCount = outcomes.filter((o) => o === 'adjusted').length;
+      if (newlyAdjusted > 0 || uncertainCount > 0) stockMayHaveChangedRef.current = true;
 
       // Only unfreeze once no row is left uncertain. A refused or binding-rejected
       // row committed nothing under its key, so a later, deliberately new batch
       // may safely use fresh keys. Unfreeze BEFORE showing the row results so the
       // dialog never shows final results under an "Unconfirmed batch" banner.
+      let resolveFailed = false;
       if (uncertainCount === 0) {
         try {
           await batchIntent.resolveIntent();
         } catch (err) {
           // The batch stays frozen; retrying it only replays receipts.
+          resolveFailed = true;
           Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
             extra: { context: 'Batch adjust resolve failed' },
           });
@@ -288,15 +300,19 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       }
       setRowResults(results);
       setRowMessages(messages);
+      setLastBatchRows(request.rows);
 
       const signedDelta = `${request.delta > 0 ? '+' : ''}${request.delta}`;
       if (newlyAdjusted > 0) {
-        adjustedSinceOpenRef.current = true;
         await logActivity({ event: 'inventory_batch_adjusted', description: `Batch adjusted ${newlyAdjusted} product(s) by ${signedDelta}: ${request.reason}`, performedBy: request.performedBy, entityType: 'inventory' });
       }
 
       if (adjustedCount === request.rows.length) {
-        toast('success', `Adjusted ${adjustedCount} product(s) by ${signedDelta}`);
+        if (resolveFailed) {
+          toast('warning', `Adjusted ${adjustedCount} product(s) by ${signedDelta}, but this browser could not record that the batch finished. If it reappears as unconfirmed, retrying it will not move stock again.`);
+        } else {
+          toast('success', `Adjusted ${adjustedCount} product(s) by ${signedDelta}`);
+        }
         resetAndClose();
         return;
       }
@@ -314,9 +330,20 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     }
   };
 
-  const displayRows = frozen
-    ? frozen.rows.map((row) => ({ id: row.inventoryId, name: row.productName, qty: null as number | null }))
-    : items.map((it) => ({ id: it.id, name: it.product_name, qty: it.quantity_available }));
+  const quantityById = new Map(items.map((it) => [it.id, it.quantity_available]));
+  const listedRows = frozen
+    ? frozen.rows
+    : [
+      ...lastBatchRows,
+      ...items
+        .filter((it) => !lastBatchRows.some((row) => row.inventoryId === it.id))
+        .map((it) => ({ inventoryId: it.id, productName: it.product_name })),
+    ];
+  const displayRows = listedRows.map((row) => ({
+    id: row.inventoryId,
+    name: row.productName,
+    qty: frozen ? null : quantityById.get(row.inventoryId) ?? null,
+  }));
   const actionCount = frozen
     ? frozen.rows.filter((row) => !SETTLED.has(rowResults[row.inventoryId]?.outcome)).length
     : pendingItems.length;

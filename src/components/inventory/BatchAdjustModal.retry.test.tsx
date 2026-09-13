@@ -95,6 +95,11 @@ const PRODUCTS = [
   { id: 'inv-b', product_id: 'p-b', product_name: 'Bicep II Magnum' },
 ];
 
+const NEGATIVE_STOCK_REFUSAL = {
+  code: 'P0001',
+  message: 'Adjustment would result in negative inventory (current: 1, delta: -4, result: -3)',
+};
+
 function renderPage(db: FakeDatabase, options: { selectOnOpen: string[]; startOpen?: boolean }) {
   const onClose = vi.fn();
   const onSuccess = vi.fn();
@@ -135,6 +140,12 @@ async function click(name: RegExp) {
   await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
   await act(async () => {
     fireEvent.click(button);
+  });
+}
+
+async function pressEscape() {
+  await act(async () => {
+    fireEvent.keyDown(document, { key: 'Escape' });
   });
 }
 
@@ -182,6 +193,22 @@ describe('BatchAdjustModal retry keys', () => {
     expect(onSuccess).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes the page when closed with a row that may already have moved stock', async () => {
+    const db = createFakeDatabase();
+    db.loseNextReply.add('inv-a');
+    const { onClose, onSuccess } = renderPage(db, { selectOnOpen: ['inv-a'] });
+
+    fillForm('5', 'Cycle count correction');
+    await submit(/Adjust 1 Product/);
+    expect(db.moves.get('inv-a')).toBe(1);
+    expect(onSuccess).not.toHaveBeenCalled();
+
+    await pressEscape();
+
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the unconfirmed row key after a mixed result and keeps the results on screen', async () => {
     const db = createFakeDatabase();
     db.loseNextReply.add('inv-b');
@@ -223,19 +250,55 @@ describe('BatchAdjustModal retry keys', () => {
     // browser storage and is shown locked as soon as the dialog opens again, even
     // when only one of its products is selected.
     first.unmount();
-    renderPage(db, { selectOnOpen: ['inv-a'], startOpen: false });
+    const second = renderPage(db, { selectOnOpen: ['inv-a'], startOpen: false });
     await click(/Select and open batch adjust/);
     await waitFor(() => expect(screen.getByText(/Unconfirmed batch/)).toBeTruthy());
     expect((screen.getByPlaceholderText('e.g. 5 or -3') as HTMLInputElement).disabled).toBe(true);
 
     await submit(/Retry 2 Unchanged/);
 
+    expect(mockToast).toHaveBeenLastCalledWith('success', 'Adjusted 2 product(s) by -3');
     expect(db.calls).toHaveLength(4);
     expect(db.calls.slice(2).map((call) => call.p_idempotency_key).sort()).toEqual(firstKeys);
     expect(db.moves.get('inv-a')).toBe(1);
     expect(db.moves.get('inv-b')).toBe(1);
     expect(db.stock.get('inv-a')).toBe(97);
     expect(db.stock.get('inv-b')).toBe(97);
+    expect(second.onClose).toHaveBeenCalledTimes(1);
+    expect(second.onSuccess).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Unconfirmed batch/)).toBeNull();
+  });
+
+  it('keeps a refused row of a retried batch listed even when it is not in the current selection', async () => {
+    const db = createFakeDatabase();
+    db.loseNextReply.add('inv-a');
+    db.refuse.set('inv-b', NEGATIVE_STOCK_REFUSAL);
+    const first = renderPage(db, { selectOnOpen: ['inv-a', 'inv-b'] });
+
+    fillForm('-4', 'Shrink');
+    await submit(/Adjust 2 Products/);
+    // Atrazine is unconfirmed, so the batch — refused Bicep included — stays frozen.
+    expect(screen.getByText('Refused — will retry')).toBeTruthy();
+
+    first.unmount();
+    const second = renderPage(db, { selectOnOpen: ['inv-a'], startOpen: false });
+    await click(/Select and open batch adjust/);
+    await waitFor(() => expect(screen.getByText(/Unconfirmed batch/)).toBeTruthy());
+
+    await submit(/Retry 2 Unchanged/);
+
+    // The retry replays Atrazine and Bicep is refused again under its SAME key.
+    expect(db.calls).toHaveLength(4);
+    expect(db.calls[3].p_inventory_id).toBe('inv-b');
+    expect(db.calls[3].p_idempotency_key).toBe(db.calls[1].p_idempotency_key);
+    expect(db.moves.get('inv-a')).toBe(1);
+    expect(db.moves.get('inv-b')).toBeUndefined();
+    // The batch unfroze, but Bicep's result is still on screen although only
+    // Atrazine is selected.
+    expect(screen.queryByText(/Unconfirmed batch/)).toBeNull();
+    expect(screen.getByText('Bicep II Magnum')).toBeTruthy();
+    expect(screen.getByText('Refused — nothing changed')).toBeTruthy();
+    expect(second.onSuccess).not.toHaveBeenCalled();
   });
 
   it('uses a fresh key when the payload changes', async () => {
@@ -288,8 +351,8 @@ describe('BatchAdjustModal retry keys', () => {
 
   it('treats a definitive refusal as final for that row and unfreezes the batch', async () => {
     const db = createFakeDatabase();
-    db.refuse.set('inv-b', { code: 'P0001', message: 'Adjustment would result in negative inventory (current: 1, delta: -4, result: -3)' });
-    renderPage(db, { selectOnOpen: ['inv-a', 'inv-b'] });
+    db.refuse.set('inv-b', NEGATIVE_STOCK_REFUSAL);
+    const { onSuccess } = renderPage(db, { selectOnOpen: ['inv-a', 'inv-b'] });
 
     fillForm('-4', 'Shrink');
     await submit(/Adjust 2 Products/);
@@ -300,6 +363,7 @@ describe('BatchAdjustModal retry keys', () => {
     expect(db.calls).toHaveLength(2);
     expect(db.moves.get('inv-a')).toBe(1);
     expect(db.moves.get('inv-b')).toBeUndefined();
+    expect(onSuccess).not.toHaveBeenCalled();
 
     // The refused row can be sent again as a NEW batch; the adjusted row is not.
     db.refuse.delete('inv-b');
@@ -310,5 +374,6 @@ describe('BatchAdjustModal retry keys', () => {
     expect(db.calls[2].p_idempotency_key).not.toBe(db.calls[1].p_idempotency_key);
     expect(db.moves.get('inv-a')).toBe(1);
     expect(db.moves.get('inv-b')).toBe(1);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
   });
 });
