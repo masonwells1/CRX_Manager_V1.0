@@ -6,11 +6,16 @@
 >
 > **Prior baselines:** 2026-06-23 live: 228 callable RPCs + 51 trigger functions. 2026-06-29 branch HEAD (local, pre-live-merge): 270 callable RPCs + 56 trigger functions.
 
-**Local generic-creation follow-up, September 12 (NOT APPLIED; no live-count change):**
-`20260912165758_refuse_generic_field_invoice_creation.sql` retains the existing
-`save_invoice(jsonb,jsonb,text)` public RPC contract and adds only an early refusal to
-CREATE `field_application` invoices through it. Dedicated field-app/job/blend creators
-remain the supported creation paths. Existing generic field edits, other types and all
+**Local generic-creation follow-up, September 12–13 (NOT APPLIED; no live-count change):**
+Both phases retain the existing `save_invoice(jsonb,jsonb,text)` public RPC contract.
+Phase 1, `20260912165758_refuse_generic_field_invoice_creation.sql`, installs the
+advisory cutover barrier but deliberately continues to allow generic
+`field_application` creation and committed receipt retries. The bypass is NOT closed
+after phase 1. Phase 2, `20260913040359_finish_generic_field_invoice_cutover.sql`,
+must commit in a separate transaction and refuses installation while any unexpired
+generic `save_invoice` receipt remains. Only after phase 2 commits does the public
+RPC refuse CREATE `field_application` invoices. Dedicated field-app/job/blend creators
+remain the supported creation paths; existing generic field edits, other types and
 below-cost/idempotency delegation remain unchanged. A universal INSERT draft was rejected.
 >
 > **2026-08-09 update (retires the earlier candidate warning):** those function and trigger changes **are live**. The candidates `20260808150100` / `20260808150200` / `20260808150400` were re-issued forward and applied on 2026-08-09 as `20260809170500` / `20260809170600` / `20260809170800` (ledger versions `20260809203222`, `20260809204044`, `20260809204855`), together with `20260809170700` and `20260809170900`. Production now carries the restored `batch_apply_prepayments` actor guard, the cancel-order `quantity_remaining` zeroing, and the whole-cent rounding trigger function `public._round_money_to_whole_cents`. Per-migration proof: `docs/reference/migration-history.md` rows 857–861.
