@@ -715,6 +715,93 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
   });
 });
 
+describe('FieldApplicationInvoice — invoice load ownership', () => {
+  it('keeps previously loaded invoice-A controls hidden when returning before its fresh load completes', async () => {
+    const firstRow = {
+      id: 'inv-a', invoice_number: 'INV-A-OLD', invoice_type: 'field_application',
+      invoice_date: '2026-04-29', season: 2026, status: 'draft', invoice_group_id: null,
+    };
+    let resolveReturning!: (result: { data: unknown; error: null }) => void;
+    const pending = new Promise<{ data: unknown; error: null }>((resolve) => { resolveReturning = resolve; });
+    const fallback = makeFromMock({});
+    let reads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      const chain = fallback(table) as Record<string, unknown>;
+      if (table === 'invoices') {
+        chain.maybeSingle = vi.fn().mockResolvedValue({
+          data: { invoice_type: 'field_application', job_id: null, blend_ticket_id: null }, error: null,
+        });
+        chain.single = vi.fn(() => ++reads === 1
+          ? Promise.resolve({ data: firstRow, error: null })
+          : pending);
+      }
+      return chain;
+    });
+    mockUseParams.mockReturnValue({ id: 'inv-a' });
+    const page = await renderPage();
+    await screen.findByText('Field Application INV-A-OLD');
+    mockUseParams.mockReturnValue({ id: 'inv-b' });
+    await act(async () => page.rerender(<FieldApplicationInvoice />));
+    expect(screen.getByRole('status')).toHaveTextContent('Loading invoice');
+    mockUseParams.mockReturnValue({ id: 'inv-a' });
+    await act(async () => page.rerender(<FieldApplicationInvoice />));
+    expect(screen.getByRole('status')).toHaveTextContent('Loading invoice');
+    expect(screen.queryByText('Field Application INV-A-OLD')).not.toBeInTheDocument();
+    await act(async () => resolveReturning({
+      data: { ...firstRow, invoice_number: 'INV-A-FRESH', invoice_date: '2027-04-29', season: 2027 }, error: null,
+    }));
+    await screen.findByText('Field Application INV-A-FRESH');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it.each(['inv-b', 'inv-a'])('ignores a late invoice-A header after navigation to %s', async (finalId) => {
+    const row = (id: string, season: number) => ({
+      id, invoice_number: `INV-${id}-${season}`, invoice_type: 'field_application',
+      invoice_date: `${season}-04-29`, season, status: 'draft', invoice_group_id: null,
+    });
+    let resolveOld!: (result: { data: unknown; error: null }) => void;
+    const oldHeader = new Promise<{ data: unknown; error: null }>((resolve) => { resolveOld = resolve; });
+    const headerReads = vi.fn();
+    const fallback = makeFromMock({});
+    mockFrom.mockImplementation((table: string) => {
+      const chain = fallback(table) as Record<string, unknown>;
+      if (table !== 'invoices') return chain;
+      let invoiceId = '';
+      chain.eq = vi.fn((column: string, value: string) => {
+        if (column === 'id') invoiceId = value;
+        return chain;
+      });
+      chain.maybeSingle = vi.fn().mockResolvedValue({
+        data: { invoice_type: 'field_application', job_id: null, blend_ticket_id: null }, error: null,
+      });
+      chain.single = vi.fn(() => {
+        headerReads(invoiceId);
+        return headerReads.mock.calls.length === 1
+          ? oldHeader
+          : Promise.resolve({ data: row(invoiceId, 2027), error: null });
+      });
+      return chain;
+    });
+    mockUseParams.mockReturnValue({ id: 'inv-a' });
+    const page = await renderPage();
+    await waitFor(() => expect(headerReads).toHaveBeenCalledWith('inv-a'));
+    mockUseParams.mockReturnValue({ id: 'inv-b' });
+    await act(async () => page.rerender(<FieldApplicationInvoice />));
+    await screen.findByText('Field Application INV-inv-b-2027');
+    if (finalId === 'inv-a') {
+      mockUseParams.mockReturnValue({ id: 'inv-a' });
+      await act(async () => page.rerender(<FieldApplicationInvoice />));
+      await screen.findByText('Field Application INV-inv-a-2027');
+    }
+    await act(async () => resolveOld({ data: row('inv-a', 2026), error: null }));
+    expect(screen.getByText(`Field Application INV-${finalId}-2027`)).toBeInTheDocument();
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2027-10-01' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('This invoice is filed in season 2027.');
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});
+
 describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
   function setupGroup(siblingStatuses: string[]) {
     const invoiceRow = {

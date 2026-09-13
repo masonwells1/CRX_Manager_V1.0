@@ -23,6 +23,7 @@ import { withBelowCostReason } from '../lib/belowCostApproval';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
+import { retryGenericInvoiceCutover } from '../lib/genericInvoiceCutoverRetry';
 import { Sentry } from '../lib/sentry';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -811,11 +812,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           }
           legacySaveIntentRef.current = { key: idemKey, intent };
         }
-        const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_invoice', withBelowCostReason('save_invoice', {
-          p_invoice: payload,
-          p_items: itemsPayload,
-          p_idempotency_key: idemKey,
-        }, reason)));
+        const { data, error } = await runWithBelowCostApproval((reason) => {
+          return retryGenericInvoiceCutover(() => supabase.rpc('save_invoice', withBelowCostReason('save_invoice', {
+            p_invoice: payload,
+            p_items: itemsPayload,
+            p_idempotency_key: idemKey,
+          }, reason)));
+        });
 
         if (error) {
           const receipt = getIdempotencyMismatchResult(error, 'save_invoice');

@@ -326,6 +326,8 @@ assert.equal(md5(plpgsqlBody(genericRoutingSql, 'CREATE FUNCTION public._save_in
   '622210352fd3c9fa3e293a8e48957429', 'routing source must match September 12 read-only live body');
 const genericCreationGuardSql = readFileSync(GENERIC_CREATION_GUARD, 'utf8');
 const genericCutoverBarrierSql = readFileSync(GENERIC_CUTOVER_BARRIER, 'utf8');
+assert.equal(genericCreationGuardSql.includes('\r'), false, `${path.basename(GENERIC_CREATION_GUARD)} must use LF line endings`);
+assert.equal(genericCutoverBarrierSql.includes('\r'), false, `${path.basename(GENERIC_CUTOVER_BARRIER)} must use LF line endings`);
 assertWrappable(genericCutoverBarrierSql, path.basename(GENERIC_CUTOVER_BARRIER));
 const genericBarrierBodyMd5 = md5(plpgsqlBody(
   genericCutoverBarrierSql, 'CREATE OR REPLACE FUNCTION public.save_invoice(',
@@ -975,6 +977,11 @@ $probe$;`;
 }
 
 function sourceSeasonCreatorProbe() {
+  // This is the historical replay's creator control, not an assertion about later
+  // Chicago compatibility overlays. Its inspected INSERT stamps CURRENT_DATE.
+  // Refuse a changed baseline rather than silently substituting a date expression.
+  assert.equal(scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.transfer_job_to_invoice(uuid,uuid,text)'::regprocedure"),
+    '78b827f8509a2740ea9879364747c372', 'job creator baseline changed; re-review its invoice-date assertion');
   const sql = `BEGIN;
 DO $probe$
 DECLARE v_customer uuid; v_field uuid; v_job uuid; v_ticket uuid; v_invoice uuid; v_result jsonb;
@@ -1336,7 +1343,7 @@ ${predOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904160000 predecessor did not rea
   const saveOut = apply('save-side.sql');
   assert.match(`${saveOut.stdout}
 ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did not reach its own POSTFLIGHT_OK');
-  log('PHASE 1a: 20260904160000 and 20260904180000 applied -- the container is now in the state production is in');
+  log('PHASE 1a: historical invoice-date/season baseline installed; job/blend creators are baseline controls, not later live-overlay proof');
   psql(genericRoutingSql.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION'), { wrap: true });
   assert.equal(scalar("SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.save_invoice(jsonb,jsonb,text)'::regprocedure"),
     '9a34478d405a1a3b8233cabcdfb39691', 'public generic RPC entry must match September 12 live body');

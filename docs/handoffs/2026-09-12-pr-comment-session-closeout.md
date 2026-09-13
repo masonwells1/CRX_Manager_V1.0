@@ -1,5 +1,13 @@
 # 2026-09-12 — PR-comment audit session: current closeout map
 
+**September 13 supersession:** later #652 corrected published head `7a0ed406b1`
+supersedes the dated `15742bdabd74` publication below; see `../manual/KNOWN_ISSUES.md`
+and the scoped September 13 header in `../manual/CURRENT_STATE.md`. Retain the
+historical P2, exact-head proof, and CodeRabbit review gates rather than reading
+this older checkpoint as current clearance. Replacement #662 head `5818d67aee`
+received CodeRabbit changes requested on September 13; its valid findings require
+correction and a freshly reviewed candidate. All three guards remain unapplied.
+
 ## Confirmed GitHub state
 
 Refreshed against main `791bc3d8614fde6a1ff71ad3300d341563aaab89` on September 12.

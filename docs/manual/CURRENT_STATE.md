@@ -22,6 +22,15 @@ mutation passed in disposable PostgreSQL. This is local behavior proof, not live
 Original #592 and #599 are merged; their distinct later follow-ups are not thereby cleared.
 See the September 12 session closeout for current review gates and remaining obligations.
 
+**Closeout supersession:** the handoff's older published #652 head `15742bdabd74`
+was superseded by corrected published head `7a0ed406b1`, as recorded in
+`KNOWN_ISSUES.md`. Preserve its dated proof/review history, but use the scoped
+September 13 status below instead of treating that older handoff as current.
+Fresh replacement #662 head `5818d67aee` received CodeRabbit changes requested
+on September 13; its five findings are being adjudicated/corrected before a new
+frozen candidate receives fresh exact-head proof, CI, and actual CodeRabbit review.
+No pending guard is applied and no corrected candidate is merge-cleared by that history.
+
 Published #652 head `7a0ed406b1` has executed retry-safe two-phase proof, exact-head
 Sol/high CLEAN and green implementation CI. Its two original Codex cutover findings
 have exact-head dispositions and resolved threads. A new-head Codex P2 about phase-two

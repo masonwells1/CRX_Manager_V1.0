@@ -17,6 +17,18 @@ generic `save_invoice` receipt remains. Only after phase 2 commits does the publ
 RPC refuse CREATE `field_application` invoices. Dedicated field-app/job/blend creators
 remain the supported creation paths; existing generic field edits, other types and
 below-cost/idempotency delegation remain unchanged. A universal INSERT draft was rejected.
+
+The phase-one wrapper has three explicit `40001` refusals that roll back without
+changing an invoice. `InvoiceDetail` retries only the RPC request, retaining its
+original idempotency key and frozen invoice/items/approval reason:
+`GENERIC_FIELD_CUTOVER_IN_PROGRESS` waits briefly before a fresh request;
+`GENERIC_FIELD_CUTOVER_ISOLATION` starts a new request/transaction rather than
+reusing the failed transaction (explicit SQL callers must choose READ COMMITTED);
+`GENERIC_FIELD_CUTOVER_STALE_CALL` starts a fresh request so the committed catalog
+is observed. There are at most three requests. An exhausted refusal returns to
+the normal error handler with the key retained for a later identical retry.
+Other SQL errors and uncertain transport failures are never automatically retried.
+`runCriticalAction` remains reporting/loading-state handling, not mutation replay.
 >
 > **2026-08-09 update (retires the earlier candidate warning):** those function and trigger changes **are live**. The candidates `20260808150100` / `20260808150200` / `20260808150400` were re-issued forward and applied on 2026-08-09 as `20260809170500` / `20260809170600` / `20260809170800` (ledger versions `20260809203222`, `20260809204044`, `20260809204855`), together with `20260809170700` and `20260809170900`. Production now carries the restored `batch_apply_prepayments` actor guard, the cancel-order `quantity_remaining` zeroing, and the whole-cent rounding trigger function `public._round_money_to_whole_cents`. Per-migration proof: `docs/reference/migration-history.md` rows 857–861.
 >

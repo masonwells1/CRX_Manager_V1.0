@@ -168,6 +168,14 @@ export default function FieldApplicationInvoice() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
+  const invoiceLoadRef = useRef({ id, route: 0, request: 0 });
+  if (invoiceLoadRef.current.id !== id) {
+    // Invalidate before effects run, including A -> B -> A navigation.
+    invoiceLoadRef.current = {
+      id, route: invoiceLoadRef.current.route + 1,
+      request: invoiceLoadRef.current.request + 1,
+    };
+  }
   const saveIdem = useIdempotencyKey('save_field_app_invoice', profile?.id || '');
   // #33: per-invoice key cache for the billing-details RPC (PO/terms/due/footer/memo
   // + per-invoice Discount Earned). Keyed by the editor's invoice id (or '__new__'
@@ -217,6 +225,7 @@ export default function FieldApplicationInvoice() {
   const [transferringToScheduling, setTransferringToScheduling] = useState(false);
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [loadedInvoice, setLoadedInvoice] = useState<{ id: string; route: number } | null>(null);
   // todayInBusinessTz(), NOT new Date().toISOString() and NOT localToday().
   // toISOString() converts to UTC, so from ~7 pm Chicago this pre-filled TOMORROW — the same
   // UTC/Chicago bug the server-side invoice_date fallbacks fixed on 2026-09-04. Because this
@@ -796,7 +805,10 @@ export default function FieldApplicationInvoice() {
   }, [jobNumber, siblings, invoiceNumber]);
 
   const fetchInvoice = useCallback(async () => {
-    if (!id) return;
+    if (!id || invoiceLoadRef.current.id !== id) return;
+    const request = ++invoiceLoadRef.current.request;
+    const isCurrentLoad = () => invoiceLoadRef.current.id === id
+      && invoiceLoadRef.current.request === request;
     // #3 segregation: validate the invoice belongs in THIS (per-acre, field-app)
     // editor BEFORE pulling the full row, so a denied / wrong-editor URL doesn't
     // expose invoice data — only the type + job_id/blend_ticket_id discriminators are
@@ -809,6 +821,7 @@ export default function FieldApplicationInvoice() {
       .select('invoice_type, job_id, blend_ticket_id')
       .eq('id', id)
       .maybeSingle();
+    if (!isCurrentLoad()) return;
     if (chkErr || !chk) {
       toast('error', 'Failed to load invoice');
       navigate('/field-invoices');
@@ -834,6 +847,7 @@ export default function FieldApplicationInvoice() {
         .from('field_app_locations')
         .select('field_id', { count: 'exact', head: true })
         .eq('invoice_id', id);
+      if (!isCurrentLoad()) return;
       if (!locCount || locCount === 0) {
         navigate(`/field-invoices/${id}`, { replace: true });
         return;
@@ -845,6 +859,8 @@ export default function FieldApplicationInvoice() {
       .select('*')
       .eq('id', id)
       .single();
+
+    if (!isCurrentLoad()) return;
 
     if (error || !inv) {
       toast('error', 'Failed to load invoice');
@@ -953,6 +969,7 @@ export default function FieldApplicationInvoice() {
         .select('job_number, status, job_date')
         .eq('id', srcJobId)
         .maybeSingle();
+      if (!isCurrentLoad()) return;
       setJobNumber((jobRow as { job_number?: string } | null)?.job_number ?? null);
       // #41: source job status gates the post-notification action (completed/invoiced).
       setJobStatus(((jobRow as { status?: string } | null)?.status as JobStatus | undefined) ?? null);
@@ -1037,6 +1054,7 @@ export default function FieldApplicationInvoice() {
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
+      if (!isCurrentLoad()) return;
       if (sibs) {
         setSiblings(
           (sibs as Array<Record<string, unknown>>).map((s) => ({
@@ -1084,6 +1102,8 @@ export default function FieldApplicationInvoice() {
       ? await locQuery.eq('invoice_group_id', groupId)
       : await locQuery.eq('invoice_id', id);
 
+    if (!isCurrentLoad()) return;
+
     if (locs) {
       setLocations(
         (locs as Array<Record<string, unknown>>).map((l) => {
@@ -1111,6 +1131,8 @@ export default function FieldApplicationInvoice() {
       .eq('invoice_id', id)
       .order('sort_order');
 
+    if (!isCurrentLoad()) return;
+
     if (items) {
       // §5 (Codex P2): invoice_items does NOT carry label data, so hydrate the per-line
       // label fields (max_label_rate / unit / rei / phi) from products for the lines that
@@ -1126,6 +1148,7 @@ export default function FieldApplicationInvoice() {
           .from('products')
           .select('id, max_label_rate, max_label_rate_unit, rei_hours, phi_days')
           .in('id', productIds);
+        if (!isCurrentLoad()) return;
         for (const p of (prodRows as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }> | null) ?? []) {
           labelByProduct.set(p.id, {
             max_label_rate: p.max_label_rate,
@@ -1178,6 +1201,8 @@ export default function FieldApplicationInvoice() {
       .eq('invoice_id', id)
       .order('sort_order');
 
+    if (!isCurrentLoad()) return;
+
     if (shareData) {
       setShares(
         (shareData as Array<Record<string, unknown>>).map((s) => ({
@@ -1199,6 +1224,7 @@ export default function FieldApplicationInvoice() {
         .eq('job_id', srcJobId)
         .order('application_date', { ascending: false })
         .order('created_at', { ascending: false });
+      if (!isCurrentLoad()) return;
       setAppliedRecords((recs as JobAppliedRecordRow[]) ?? []);
     } else {
       setAppliedRecords([]);
@@ -1216,6 +1242,7 @@ export default function FieldApplicationInvoice() {
       .select('id, title, message, notification_type, created_at, related_entity_type')
       .or(notifOrFilters.join(','))
       .order('created_at', { ascending: false });
+    if (!isCurrentLoad()) return;
     if (notifsError) {
       setNotificationsError(sanitizeError(notifsError));
       setNotifications([]);
@@ -1223,12 +1250,14 @@ export default function FieldApplicationInvoice() {
       setNotificationsError(null);
       setNotifications((notifs as NotificationRow[]) ?? []);
     }
+    setLoadedInvoice({ id, route: invoiceLoadRef.current.route });
   }, [id, toast, navigate]);
 
   useEffect(() => {
     // App.tsx reuses this component when navigating between /new and /:id. Never let
     // the previous invoice's filed season leak into the next route while it loads.
     setFiledSeason(null);
+    return () => { invoiceLoadRef.current.request += 1; };
   }, [id]);
 
   useEffect(() => {
@@ -2486,6 +2515,10 @@ export default function FieldApplicationInvoice() {
   const handleCancel = () => {
     navigate('/field-invoices');
   };
+
+  if (!isNew && (loadedInvoice?.id !== id || loadedInvoice.route !== invoiceLoadRef.current.route)) {
+    return <Card><p role="status" className="p-4">Loading invoice…</p></Card>;
+  }
 
   return (
     <div className="space-y-6">
