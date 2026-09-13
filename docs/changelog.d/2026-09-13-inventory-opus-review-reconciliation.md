@@ -34,8 +34,9 @@ independent review, full remote delivery checks and authenticated CodeRabbit fin
 required before merge; this ledger does not claim that unpublished changes have landed.
 
 Review reconciliation retained two safety limitations rather than converting uncertainty into new
-inventory work: unreadable session storage stays fail-closed, and a copied tab acknowledgement
-conflicting with newer shared work stays locked. Neither condition proves the old mutation failed.
+inventory work: unreadable session storage stays fail-closed, and an unacknowledged attempt
+conflicting with newer shared work stays locked. This can include copied tabs and an ordinary reload
+that adopts a peer's pending request. Neither condition proves the old mutation failed.
 Staff must verify Active Holds/transaction history and obtain admin reconciliation; never clear
 storage or mint a fresh key blindly. The existing expired-request recovery design is assigned to
 the landing coordinator for 2026-09-18 in `docs/manual/KNOWN_ISSUES.md`; these browser-storage cases

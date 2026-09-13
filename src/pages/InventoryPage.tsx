@@ -1691,7 +1691,9 @@ export default function InventoryPage() {
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-2"
             />
             <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
-              {filteredProducts.length === 0 ? (
+              {createHoldIntent.isIntentLocked && holdProductId && !filteredProducts.some((product) => product.id === holdProductId) ? (
+                <p className="px-3 py-4 text-sm text-nav-dark bg-crx-green/10">Saved product (name unavailable)</p>
+              ) : filteredProducts.length === 0 ? (
                 <p className="px-3 py-4 text-sm text-secondary text-center">No products found</p>
               ) : (
                 filteredProducts.map((p) => (

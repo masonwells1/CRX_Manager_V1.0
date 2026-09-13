@@ -208,15 +208,27 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     expect(mocks.toast).toHaveBeenCalledWith('success', 'Adjusted by 50 units');
   });
 
-  it.each(['adjust_inventory', 'create_inventory_hold'] as const)(
-    'reports confirmed %s success and refreshes even when the resolved local mirror cannot be saved',
-    async (operation) => {
+  it.each([
+    { operation: 'adjust_inventory', fault: 'mirror' },
+    { operation: 'create_inventory_hold', fault: 'mirror' },
+    { operation: 'adjust_inventory', fault: 'acknowledgment' },
+    { operation: 'create_inventory_hold', fault: 'acknowledgment' },
+  ] as const)(
+    'reports confirmed $operation success and refreshes when cleanup fails in $fault',
+    async ({ operation, fault }) => {
       const originalSetItem = Storage.prototype.setItem;
       const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
-        if (this === window.localStorage && key.startsWith('crx:uncertain-mutation:v4:') && JSON.parse(value).status === 'resolved') {
+        if (fault === 'mirror' && this === window.localStorage && key.startsWith('crx:uncertain-mutation:v4:') && JSON.parse(value).status === 'resolved') {
           throw new DOMException('resolved mirror quota exhausted', 'QuotaExceededError');
         }
         originalSetItem.call(this, key, value);
+      });
+      const originalRemoveItem = Storage.prototype.removeItem;
+      const acknowledgementStorage = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key) {
+        if (fault === 'acknowledgment' && this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+          throw new DOMException('acknowledgment removal unavailable', 'SecurityError');
+        }
+        originalRemoveItem.call(this, key);
       });
       respond({ [operation]: () => ({ data: operation === 'adjust_inventory' ? { status: 'adjusted', new_quantity: 150 } : { hold_id: 'hold-saved' }, error: null }) });
       await renderPage();
@@ -239,6 +251,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
       await waitFor(() => expect(callsTo('get_inventory_position').length).toBeGreaterThan(beforeRefresh));
       const committed = callsTo(operation)[0];
       storage.mockRestore();
+      acknowledgementStorage.mockRestore();
       if (operation === 'adjust_inventory') {
         dialog = await openAdjustForRow(0);
       } else {
@@ -356,7 +369,7 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     expect(mocks.toast).toHaveBeenCalledWith('success', 'Hold created successfully');
   });
 
-  it.each([false, true])('preserves the frozen customer on reload when its lookup fails: %s', async (lookupFails) => {
+  it.each(['none', 'customers', 'products', 'inactive-product'] as const)('preserves frozen hold IDs on reload with unavailable lookup: %s', async (lookupFailure) => {
     mocks.from.mockImplementation((table: string) => {
       if (table === 'products') return query(products);
       if (table === 'customers') return query([{ id: 'customer-a', farm_name: 'Farm A' }]);
@@ -378,22 +391,35 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     await within(dialog).findByRole('button', { name: /retry exact hold/i });
     const original = callsTo('create_inventory_hold')[0];
     initial.unmount();
-    if (lookupFails) {
+    if (lookupFailure !== 'none') {
       mocks.from.mockImplementation((table: string) => {
-        if (table === 'products') return query(products);
-        if (table === 'customers') return query([], { message: 'customer lookup unavailable' });
+        if (table === 'products') {
+          if (lookupFailure === 'products') return query([], { message: 'product lookup unavailable' });
+          return query(lookupFailure === 'inactive-product' ? [] : products);
+        }
+        if (table === 'customers') return lookupFailure === 'customers'
+          ? query([], { message: 'customer lookup unavailable' })
+          : query([{ id: 'customer-a', farm_name: 'Farm A' }]);
         return query([]);
       });
     }
 
     await renderPage();
     const recovered = screen.getByRole('dialog', { name: /create.*hold/i });
-    expect(await within(recovered).findByRole('button', { name: /SKU-A/i })).toBeInTheDocument();
+    if (lookupFailure === 'products' || lookupFailure === 'inactive-product') {
+      expect(await within(recovered).findByText('Saved product (name unavailable)')).toBeInTheDocument();
+      expect(within(recovered).queryByText('No products found')).not.toBeInTheDocument();
+    } else {
+      expect(await within(recovered).findByRole('button', { name: /SKU-A/i })).toBeInTheDocument();
+    }
     expect(await within(recovered).findByRole('option', {
-      name: lookupFails ? 'Saved customer (name unavailable)' : 'Farm A',
+      name: lookupFailure === 'customers' ? 'Saved customer (name unavailable)' : 'Farm A',
     })).toHaveProperty('selected', true);
-    if (lookupFails) {
+    if (lookupFailure === 'customers') {
       expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('Customer names could not be loaded'));
+    }
+    if (lookupFailure === 'products') {
+      expect(mocks.toast).toHaveBeenCalledWith('error', expect.stringContaining('Failed to load products'));
     }
     expect(within(recovered).getByRole('combobox')).toBeDisabled();
     expect(callsTo('create_inventory_hold')).toHaveLength(1);

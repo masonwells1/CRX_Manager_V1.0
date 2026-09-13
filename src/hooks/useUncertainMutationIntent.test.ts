@@ -881,6 +881,30 @@ describe('useUncertainMutationIntent', () => {
     expect(freshTab.result.current.getIdempotencyKey()).not.toBe(completedKey);
   });
 
+  it('restores the original receipt from the tab acknowledgment when both shared stores were evicted', async () => {
+    const options = { operation: 'adjust_inventory', userId: 'admin-ack-only', surface: 'inventory-page', scope: '' };
+    const original = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => original.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = original.result.current.getIdempotencyKey();
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
+    const originalVersion = JSON.parse(window.localStorage.getItem(storageKey)!).requestVersion;
+    original.unmount();
+    window.localStorage.clear();
+    globalThis.indexedDB = new IDBFactory();
+
+    const reopened = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    await expect(act(async () => reopened.result.current.beginIntent({ quantity: 6 })))
+      .rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    let retried!: { quantity: number };
+    await act(async () => { retried = await reopened.result.current.beginIntent({ quantity: 5 }); });
+    expect(retried).toEqual({ quantity: 5 });
+    expect(reopened.result.current.getIdempotencyKey()).toBe(originalKey);
+    expect(JSON.parse(window.localStorage.getItem(storageKey)!)).toMatchObject({
+      requestVersion: originalVersion, idempotencyKey: originalKey, intent: { quantity: 5 },
+    });
+  });
+
   it('keeps a pending local mirror frozen when IndexedDB lost the record', async () => {
     // localStorage and IndexedDB are separate stores. If the coordinator row is
     // gone (evicted or cleared) while the mirror still says a request is pending,
