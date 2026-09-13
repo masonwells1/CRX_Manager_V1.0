@@ -355,6 +355,16 @@ test('the trusted final-review workflow has only the final-review-gate job', () 
   assertOnlyTrustedGateJob(workflow);
 });
 
+test('successful opened snapshots have a distinct check context from final review', () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'), 'utf8');
+  const name = workflow.match(/^ {4}name: \$\{\{ github\.event\.action == 'opened' && '([^']+)' \|\| '([^']+)' \}\}$/m);
+  assert.ok(name, 'the sole trusted job must select its check context using the event action');
+  assert.equal(name[1], 'CodeRabbit candidate snapshot');
+  assert.notEqual(name[1], 'final-review-gate', 'snapshot success must not report final-review success');
+  assert.equal(name[2], 'final-review-gate', 'ready-label delivery retains its authenticated check context');
+  assertOnlyTrustedGateJob(workflow);
+});
+
 test('the one-job workflow guard rejects quoted, flow-style, and explicit-key second jobs', () => {
   const workflow = fs.readFileSync(
     path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),

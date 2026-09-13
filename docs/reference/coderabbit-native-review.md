@@ -45,6 +45,8 @@ base: preserve the PR and create a fresh delivery PR before another request. The
 record attempts; neither establishes merge authorization.
 
 The trusted workflow records the original `opened` webhook's head and base.
+Its opened job reports `CodeRabbit candidate snapshot`, a separate check context;
+snapshot success never reports completed `final-review-gate` review delivery.
 Its run name also includes the action, PR number and both original SHAs; receipt
 inspection checks that name on the authenticated original workflow run. Later
 REST PR and activity-event payloads can expose current values, so they cannot

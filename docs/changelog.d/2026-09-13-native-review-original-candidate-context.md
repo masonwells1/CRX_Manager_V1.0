@@ -1,5 +1,7 @@
 ## 2026-09-13 - Preserve the original native-review candidate context
 
+The subsequent exact-candidate review blocked publication because opened snapshot success used the final-review check name before a review occurred. The single trusted job now displays a distinct `CodeRabbit candidate snapshot` check on opened events and retains `final-review-gate` for the existing review lifecycle. No extra privileged job or workflow is added. A green snapshot records original context and does not attest review delivery; actual formal review and all existing protected delivery requirements remain necessary. A focused regression rejects reuse of the final-review name for snapshot success.
+
 GitHub's final-candidate P2 also identified a spurious failed check for newly opened PRs aimed at feature or staging branches. Such opens now return an ignored status before snapshot capture or GitHub reads/writes. A focused regression executes both branch targets and verifies no failure, snapshot, receipt or provider request; production-main capture retains its existing validation.
 
 The GitHub Codex review found that current repository permissions cannot establish a commenter's authority when an old review command was posted. A former writer could now appear read-only, allowing a delayed old-base review to be mistaken for a newer dispatch. This supersedes the September 12 current-permission classifier.
