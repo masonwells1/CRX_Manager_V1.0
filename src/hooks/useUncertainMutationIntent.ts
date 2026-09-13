@@ -360,6 +360,8 @@ async function coordinateDurableRecord<T>(
   candidateIntent: T,
   options: DurableMutationIntentOptions<T>,
   tabId: string,
+  localMirror: DurableMutationIntentRecord<T> | null = null,
+  ownAttemptRequestVersion: string | null = null,
 ): Promise<{ record: DurableMutationIntentRecord<T>; conflict: boolean }> {
   const db = await openDurableIntentDb();
   try {
@@ -372,11 +374,16 @@ async function coordinateDurableRecord<T>(
       request.onsuccess = () => {
         const stored = request.result as { storageKey?: string; record?: unknown } | undefined;
         const existingCandidate = stored?.record as Partial<DurableMutationIntentRecord<T>> | undefined;
+        // With NO coordinator row, the local mirror is the only evidence
+        // that an earlier request may have committed (IndexedDB evicted or
+        // cleared). Decide it like an authoritative pending record rather than
+        // letting the fresh candidate mint a second key for the same work. A
+        // resolved mirror counts too: it still names the key a peer committed.
         const existing = existingCandidate && isValidRecord(existingCandidate, options)
           ? existingCandidate
           : stored
             ? blockedDurableRecord(options)
-            : proposed;
+            : localMirror ?? proposed;
         const owned = existing.surface === options.surface
           && existing.scope === (options.scope || '');
         const candidateIdentity = fingerprintIntent(candidateIntent, options.getIntentIdentity);
@@ -385,8 +392,24 @@ async function coordinateDurableRecord<T>(
         const intentExpired = Date.now() >= existing.retryNotAfterMs;
         const sameActiveIntent = sameIntent && !intentExpired;
         if (existing.status === 'resolved') {
-          result = { record: proposed, conflict: false };
-          store.put({ storageKey, record: proposed });
+          // A peer tab can finish this tab's uncertain attempt under the same
+          // key before, or without, the storage event reaching this tab. A
+          // retry of that same request must keep the committed key so the
+          // server replays its saved receipt; a fresh key would apply the
+          // work a second time. Any other request starts fresh.
+          const reopensOwnAttempt = sameActiveIntent
+            && ownAttemptRequestVersion !== null
+            && ownAttemptRequestVersion === existing.requestVersion;
+          const record = reopensOwnAttempt
+            ? {
+              ...proposed,
+              idempotencyKey: existing.idempotencyKey,
+              createdAtMs: existing.createdAtMs,
+              retryNotAfterMs: existing.retryNotAfterMs,
+            }
+            : proposed;
+          result = { record, conflict: false };
+          store.put({ storageKey, record });
         } else if (owned && (sameIntent || intentExpired)) {
           const liveClaimTabIds = retainLiveClaims(existing.claimTabIds, tabId);
           const claimed = {
@@ -605,16 +628,24 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   const [, setExpiryRevision] = useState(0);
 
   const applyRecord = useCallback((record: DurableMutationIntentRecord<T> | null) => {
-    const pending = record?.status === 'pending';
-    const owned = pending && record.surface === surface && record.scope === scope;
+    // A peer completion is still this tab's retry until its handler acknowledges
+    // the result. Unlocking early would present identical new work while
+    // beginIntent still correctly replays this attempt's committed receipt.
+    const attempt = attemptRecordRef.current;
+    const visible = record?.status === 'resolved'
+      && attempt?.requestVersion === record.requestVersion
+      && attempt.surface === surface && attempt.scope === scope
+      ? attempt : record;
+    const pending = visible?.status === 'pending';
+    const owned = pending && visible.surface === surface && visible.scope === scope;
     recordRef.current = record;
-    idempotencyKeyRef.current = pending ? record.idempotencyKey : null;
-    intentRef.current = owned ? record.intent : null;
-    retryNotAfterRef.current = pending ? record.retryNotAfterMs : null;
-    setUnresolvedIntent(owned ? record.intent : null);
+    idempotencyKeyRef.current = pending ? visible.idempotencyKey : null;
+    intentRef.current = owned ? visible.intent : null;
+    retryNotAfterRef.current = pending ? visible.retryNotAfterMs : null;
+    setUnresolvedIntent(owned ? visible.intent : null);
     setHasUnresolvedRecord(pending);
     setIsForeignIntentLocked(Boolean(pending && !owned));
-    setRetryNotAfterMs(pending ? record.retryNotAfterMs : null);
+    setRetryNotAfterMs(pending ? visible.retryNotAfterMs : null);
   }, [scope, surface]);
 
   const activateCurrentIdentity = useCallback((force = false) => {
@@ -675,16 +706,31 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   const beginIntent = useCallback(async (intent: T): Promise<T> => {
     activateCurrentIdentity(true);
     if (!options && intentRef.current !== null) return intentRef.current;
-    const existing = recordRef.current;
+    const mirrorRecord = recordRef.current;
     if (options) {
       if (!storageKey) throw new Error('DURABLE_MUTATION_INTENT_IDENTITY_MISSING');
+      // A malformed mirror cannot establish whether it represented a pending
+      // request before the local failure. Do not let an absent IndexedDB record
+      // turn that uncertainty into permission for a new mutation.
+      if (mirrorRecord?.surface === '__reconciliation_required__') {
+        writeDurableRecord(storageKey, mirrorRecord);
+        throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
+      }
       const currentClaimId = tabIdRef.current ?? currentPageClaimId();
       tabIdRef.current = currentClaimId;
       markClaimLive(currentClaimId);
       const idempotencyKey = generateIdempotencyKey(options.operation, options.userId);
       const createdAtMs = Date.now();
       const retryNotAfterMs = createdAtMs + SAFE_RETRY_WINDOW_MS;
-      const proposed: DurableMutationIntentRecord<T> = existing?.status === 'pending' ? existing : {
+      // localStorage is only a UI mirror. It can lag behind IndexedDB when a
+      // response resolves between the two writes, so a coordinator record
+      // always wins: a pending one is restored (including conflict and expiry
+      // refusal) and a resolved one receives a fresh candidate unless it is
+      // this tab's own uncertain attempt, which keeps its committed key.
+      // Only when the coordinator has no record at all is the local mirror
+      // offered in its place, because then it is the sole evidence that an
+      // earlier request may have committed.
+      const proposed: DurableMutationIntentRecord<T> = {
         version: 4,
         status: 'pending',
         requestVersion: crypto.randomUUID(),
@@ -707,6 +753,8 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           intent,
           options,
           currentClaimId,
+          mirrorRecord,
+          attemptRecordRef.current?.requestVersion ?? null,
         );
         writeDurableRecord(storageKey, coordinated.record);
         applyRecord(coordinated.record);
@@ -764,7 +812,24 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     );
     if (resolved) {
       if (storageKey) writeDurableRecord(storageKey, resolved);
+      attemptRecordRef.current = null;
       applyRecord(resolved);
+    } else if (attempt && storageKey) {
+      // No coordinator row was left to resolve (IndexedDB lost it). This request
+      // is known to have committed, so retire its pending mirror; beginIntent
+      // would otherwise restore it as unresolved. A mirror that now belongs to a
+      // different request is left alone.
+      const mirror = readDurableRecord<T>(storageKey, options);
+      if (!mirror || mirror.requestVersion === attempt.requestVersion) {
+        const retired: DurableMutationIntentRecord<T> = {
+          ...attempt,
+          status: 'resolved',
+          resolvedAtMs: Date.now(),
+        };
+        writeDurableRecord(storageKey, retired);
+        attemptRecordRef.current = null;
+        applyRecord(retired);
+      }
     }
     attemptRecordRef.current = null;
   }, [applyRecord, options, storageKey]);
@@ -796,6 +861,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           applyRecord(null);
         } else if (outcome.current) {
           if (storageKey) writeDurableRecord(storageKey, outcome.current);
+          if (outcome.current.status === 'resolved') attemptRecordRef.current = null;
           applyRecord(outcome.current);
           if (outcome.current.status === 'resolved') {
             attemptRecordRef.current = null;
@@ -808,15 +874,16 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
       const current = await readCoordinatedRecord(storageKey, options);
       if (current) {
         if (storageKey) writeDurableRecord(storageKey, current);
-        applyRecord(current);
         if (
           attempt
           && current.requestVersion === attempt.requestVersion
           && current.status === 'resolved'
         ) {
           attemptRecordRef.current = null;
+          applyRecord(current);
           return 'resolved';
         }
+        applyRecord(current);
         return 'uncertain';
       }
       if (attempt && options && storageKey && attempt.status === 'pending') {
