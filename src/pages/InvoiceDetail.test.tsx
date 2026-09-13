@@ -103,6 +103,12 @@ vi.mock('../lib/emailService', () => ({
 }));
 vi.mock('../lib/dateUtils', () => ({
   localToday: vi.fn(() => '2026-03-16'),
+  // DELIBERATELY a different date from localToday (CodeRabbit, 2026-09-04). The first version of
+  // this mock pinned both to 2026-03-16, which made the new-invoice date assertion below unable
+  // to fail: reverting InvoiceDetail back to localToday() would have produced the identical value
+  // and the suite would still have been green. The two dates must differ for that test to
+  // discriminate at all.
+  todayInBusinessTz: vi.fn(() => '2026-09-30'),
   parseLocalDate: vi.fn((d: string) => new Date(d)),
 }));
 // parseCents is deliberately NOT mocked: the real parser refuses more than two
@@ -985,5 +991,40 @@ describe('InvoiceDetail — Phase 1 group-aware Post routing', () => {
       }));
       expect(mockToast).toHaveBeenCalledWith('success', 'Invoice group voided');
     });
+  });
+});
+
+describe('InvoiceDetail — new-invoice date default follows the Chicago business day', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
+    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+  });
+
+  // Guards the 2026-09-30 season window on the client. `season` is derived server-side from
+  // `invoice_date`, and this page ALWAYS sends a date, so the server's Chicago fallback never
+  // engages here — a browser-local default would file the invoice in the wrong season and price
+  // it against the wrong customer_application_rates row.
+  //
+  // This test only discriminates because the two helpers are mocked to DIFFERENT dates
+  // (localToday 2026-03-16, todayInBusinessTz 2026-09-30). Reverting InvoiceDetail.tsx to
+  // localToday() turns the assertion red; with both mocked to the same day it could not.
+  it('pre-fills the date input from todayInBusinessTz, not localToday', async () => {
+    render(
+      <MemoryRouter initialEntries={['/invoices/new']}>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const dateInput = await waitFor(() => {
+      const found = document.querySelector('input[type="date"]') as HTMLInputElement | null;
+      expect(found).not.toBeNull();
+      return found!;
+    });
+
+    expect(dateInput.value).toBe('2026-09-30');
+    expect(dateInput.value).not.toBe('2026-03-16');
   });
 });

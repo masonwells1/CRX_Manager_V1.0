@@ -8,6 +8,8 @@
 // the reviewed apply_migration path. Rolled-back smoke batches (BEGIN;...;ROLLBACK;
 // with no COMMIT) stay allowed — that is the documented safe test pattern.
 
+import { createHash } from "node:crypto";
+
 const BUSINESS_TABLES = [
   "customers", "products", "orders", "order_items", "invoices", "invoice_items",
   "quotes", "quote_items", "deliveries", "delivery_items", "blend_tickets",
@@ -324,7 +326,156 @@ export function findNonReadFunctionCall(sqlText) {
 }
 
 // Returns { block: false } | { block: true, kind, reason }
+// ── Known sweep predicates, recognised by content — NOT parsed ──────────────
+//
+// All 29 db-invariant-sweep predicates are refused by the checks below. 27 are
+// refused by findNonReadFunctionCall, which reads comment prose or an unlisted
+// catalog function as a call — `-- predicate (f): overloads` as `predicate()`
+// in 8 of them, and `suite()`, `expected()`, `key()`, `pg_get_triggerdef()` and
+// others in the rest. The other 2 trip the audit-log write check. (This comment
+// used to say all 29 were refused as `predicate()`; Codex, PR #648 round 7,
+// counted.)
+//
+// PR #639 tried to fix that by teaching this file to lex SQL. Six pinned
+// gpt-5.6-sol rounds each found real defects — several introduced by the
+// previous round's fix — and it was closed unmerged on Mason's decision
+// (2026-09-09). A PreToolUse hook cannot see standard_conforming_strings,
+// cannot resolve a search_path, and cannot know which schema a name binds to.
+// It was guessing, and the guesses were the bugs.
+//
+// These predicates are not unknown input. They are fixed, reviewed text in this
+// repository, so they are RECOGNISED rather than understood: a sha256 of their
+// text after the normalisation below, against the list embedded in this file
+// (not the checked-in manifest an earlier version used). This can only ever ADD permission
+// for text already written and reviewed, so it changes nothing about how any
+// other input is classified — the checks below are untouched.
+//
+// Editing a predicate changes its fingerprint, so the guard stops recognising
+// it until the list below is updated, and that update appears in the diff
+// where the changed SQL is re-reviewed. That is the control, and it is
+// deliberately the only one: see the long note in
+// scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs about the
+// keyword shape-check that was tried here and removed for demanding a lexer.
+//
+// THE LIST LIVES IN THIS FILE, AND THAT IS THE POINT.
+//
+// It was first a JSON manifest under scripts/. That was a bypass: the manifest
+// was an ordinary writable file while `.claude/hooks/**` is an approval-gated
+// enforcement surface, so an agent could hash a destructive statement, append
+// it to the manifest with an ordinary edit, and call execute_sql — each hook
+// invocation reloads the file, and the allowance short-circuits every check
+// below it. The suite would notice afterwards, which is no use once the rows
+// are gone (Codex, PR #648 round 4).
+//
+// So the authorised hashes are part of the guard, protected by whatever
+// protects the guard, and adding one is an edit to a hook file. This library
+// now reads no file at runtime, which also retires the cache-lifetime,
+// path-resolution and malformed-manifest questions that version carried. (Said
+// precisely: the HOOK that calls this still reads its PreToolUse payload from
+// stdin, as every hook does. An earlier commit message claimed "the guard
+// performs no readFileSync", which was broader than the truth.)
+//
+// To change the list: node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs
+// PRINTS the block that belongs between the markers below; it never changes
+// this file. Apply the printed block with an ordinary edit here. It used to
+// rewrite this region itself, which let an auto-allowed `node scripts/...`
+// command change an approval-gated hook file — the manifest bypass above, by a
+// side door (Codex GitHub review, PR #648). This removes that sanctioned,
+// pre-allowed writer; it does not make hook files tamper-proof against an
+// agent that writes its own script, which no hook-file layout can.
+
+// Line endings, a UTF-8 BOM, and trailing whitespace at end of file can all
+// differ between checkouts without a single SQL character changing, so they are
+// normalised. NOTHING inside the SQL is touched: no comment stripping, no case
+// folding, no whitespace collapsing. Every one of those would be a parser
+// again, and would let two different statements share a fingerprint.
+//
+// Two consequences are accepted, not overlooked (Codex, PR #648 round 7).
+// Line endings are folded everywhere, including inside a string literal, where
+// a CR is part of the value; none of the 29 has a raw line break inside a
+// literal, and a literal's contents change what a read returns, never whether
+// it writes. And a leading BOM is stripped although PostgreSQL rejects one, so
+// the BOM-prefixed variant shares a fingerprint while being a syntax error,
+// which executes nothing.
+//
+// This is the ONE definition — write-predicate-fingerprints.mjs imports it, so
+// the generator and the guard cannot drift into hashing different bytes.
+//
+// The trailing trim is ASCII-only, and deliberately narrower than `trimEnd()`.
+// `trimEnd()` also strips NBSP, U+2028, ideographic space and friends, none of
+// which a checkout introduces — and PostgreSQL does not treat them as
+// whitespace either, so trimming them meant `SELECT 1;` plus a trailing NBSP
+// shared a fingerprint with `SELECT 1;` while being a syntax error to the
+// server (Codex, PR #648 round 6). Harmless in practice, but it made the stated
+// rule — "only what a checkout can change" — untrue. This is the rule as
+// written.
+//
+// It is also a hand-rolled loop rather than `/[ \t\n\r\f\v]+$/`, because that
+// regex backtracks: every input passes through here on its way to the
+// classifier, and a long run of leading whitespace made classification
+// quadratic — 80,000 spaces cost 1.06 s, enough to exceed the hook timeout
+// (Codex, PR #648 round 1). Scanning backwards is linear.
+const ASCII_TRAILING_WS = new Set([" ", "\t", "\n", "\r", "\f", "\v"]);
+export function normalizePredicateSql(text) {
+  const s = String(text).replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  let end = s.length;
+  while (end > 0 && ASCII_TRAILING_WS.has(s[end - 1])) end--;
+  return end === s.length ? s : s.slice(0, end);
+}
+
+// >>> BEGIN GENERATED PREDICATE FINGERPRINTS — do not hand-edit
+export const KNOWN_SWEEP_PREDICATE_SHA256 = new Set([
+  "2ad3ccf677742b436ce793ea7c1fc56b4531500ad6841d38a87b4475224660df", // actor-forgery-fin-audit.sql
+  "ec304e4e2f10d420220a5df36982fe90a19f3f8230a8a3d0cbbe488eb36abc72", // actor-forgery.sql
+  "2e8bdab505e2e9b858462f0cdaae6c5a701c3c2ea362c1133a782a4234b30376", // anon-exec-secdef.sql
+  "3c1f93e2a1fe90b8e8aad9145f981904906116fae175696eecd9dce1b2061ed8", // audit-log-completeness.sql
+  "5c49a1f5d8afca87439cf87fc1a74ffebaa38de68cb5eb1790109fc0a8dce1e6", // auth-bound-role-ungated.sql
+  "c9a03c9a022912fdbf263251f3ec48155cf49259cf097f23a3daf28d445d4a54", // commission-admin-active.sql
+  "c769b15bf97485e4d8b1d7457a8ed9a726627a57ec1c16c06c198308d8984f0d", // dispatch-sync-nonqualifying-profile.sql
+  "b15716e33a3061f3ebced1eb6b4ca20b90ec53c5967f4a34531ec8e56088ff08", // fin-allocations-bounded.sql
+  "61e703c79b85374001fd80719e0faa00bda1b5f899cb66d5cd4b04ba5a1693b6", // fin-ar-statement-balance.sql
+  "11cd6482c1e98dd6c32a7ef7f17c9dc3d49511e554cd1841d6028a166bcbea3d", // fin-commission-split-sum.sql
+  "d333bf15256b8b9bc1e6b488d73ebfc90926837691aa54d8a7a027edaabd5e6e", // fin-invoice-balance-identity.sql
+  "90d85c6c218f5e96d08c7dd51994e0a7b950fa5522f77f76388bb775fc16b5d8", // fin-money-whole-cents.sql
+  "ad224d20046ea896cab17d5a4ec7fb5bbaf0e5836943902dc6c991e194f20217", // fin-po-receipt-identity.sql
+  "0f34426fbf1478e559f747a7a8c3c927834bea339903571ef941ac42feef0389", // fin-prepay-balance.sql
+  "204a287787bb5b46340e9b113afb80e75f8c6ac18163a3bf220db6bcd55d9144", // fin-quote-override-survival.sql
+  "d9d1fe470cd37287d77e50ffa7ef8b160743068b72cea79fa0f335b579096f85", // fin-vendor-bill-balance-identity.sql
+  "7316cc7f33a2c0717029689cb40b9831250b0884bd7ad8dc904a00e4102614a2", // office-only-pricing-secdef-gates.sql
+  "d339b02e5022edaf87748ec20540d3a451e5a67e4dfcd69961267f7a00f9fd6c", // overloads.sql
+  "1a9179b05963dc315c90e54b2fd18445e21d58cae9bdb743111607b9de7e8e86", // plpgsql-check.sql
+  "071d89aae1ef714720386c43c9ac6a4c11cc03edb0f00bdcd152ba52079db216", // product-name-vs-return-policy.sql
+  "5ea47dde9df5671b8b4acce4e274f242467e3eb71eeb0b3487c8940316a3019d", // profile-role-lock-insert-arm.sql
+  "116ec46dbd26a3c3c5197363b66169d133db49414a2b324e298baa31b0dcb3db", // quote-versions-rpc-owned.sql
+  "7c6edab973d810b5c6e7abc34b4121376609fd82cb82f3905075e01975e29e17", // return-credit-intent-binding.sql
+  "e86e0b0d2f61073fce6110913bf9260a9332f92d29c295a61d1a7810345dda49", // returns-lifecycle-rpc-owned.sql
+  "c1d531420c58198a15ab94eb3e805b1778c3c3a4100633f591240a58e1492f94", // save-field-actor-binding.sql
+  "09b24ce34cc1c13ad3939a4270a5dbef647ef0aef80cbba8861fd625edd6d0ce", // secdef-searchpath.sql
+  "a214ec21734991ea10daa54e7832dc9f814d41b18bb5523dcb5ea42f2f60e93b", // section9-po-ap-controls.sql
+  "f0bd806a01f9114345eb47a0e1523e54a9e5ef7d2e8b40dfbd47f278bfe4503b", // status-literals.sql
+  "dbaa1cfe6d3d81ca66c8f44ac9085d8b9c47e507733cd708c4de2ead823b53c1", // ungated-secdef-mutators.sql
+]);
+// <<< END GENERATED PREDICATE FINGERPRINTS
+
+export function isKnownSweepPredicate(query) {
+  const text = normalizePredicateSql(query || "");
+  if (!text) return false;
+  if (!KNOWN_SWEEP_PREDICATE_SHA256.size) return false;
+  return KNOWN_SWEEP_PREDICATE_SHA256.has(createHash("sha256").update(text, "utf8").digest("hex"));
+}
+
 export function classifySql(query) {
+  // Convert ONCE and judge that one string. Converting separately for the
+  // recognition check and the classifier let a value whose toString changes
+  // between calls read differently to each, where base converted once (Codex,
+  // PR #648 round 7). Unreachable from a JSON hook payload, but it keeps
+  // "untouched for every other input" literally true.
+  const q = String(query || "");
+  if (isKnownSweepPredicate(q)) return { block: false, kind: "known-sweep-predicate" };
+  return classifySqlInner(q);
+}
+
+function classifySqlInner(query) {
   const q = String(query || "");
   if (!q) return { block: false };
 
