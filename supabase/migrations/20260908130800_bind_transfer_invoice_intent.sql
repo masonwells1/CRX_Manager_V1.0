@@ -40,6 +40,13 @@
 CREATE TEMP TABLE crx_transfer_invoice_intent_transaction_guard (
   marker boolean NOT NULL
 ) ON COMMIT DROP;
+-- The table lives only in this session's pg_temp and drops at commit. RLS with a
+-- deny-all policy follows the every-new-table rule; the owning migration role
+-- is exempt from its own table's RLS, so the marker insert below still runs.
+ALTER TABLE crx_transfer_invoice_intent_transaction_guard ENABLE ROW LEVEL SECURITY;
+CREATE POLICY crx_transfer_invoice_intent_transaction_guard_no_client_access
+  ON crx_transfer_invoice_intent_transaction_guard
+  FOR ALL TO public USING (false) WITH CHECK (false);
 INSERT INTO crx_transfer_invoice_intent_transaction_guard(marker) VALUES (true);
 
 -- The purge and the refusal below must see every receipt committed while this

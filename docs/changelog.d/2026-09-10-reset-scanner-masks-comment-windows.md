@@ -105,3 +105,9 @@ reads as division. Proof observed: the new negative cases were added FIRST and f
 visible and still let a regex start after a binary `+`. CodeRabbit noted no current `src` site was
 affected. The same review asked for direct coverage that `assertTransferResultForJob()` accepts a
 `job_id` differing only in letter case; `src/lib/db.test.ts` now has that case.
+
+Ninth round — CodeRabbit's review of delivery PR #696 at `b1f0055b2` found that the eighth-round
+rule also read the last two operators of `count+++ /re/` (which is `count++ + /re/`) as a postfix
+operator, leaving the regex text visible as evidence. Only an exact `++` or `--` now reads as
+postfix; a third operator is binary and lets a regex start. Proof observed: `+++` and `---`
+negative cases were added FIRST and failed with `expected 'recovery' to be null`; 24/24 after.

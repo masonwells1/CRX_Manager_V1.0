@@ -41,6 +41,11 @@ An offline static contract proof and a disposable PostgreSQL 17 behavioral proof
 cover unsafe-autocommit refusal, stale-body rollback, and replay paths. This entry
 does not claim a live migration apply.
 
+The autocommit transaction-guard TEMP table enables RLS with a deny-all policy in
+the same file, matching the every-created-table rule (CodeRabbit, PR #696). The
+owning migration role is exempt from its own table's RLS, so the marker insert
+still runs; the disposable PostgreSQL 17 behavioural proof still passes.
+
 Refreshed the existing production rollback smoke for the currently deployed
 `transfer_job_to_invoice` behavior so it uses governed Product cost bases,
 checks per-owner invoice groups, and proves unsupported split overrides refuse

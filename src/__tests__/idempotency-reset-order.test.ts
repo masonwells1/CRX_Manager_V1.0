@@ -611,9 +611,12 @@ function maskNonCode(code: string): string {
     if (j < 0) return true;
     if (out[j] === '>') return out[j - 1] === '=';
     if (out[j] === ')') return controlCloseAt === j;
-    // A doubled `+` or `-` right before `/` ends a postfix operator (`count++ / 2`), so the
-    // `/` is division (CodeRabbit, PR #690).
-    if ((out[j] === '+' || out[j] === '-') && out[j - 1] === out[j]) return false;
+    // An exact `++` or `--` right before `/` ends a postfix operator (`count++ / 2`), so the
+    // `/` is division (CodeRabbit, PR #690). A third one (`count+++ /re/`) is binary, so a
+    // regex can start (CodeRabbit, PR #696).
+    if ((out[j] === '+' || out[j] === '-') && out[j - 1] === out[j] && out[j - 2] !== out[j]) {
+      return false;
+    }
     if (/[(,=:[!&|?{;+\-*%~^]/.test(out[j])) return true;
     let k = j;
     while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
@@ -1015,6 +1018,10 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     // binary `+` or `-` still lets a regex start.
     expect(classify(['  const r = count++ / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
     expect(classify(['  const r = a + /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    // `count+++ /re/` is `count++ + /re/` and `count--- /re/` is `count-- - /re/`: the
+    // third operator is binary, so a regex starts and its text is not evidence.
+    expect(classify(['  const r = count+++ /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  const r = count--- /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
   });
 
   it('scans a meaningful number of source files', () => {
