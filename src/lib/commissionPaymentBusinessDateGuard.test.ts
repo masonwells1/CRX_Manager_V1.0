@@ -39,7 +39,7 @@ describe('commission payment Chicago business-date guard', () => {
   it('serializes the preflight and refuses an existing future-dated payment', () => {
     const timeout = migration.indexOf("SET LOCAL lock_timeout = '10s';");
     const lock = migration.indexOf(
-      'LOCK TABLE public.commission_payments IN SHARE ROW EXCLUSIVE MODE;',
+      'LOCK TABLE public.commission_payments IN ACCESS EXCLUSIVE MODE;',
     );
     const preflight = migration.indexOf('DO $preflight$');
     const futureScan = migration.indexOf(

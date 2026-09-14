@@ -4,8 +4,12 @@
 -- on tomorrow while Chicago is still on today; accepting that generated date
 -- makes a just-posted settlement disappear from an as-of-today report.
 
+-- ACCESS EXCLUSIVE up front, not SHARE ROW EXCLUSIVE: the DROP TRIGGER below
+-- needs ACCESS EXCLUSIVE, and upgrading a weaker lock mid-file can deadlock
+-- against a concurrent read-then-write transaction. Taking the final mode first
+-- means the file only ever waits, bounded by lock_timeout; it never upgrades.
 SET LOCAL lock_timeout = '10s';
-LOCK TABLE public.commission_payments IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.commission_payments IN ACCESS EXCLUSIVE MODE;
 
 DO $preflight$
 DECLARE

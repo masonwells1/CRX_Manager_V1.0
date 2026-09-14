@@ -427,7 +427,7 @@ try {
   const applying = psqlProcess({ wrap: wrapByName.get('candidate.sql') ?? false });
   const applyingDone = collect(applying);
   applying.stdin.end('\\i /tmp/candidate.sql\n');
-  await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'orders' AND l.mode = 'ShareRowExclusiveLock' AND NOT l.granted)") === 't', 'candidate waiting on writer drain');
+  await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'orders' AND l.mode = 'AccessExclusiveLock' AND NOT l.granted)") === 't', 'candidate waiting on writer drain');
   assert.deepEqual(bodyState(), rebuild, 'while the old writer holds its lock, no partial helper DDL may be visible');
   holder.stdin.end('COMMIT;\n');
   assert.equal((await holderDone).status, 0, 'writer holder must release cleanly');
@@ -529,7 +529,7 @@ try {
   // proves the top-level lock is the deterministic drain boundary, not a cosmetic
   // statement that happens to be rescued by a later DDL lock.
   restoreHelpers();
-  const lockBlock = "SET LOCAL lock_timeout = '10s';\nLOCK TABLE public.orders,\n           public.invoices,\n           public.jobs,\n           public.commissions\n  IN SHARE ROW EXCLUSIVE MODE;\n";
+  const lockBlock = "SET LOCAL lock_timeout = '10s';\nLOCK TABLE public.orders,\n           public.invoices\n  IN ACCESS EXCLUSIVE MODE;\nLOCK TABLE public.jobs IN SHARE ROW EXCLUSIVE MODE;\nLOCK TABLE public.commissions IN ACCESS EXCLUSIVE MODE;\n";
   const lockMutant = candidateSql.replace(lockBlock, "SET LOCAL lock_timeout = '10s';\n-- MUTATION: writer-drain lock removed.\n");
   assert.notEqual(lockMutant, candidateSql, 'lock mutation did not alter the candidate');
   copyText(lockMutant, 'lock-mutant.sql', workDir);

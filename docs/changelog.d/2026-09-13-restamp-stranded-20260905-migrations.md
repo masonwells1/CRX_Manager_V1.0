@@ -52,11 +52,15 @@ Row 923 and the "current boundary" capture at the top of `migration-history.md` 
 file's live apply, so this change leaves them for #646 to update. The read-only ledger reads cited
 above are the evidence that it is applied.
 
-**Known issue before apply.** CodeRabbit (PR #695) found that `20260914100400` and
-`20260914100500` take SHARE ROW EXCLUSIVE and then DROP TRIGGER, which needs ACCESS EXCLUSIVE.
-That lock upgrade can deadlock against a concurrent writer; PostgreSQL then cancels one side and
-nothing partial commits. This is pre-existing SQL that this rename does not touch, and it must be
-fixed before either file is applied.
+**Lock-upgrade fix (Mason approved 2026-09-14).** CodeRabbit (PR #695) and the Codex push proof
+found that `20260914100400` and `20260914100500` took SHARE ROW EXCLUSIVE and later ran
+`DROP TRIGGER`/`ALTER TABLE`, which need ACCESS EXCLUSIVE. Upgrading a lock mid-file can deadlock
+against a concurrent read-then-write transaction. Both files now take ACCESS EXCLUSIVE up front
+on every table they alter (`commission_payments`; `orders`, `invoices`, `commissions`), keeping
+the fixed lock order, so they only ever wait, bounded by `lock_timeout = '10s'`. `jobs` keeps
+SHARE ROW EXCLUSIVE because the file runs no DDL on it. The trade-off: readers of those tables
+wait for the short apply. No function body, md5 pin, or other statement changed. The unit test
+and `prove-commission-dates-chicago.mjs` now assert the new lock modes.
 
 No migration was applied and no live data changed. Applying any of the seven still requires Mason's
 explicit in-chat approval and the governed apply path. `.claude/schema-registry.json` is refreshed
