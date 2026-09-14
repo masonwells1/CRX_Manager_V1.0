@@ -2,7 +2,7 @@
 
 **Last verified: 2026-09-14 for the live migration ledger and the scoped invoice/job RPC
 contracts below; this is not a re-certification of every historical entry on this page.**
-The fresh read-only ledger agrees with the September 13 capture in
+The fresh read-only ledger agrees with the September 14 capture in
 `docs/reference/migration-history.md`: authored-name boundary `20260908120000`, with bare
 names resolved by the canonical ordering rules. That capture supersedes the September 8
 ordering guidance and older registry metadata below. This branch's registry was regenerated
@@ -56,7 +56,7 @@ and actual CodeRabbit review remain pending. September 13 live inspection found 
 valid generic save receipts, active mixed-season groups or active field date/season
 mismatches now; these are point-in-time pre-apply checks, not a future apply guarantee.
 
-## Historical captures — superseded by the scoped September 13 header above
+## Historical captures — superseded by the scoped September 14 header above
 
 **Superseded 2026-09-06 header, kept for provenance — every boundary and counter claim in the next
 two paragraphs is superseded by the 2026-09-08 capture that follows them; do not number a migration
