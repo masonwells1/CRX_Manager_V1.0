@@ -299,6 +299,61 @@ describe('useUncertainMutationIntent', () => {
     expect(window.localStorage.length).toBe(0);
   });
 
+  it('preserves a saved receipt through inline-options rerenders when later acknowledgment writes fail', async () => {
+    const options = { operation: 'record_vendor_payment', userId: 'ack-rerender-admin',
+      surface: 'vendor-bill-detail', scope: 'ack-rerender-bill' };
+    const { result, rerender } = renderHook(() =>
+      useUncertainMutationIntent<{ amount: number }>({ ...options }));
+    await act(async () => result.current.beginIntent({ amount: 10000 }));
+    const originalKey = result.current.getIdempotencyKey();
+    const originalSetItem = Storage.prototype.setItem;
+    const ackWrites = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new DOMException('later acknowledgment write failed', 'QuotaExceededError');
+      }
+      return originalSetItem.call(this, key, value);
+    });
+    try {
+      act(() => rerender());
+      act(() => rerender());
+      expect(ackWrites.mock.calls.filter(([key]) => key.startsWith('crx:uncertain-mutation-ack:v1:'))).toHaveLength(0);
+      expect(result.current.isForeignIntentLocked).toBe(false);
+      expect(result.current.unresolvedIntent).toEqual({ amount: 10000 });
+      expect(result.current.getIdempotencyKey()).toBe(originalKey);
+    } finally {
+      ackWrites.mockRestore();
+    }
+    await act(async () => {
+      expect(await result.current.beginIntent({ amount: 10000 })).toEqual({ amount: 10000 });
+    });
+    expect(result.current.getIdempotencyKey()).toBe(originalKey);
+  });
+
+  it('still requires acknowledgment persistence when switching back to a saved route identity', async () => {
+    const { result, rerender } = renderHook(({ scope }: { scope: string }) =>
+      useUncertainMutationIntent<{ amount: number }>({ operation: 'record_vendor_payment',
+        userId: 'ack-route-admin', surface: 'vendor-bill-detail', scope }),
+    { initialProps: { scope: 'bill-a' } });
+    await act(async () => result.current.beginIntent({ amount: 10000 }));
+    act(() => rerender({ scope: 'bill-b' }));
+    const originalSetItem = Storage.prototype.setItem;
+    const ackWrites = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new DOMException('new identity acknowledgment unavailable', 'QuotaExceededError');
+      }
+      return originalSetItem.call(this, key, value);
+    });
+    try {
+      act(() => rerender({ scope: 'bill-a' }));
+      expect(ackWrites.mock.calls.some(([key]) => key.startsWith('crx:uncertain-mutation-ack:v1:'))).toBe(true);
+      expect(result.current.isIntentLocked).toBe(true);
+      expect(result.current.isForeignIntentLocked).toBe(true);
+      expect(() => result.current.getIdempotencyKey()).toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    } finally {
+      ackWrites.mockRestore();
+    }
+  });
+
   it('switches route scope without deleting the unresolved record owned by the prior route', async () => {
     const { result, rerender } = renderHook(
       ({ scope }: { scope: string }) => useUncertainMutationIntent<{ billId: string }>({
@@ -425,6 +480,9 @@ describe('useUncertainMutationIntent', () => {
     const originalKey = first.result.current.getIdempotencyKey();
     first.unmount();
     window.localStorage.clear();
+    // Exercise IndexedDB-only recovery, without the newly durable per-tab
+    // acknowledgment record providing an earlier safe recovery path.
+    window.sessionStorage.clear();
 
     const reopened = renderHook(() => useUncertainMutationIntent(options));
     expect(reopened.result.current.isIntentLocked).toBe(false);
@@ -462,6 +520,131 @@ describe('useUncertainMutationIntent', () => {
     await act(async () => secondTab.result.current.beginIntent({ bill: 'VB-TABS' }));
     expect(secondTab.result.current.getIdempotencyKey())
       .toBe(firstTab.result.current.getIdempotencyKey());
+  });
+
+  describe('retrying one specific pending request (requireIdempotencyKey)', () => {
+    const options = {
+      operation: 'adjust_inventory_batch',
+      userId: 'admin-required-key',
+      surface: 'inventory-batch-adjust',
+      getIntentIdentity: (intent: { batch: string }) => intent,
+    };
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
+    const deliverStorageEvent = () => act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: storageKey,
+        newValue: window.localStorage.getItem(storageKey),
+        storageArea: window.localStorage,
+      }));
+    });
+
+    function renderTwoTabs() {
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'required-key-tab-a');
+      const firstTab = renderHook(() => useUncertainMutationIntent(options));
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'required-key-tab-b');
+      const secondTab = renderHook(() => useUncertainMutationIntent(options));
+      return { firstTab, secondTab };
+    }
+
+    it('retries under the required key while that request is still pending', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      deliverStorageEvent();
+      expect(secondTab.result.current.getPendingIdempotencyKey()).toBe(originalKey);
+
+      await act(async () => secondTab.result.current.beginIntent(
+        { batch: 'B-1' },
+        { requireIdempotencyKey: originalKey },
+      ));
+      expect(secondTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    });
+
+    it('fails closed without minting a new key when a peer resolved the request first', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      deliverStorageEvent();
+      const shownKey = secondTab.result.current.getPendingIdempotencyKey()!;
+
+      // The peer finishes the request; this tab has not heard about it yet.
+      await act(async () => firstTab.result.current.resolveIntent());
+      expect(secondTab.result.current.getUnresolvedIntent()).toEqual({ batch: 'B-1' });
+
+      await act(async () => {
+        await expect(secondTab.result.current.beginIntent(
+          { batch: 'B-1' },
+          { requireIdempotencyKey: shownKey },
+        )).rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+      });
+      const stored = JSON.parse(window.localStorage.getItem(storageKey)!);
+      expect(stored.status).toBe('resolved');
+      expect(stored.idempotencyKey).toBe(originalKey);
+      expect(secondTab.result.current.unresolvedIntent).toBeNull();
+      expect(() => secondTab.result.current.getIdempotencyKey()).toThrow();
+    });
+
+    it('fails closed inside the durable transaction when only the local mirror is stale', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      const pendingMirror = window.localStorage.getItem(storageKey)!;
+      await act(async () => firstTab.result.current.resolveIntent());
+      // IndexedDB holds the resolved record; localStorage still says pending.
+      window.localStorage.setItem(storageKey, pendingMirror);
+
+      await act(async () => {
+        await expect(secondTab.result.current.beginIntent(
+          { batch: 'B-1' },
+          { requireIdempotencyKey: originalKey },
+        )).rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+      });
+      const stored = JSON.parse(window.localStorage.getItem(storageKey)!);
+      expect(stored.status).toBe('resolved');
+      expect(stored.idempotencyKey).toBe(originalKey);
+      expect(secondTab.result.current.unresolvedIntent).toBeNull();
+    });
+
+    it('fails closed inside the durable transaction when a stale mirror hides a newer pending request', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      const originalMirror = window.localStorage.getItem(storageKey)!;
+      await act(async () => firstTab.result.current.resolveIntent());
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const newerKey = firstTab.result.current.getIdempotencyKey();
+      // IndexedDB holds the newer pending request; localStorage still shows the
+      // original one, so only the in-transaction check can see the replacement.
+      window.localStorage.setItem(storageKey, originalMirror);
+
+      await act(async () => {
+        await expect(secondTab.result.current.beginIntent(
+          { batch: 'B-1' },
+          { requireIdempotencyKey: originalKey },
+        )).rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+      });
+      const stored = JSON.parse(window.localStorage.getItem(storageKey)!);
+      expect(stored.idempotencyKey).toBe(newerKey);
+      expect(stored.claimTabIds.some((claim: string) => claim.startsWith('required-key-tab-b:'))).toBe(false);
+    });
+
+    it('fails closed when the request was replaced by a newer pending one', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      await act(async () => firstTab.result.current.resolveIntent());
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const newerKey = firstTab.result.current.getIdempotencyKey();
+      expect(newerKey).not.toBe(originalKey);
+
+      await act(async () => {
+        await expect(secondTab.result.current.beginIntent(
+          { batch: 'B-1' },
+          { requireIdempotencyKey: originalKey },
+        )).rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+      });
+      expect(JSON.parse(window.localStorage.getItem(storageKey)!).idempotencyKey).toBe(newerKey);
+    });
   });
 
   it('rejects a different concurrent request from the same surface instead of reporting the winner as its result', async () => {
@@ -530,7 +713,208 @@ describe('useUncertainMutationIntent', () => {
     expect(stored.claimTabIds.some((claim: string) => claim.startsWith('same-tab-b:'))).toBe(true);
   });
 
-  it('releases only the definitively rejected tab claim while a peer request remains in flight', async () => {
+  it('re-sends a peer-completed attempt under its original key instead of minting a second one', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-peer-resolved',
+      surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'stale-tab');
+    const staleTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'peer-tab');
+    const peerTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    // The stale tab's reply is lost, so its attempt stays pending.
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = staleTab.result.current.getIdempotencyKey();
+    await act(async () => {
+      expect(await staleTab.result.current.classifyFailure({ code: 'ETIMEDOUT', message: 'socket timeout' }))
+        .toBe('uncertain');
+    });
+
+    // A peer tab retries the same request under the same key, and it commits.
+    await act(async () => peerTab.result.current.beginIntent({ quantity: 5 }));
+    expect(peerTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => peerTab.result.current.resolveIntent());
+
+    // No storage event reaches the stale tab before its operator retries. The
+    // retry must reuse the committed key so the server replays its receipt;
+    // adjust_inventory replays by key alone, so a fresh key applies it twice.
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    expect(staleTab.result.current.getIdempotencyKey()).toBe(originalKey);
+  });
+
+  it('keeps the original key when the peer completion arrives by storage event first', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-peer-resolved-event',
+      surface: 'inventory-page',
+    };
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'stale-tab-event');
+    const staleTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'peer-tab-event');
+    const peerTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = staleTab.result.current.getIdempotencyKey();
+    await act(async () => {
+      await staleTab.result.current.classifyFailure({ code: 'ETIMEDOUT', message: 'socket timeout' });
+    });
+    await act(async () => peerTab.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => peerTab.result.current.resolveIntent());
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: storageKey,
+        newValue: window.localStorage.getItem(storageKey),
+        storageArea: window.localStorage,
+      }));
+    });
+
+    // The completed receipt remains an explicit retry, not an unlocked form
+    // that could misrepresent a new identical adjustment as applied.
+    expect(staleTab.result.current.isIntentLocked).toBe(true);
+    expect(staleTab.result.current.unresolvedIntent).toEqual({ quantity: 5 });
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    expect(staleTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => staleTab.result.current.resolveIntent());
+    expect(staleTab.result.current.isIntentLocked).toBe(false);
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    expect(staleTab.result.current.getIdempotencyKey()).not.toBe(originalKey);
+  });
+
+  it('retains a peer-completed exact retry through reload until this tab acknowledges it', async () => {
+    const options = {
+      operation: 'adjust_inventory', userId: 'admin-peer-reload', surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reload-original');
+    const original = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => original.result.current.beginIntent({ quantity: 5 }));
+    const committedKey = original.result.current.getIdempotencyKey();
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reload-peer');
+    const peer = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => peer.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => peer.result.current.resolveIntent());
+    original.unmount();
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reload-original');
+    const reopened = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    expect(reopened.result.current.unresolvedIntent).toEqual({ quantity: 5 });
+    await act(async () => reopened.result.current.beginIntent({ quantity: 5 }));
+    expect(reopened.result.current.getIdempotencyKey()).toBe(committedKey);
+    await act(async () => reopened.result.current.resolveIntent());
+    reopened.unmount();
+    const acknowledged = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(acknowledged.result.current.isIntentLocked).toBe(false);
+    await act(async () => acknowledged.result.current.beginIntent({ quantity: 5 }));
+    expect(acknowledged.result.current.getIdempotencyKey()).not.toBe(committedKey);
+  });
+
+  it('keeps an older unacknowledged request locked if a peer completes newer work before reload', async () => {
+    const options = {
+      operation: 'adjust_inventory', userId: 'admin-older-ack-reload', surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'older-original');
+    const original = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => original.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = original.result.current.getIdempotencyKey();
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'older-peer');
+    const peer = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => peer.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => peer.result.current.resolveIntent());
+    await act(async () => peer.result.current.beginIntent({ quantity: 10 }));
+    const newerKey = peer.result.current.getIdempotencyKey();
+    expect(newerKey).not.toBe(originalKey);
+    await act(async () => peer.result.current.resolveIntent());
+    original.unmount();
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'older-original');
+    const reopened = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    expect(reopened.result.current.unresolvedIntent).toEqual({ quantity: 5 });
+    await act(async () => {
+      await expect(reopened.result.current.beginIntent({ quantity: 5 }))
+        .rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    });
+    expect(() => reopened.result.current.getIdempotencyKey())
+      .toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    const durable = JSON.parse(Object.entries(window.localStorage)
+      .find(([key]) => key.startsWith('crx:uncertain-mutation:v4:'))![1]);
+    expect(durable.idempotencyKey).toBe(newerKey);
+    expect(durable.status).toBe('resolved');
+  });
+
+  it('lets both unacknowledged tabs retry the same peer-completed receipt', async () => {
+    const options = {
+      operation: 'adjust_inventory', userId: 'admin-two-peer-retries', surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'retry-first');
+    const first = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => first.result.current.beginIntent({ quantity: 5 }));
+    const receiptKey = first.result.current.getIdempotencyKey();
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'retry-second');
+    const second = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => second.result.current.beginIntent({ quantity: 5 }));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'retry-completer');
+    const completer = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => completer.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => completer.result.current.resolveIntent());
+    await act(async () => first.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => second.result.current.beginIntent({ quantity: 5 }));
+    expect(first.result.current.getIdempotencyKey()).toBe(receiptKey);
+    expect(second.result.current.getIdempotencyKey()).toBe(receiptKey);
+    await act(async () => first.result.current.resolveIntent());
+    await act(async () => second.result.current.resolveIntent());
+    expect(first.result.current.isIntentLocked).toBe(false);
+    expect(second.result.current.isIntentLocked).toBe(false);
+  });
+
+  it('gives an identical follow-up a fresh key once this tab completed its own request', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-own-follow-up',
+      surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'own-tab');
+    const { result } = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    await act(async () => result.current.beginIntent({ quantity: 5 }));
+    const firstKey = result.current.getIdempotencyKey();
+    await act(async () => result.current.resolveIntent());
+
+    // A second +5 is new work. Reusing the committed key would make the server
+    // replay the first receipt and silently skip this adjustment.
+    await act(async () => result.current.beginIntent({ quantity: 5 }));
+    expect(result.current.getIdempotencyKey()).not.toBe(firstKey);
+  });
+
+  it('lets a different request start fresh after a peer completed the stale attempt', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-peer-resolved-new',
+      surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'stale-tab-new');
+    const staleTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'peer-tab-new');
+    const peerTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = staleTab.result.current.getIdempotencyKey();
+    await act(async () => {
+      await staleTab.result.current.classifyFailure({ code: 'ETIMEDOUT', message: 'socket timeout' });
+    });
+    await act(async () => peerTab.result.current.beginIntent({ quantity: 5 }));
+    await act(async () => peerTab.result.current.resolveIntent());
+
+    // A different payload cannot be a duplicate of the committed request.
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 6 }));
+    expect(staleTab.result.current.getIdempotencyKey()).not.toBe(originalKey);
+  });
+
+  it.each(['storage-event', 'reload'] as const)('retains the rejected tab receipt through peer completion and %s', async (recovery) => {
     const options = {
       operation: 'record_vendor_payment',
       userId: 'admin-definitive-race',
@@ -571,6 +955,29 @@ describe('useUncertainMutationIntent', () => {
     )!);
     expect(resolved.status).toBe('resolved');
     expect(resolved.idempotencyKey).toBe(originalKey);
+    let reconcilingTab = rejectTab;
+    if (recovery === 'storage-event') {
+      act(() => {
+        const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: storageKey,
+          newValue: window.localStorage.getItem(storageKey),
+          storageArea: window.localStorage,
+        }));
+      });
+    } else {
+      rejectTab.unmount();
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reject-tab');
+      reconcilingTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    }
+    expect(reconcilingTab.result.current.isIntentLocked).toBe(true);
+    expect(reconcilingTab.result.current.unresolvedIntent).toEqual({ amount: 10_000 });
+    await act(async () => reconcilingTab.result.current.beginIntent({ amount: 10_000 }));
+    expect(reconcilingTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => reconcilingTab.result.current.resolveIntent());
+    expect(reconcilingTab.result.current.isIntentLocked).toBe(false);
+    await act(async () => reconcilingTab.result.current.beginIntent({ amount: 10_000 }));
+    expect(reconcilingTab.result.current.getIdempotencyKey()).not.toBe(originalKey);
   });
 
   it('drops an unmounted claimant so a remounted definitive rejection clears the lock', async () => {
@@ -640,6 +1047,226 @@ describe('useUncertainMutationIntent', () => {
     const afterResolve = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
     await act(async () => afterResolve.result.current.beginIntent({ amount: 2_500 }));
     expect(afterResolve.result.current.getIdempotencyKey()).not.toBe(completedKey);
+  });
+
+  it('uses a fresh payload and key when IndexedDB resolved the record before a stale local mirror', async () => {
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-stale-mirror-race',
+      surface: 'inventory-page',
+      scope: 'manual-adjustment',
+    };
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([
+      options.operation,
+      options.userId,
+    ])}`;
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'completed-tab');
+    const completedTab = renderHook(() => useUncertainMutationIntent<{ inventoryId: string; delta: number }>(options));
+    await act(async () => completedTab.result.current.beginIntent({ inventoryId: 'inventory-a', delta: -10 }));
+    const completedKey = completedTab.result.current.getIdempotencyKey();
+    const stalePendingMirror = window.localStorage.getItem(storageKey)!;
+
+    await act(async () => completedTab.result.current.resolveIntent());
+    // The coordinator is authoritative. Model the narrow window where Tab A
+    // committed its resolved IndexedDB tombstone but a stale pending mirror
+    // remained visible to Tab B.
+    window.localStorage.setItem(storageKey, stalePendingMirror);
+
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'fresh-tab');
+    const freshTab = renderHook(() => useUncertainMutationIntent<{ inventoryId: string; delta: number }>(options));
+    let freshRequest!: { inventoryId: string; delta: number };
+    await act(async () => {
+      freshRequest = await freshTab.result.current.beginIntent({ inventoryId: 'inventory-b', delta: 25 });
+    });
+
+    expect(freshRequest).toEqual({ inventoryId: 'inventory-b', delta: 25 });
+    expect(freshTab.result.current.getIdempotencyKey()).not.toBe(completedKey);
+  });
+
+  it('restores the original receipt from the tab acknowledgment when both shared stores were evicted', async () => {
+    const options = { operation: 'adjust_inventory', userId: 'admin-ack-only', surface: 'inventory-page', scope: '' };
+    const original = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => original.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = original.result.current.getIdempotencyKey();
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
+    const originalVersion = JSON.parse(window.localStorage.getItem(storageKey)!).requestVersion;
+    original.unmount();
+    window.localStorage.clear();
+    globalThis.indexedDB = new IDBFactory();
+
+    const reopened = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    await expect(act(async () => reopened.result.current.beginIntent({ quantity: 6 })))
+      .rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    let retried!: { quantity: number };
+    await act(async () => { retried = await reopened.result.current.beginIntent({ quantity: 5 }); });
+    expect(retried).toEqual({ quantity: 5 });
+    expect(reopened.result.current.getIdempotencyKey()).toBe(originalKey);
+    expect(JSON.parse(window.localStorage.getItem(storageKey)!)).toMatchObject({
+      requestVersion: originalVersion, idempotencyKey: originalKey, intent: { quantity: 5 },
+    });
+  });
+
+  it('keeps a pending local mirror frozen when IndexedDB lost the record', async () => {
+    // localStorage and IndexedDB are separate stores. If the coordinator row is
+    // gone (evicted or cleared) while the mirror still says a request is pending,
+    // that request may already have committed. A fresh key here would let an
+    // edited retry run the mutation a second time, so the mirror is decided
+    // exactly like an authoritative pending record.
+    const options = {
+      operation: 'create_inventory_hold',
+      userId: 'admin-idb-evicted',
+      surface: 'inventory-page',
+      scope: 'hold-evicted',
+    };
+    const first = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => first.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = first.result.current.getIdempotencyKey();
+    first.unmount();
+    globalThis.indexedDB = new IDBFactory();
+
+    const reopened = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await expect(act(async () => reopened.result.current.beginIntent({ quantity: 6 })))
+      .rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    expect(reopened.result.current.isIntentLocked).toBe(true);
+    expect(reopened.result.current.unresolvedIntent).toEqual({ quantity: 5 });
+
+    let retried!: { quantity: number };
+    await act(async () => {
+      retried = await reopened.result.current.beginIntent({ quantity: 5 });
+    });
+    expect(retried).toEqual({ quantity: 5 });
+    expect(reopened.result.current.getIdempotencyKey()).toBe(originalKey);
+  });
+
+  it('keeps the committed key when a peer resolved the attempt and IndexedDB then lost the record', async () => {
+    // With no coordinator row left, the resolved local mirror is the only
+    // evidence of which key committed. Dropping it would mint a fresh key, and
+    // adjust_inventory replays by key alone, so the retry would apply twice.
+    const options = {
+      operation: 'adjust_inventory',
+      userId: 'admin-peer-resolved-evicted',
+      surface: 'inventory-page',
+    };
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'stale-tab-evicted');
+    const staleTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'peer-tab-evicted');
+    const peerTab = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = staleTab.result.current.getIdempotencyKey();
+    await act(async () => {
+      await staleTab.result.current.classifyFailure({ code: 'ETIMEDOUT', message: 'socket timeout' });
+    });
+    await act(async () => peerTab.result.current.beginIntent({ quantity: 5 }));
+    expect(peerTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => peerTab.result.current.resolveIntent());
+    globalThis.indexedDB = new IDBFactory();
+
+    await act(async () => staleTab.result.current.beginIntent({ quantity: 5 }));
+    expect(staleTab.result.current.getIdempotencyKey()).toBe(originalKey);
+  });
+
+  it('retires the local mirror when a success resolves after IndexedDB lost the record', async () => {
+    // The pending-mirror fallback must not outlive a request known to have
+    // committed: a success retires the mirror even with no coordinator row left.
+    const options = {
+      operation: 'create_inventory_hold',
+      userId: 'admin-idb-evicted-resolve',
+      surface: 'inventory-page',
+      scope: 'hold-evicted-resolve',
+    };
+    const first = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => first.result.current.beginIntent({ quantity: 5 }));
+    const originalKey = first.result.current.getIdempotencyKey();
+    globalThis.indexedDB = new IDBFactory();
+    await act(async () => first.result.current.resolveIntent());
+    expect(first.result.current.isIntentLocked).toBe(false);
+    first.unmount();
+
+    const next = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(next.result.current.isIntentLocked).toBe(false);
+    let fresh!: { quantity: number };
+    await act(async () => {
+      fresh = await next.result.current.beginIntent({ quantity: 6 });
+    });
+    expect(fresh).toEqual({ quantity: 6 });
+    expect(next.result.current.getIdempotencyKey()).not.toBe(originalKey);
+  });
+
+  it.each(['unreadable', 'malformed'] as const)('rejects cleanup for an %s acknowledgment and preserves the exact confirmed retry', async (fault) => {
+    const options = { operation: 'record_vendor_payment', userId: `ack-cleanup-${fault}`,
+      surface: 'vendor-bill-detail', scope: 'bill-cleanup' };
+    const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    await act(async () => result.current.beginIntent({ amount: 10000 }));
+    const originalKey = result.current.getIdempotencyKey();
+    const acknowledgmentKey = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
+      .find((key) => key?.startsWith('crx:uncertain-mutation-ack:v1:'))!;
+    const saved = window.sessionStorage.getItem(acknowledgmentKey)!;
+    const originalGetItem = Storage.prototype.getItem;
+    const readSpy = fault === 'unreadable'
+      ? vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key) {
+        if (this === window.sessionStorage && key === acknowledgmentKey) throw new Error('acknowledgment read failed');
+        return originalGetItem.call(this, key);
+      }) : null;
+    if (fault === 'malformed') window.sessionStorage.setItem(acknowledgmentKey, '{not-json');
+    try {
+      await expect(act(async () => result.current.resolveIntent()))
+        .rejects.toThrow('DURABLE_MUTATION_INTENT_STORAGE_UNAVAILABLE');
+      expect(result.current.isIntentLocked).toBe(true);
+      expect(result.current.unresolvedIntent).toEqual({ amount: 10000 });
+    } finally {
+      readSpy?.mockRestore();
+      window.sessionStorage.setItem(acknowledgmentKey, saved);
+    }
+    // The coordinator is already resolved; preparation must reconcile that
+    // receipt before the key can be read again, without minting fresh work.
+    expect(() => result.current.getIdempotencyKey()).toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+    await act(async () => {
+      expect(await result.current.beginIntent({ amount: 10000 })).toEqual({ amount: 10000 });
+    });
+    expect(result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => result.current.resolveIntent());
+    expect(result.current.isIntentLocked).toBe(false);
+    expect(window.sessionStorage.getItem(acknowledgmentKey)).toBeNull();
+  });
+
+  it('leaves a valid acknowledgment for a genuinely different request version untouched', async () => {
+    const options = { operation: 'record_vendor_payment', userId: 'ack-newer-valid',
+      surface: 'vendor-bill-detail', scope: 'bill-cleanup' };
+    const { result } = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    await act(async () => result.current.beginIntent({ amount: 10000 }));
+    const acknowledgmentKey = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
+      .find((key) => key?.startsWith('crx:uncertain-mutation-ack:v1:'))!;
+    const newer = { ...JSON.parse(window.sessionStorage.getItem(acknowledgmentKey)!), requestVersion: 'valid-newer-request',
+      idempotencyKey: `${options.operation}:${options.userId}:valid-newer`, intent: { amount: 20000 },
+      intentIdentity: JSON.stringify({ amount: 20000 }) };
+    window.sessionStorage.setItem(acknowledgmentKey, JSON.stringify(newer));
+    await act(async () => result.current.resolveIntent());
+    expect(JSON.parse(window.sessionStorage.getItem(acknowledgmentKey)!)).toEqual(newer);
+    expect(result.current.isIntentLocked).toBe(false);
+  });
+
+  it('clears only the completed acknowledgement when a newer mirror survives coordinator eviction', async () => {
+    const options = { operation: 'create_inventory_hold', userId: 'admin-newer-mirror-resolve', surface: 'inventory-page' };
+    const original = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    await act(async () => original.result.current.beginIntent({ quantity: 5 }));
+    const key = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
+    const newer = { ...JSON.parse(window.localStorage.getItem(key)!), requestVersion: 'newer-request', idempotencyKey: `${options.operation}:${options.userId}:newer-receipt`, intent: { quantity: 6 }, intentIdentity: JSON.stringify({ quantity: 6 }), claimTabIds: ['newer-tab:claim'] };
+    window.localStorage.setItem(key, JSON.stringify(newer));
+    globalThis.indexedDB = new IDBFactory();
+    await act(async () => original.result.current.resolveIntent());
+    expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual(newer);
+    original.unmount();
+    const acknowledgementKeys = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
+      .filter((entry) => entry?.startsWith('crx:uncertain-mutation-ack:') && entry.includes(options.userId));
+    expect(acknowledgementKeys).toEqual([]);
+    const reloaded = renderHook(() => useUncertainMutationIntent<{ quantity: number }>(options));
+    expect(reloaded.result.current.unresolvedIntent).toEqual({ quantity: 6 });
+    expect(reloaded.result.current.getIdempotencyKey()).toBe(newer.idempotencyKey);
+    expect(reloaded.result.current.isForeignIntentLocked).toBe(false);
+    expect(reloaded.result.current.isIntentLocked).toBe(true);
   });
 
   it('keeps duplicated tabs distinct and never erases a peer resolved tombstone', async () => {
@@ -725,7 +1352,7 @@ describe('useUncertainMutationIntent', () => {
     });
     expect(disposition).toBe('uncertain');
     expect(staleTab.result.current.isIntentLocked).toBe(true);
-    expect(staleTab.result.current.unresolvedIntent).toEqual({ amount: 2_500 });
+    expect(staleTab.result.current.unresolvedIntent).toEqual({ amount: 10_000 });
     expect(() => staleTab.result.current.getIdempotencyKey())
       .toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
     expect(newTab.result.current.getIdempotencyKey()).toBe(newerKey);
