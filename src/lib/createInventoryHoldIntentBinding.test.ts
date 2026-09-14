@@ -124,6 +124,20 @@ function hasIntentBindingContract(sql: string) {
 }
 
 describe('create_inventory_hold receipt binding (20260908130000)', () => {
+  it('pins the emitted receipt-binding body and refuses drift before replacing it', () => {
+    const definition = migration.indexOf('CREATE OR REPLACE FUNCTION public._bind_create_inventory_hold_receipt_20260905()');
+    const marker = 'AS $function$';
+    const start = migration.indexOf(marker, definition) + marker.length;
+    const end = migration.indexOf('$function$;', start);
+    expect(definition).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const hash = createHash('sha256').update(migration.slice(start, end), 'utf8').digest('hex');
+    expect(/v_receipt_guard_pin text := '([^']+)'/.exec(migration)?.[1]).toBe(hash);
+    expect(migration.indexOf('PREFLIGHT_RECEIPT_GUARD_DRIFT')).toBeLessThan(definition);
+    expect(migration.indexOf('PREFLIGHT_RECEIPT_TRIGGER_DRIFT')).toBeLessThan(definition);
+    expect(migration).toContain('IF v_sha IS DISTINCT FROM v_receipt_guard_pin THEN');
+  });
+
   it('pins the standalone insert barrier body and installs it before the rename', () => {
     const marker = 'AS $insert_guard$';
     const markerStart = migration.indexOf(marker);

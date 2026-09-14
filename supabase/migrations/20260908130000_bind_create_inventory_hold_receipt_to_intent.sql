@@ -215,6 +215,8 @@ DECLARE
   v_wrapper_sha text;
   v_insert_guard_oid oid;
   v_insert_guard_pin text := 'ce2fe3004a511516afa86ce8a1090dd1a2fba6b40cb0be1163dc93997d2ff0dd';
+  v_receipt_guard_oid oid;
+  v_receipt_guard_pin text := 'd80b78308db464a46643f10cf7229b9898175b9a56114a5840fae8142f826476';
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_attribute a
@@ -254,6 +256,38 @@ BEGIN
     IF v_sha IS DISTINCT FROM v_insert_guard_pin THEN
       RAISE EXCEPTION 'PREFLIGHT_INSERT_GUARD_DRIFT: standalone hold insert barrier was changed; refusing to replace it.';
     END IF;
+  END IF;
+
+  -- A replay must not replace a later receipt-binding hotfix or restore a
+  -- changed registration. Validate both before any CREATE OR REPLACE or DROP.
+  SELECT count(*) INTO v_count FROM pg_proc
+   WHERE pronamespace = 'public'::regnamespace
+     AND proname = '_bind_create_inventory_hold_receipt_20260905';
+  v_receipt_guard_oid := to_regprocedure('public._bind_create_inventory_hold_receipt_20260905()');
+  IF v_count > 1 OR (v_count = 1 AND v_receipt_guard_oid IS NULL) THEN
+    RAISE EXCEPTION 'PREFLIGHT_RECEIPT_GUARD_OVERLOAD';
+  END IF;
+  IF v_receipt_guard_oid IS NOT NULL THEN
+    SELECT encode(extensions.digest(convert_to(replace(prosrc, E'\r\n', E'\n'), 'UTF8'), 'sha256'), 'hex')
+      INTO v_sha FROM pg_proc WHERE oid = v_receipt_guard_oid;
+    IF v_sha IS DISTINCT FROM v_receipt_guard_pin THEN
+      RAISE EXCEPTION 'PREFLIGHT_RECEIPT_GUARD_DRIFT: receipt-binding function was changed; refusing to replace it.';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger
+       WHERE tgrelid = 'public.idempotency_keys'::regclass
+         AND tgname = 'bind_create_inventory_hold_receipt_20260905'
+         AND tgfoid = v_receipt_guard_oid AND tgtype = 7 AND tgenabled = 'O'
+         AND NOT tgisinternal AND tgnargs = 0 AND tgqual IS NULL
+    ) THEN
+      RAISE EXCEPTION 'PREFLIGHT_RECEIPT_TRIGGER_DRIFT: receipt-binding registration was changed; refusing to replace it.';
+    END IF;
+  ELSIF EXISTS (
+    SELECT 1 FROM pg_trigger
+     WHERE tgrelid = 'public.idempotency_keys'::regclass
+       AND tgname = 'bind_create_inventory_hold_receipt_20260905'
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_RECEIPT_TRIGGER_DRIFT: receipt-binding name is already registered to another function.';
   END IF;
 
   v_public_oid := to_regprocedure(v_public_sig);

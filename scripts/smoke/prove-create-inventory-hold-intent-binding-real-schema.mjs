@@ -358,6 +358,32 @@ async function main() {
   r = apply('hold-smoke.sql', true);
   assert.equal(rollbackPass(r.output), true, `hold smoke chain failed after candidate re-run:\n${r.output}`);
 
+  const receiptDefinition = Buffer.from(scalar(`SELECT encode(convert_to(
+    pg_get_functiondef(to_regprocedure('public._bind_create_inventory_hold_receipt_20260905()')), 'UTF8'), 'hex');`), 'hex').toString('utf8');
+  psql(`CREATE OR REPLACE FUNCTION public._bind_create_inventory_hold_receipt_20260905()
+    RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp
+    AS $tampered$ BEGIN RETURN NEW; END; $tampered$;`);
+  const changedReceiptBody = scalar(`SELECT prosrc FROM pg_proc
+    WHERE oid = to_regprocedure('public._bind_create_inventory_hold_receipt_20260905()');`);
+  r = apply('candidate.sql', true);
+  assert.notEqual(r.status, 0, 'candidate silently replaced a changed receipt-binding function');
+  assert.match(r.output, /PREFLIGHT_RECEIPT_GUARD_DRIFT/, 'changed receipt guard did not produce the named refusal');
+  assert.equal(scalar(`SELECT prosrc FROM pg_proc
+    WHERE oid = to_regprocedure('public._bind_create_inventory_hold_receipt_20260905()');`), changedReceiptBody,
+  'refused migration modified the receipt hotfix');
+  psql(receiptDefinition);
+  console.log('[prover] changed receipt-binding body is refused and preserved (container-only mutation)');
+
+  psql(`ALTER TABLE public.idempotency_keys DISABLE TRIGGER bind_create_inventory_hold_receipt_20260905;`);
+  r = apply('candidate.sql', true);
+  assert.notEqual(r.status, 0, 'candidate silently restored a changed receipt trigger registration');
+  assert.match(r.output, /PREFLIGHT_RECEIPT_TRIGGER_DRIFT/, 'changed receipt registration did not produce the named refusal');
+  assert.equal(scalar(`SELECT tgenabled FROM pg_trigger
+    WHERE tgrelid = 'public.idempotency_keys'::regclass AND tgname = 'bind_create_inventory_hold_receipt_20260905';`), 'D',
+  'refused migration modified the receipt registration');
+  psql(`ALTER TABLE public.idempotency_keys ENABLE TRIGGER bind_create_inventory_hold_receipt_20260905;`);
+  console.log('[prover] changed receipt registration is refused and preserved (container-only mutation)');
+
   psql(`CREATE OR REPLACE FUNCTION public._guard_create_inventory_hold_insert_20260913()
     RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp
     AS $tampered$ BEGIN RETURN NEW; END; $tampered$;`);
@@ -369,7 +395,7 @@ async function main() {
   'refused migration modified the changed insert barrier');
   console.log('[prover] changed insert barrier is refused and preserved (container-only mutation)');
 
-  console.log(`CREATE_INVENTORY_HOLD_INTENT_REAL_SCHEMA_PASS pre_chain=FAIL pre_race=${before.holds}_hold_loser_errors legacy_receipt=REFUSED keyless_cutover=BLOCKED source_backed_shapes=PASS post_chain=PASS post_race=${after.holds}_hold_loser_replays rerun=PASS insert_guard_drift=REFUSED`);
+  console.log(`CREATE_INVENTORY_HOLD_INTENT_REAL_SCHEMA_PASS pre_chain=FAIL pre_race=${before.holds}_hold_loser_errors legacy_receipt=REFUSED keyless_cutover=BLOCKED source_backed_shapes=PASS post_chain=PASS post_race=${after.holds}_hold_loser_replays rerun=PASS receipt_guard_drift=REFUSED receipt_trigger_drift=REFUSED insert_guard_drift=REFUSED`);
 }
 
 try { await main(); }
