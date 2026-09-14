@@ -28,7 +28,8 @@ file depends on any of the seven, so the set now sorts above all of them.
 | `20260905200600_latest_commission_recipient_label.sql` | `20260914100600_…` |
 | `20260905210000_repair_commission_history_label_snapshots.sql` | `20260914100900_…` |
 
-No SQL statement changed. The only in-migration edit is the cross-reference comment inside
+The rename itself changes no SQL statement (the lock-upgrade fix below is the only statement
+change in this PR). The rename's only in-migration edit is the cross-reference comment inside
 `20260914100300` that names the label repair's current stamp. The `crx.chicago_date_cutover`
 marker value `'20260905200400'` inside `20260914100500` is deliberately unchanged: it is embedded
 in md5-pinned function bodies and matched by other files, and it is a marker, not a filename.
