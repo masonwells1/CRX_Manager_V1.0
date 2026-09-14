@@ -209,6 +209,7 @@ describe('BatchAdjustModal retry keys', () => {
     db.loseNextReply.add('inv-a');
 
     // Tab A: the stock move commits but its reply is lost, so the batch freezes.
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'batch-original-tab');
     const tabA = renderPage(db, { selectOnOpen: ['inv-a'] });
     fillForm('5', 'Cycle count correction', tabA.scope);
     await submit(/Adjust 1 Product/, tabA.scope);
@@ -217,6 +218,7 @@ describe('BatchAdjustModal retry keys', () => {
 
     // Tab B (a second live page on the same browser storage) retries the frozen
     // batch, gets the stored receipt, and resolves it.
+    window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'batch-retry-tab');
     const tabB = renderPage(db, { selectOnOpen: ['inv-a'], startOpen: false });
     await click(/Select and open batch adjust/, tabB.scope);
     await waitFor(() => expect(tabB.scope.getByText(/Unconfirmed batch/)).toBeTruthy());
@@ -241,9 +243,29 @@ describe('BatchAdjustModal retry keys', () => {
     expect(db.moves.get('inv-a')).toBe(1);
     expect(db.stock.get('inv-a')).toBe(105);
 
+    // A failed local acknowledgment cleanup must keep the completed batch
+    // blocked and visible; closing again may retry cleanup, never stock RPCs.
+    const originalRemoveItem = Storage.prototype.removeItem;
+    const removeSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new Error('batch acknowledgment cleanup failed');
+      }
+      return originalRemoveItem.call(this, key);
+    });
+    try {
+      await click(/Cancel/, tabA.scope);
+      await waitFor(() => expect(mockToast).toHaveBeenLastCalledWith('warning', expect.stringContaining('saved retry could not be cleared')));
+      expect(tabA.onClose).not.toHaveBeenCalled();
+      expect(tabA.onSuccess).not.toHaveBeenCalled();
+      expect(db.calls).toHaveLength(2);
+      expect((tabA.scope.getByRole('button', { name: /Adjust/ }) as HTMLButtonElement).disabled).toBe(true);
+    } finally {
+      removeSpy.mockRestore();
+    }
+
     // Closing hands the refresh to the page so it loads authoritative stock.
     await click(/Cancel/, tabA.scope);
-    expect(tabA.onSuccess).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(tabA.onSuccess).toHaveBeenCalledTimes(1));
     expect(tabA.onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -321,7 +343,7 @@ describe('BatchAdjustModal retry keys', () => {
     expect((tabA.scope.getByRole('button', { name: /Adjust/ }) as HTMLButtonElement).disabled).toBe(true);
 
     await click(/Cancel/, tabA.scope);
-    expect(tabA.onSuccess).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(tabA.onSuccess).toHaveBeenCalledTimes(1));
   });
 
   it('refreshes the page when closed with a row that may already have moved stock', async () => {

@@ -1,0 +1,9 @@
+## 2026-09-12 — Inventory retry-protection landing coordination
+
+The landing coordinator preserves the original PR #624 checkout and finishes the existing inventory Hold/Adjust retry protection against the installed server contract. The migration `20260908130000_bind_create_inventory_hold_receipt_to_intent.sql` remains source-only and unapplied; merging this PR is not approval to apply it.
+
+A late exact-head CodeRabbit review identified the previously documented expired-request recovery limitation outside the diff. The approved September 11 backlog plan explicitly schedules that administrator recovery control separately. Its known-issue entry now has the Codex landing coordinator as owner, with a recovery design and verification plan due September 18. Requests remain locked after expiry; expiry alone never clears an intent or creates a new receipt number.
+
+Read-only production metadata confirms browser callers cannot directly read the idempotency receipt table. The existing `check_idempotency` helper can delete expired receipts, so it is not an authoritative read-only reconciliation route. The activity logger also swallows failures and cannot certify an audited unlock. The follow-up must establish authoritative outcome confirmation and acknowledged auditing before releasing the browser lock. Staff recovery instructions remain in `docs/workflows/INVENTORY_RULES.md`.
+
+Accepted verification uses rendered inventory flows and isolated fault/concurrency tests. Production observation opens and cancels Hold/Adjust forms and checks console errors, without submitting inventory transactions. Deployment must map to the actual merge commit. Rollback is the accepted Vercel rollback owned by the landing coordinator or a protected revert of the screen changes. Live migration application and post-apply proof remain separate.

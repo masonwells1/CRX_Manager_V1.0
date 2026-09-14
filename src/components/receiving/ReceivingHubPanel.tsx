@@ -97,6 +97,7 @@ export default function ReceivingHubPanel() {
   const [receiveTarget, setReceiveTarget] = useState<{ line: POLine; product_name: string } | null>(null);
   const [receiveQty, setReceiveQty] = useState('');
   const [receiving, setReceiving] = useState(false);
+  const [receiveCleanupFailed, setReceiveCleanupFailed] = useState(false);
 
   useEffect(() => {
     const recovered = receiveIntent.unresolvedIntent;
@@ -213,7 +214,9 @@ export default function ReceivingHubPanel() {
     }
     let request: NonNullable<typeof receiveIntent.unresolvedIntent>;
     let idemKey: string;
+    const wasLockedReplay = receiveIntent.isIntentLocked;
     try {
+      if (!receiveIntent.isIntentLocked) setReceiveCleanupFailed(false);
       request = await receiveIntent.beginIntent({
         items: [{ po_item_id: receiveTarget.line.po_item_id, quantity: qty, condition: 'good' }],
         performedBy: profile.id,
@@ -223,12 +226,17 @@ export default function ReceivingHubPanel() {
       idemKey = receiveIntent.getIdempotencyKey();
     } catch (error) {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { tags: { source: 'durable-intent', page: 'receiving-hub' } });
-      toast('error', 'Receiving could not be safely prepared. Nothing was received; refresh and try again.');
+      toast('error', wasLockedReplay
+        ? receiveCleanupFailed
+          ? 'These goods were already recorded once. This retry could not be prepared, so nothing further was sent. Do not receive these goods again on another device. Reload and check receiving history before retrying unchanged.'
+          : 'This retry could not be prepared, so nothing further was sent. An earlier attempt may already have recorded these goods. Do not receive these goods again on another device. Reload and check receiving history before retrying unchanged.'
+        : 'Receiving could not be safely prepared. Nothing was received; refresh and try again.');
       return;
     }
     await runCriticalAction({
       action: async () => {
         let completedElsewhere = false;
+        let cleanupFailed = false;
         const { data, error } = await supabase.rpc('receive_po_items', {
           p_items: request.items,
           p_performed_by: request.performedBy,
@@ -255,19 +263,30 @@ export default function ReceivingHubPanel() {
         } else {
           assertRpcResult(data, 'receive_po_items');
         }
-        await receiveIntent.resolveIntent();
-        return completedElsewhere;
+        try {
+          await receiveIntent.resolveIntent();
+          setReceiveCleanupFailed(false);
+        } catch (resolveError) {
+          cleanupFailed = true;
+          setReceiveCleanupFailed(true);
+          try {
+            Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'receiving-hub', operation: 'receive_po_items' } });
+          } catch { /* Reporting cannot change the confirmed receipt. */ }
+          toast('warning', 'The receipt was saved once. This form stays locked to the same receipt because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before recording another receipt on this device.');
+        }
+        return { completedElsewhere, cleanupFailed };
       },
       toast,
       setLoading: setReceiving,
       sentryTag: 'receive_po_items',
-      onSuccess: (completedElsewhere) => {
+      onSuccess: ({ completedElsewhere, cleanupFailed }) => {
+        setRefreshKey((k) => k + 1);
+        if (cleanupFailed) return;
         if (!completedElsewhere) {
           toast('success', `Received ${fmtUnits(request.items[0].quantity)} of ${request.productName}`);
         }
         setReceiveTarget(null);
         setReceiveQty('');
-        setRefreshKey((k) => k + 1);
       },
     });
   };
@@ -441,10 +460,11 @@ export default function ReceivingHubPanel() {
       <Modal
         open={!!receiveTarget}
         onClose={() => {
-          if (receiveIntent.isIntentLocked) return;
+          if (receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked) return;
           setReceiveTarget(null);
           setReceiveQty('');
         }}
+        closeDisabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked}
         title="Receive Stock"
       >
         <div className="space-y-4">
@@ -454,7 +474,9 @@ export default function ReceivingHubPanel() {
                 ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
                 : receiveIntent.isRetryExpired
                 ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
-                : 'The last response was uncertain. This receiving request is locked so stock cannot be received twice. Retry it unchanged to reconcile the result.'}
+                : receiveCleanupFailed
+                ? 'These goods were recorded once. Browser cleanup failed; retry this same receipt unchanged. If it stays locked after reloading, report it before recording another receipt on this device.'
+                : 'This saved receiving request needs reconciliation before another can be recorded. Retry it unchanged so stock cannot be received twice.'}
             </div>
           )}
           <p className="text-sm text-secondary">
@@ -478,7 +500,7 @@ export default function ReceivingHubPanel() {
             <p className="text-[11px] text-secondary mt-1">Receives the full remaining quantity to Main Warehouse in good condition. For a partial/damaged receipt or a printed receipt, open the PO.</p>
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="ghost" disabled={receiveIntent.isIntentLocked} onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>
+            <Button variant="ghost" disabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked} onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>
             <Button
               icon={<PackagePlus className="w-4 h-4" />}
               onClick={handleReceiveConfirm}

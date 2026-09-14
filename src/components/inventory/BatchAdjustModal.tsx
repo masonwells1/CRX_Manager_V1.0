@@ -163,11 +163,11 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       p_performed_by: intent.performedBy,
     }),
   });
-  const frozen = batchIntent.unresolvedIntent;
+  const frozen = batchIntent.isIntentResolved ? null : batchIntent.unresolvedIntent;
 
   useEffect(() => {
-    if (open && frozen) setSawFrozenBatch(true);
-  }, [open, frozen]);
+    if (open && batchIntent.unresolvedIntent) setSawFrozenBatch(true);
+  }, [open, batchIntent.unresolvedIntent]);
 
   // This open dialog showed a frozen batch, and it is no longer frozen, and this
   // dialog did not resolve it: another tab or window retried and finished it.
@@ -175,7 +175,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
   // retry may have moved any of those rows — so nothing may be sent from here (a
   // new batch would use fresh keys and move stock a second time). Closing
   // refreshes the page with authoritative stock.
-  const finishedElsewhere = sawFrozenBatch && !frozen;
+  const finishedElsewhere = sawFrozenBatch && (!frozen || batchIntent.isIntentResolved);
 
   // A non-finite entry (e.g. 1e400 → Infinity) would be frozen as null by JSON.
   const parsedDelta = Number(uniformDelta);
@@ -197,8 +197,16 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     onClose();
   };
 
-  const handleClose = () => {
+  const handleClose = async () => {
     if (saving) return;
+    if (finishedElsewhere) {
+      try {
+        await batchIntent.resolveIntent();
+      } catch (error) {
+        toast('warning', `This batch is finished, but its saved retry could not be cleared. Close again to retry cleanup. ${sanitizeError(error)}`);
+        return;
+      }
+    }
     resetAndClose();
   };
 
@@ -271,8 +279,8 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
           // dialog read it. Nothing was sent. If a newer unconfirmed batch took its
           // place, the dialog now shows that batch for an unchanged retry instead.
           setSawFrozenBatch(true);
-          if (batchIntent.getUnresolvedIntent()) toast('warning', REPLACED_BATCH_MESSAGE);
-          else toast('warning', FINISHED_ELSEWHERE_MESSAGE);
+          if (batchIntent.getIsIntentResolved()) toast('warning', FINISHED_ELSEWHERE_MESSAGE);
+          else toast('warning', REPLACED_BATCH_MESSAGE);
         } else if (message === UNCERTAIN_MUTATION_INTENT_CONFLICT) toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
         else if (message === UNCERTAIN_MUTATION_RETRY_EXPIRED) toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
         else toast('error', sanitizeError(err));
