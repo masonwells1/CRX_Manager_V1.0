@@ -17,17 +17,20 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ReactNode } from 'react';
-import { render, screen, cleanup, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent, act, within } from '@testing-library/react';
 
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, Link } from 'react-router-dom';
 import { IDBFactory } from 'fake-indexeddb';
 
 const BILL_ID = '11111111-1111-4111-8111-111111111111';
+const NEXT_BILL_ID = '33333333-3333-4333-8333-333333333333';
 const COMMITTED_PAYMENT_ID = '22222222-2222-4222-8222-222222222222';
 
 const H = vi.hoisted(() => ({
   rpc: vi.fn(),
   toast: vi.fn(),
+  captureException: vi.fn(),
+  billReads: vi.fn(),
 }));
 
 const bill = {
@@ -52,15 +55,22 @@ const bill = {
 vi.mock('../lib/db', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const builder = (table: string) => {
-    const result = table === 'vendor_bills'
-      ? { data: bill, error: null }
-      : { data: [], error: null };
+    let requestedBillId = BILL_ID;
     const proxy: unknown = new Proxy(function () {}, {
       get(_t, prop: string | symbol) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => unknown) => resolve({ data: [], error: null });
         }
-        if (prop === 'single' || prop === 'maybeSingle') return () => Promise.resolve(result);
+        if (prop === 'eq') return (column: string, value: string) => {
+          if (table === 'vendor_bills' && column === 'id') requestedBillId = value;
+          return proxy;
+        };
+        if (prop === 'single' || prop === 'maybeSingle') return () => {
+          if (table === 'vendor_bills') H.billReads(requestedBillId);
+          return Promise.resolve(table === 'vendor_bills'
+            ? { data: { ...bill, id: requestedBillId, bill_number: requestedBillId === BILL_ID ? 'VB-1001' : 'VB-2002' }, error: null }
+            : { data: [], error: null });
+        };
         if (typeof prop === 'symbol') return undefined;
         return () => proxy;
       },
@@ -75,7 +85,6 @@ vi.mock('../lib/db', async (importOriginal) => {
       rpc: (...args: unknown[]) => H.rpc(...args),
     },
     checkMutationResult: vi.fn(),
-    assertRpcResult: (data: unknown) => data,
   };
 });
 
@@ -97,7 +106,7 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 
 vi.mock('../lib/sentry', () => ({
-  Sentry: new Proxy({}, { get: () => () => undefined }),
+  Sentry: new Proxy({}, { get: (_target, prop) => prop === 'captureException' ? H.captureException : () => undefined }),
 }));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../hooks/usePageMeta', () => ({ usePageMeta: vi.fn() }));
@@ -120,13 +129,179 @@ describe('VendorBillDetail record-payment recovery', () => {
     globalThis.indexedDB = new IDBFactory();
     H.rpc.mockReset();
     H.toast.mockReset();
+    H.captureException.mockReset();
+    H.billReads.mockReset();
   });
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
   });
 
-  it('still refreshes and warns when durable-intent bookkeeping fails on a committed payment', async () => {
+  it.each(['success', 'saved receipt'] as const)('keeps the next bill usable when old %s cleanup fails after navigation', async (outcome) => {
+    const removeItem = Storage.prototype.removeItem;
+    const cleanupSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) throw new Error('Old bill cleanup blocked');
+      return removeItem.call(this, key);
+    });
+    let completeRpc!: (value: { data: string | null; error: typeof idempotencyMismatchError | null }) => void;
+    H.rpc.mockImplementation(() => new Promise((resolve) => { completeRpc = resolve; }));
+    render(<MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}>
+      <Link to={`/accounts-payable/bills/${NEXT_BILL_ID}`}>Next bill</Link>
+      <Link to={`/accounts-payable/bills/${BILL_ID}`}>Original bill</Link>
+      <Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes>
+    </MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Record Payment' })).getByRole('button', { name: 'Record Payment' }));
+    await waitFor(() => expect(H.rpc).toHaveBeenCalledTimes(1));
+    const originalArgs = H.rpc.mock.calls[0][1];
+    // Pause the real hook's cleanup after it captures A's request version.
+    const cleanupRequest = { error: new DOMException('Old cleanup database unavailable'), onerror: null } as unknown as IDBOpenDBRequest;
+    const openSpy = vi.spyOn(indexedDB, 'open').mockImplementationOnce(() => cleanupRequest);
+    await act(async () => completeRpc(outcome === 'success'
+      ? { data: COMMITTED_PAYMENT_ID, error: null }
+      : { data: null, error: idempotencyMismatchError }));
+    await waitFor(() => expect(openSpy).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('link', { name: 'Next bill' }));
+    await screen.findByRole('heading', { name: 'Bill #VB-2002' });
+    await screen.findByRole('button', { name: 'Record Payment' });
+    H.toast.mockClear();
+    const oldReads = H.billReads.mock.calls.filter(([billId]) => billId === BILL_ID).length;
+    await act(async () => cleanupRequest.onerror?.call(cleanupRequest, new Event('error')));
+    await waitFor(() => expect(H.captureException).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tags: expect.objectContaining({ source: 'durable-intent-resolve' }) })));
+    expect(H.toast).not.toHaveBeenCalled();
+    expect(H.billReads.mock.calls.filter(([billId]) => billId === BILL_ID)).toHaveLength(oldReads);
+    expect(screen.getByRole('heading', { name: 'Bill #VB-2002' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Record Payment' })).toBeEnabled();
+    openSpy.mockRestore();
+    cleanupSpy.mockRestore();
+    H.rpc.mockResolvedValue({ data: COMMITTED_PAYMENT_ID, error: null });
+    fireEvent.click(screen.getByRole('link', { name: 'Original bill' }));
+    await screen.findByRole('heading', { name: 'Bill #VB-1001' });
+    fireEvent.click(await screen.findByRole('button', { name: /retry exact payment/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Record Payment' })).not.toBeInTheDocument());
+    expect(H.rpc).toHaveBeenCalledTimes(2);
+    expect(H.rpc.mock.calls[1][1]).toEqual(originalArgs);
+  });
+
+  it('keeps a confirmed payment frozen and retryable through reopening and cleanup recovery', async () => {
+    const removeItem = Storage.prototype.removeItem;
+    const cleanupSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new Error('Acknowledgment cleanup blocked');
+      }
+      return removeItem.call(this, key);
+    });
+    H.rpc.mockResolvedValue({ data: COMMITTED_PAYMENT_ID, error: null });
+    render(
+      <MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}>
+        <Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    const buttons = await screen.findAllByRole('button', { name: 'Record Payment' });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(H.toast).toHaveBeenCalledWith('warning', expect.stringContaining('payment was recorded once')));
+    expect(H.toast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
+    expect(H.captureException).toHaveBeenCalled();
+    expect(screen.getByLabelText(/Payment Amount/)).toHaveValue(100);
+    expect(screen.getByLabelText(/Payment Amount/)).toBeDisabled();
+    expect(screen.getByText(/this payment was recorded once/i)).toBeInTheDocument();
+    const frozenDialog = screen.getByRole('dialog', { name: 'Record Payment' });
+    expect(within(frozenDialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(frozenDialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    expect(H.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
+    expect(H.rpc).toHaveBeenCalledTimes(1);
+    const args = H.rpc.mock.calls[0][1] as { p_amount_cents: number; p_idempotency_key: string };
+    expect(args.p_amount_cents).toBe(10_000);
+    const acknowledgmentKey = Object.keys(window.sessionStorage).find((key) => key.startsWith('crx:uncertain-mutation-ack:v1:'));
+    expect(acknowledgmentKey).toBeDefined();
+    expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
+    fireEvent.click(screen.getByRole('button', { name: 'Record Payment' }));
+    expect(screen.getByLabelText(/Payment Amount/)).toHaveValue(100);
+    const setItem = Storage.prototype.setItem;
+    const preparationSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (this === window.localStorage && key.startsWith('crx:uncertain-mutation:v4:') && key.includes('record_vendor_payment')) throw new Error('Retry preparation storage unavailable');
+      return setItem.call(this, key, value);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /retry exact payment/i }));
+    await waitFor(() => expect(H.toast).toHaveBeenCalledWith('error', expect.stringContaining('This payment was already recorded once.')));
+    expect(H.toast).toHaveBeenCalledWith('error', expect.stringContaining('Do not record this payment again on another device.'));
+    expect(H.rpc).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/this payment was recorded once/i)).toBeInTheDocument();
+    expect(window.sessionStorage.getItem(acknowledgmentKey!)).toContain(args.p_idempotency_key);
+    preparationSpy.mockRestore();
+    cleanupSpy.mockRestore();
+    fireEvent.click(screen.getByRole('button', { name: /retry exact payment/i }));
+    await waitFor(() => expect(screen.queryByLabelText(/Payment Amount/)).toBeNull());
+    expect(H.rpc).toHaveBeenCalledTimes(2);
+    expect(H.rpc.mock.calls[1][1]).toEqual(args);
+  });
+
+  it('keeps a confirmed payment open when acknowledgment reads fail during cleanup', async () => {
+    let blockReads = false;
+    const getItem = Storage.prototype.getItem;
+    const readSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (blockReads && this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) {
+        throw new Error('Acknowledgment read unavailable after commit');
+      }
+      return getItem.call(this, key);
+    });
+    H.rpc.mockImplementation(() => {
+      blockReads = true;
+      return Promise.resolve({ data: COMMITTED_PAYMENT_ID, error: null });
+    });
+    render(<MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}>
+      <Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes>
+    </MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    const dialog = screen.getByRole('dialog', { name: 'Record Payment' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Record Payment' }));
+    await waitFor(() => expect(H.toast).toHaveBeenCalledWith('warning', expect.stringContaining('payment was recorded once')));
+    expect(H.rpc).toHaveBeenCalledTimes(1);
+    const args = H.rpc.mock.calls[0][1];
+    expect(screen.getByLabelText(/Payment Amount/)).toHaveValue(100);
+    expect(screen.getByLabelText(/Payment Amount/)).toBeDisabled();
+    expect(screen.getByText(/this payment was recorded once/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(H.toast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
+    blockReads = false;
+    readSpy.mockRestore();
+    H.rpc.mockResolvedValue({ data: COMMITTED_PAYMENT_ID, error: null });
+    fireEvent.click(screen.getByRole('button', { name: /retry exact payment/i }));
+    await waitFor(() => expect(screen.queryByLabelText(/Payment Amount/)).toBeNull());
+    expect(H.rpc).toHaveBeenCalledTimes(2);
+    expect(H.rpc.mock.calls[1][1]).toEqual(args);
+  });
+
+  it.each(['Cancel', 'Close'])('allows %s on a foreign payment lock and preserves the saved payment key', async (control) => {
+    H.rpc.mockResolvedValue({ data: null, error: { code: 'ETIMEDOUT', message: 'socket timeout' } });
+    const initial = render(<MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}><Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Record Payment' })).getByRole('button', { name: 'Record Payment' }));
+    await screen.findByRole('button', { name: /retry exact payment/i });
+    // Wait for classification and its durable write before simulating another tab.
+    await waitFor(() => expect(H.toast).toHaveBeenCalledWith('warning', expect.stringContaining('payment may already be recorded')));
+    const sharedKey = `crx:uncertain-mutation:v4:${JSON.stringify(['record_vendor_payment', 'admin-user'])}`;
+    const saved = window.localStorage.getItem(sharedKey);
+    expect(saved).not.toBeNull();
+    initial.unmount();
+    window.sessionStorage.clear();
+    globalThis.indexedDB = new IDBFactory();
+    const peerRecord = { ...JSON.parse(saved!), surface: 'other-payment-page', claimTabIds: ['another-tab'] };
+    window.localStorage.setItem(sharedKey, JSON.stringify(peerRecord));
+    render(<MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}><Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    const dialog = screen.getByRole('dialog', { name: 'Record Payment' });
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /retry exact payment/i })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: control })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: control }));
+    expect(screen.queryByRole('dialog', { name: 'Record Payment' })).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(sharedKey)!)).toEqual(peerRecord);
+    expect(H.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes and preserves the frozen form when bookkeeping fails on a recovered committed payment', async () => {
     // The server answers with the committed receipt, and durable storage dies in
     // the same moment — exactly the ordering that stranded the modal.
     H.rpc.mockImplementation(() => {
@@ -154,19 +329,20 @@ describe('VendorBillDetail record-payment recovery', () => {
     const submit = submitButtons[submitButtons.length - 1];
     await act(async () => { fireEvent.click(submit); });
 
-    // The operator must be told the payment already completed, and the modal
-    // must close instead of spinning on a payment the vendor already received.
+    // The operator is told the payment already completed. Cleanup failure keeps
+    // the form open with the confirmed amount so retry replays this same payment.
     await waitFor(() => {
       expect(H.toast).toHaveBeenCalledWith(
         'warning',
-        'The earlier payment already completed. The bill has been refreshed instead of recording a duplicate.',
+        expect.stringContaining('earlier payment was recorded once'),
       );
     });
     await waitFor(() => {
-      expect(screen.queryByLabelText(/Payment Amount/)).toBeNull();
+      expect(screen.getByLabelText(/Payment Amount/)).toHaveValue(100);
     });
     expect(H.rpc).toHaveBeenCalledTimes(1);
     expect(H.rpc.mock.calls[0][0]).toBe('record_vendor_payment');
+    expect(H.captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tags: { source: 'durable-intent-resolve', page: 'vendor-bill-detail', operation: 'record_vendor_payment' } }));
     // Exact whole cents reached the RPC — no floating-point dollars.
     expect((H.rpc.mock.calls[0][1] as { p_amount_cents: number }).p_amount_cents).toBe(10_000);
   });
