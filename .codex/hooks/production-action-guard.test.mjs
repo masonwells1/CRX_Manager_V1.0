@@ -2140,6 +2140,23 @@ try {
   assert.equal(fast.verdict.blocked, false, "CONTROL: three clean merges on a fast GitHub are allowed");
   assert.deepEqual([...new Set(fast.resolved)].sort(), ["123", "456", "789"], "CONTROL: every merge in the chain is resolved and gated");
 
+  // The budget admits a call on the assumption it lasts at most ONE 5-second
+  // timeout. defaultRunGh tries `gh` then the absolute gh.exe on Windows; if a
+  // timed-out `gh` fell through to the second candidate, one admitted call could
+  // last ten seconds and a chain could outrun the hook (Codex sol, 2026-09-14).
+  const guardSource = (await import("node:fs")).readFileSync(
+    new URL("./production-action-guard.mjs", import.meta.url),
+    "utf8",
+  );
+  const runGhStart = guardSource.indexOf("function defaultRunGh(");
+  const runGhSource = guardSource.slice(runGhStart, guardSource.indexOf("\n}\n", runGhStart));
+  assert.ok(runGhStart >= 0, "defaultRunGh is present");
+  assert.match(
+    runGhSource,
+    /catch \(error\) \{[\s\S]*?if \(error\?\.code !== "ENOENT"\) throw error;[\s\S]*?lastError = error;/,
+    "defaultRunGh moves to the next executable ONLY when the previous one is missing (ENOENT)",
+  );
+
   // ── round 9: the GitHub-connector merge tool must get the advisory too ─────
   // Codex HIGH on the exact-SHA proof of dc965401f — a regression round 8
   // introduced. Moving the lookup out of gatePullRequestMerge() left the

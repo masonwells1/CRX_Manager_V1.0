@@ -871,6 +871,11 @@ function defaultRunGh(args, cwd) {
         stdio: ["ignore", "pipe", "pipe"],
       }).trim();
     } catch (error) {
+      // Only a MISSING executable moves on to the next candidate. A timed-out or
+      // failed `gh` is thrown as-is: retrying it would let one admitted call run
+      // two 5-second timeouts, which the hard-gate budget counts as one
+      // (Codex sol, 2026-09-14).
+      if (error?.code !== "ENOENT") throw error;
       lastError = error;
     }
   }
