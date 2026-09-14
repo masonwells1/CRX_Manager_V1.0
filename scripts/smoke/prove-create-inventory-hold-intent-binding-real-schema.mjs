@@ -384,6 +384,33 @@ async function main() {
   psql(`ALTER TABLE public.idempotency_keys ENABLE TRIGGER bind_create_inventory_hold_receipt_20260905;`);
   console.log('[prover] changed receipt registration is refused and preserved (container-only mutation)');
 
+  psql(`ALTER TABLE public.inventory_holds DISABLE TRIGGER guard_create_inventory_hold_insert_20260913;`);
+  r = apply('candidate.sql', true);
+  assert.notEqual(r.status, 0, 'candidate silently restored a disabled standalone insert trigger');
+  assert.match(r.output, /PREFLIGHT_INSERT_TRIGGER_DRIFT/, 'disabled insert registration did not produce the named refusal');
+  assert.equal(scalar(`SELECT tgenabled FROM pg_trigger
+    WHERE tgrelid = 'public.inventory_holds'::regclass AND tgname = 'guard_create_inventory_hold_insert_20260913';`), 'D',
+  'refused migration enabled the disabled insert registration');
+  psql(`ALTER TABLE public.inventory_holds ENABLE TRIGGER guard_create_inventory_hold_insert_20260913;`);
+  console.log('[prover] disabled insert registration is refused and preserved (container-only mutation)');
+
+  const insertTriggerDefinition = Buffer.from(scalar(`SELECT encode(convert_to(pg_get_triggerdef(oid), 'UTF8'), 'hex')
+    FROM pg_trigger WHERE tgrelid = 'public.inventory_holds'::regclass
+      AND tgname = 'guard_create_inventory_hold_insert_20260913';`), 'hex').toString('utf8');
+  psql(`DROP TRIGGER guard_create_inventory_hold_insert_20260913 ON public.inventory_holds;
+    CREATE TRIGGER guard_create_inventory_hold_insert_20260913
+    AFTER INSERT ON public.inventory_holds FOR EACH ROW
+    EXECUTE FUNCTION public._guard_create_inventory_hold_insert_20260913();`);
+  r = apply('candidate.sql', true);
+  assert.notEqual(r.status, 0, 'candidate silently replaced a reconfigured standalone insert trigger');
+  assert.match(r.output, /PREFLIGHT_INSERT_TRIGGER_DRIFT/, 'changed insert registration did not produce the named refusal');
+  assert.equal(scalar(`SELECT tgtype FROM pg_trigger
+    WHERE tgrelid = 'public.inventory_holds'::regclass AND tgname = 'guard_create_inventory_hold_insert_20260913';`), '5',
+  'refused migration replaced the changed insert event');
+  psql(`DROP TRIGGER guard_create_inventory_hold_insert_20260913 ON public.inventory_holds;
+    ${insertTriggerDefinition};`);
+  console.log('[prover] reconfigured insert registration is refused and preserved (container-only mutation)');
+
   psql(`CREATE OR REPLACE FUNCTION public._guard_create_inventory_hold_insert_20260913()
     RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp
     AS $tampered$ BEGIN RETURN NEW; END; $tampered$;`);
@@ -395,7 +422,7 @@ async function main() {
   'refused migration modified the changed insert barrier');
   console.log('[prover] changed insert barrier is refused and preserved (container-only mutation)');
 
-  console.log(`CREATE_INVENTORY_HOLD_INTENT_REAL_SCHEMA_PASS pre_chain=FAIL pre_race=${before.holds}_hold_loser_errors legacy_receipt=REFUSED keyless_cutover=BLOCKED source_backed_shapes=PASS post_chain=PASS post_race=${after.holds}_hold_loser_replays rerun=PASS receipt_guard_drift=REFUSED receipt_trigger_drift=REFUSED insert_guard_drift=REFUSED`);
+  console.log(`CREATE_INVENTORY_HOLD_INTENT_REAL_SCHEMA_PASS pre_chain=FAIL pre_race=${before.holds}_hold_loser_errors legacy_receipt=REFUSED keyless_cutover=BLOCKED source_backed_shapes=PASS post_chain=PASS post_race=${after.holds}_hold_loser_replays rerun=PASS receipt_guard_drift=REFUSED receipt_trigger_drift=REFUSED insert_trigger_disabled=REFUSED insert_trigger_reconfigured=REFUSED insert_guard_drift=REFUSED`);
 }
 
 try { await main(); }

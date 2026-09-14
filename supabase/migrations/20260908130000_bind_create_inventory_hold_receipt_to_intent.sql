@@ -256,6 +256,21 @@ BEGIN
     IF v_sha IS DISTINCT FROM v_insert_guard_pin THEN
       RAISE EXCEPTION 'PREFLIGHT_INSERT_GUARD_DRIFT: standalone hold insert barrier was changed; refusing to replace it.';
     END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_trigger
+       WHERE tgrelid = 'public.inventory_holds'::regclass
+         AND tgname = 'guard_create_inventory_hold_insert_20260913'
+         AND tgfoid = v_insert_guard_oid AND tgtype = 7 AND tgenabled = 'O'
+         AND NOT tgisinternal AND tgnargs = 0 AND tgqual IS NULL
+    ) THEN
+      RAISE EXCEPTION 'PREFLIGHT_INSERT_TRIGGER_DRIFT: standalone hold insert registration was changed; refusing to replace it.';
+    END IF;
+  ELSIF EXISTS (
+    SELECT 1 FROM pg_trigger
+     WHERE tgrelid = 'public.inventory_holds'::regclass
+       AND tgname = 'guard_create_inventory_hold_insert_20260913'
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_INSERT_TRIGGER_DRIFT: standalone hold insert name is already registered to another function.';
   END IF;
 
   -- A replay must not replace a later receipt-binding hotfix or restore a

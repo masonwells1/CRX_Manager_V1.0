@@ -149,6 +149,8 @@ describe('create_inventory_hold receipt binding (20260908130000)', () => {
     const pin = /v_insert_guard_pin text := '([^']+)'/.exec(migration)?.[1];
     expect(pin).toBe(hash);
     expect(migration).toContain('PREFLIGHT_INSERT_GUARD_DRIFT');
+    expect(migration.indexOf('PREFLIGHT_INSERT_TRIGGER_DRIFT')).toBeLessThan(markerStart);
+    expect(migration).toContain("AND tgfoid = v_insert_guard_oid AND tgtype = 7 AND tgenabled = 'O'");
     expect(migration).toContain('PREFLIGHT_HOLD_SOURCE_SHAPE');
     expect(migration.indexOf('CREATE TRIGGER guard_create_inventory_hold_insert_20260913'))
       .toBeLessThan(migration.indexOf(`RENAME TO ${implName};`));
