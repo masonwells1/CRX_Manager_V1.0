@@ -1,4 +1,4 @@
-## 2026-09-14 - Seven stranded 20260905* migrations restamped above the applied ledger high-water
+## 2026-09-13 - Seven stranded 20260905* migrations restamped above the applied ledger high-water
 
 **Why.** `20260908120000_close_pr535_live_gaps` applied live on 2026-09-08 (ledger version
 `20260909023300`). Seven migration files merged on `main` were never applied. They are the
