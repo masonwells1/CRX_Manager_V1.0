@@ -51,6 +51,9 @@ their dependency order, before any future apply. The transfer wrapper and repair
 current boundary, and their latest restamp removes a version collision with the separate parked
 PR #535 migration at `20260908120000`; they are still not independently apply-ready because the
 wrapper requires the parked Chicago-date candidate first. This correction applies none of them.
+
+**Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and remains unapplied.
+
 They harden snapshot replay, refuse a payment batch if its recipient became stale before posting,
 park an America/Chicago payout business-date guard, pair commission source-date inheritance with
 Chicago-based source document dates, make balance-report recipient labels follow the latest
@@ -151,6 +154,30 @@ so any migration whose safety argument rests on "the live body equals the last c
 post-apply `pg_proc.prosrc` body and rechecked that exact pre-image at apply time rather than inferring
 it from migration filenames alone; it has since been applied, so live `save_job` is now at ITS body
 md5 `8acf34542105a90212ddb0a5e7c5d272`, not F06's.
+
+A second local candidate, `20260908130000_bind_create_inventory_hold_receipt_to_intent` (originally on
+`claude/inventory-idempotency-key-reset-888161`, history row 927), is written and container-proven but
+**NOT applied**. Repository delivery is tracked by PR #624 and its landing successors; publishing
+this parked SQL does not authorize or perform a live apply. Fresh apply-time preflight and the
+protected production gate remain required. Its stamp is authored above PR #592's pending `20260905*` files, and
+deliberately clear of `20260905210000`, which PR #592 occupies with
+`20260905210000_repair_commission_history_label_snapshots.sql` (two migration files sharing one
+timestamp would have undefined apply order), and its safety argument pins the `create_inventory_hold` body by `prosrc`
+sha256 (`3c86421e…`, the body the checked-in 2026-07-27 production dump carries) and fails closed at
+apply time if the installed body differs. **Mason authorized a read-only live check on 2026-09-06 and
+every preflight condition was met**: exactly one `create_inventory_hold` overload, owner `postgres`,
+`plpgsql`, SECURITY DEFINER, `proconfig = {search_path=public, pg_temp}`, the full argument list with
+defaults equal to the pinned string, `md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` — the same
+4,046-character body whose sha256 is the pinned `3c86421e…` (md5 recomputed locally from the
+2026-07-27 dump for comparison, because the live-data guard's read-only allowlist has no
+`digest()`); the private impl name absent; `check_idempotency_intent`, `extensions.digest` and
+`pg_catalog.trim_scale` installed; both receipt-binding columns present; EXECUTE on the hold RPC
+held by `authenticated` and `service_role` and not `anon`; `check_idempotency_intent` executable by
+none of the three; and **zero** unexpired `create_inventory_hold` receipts of any kind, so
+`PREFLIGHT_LEGACY_RECEIPTS` would not fire at that moment. The pre-existing
+`section9_bind_idempotency_receipt_20260826` BEFORE INSERT trigger returns `NEW` unchanged for
+operations outside its AP/receiving list, so it does not touch hold receipts. No live write was made.
+See `docs/manual/KNOWN_ISSUES.md` (OPEN 2026-09-05, manual-hold same-key race).
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
 `20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
