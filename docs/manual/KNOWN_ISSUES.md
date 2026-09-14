@@ -1739,7 +1739,8 @@ interpolation stays code. Comment, string and template text can no longer supply
 `.throwOnError()` or a recovery marker, and neither can a regex the scanner RECOGNISES as a regex
 literal. That recognition is the limit of the guarantee, because the mask is a scanner, not a
 lexer: a `/` after `]`, `}` or `<` is still read as division, so a regex literal written in one of
-those positions stays visible and its text CAN still supply those three tokens. A `/` after `)` is
+those positions stays visible and its text CAN still supply those three tokens (the statement-block
+`}` case is tracked in issue #686, deferred by Mason on 2026-09-14). A `/` after `)` is
 recognised only when that `)` closes an `if`, `for` (including `for await`), `while`, `switch` or `catch` head (2026-09-12,
 CodeRabbit's third round on PR #638: a regex used as a control statement's body was excusing a
 reset). A keyword or control head counts only when it is not a property name: a word whose nearest

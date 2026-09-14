@@ -75,7 +75,7 @@ BEGIN
   UPDATE jobs SET status='in_progress' WHERE id=v_job; UPDATE jobs SET status='completed' WHERE id=v_job;
   BEGIN PERFORM transfer_job_to_invoice(v_job, v_forged, NULL); RAISE EXCEPTION 'SMOKE_FAIL: forged actor allowed';
   EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL%' THEN RAISE; END IF; IF SQLERRM NOT LIKE 'ACTOR_MISMATCH%' THEN RAISE EXCEPTION 'SMOKE_FAIL: expected ACTOR_MISMATCH got %', SQLERRM; END IF; END;
-  v_res := transfer_job_to_invoice(v_job, v_admin, '[SMOKE] feeA-'||v_sfx); v_inv := (v_res->>'invoice_id')::uuid; SELECT * INTO v_invR FROM invoices WHERE id=v_inv;
+  v_res := transfer_job_to_invoice(v_job, v_admin, 'SMOKE-feeA-'||v_sfx); v_inv := (v_res->>'invoice_id')::uuid; SELECT * INTO v_invR FROM invoices WHERE id=v_inv;
   IF v_invR.application_service_id IS DISTINCT FROM v_svc THEN RAISE EXCEPTION 'SMOKE_FAIL: A service FK not set'; END IF;
   SELECT count(*) INTO v_n FROM invoice_items WHERE invoice_id=v_inv; IF v_n<>3 THEN RAISE EXCEPTION 'SMOKE_FAIL: A items % (exp 3)', v_n; END IF;
   PERFORM 1 FROM invoice_items WHERE invoice_id=v_inv AND product_id=v_prodB AND extended_cents=1998 AND is_application_fee=false; IF NOT FOUND THEN RAISE EXCEPTION 'SMOKE_FAIL: A flat line missing'; END IF;
@@ -91,7 +91,7 @@ BEGIN
   INSERT INTO job_fields (job_id, field_id, acres_to_treat, sort_order) VALUES (v_job2, v_field2, 33, 1);
   INSERT INTO job_chemicals (job_id, product_id, quantity, unit, rate_per_acre, rate_unit, cost_per_unit_cents, price_per_unit_cents, sort_order) VALUES (v_job2, v_prodA, 1, 'GL', NULL, NULL, 0, 10001, 1);
   UPDATE jobs SET status='in_progress' WHERE id=v_job2; UPDATE jobs SET status='completed' WHERE id=v_job2;
-  v_res := transfer_job_to_invoice(v_job2, v_admin, '[SMOKE] feeB-'||v_sfx);
+  v_res := transfer_job_to_invoice(v_job2, v_admin, 'SMOKE-feeB-'||v_sfx);
   IF COALESCE((v_res->>'split')::boolean, false) IS NOT TRUE OR (v_res->>'invoice_count')::int IS DISTINCT FROM 2 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: B split result %', v_res;
   END IF;
@@ -126,7 +126,7 @@ BEGIN
   INSERT INTO job_fields (job_id, field_id, acres_to_treat, sort_order) VALUES (v_job3, v_field3, 50, 1);
   INSERT INTO job_chemicals (job_id, product_id, quantity, unit, rate_per_acre, rate_unit, cost_per_unit_cents, price_per_unit_cents, sort_order) VALUES (v_job3, v_prodA, 1, 'GL', NULL, NULL, 1000, 2500, 1);
   UPDATE jobs SET status='in_progress' WHERE id=v_job3; UPDATE jobs SET status='completed' WHERE id=v_job3;
-  v_res := transfer_job_to_invoice(v_job3, v_admin, '[SMOKE] feeC-'||v_sfx);
+  v_res := transfer_job_to_invoice(v_job3, v_admin, 'SMOKE-feeC-'||v_sfx);
   IF COALESCE((v_res->>'split')::boolean, false) IS NOT TRUE OR (v_res->>'invoice_count')::int IS DISTINCT FROM 2 THEN RAISE EXCEPTION 'SMOKE_FAIL: C split result %', v_res; END IF;
   SELECT count(*) INTO v_n FROM invoices WHERE job_id=v_job3; IF v_n<>2 THEN RAISE EXCEPTION 'SMOKE_FAIL: C invoices %', v_n; END IF;
   SELECT count(*) INTO v_n FROM invoices WHERE job_id=v_job3 AND customer_id=v_cust; IF v_n<>1 THEN RAISE EXCEPTION 'SMOKE_FAIL: C customer A invoices %', v_n; END IF;
@@ -157,7 +157,7 @@ BEGIN
   INSERT INTO job_chemicals (job_id, product_id, quantity, unit, rate_per_acre, rate_unit, cost_per_unit_cents, price_per_unit_cents, sort_order) VALUES (v_job4, v_prodA, 1, 'GL', NULL, NULL, 0, 0, 1);
   UPDATE jobs SET status='in_progress' WHERE id=v_job4; UPDATE jobs SET status='completed' WHERE id=v_job4;
   BEGIN
-    PERFORM transfer_job_to_invoice(v_job4, v_admin, '[SMOKE] feeD-'||v_sfx);
+    PERFORM transfer_job_to_invoice(v_job4, v_admin, 'SMOKE-feeD-'||v_sfx);
     RAISE EXCEPTION 'SMOKE_FAIL: D accepted unsupported split override';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;

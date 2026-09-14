@@ -155,12 +155,10 @@ describe('F1 — the key survives until the reply is confirmed', () => {
  *    There is no payload to assert.
  *  - `intent-rotation` — the reset runs from a JSX `onClick`/`onChange`, deliberately
  *    minting a new key because the payload genuinely varies with what the user typed.
- *  - `doc-comment` — the hook's own usage example, not executable code.
  */
-type Reason = 'recovery' | 'throw-on-error' | 'intent-rotation' | 'doc-comment';
+type Reason = 'recovery' | 'throw-on-error' | 'intent-rotation';
 
 const ALLOWED_REASONS: Record<string, Reason[]> = {
-  'src/hooks/useIdempotencyKey.ts': ['doc-comment'],
   'src/components/deliveries/QuickDeliveryModal.tsx': ['recovery'],
   'src/pages/Returns.tsx': ['recovery'],
   'src/pages/InvoiceDetail.tsx': ['recovery', 'throw-on-error'],
@@ -318,8 +316,6 @@ const KNOWN_UNFIXED = new Set(Object.keys(KNOWN_UNFIXED_SITES));
 
 /** Classify one hit from the surrounding source, or null if nothing excuses it. */
 function classify(lines: string[], lineNo: number): Reason | null {
-  const self = lines[lineNo - 1] ?? '';
-  if (/^\s*(\*|\/\/)/.test(self)) return 'doc-comment';
 
   // Every window below reads MASKED source (CodeRabbit, PR #638, two reviews). The
   // per-line stripNoise() cannot see a multi-line block comment, a regex literal, or a
@@ -837,7 +833,9 @@ function siteIdentifiers(line: string, names: string[]): string[] {
 
 function findResetBeforeAssert(file: string): number[] {
   const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
-  const lines = source.split('\n').map(stripNoise);
+  // Scan the whole-file mask, as classify() does: a per-line strip cannot see a multi-line
+  // comment, so its text could otherwise pose as a call followed by a reset.
+  const lines = maskNonCode(source).split('\n').map(stripNoise);
   const alias = aliasResetPattern(source);
   const isReset = (l: string) => RESET.test(l) || (alias !== null && alias.test(l));
   const hits: number[] = [];

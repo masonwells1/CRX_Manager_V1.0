@@ -77,3 +77,10 @@ a keyword and does not open a control head. The `for await` and bare-`await` beh
 Proof observed: the new test (four negative cases, two positive controls, and two keyword controls)
 was added FIRST. It failed against the unfixed mask with `expected 'intent-rotation' to be null`.
 After the fix, all 23 tests in the file pass, including the repo-wide sweep and the exact pins.
+
+Sixth round — CodeRabbit's review of delivery PR #684 at `9ea5e7b3e` found that
+`findResetBeforeAssert()`, which chooses the reset sites `classify()` then judges, still stripped
+each line on its own, so a multi-line comment could pose as a call followed by a reset. It now scans
+the same whole-file `maskNonCode()` text as `classify()`. The same review's Major, a regex written
+after a statement-block `}`, is the documented `}` limitation above; Mason deferred it on 2026-09-14
+and it is tracked in issue #686.
