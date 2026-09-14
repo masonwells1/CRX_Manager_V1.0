@@ -408,6 +408,41 @@ part of the stored ledger name); `docs/reference/migration-history.md` uses the 
 
 **Quote/customer row-version rollout is live:** PR #290 deployed the compatible frontend first, then `20260730201230_quote_customer_row_version_guard` applied under Supabase-assigned ledger/disk version `20260730235031`. Live catalog, trigger, overload, ownership, fixed-search-path, grant, and child-table ACL checks passed. Four rollback-only behavior chains reached exact `SMOKE_PASS_ROLLBACK`, zero fixture rows remained, all 21 standing invariant predicates had zero unallowlisted findings, and the schema registry was refreshed through the subsequent AP high-water. Cached pre-migration bundles fail closed until refreshed; no rollout toggle is required.
 
+## Open-PR landing queue (point-in-time, 2026-09-13)
+
+Running record for `docs/plans/2026-09-11-open-pr-backlog-plan.md`. The approved plan is frozen in
+that file; this block is the live queue state and is updated through normal PRs by the fleet
+orchestrator session (the coordinator). Owners are as reported by the coordinator on 2026-09-12
+14:45Z; PR states were read from GitHub on 2026-09-13. Like every capture on this page it ages
+immediately: re-read GitHub before acting on a row.
+
+| PR | Plan disposition | Owner (session, worktree) | State on 2026-09-13 |
+|---|---|---|---|
+| #599 | FINISH (outcome A) | owner session archived after landing | MERGED 2026-09-11 as `791bc3d86`; per the coordinator, the live-site check on 2026-09-12 showed all three invoice screens pre-filling the Chicago date |
+| #650 | FINISH (docs) | coordinator | MERGED 2026-09-11 as `df92df406` |
+| #638 | FINISH | `local_736a899d`, worktree `pr638-merge-handoff-4bdc81` | open, review round running |
+| #646 | FINISH | `local_ca18f288`, worktree `cycle-count-migration-be7fc1` | open, review round running |
+| #624 | FINISH (source-only merge) | `local_1bb7cec9`, worktree `inventory-idempotency-key-reset-888161` | open |
+| #630 | FINISH | `local_45e768d6`, worktree `usage-review-optimization-46d351` | open, fix not started |
+| #631 | FINISH, last in queue | BLOCKED until the coordinator assigns an owner | open |
+| #651 | plan + baseline documentation | efficiency-review session, worktree `guard-denial-baseline-0911` | open, in review |
+| #612, #647, #605, #544, #635 | PARK (plan section 3) | custody per section 3 | open |
+| #634 | CLOSE | none | closed 2026-09-11 |
+| #626 | CLOSE after #630 lands | none | open |
+| #449 | CLOSE once Mason accepts the retirement sentence (plan section 4) | none | CLOSED 2026-09-12 14:05Z; the closing comment records Mason's explicit direction under plan section 4 |
+
+Open coordinator decisions (carried from the plan's section 8, 2026-09-11):
+
+- KNOWN_ISSUES owner for the 2026-09-18 exposure assessment (suggested: the #624 lane, reassignable).
+- Landing order: the coordinator is to confirm the plan's section 2 order (#638, then #646, then #624;
+  the section 2 order stands and is not reopened here) and name who renumbers ledger row 924.
+
+Follow-ups discovered during execution (2026-09-11, moved here verbatim on 2026-09-13):
+
+- PRODUCT (not guard, not frozen): expired pending-request records leave a locked dialog that cannot be closed and reopens on every visit once the 23-hour safe-retry window passes. Pre-existing on main for Inventory Receive, QuickReceive, ReceivingHub, NewVendorBill; #624 extends it to Adjust and Hold. Interim: the staff recovery procedure in INVENTORY_RULES (ships with #624). Fix: an admin "verified, clear this request" control. Owner: unassigned; coordinator to assign a session and a queue slot. Recorded in KNOWN_ISSUES by the #624 lane.
+- #612: PARKED by Mason's own answer in the #612 lane's chat (~02:10Z). Lane closed; head f415258e0; two codex-connector threads answered in prose and left open for the 09-25 resume.
+- #624 sequencing: #599 first, then #624 with its docs batch (staff procedure, KNOWN_ISSUES owner + 09-18 date, compatibility note, stale-line fix, PR description) in ONE push, one review slot (14:22Z earliest), SOURCE-ONLY merge. Pending Mason's answer in the #624 lane's chat.
+
 ## Recent production deployments
 
 - **2026-08-11 verification (Team Board delegation fully live and deployed):** Team Board delegation is live across two migrations. `20260809130108_team_note_completion_rpc_and_assignment_notify` added the governed completion RPC — which admits the creator, current assignee, or an active admin — plus the assignment trigger that notifies active assignees and avoids self-notifications. Review then found the trigger lacked an active-actor gate, closed by `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`), which requires an active profile in both the `tnotes_insert` policy and the trigger itself. The full rollback-only chain passed against live with exact `SMOKE_PASS_ROLLBACK`, covering assignee completion, outsider and inactive-actor denials, replay/mismatch behavior, assignment notifications, and grants. The schema registry is refreshed through live high-water `20260810235207`. The UI caller and notification deep-link changes were carried by PR #351 (merge commit `8dcb82fb`), and closeout PR #372 merged as `261d10bd`; Vercel reported the production deployment successful and `/team-board` returned HTTP 200 with the app shell.
