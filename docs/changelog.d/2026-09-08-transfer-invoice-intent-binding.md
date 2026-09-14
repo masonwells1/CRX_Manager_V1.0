@@ -1,7 +1,7 @@
 ## 2026-09-08 — Bind job-to-invoice retries to the requesting user and job
 
-Delivery: SOURCE/UI-ONLY. Merging PR #638 (delivered through its delivery PRs,
-currently #697) ships the two job-invoice screens and repository files; it applies
+Delivery: SOURCE/UI-ONLY. Merging PR #638's final delivery PR (#638 is delivered
+through a series of delivery PRs, each replacing the last) ships the two job-invoice screens and repository files; it applies
 no SQL. The migration files in its diff are all parked
 and unapplied:
 

@@ -69,7 +69,9 @@ The parked transfer wrapper refuses to run at any isolation level but READ COMMI
 ACCESS EXCLUSIVE on the receipt table, which drains every transaction that has already read or
 written it. Its 5-second lock timeout bounds only the wait for that lock; the lock is then held
 until commit, so the rest of the file must commit within 3 seconds for queued receipt reads and
-writes to stay under the 8-second statement timeout live sets for `authenticated`. Under that lock it deletes expired unbound transfer receipts: a legacy call
+writes to stay under an 8-second `authenticated` statement timeout. That 8 seconds is the
+migration file's own stated assumption, not a value verified from the live database, and the
+3-second post-lock budget is not enforced by the file (must fix before apply, issue #669). Under that lock it deletes expired unbound transfer receipts: a legacy call
 still waiting on its key's advisory lock is not drained, and could otherwise replay such a receipt
 after cutover with no actor or job check. An owner-only receipt trigger then rejects a cached
 pre-cutover body that reaches the insert with `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` and rolls it
