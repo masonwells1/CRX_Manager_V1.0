@@ -3,12 +3,12 @@
  * Network-isolated PostgreSQL 17 proof that the parked commission migration set
  * survives SETTLED data in its REAL filename order.
  *
- * The defect this guards against: 20260908130900_repair_commission_history_label_snapshots
+ * The defect this guards against: 20260914100900_repair_commission_history_label_snapshots
  * (formerly 20260905020100, then 20260905190000) correctly refuses to run once any
  * commission payment has been posted, and the filename-ordered runner
  * (scripts/list-post-baseline-migrations.mjs) halts at the first failing file. At its
  * old position that refusal would have stopped
- * 20260908120300_refuse_stale_commission_payment_recipient — the payout money-safety
+ * 20260914100300_refuse_stale_commission_payment_recipient — the payout money-safety
  * guard — and every later file from ever installing.
  *
  * A second ordering hazard, found 2026-09-05 evening: the ordering guard the apply path
@@ -16,8 +16,8 @@
  * ledger row. #606 landed live that day as version 20260905185938 under a bare name, so
  * the five surviving files then stamped 20260905020000..185619 would each have been refused.
  * (The former standalone 020500 was superseded before apply by the unified 020400 cutover.)
- * The six-file set was restamped 20260905200000..210000. On 2026-09-13 it was restamped again,
- * to 20260908120200..20260908130900, after 20260908120000_close_pr535_live_gaps applied live;
+ * The six-file set was restamped 20260905200000..210000. On 2026-09-14 it was restamped again,
+ * to 20260914100200..20260914100900, after 20260908120000_close_pr535_live_gaps applied live;
  * the LEDGER phase below proves the current names clear the guard and that the previous names
  * do not.
  *
@@ -28,7 +28,7 @@
  *   CONTROL   the OLD order (repair right after the replay guard) halts at the repair
  *             and the recipient guard never installs — the harness sees the defect
  *   ROLLOUT   the REAL order, applied file by file with per-file commits exactly as
- *             the runner does, installs every file through 20260908120600, leaves the
+ *             the runner does, installs every file through 20260914100600, leaves the
  *             recipient guard's recorder body + trigger in place, and refuses ONLY the
  *             repair, as the final file, with COMMISSION_HISTORY_LABEL_REPAIR_SETTLED
  *   PIN       narrowing the repair's settlement-recorder pin back to the single
@@ -57,13 +57,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const BASE_PROVER = path.join(HERE, 'prove-commission-history-as-of.mjs');
 const LEDGER_MIGRATION = '20260903150100_ledger_backed_commission_history.sql';
-const REPLAY_GUARD = '20260908120200_commission_history_report_replay_guard.sql';
-const RECIPIENT_GUARD = '20260908120300_refuse_stale_commission_payment_recipient.sql';
-const PAYMENT_DATE_GUARD = '20260908120400_enforce_commission_payment_business_date.sql';
-const CHICAGO_DATE_CUTOVER = '20260908120500_commission_dates_follow_chicago_business_day.sql';
-const REPAIR = '20260908130900_repair_commission_history_label_snapshots.sql';
-const LABEL_FIX = '20260908120600_latest_commission_recipient_label.sql';
-const NEXT_INVOICE_YEAR = '20260908120100_next_invoice_number_year_chicago.sql';
+const REPLAY_GUARD = '20260914100200_commission_history_report_replay_guard.sql';
+const RECIPIENT_GUARD = '20260914100300_refuse_stale_commission_payment_recipient.sql';
+const PAYMENT_DATE_GUARD = '20260914100400_enforce_commission_payment_business_date.sql';
+const CHICAGO_DATE_CUTOVER = '20260914100500_commission_dates_follow_chicago_business_day.sql';
+const REPAIR = '20260914100900_repair_commission_history_label_snapshots.sql';
+const LABEL_FIX = '20260914100600_latest_commission_recipient_label.sql';
+const NEXT_INVOICE_YEAR = '20260914100100_next_invoice_number_year_chicago.sql';
 const PARKED_COMMISSION_NAMES = [
   REPLAY_GUARD,
   RECIPIENT_GUARD,
@@ -80,7 +80,7 @@ const WRAPPABLE_PLAN_NAMES = [...PARKED_COMMISSION_NAMES, NEXT_INVOICE_YEAR];
 // Pinned so the LEDGER phase never abstains when the gitignored snapshot is absent (CI); when
 // the snapshot is present it is unioned in, so the bar can only rise, never fall.
 const LIVE_HIGH_WATER_ROW = '20260908120000_close_pr535_live_gaps';
-// The names the parked set carried before the 2026-09-13 restamp — the negative control for
+// The names the parked set carried before the 2026-09-14 restamp — the negative control for
 // the LEDGER phase. All six sort below the row above.
 const PRE_RENUMBER_NAMES = [
   '20260905200000_commission_history_report_replay_guard.sql',
