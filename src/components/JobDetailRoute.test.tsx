@@ -106,6 +106,7 @@ vi.mock('../lib/dateUtils', async (orig) => {
 
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import JobDetailRoute from './JobDetailRoute';
+import { Sentry } from '../lib/sentry';
 
 function makeJob(overrides: Record<string, unknown>) {
   return {
@@ -384,6 +385,51 @@ describe('JobDetail transfer intent recovery', () => {
     const secondKey = (transferCalls[1][1] as { p_idempotency_key: string }).p_idempotency_key;
     expect(secondKey).not.toBe(firstKey);
     expect(mockTransferResetKey).toHaveBeenCalledTimes(2);
+  });
+
+  // CodeRabbit, PR #697: an unverifiable transfer result that lands after the operator moved to
+  // another job must not raise this job's reconciliation toast over the job now on screen.
+  it('stays silent when an unverifiable transfer result lands after navigating away', async () => {
+    let resolveTransfer!: (result: { data: unknown; error: unknown }) => void;
+    const transfer = new Promise<{ data: unknown; error: unknown }>((resolve) => {
+      resolveTransfer = resolve;
+    });
+    const jobBReads: string[] = [];
+    let jobReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'jobs') return buildChain({ data: [], error: null });
+      jobReads += 1;
+      if (jobReads === 1) return buildChain({ data: completedJob, error: null });
+      jobBReads.push('jobs');
+      return buildChain({ data: JOB_B, error: null });
+    });
+    mockRpc.mockImplementation((name: string) => (name === 'transfer_job_to_invoice'
+      ? transfer
+      : Promise.resolve({ data: null, error: null })));
+
+    const router = mountAt('/jobs/job-transfer');
+    await screen.findByRole('heading', { name: 'J-TRANSFER-3003' });
+    await confirmTransfer();
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'transfer_job_to_invoice')).toHaveLength(1));
+
+    await act(async () => { await router.navigate('/jobs/job-b'); });
+    await screen.findByRole('heading', { name: 'J-BBBB-2002' });
+    const jobBReadsBeforeResult = jobBReads.length;
+
+    await act(async () => {
+      resolveTransfer({ data: null, error: { code: 'P0001', message: 'TRANSFER_INVOICE_RESULT_INVALID', details: null, hint: null } });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // Positive control: the stale handler really reached its catch block.
+    await waitFor(() => expect(Sentry.captureException).toHaveBeenCalledWith(
+      expect.anything(),
+      { extra: { context: 'transfer_job_to_invoice' } },
+    ));
+    const recoveryMessage = 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
+    expect(mockToast).not.toHaveBeenCalledWith('error', recoveryMessage);
+    expect(jobBReads.length).toBe(jobBReadsBeforeResult);
+    expect(mockTransferResetKey).not.toHaveBeenCalled();
   });
 
   it('removes the transfer action when reconciliation shows the first attempt already invoiced the job', async () => {

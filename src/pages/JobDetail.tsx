@@ -3168,15 +3168,19 @@ export default function JobDetail() {
       const resultInvalid = isTransferInvoiceResultInvalid(err);
       const intentRecovery = transferInvoiceErrorMessage(err);
       if (resultInvalid) {
-        setTransferReconciliationPending(true);
-        toast('error', intentRecovery!);
         // A malformed result cannot authorize a blind retry. Keep the transfer
         // control busy until an authoritative job reload settles whether the
         // first attempt produced an invoice. Only that successful reconciliation
         // retires the suspect receipt key and allows a new confirmed attempt.
-        if (stillOnThisJob() && await fetchJob() && stillOnThisJob()) {
-          transferJobIdem.resetKey();
-          setTransferReconciliationPending(false);
+        // All of it is about THIS job: if the operator has moved to another job,
+        // raising this job's reconciliation state or toast would land on that one.
+        if (stillOnThisJob()) {
+          setTransferReconciliationPending(true);
+          toast('error', intentRecovery!);
+          if (await fetchJob() && stillOnThisJob()) {
+            transferJobIdem.resetKey();
+            setTransferReconciliationPending(false);
+          }
         }
       } else if (intentRecovery) {
         // The cutover refusal committed nothing and explicitly asks for the same

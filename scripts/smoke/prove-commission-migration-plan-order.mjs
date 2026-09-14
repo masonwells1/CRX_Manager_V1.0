@@ -184,8 +184,8 @@ if (existsSync(appliedSnapshot)) {
   if (Array.isArray(snapshot.applied)) appliedNames = appliedNames.concat(snapshot.applied);
 }
 const parkedNames = trailingNames.filter((name) => PARKED_COMMISSION_NAMES.includes(name));
-assert.equal(parkedNames.length, PRE_RENUMBER_NAMES.length + 1,
-  `parked set is ${parkedNames.length} files but the historical negative control lists ${PRE_RENUMBER_NAMES.length} original files`);
+assert.equal(parkedNames.length, PARKED_COMMISSION_NAMES.length,
+  `parked set is ${parkedNames.length} files on disk but ${PARKED_COMMISSION_NAMES.length} parked files are expected`);
 // Negative control first: the SAME guard against the SAME ledger refuses the old names.
 const refusedBefore = PRE_RENUMBER_NAMES.filter((name) => checkMigrationOrdering({ name, sql: '', appliedNames }).ok === false);
 assert.deepEqual(refusedBefore, PRE_RENUMBER_NAMES,

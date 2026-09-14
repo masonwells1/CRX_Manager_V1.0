@@ -576,6 +576,8 @@ function maskNonCode(code: string): string {
   // `(` opened such a head and where its matching `)` landed in `out`.
   const controlHead: boolean[] = [];
   let controlCloseAt = -1;
+  // Where the closing `/` of the most recent masked regex literal landed in `out`.
+  let regexCloseAt = -1;
 
   // The identifier ending at or before `end` in `out` (whitespace skipped), and the index just
   // before it.
@@ -611,6 +613,10 @@ function maskNonCode(code: string): string {
     if (j < 0) return true;
     if (out[j] === '>') return out[j - 1] === '=';
     if (out[j] === ')') return controlCloseAt === j;
+    // A `/` in `out` is a division operator (comments are blanked), so a regex may follow it
+    // (`value / /re/.test(v)`, CodeRabbit, PR #697) — unless it is the closing `/` of a masked
+    // regex literal with no flags, which ends an operand (`/x/ / 2`).
+    if (out[j] === '/') return regexCloseAt !== j;
     // An exact `++` or `--` right before `/` ends a postfix operator (`count++ / 2`), so the
     // `/` is division (CodeRabbit, PR #690). A third one (`count+++ /re/`) is binary, so a
     // regex can start (CodeRabbit, PR #696).
@@ -702,6 +708,7 @@ function maskNonCode(code: string): string {
         const end = regexEnd(i);
         if (end > 0) {
           const close = code.lastIndexOf('/', end - 1);
+          regexCloseAt = out.length + (close - i);
           out += `/${' '.repeat(close - i - 1)}${code.slice(close, end)}`;
           i = end;
           continue;
@@ -1022,6 +1029,20 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     // third operator is binary, so a regex starts and its text is not evidence.
     expect(classify(['  const r = count+++ /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
     expect(classify(['  const r = count--- /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+  });
+
+  // CodeRabbit (PR #697): a `/` that is itself division is an operator, so a second `/` right
+  // after it opens a regex (`value / /re/.test(v)`); its text must not supply an excuse.
+  it('a regex right after a division operator cannot excuse a reset', () => {
+    const reset = '  idem.resetKey();';
+    expect(classify(['  const r = value / /getIdempotencyBindingRejection/.test(input);', reset], 2)).toBeNull();
+    expect(classify(['  const r = (a + b) / /query.throwOnError()/.test(input);', reset], 2)).toBeNull();
+
+    // Positive controls: plain division, a closed regex followed by division, and a `//`
+    // comment after division all leave the executable call visible.
+    expect(classify(['  const r = a / b / 2 + getIdempotencyBindingRejection(error);', reset], 2)).toBe('recovery');
+    expect(classify(['  const r = /x/g / 2 + getIdempotencyBindingRejection(error);', reset], 2)).toBe('recovery');
+    expect(classify(['  const r = a / 2; // note', '  if (getIdempotencyBindingRejection(error)) {', reset], 3)).toBe('recovery');
   });
 
   it('scans a meaningful number of source files', () => {
