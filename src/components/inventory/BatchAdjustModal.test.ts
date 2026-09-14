@@ -13,6 +13,8 @@ vi.mock('../../lib/activityLogger', () => ({
 
 import { buildAdjustmentCalls, type AdjustmentItem } from './BatchAdjustModal';
 
+const keyFor = (item: AdjustmentItem) => `batch-key:${item.inventory_id}`;
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -23,7 +25,7 @@ describe('buildAdjustmentCalls', () => {
       { inventory_id: 'inv-1', product_name: 'Product A', current_qty: 10, delta: 5 },
       { inventory_id: 'inv-2', product_name: 'Product B', current_qty: 20, delta: -3 },
     ];
-    const calls = buildAdjustmentCalls(items, 'Cycle count correction', 'user-1');
+    const calls = buildAdjustmentCalls(items, 'Cycle count correction', 'user-1', keyFor);
     expect(calls).toHaveLength(2);
     expect(calls[0].p_inventory_id).toBe('inv-1');
     expect(calls[0].p_delta).toBe(5);
@@ -35,7 +37,7 @@ describe('buildAdjustmentCalls', () => {
       { inventory_id: 'inv-1', product_name: 'A', current_qty: 10, delta: 5 },
       { inventory_id: 'inv-2', product_name: 'B', current_qty: 20, delta: 0 },
     ];
-    const calls = buildAdjustmentCalls(items, 'fix', 'user-1');
+    const calls = buildAdjustmentCalls(items, 'fix', 'user-1', keyFor);
     expect(calls).toHaveLength(1);
   });
 
@@ -43,7 +45,15 @@ describe('buildAdjustmentCalls', () => {
     const items: AdjustmentItem[] = [
       { inventory_id: 'inv-1', product_name: 'A', current_qty: 10, delta: 5 },
     ];
-    const calls = buildAdjustmentCalls(items, 'Damaged goods', 'user-1');
+    const calls = buildAdjustmentCalls(items, 'Damaged goods', 'user-1', keyFor);
     expect(calls[0].p_reason).toBe('Damaged goods');
+  });
+
+  it('uses the supplied per-row key', () => {
+    const items: AdjustmentItem[] = [
+      { inventory_id: 'inv-1', product_name: 'A', current_qty: 10, delta: 5 },
+    ];
+    const calls = buildAdjustmentCalls(items, 'Damaged goods', 'user-1', keyFor);
+    expect(calls[0].p_idempotency_key).toBe('batch-key:inv-1');
   });
 });
