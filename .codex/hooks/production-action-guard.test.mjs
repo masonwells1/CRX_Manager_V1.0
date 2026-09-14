@@ -2157,6 +2157,30 @@ try {
     "defaultRunGh moves to the next executable ONLY when the previous one is missing (ENOENT)",
   );
 
+  // PowerShell keeps `\` and splits on the following space (Codex sol, 2026-09-14).
+  const BS = String.fromCharCode(92);
+  // A GREEN, mergeable PR: the POSIX reading clears every hard gate, so only the
+  // PowerShell reading's --admin can deny it.
+  const greenGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) throw new Error("advisory unavailable");
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  for (const [command, pattern, label] of [
+    [`gh api -H X-Test:value${BS} -X DELETE repos/o/r/branches/main/protection`, /./, "an escaped-space `-X DELETE`"],
+    [`gh pr merge 123 --body x${BS} --admin --squash`, /--admin/, "an escaped-space `--admin`"],
+  ]) {
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: greenGh,
+    });
+    assert.equal(verdict.blocked, true, `${label} is denied under PowerShell's reading`);
+    assert.match(String(verdict.reason), pattern, `${label} denial names the offence`);
+  }
+
   // ── round 9: the GitHub-connector merge tool must get the advisory too ─────
   // Codex HIGH on the exact-SHA proof of dc965401f — a regression round 8
   // introduced. Moving the lookup out of gatePullRequestMerge() left the

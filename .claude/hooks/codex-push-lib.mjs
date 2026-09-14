@@ -2643,11 +2643,20 @@ function segmentOneReading(text, { honorQuotes, honorEscapes }) {
 
 export function splitCommandSegments(command) {
   const text = String(command || "");
+  // Reading 3 is PowerShell's: a backslash is an ordinary character there, so
+  // `x\ --admin` is the word `x\` followed by `--admin`. The word splitter follows
+  // POSIX and binds `\ ` into one word, which read `gh pr merge 1 --body x\
+  // --admin` as admin:false and `gh api -H a:b\ -X DELETE …` as a GET (Codex sol,
+  // 2026-09-14). Doubling a backslash that precedes whitespace makes the POSIX
+  // splitter hand the program `x\` and end the word, exactly as PowerShell does.
+  // It is an EXTRA reading: callers deny when any reading is refused.
+  const powershellText = text.replace(/\\(?=\s)/g, "\\\\");
   const seen = new Set();
   const union = [];
   for (const segment of [
     ...segmentOneReading(text, { honorQuotes: true, honorEscapes: true }),
     ...segmentOneReading(text, { honorQuotes: false, honorEscapes: false }),
+    ...(powershellText === text ? [] : segmentOneReading(powershellText, { honorQuotes: true, honorEscapes: true })),
   ]) {
     if (!segment || seen.has(segment)) continue;
     seen.add(segment);

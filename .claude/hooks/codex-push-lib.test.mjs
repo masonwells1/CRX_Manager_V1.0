@@ -3098,6 +3098,30 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   }
 }
 
+// ── PowerShell reading of `\ ` (Codex sol, 2026-09-14) ───────────────────────
+// PowerShell keeps a backslash and still splits on the space after it; POSIX
+// binds `\ ` into one word. The union must include PowerShell's reading, or
+// `--admin` and `-X DELETE` hide inside the previous word.
+{
+  const BS = String.fromCharCode(92);
+  const adminCommand = `gh pr merge 123 --body x${BS} --admin --squash`;
+  const adminReadings = splitCommandSegments(adminCommand).map((segment) => ghMergeRequest(segment));
+  assert.ok(
+    adminReadings.some((request) => request?.admin === true),
+    "a PowerShell `x\\ --admin` reading exposes --admin",
+  );
+  const deleteCommand = `gh api -H X-Test:value${BS} -X DELETE repos/o/r/branches/main/protection`;
+  assert.ok(
+    splitCommandSegments(deleteCommand).some((segment) => ghApiMutates(segment)),
+    "a PowerShell `value\\ -X DELETE` reading exposes the DELETE",
+  );
+  assert.deepEqual(
+    splitCommandSegments("gh pr merge 123 --squash"),
+    ["gh pr merge 123 --squash"],
+    "CONTROL: a command with no backslash gains no extra reading",
+  );
+}
+
 // ── createHardGateBudget / hookDeadlineMs (CodeRabbit, 2026-09-10) ──────────
 // Both merge guards ran their hard gates as a series of blocking calls with
 // nothing bounding the series, and a hook killed at its timeout ALLOWS. The
