@@ -19,3 +19,5 @@ found seven such keys in four files, one more than the review named:
 Each now uses a `SMOKE-<name>-<suffix>` key with no space. Only the key text changed; no
 assertion, fixture or SQL statement in a migration changed. These chains need a database and
 were not run here. No SQL is applied and no production behaviour changes.
+
+- **2026-09-14, CodeRabbit on delivery PR #698 at `39af0526b`:** `src/lib/db.test.ts` now also covers `assertTransferResultForJob()` refusing a result whose `job_id` is not a string. The repeated finding asking to revert the comment-only edit in never-applied `20260905200200` stays unchanged (owner decision 2026-09-13).

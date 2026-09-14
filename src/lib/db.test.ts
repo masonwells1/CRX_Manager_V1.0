@@ -189,6 +189,13 @@ describe('assertTransferResultForJob', () => {
     const result = { success: true, job_id: 'A1B2C3D4-0000-4000-8000-00000000ABCD' };
     expect(assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd')).toBe(result);
   });
+
+  it('rejects a result with a non-string job id', () => {
+    expect(() => assertTransferResultForJob(
+      { success: true, job_id: 42 },
+      'a1b2c3d4-0000-4000-8000-00000000abcd',
+    )).toThrow(/^TRANSFER_INVOICE_RESULT_INVALID:/);
+  });
 });
 
 describe('describePostInvoiceBlock', () => {
