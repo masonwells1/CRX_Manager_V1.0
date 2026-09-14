@@ -73,6 +73,7 @@ describe('NewVendorBill PO-overage handling', () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
     globalThis.indexedDB = new IDBFactory();
+    vi.mocked(Sentry.captureException).mockReset();
     mockToast.mockClear();
     mockNavigate.mockClear();
     mockRpc.mockReset();

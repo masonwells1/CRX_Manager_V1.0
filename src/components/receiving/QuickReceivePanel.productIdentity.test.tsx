@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import QuickReceivePanel from './QuickReceivePanel';
 import { Sentry } from '../../lib/sentry';
+import { downloadReceivingPdf } from '../../lib/receivingPdf';
+import { notifyDamagedReceiving } from '../../lib/notificationTriggers';
 
 const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
@@ -93,6 +95,7 @@ vi.mock('../../lib/notificationTriggers', () => ({
   notifyDamagedReceiving: vi.fn(),
 }));
 vi.mock('../../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
+vi.mock('../../lib/receivingPdf', () => ({ downloadReceivingPdf: vi.fn() }));
 
 describe('QuickReceivePanel Product identity', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -123,7 +126,7 @@ describe('QuickReceivePanel Product identity', () => {
         };
       }
       if (name === 'receive_po_items') {
-        return { data: { receiving_record_ids: [] }, error: null };
+        return { data: { receiving_record_ids: ['receiving-b'] }, error: null };
       }
       return { data: null, error: new Error(`Unexpected RPC ${name}`) };
     });
@@ -188,6 +191,7 @@ describe('QuickReceivePanel Product identity', () => {
       expect(screen.getByRole('button', { name: /back to edit/i })).toBeDisabled();
       expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'success')).toEqual([]);
       expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'error')).toEqual([]);
+      await waitFor(() => expect(downloadReceivingPdf).toHaveBeenCalledTimes(1));
       const receivingCalls = mocks.rpc.mock.calls.filter(([name]) => name === 'receive_po_items');
       expect(receivingCalls).toHaveLength(1);
       const args = receivingCalls[0][1] as { p_idempotency_key: string };
@@ -212,6 +216,7 @@ describe('QuickReceivePanel Product identity', () => {
       const replayCalls = mocks.rpc.mock.calls.filter(([name]) => name === 'receive_po_items');
       expect(replayCalls).toHaveLength(2);
       expect(replayCalls[1][1]).toEqual(args);
+      expect(downloadReceivingPdf).toHaveBeenCalledTimes(1);
 
       // Only after A's cleanup succeeds may B become a new receipt, with B's
       // allocation and a new key instead of a hidden replay of A.
@@ -247,7 +252,7 @@ describe('QuickReceivePanel Product identity', () => {
       product_name: 'Same Name',
       sku: 'SKU-B',
       quantity: 3,
-      condition: 'good',
+      condition: 'damaged',
       lot_number: '',
       notes: '',
     };
@@ -271,7 +276,7 @@ describe('QuickReceivePanel Product identity', () => {
     const frozenPayload = [{
       po_item_id: 'po-item-frozen',
       quantity: 3,
-      condition: 'good',
+      condition: 'damaged',
       lot_number: null,
       notes: null,
       storage_location: 'Cold Storage',
@@ -294,7 +299,7 @@ describe('QuickReceivePanel Product identity', () => {
       intentIdentity: JSON.stringify({
         p_allow_over_receive: false,
         p_items: [{
-          condition: 'good',
+          condition: 'damaged',
           lot_number: null,
           notes: null,
           po_item_id: 'po-item-frozen',
@@ -339,6 +344,8 @@ describe('QuickReceivePanel Product identity', () => {
     ));
     expect(await screen.findByText(/successfully received 1 item allocation/i)).toBeInTheDocument();
     await waitFor(() => expect(window.localStorage.getItem(storageKey)).toContain('"status":"resolved"'));
+    expect(downloadReceivingPdf).not.toHaveBeenCalled();
+    expect(notifyDamagedReceiving).toHaveBeenCalledWith('PO-FROZEN', [expect.objectContaining({ condition: 'damaged', quantity: 3 })], 'po-frozen', ['receiving-b']);
   });
 
   it.each(['foreign', 'corrupt'])('allows Back to Edit under a %s saved-request lock without receiving or clearing it', async (kind) => {

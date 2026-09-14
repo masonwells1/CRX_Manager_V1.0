@@ -175,6 +175,7 @@ export default function VendorBillDetail() {
     setPayModalBillId(null);
     setPayAmount('');
     setPaymentCleanupFailed(false);
+    setPaying(false);
     setPayMethod('check');
     setPayRef('');
     setPayDate(localToday());
@@ -213,7 +214,7 @@ export default function VendorBillDetail() {
   const today = localToday();
 
   const fetchBill = useCallback(async () => {
-    if (!id) return;
+    if (!id || activeBillIdRef.current !== id) return;
     const requestedBillId = id;
     setLoading(true);
 
@@ -295,6 +296,7 @@ export default function VendorBillDetail() {
     const amountCents = parseDollarsToCents(payAmount);
     if (amountCents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
     if (amountCents <= 0) { toast('error', 'Enter a valid payment amount'); return; }
+    const submittedBillId = id;
 
     let request: NonNullable<typeof paymentIntent.unresolvedIntent>;
     let payKey: string;
@@ -317,6 +319,7 @@ export default function VendorBillDetail() {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         tags: { source: 'durable-intent', page: 'vendor-bill-detail' },
       });
+      if (activeBillIdRef.current !== submittedBillId) return;
       toast('error', wasLockedReplay
         ? paymentCleanupFailed
           ? 'This payment was already recorded once. This retry could not be prepared, so nothing further was sent. Do not record this payment again on another device. Reload and check payment history before retrying unchanged.'
@@ -325,7 +328,7 @@ export default function VendorBillDetail() {
       return;
     }
 
-    setPaying(true);
+    if (activeBillIdRef.current === submittedBillId) setPaying(true);
     try {
       const { data, error } = await supabase.rpc('record_vendor_payment', {
         ...request.args,
@@ -335,17 +338,19 @@ export default function VendorBillDetail() {
       assertRpcResult<string>(data, 'record_vendor_payment');
       try {
         await paymentIntent.resolveIntent();
-        setPaymentCleanupFailed(false);
+        if (activeBillIdRef.current === submittedBillId) setPaymentCleanupFailed(false);
       } catch (resolveError) {
-        setPaymentCleanupFailed(true);
         try {
           Sentry.captureException(resolveError, { tags: { source: 'durable-intent-resolve', page: 'vendor-bill-detail', operation: 'record_vendor_payment' } });
         } catch { /* Reporting cannot change the confirmed payment. */ }
+        if (activeBillIdRef.current !== submittedBillId) return;
+        setPaymentCleanupFailed(true);
         toast('warning', 'The payment was recorded once. This form stays locked to the same payment because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before recording another payment on this device.');
         fetchBill();
         return;
       }
 
+      if (activeBillIdRef.current !== submittedBillId) return;
       toast('success', `Payment of ${fmt(request.amountCents)} recorded`);
       setPayModalOpen(false);
       setPayModalBillId(null);
@@ -366,19 +371,21 @@ export default function VendorBillDetail() {
       if (typeof receipt?.payment_id === 'string') {
         try {
           await paymentIntent.resolveIntent();
-          setPaymentCleanupFailed(false);
+          if (activeBillIdRef.current === submittedBillId) setPaymentCleanupFailed(false);
         } catch (resolveError) {
-          setPaymentCleanupFailed(true);
           try {
             Sentry.captureException(
               resolveError instanceof Error ? resolveError : new Error(String(resolveError)),
               { tags: { source: 'durable-intent-resolve', page: 'vendor-bill-detail', operation: 'record_vendor_payment' } },
             );
           } catch { /* Reporting cannot change the confirmed payment. */ }
+          if (activeBillIdRef.current !== submittedBillId) return;
+          setPaymentCleanupFailed(true);
           toast('warning', 'The earlier payment was recorded once. This form stays locked to the same payment because this browser could not clear its retry record. Retry unchanged; if it remains locked, reload and report it before recording another payment on this device.');
           fetchBill();
           return;
         }
+        if (activeBillIdRef.current !== submittedBillId) return;
         toast('warning', 'The earlier payment already completed. The bill has been refreshed instead of recording a duplicate.');
         setPayModalOpen(false);
         setPayModalBillId(null);
@@ -401,6 +408,7 @@ export default function VendorBillDetail() {
         );
         disposition = 'uncertain';
       }
+      if (activeBillIdRef.current !== submittedBillId) return;
       if (disposition === 'resolved') {
         toast('warning', 'This payment completed in another tab. The bill has been refreshed.');
         setPayModalOpen(false);
@@ -417,7 +425,7 @@ export default function VendorBillDetail() {
         toast('warning', 'The payment may already be recorded. The exact payment is locked; retry it unchanged to reconcile the result.');
       }
     } finally {
-      setPaying(false);
+      if (activeBillIdRef.current === submittedBillId) setPaying(false);
     }
   };
 

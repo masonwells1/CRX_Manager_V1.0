@@ -19,16 +19,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { render, screen, cleanup, waitFor, fireEvent, act, within } from '@testing-library/react';
 
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, Link } from 'react-router-dom';
 import { IDBFactory } from 'fake-indexeddb';
 
 const BILL_ID = '11111111-1111-4111-8111-111111111111';
+const NEXT_BILL_ID = '33333333-3333-4333-8333-333333333333';
 const COMMITTED_PAYMENT_ID = '22222222-2222-4222-8222-222222222222';
 
 const H = vi.hoisted(() => ({
   rpc: vi.fn(),
   toast: vi.fn(),
   captureException: vi.fn(),
+  billReads: vi.fn(),
 }));
 
 const bill = {
@@ -53,15 +55,22 @@ const bill = {
 vi.mock('../lib/db', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const builder = (table: string) => {
-    const result = table === 'vendor_bills'
-      ? { data: bill, error: null }
-      : { data: [], error: null };
+    let requestedBillId = BILL_ID;
     const proxy: unknown = new Proxy(function () {}, {
       get(_t, prop: string | symbol) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => unknown) => resolve({ data: [], error: null });
         }
-        if (prop === 'single' || prop === 'maybeSingle') return () => Promise.resolve(result);
+        if (prop === 'eq') return (column: string, value: string) => {
+          if (table === 'vendor_bills' && column === 'id') requestedBillId = value;
+          return proxy;
+        };
+        if (prop === 'single' || prop === 'maybeSingle') return () => {
+          if (table === 'vendor_bills') H.billReads(requestedBillId);
+          return Promise.resolve(table === 'vendor_bills'
+            ? { data: { ...bill, id: requestedBillId, bill_number: requestedBillId === BILL_ID ? 'VB-1001' : 'VB-2002' }, error: null }
+            : { data: [], error: null });
+        };
         if (typeof prop === 'symbol') return undefined;
         return () => proxy;
       },
@@ -121,11 +130,58 @@ describe('VendorBillDetail record-payment recovery', () => {
     H.rpc.mockReset();
     H.toast.mockReset();
     H.captureException.mockReset();
+    H.billReads.mockReset();
   });
 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it.each(['success', 'saved receipt'] as const)('keeps the next bill usable when old %s cleanup fails after navigation', async (outcome) => {
+    const removeItem = Storage.prototype.removeItem;
+    const cleanupSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, key: string) {
+      if (this === window.sessionStorage && key.startsWith('crx:uncertain-mutation-ack:v1:')) throw new Error('Old bill cleanup blocked');
+      return removeItem.call(this, key);
+    });
+    let completeRpc!: (value: { data: string | null; error: typeof idempotencyMismatchError | null }) => void;
+    H.rpc.mockImplementation(() => new Promise((resolve) => { completeRpc = resolve; }));
+    render(<MemoryRouter initialEntries={[`/accounts-payable/bills/${BILL_ID}`]}>
+      <Link to={`/accounts-payable/bills/${NEXT_BILL_ID}`}>Next bill</Link>
+      <Link to={`/accounts-payable/bills/${BILL_ID}`}>Original bill</Link>
+      <Routes><Route path="/accounts-payable/bills/:id" element={<VendorBillDetail />} /></Routes>
+    </MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Record Payment' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Record Payment' })).getByRole('button', { name: 'Record Payment' }));
+    await waitFor(() => expect(H.rpc).toHaveBeenCalledTimes(1));
+    const originalArgs = H.rpc.mock.calls[0][1];
+    // Pause the real hook's cleanup after it captures A's request version.
+    const cleanupRequest = { error: new DOMException('Old cleanup database unavailable'), onerror: null } as unknown as IDBOpenDBRequest;
+    const openSpy = vi.spyOn(indexedDB, 'open').mockImplementationOnce(() => cleanupRequest);
+    await act(async () => completeRpc(outcome === 'success'
+      ? { data: COMMITTED_PAYMENT_ID, error: null }
+      : { data: null, error: idempotencyMismatchError }));
+    await waitFor(() => expect(openSpy).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('link', { name: 'Next bill' }));
+    await screen.findByRole('heading', { name: 'Bill #VB-2002' });
+    await screen.findByRole('button', { name: 'Record Payment' });
+    H.toast.mockClear();
+    const oldReads = H.billReads.mock.calls.filter(([billId]) => billId === BILL_ID).length;
+    await act(async () => cleanupRequest.onerror?.call(cleanupRequest, new Event('error')));
+    await waitFor(() => expect(H.captureException).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tags: expect.objectContaining({ source: 'durable-intent-resolve' }) })));
+    expect(H.toast).not.toHaveBeenCalled();
+    expect(H.billReads.mock.calls.filter(([billId]) => billId === BILL_ID)).toHaveLength(oldReads);
+    expect(screen.getByRole('heading', { name: 'Bill #VB-2002' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Record Payment' })).toBeEnabled();
+    openSpy.mockRestore();
+    cleanupSpy.mockRestore();
+    H.rpc.mockResolvedValue({ data: COMMITTED_PAYMENT_ID, error: null });
+    fireEvent.click(screen.getByRole('link', { name: 'Original bill' }));
+    await screen.findByRole('heading', { name: 'Bill #VB-1001' });
+    fireEvent.click(await screen.findByRole('button', { name: /retry exact payment/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Record Payment' })).not.toBeInTheDocument());
+    expect(H.rpc).toHaveBeenCalledTimes(2);
+    expect(H.rpc.mock.calls[1][1]).toEqual(originalArgs);
   });
 
   it('keeps a confirmed payment frozen and retryable through reopening and cleanup recovery', async () => {

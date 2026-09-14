@@ -35,10 +35,13 @@
 --   * the renamed body is not executable by anon/authenticated/service_role;
 --   * CUTOVER RACE: calling the renamed body DIRECTLY -- which is exactly what
 --     a call that resolved the old function before the swap and resumed after
---     it does -- is refused with CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT and
---     leaves no hold and no receipt; a STALE binding context cannot bind a
+--     it does -- is refused by the hold-insert barrier with
+--     IDEMPOTENCY_CONCURRENT_REPLAY_RETRY before reaching the receipt write,
+--     leaving no hold and no receipt; a STALE binding context cannot bind a
 --     different key (CREATE_INVENTORY_HOLD_CONTEXT_MISMATCH); and a receipt
 --     for an unrelated operation still inserts freely.
+--   * a direct context-free hold receipt separately exercises
+--     CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT in the receipt-table trigger.
 --
 -- Always ends by raising SMOKE_PASS_ROLLBACK: nothing is ever committed.
 
@@ -443,14 +446,15 @@ BEGIN
   END IF;
 
   ----------------------------------------------------------------------------
-  -- 11. CUTOVER RACE: the old body cannot land an unbound receipt
+  -- 11. CUTOVER RACE: the old body cannot insert a context-free hold
   --
   -- The impl IS the pre-cutover body, byte for byte. Calling it directly with
   -- no binding context reproduces exactly what an in-flight call that resolved
   -- the old function and resumed after this migration committed would do. The
-  -- BEFORE INSERT trigger must refuse the receipt, and because the receipt
-  -- write is the last statement of that body, the refusal must roll the whole
-  -- call back -- no hold, no receipt.
+  -- inventory_holds BEFORE INSERT barrier raises
+  -- IDEMPOTENCY_CONCURRENT_REPLAY_RETRY before the receipt write. The refusal
+  -- rolls the whole call back -- no hold, no receipt. The separate receipt
+  -- trigger still independently rejects a stale context for a different key.
   ----------------------------------------------------------------------------
   SELECT count(*) INTO v_count FROM public.inventory_holds WHERE product_id = v_product;
   IF v_count <> 2 THEN
@@ -496,6 +500,18 @@ BEGIN
   SELECT count(*) INTO v_count FROM public.inventory_holds WHERE product_id = v_product;
   IF v_count <> 2 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: a refused cutover call left a hold behind (% rows)', v_count;
+  END IF;
+
+  -- (c) independently exercise the receipt guard without a preceding hold.
+  BEGIN
+    INSERT INTO public.idempotency_keys (idempotency_key, operation, result, expires_at)
+    VALUES ('smoke-hold-key-unbound-direct', 'create_inventory_hold', '{}'::jsonb, now() + interval '1 hour');
+    RAISE EXCEPTION 'SMOKE_FAIL: the receipt trigger accepted a context-free hold receipt';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLSTATE <> 'P0001' OR SQLERRM NOT LIKE 'CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT:%' THEN RAISE; END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM public.idempotency_keys WHERE idempotency_key = 'smoke-hold-key-unbound-direct') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the rejected direct receipt remained stored';
   END IF;
 
   -- A receipt for an operation this trigger does not own must still insert

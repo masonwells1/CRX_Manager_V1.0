@@ -33,10 +33,17 @@ after cutover`. Container run with the fix:
 `pre_chain=FAIL pre_race=1_hold_loser_errors legacy_receipt=REFUSED
 post_chain=PASS post_race=1_hold_loser_replays rerun=PASS`.
 
-**Not proven by a test:** nothing pauses a real call inside the OLD public body,
+**Historical limit as of September 7, superseded September 13:** nothing then paused a real call inside the OLD public body,
 applies the migration, and resumes it. The prover's two-session same-key race
 runs before and after the candidate, not across it. The cutover guarantee rests
 on the trigger existing before the rename plus the equivalent-path smoke above.
+
+The September 13 prover now pauses an actual old public-body keyless sales-user
+call at its stock lock, installs the candidate and resumes the old call. The
+new hold-insert barrier rejects it with zero late holds. See
+`2026-09-13-keyless-hold-cutover-insert-barrier.md` for the observed result and
+the remaining automatic-sync boundary limits. The original proof above is
+preserved as dated evidence.
 
 The wrapper body changed, so the replay pin was recomputed to
 `71fa8faf…0750d02`; the `rerun=PASS` leg proves it matches what the file emits.

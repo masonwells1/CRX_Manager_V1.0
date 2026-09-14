@@ -265,6 +265,7 @@ export default function QuickReceivePanel() {
      STEP 3: Confirm & receive
   ═══════════════════════════════════════════════════════════════════ */
   const submitQuickReceive = async (request: QuickReceiveIntent) => {
+    const wasLockedReplay = receiveIntent.isIntentLocked;
     // Captured BEFORE the call: resolveIntent() below retires this intent, so
     // asking for the key again afterwards can mint a different one. The damaged
     // notification falls back to this exact key when the RPC returns no
@@ -350,7 +351,9 @@ export default function QuickReceivePanel() {
       // Damaged-item notification is non-critical after a proven receipt.
     }
 
-    if (hasReceivingRecordIds) {
+    // Automatic download belongs to the initial submission. A locked replay
+    // reconciles the same saved receipt and must not emit another dated PDF.
+    if (hasReceivingRecordIds && !wasLockedReplay) {
       try {
         const { downloadReceivingPdf } = await import('../../lib/receivingPdf');
         await downloadReceivingPdf({

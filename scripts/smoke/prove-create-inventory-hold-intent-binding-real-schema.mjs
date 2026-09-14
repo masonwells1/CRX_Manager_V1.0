@@ -219,9 +219,12 @@ async function proveKeylessCutover() {
   assert.ok(reachedStockLock, 'keyless old-body invocation did not reach the controlled stock lock');
   const applied = apply('candidate.sql', true);
   const atCutover = Number(scalar(`SELECT count(*) FROM public.inventory_holds WHERE product_id = '${RACE_PRODUCT_CUTOVER}';`));
+  assert.equal(atCutover, 0, 'the old call inserted a hold before the candidate committed');
   const [stockResult, oldResult] = await Promise.all([stockOwner.completion, oldCall.completion]);
   assert.equal(stockResult.code, 0, `stock-lock owner failed: ${stockResult.stderr}`);
   assert.equal(applied.status, 0, `candidate failed during keyless cutover: ${applied.output}`);
+  assert.notEqual(oldResult.code, 0, 'the late old-body call was not rejected');
+  assert.match(oldResult.stderr, /IDEMPOTENCY_CONCURRENT_REPLAY_RETRY: create_inventory_hold cutover/, 'the late old-body call did not fail through the insert barrier');
   const afterCutover = Number(scalar(`SELECT count(*) FROM public.inventory_holds WHERE product_id = '${RACE_PRODUCT_CUTOVER}';`));
   console.log(`[prover] keyless cutover: holds_at_candidate_commit=${atCutover} holds_after_old_call=${afterCutover} old_call_exit=${oldResult.code}`);
   assert.equal(afterCutover, atCutover, 'KEYLESS_CUTOVER_UNSAFE: unauthorized old-body hold committed after the candidate installed');

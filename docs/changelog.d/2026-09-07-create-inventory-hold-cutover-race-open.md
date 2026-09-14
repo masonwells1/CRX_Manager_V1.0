@@ -5,9 +5,11 @@
 > rename (see `2026-09-07-create-inventory-hold-cutover-race-fixed.md`). The apply blocker this
 > entry describes is cleared on migration-history row 927, which now carries the candidate (it was
 > numbered 923 before the main merge renumbered it). Candidate `20260908130000` is still **NOT
-> applied live**, still needs Mason's explicit approval and a fresh read-only preflight, and keeps
-> one accepted residual recorded on row 927: an in-flight old-body call that passed no idempotency
-> key never touches the receipt table, so the trigger cannot see it.
+> applied live** and still needs Mason's explicit approval and a fresh read-only preflight.
+> The historical keyless residual below was subsequently closed by the September 13
+> hold-insert barrier and real cross-cutover prover, recorded in
+> `2026-09-13-keyless-hold-cutover-insert-barrier.md`. Row 927 records that current
+> candidate and proof; the original findings below remain historical context.
 
 Fourth `gpt-5.6-sol` review of PR #624. Unlike the previous round's two staleness artifacts, this
 one was **substantive**. When this entry was written it was recorded here and on migration-history
