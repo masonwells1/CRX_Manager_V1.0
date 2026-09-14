@@ -113,6 +113,7 @@ export default function PurchaseOrderDetail() {
 
   /* Receive modal state */
   const [receiveOpen, setReceiveOpen] = useState(false);
+  const [receiveCleanupFailed, setReceiveCleanupFailed] = useState(false);
   const [receiveItems, setReceiveItems] = useState<Record<string, ReceiveItemState>>({});
   const [storageLocation, setStorageLocation] = useState('Main Warehouse');
   const [receiveStep, setReceiveStep] = useState<'fill' | 'review'>('fill');
@@ -127,6 +128,7 @@ export default function PurchaseOrderDetail() {
   useEffect(() => {
     resetSubmitPOKey();
     setReceiveOpen(false);
+    setReceiveCleanupFailed(false);
   }, [id, resetSubmitPOKey]);
 
   useEffect(() => {
@@ -418,6 +420,7 @@ export default function PurchaseOrderDetail() {
         // reconcile a lost response, so locked retries use the frozen request.
         request = await receiveIntent.beginIntent(lockedRequest);
       } else {
+        if (!receiveIntent.isIntentLocked) setReceiveCleanupFailed(false);
         // Defence in depth behind the route-currency guard. `receive_po_items`
         // resolves the affected PO from the submitted po_item_ids alone, so a
         // payload built from another PO's lines silently books goods against
@@ -563,8 +566,10 @@ export default function PurchaseOrderDetail() {
         // and receive the goods a second time.
         try {
           await receiveIntent.resolveIntent();
+          setReceiveCleanupFailed(false);
         } catch (resolveErr) {
           cleanupFailed = true;
+          setReceiveCleanupFailed(true);
           // Telemetry alone is NOT enough here, and treating it as enough was the
           // defect (gpt-5.6-sol on c127bd535). Retaining the key prevents a
           // double-receive, but it does not preserve LIVENESS: the intent stays
@@ -584,7 +589,7 @@ export default function PurchaseOrderDetail() {
           // already committed, and takes the completedElsewhere path rather than
           // receiving the goods twice.
           try {
-            Sentry.captureException(resolveErr);
+            Sentry.captureException(resolveErr, { tags: { source: 'durable-intent-resolve', page: 'purchase-order-detail', operation: 'receive_po_items' } });
           } catch {
             // Nothing left to report through; the receipt still stands.
           }
@@ -1311,8 +1316,9 @@ export default function PurchaseOrderDetail() {
       <Modal
         open={receiveOpen}
         onClose={() => {
-          if (!receiveIntent.isIntentLocked) setReceiveOpen(false);
+          if (!receiveIntent.isIntentLocked || receiveIntent.isForeignIntentLocked) setReceiveOpen(false);
         }}
+        closeDisabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked}
         title="Receive"
         accent="Items"
         size="large"
@@ -1417,7 +1423,7 @@ export default function PurchaseOrderDetail() {
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="secondary" onClick={() => setReceiveOpen(false)}>
+              <Button variant="secondary" onClick={() => setReceiveOpen(false)} disabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked}>
                 Cancel
               </Button>
               <Button
@@ -1437,7 +1443,9 @@ export default function PurchaseOrderDetail() {
                   ? UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE
                   : receiveIntent.isRetryExpired
                   ? UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE
-                  : 'The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice. Retry it unchanged to reconcile the result.'}
+                  : receiveCleanupFailed
+                  ? 'These goods were recorded once. Browser cleanup failed; retry this same receipt unchanged. If it stays locked after reloading, report it before receiving another shipment on this device.'
+                  : 'This saved receiving request needs reconciliation before another can be submitted. Retry this exact receipt unchanged.'}
               </div>
             )}
             <div className="bg-gray-50 rounded-xl p-4">
@@ -1536,7 +1544,7 @@ export default function PurchaseOrderDetail() {
               <Button variant="ghost" onClick={() => setReceiveStep('fill')} disabled={receiveIntent.isIntentLocked}>
                 Back
               </Button>
-              <Button variant="secondary" onClick={() => setReceiveOpen(false)} disabled={receiveIntent.isIntentLocked}>
+              <Button variant="secondary" onClick={() => setReceiveOpen(false)} disabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked}>
                 Cancel
               </Button>
               <Button onClick={handleReceive} loading={saving} disabled={receiveIntent.isForeignIntentLocked || receiveIntent.isRetryExpired}>
