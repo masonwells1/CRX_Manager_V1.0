@@ -588,6 +588,7 @@ const oneCandidateHistory = [
 ].join("\n");
 const candidateWithoutHeader = validateParkedMigrationCrossReferences([PARKED_FORWARD], oneCandidateHistory, () => "-- ordinary migration\nSELECT 1;");
 eq(candidateWithoutHeader.state, "unknown", "correction guard fails loud for a candidate history row without its status header");
+ok(candidateWithoutHeader.reason.includes(PARKED_FORWARD.toLowerCase()), "candidate mismatch diagnostic names the unverified migration without accepting it");
 const duplicateHistory = localCandidateMigrationPathsFromHistory(`${mergedHistory}\n| 999 | 20260729231031 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260729231031_vendor_bill_period_close_lock.sql\`. |`);
 eq(duplicateHistory.state, "unknown", "duplicate candidate history rows are not silently deduped");
 eq(localCandidateMigrationPathsFromHistory(null).state, "unknown", "unreadable history is PARKED STATE UNKNOWN");

@@ -220,15 +220,16 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(inventoryPage).toContain('if (receivePoIntent.isIntentLocked) {');
 
     expect(receivingHub).toContain("getIdempotencyMismatchResult(error, 'receive_po_items')");
-    expect(receivingHub).toContain('disabled={receiveIntent.isIntentLocked}');
+    expect(receivingHub).toContain('closeDisabled={receiveIntent.isIntentLocked && !receiveIntent.isForeignIntentLocked}');
+    expect(receivingHub).toContain('disabled={receiveIntent.isForeignIntentLocked || receiveIntent.isRetryExpired || !receiveQty || Number(receiveQty) <= 0}');
     expect(receivingHub).toContain('Retry Exact Receiving');
-    expect(newVendorBill).toContain('The last response was uncertain. These fields are locked so a second bill cannot be created.');
-    expect(receivingHub).toContain('This receiving request is locked so stock cannot be received twice.');
+    expect(newVendorBill).toContain('This saved bill request needs reconciliation before another can be created. Retry this exact bill unchanged.');
+    expect(receivingHub).toContain('This saved receiving request needs reconciliation before another can be recorded. Retry it unchanged so stock cannot be received twice.');
 
     expect(quickReceive).toContain("getIdempotencyMismatchResult(error, 'receive_po_items')");
     expect(quickReceive).toContain('Retry Exact Receiving');
     expect(quickReceive).toContain('disabled={receiveIntent.isIntentLocked}');
-    expect(quickReceive).toContain('The last response was uncertain. This exact receiving request is locked so inventory cannot be received twice.');
+    expect(quickReceive).toContain('This saved receiving request needs reconciliation before another shipment can be recorded. Retry it unchanged so inventory cannot be received twice.');
     for (const caller of [
       newVendorBill,
       vendorBillDetail,
@@ -360,7 +361,15 @@ describe('Section 9 AP and receiving intent binding', () => {
     expect(vendorBillDetail).toContain('Payment could not be safely prepared. Nothing was recorded');
     expect(purchaseOrderDetail).toContain('Receiving could not be safely prepared. Nothing was received');
     expect(receivingHub).toContain('Receiving could not be safely prepared. Nothing was received');
-    expect(receivingHub).toContain('onSuccess: (completedElsewhere) => {');
+    expect(receivingHub).toContain('onSuccess: ({ completedElsewhere, cleanupFailed }) => {');
+    const receivingSuccess = sliceBetween(receivingHub, 'onSuccess: ({ completedElsewhere, cleanupFailed }) => {', '\n    });');
+    expect(receivingSuccess).toContain('setRefreshKey((k) => k + 1);');
+    expect(receivingSuccess).toContain('if (cleanupFailed) return;');
+    expect(receivingSuccess).toContain('setReceiveTarget(null);');
+    expect(receivingSuccess.indexOf('setRefreshKey((k) => k + 1);'))
+      .toBeLessThan(receivingSuccess.indexOf('if (cleanupFailed) return;'));
+    expect(receivingSuccess.indexOf('if (cleanupFailed) return;'))
+      .toBeLessThan(receivingSuccess.indexOf('setReceiveTarget(null);'));
     expect(receivingHub).not.toContain('successMessage: `Received ${fmtUnits(request.items[0].quantity)}');
     expect(purchaseOrderDetail).toContain('onSuccess: (completedElsewhere) => {');
     expect(purchaseOrderDetail).not.toContain("successMessage: 'Items received and inventory updated'");
