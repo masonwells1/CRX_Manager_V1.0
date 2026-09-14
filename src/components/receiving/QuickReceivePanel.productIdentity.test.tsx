@@ -46,6 +46,35 @@ function productQuery() {
   return builder;
 }
 
+async function seedPendingIntent(storageKey: string, record: unknown): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open('crx_durable_mutation_intents', 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains('intents')) {
+        request.result.createObjectStore('intents', { keyPath: 'storageKey' });
+      }
+    };
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction('intents', 'readwrite');
+      transaction.objectStore('intents').put({ storageKey, record });
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error);
+      };
+      transaction.onabort = () => {
+        db.close();
+        reject(transaction.error);
+      };
+    };
+  });
+}
+
 vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1', full_name: 'Receiver' } }),
 }));
@@ -174,7 +203,7 @@ describe('QuickReceivePanel Product identity', () => {
       'receive_po_items',
       'user-1',
     ])}`;
-    window.localStorage.setItem(storageKey, JSON.stringify({
+    const frozenRecord = {
       version: 4,
       status: 'pending',
       requestVersion: 'frozen-version',
@@ -208,7 +237,12 @@ describe('QuickReceivePanel Product identity', () => {
         matchResults: [frozenMatch],
         sourceItems: [sourceItem],
       },
-    }));
+    };
+    // A real reload retains both durable stores. localStorage renders the
+    // recovery UI, while IndexedDB is the coordinator that authorizes this
+    // exact pending retry rather than a stale mirror replay.
+    window.localStorage.setItem(storageKey, JSON.stringify(frozenRecord));
+    await seedPendingIntent(storageKey, frozenRecord);
 
     render(
       <MemoryRouter>

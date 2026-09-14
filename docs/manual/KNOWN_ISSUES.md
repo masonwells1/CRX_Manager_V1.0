@@ -31,7 +31,7 @@ and diverge, so reading the boundary off `version` gives a plausible wrong answe
 returns garbage, because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …)
 sort above digits — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` in
 that capture as a point-in-time observation, not a fact** — any lane applying a migration moves
-them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05.
+them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05. The live `create_inventory_hold` surface described in the OPEN 2026-09-05 manual-hold entry below was separately re-read READ-ONLY on 2026-09-06 for the `20260908130000` candidate's preconditions (no boundary facts restated here on purpose — see that entry and the migration header).
 The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
@@ -1994,6 +1994,99 @@ but still does not solve the naming-scope limit.
 landing after one clean review round, as an improvement to a capped control rather than a resumed programme.
 A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-recut-20260831` (no PR) and
 duplicates one of #449's fixes — delete it rather than continuing it.
+
+
+## OPEN 2026-09-11 — an expired uncertain request locks its dialog with no in-app way to clear it
+
+**Owner:** unassigned, coordinator to assign. Product UI work, so the 2026-09-11 to 2026-09-25 guard-logic
+freeze does not apply.
+
+`useUncertainMutationIntent` keeps a request whose reply was lost as pending for a 23-hour safe retry
+window. Once that window passes, the record is still restored as pending on every visit: the dialog
+reopens locked, shows "The safe automatic retry window expired. Do not submit this mutation again",
+disables its retry button, and cannot be closed. Nothing in the app clears an expired pending record; only
+a successful retry or a positively identified server refusal releases it, and after expiry neither can
+run. The lock lives in that one browser.
+
+Pre-existing on `main` for the Inventory page Receive dialog, `QuickReceivePanel`, `ReceivingHubPanel` and
+`NewVendorBill`. PR #624 extends it to the Inventory page Adjust and Hold dialogs.
+
+**Interim:** the staff recovery steps in `docs/workflows/INVENTORY_RULES.md` ("Staff recovery", step 5):
+verify the outcome in Active Holds or View transaction history, tell an admin, and re-enter from another
+browser only if it did not go through. **Fix:** an admin "verified, clear this request" control that
+records who cleared it and what they checked.
+
+
+## OPEN 2026-09-05 — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold (fix written and proven, not applied)
+
+**Owner:** the PR #624 lane (worktree `inventory-idempotency-key-reset-888161`), reassignable by the fleet
+coordinator. **Exposure assessment due 2026-09-18:** a read-only look at live holds for the two server
+defects the parked migration closes while it stays unapplied: a NULL `p_force` that skips the admin and
+free-stock checks, and holds created by staff whose profile is missing or inactive. The live read needs
+Mason's explicit OK at the time; the result decides whether the apply moves up.
+
+The live `create_inventory_hold` body (the `20260630173022` parked_010 body — the 2026-07-27 production
+dump proves it IS installed; earlier notes calling it "parked, never applied" were wrong) reads its
+idempotency receipt with a plain SELECT before the stock lock and writes it after the hold with
+`ON CONFLICT DO NOTHING`. Two overlapping calls with the same key both pass the receipt read. The live
+BEFORE INSERT guard on `idempotency_keys` (`_guard_idempotency_key_insert`, 20260714230000 /
+20260716160000) then rolls the loser back with `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY`, so the table
+ends with ONE hold — but the losing caller is told its hold failed although the winner created exactly
+that hold. The browser classifies that SQLSTATE P0001 as a definitive refusal, releases the key, and the
+operator's next click mints a NEW key and creates a second hold. Measured on 2026-09-05 in a
+network-disabled container built from the 2026-07-27 baseline plus all 75 later migrations
+(`scripts/smoke/prove-create-inventory-hold-intent-binding-real-schema.mjs`): pre-fix race = 1 hold,
+session 2 exits with that error. The same body also gates role with `v_role NOT IN (...)`, which lets a
+caller with no `profiles` row through (NULL is not IN anything), and accepts a NULL key.
+
+Local forward migration `20260908130000_bind_create_inventory_hold_receipt_to_intent.sql` renames the
+live body to `_create_inventory_hold_intent_impl_20260905` (postgres-only EXECUTE) and installs a
+same-signature wrapper: AUTH_REQUIRED, ACTOR_MISMATCH on a forged `p_performed_by`, a NULL-safe ACTIVE
+admin/sales_rep gate, key required, request fingerprint, then `check_idempotency_intent` (per-key
+advisory lock, actor + fingerprint binding) BEFORE any mutation, then the renamed body, then receipt
+binding. Post-fix race in the same container = 1 hold, both sessions succeed with the same `hold_id`;
+the rolled-back chain `smoke-create-inventory-hold-intent-binding.sql` passes; re-apply is clean.
+Neither proof pauses a real old-body call across the migration: the cutover guard (a `BEFORE INSERT`
+trigger on `idempotency_keys`, created before the rename, that refuses an unbound hold receipt) is
+proven by an equivalent-path smoke that calls the renamed body directly, plus the same-key race run
+before and after the candidate — not by a literal pause/resume interleaving test.
+**No live apply is authorized.** Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
+and every preflight condition held: one overload, owner `postgres`, `plpgsql`, SECURITY DEFINER,
+`proconfig = {search_path=public, pg_temp}`, the pinned argument list with defaults,
+`md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` for the 4,046-character body whose sha256 is the
+pinned `3c86421e…` (md5 recomputed locally from the 2026-07-27 dump for comparison — the live-data
+guard's read-only allowlist has no `digest()`), the private impl name absent, all three helpers
+present, both binding columns present, EXECUTE held by `authenticated`/`service_role` and not `anon`,
+`check_idempotency_intent` executable by none of those three, and ZERO unexpired
+`create_inventory_hold` receipts of any kind. The pre-existing
+`section9_bind_idempotency_receipt_20260826` BEFORE INSERT trigger short-circuits for operations
+outside its AP/receiving list, so it leaves hold receipts alone. The preflight still fails closed if the
+installed body hash or argument list differs from the pins, and REFUSES (`PREFLIGHT_LEGACY_RECEIPTS`) while
+any unexpired receipt written by the old body exists — such a receipt would otherwise lock its operator out
+of creating any hold for up to 24 hours after the swap, so the apply belongs in a quiet window and may need
+a second attempt. The frontend fix for the per-open `resetKey()` on the same page ships in this same PR (#624)
+and is safe to merge BEFORE the apply (re-checked 2026-09-11): it sends the installed body exactly the
+arguments `main` sends, and a key is re-sent only with its original frozen request or after another tab
+confirmed that request committed; the installed body replays both by key. A racing loser's
+`IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` now keeps the key instead of releasing it. After the apply, a
+retained key whose request CHANGES raises `IDEMPOTENCY_INTENT_MISMATCH`, which the page treats as
+"uncertain" and locks the dialog — acceptable, deliberate. Do not author a competing migration.
+
+**Compatibility, installed vs parked contract (2026-09-11).** The branch sends `create_inventory_hold` (10
+arguments), `adjust_inventory` (5) and `retire_inventory_item` (3) exactly the argument sets `main` sends, and
+the migration keeps the same signature, so the frontend runs on either body. Key rules: a key is re-sent only
+with its frozen request or after another tab confirmed that request committed; a racing loser's
+`IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` keeps the key; a definitive refusal releases it. Server side, the
+real-schema prover covers both bodies (`pre_race=1_hold_loser_errors`, `post_race=1_hold_loser_replays`).
+Two gaps, stated plainly: key-cleanup failures are not exercised, and there is no live old-body run (by
+design: production gets observation only, so the isolated prover is the evidence).
+
+**Known gap, not introduced here:** once the 23-hour safe retry window passes, a locked dialog shows "The
+safe automatic retry window expired", disables its retry button, cannot be closed, and reopens on every
+visit, because nothing in the app clears an expired request. The Inventory page's Receive dialog and the
+receiving and vendor-bill screens already behave this way on `main`; this PR extends it to Adjust and Hold.
+The lock lives in that one browser. Tracked as its own item: OPEN 2026-09-11 (expired uncertain
+request) above.
 
 
 ## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
