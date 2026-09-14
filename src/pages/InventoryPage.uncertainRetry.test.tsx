@@ -551,6 +551,59 @@ describe('InventoryPage — a lost reply freezes the request instead of minting 
     },
   );
 
+  it('keeps a peer-claimed refused hold unchanged instead of offering an unusable override', async () => {
+    const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify(['create_inventory_hold', 'admin-1'])}`;
+    const peerLease = 'crx:durable-mutation:live-claim:peer-hold-tab';
+    let attempts = 0;
+    mocks.rpc.mockImplementation(async (name: string) => {
+      if (name === 'get_inventory_position') return { data: positions, error: null };
+      if (name !== 'create_inventory_hold') return { data: [], error: null };
+      attempts += 1;
+      if (attempts === 1) {
+        // Another live tab has claimed this exact request in the real coordinator.
+        window.localStorage.setItem(peerLease, String(Date.now()));
+        await new Promise<void>((resolve, reject) => {
+          const open = indexedDB.open('crx_durable_mutation_intents', 1);
+          open.onerror = () => reject(open.error);
+          open.onsuccess = () => {
+            const db = open.result;
+            const transaction = db.transaction('intents', 'readwrite');
+            const store = transaction.objectStore('intents');
+            const get = store.get(storageKey);
+            get.onsuccess = () => {
+              const stored = get.result as { storageKey: string; record: { claimTabIds: string[] } };
+              store.put({ ...stored, record: { ...stored.record, claimTabIds: [...stored.record.claimTabIds, 'peer-hold-tab'] } });
+            };
+            transaction.oncomplete = () => { db.close(); resolve(); };
+            transaction.onerror = () => { db.close(); reject(transaction.error); };
+            transaction.onabort = () => { db.close(); reject(transaction.error); };
+          };
+        });
+        return { data: null, error: { code: 'P0001', message: 'INSUFFICIENT_HOLD_INVENTORY: only 2 units are free' } };
+      }
+      return { data: { hold_id: 'peer-hold-reconciled' }, error: null };
+    });
+    await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /create hold/i }));
+    const dialog = screen.getByRole('dialog', { name: /create.*hold/i });
+    fireEvent.click(await within(dialog).findByRole('button', { name: /SKU-A/i }));
+    fireEvent.change(within(dialog).getByLabelText(/^quantity$/i), { target: { value: '3' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^create hold$/i }));
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('warning', expect.stringContaining('Retry the locked request unchanged')));
+    expect(screen.queryByRole('dialog', { name: /force-create hold/i })).not.toBeInTheDocument();
+    expect(callsTo('create_inventory_hold')).toHaveLength(1);
+    const original = callsTo('create_inventory_hold')[0];
+    expect(original.p_force).toBe(false);
+    const retained = JSON.parse(window.localStorage.getItem(storageKey)!) as { status: string; claimTabIds: string[]; idempotencyKey: string };
+    expect(retained).toMatchObject({ status: 'pending', claimTabIds: ['peer-hold-tab'], idempotencyKey: original.p_idempotency_key });
+    const retry = within(dialog).getByRole('button', { name: /retry exact hold/i });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(callsTo('create_inventory_hold')).toHaveLength(2);
+    expect(callsTo('create_inventory_hold')[1]).toEqual(original);
+  });
+
   it('keeps a confirmed ADMIN OVERRIDE frozen until acknowledgment cleanup recovers', async () => {
     let attempts = 0;
     let cleanupSpy: ReturnType<typeof vi.spyOn> | undefined;

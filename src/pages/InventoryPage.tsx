@@ -529,9 +529,13 @@ export default function InventoryPage() {
     let outcome: HoldRpcOutcome = 'created';
     if (error) {
       const disposition = await createHoldIntent.classifyFailure(error);
-      // A positively identified server refusal means nothing was inserted, so
-      // the intent is released and the caller decides (force flow or toast).
-      if (disposition === 'definitive') throw error;
+      // A refusal releases this tab's claim, but a live peer can still own the
+      // original request. Read the synchronous survivor after classification;
+      // changing its force flag would conflict with that frozen request.
+      if (disposition === 'definitive') {
+        if (createHoldIntent.getUnresolvedIntent()) return 'uncertain';
+        throw error;
+      }
       // Transport failures keep the request locked: PostgreSQL may have
       // committed the hold before the reply was lost.
       if (disposition === 'uncertain') return 'uncertain';
