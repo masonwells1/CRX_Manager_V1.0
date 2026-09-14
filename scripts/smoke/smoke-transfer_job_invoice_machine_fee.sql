@@ -112,6 +112,11 @@ BEGIN
   SELECT COALESCE(SUM(amount_cents),0) INTO v_share_sum FROM invoice_shares s JOIN invoices i ON i.id=s.invoice_id WHERE i.job_id=v_job2;
   SELECT COALESCE(SUM(extended_cents),0) INTO v_items_sum FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id WHERE i.job_id=v_job2;
   IF v_a<>52901 OR v_share_sum<>v_a OR v_items_sum<>v_a THEN RAISE EXCEPTION 'SMOKE_FAIL: B headers % shares % items %', v_a, v_share_sum, v_items_sum; END IF;
+  -- Per owner at the same 1300 rate: fee 19.8ac=25740 / 13.2ac=17160; the 10001 chemical splits
+  -- 6000.6/4000.4, and the largest remainder takes the penny -> A=6001+25740, B=4000+17160.
+  SELECT s.amount_cents INTO v_a FROM invoice_shares s JOIN invoices i ON i.id=s.invoice_id WHERE i.job_id=v_job2 AND s.customer_id=v_cust;
+  SELECT s.amount_cents INTO v_b FROM invoice_shares s JOIN invoices i ON i.id=s.invoice_id WHERE i.job_id=v_job2 AND s.customer_id=v_cust2;
+  IF v_a IS DISTINCT FROM 31741 OR v_b IS DISTINCT FROM 21160 THEN RAISE EXCEPTION 'SMOKE_FAIL: B shares A=% B=%', v_a, v_b; END IF;
 
   -- C: split, grower B on a customer override rate 2000 (per-customer rate)
   INSERT INTO customer_application_rates (customer_id, application_service_id, rate_per_acre_cents, season, created_by) VALUES (v_cust2, v_svc, 2000, 2026, v_admin);

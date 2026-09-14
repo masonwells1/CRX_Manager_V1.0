@@ -78,7 +78,17 @@ DECLARE
   v_cutover_guard regprocedure := to_regprocedure('public.prevent_unwrapped_transfer_invoice_receipt_20260908()');
   v_public_src text;
   v_public_is_wrapper boolean := false;
+  -- A privilege lookup by role NAME raises "role does not exist" before this
+  -- file's own refusal, and OR gives no evaluation order. Every lookup below
+  -- therefore takes a role OID, and the role check runs first as its own statement.
+  v_anon oid := (SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon');
+  v_authenticated oid := (SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated');
+  v_service_role oid := (SELECT r.oid FROM pg_roles r WHERE r.rolname = 'service_role');
 BEGIN
+  IF v_anon IS NULL OR v_authenticated IS NULL OR v_service_role IS NULL THEN
+    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_PREFLIGHT: anon, authenticated, or service_role role is missing';
+  END IF;
+
   IF (SELECT count(*) FROM pg_proc p
         WHERE p.pronamespace = 'public'::regnamespace
           AND p.proname = 'transfer_job_to_invoice') <> 1
@@ -210,10 +220,10 @@ BEGIN
           AND (elevated_role.rolsuper OR elevated_role.rolbypassrls)
           AND pg_has_role(browser_role.oid, elevated_role.oid, 'MEMBER')
      )
-     OR has_table_privilege('anon', 'public.idempotency_keys', 'INSERT')
-     OR has_table_privilege('anon', 'public.idempotency_keys', 'UPDATE')
-     OR has_table_privilege('anon', 'public.idempotency_keys', 'DELETE')
-     OR has_table_privilege('anon', 'public.idempotency_keys', 'TRUNCATE')
+     OR has_table_privilege(v_anon, 'public.idempotency_keys', 'INSERT')
+     OR has_table_privilege(v_anon, 'public.idempotency_keys', 'UPDATE')
+     OR has_table_privilege(v_anon, 'public.idempotency_keys', 'DELETE')
+     OR has_table_privilege(v_anon, 'public.idempotency_keys', 'TRUNCATE')
      OR EXISTS (
        SELECT 1
          FROM pg_class c,
@@ -248,9 +258,9 @@ BEGIN
             AND p.procost = 100 AND p.prorows = 0
             AND p.proacl = ARRAY['postgres=X/postgres', 'authenticated=X/postgres', 'service_role=X/postgres']::aclitem[]
        )
-       OR has_function_privilege('anon', v_public, 'EXECUTE')
-       OR NOT has_function_privilege('authenticated', v_public, 'EXECUTE')
-       OR NOT has_function_privilege('service_role', v_public, 'EXECUTE') THEN
+       OR has_function_privilege(v_anon, v_public, 'EXECUTE')
+       OR NOT has_function_privilege(v_authenticated, v_public, 'EXECUTE')
+       OR NOT has_function_privilege(v_service_role, v_public, 'EXECUTE') THEN
       RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_PREFLIGHT: reviewed Chicago-date transfer implementation or ACL drifted';
     END IF;
   ELSE
@@ -289,9 +299,9 @@ BEGIN
             AND p.proacl = ARRAY['postgres=X/postgres', 'authenticated=X/postgres', 'service_role=X/postgres']::aclitem[]
             AND obj_description(p.oid, 'pg_proc') = 'Transfers one job to invoice exactly once, binding retries to the authenticated actor and job intent.'
         )
-        AND NOT has_function_privilege('anon', v_public, 'EXECUTE')
-        AND has_function_privilege('authenticated', v_public, 'EXECUTE')
-        AND has_function_privilege('service_role', v_public, 'EXECUTE');
+        AND NOT has_function_privilege(v_anon, v_public, 'EXECUTE')
+        AND has_function_privilege(v_authenticated, v_public, 'EXECUTE')
+        AND has_function_privilege(v_service_role, v_public, 'EXECUTE');
       IF NOT v_public_is_wrapper THEN
         RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_PREFLIGHT: private implementation exists but public body, signature, security, or ACL is not this migration wrapper';
       END IF;
@@ -311,17 +321,24 @@ FROM PUBLIC, anon, authenticated;
 
 DO $receipt_acl_preflight$
 BEGIN
+  -- Privilege lookups below take pg_roles OIDs, never role names; this check runs
+  -- first so a missing browser role refuses with this file's own message.
+  IF (SELECT count(*) FROM pg_roles r WHERE r.rolname IN ('anon', 'authenticated')) <> 2 THEN
+    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_PREFLIGHT: anon or authenticated role is missing';
+  END IF;
   IF EXISTS (
        SELECT 1
-         FROM unnest(ARRAY['anon', 'authenticated']::text[]) AS browser_role(role_name)
+         FROM pg_roles browser_role
          CROSS JOIN unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']::text[]) AS forbidden(privilege_name)
-        WHERE has_table_privilege(browser_role.role_name, 'public.idempotency_keys', forbidden.privilege_name)
+        WHERE browser_role.rolname IN ('anon', 'authenticated')
+          AND has_table_privilege(browser_role.oid, 'public.idempotency_keys', forbidden.privilege_name)
      )
      OR EXISTS (
        SELECT 1
-         FROM unnest(ARRAY['anon', 'authenticated']::text[]) AS browser_role(role_name)
+         FROM pg_roles browser_role
          CROSS JOIN unnest(ARRAY['INSERT', 'UPDATE', 'REFERENCES']::text[]) AS forbidden(privilege_name)
-        WHERE has_any_column_privilege(browser_role.role_name, 'public.idempotency_keys', forbidden.privilege_name)
+        WHERE browser_role.rolname IN ('anon', 'authenticated')
+          AND has_any_column_privilege(browser_role.oid, 'public.idempotency_keys', forbidden.privilege_name)
      )
      OR EXISTS (
        SELECT 1
@@ -520,18 +537,29 @@ DECLARE
   v_impl regprocedure := to_regprocedure('public._transfer_job_to_invoice_intent_impl_20260908(uuid,uuid,text)');
   v_cutover_guard regprocedure := to_regprocedure('public.prevent_unwrapped_transfer_invoice_receipt_20260908()');
   v_src text;
+  -- Role OIDs, never role names, so a missing role reaches the check below
+  -- instead of raising "role does not exist" inside a privilege lookup.
+  v_anon oid := (SELECT r.oid FROM pg_roles r WHERE r.rolname = 'anon');
+  v_authenticated oid := (SELECT r.oid FROM pg_roles r WHERE r.rolname = 'authenticated');
+  v_service_role oid := (SELECT r.oid FROM pg_roles r WHERE r.rolname = 'service_role');
+  v_postgres oid := (SELECT r.oid FROM pg_roles r WHERE r.rolname = 'postgres');
 BEGIN
+  IF v_anon IS NULL OR v_authenticated IS NULL OR v_service_role IS NULL OR v_postgres IS NULL THEN
+    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_POSTFLIGHT: anon, authenticated, service_role, or postgres role is missing';
+  END IF;
   IF EXISTS (
        SELECT 1
-         FROM unnest(ARRAY['anon', 'authenticated']::text[]) AS browser_role(role_name)
+         FROM pg_roles browser_role
          CROSS JOIN unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']::text[]) AS forbidden(privilege_name)
-        WHERE has_table_privilege(browser_role.role_name, 'public.idempotency_keys', forbidden.privilege_name)
+        WHERE browser_role.oid IN (v_anon, v_authenticated)
+          AND has_table_privilege(browser_role.oid, 'public.idempotency_keys', forbidden.privilege_name)
      )
      OR EXISTS (
        SELECT 1
-         FROM unnest(ARRAY['anon', 'authenticated']::text[]) AS browser_role(role_name)
+         FROM pg_roles browser_role
          CROSS JOIN unnest(ARRAY['INSERT', 'UPDATE', 'REFERENCES']::text[]) AS forbidden(privilege_name)
-        WHERE has_any_column_privilege(browser_role.role_name, 'public.idempotency_keys', forbidden.privilege_name)
+        WHERE browser_role.oid IN (v_anon, v_authenticated)
+          AND has_any_column_privilege(browser_role.oid, 'public.idempotency_keys', forbidden.privilege_name)
      )
      OR EXISTS (
        SELECT 1
@@ -572,23 +600,23 @@ BEGIN
     RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_POSTFLIGHT: wrapper guard or receipt-binding order is incomplete';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_public AND p.prosecdef AND p.prolang = (SELECT oid FROM pg_language WHERE lanname = 'plpgsql') AND p.prorettype = 'jsonb'::regtype AND p.proargtypes = ARRAY['uuid'::regtype::oid, 'uuid'::regtype::oid, 'text'::regtype::oid]::oidvector AND p.proargnames = ARRAY['p_job_id', 'p_performed_by', 'p_idempotency_key']::text[] AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres' AND p.pronargdefaults = 1 AND pg_get_expr(p.proargdefaults, 0) = 'NULL::text' AND p.provolatile = 'v' AND NOT p.proisstrict AND NOT p.proleakproof AND p.proparallel = 'u' AND p.procost = 100 AND p.prorows = 0 AND p.proacl = ARRAY['postgres=X/postgres', 'authenticated=X/postgres', 'service_role=X/postgres']::aclitem[] AND obj_description(p.oid, 'pg_proc') = 'Transfers one job to invoice exactly once, binding retries to the authenticated actor and job intent.' AND md5(p.prosrc) = 'b083dd371b091d7b70bb4cdc015c9bc8')
-     OR has_function_privilege('anon', v_public, 'EXECUTE')
-     OR NOT has_function_privilege('authenticated', v_public, 'EXECUTE')
-     OR NOT has_function_privilege('service_role', v_public, 'EXECUTE') THEN
+     OR has_function_privilege(v_anon, v_public, 'EXECUTE')
+     OR NOT has_function_privilege(v_authenticated, v_public, 'EXECUTE')
+     OR NOT has_function_privilege(v_service_role, v_public, 'EXECUTE') THEN
     RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_POSTFLIGHT: public wrapper security, default, or grants drifted';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_impl AND p.prosecdef AND p.prolang = (SELECT oid FROM pg_language WHERE lanname = 'plpgsql') AND p.prorettype = 'jsonb'::regtype AND p.proargtypes = ARRAY['uuid'::regtype::oid, 'uuid'::regtype::oid, 'text'::regtype::oid]::oidvector AND p.proargnames = ARRAY['p_job_id', 'p_performed_by', 'p_idempotency_key']::text[] AND p.pronargdefaults = 1 AND pg_get_expr(p.proargdefaults, 0) = 'NULL::text' AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres' AND p.provolatile = 'v' AND NOT p.proisstrict AND NOT p.proleakproof AND p.proparallel = 'u' AND p.procost = 100 AND p.prorows = 0 AND p.proacl = ARRAY['postgres=X/postgres']::aclitem[] AND md5(p.prosrc) = '85cd07a0a6b978cb066edab7df369fea')
-     OR has_function_privilege('anon', v_impl, 'EXECUTE')
-     OR has_function_privilege('authenticated', v_impl, 'EXECUTE')
-     OR has_function_privilege('service_role', v_impl, 'EXECUTE')
-     OR NOT has_function_privilege('postgres', v_impl, 'EXECUTE') THEN
+     OR has_function_privilege(v_anon, v_impl, 'EXECUTE')
+     OR has_function_privilege(v_authenticated, v_impl, 'EXECUTE')
+     OR has_function_privilege(v_service_role, v_impl, 'EXECUTE')
+     OR NOT has_function_privilege(v_postgres, v_impl, 'EXECUTE') THEN
     RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_POSTFLIGHT: private implementation ACL drifted';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_cutover_guard AND NOT p.prosecdef AND p.prolang = (SELECT oid FROM pg_language WHERE lanname = 'plpgsql') AND p.prorettype = 'trigger'::regtype AND p.proargtypes = ''::oidvector AND p.pronargdefaults = 0 AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[] AND pg_get_userbyid(p.proowner) = 'postgres' AND p.provolatile = 'v' AND NOT p.proisstrict AND NOT p.proleakproof AND p.proparallel = 'u' AND p.procost = 100 AND p.prorows = 0 AND p.proacl = ARRAY['postgres=X/postgres']::aclitem[] AND obj_description(p.oid, 'pg_proc') = 'Rejects stale pre-cutover transfer receipt inserts unless the intent-bound wrapper owns the transaction.' AND md5(p.prosrc) = '339762db7603acca00779ca62bc86772')
-     OR has_function_privilege('anon', v_cutover_guard, 'EXECUTE')
-     OR has_function_privilege('authenticated', v_cutover_guard, 'EXECUTE')
-     OR has_function_privilege('service_role', v_cutover_guard, 'EXECUTE')
-     OR NOT has_function_privilege('postgres', v_cutover_guard, 'EXECUTE')
+     OR has_function_privilege(v_anon, v_cutover_guard, 'EXECUTE')
+     OR has_function_privilege(v_authenticated, v_cutover_guard, 'EXECUTE')
+     OR has_function_privilege(v_service_role, v_cutover_guard, 'EXECUTE')
+     OR NOT has_function_privilege(v_postgres, v_cutover_guard, 'EXECUTE')
      OR NOT EXISTS (
        SELECT 1 FROM pg_trigger t
         WHERE t.tgrelid = 'public.idempotency_keys'::regclass

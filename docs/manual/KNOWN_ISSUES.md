@@ -1742,7 +1742,11 @@ lexer: a `/` after `]`, `}` or `<` is still read as division, so a regex literal
 those positions stays visible and its text CAN still supply those three tokens. A `/` after `)` is
 recognised only when that `)` closes an `if`, `for` (including `for await`), `while`, `switch` or `catch` head (2026-09-12,
 CodeRabbit's third round on PR #638: a regex used as a control statement's body was excusing a
-reset). A `//` inside JSX text masks the rest of its line. (i) The
+reset). A keyword or control head counts only when it is not a property name: a word whose nearest
+non-space character before it is `.` (as in `obj.return / 2` or `helpers.if(a) / 2`) is read as a
+property, so the `/` after it stays division (2026-09-13, CodeRabbit's fifth round on PR #668: the
+false regex masked a mutating call and could excuse a reset). A `//` inside JSX text masks the rest
+of its line. (i) The
 "no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/
 `functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
 intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes

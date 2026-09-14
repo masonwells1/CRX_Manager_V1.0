@@ -462,12 +462,16 @@ export function isTransferInvoiceResultInvalid(err: unknown): boolean {
     || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RECEIPT_MISSING);
 }
 
+/** Shown when a transfer result could not be verified, and again if a retry is attempted before reconciliation. */
+export const TRANSFER_INVOICE_UNVERIFIED_MESSAGE =
+  'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
+
 export function transferInvoiceErrorMessage(err: unknown): string | null {
   if (hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_INTENT_CUTOVER_RETRY)) {
     return 'The invoice safety update finished during this transfer. Try Transfer to Invoice again — the app will safely reuse the same request.';
   }
   if (isTransferInvoiceResultInvalid(err)) {
-    return 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
+    return TRANSFER_INVOICE_UNVERIFIED_MESSAGE;
   }
   return null;
 }

@@ -66,3 +66,14 @@ accepts `await` when the word before it is `for`, and nothing else. Proof observ
 `for await` negative case was added FIRST and failed against the unfixed check with
 `expected 'recovery' to be null`; a new positive control keeps a bare `await (a + b) / 2` read as
 division, so a lone `await` still opens no control head.
+
+Fifth round — CodeRabbit's review of delivery PR #668 at `e00f5870f` found that both keyword checks
+read a property NAME as a keyword. In `obj.return / 2 + supabase.rpc('save') / 3` the `/` after
+`return` opened a false regex that masked the rest of the line, including the mutating call. That
+call is what stops `classify()` from accepting an intent-rotation excuse, so the reset was excused.
+`helpers.if(a) / 2 + …` did the same through the control-head check. `maskNonCode()` now treats a
+word whose nearest non-space character before it is `.` (which covers `?.`) as a property: it is not
+a keyword and does not open a control head. The `for await` and bare-`await` behaviour is unchanged.
+Proof observed: the new test (four negative cases, two positive controls, and two keyword controls)
+was added FIRST. It failed against the unfixed mask with `expected 'intent-rotation' to be null`.
+After the fix, all 23 tests in the file pass, including the repo-wide sweep and the exact pins.

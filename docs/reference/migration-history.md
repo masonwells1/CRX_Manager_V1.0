@@ -1880,7 +1880,8 @@ These 10 historical migrations apply by timestamp order like all others; they si
 ## Local candidate added 2026-09-04
 
 > **Historical reservation note.** Rows 912-915 were reserved by PRs #599 and #592. PR #599's row
-> 912 migration is applied live but not yet merged; PR #592 has since merged its commission-history
+> 912 migration was applied live before that PR merged; #599 has since merged (2026-09-11,
+> `791bc3d86`) and its rows now sit at 924-926, and PR #592 has since merged its commission-history
 > rows. At authoring time the numbering overlap was a cross-PR collision those owners had to reconcile. This save-job candidate
 > deliberately uses row 916 and does not rewrite either owner's history. Its `20260904185900` stamp
 > sorts above the live `20260904180000` high-water and before PR #592's two pending migrations.

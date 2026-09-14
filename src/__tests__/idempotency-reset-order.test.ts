@@ -538,10 +538,12 @@ function stripCommentsOnly(code: string): string {
  *
  * A `/` opens a regex only where an expression can start: at the beginning, after one of
  * `( , = : [ ! & | ? { ; + - * % ~ ^`, after `=>`, or after a keyword such as `return`.
+ * A word whose nearest non-space character before it is `.` is a property name, not a keyword,
+ * so `obj.return / 2` and `obj?.typeof / 2` stay division (CodeRabbit, PR #668).
  * Anywhere else it is division, and so is a candidate that reaches a line break before its
  * closing `/`. A `)` counts only when it closes an `if`, `for` (including `for await`), `while`, `switch` or `catch`
- * head, so a regex written as a control statement's BODY is masked while division after an
- * ordinary `)` is not (CodeRabbit, PR #638). This is still a scanner, not a TypeScript lexer:
+ * head — never a method named like one, such as `helpers.if(a)` — so a regex written as a control
+ * statement's BODY is masked while division after an ordinary `)` is not (CodeRabbit, PR #638). This is still a scanner, not a TypeScript lexer:
  * a regex written after `]`, `}` or `<` is read as division and its text stays visible, as it
  * always was, and a `//` inside JSX text still masks the rest of its line.
  */
@@ -573,8 +575,19 @@ function maskNonCode(code: string): string {
     return [out.slice(k + 1, j + 1), k];
   }
 
+  // True when the identifier just after index `before` is a property NAME, such as the
+  // `return` in `obj.return` or `obj?.return`, rather than a keyword: the nearest
+  // non-space character before it is `.` (CodeRabbit, PR #668).
+  function isPropertyName(before: number): boolean {
+    let m = before;
+    while (m >= 0 && /\s/.test(out[m])) m -= 1;
+    return out[m] === '.';
+  }
+
   function opensControlHead(): boolean {
     const [word, before] = wordBefore(out.length - 1);
+    // `helpers.if(…)` is a method call, not an `if` head.
+    if (isPropertyName(before)) return false;
     // `for await (…)` opens a `for` head; a bare `await (…)` does not.
     if (word === 'await') return wordBefore(before)[0] === 'for';
     return /^(if|for|while|switch|catch)$/.test(word);
@@ -589,6 +602,8 @@ function maskNonCode(code: string): string {
     if (/[(,=:[!&|?{;+\-*%~^]/.test(out[j])) return true;
     let k = j;
     while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
+    // `obj.return / 2` is division by a property, not a `return` statement.
+    if (isPropertyName(k)) return false;
     return /^(return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await|instanceof)$/.test(
       out.slice(k + 1, j + 1),
     );
@@ -941,6 +956,25 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     expect(classify(['  const rate = await (a + b) / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
     expect(classify(['  if (isReady) total = count / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
     expect(classify(['  if (ready) handleRecovery(getIdempotencyBindingRejection(error));', reset], 2)).toBe('recovery');
+  });
+
+  // CodeRabbit (PR #668, round 5): keyword detection read a property NAME as a keyword, so the
+  // `/` after `obj.return` or after `helpers.if(a)` opened a false regex that masked the rest of
+  // the line, including a mutating call that must block an intent-rotation excuse.
+  it('a property named like a keyword does not open a regex', () => {
+    const reset = '  idem.resetKey();';
+    const handler = '  onClick={() => {';
+    expect(classify([handler, "    const r = obj.return / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = obj?.typeof / 2 + supabase.from('t').delete() / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    if (helpers.if(a) / 2 + supabase.from('t').update(row) / 3) done();", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = helpers.for(a) / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+
+    // Positive controls: the same property-then-division lines leave executable evidence visible.
+    expect(classify(['  const r = obj.return / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    expect(classify(['  const r = helpers.while(a) / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    // A real keyword and a real control head still open a regex.
+    expect(classify(['  return /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  if (ready) /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
   });
 
   it('scans a meaningful number of source files', () => {

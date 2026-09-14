@@ -61,10 +61,17 @@ assert.match(source, /expires_at IS NULL OR expires_at > now\(\)/, 'null-expiry 
 assert.match(source, /c\.relrowsecurity[\s\S]*NOT c\.relforcerowsecurity[\s\S]*pg_get_userbyid\(c\.relowner\) = 'postgres'/, 'receipt table owner and RLS state are pinned');
 assert.match(source, /pol\.polname = 'No direct client access to idempotency keys'[\s\S]*pol\.polroles = ARRAY\[0::oid\][\s\S]*pg_get_expr\(pol\.polqual, pol\.polrelid\) = 'false'[\s\S]*pg_get_expr\(pol\.polwithcheck, pol\.polrelid\) = 'false'/, 'sole deny-all receipt policy is pinned');
 assert.match(source, /browser_role\.rolname IN \('anon', 'authenticated'\)[\s\S]*elevated_role\.rolsuper OR elevated_role\.rolbypassrls[\s\S]*pg_has_role\(browser_role\.oid, elevated_role\.oid, 'MEMBER'\)/, 'browser roles cannot inherit or assume any superuser or RLS-bypass role');
-assert.match(source, /has_table_privilege\('anon', 'public\.idempotency_keys', 'INSERT'\)[\s\S]*has_table_privilege\('anon', 'public\.idempotency_keys', 'TRUNCATE'\)/, 'anon write ACL drift is rejected');
+assert.match(source, /has_table_privilege\(v_anon, 'public\.idempotency_keys', 'INSERT'\)[\s\S]*has_table_privilege\(v_anon, 'public\.idempotency_keys', 'TRUNCATE'\)/, 'anon write ACL drift is rejected');
+// CodeRabbit, PR #668: a privilege lookup by role NAME raises "role does not exist"
+// before the file's own refusal, and OR gives no evaluation order. Every lookup
+// takes a pg_roles OID, and each block checks its roles first as its own statement.
+assert.doesNotMatch(source, /has_\w+_privilege\(\s*'/, 'no privilege lookup passes a role name');
+assert.match(source, /IF v_anon IS NULL OR v_authenticated IS NULL OR v_service_role IS NULL THEN\n    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_PREFLIGHT: /, 'preflight refuses a missing role before any lookup');
+assert.match(source, /IF \(SELECT count\(\*\) FROM pg_roles r WHERE r\.rolname IN \('anon', 'authenticated'\)\) <> 2 THEN\n    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_PREFLIGHT: /, 'receipt ACL preflight refuses a missing browser role before any lookup');
+assert.match(source, /IF v_anon IS NULL OR v_authenticated IS NULL OR v_service_role IS NULL OR v_postgres IS NULL THEN\n    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_POSTFLIGHT: /, 'postflight refuses a missing role before any lookup');
 assert.match(source, /acl\.grantee = 0[\s\S]*'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'/, 'PUBLIC write ACL drift is rejected');
 assert.match(source, /REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER\s+ON TABLE public\.idempotency_keys\s+FROM PUBLIC, anon, authenticated;/, 'browser receipt mutation privileges are revoked without removing SELECT');
-assert.equal(source.match(/browser_role\.role_name, 'public\.idempotency_keys', forbidden\.privilege_name/g)?.length, 4, 'effective browser table and column privileges are checked before cutover and at postflight');
+assert.equal(source.match(/browser_role\.oid, 'public\.idempotency_keys', forbidden\.privilege_name/g)?.length, 4, 'effective browser table and column privileges are checked before cutover and at postflight');
 assert.equal(source.match(/acl\.privilege_type IN \('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'\)/g)?.length, 2, 'PUBLIC table privileges are checked before cutover and at postflight');
 assert.equal(source.match(/acl\.privilege_type IN \('INSERT', 'UPDATE', 'REFERENCES'\)/g)?.length, 2, 'PUBLIC column privileges are checked before cutover and at postflight');
 assert.equal(source.match(/browser role retains direct idempotency receipt mutation privilege/g)?.length, 2, 'browser receipt ACL boundary has independent preflight and postflight refusals');

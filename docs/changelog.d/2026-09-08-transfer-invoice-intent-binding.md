@@ -31,6 +31,12 @@ tested plain-English retry and reconciliation guidance in both job-invoice entry
 points, including corrupt cached-receipt failures and missing post-mutation
 receipts.
 
+Every privilege check in the file now looks a role up by its `pg_roles` OID, never by name.
+Each check block first confirms the roles exist, as a separate statement. A missing `anon`,
+`authenticated`, `service_role` or `postgres` role therefore stops the migration with its own
+PREFLIGHT or POSTFLIGHT message, not with PostgreSQL's `role does not exist` error (CodeRabbit,
+PR #668).
+
 An offline static contract proof and a disposable PostgreSQL 17 behavioral proof
 cover unsafe-autocommit refusal, stale-body rollback, and replay paths. This entry
 does not claim a live migration apply.

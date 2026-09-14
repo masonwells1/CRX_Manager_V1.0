@@ -282,6 +282,54 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     expect(mockRpc).toHaveBeenCalledTimes(1);
   });
 
+  // CodeRabbit (PR #668, round 5): a successful invoice leaves "Bill next" showing. If the
+  // NEXT job's result cannot be verified and the reconciling refresh fails, that job stays
+  // first in the backlog, and the banner must not offer a new transfer for it before a
+  // successful refresh settles whether an invoice already exists.
+  it('blocks Bill next for a job whose unverified result has not been reconciled', async () => {
+    const secondJob = {
+      ...completedJob,
+      id: 'job-transfer-next',
+      job_number: 'J-TRANSFER-4005',
+    };
+    let jobReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'jobs') return queryResult([]);
+      jobReads += 1;
+      if (jobReads === 2) return queryResult([], { code: 'PGRST500', message: 'refresh failed' });
+      return queryResult(jobReads === 1 ? [completedJob, secondJob] : [secondJob]);
+    });
+    mockRpc.mockImplementation((_name: string, args: { p_job_id: string }) => Promise.resolve(
+      args.p_job_id === completedJob.id
+        ? { data: { job_id: completedJob.id, invoice_id: 'invoice-1', invoice_number: 'INV-1' }, error: null }
+        : { data: null, error: { code: 'P0001', message: 'TRANSFER_INVOICE_RESULT_INVALID', details: null, hint: null } },
+    ));
+
+    render(<UnbilledApplicationsPanel />);
+    await screen.findByText('J-TRANSFER-4004');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Create Invoice' })[0]);
+    confirmCreateInvoice();
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', 'Invoice INV-1 created'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bill next (1 left)' }));
+    confirmCreateInvoice();
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load unbilled applications'));
+    await screen.findByText('J-TRANSFER-4005');
+    expect(mockRpc).toHaveBeenCalledTimes(2);
+
+    const billNext = screen.getByRole('button', { name: 'Bill next (1 left)' });
+    expect(billNext).toBeDisabled();
+    fireEvent.click(billNext);
+    expect(screen.queryByRole('dialog', { name: 'Create Invoice' })).toBeNull();
+    expect(mockRpc).toHaveBeenCalledTimes(2);
+
+    // A successful refresh reconciles the job and lifts the block.
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Bill next (1 left)' })).not.toBeDisabled());
+    expect(jobReads).toBe(3);
+    expect(mockRpc).toHaveBeenCalledTimes(2);
+  });
+
   it('preserves the existing sanitizer fallback for unrelated failures', async () => {
     const unrelatedError = { code: 'P0001', message: 'SPLIT_OVERRIDE_UNSUPPORTED' };
     mockRpc.mockResolvedValue({ data: null, error: unrelatedError });

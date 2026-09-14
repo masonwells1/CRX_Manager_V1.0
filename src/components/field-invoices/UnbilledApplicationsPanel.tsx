@@ -12,6 +12,7 @@ import {
   assertTransferResultForJob,
   isTransferInvoiceResultInvalid,
   sanitizeError,
+  TRANSFER_INVOICE_UNVERIFIED_MESSAGE,
   transferInvoiceErrorMessage,
 } from '../../lib/db';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
@@ -197,6 +198,12 @@ export default function UnbilledApplicationsPanel() {
 
   const handleCreateInvoice = async () => {
     if (!profile || !pendingJobInvoice) return;
+    // Every confirmation path lands here, so an unreconciled job can never start a new transfer.
+    if (reconciliationPendingJobIds.has(pendingJobInvoice.row.id)) {
+      setPendingJobInvoice(null);
+      toast('error', TRANSFER_INVOICE_UNVERIFIED_MESSAGE);
+      return;
+    }
     setCreatingInvoice(true);
 
     try {
@@ -252,6 +259,10 @@ export default function UnbilledApplicationsPanel() {
     const nextJob = jobs[0];
     if (!nextJob) {
       setBillNextReady(false);
+      return;
+    }
+    if (reconciliationPendingJobIds.has(nextJob.id)) {
+      toast('error', TRANSFER_INVOICE_UNVERIFIED_MESSAGE);
       return;
     }
 
@@ -336,7 +347,12 @@ export default function UnbilledApplicationsPanel() {
             <span>{lastCreatedMessage}</span>
           </div>
           {billNextReady && jobs.length > 0 && (
-            <Button size="sm" showChevron={false} onClick={handleBillNext}>
+            <Button
+              size="sm"
+              showChevron={false}
+              disabled={reconciliationPendingJobIds.has(jobs[0].id)}
+              onClick={handleBillNext}
+            >
               Bill next ({jobs.length} left)
             </Button>
           )}
