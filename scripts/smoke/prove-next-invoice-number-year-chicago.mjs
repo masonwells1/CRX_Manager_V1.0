@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Container proof for supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql
+// Container proof for supabase/migrations/20260908120100_next_invoice_number_year_chicago.sql
 //
 // Runs the real migration against a throwaway PostgreSQL 17 container holding a
 // minimal stand-in for the live objects the function touches, and proves:
@@ -30,7 +30,7 @@ import { assertWrappable } from "../../.claude/hooks/migration-wrappability-lib.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, "..", "..");
-const MIGRATION = path.join(REPO, "supabase", "migrations", "20260905090000_next_invoice_number_year_chicago.sql");
+const MIGRATION = path.join(REPO, "supabase", "migrations", "20260908120100_next_invoice_number_year_chicago.sql");
 
 const LIVE_MD5 = "b53499d077bd84b78a6f8fec142741bc";
 const CANDIDATE_MD5 = "7cbf50ddfe3abda50cc241f3374e98a3";
@@ -201,7 +201,7 @@ function bodyMd5() {
 
 function main() {
   scratch = mkdtempSync(path.join(tmpdir(), "crx-nin-proof-"));
-  console.log(`\nContainer proof: 20260905090000_next_invoice_number_year_chicago\n`);
+  console.log(`\nContainer proof: 20260908120100_next_invoice_number_year_chicago\n`);
 
   console.log("Starting throwaway PostgreSQL 17...");
   docker(["run", "--rm", "-d", "--name", CONTAINER,
@@ -245,7 +245,7 @@ function main() {
   let wrappable = true;
   let wrappableReason = "";
   try {
-    assertWrappable(migrationSql, "20260905090000_next_invoice_number_year_chicago");
+    assertWrappable(migrationSql, "20260908120100_next_invoice_number_year_chicago");
   } catch (error) {
     wrappable = false;
     wrappableReason = String(error.message || error);

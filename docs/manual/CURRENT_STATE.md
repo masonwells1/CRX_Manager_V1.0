@@ -41,19 +41,21 @@ A candidate must now sort above the `20260906120000` name-stamp, not above the 0
 again — 1001 rows / 994 distinct names, `max(version)` `20260909023300`, prefixed high-water
 `20260908120000_close_pr535_live_gaps`, the PR #535 gap-closer whose file and ledger record are owned
 by open PR #646. This page states the boundary as of 2026-09-08; PR #646 restates it when it lands.)
-Six local commission follow-ups (`20260905200000` through `20260905210000`, with no `20260905200500` file) are not applied. The
-six-file set was restamped together above that row on 2026-09-05 evening, preserving its order;
-five had sorted below the new high-water and the ordering guard would have refused them.
+Six local commission follow-ups (`20260908120200` through `20260908130900`, with no `20260905200500` file) are not applied. The
+six-file set was restamped together on 2026-09-05 evening and again on 2026-09-13 (from
+`20260905200000`..`20260905210000`, to sort above the applied `20260908120000_close_pr535_live_gaps`),
+preserving its order each time; both times the set had sorted below a newly applied row and the
+ordering guard would have refused it.
 They harden snapshot replay, refuse a payment batch if its recipient became stale before posting,
 park an America/Chicago payout business-date guard, pair commission source-date inheritance with
 Chicago-based source document dates, make balance-report recipient labels follow the latest
 earned-state observation at the requested cutoff (including paid-only rows), and — last in the
 ordered plan on purpose — append corrected labels for 34 un-settled opening commission snapshots.
-That label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 to run last,
-then restamped again with the rest of the set) refuses to run
+That label repair (`20260908130900`, renumbered from `20260905020100` on 2026-09-05 to run last,
+then restamped again with the rest of the set on 2026-09-05 and 2026-09-13) refuses to run
 once any commission payment has been posted; running it last means such a refusal stops nothing
 else, whereas at its old position it would have halted the payout guard and the date fixes behind
-it. The unified date candidate at `20260905200400` closes the September 30 boundary atomically:
+it. The unified date candidate at `20260908120500` (formerly `20260905200400`) closes the September 30 boundary atomically:
 it drains old writers, then replaces both commission helpers and all four source-document writers
 in one migration transaction. A transaction-local marker plus three owner-only compatibility
 triggers rejects any cached pre-cutover body when it reaches its first affected DML, requiring the
@@ -107,7 +109,7 @@ migrations are applied live with **no file on `main`**. Six belong to PR #535:
 reconstruct any of these nine; land the owning PRs after their own review gates. PR #592 has already
 restamped its two NOT-YET-APPLIED files to `20260905020000_commission_history_report_replay_guard`
 and `20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: the
-six-file set now sits at `20260905200000` through `20260905210000`, with no `20260905200500`
+six-file set now sits at `20260908120200` through `20260908130900` after the 2026-09-13 restamp, with no `20260905200500`
 file, above the applied high-water and with the repair still last).
 
 **Corrected 2026-09-08 against a live `list_migrations` read.** An earlier version of this paragraph

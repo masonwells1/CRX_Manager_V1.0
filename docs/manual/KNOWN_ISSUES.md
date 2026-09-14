@@ -37,12 +37,13 @@ The F2 item below was last re-verified against live on 2026-09-04
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
 
-Six local commission candidates (`20260905200000` through `20260905210000`, excluding superseded `20260905200500`) remain unapplied;
-the complete six-file set was restamped together on 2026-09-05 evening, after a #606 apply moved the
+Six local commission candidates (`20260908120200` through `20260908130900`, excluding superseded `20260905200500`) remain unapplied;
+the complete six-file set was restamped together on 2026-09-05 evening (and again on 2026-09-13, from
+`20260905200000`..`20260905210000`, after `20260908120000_close_pr535_live_gaps` applied live), after a #606 apply moved the
 live ordering boundary above most of the set, and the set's relative order was preserved during the
 restamp. This file deliberately does not name that boundary — re-read it from the live-ledger capture
 in `docs/reference/migration-history.md` before any apply decision.
-The label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
+The label repair (`20260908130900`, renumbered from `20260905020100` on 2026-09-05 so it runs last, and restamped with the set on 2026-09-13)
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
 now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes. The settlement-recipient guard closes the live case where a batch prepared for A
@@ -50,7 +51,7 @@ could still credit A after its commission was reassigned to B; until that candid
 approved and applied, production still carries that narrow stale-batch risk. Until the parked
 business-date guard is separately approved and applied, a noncanonical writer can still store a
 commission payment date after the current America/Chicago business date. The unified
-`20260905200400` candidate makes commission dates inherit their source documents and moves every
+`20260908120500` candidate makes commission dates inherit their source documents and moves every
 affected source-document writer off UTC `CURRENT_DATE` under one writer-drain lock boundary. Its
 same-transaction compatibility triggers reject a cached pre-cutover body at its first affected DML
 with `CHICAGO_DATE_CUTOVER_RETRY`, so a backend that resolved an old PL/pgSQL plan before the lock
@@ -568,7 +569,7 @@ failed for a reason unrelated to its assertion. Both mocks now mirror the hook's
 ---
 ## PARKED 2026-09-05 (WRITTEN, REVIEWED, PROVEN — NOT APPLIED) — invoice numbers take their year from UTC, so the last six hours of 31 December are numbered into the next year
 
-**Migration file:** `supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql`.
+**Migration file:** `supabase/migrations/20260908120100_next_invoice_number_year_chicago.sql`.
 **Deadline: 31 December 2026** — months out, which is why this is parked rather than rushed.
 **Mason applies it himself.** Nothing about it has been applied, and the standing hands-free
 migration allowance was deliberately not used.
@@ -599,7 +600,8 @@ and `20260904180000` (both applied live 2026-09-04) and the settled ~2026-07-10 
   misclassify three already-applied migrations as pending. Refresh it from a live ledger read first.
 - The `20260905090000` stamp was the correct next slot on 2026-09-05 (effective high-water by NAME
   was `20260904180000`), but a parked file's timestamp perishes. Re-derive it immediately before
-  apply and expect renumbering.
+  apply and expect renumbering. (It was restamped to `20260908120100` on 2026-09-13, after
+  `20260908120000_close_pr535_live_gaps` applied live.)
 
 Also re-run `scripts/smoke/prove-next-invoice-number-year-chicago.mjs` (35/35 at parking time, real
 PostgreSQL 17 container) and confirm the live body still matches pin `b53499d0…` — a drifted body
@@ -631,7 +633,7 @@ the December work is filed under the wrong year and consumes that year's first n
 **Same 31 December 2026 deadline.**
 The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
 they were deliberately not bundled into the parked migration because that file is pinned to one
-function's body md5. **Do not close this family when `20260905090000` is applied.**
+function's body md5. **Do not close this family when `20260908120100` (formerly `20260905090000`) is applied.**
 
 The general lesson, worth more than the six fixes: **a sweep proves only the question it asked.**
 Searching for `now()` cannot clear `CURRENT_DATE`, and on a UTC server the two are the same bug.
