@@ -14,6 +14,8 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { localCandidateMigrationPathsFromHistory } from '../../.claude/hooks/worktree-awareness-lib.mjs';
+import { checkPendingMigrations, migrationSlug } from '../../.claude/hooks/migration-pending-lib.mjs';
 
 // -------------------------------------------------------------------------
 // RPC parameter type definitions (must match SQL function signatures)
@@ -2812,11 +2814,50 @@ function generatedMutatingRpcInventory(): Set<string> {
   const mutators = transitiveMutatingFunctionNames(latestMigrationFunctionBodies());
   const highWater = registryMigrationHighWater();
   const pendingTimestamps = migrationsAwaitingTypeRegeneration();
+  const migrationDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'supabase', 'migrations');
+  const historyPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs', 'reference', 'migration-history.md');
+  const registryPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.claude', 'schema-registry.json');
+  const registry = JSON.parse(readFileSync(registryPath, 'utf8')) as {
+    _meta?: { applied_migration_names?: string[] };
+  };
+  const appliedNames = registry._meta?.applied_migration_names;
+  if (!Array.isArray(appliedNames) || appliedNames.length === 0) {
+    throw new Error('Mutator inventory requires a truthful non-empty applied-migration name snapshot.');
+  }
+  for (const timestamp of unappliedLocalCandidateTimestamps(
+    readFileSync(historyPath, 'utf8'), appliedNames, readdirSync(migrationDir),
+  )) pendingTimestamps.add(timestamp);
   return new Set([...mutators].filter((name) => {
     const timestamp = functions.get(name)?.fileName.match(/^\d{14}/)?.[0] || '';
     return generatedNames.has(name)
       || (timestamp !== '' && (timestamp > highWater || pendingTimestamps.has(timestamp)));
   }));
+}
+
+/** Date high-water cannot settle a parked candidate; actual applied identity is authoritative. */
+function unappliedLocalCandidateTimestamps(history: string, appliedNames: string[], diskNames: string[]): Set<string> {
+  const candidates = localCandidateMigrationPathsFromHistory(history);
+  if (candidates.state !== 'known') throw new Error(`Unknown local-candidate inventory: ${candidates.reason}`);
+  const disk = new Set(diskNames);
+  const pending = new Set<string>();
+  for (const candidatePath of candidates.paths) {
+    const basename = candidatePath.split('/').pop();
+    if (!basename || !disk.has(basename)) throw new Error(`Local candidate lacks checked-in source: ${candidatePath}`);
+    // Use the canonical attribution policy, not a yes/no slug lookup. Every same-slug
+    // disk peer participates, so one applied row cannot settle both an applied file
+    // and an unapplied twin. The pure guard spends exact-stamp rows first and counts
+    // the remaining slug evidence. A genuinely ambiguous result is an error, not applied.
+    const peers = diskNames.filter((name) => name.endsWith('.sql') && migrationSlug(name) === migrationSlug(basename));
+    const attribution = checkPendingMigrations({
+      name: '99991231235959_inventory_probe', sql: '', appliedNames, trackedFiles: peers,
+      baselineHighWater: '00000000000000', // Explicit candidates are never hidden below a date floor.
+    });
+    if (attribution.abstained) {
+      throw new Error(`Unknown local-candidate applied attribution: ${attribution.abstainReason}`);
+    }
+    if (attribution.pending?.includes(basename.replace(/\.sql$/i, ''))) pending.add(basename.slice(0, 14));
+  }
+  return pending;
 }
 
 const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
@@ -2897,12 +2938,12 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
-  // The applied ledger migration moved both recorder helpers below the live
-  // registry high-water. The forward-only label and stale-recipient candidates
-  // re-emit them, so they are discovered again until those candidates apply.
+  // The forward-only label and stale-recipient candidates are NOT APPLIED and
+  // re-emit both recorder helpers. Canonical local-candidate identities retain
+  // them even when an unrelated live apply moves the date high-water past them.
   // Both remain trigger-only (RETURNS trigger) and every non-owner EXECUTE grant
-  // is revoked; these narrow entries must be removed after the next truthful
-  // live registry refresh moves beyond the candidates.
+  // is revoked; remove these narrow entries only after the actual applied-name
+  // snapshot contains the candidates, not because its maximum date advanced.
   record_commission_earned_state:
     'local commission-label repair candidate re-emits this trigger-only recorder; direct client EXECUTE is revoked and the parent commission write owns the transaction',
   record_commission_settlement_event:
@@ -2930,6 +2971,35 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
 
 
 describe('Idempotency coverage drift (generated-types driven, fail-closed)', () => {
+  it('keeps parked candidates in coverage below an unrelated high-water until their actual identity applies', () => {
+    const basename = '20260905210000_repair_commission_history_label_snapshots.sql';
+    const history = `| 915 | 20260905210000 | **LOCAL CANDIDATE — NOT APPLIED.** \`${basename}\` |`;
+    expect([...unappliedLocalCandidateTimestamps(history, ['20260908120000_unrelated_apply'], [basename])])
+      .toEqual(['20260905210000']);
+    expect([...unappliedLocalCandidateTimestamps(history, ['20260910000000_repair_commission_history_label_snapshots'], [basename])])
+      .toEqual([]); // Renumbered applied identity still settles the candidate.
+    expect([...unappliedLocalCandidateTimestamps(history, ['20260908120000_unrelated_apply', 'repair_commission_history_label_snapshots'], [basename])])
+      .toEqual([]); // Bare ledger identity is authoritative too.
+    expect(() => unappliedLocalCandidateTimestamps(history, ['unrelated'], [])).toThrow(/lacks checked-in source/);
+    expect(() => unappliedLocalCandidateTimestamps('', ['unrelated'], [basename])).toThrow(/Unknown local-candidate/);
+    const malformed = '| 915 | 20260905210000 | **LOCAL CANDIDATE — NOT APPLIED.** no exact basename |';
+    expect(() => unappliedLocalCandidateTimestamps(malformed, ['unrelated'], [basename])).toThrow(/Unknown local-candidate/);
+  });
+
+  it('never lets one applied row settle an unapplied same-slug twin or ambiguous candidate pair', () => {
+    const applied = '20260904120000_shared_recorder.sql';
+    const candidate = '20260905210000_shared_recorder.sql';
+    const twin = '20260905220000_shared_recorder.sql';
+    const row = (timestamp: string, basename: string) => `| 999 | ${timestamp} | **LOCAL CANDIDATE — NOT APPLIED.** \`${basename}\` |`;
+    const history = row('20260905210000', candidate);
+    expect([...unappliedLocalCandidateTimestamps(history, [applied], [applied, candidate])])
+      .toEqual(['20260905210000']);
+    const ambiguous = `${history}\n${row('20260905220000', twin)}`;
+    expect(() => unappliedLocalCandidateTimestamps(ambiguous, ['20260908120000_unrelated', 'shared_recorder'], [candidate, twin]))
+      .toThrow(/Unknown local-candidate applied attribution/);
+    expect([...unappliedLocalCandidateTimestamps(ambiguous, [candidate, twin], [candidate, twin])]).toEqual([]);
+  });
+
   it('requires executable idempotency usage rather than comments or string literals', () => {
     expect(bodyUsesIdempotency(`
       BEGIN

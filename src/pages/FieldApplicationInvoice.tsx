@@ -34,7 +34,7 @@ import {
   type GuardrailMode,
 } from '../lib/labelGuardrailSetting';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
-import { computeSeason } from '../utils/season';
+import { computeSeason, seasonEndDate, seasonStartDate } from '../utils/season';
 import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
 import type { CustomerSharesBasis } from '../components/field-app/customerSplit';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
@@ -153,6 +153,8 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
 function fieldAppError(err: unknown): string {
   if (hasRpcCode(err, RpcErrorCodes.ZERO_APPLIED_ACRES)) return 'A location has 0 or blank applied acres. Open the Locations tab and enter the acres sprayed for each field.';
   if (hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)) return 'Your sign-in could not be verified. Refresh the page and try again.';
+  if (hasRpcCode(err, RpcErrorCodes.INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED)) return 'This date conflicts with the filed season of this invoice or another invoice in its split group. Keep the original transaction date; every group member must keep its filed season.';
+  if (hasRpcCode(err, RpcErrorCodes.INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED)) return 'The filed season of this invoice or another invoice in its split group cannot be changed. Keep the original transaction date and each group member’s filed season.';
   // U7: this invoice is one member of a multi-owner split group — it can't be reversed
   // member-by-member (that would reopen the job while the other owners' invoices stay live).
   if (hasRpcCode(err, RpcErrorCodes.JOB_BILLED_AS_GROUP)) return 'This job was invoiced as a multi-owner split. To return it to scheduling, void each owner’s invoice — voiding the last one reopens the job.';
@@ -166,6 +168,14 @@ export default function FieldApplicationInvoice() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
+  const invoiceLoadRef = useRef({ id, route: 0, request: 0 });
+  if (invoiceLoadRef.current.id !== id) {
+    // Invalidate before effects run, including A -> B -> A navigation.
+    invoiceLoadRef.current = {
+      id, route: invoiceLoadRef.current.route + 1,
+      request: invoiceLoadRef.current.request + 1,
+    };
+  }
   const saveIdem = useIdempotencyKey('save_field_app_invoice', profile?.id || '');
   // #33: per-invoice key cache for the billing-details RPC (PO/terms/due/footer/memo
   // + per-invoice Discount Earned). Keyed by the editor's invoice id (or '__new__'
@@ -173,10 +183,8 @@ export default function FieldApplicationInvoice() {
   // and the server dedup never double-applies.
   const billingKeysRef = useRef<Record<string, string>>({});
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
-  // F1: scoped by the route id — these two keys' post-RPC resets moved after
-  // assertRpcResult, and this component does NOT remount when the route id changes
-  // (App.tsx renders both invoices/field-app/:id and .../new without a key) while line
-  // ~1710 navigates to a DIFFERENT field-app invoice.
+  // Keep receipt ownership scoped by invoice id even though the route wrapper now
+  // remounts per record. Reset only after assertRpcResult confirms success.
   const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '', id ?? '');
   // #27: reverse "Transfer to Scheduling" — push a job-built invoice back to its job.
   const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '', id ?? '');
@@ -215,6 +223,8 @@ export default function FieldApplicationInvoice() {
   const [transferringToScheduling, setTransferringToScheduling] = useState(false);
 
   const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [loadedInvoice, setLoadedInvoice] = useState<{ id: string; route: number } | null>(null);
+  const [filedDate, setFiledDate] = useState<string | null>(null);
   // todayInBusinessTz(), NOT new Date().toISOString() and NOT localToday().
   // toISOString() converts to UTC, so from ~7 pm Chicago this pre-filled TOMORROW — the same
   // UTC/Chicago bug the server-side invoice_date fallbacks fixed on 2026-09-04. Because this
@@ -226,6 +236,11 @@ export default function FieldApplicationInvoice() {
   // where the user is sitting — otherwise a salesman on Pacific time creates 2026-09-30
   // invoices while Chicago is already on 2026-10-01, landing them in the wrong season.
   const [transactionDate, setTransactionDate] = useState(todayInBusinessTz());
+  // An existing invoice keeps this server-stamped season for its lifetime. The date may
+  // move within that season, but crossing October 1 would make the header date disagree
+  // with the year-end filing and application-service rate. The database enforces the same
+  // rule; this snapshot gives the operator an immediate, actionable explanation.
+  const [filedSeason, setFiledSeason] = useState<number | null>(null);
   const [notes, setNotes] = useState(''); // header_notes (printed)
   // #33: ChemMan billing details. Header/footer notes + PO + due date already
   // existed on invoices; payment_terms / internal_notes / discount are new (migration
@@ -422,6 +437,19 @@ export default function FieldApplicationInvoice() {
   const blocker = useUnsavedChanges(dirty);
 
   const isNew = !id;
+  const transactionSeason = useMemo(() => {
+    if (!transactionDate) return null;
+    const parsed = new Date(`${transactionDate}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? null : computeSeason(parsed);
+  }, [transactionDate]);
+  const crossSeasonDateEdit = !isNew
+    && transactionDate !== filedDate
+    && filedSeason !== null
+    && transactionSeason !== null
+    && transactionSeason !== filedSeason;
+  const filedSeasonDateMessage = filedSeason === null
+    ? ''
+    : `This invoice is filed in season ${filedSeason}. Choose a date from ${seasonStartDate(filedSeason)} through ${seasonEndDate(filedSeason)}.`;
   // #24: only an ADMIN may attribute the invoice to another consultant. The save
   // RPC rejects a non-admin who sets salesman_id to anyone but themselves
   // ([B1.5]), so the picker is read-only for sales_reps and a non-admin save
@@ -777,7 +805,10 @@ export default function FieldApplicationInvoice() {
   }, [jobNumber, siblings, invoiceNumber]);
 
   const fetchInvoice = useCallback(async () => {
-    if (!id) return;
+    if (!id || invoiceLoadRef.current.id !== id) return;
+    const request = ++invoiceLoadRef.current.request;
+    const isCurrentLoad = () => invoiceLoadRef.current.id === id
+      && invoiceLoadRef.current.request === request;
     // #3 segregation: validate the invoice belongs in THIS (per-acre, field-app)
     // editor BEFORE pulling the full row, so a denied / wrong-editor URL doesn't
     // expose invoice data — only the type + job_id/blend_ticket_id discriminators are
@@ -790,6 +821,7 @@ export default function FieldApplicationInvoice() {
       .select('invoice_type, job_id, blend_ticket_id')
       .eq('id', id)
       .maybeSingle();
+    if (!isCurrentLoad()) return;
     if (chkErr || !chk) {
       toast('error', 'Failed to load invoice');
       navigate('/field-invoices');
@@ -815,6 +847,7 @@ export default function FieldApplicationInvoice() {
         .from('field_app_locations')
         .select('field_id', { count: 'exact', head: true })
         .eq('invoice_id', id);
+      if (!isCurrentLoad()) return;
       if (!locCount || locCount === 0) {
         navigate(`/field-invoices/${id}`, { replace: true });
         return;
@@ -826,6 +859,8 @@ export default function FieldApplicationInvoice() {
       .select('*')
       .eq('id', id)
       .single();
+
+    if (!isCurrentLoad()) return;
 
     if (error || !inv) {
       toast('error', 'Failed to load invoice');
@@ -846,6 +881,8 @@ export default function FieldApplicationInvoice() {
     }
     setInvoiceNumber((invoice.invoice_number as string) || '');
     setTransactionDate((invoice.invoice_date as string) || '');
+    const loadedSeason = Number(invoice.season);
+    setFiledSeason(Number.isInteger(loadedSeason) ? loadedSeason : null);
     setNotes((invoice.header_notes as string) || '');
     // #33: load the ChemMan billing details from the loaded invoice. These header
     // fields are uniform across a split group (the save RPC writes them to every
@@ -877,6 +914,7 @@ export default function FieldApplicationInvoice() {
           return Number.isFinite(n) && n >= 1 && n <= 365 ? n : 30;
         })();
     const loadedInvoiceDate = (invoice.invoice_date as string) || '';
+    setFiledDate(loadedInvoiceDate);
     let stampedDate = '';
     if (loadedInvoiceDate) {
       const d = new Date(loadedInvoiceDate + 'T00:00:00Z');
@@ -932,6 +970,7 @@ export default function FieldApplicationInvoice() {
         .select('job_number, status, job_date')
         .eq('id', srcJobId)
         .maybeSingle();
+      if (!isCurrentLoad()) return;
       setJobNumber((jobRow as { job_number?: string } | null)?.job_number ?? null);
       // #41: source job status gates the post-notification action (completed/invoiced).
       setJobStatus(((jobRow as { status?: string } | null)?.status as JobStatus | undefined) ?? null);
@@ -1016,6 +1055,7 @@ export default function FieldApplicationInvoice() {
         .eq('invoice_group_id', groupId)
         .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
+      if (!isCurrentLoad()) return;
       if (sibs) {
         setSiblings(
           (sibs as Array<Record<string, unknown>>).map((s) => ({
@@ -1063,6 +1103,8 @@ export default function FieldApplicationInvoice() {
       ? await locQuery.eq('invoice_group_id', groupId)
       : await locQuery.eq('invoice_id', id);
 
+    if (!isCurrentLoad()) return;
+
     if (locs) {
       setLocations(
         (locs as Array<Record<string, unknown>>).map((l) => {
@@ -1090,6 +1132,8 @@ export default function FieldApplicationInvoice() {
       .eq('invoice_id', id)
       .order('sort_order');
 
+    if (!isCurrentLoad()) return;
+
     if (items) {
       // §5 (Codex P2): invoice_items does NOT carry label data, so hydrate the per-line
       // label fields (max_label_rate / unit / rei / phi) from products for the lines that
@@ -1105,6 +1149,7 @@ export default function FieldApplicationInvoice() {
           .from('products')
           .select('id, max_label_rate, max_label_rate_unit, rei_hours, phi_days')
           .in('id', productIds);
+        if (!isCurrentLoad()) return;
         for (const p of (prodRows as Array<{ id: string; max_label_rate: number | null; max_label_rate_unit: string | null; rei_hours: number | null; phi_days: number | null }> | null) ?? []) {
           labelByProduct.set(p.id, {
             max_label_rate: p.max_label_rate,
@@ -1157,6 +1202,8 @@ export default function FieldApplicationInvoice() {
       .eq('invoice_id', id)
       .order('sort_order');
 
+    if (!isCurrentLoad()) return;
+
     if (shareData) {
       setShares(
         (shareData as Array<Record<string, unknown>>).map((s) => ({
@@ -1178,6 +1225,7 @@ export default function FieldApplicationInvoice() {
         .eq('job_id', srcJobId)
         .order('application_date', { ascending: false })
         .order('created_at', { ascending: false });
+      if (!isCurrentLoad()) return;
       setAppliedRecords((recs as JobAppliedRecordRow[]) ?? []);
     } else {
       setAppliedRecords([]);
@@ -1195,6 +1243,7 @@ export default function FieldApplicationInvoice() {
       .select('id, title, message, notification_type, created_at, related_entity_type')
       .or(notifOrFilters.join(','))
       .order('created_at', { ascending: false });
+    if (!isCurrentLoad()) return;
     if (notifsError) {
       setNotificationsError(sanitizeError(notifsError));
       setNotifications([]);
@@ -1202,11 +1251,27 @@ export default function FieldApplicationInvoice() {
       setNotificationsError(null);
       setNotifications((notifs as NotificationRow[]) ?? []);
     }
+    setLoadedInvoice({ id, route: invoiceLoadRef.current.route });
   }, [id, toast, navigate]);
 
   useEffect(() => {
-    fetchInvoice();
-  }, [fetchInvoice]);
+    // The route wrapper remounts per invoice. Retain these guards for direct
+    // mounts and invalidate abandoned requests on unmount as well as route changes.
+    setFiledSeason(null);
+    setFiledDate(null);
+    return () => { invoiceLoadRef.current.request += 1; };
+  }, [id]);
+
+  useEffect(() => {
+    const startedRoute = invoiceLoadRef.current.route;
+    const expectedRequest = invoiceLoadRef.current.request + 1;
+    void fetchInvoice().catch(() => {
+      const current = invoiceLoadRef.current;
+      if (current.id !== id || current.route !== startedRoute || current.request !== expectedRequest) return;
+      toast('error', 'Failed to load invoice');
+      navigate('/field-invoices');
+    });
+  }, [fetchInvoice, id, toast, navigate]);
 
   // U16b: surface fields using all-inclusive grower-share pricing. This follows the
   // currently selected/loaded locations, so it works for both a saved invoice and a
@@ -1386,6 +1451,10 @@ export default function FieldApplicationInvoice() {
   };
 
   const handlePreview = async () => {
+    if (crossSeasonDateEdit) {
+      toast('error', filedSeasonDateMessage);
+      return;
+    }
     if (locations.length === 0) {
       toast('error', 'Select at least one location first');
       return;
@@ -1455,6 +1524,10 @@ export default function FieldApplicationInvoice() {
   // silent data corruption). 'cannot_compare' / 'no_label_max' never gate a save.
   const handleSave = async () => {
     if (!profile) return;
+    if (crossSeasonDateEdit) {
+      toast('error', filedSeasonDateMessage);
+      return;
+    }
     if (!transactionDate) {
       toast('error', 'Choose a transaction date before saving.');
       return;
@@ -1533,6 +1606,12 @@ export default function FieldApplicationInvoice() {
 
   const performSave = async (overrideReasonForAudit?: string) => {
     if (!profile) return;
+    // performSave is also reached from the admin label-rate override modal, so repeat
+    // the season gate here rather than relying only on handleSave's normal button path.
+    if (crossSeasonDateEdit) {
+      toast('error', filedSeasonDateMessage);
+      return;
+    }
     // The date input can be cleared even though new invoices start on today's Chicago
     // business date. Sending an empty string reaches the date cast in PostgreSQL and
     // produces a raw RPC error instead of using the server fallback, so refuse it here
@@ -2446,6 +2525,17 @@ export default function FieldApplicationInvoice() {
     navigate('/field-invoices');
   };
 
+  if (!isNew && (loadedInvoice?.id !== id || loadedInvoice.route !== invoiceLoadRef.current.route)) {
+    return <>
+      <Card><p role="status" className="p-4">Loading invoice…</p></Card>
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
+    </>;
+  }
+
   return (
     <div className="space-y-6">
       <Breadcrumbs
@@ -2678,8 +2768,15 @@ export default function FieldApplicationInvoice() {
               // Mason approves is not the one billed (Codex push-proof review, 2026-09-04).
               onChange={(e) => { setTransactionDate(e.target.value); setDirty(true); invalidatePreview(); }}
               disabled={!canEdit}
-              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
+              aria-invalid={crossSeasonDateEdit || undefined}
+              aria-describedby={crossSeasonDateEdit ? 'field-app-invoice-season-date-error' : undefined}
+              className={`w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50 ${crossSeasonDateEdit ? 'border-red-500 bg-red-50' : ''}`}
             />
+            {crossSeasonDateEdit && (
+              <p id="field-app-invoice-season-date-error" className="mt-1 text-xs text-red-700" role="alert">
+                {filedSeasonDateMessage}
+              </p>
+            )}
           </div>
           {/* #24: Consultant selector (invoices.salesman_id). Editable only by an
               admin — the save RPC rejects a non-admin attributing to another user,

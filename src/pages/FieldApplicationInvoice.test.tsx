@@ -19,6 +19,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import FieldApplicationInvoice from './FieldApplicationInvoice';
+import FieldApplicationInvoiceRoute from '../components/FieldApplicationInvoiceRoute';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // ── Hoisted shared mocks ────────────────────────────────────────────────────
 const {
@@ -47,7 +50,12 @@ vi.mock('../lib/db', () => ({
   assertRpcResult: <T,>(data: T) => data,
   checkMutationResult: () => {},
   sanitizeError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-  RpcErrorCodes: { ZERO_APPLIED_ACRES: 'ZERO_APPLIED_ACRES', ACTOR_MISMATCH: 'ACTOR_MISMATCH' },
+  RpcErrorCodes: {
+    ZERO_APPLIED_ACRES: 'ZERO_APPLIED_ACRES',
+    ACTOR_MISMATCH: 'ACTOR_MISMATCH',
+    INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED: 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED',
+    INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED: 'INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED',
+  },
   hasRpcCode: (err: unknown, code: string) => {
     const m = err instanceof Error ? err.message : String(err ?? '');
     return m === code || m.startsWith(`${code}:`) || m.startsWith(`${code} `);
@@ -602,6 +610,7 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
               invoice_number: 'INV-1001',
               invoice_type: 'field_application',
               invoice_date: '2026-04-29',
+              season: 2026,
               header_notes: '',
               status: 'draft',
               application_service_id: null,
@@ -616,6 +625,57 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
       }),
     );
   });
+
+  it('discards loaded invoice fields and its confirmation when the production route opens a new invoice', async () => {
+    const page = render(<FieldApplicationInvoiceRoute />);
+    await screen.findByText(/Field Application INV-1001/);
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    expect(await screen.findByText('North 80')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('Printed at top of invoice'), { target: { value: 'OLD INVOICE NOTES' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
+    expect(await screen.findByRole('dialog', { name: 'Delete Invoice' })).toBeInTheDocument();
+
+    mockUseParams.mockReturnValue({ id: undefined });
+    await act(async () => page.rerender(<FieldApplicationInvoiceRoute />));
+    expect(screen.getByText('New Field Application Invoice')).toBeInTheDocument();
+    expect(screen.queryByText('North 80')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Printed at top of invoice')).toHaveValue('');
+    expect(screen.queryByRole('dialog', { name: 'Delete Invoice' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Post$/i })).not.toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Save$/i })));
+    expect(mockRpc).toHaveBeenCalledWith('save_field_app_invoice', expect.objectContaining({
+      p_invoice_id: null, p_locations: [], p_chemicals: [],
+      p_invoice: expect.objectContaining({ header_notes: null }),
+    }));
+    expect(mockRpc.mock.calls.some(([name]) => name === 'post_invoice' || name === 'delete_invoices')).toBe(false);
+  });
+
+  it('pins both production invoice routes to the identity-keyed wrapper without changing access roles', () => {
+    const app = readFileSync(join(process.cwd(), 'src', 'App.tsx'), 'utf8');
+    for (const path of ['invoices/field-app/new', 'invoices/field-app/:id']) {
+      const route = app.split(/\r?\n/).find((line) => line.includes(`path: '${path}'`));
+      expect(route).toContain('<FieldApplicationInvoiceRoute />');
+      expect(route).toContain("allowedRoles={['admin', 'sales_rep']}");
+    }
+  });
+
+  it.each(['INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED', 'INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED'])(
+    'explains a server split-group refusal (%s) even when the date fits this member', async (code) => {
+      await renderPage();
+      await screen.findByText(/Field Application INV-1001/);
+      fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+      fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+      const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+      fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-04-30' } });
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      mockRpc.mockResolvedValue({ data: null, error: new Error(code) });
+      fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+      await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('another invoice in its split group')));
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('original transaction date'));
+      expect(mockToast.mock.calls.some(([, message]) => String(message).includes('shown below'))).toBe(false);
+    },
+  );
 
   it('renders Post button and routes through post_invoice (NOT post_invoice_group) when no group_id', async () => {
     await renderPage();
@@ -639,6 +699,230 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
     await renderPage();
     await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
     expect(screen.queryByText(/part of a/i)).not.toBeInTheDocument();
+  });
+
+  it('blocks Preview and Save when an existing invoice date crosses its filed-season boundary', async () => {
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Preview$/i })).toBeInTheDocument());
+
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This invoice is filed in season 2026. Choose a date from 2025-10-01 through 2026-09-30.',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'This invoice is filed in season 2026. Choose a date from 2025-10-01 through 2026-09-30.',
+    );
+    expect(mockRpc.mock.calls.some((call) => call[0] === 'preview_field_app_invoice_split')).toBe(false);
+    expect(mockRpc.mock.calls.some((call) => call[0] === 'save_field_app_invoice')).toBe(false);
+  });
+
+  it('keeps an unchanged divergent stored date usable without permitting another out-of-season date', async () => {
+    mockFrom.mockImplementation(makeFromMock({
+      invoices: { data: [{ id: 'inv-solo', invoice_number: 'INV-SOURCE',
+        invoice_type: 'field_application', invoice_date: '2026-10-05', season: 2026,
+        status: 'draft', invoice_group_id: null, application_service_id: null,
+        total_amount_cents: 0 }] },
+      field_app_locations: { data: [] }, invoice_items: { data: [] }, invoice_shares: { data: [] },
+    }));
+    await renderPage();
+    await screen.findByText(/Field Application INV-SOURCE/);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    await waitFor(() => expect(mockRpc.mock.calls.some(([name]) => name === 'preview_field_app_invoice_split')).toBe(true));
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-06' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('filed in season 2026');
+  });
+
+  it('keeps the unsaved-changes modal available while the next invoice loads', async () => {
+    const pendingHeader = new Promise<{ data: unknown; error: null }>(() => {});
+    const fallback = makeFromMock({});
+    mockFrom.mockImplementation((table: string) => {
+      const chain = fallback(table) as Record<string, unknown>;
+      if (table === 'invoices') chain.maybeSingle = vi.fn(() => pendingHeader);
+      return chain;
+    });
+    mockUseUnsavedChanges.mockReturnValue({ state: 'blocked', reset: mockBlockerReset, proceed: mockBlockerProceed });
+    await renderPage();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading invoice');
+    expect(screen.getByRole('alertdialog', { name: 'Unsaved Changes' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Stay/i }));
+    expect(mockBlockerReset).toHaveBeenCalled();
+  });
+
+  it('rechecks the filed season after an admin opens the over-label-rate override', async () => {
+    const existingFrom = mockFrom.getMockImplementation()!;
+    const overrideFrom = makeFromMock({
+      app_settings: { data: [{ setting_value: 'block' }] },
+      invoice_items: { data: [{
+        id: 'chem-over-rate', product_id: 'product-over-rate', description: 'Over-rate product',
+        rate_per_acre: 2, rate_unit: 'oz', quantity: 80, unit_size: 'oz',
+        unit_price_cents: 100, extended_cents: 8000, cost_cents: 50, sort_order: 0,
+      }] },
+      products: { data: [{
+        id: 'product-over-rate', max_label_rate: 1, max_label_rate_unit: 'oz',
+        rei_hours: null, phi_days: null,
+      }] },
+    });
+    mockFrom.mockImplementation((table: string) =>
+      ['app_settings', 'invoice_items', 'products'].includes(table) ? overrideFrom(table) : existingFrom(table),
+    );
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/Field Application INV-1001/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
+    fireEvent.click(await screen.findByTestId('mock-select-one-field'));
+
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    expect(dateInput).toHaveValue('2026-04-29');
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    expect(await screen.findByRole('dialog', { name: 'Over-label-rate override' })).toBeInTheDocument();
+    expect(mockRpc.mock.calls.some((call) => call[0] === 'save_field_app_invoice')).toBe(false);
+
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+    fireEvent.change(screen.getByLabelText(/Reason for the override/), { target: { value: 'Authorized label-rate exception' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Override & Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Over-label-rate override' })).not.toBeInTheDocument());
+
+    expect(mockToast).toHaveBeenCalledWith('error',
+      'This invoice is filed in season 2026. Choose a date from 2025-10-01 through 2026-09-30.',
+    );
+    expect(mockRpc.mock.calls.some((call) => call[0] === 'save_field_app_invoice')).toBe(false);
+    expect(mockFrom.mock.calls.some((call) => call[0] === 'activity_feed')).toBe(false);
+  });
+});
+
+describe('FieldApplicationInvoice — invoice load ownership', () => {
+  it('reports an unexpected current header rejection and returns to the list without installing controls', async () => {
+    const fallback = makeFromMock({});
+    mockFrom.mockImplementation((table: string) => {
+      const chain = fallback(table) as Record<string, unknown>;
+      if (table === 'invoices') chain.maybeSingle = vi.fn().mockRejectedValue(new Error('Unexpected transport rejection'));
+      return chain;
+    });
+    mockUseParams.mockReturnValue({ id: 'inv-a' });
+    await renderPage();
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/field-invoices'));
+    expect(mockToast).toHaveBeenCalledWith('error', 'Failed to load invoice');
+    expect(screen.queryByRole('button', { name: /^Save$/i })).not.toBeInTheDocument();
+  });
+
+  it('ignores an abandoned header rejection after the production route remounts', async () => {
+    let rejectOld!: (reason: Error) => void;
+    const pending = new Promise<never>((_resolve, reject) => { rejectOld = reject; });
+    const fallback = makeFromMock({});
+    mockFrom.mockImplementation((table: string) => {
+      const chain = fallback(table) as Record<string, unknown>;
+      if (table === 'invoices') chain.maybeSingle = vi.fn(() => pending);
+      return chain;
+    });
+    mockUseParams.mockReturnValue({ id: 'inv-a' });
+    const page = render(<FieldApplicationInvoiceRoute />);
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading invoice');
+    mockUseParams.mockReturnValue({ id: undefined });
+    await act(async () => page.rerender(<FieldApplicationInvoiceRoute />));
+    await act(async () => rejectOld(new Error('Abandoned rejection')));
+    expect(screen.getByText('New Field Application Invoice')).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalled();
+  });
+
+  it('keeps previously loaded invoice-A controls hidden when returning before its fresh load completes', async () => {
+    const firstRow = {
+      id: 'inv-a', invoice_number: 'INV-A-OLD', invoice_type: 'field_application',
+      invoice_date: '2026-04-29', season: 2026, status: 'draft', invoice_group_id: null,
+    };
+    let resolveReturning!: (result: { data: unknown; error: null }) => void;
+    const pending = new Promise<{ data: unknown; error: null }>((resolve) => { resolveReturning = resolve; });
+    const fallback = makeFromMock({});
+    let reads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      const chain = fallback(table) as Record<string, unknown>;
+      if (table === 'invoices') {
+        chain.maybeSingle = vi.fn().mockResolvedValue({
+          data: { invoice_type: 'field_application', job_id: null, blend_ticket_id: null }, error: null,
+        });
+        chain.single = vi.fn(() => ++reads === 1
+          ? Promise.resolve({ data: firstRow, error: null })
+          : pending);
+      }
+      return chain;
+    });
+    mockUseParams.mockReturnValue({ id: 'inv-a' });
+    const page = await renderPage();
+    await screen.findByText('Field Application INV-A-OLD');
+    mockUseParams.mockReturnValue({ id: 'inv-b' });
+    await act(async () => page.rerender(<FieldApplicationInvoice />));
+    expect(screen.getByRole('status')).toHaveTextContent('Loading invoice');
+    mockUseParams.mockReturnValue({ id: 'inv-a' });
+    await act(async () => page.rerender(<FieldApplicationInvoice />));
+    expect(screen.getByRole('status')).toHaveTextContent('Loading invoice');
+    expect(screen.queryByText('Field Application INV-A-OLD')).not.toBeInTheDocument();
+    await act(async () => resolveReturning({
+      data: { ...firstRow, invoice_number: 'INV-A-FRESH', invoice_date: '2027-04-29', season: 2027 }, error: null,
+    }));
+    await screen.findByText('Field Application INV-A-FRESH');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it.each(['inv-b', 'inv-a'])('ignores a late invoice-A header after navigation to %s', async (finalId) => {
+    const row = (id: string, season: number) => ({
+      id, invoice_number: `INV-${id}-${season}`, invoice_type: 'field_application',
+      invoice_date: `${season}-04-29`, season, status: 'draft', invoice_group_id: null,
+    });
+    let resolveOld!: (result: { data: unknown; error: null }) => void;
+    const oldHeader = new Promise<{ data: unknown; error: null }>((resolve) => { resolveOld = resolve; });
+    const headerReads = vi.fn();
+    const fallback = makeFromMock({});
+    mockFrom.mockImplementation((table: string) => {
+      const chain = fallback(table) as Record<string, unknown>;
+      if (table !== 'invoices') return chain;
+      let invoiceId = '';
+      chain.eq = vi.fn((column: string, value: string) => {
+        if (column === 'id') invoiceId = value;
+        return chain;
+      });
+      chain.maybeSingle = vi.fn().mockResolvedValue({
+        data: { invoice_type: 'field_application', job_id: null, blend_ticket_id: null }, error: null,
+      });
+      chain.single = vi.fn(() => {
+        headerReads(invoiceId);
+        return headerReads.mock.calls.length === 1
+          ? oldHeader
+          : Promise.resolve({ data: row(invoiceId, 2027), error: null });
+      });
+      return chain;
+    });
+    mockUseParams.mockReturnValue({ id: 'inv-a' });
+    const page = await renderPage();
+    await waitFor(() => expect(headerReads).toHaveBeenCalledWith('inv-a'));
+    mockUseParams.mockReturnValue({ id: 'inv-b' });
+    await act(async () => page.rerender(<FieldApplicationInvoice />));
+    await screen.findByText('Field Application INV-inv-b-2027');
+    if (finalId === 'inv-a') {
+      mockUseParams.mockReturnValue({ id: 'inv-a' });
+      await act(async () => page.rerender(<FieldApplicationInvoice />));
+      await screen.findByText('Field Application INV-inv-a-2027');
+    }
+    await act(async () => resolveOld({ data: row('inv-a', 2026), error: null }));
+    expect(screen.getByText(`Field Application INV-${finalId}-2027`)).toBeInTheDocument();
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2027-10-01' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('This invoice is filed in season 2027.');
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
 

@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import { sanitizeError } from '../lib/errorSanitizer';
 
 const { mockFrom, mockRpc, mockToast, mockNavigate, intentKeys, nextIntentKey } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
@@ -51,7 +52,7 @@ vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
-  sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  sanitizeError: (e: unknown) => sanitizeError(e),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -573,6 +574,60 @@ describe('InvoiceDetail', () => {
     const totalCostLabel = screen.getByText('Total Cost');
     expect(totalCostLabel.parentElement).toHaveTextContent('$0.00');
     expect(totalCostLabel.parentElement).not.toHaveTextContent('$2.52');
+  });
+});
+
+describe('InvoiceDetail — cutover refusal retries', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    intentKeys.clear();
+    nextIntentKey.value = 0;
+    const invoice = {
+      id: 'inv-cutover', invoice_number: 'INV-CUTOVER', invoice_type: 'chemical_sale',
+      status: 'draft', customer_id: 'cust-1', invoice_date: '2026-09-13',
+      payment_terms: 'Net 30', due_date: null, total_amount_cents: 0, created_at: '2026-09-13T00:00:00Z',
+    };
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'invoices' ? invoice : [], error: null,
+    }));
+  });
+
+  it.each(['IN_PROGRESS', 'ISOLATION', 'STALE_CALL'])('retries %s through Save without changing key or body', async (token) => {
+    let saves = 0;
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_invoice'
+      ? ++saves === 1
+        ? { data: null, error: { code: '40001', message: `GENERIC_FIELD_CUTOVER_${token}: no invoice was changed` } }
+        : { data: 'inv-cutover', error: null }
+      : { data: null, error: null }));
+    renderInvoiceDetail('inv-cutover');
+    await screen.findByText('INV-CUTOVER', { selector: 'h1' });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', 'Invoice saved'));
+    const calls = mockRpc.mock.calls.filter(([name]) => name === 'save_invoice');
+    expect(calls).toHaveLength(2);
+    expect(calls[1][1]).toEqual(calls[0][1]);
+    expect(calls[0][1].p_idempotency_key).toBeTruthy();
+    expect(mockToast.mock.calls.some(([type]) => type === 'error')).toBe(false);
+  });
+
+  it('retains the original key after bounded retries are exhausted', async () => {
+    let saves = 0;
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_invoice'
+      ? ++saves <= 3
+        ? { data: null, error: { code: '40001', message: 'GENERIC_FIELD_CUTOVER_STALE_CALL: no invoice was changed' } }
+        : { data: 'inv-cutover', error: null }
+      : { data: null, error: null }));
+    renderInvoiceDetail('inv-cutover');
+    await screen.findByText('INV-CUTOVER', { selector: 'h1' });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error',
+      'No invoice was changed. An invoice update is finishing; wait a moment, then try Save again'));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'save_invoice')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('success', 'Invoice saved'));
+    const calls = mockRpc.mock.calls.filter(([name]) => name === 'save_invoice');
+    expect(calls).toHaveLength(4);
+    expect(calls[3][1]).toEqual(calls[0][1]);
   });
 });
 

@@ -1,5 +1,56 @@
 # Known Issues — Consolidated
 
+**Last verified: 2026-09-13 for the read-only live ledger and scoped filed-season/generic-save
+contracts; other historical issues retain their own dated verification and are not re-certified.**
+The current ledger capture is maintained only in `docs/reference/migration-history.md`.
+Live generic save still has original body md5 `9a34478d405a1a3b8233cabcdfb39691`, and live
+preview remains `83f6600412ced085d0876a3c7339ff12`; the filed-season helpers are absent.
+The later local creation guard below is not live. The September 8 ledger header and older
+disk/PR statuses further down are historical, not current apply or delivery guidance.
+
+## 2026-09-12 follow-up — filed-season date-edit guard is not deployed
+
+PR #599 merged September 11 with invoice-date season stamping and preview parity. Its
+original migrations are already live and must not be reapplied. The later filed-season edit
+guard is not part of that merge: September 12 read-only live inspection confirms its helpers
+and invoice trigger are absent. A separate current-main candidate adds preview refusal and
+table-level protection against changing the filed season or crossing its date boundary.
+Fresh review also found and closed a restoration bypass in that candidate; the disposable
+proof observes restore-plus-date and restore-only rejection, valid corrected restoration,
+and targeted removal of the new check reproducing the bypass. This is local proof, not deployment.
+
+Fresh whole-branch review of local corrected commit `d93106e8e` then found a HIGH creation
+bypass through generic `save_invoice`, which the UPDATE-only trigger misses. Root reproduced
+it through the public authenticated RPC. Compatibility review rejected a universal INSERT
+guard because legitimate job/blend creators carry source season with today's invoice date.
+The earlier one-phase refusal in `20260912165758_refuse_generic_field_invoice_creation.sql`
+then failed the added COMMITTED-retry transition regression (Sol/high `f6cb05b369`, 18:15Z).
+It remains NOT APPLIED and is now repurposed as phase 1: preserve original generic creation,
+below-cost and key-only receipt semantics while installing a fail-fast shared barrier,
+transitional READ COMMITTED requirement and fresh V1 catalog fence. New phase 2,
+`20260913040359_finish_generic_field_invoice_cutover.sql`, requires phase 1 separately
+committed, no old open/prepared work and no still-valid generic receipt before installing
+NEW-field refusal. Refusal leaves existing legitimate retries working until natural expiry.
+Do not manufacture actor/payload bindings for legacy generic receipts or delete/backfill them.
+Both phases pin the original OID/defaults/owner/search path/ACL and leave source creators alone.
+Corrected full disposable transition/concurrency/mutation proof passed with
+`PREVIEW_SEASON_PROOF_PASS` and both registered business-chain `SMOKE_PASS_ROLLBACK`
+markers. Published corrected head `7a0ed406b1` subsequently passed exact-head Sol/high
+CLEAN and full GitHub implementation/SQL/Windows checks. Both original Codex cutover
+threads have published-head runtime/proof dispositions and are resolved. Current-head
+Codex P2 `3998769135` also requests an explicit LF rule for phase two; the metadata-only
+local correction is verified, but its next current-main exact-head proof/publication
+and actual CodeRabbit review remain pending. The edit guard and both cutover phases
+remain unapplied. September 13 read-only checks reconfirm original live function pins,
+absent guard helpers/trigger and no valid generic receipts or active mixed-season/date
+mismatch cases now. This is not a future apply guarantee. Neither the earlier
+`d93106e8e` nor `f6cb05b369` BLOCKERS is clearance for any later candidate.
+
+The operative decision is in `DECISION_LOG.md` (September 8 continuation). Delivery and live
+apply remain separate gates. The session closeout and still-open audit follow-ups are recorded
+in `docs/handoffs/2026-09-12-pr-comment-session-closeout.md`; historical audit counts do not
+constitute a current defect list or clearance of the remaining P2 inventory.
+
 **Superseded 2026-09-06 header, kept for provenance — every boundary claim in this paragraph is
 superseded by the 2026-09-08 header that follows it.** That read confirmed the unprefixed-ledger-name
 trap: `20260904185900_refuse_null_job_field_acres` (PR #606, merged `719faac73`) applied live on

@@ -736,7 +736,8 @@ export function validateParkedMigrationCrossReferences(paths, historyText, loadT
     }
   }
   if (verifiedCandidates.size !== history.paths.size || [...verifiedCandidates].some((p) => !history.paths.has(p))) {
-    return { state: "unknown", paths: new Set(), reason: "parked marker and LOCAL CANDIDATE history registry are not one-to-one" };
+    const unverified = [...history.paths].filter((p) => !verifiedCandidates.has(p));
+    return { state: "unknown", paths: new Set(), reason: `parked marker and LOCAL CANDIDATE history registry are not one-to-one; unverified: ${unverified.join(", ") || "unexpected candidate"}` };
   }
   return { state: "known", paths: history.paths, reason: "" };
 }
