@@ -611,6 +611,9 @@ function maskNonCode(code: string): string {
     if (j < 0) return true;
     if (out[j] === '>') return out[j - 1] === '=';
     if (out[j] === ')') return controlCloseAt === j;
+    // A doubled `+` or `-` right before `/` ends a postfix operator (`count++ / 2`), so the
+    // `/` is division (CodeRabbit, PR #690).
+    if ((out[j] === '+' || out[j] === '-') && out[j - 1] === out[j]) return false;
     if (/[(,=:[!&|?{;+\-*%~^]/.test(out[j])) return true;
     let k = j;
     while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
@@ -1000,6 +1003,18 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     // A real keyword and a real control head still open a regex.
     expect(classify(['  return /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
     expect(classify(['  if (ready) /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+  });
+
+  it('division after a postfix ++ or -- cannot hide a mutation', () => {
+    const reset = '  idem.resetKey();';
+    const handler = '  onClick={() => {';
+    expect(classify([handler, "    const r = count++ / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = count-- / 2 + supabase.from('t').delete() / 3;", reset], 3)).toBeNull();
+
+    // Positive controls: executable evidence after a postfix operator stays visible, and a
+    // binary `+` or `-` still lets a regex start.
+    expect(classify(['  const r = count++ / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    expect(classify(['  const r = a + /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
   });
 
   it('scans a meaningful number of source files', () => {

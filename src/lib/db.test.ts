@@ -8,6 +8,7 @@ vi.mock('@supabase/supabase-js', () => ({
 import {
   checkMutationResult,
   assertRpcResult,
+  assertTransferResultForJob,
   hasRpcCode,
   describePostInvoiceBlock,
   isTransferInvoiceResultInvalid,
@@ -180,6 +181,13 @@ describe('transferInvoiceErrorMessage', () => {
   it('leaves unrelated transfer errors to the existing handlers', () => {
     expect(transferInvoiceErrorMessage({ message: 'SPLIT_OVERRIDE_UNSUPPORTED' })).toBeNull();
     expect(transferInvoiceErrorMessage(null)).toBeNull();
+  });
+});
+
+describe('assertTransferResultForJob', () => {
+  it('accepts a job_id that differs from the requested id only in letter case', () => {
+    const result = { success: true, job_id: 'A1B2C3D4-0000-4000-8000-00000000ABCD' };
+    expect(assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd')).toBe(result);
   });
 });
 

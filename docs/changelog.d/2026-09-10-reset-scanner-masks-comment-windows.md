@@ -95,3 +95,13 @@ and the three repo-wide checks carry an explicit 30-second timeout for slower ma
 whole-file mask is equivalent because `maskNonCode()` never looks back and only looks ahead past a
 construct already opened; a throwaway test compared the prefix mask with the whole-file mask at every
 `resetKey` line under `src/` and found zero mismatches.
+
+Eighth round — CodeRabbit's review of delivery PR #690 at `1fcbaabf0` found that `regexCanStart()`
+read the second `+` or `-` of a postfix `++`/`--` as an expression start, so in
+`count++ / 2 + supabase.rpc('save') / 3` the text between the slashes, including the mutating call,
+was masked and an intent-rotation excuse could pass. A doubled `+` or `-` directly before `/` now
+reads as division. Proof observed: the new negative cases were added FIRST and failed with
+`expected 'intent-rotation' to be null`; positive controls keep evidence after a postfix operator
+visible and still let a regex start after a binary `+`. CodeRabbit noted no current `src` site was
+affected. The same review asked for direct coverage that `assertTransferResultForJob()` accepts a
+`job_id` differing only in letter case; `src/lib/db.test.ts` now has that case.
