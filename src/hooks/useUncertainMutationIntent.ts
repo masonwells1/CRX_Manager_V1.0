@@ -981,6 +981,9 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
             attemptRecordRef.current = null;
             return 'resolved';
           }
+          // A peer still owns this pending request. Keep this tab's attempt and
+          // acknowledgment so its eventual receipt remains an exact-key retry.
+          return 'definitive';
         }
         clearAcknowledgmentRecord(acknowledgmentKey, options, attempt?.requestVersion ?? null);
         attemptRecordRef.current = null;

@@ -789,7 +789,7 @@ describe('useUncertainMutationIntent', () => {
     expect(staleTab.result.current.getIdempotencyKey()).not.toBe(originalKey);
   });
 
-  it('releases only the definitively rejected tab claim while a peer request remains in flight', async () => {
+  it.each(['storage-event', 'reload'] as const)('retains the rejected tab receipt through peer completion and %s', async (recovery) => {
     const options = {
       operation: 'record_vendor_payment',
       userId: 'admin-definitive-race',
@@ -830,6 +830,29 @@ describe('useUncertainMutationIntent', () => {
     )!);
     expect(resolved.status).toBe('resolved');
     expect(resolved.idempotencyKey).toBe(originalKey);
+    let reconcilingTab = rejectTab;
+    if (recovery === 'storage-event') {
+      act(() => {
+        const storageKey = `crx:uncertain-mutation:v4:${JSON.stringify([options.operation, options.userId])}`;
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: storageKey,
+          newValue: window.localStorage.getItem(storageKey),
+          storageArea: window.localStorage,
+        }));
+      });
+    } else {
+      rejectTab.unmount();
+      window.sessionStorage.setItem('crx:durable-mutation:tab-id', 'reject-tab');
+      reconcilingTab = renderHook(() => useUncertainMutationIntent<{ amount: number }>(options));
+    }
+    expect(reconcilingTab.result.current.isIntentLocked).toBe(true);
+    expect(reconcilingTab.result.current.unresolvedIntent).toEqual({ amount: 10_000 });
+    await act(async () => reconcilingTab.result.current.beginIntent({ amount: 10_000 }));
+    expect(reconcilingTab.result.current.getIdempotencyKey()).toBe(originalKey);
+    await act(async () => reconcilingTab.result.current.resolveIntent());
+    expect(reconcilingTab.result.current.isIntentLocked).toBe(false);
+    await act(async () => reconcilingTab.result.current.beginIntent({ amount: 10_000 }));
+    expect(reconcilingTab.result.current.getIdempotencyKey()).not.toBe(originalKey);
   });
 
   it('drops an unmounted claimant so a remounted definitive rejection clears the lock', async () => {
