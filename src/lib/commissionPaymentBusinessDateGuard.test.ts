@@ -49,6 +49,24 @@ describe('commission payment Chicago business-date guard', () => {
     expect(timeout).toBeGreaterThan(-1);
     expect(timeout).toBeLessThan(lock);
     expect(lock).toBeLessThan(preflight);
+
+    // No lock upgrade: the file's only LOCK statement is the up-front ACCESS
+    // EXCLUSIVE one, so no weaker commission_payments lock precedes the DROP
+    // TRIGGER. Comments are stripped because the header names the old mode.
+    const lockStatements = (sql: string) =>
+      sql
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('--'))
+        .join('\n')
+        .match(/\bLOCK\s+TABLE\b[\s\S]*?;/gi) ?? [];
+    expect(lockStatements(migration)).toEqual([
+      'LOCK TABLE public.commission_payments IN ACCESS EXCLUSIVE MODE;',
+    ]);
+    const weakerLockAdded = migration.replace(
+      'LOCK TABLE public.commission_payments IN ACCESS EXCLUSIVE MODE;',
+      'LOCK TABLE public.commission_payments IN SHARE ROW EXCLUSIVE MODE;\nLOCK TABLE public.commission_payments IN ACCESS EXCLUSIVE MODE;',
+    );
+    expect(lockStatements(weakerLockAdded)).toHaveLength(2);
     expect(futureScan).toBeGreaterThan(preflight);
     expect(migration).toContain(
       'COMMISSION_PAYMENT_DATE_AFTER_BUSINESS_TODAY: existing future-dated commission payment requires review',
