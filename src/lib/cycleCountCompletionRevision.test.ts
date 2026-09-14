@@ -162,6 +162,12 @@ describe('cycle count completion revision contract', () => {
     // the new refusal, so it must reach a readable instruction, not a raw code.
     expect(sharedDb).toContain("CYCLE_COUNT_REVISION_REQUIRED: 'CYCLE_COUNT_REVISION_REQUIRED'");
     expect(page).toContain('RpcErrorCodes.CYCLE_COUNT_REVISION_REQUIRED');
+    // CodeRabbit (2026-09-12, PR #646): the code check alone leaves the operator-facing
+    // half unpinned — a branch that swallowed the refusal, or replaced the sentence with
+    // the raw code, would still satisfy the line above. Pin the instruction itself.
+    expect(page).toContain(
+      'This page is running an out-of-date version and cannot safely complete a count. Reload the page, then complete it again.',
+    );
   });
 
   it('rejects an authoritative snapshot that changed before completion', () => {
@@ -172,6 +178,10 @@ describe('cycle count completion revision contract', () => {
     expect(code).toContain("'_expected_item_revision', p_expected_item_revision");
     expect(page).toContain(".select('item_revision, status')");
     expect(page).toContain('p_expected_item_revision: snapshot.itemRevision');
+    // CodeRabbit (2026-09-12, PR #646): BOTH completion call sites must send the expected
+    // revision. The retained-key replay path is the one this file never pinned by name,
+    // so a refactor could drop its argument while every assertion here still passed.
+    expect(page).toContain('p_expected_item_revision: countState.item_revision');
     expect(page).toContain("typeof countState.item_revision !== 'number'");
     expect(page).toContain('onConfirm={() => { void executeComplete(); }}');
     expect(sharedTypes).toMatch(/item_revision\?: number;/);
