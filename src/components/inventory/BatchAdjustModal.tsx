@@ -1,9 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
-import { supabase, assertRpcResult } from '../../lib/db';
+import { supabase, assertRpcResult, sanitizeError } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
+import { getIdempotencyBindingRejection, isDefinitiveRpcRejection } from '../../lib/idempotency';
+import {
+  UNCERTAIN_MUTATION_INTENT_CONFLICT,
+  UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE,
+  UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE,
+  UNCERTAIN_MUTATION_RETRY_EXPIRED,
+  useUncertainMutationIntent,
+} from '../../hooks/useUncertainMutationIntent';
 import { useToast } from '../ui/Toast';
 
 import { Sentry } from '../../lib/sentry';
@@ -23,13 +31,17 @@ interface RpcCall {
   p_idempotency_key: string;
 }
 
-/** Exported for testing */
+/**
+ * Exported for testing. `getKey` is required on purpose: a random key per call
+ * cannot be replayed after a lost reply, which is exactly the double-move this
+ * modal used to cause.
+ */
 // eslint-disable-next-line react-refresh/only-export-components
 export function buildAdjustmentCalls(
   items: AdjustmentItem[],
   reason: string,
   userId: string,
-  getKey: () => string = () => crypto.randomUUID(),
+  getKey: (item: AdjustmentItem) => string,
 ): RpcCall[] {
   return items
     .filter((it) => it.delta !== 0)
@@ -38,9 +50,74 @@ export function buildAdjustmentCalls(
       p_delta: it.delta,
       p_reason: reason,
       p_performed_by: userId,
-      p_idempotency_key: getKey(),
+      p_idempotency_key: getKey(it),
     }));
 }
+
+/**
+ * A row's key is the frozen batch key plus the row. The batch key only exists
+ * while one exact batch (rows, delta, reason) is frozen, so a retry of that batch
+ * re-sends every row under the key it was first sent with, and any change to the
+ * rows, delta or reason is a different batch with a different key. The live
+ * adjust_inventory replays on the key alone, so this pairing — never one key for
+ * two payloads — is what makes a replay return the right receipt.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function batchRowIdempotencyKey(batchKey: string, inventoryId: string): string {
+  return `${batchKey}:${inventoryId}`;
+}
+
+export type RowOutcome = 'adjusted' | 'refused' | 'uncertain' | 'binding_rejected';
+
+/**
+ * 'binding_rejected' is checked first: IDEMPOTENCY_ACTOR_MISMATCH is a P0001 that
+ * isDefinitiveRpcRejection would call an ordinary refusal, and
+ * IDEMPOTENCY_INTENT_MISMATCH is one it deliberately calls uncertain. Either way
+ * this key can never succeed again, but an earlier request may have moved the
+ * stock, so the operator must check before adjusting that product again.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function classifyAdjustmentError(error: unknown): Exclude<RowOutcome, 'adjusted'> {
+  if (getIdempotencyBindingRejection(error)) return 'binding_rejected';
+  if (isDefinitiveRpcRejection(error)) return 'refused';
+  return 'uncertain';
+}
+
+type BatchAdjustIntent = {
+  rows: Array<{ inventoryId: string; productName: string }>;
+  delta: number;
+  reason: string;
+  performedBy: string;
+};
+
+// The outcome is remembered together with the batch key it was observed under.
+// A row is only skipped on a retry of THAT batch: a different frozen batch (for
+// example one adopted from another tab) must still send every one of its rows.
+type RowResult = { outcome: RowOutcome; batchKey: string };
+
+// A row in one of these states moved the stock already or holds a key the server
+// will never accept, so it is never re-sent under the same batch.
+const SETTLED: ReadonlySet<RowOutcome | undefined> = new Set<RowOutcome | undefined>(['adjusted', 'binding_rejected']);
+
+const OUTCOME_LABEL: Record<RowOutcome, string> = {
+  adjusted: 'Adjusted',
+  refused: 'Refused — nothing changed',
+  uncertain: 'Not confirmed — retry',
+  binding_rejected: 'Check stock history',
+};
+
+const OUTCOME_CLASS: Record<RowOutcome, string> = {
+  adjusted: 'text-green-700',
+  refused: 'text-red-600',
+  uncertain: 'text-yellow-800',
+  binding_rejected: 'text-red-700 font-medium',
+};
+
+const FINISHED_ELSEWHERE_LABEL = 'Finished elsewhere — check stock';
+const FINISHED_ELSEWHERE_MESSAGE =
+  'This batch was finished in another tab or window. Close this dialog to load current stock before adjusting these products again.';
+const REPLACED_BATCH_MESSAGE =
+  'Nothing was sent: another tab changed the unconfirmed batch. The batch now shown can be retried unchanged.';
 
 interface Props {
   open: boolean;
@@ -55,92 +132,327 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
   const [reason, setReason] = useState('');
   const [uniformDelta, setUniformDelta] = useState('');
   const [saving, setSaving] = useState(false);
-  // Per-item idempotency keys: generated once on first submit, reused on retry
-  const [batchKeys, setBatchKeys] = useState<string[]>([]);
+  const [rowResults, setRowResults] = useState<Record<string, RowResult>>({});
+  const [rowMessages, setRowMessages] = useState<Record<string, string>>({});
+  // The rows of the last batch this dialog sent. Its results stay listed until the
+  // dialog closes, even when the current selection no longer contains them (e.g.
+  // a frozen batch retried after a reload with a different selection).
+  const [lastBatchRows, setLastBatchRows] = useState<BatchAdjustIntent['rows']>([]);
+  // True once this open dialog has shown a frozen batch — whether this dialog
+  // froze it or only observed it (another tab's lost reply) — and cleared only
+  // when this dialog resolves that batch itself, or closes.
+  const [sawFrozenBatch, setSawFrozenBatch] = useState(false);
+  // The Inventory page's onSuccess clears the selection, which empties `items`.
+  // Calling it mid-dialog would wipe the per-row results the operator still needs,
+  // so it runs when the dialog closes — whenever stock moved or may have moved.
+  const stockMayHaveChangedRef = useRef(false);
 
-  const delta = Number(uniformDelta) || 0;
-  const hasDelta = uniformDelta !== '' && Number.isFinite(Number(uniformDelta));
+  // adjust_inventory replays on the idempotency key. A batch whose reply was lost
+  // may already have moved some stock, so the exact batch is frozen until every
+  // row has a definitive answer, and a retry re-sends it under the same keys. This
+  // uses its own operation name so an unresolved batch never locks the
+  // single-product adjustment dialog on the Inventory page (the server keys differ).
+  const batchIntent = useUncertainMutationIntent<BatchAdjustIntent>({
+    operation: 'adjust_inventory_batch',
+    userId,
+    surface: 'inventory-batch-adjust',
+    getIntentIdentity: (intent) => ({
+      inventory_ids: intent.rows.map((row) => row.inventoryId),
+      p_delta: intent.delta,
+      p_reason: intent.reason,
+      p_performed_by: intent.performedBy,
+    }),
+  });
+  const frozen = batchIntent.unresolvedIntent;
+
+  useEffect(() => {
+    if (open && frozen) setSawFrozenBatch(true);
+  }, [open, frozen]);
+
+  // This open dialog showed a frozen batch, and it is no longer frozen, and this
+  // dialog did not resolve it: another tab or window retried and finished it.
+  // Whatever this dialog shows or holds in its form is now stale — that tab's
+  // retry may have moved any of those rows — so nothing may be sent from here (a
+  // new batch would use fresh keys and move stock a second time). Closing
+  // refreshes the page with authoritative stock.
+  const finishedElsewhere = sawFrozenBatch && !frozen;
+
+  // A non-finite entry (e.g. 1e400 → Infinity) would be frozen as null by JSON.
+  const parsedDelta = Number(uniformDelta);
+  const delta = Number.isFinite(parsedDelta) ? parsedDelta : 0;
+  const hasDelta = uniformDelta !== '' && Number.isFinite(parsedDelta);
   const negativeCount = hasDelta ? items.filter((it) => it.quantity_available + delta < 0).length : 0;
+  const pendingItems = items.filter((it) => !SETTLED.has(rowResults[it.id]?.outcome));
 
-  const handleSubmit = async () => {
-    if (!reason.trim()) {
-      toast('error', 'Please enter a reason for the adjustment');
-      return;
-    }
-    if (delta === 0) {
-      toast('error', 'Adjustment quantity cannot be zero');
-      return;
-    }
-
-    setSaving(true);
-    const adjustItems: AdjustmentItem[] = items.map((it) => ({
-      inventory_id: it.id,
-      product_name: it.product_name,
-      current_qty: it.quantity_available,
-      delta,
-    }));
-
-    // Generate stable per-item keys on first attempt; reuse on retry
-    const keys = batchKeys.length === adjustItems.length ? batchKeys : adjustItems.map(() => crypto.randomUUID());
-    if (batchKeys.length !== adjustItems.length) setBatchKeys(keys);
-    let keyIndex = 0;
-    const calls = buildAdjustmentCalls(adjustItems, reason.trim(), userId, () => keys[keyIndex++]);
-    let successCount = 0;
-    let errorCount = 0;
-
-    for (const call of calls) {
-      const { data, error } = await supabase.rpc('adjust_inventory', call);
-      if (error) {
-        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Batch adjust error' } });
-        errorCount++;
-      } else {
-        assertRpcResult(data, 'adjust_inventory');
-        successCount++;
-      }
-    }
-
-    if (successCount > 0) {
-      setBatchKeys([]);
-      await logActivity({ event: 'inventory_batch_adjusted', description: `Batch adjusted ${successCount} product(s) by ${delta > 0 ? '+' : ''}${delta}: ${reason.trim()}`, performedBy: userId, entityType: 'inventory' });
-    }
-
-    if (errorCount > 0) {
-      toast('error', `${errorCount} adjustment(s) failed. ${successCount} succeeded.`);
-    } else {
-      toast('success', `Adjusted ${successCount} product(s) by ${delta > 0 ? '+' : ''}${delta}`);
-    }
-
-    setSaving(false);
+  const resetAndClose = () => {
+    const refreshPage = stockMayHaveChangedRef.current || finishedElsewhere;
+    stockMayHaveChangedRef.current = false;
+    setRowResults({});
+    setRowMessages({});
+    setLastBatchRows([]);
+    setSawFrozenBatch(false);
     setReason('');
     setUniformDelta('');
-    onSuccess();
+    if (refreshPage) onSuccess();
     onClose();
   };
 
+  const handleClose = () => {
+    if (saving) return;
+    resetAndClose();
+  };
+
+  const handleSubmit = async () => {
+    if (saving) return;
+    if (finishedElsewhere) {
+      toast('warning', FINISHED_ELSEWHERE_MESSAGE);
+      return;
+    }
+    if (batchIntent.isForeignIntentLocked) {
+      toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+      return;
+    }
+    if (batchIntent.isRetryExpired) {
+      toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+      return;
+    }
+
+    // A frozen batch is retried exactly as it was sent, and only under the key it
+    // was frozen with; form validation only applies to a new batch.
+    let candidate = batchIntent.getUnresolvedIntent();
+    const retryingFrozenBatch = candidate !== null;
+    const frozenBatchKey = batchIntent.getPendingIdempotencyKey();
+    if (!candidate && frozen) {
+      // This dialog showed a frozen batch that another tab has already resolved,
+      // and this render has not caught up. Its form is stale: a new batch would
+      // use fresh keys and could move the stock a second time.
+      setSawFrozenBatch(true);
+      toast('warning', FINISHED_ELSEWHERE_MESSAGE);
+      return;
+    }
+    if (!candidate) {
+      if (!reason.trim()) {
+        toast('error', 'Please enter a reason for the adjustment');
+        return;
+      }
+      if (delta === 0) {
+        toast('error', 'Adjustment quantity cannot be zero');
+        return;
+      }
+      if (pendingItems.length === 0) {
+        toast('error', 'Every selected product has already been handled');
+        return;
+      }
+      candidate = {
+        rows: [...pendingItems]
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .map((it) => ({ inventoryId: it.id, productName: it.product_name })),
+        delta,
+        reason: reason.trim(),
+        performedBy: userId,
+      };
+    }
+
+    setSaving(true);
+    try {
+      let request: BatchAdjustIntent;
+      let batchKey: string;
+      try {
+        // A missing key ('') can never match, so the retry fails closed.
+        request = await batchIntent.beginIntent(
+          candidate,
+          retryingFrozenBatch ? { requireIdempotencyKey: frozenBatchKey ?? '' } : undefined,
+        );
+        batchKey = batchIntent.getIdempotencyKey();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : '';
+        if (message === UNCERTAIN_MUTATION_INTENT_CONFLICT && retryingFrozenBatch) {
+          // The frozen batch was resolved or replaced in another tab after this
+          // dialog read it. Nothing was sent. If a newer unconfirmed batch took its
+          // place, the dialog now shows that batch for an unchanged retry instead.
+          setSawFrozenBatch(true);
+          if (batchIntent.getUnresolvedIntent()) toast('warning', REPLACED_BATCH_MESSAGE);
+          else toast('warning', FINISHED_ELSEWHERE_MESSAGE);
+        } else if (message === UNCERTAIN_MUTATION_INTENT_CONFLICT) toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
+        else if (message === UNCERTAIN_MUTATION_RETRY_EXPIRED) toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
+        else toast('error', sanitizeError(err));
+        return;
+      }
+
+      const results = { ...rowResults };
+      const messages = { ...rowMessages };
+      const settledUnderThisBatch = (inventoryId: string) =>
+        results[inventoryId]?.batchKey === batchKey && SETTLED.has(results[inventoryId].outcome);
+      let newlyAdjusted = 0;
+      const calls = buildAdjustmentCalls(
+        request.rows
+          .filter((row) => !settledUnderThisBatch(row.inventoryId))
+          .map((row) => ({ inventory_id: row.inventoryId, product_name: row.productName, current_qty: 0, delta: request.delta })),
+        request.reason,
+        request.performedBy,
+        (item) => batchRowIdempotencyKey(batchKey, item.inventory_id),
+      );
+
+      for (const call of calls) {
+        let outcome: RowOutcome;
+        try {
+          const { data, error } = await supabase.rpc('adjust_inventory', call);
+          if (error) {
+            outcome = classifyAdjustmentError(error);
+            messages[call.p_inventory_id] = sanitizeError(error);
+            Sentry.captureException(error instanceof Error ? error : new Error(messages[call.p_inventory_id]), {
+              extra: { context: 'Batch adjust error', outcome },
+            });
+          } else {
+            assertRpcResult(data, 'adjust_inventory');
+            outcome = 'adjusted';
+          }
+        } catch (err) {
+          // A thrown request or an unusable reply: the database may still have
+          // committed, so the row keeps its key.
+          outcome = 'uncertain';
+          messages[call.p_inventory_id] = sanitizeError(err);
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+            extra: { context: 'Batch adjust error', outcome },
+          });
+        }
+        results[call.p_inventory_id] = { outcome, batchKey };
+        if (outcome === 'adjusted') {
+          newlyAdjusted++;
+          delete messages[call.p_inventory_id];
+        }
+      }
+
+      // Every row of this batch now has a result under this batch key: it was
+      // either sent above or skipped because it had already settled under it.
+      const outcomes = request.rows.map((row) => results[row.inventoryId].outcome);
+      const uncertainCount = outcomes.filter((o) => o === 'uncertain').length;
+      const refusedCount = outcomes.filter((o) => o === 'refused').length;
+      const bindingCount = outcomes.filter((o) => o === 'binding_rejected').length;
+      const adjustedCount = outcomes.filter((o) => o === 'adjusted').length;
+      // A binding rejection means an earlier attempt under this key may have moved
+      // stock, so the page must reload authoritative quantities on close too.
+      if (newlyAdjusted > 0 || uncertainCount > 0 || bindingCount > 0) stockMayHaveChangedRef.current = true;
+
+      // Only unfreeze once no row is left uncertain. A refused or binding-rejected
+      // row committed nothing under its key, so a later, deliberately new batch
+      // may safely use fresh keys. Unfreeze BEFORE showing the row results so the
+      // dialog never shows final results under an "Unconfirmed batch" banner.
+      let resolveFailed = false;
+      if (uncertainCount === 0) {
+        // This dialog is resolving the batch itself, so the unfreeze that follows
+        // is not "finished elsewhere". If resolving fails the batch stays frozen
+        // and the effect above records it as seen again.
+        setSawFrozenBatch(false);
+        try {
+          await batchIntent.resolveIntent();
+        } catch (err) {
+          // The batch stays frozen; retrying it only replays receipts.
+          resolveFailed = true;
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+            extra: { context: 'Batch adjust resolve failed' },
+          });
+        }
+      }
+      setRowResults(results);
+      setRowMessages(messages);
+      setLastBatchRows(request.rows);
+
+      const signedDelta = `${request.delta > 0 ? '+' : ''}${request.delta}`;
+      if (newlyAdjusted > 0) {
+        await logActivity({ event: 'inventory_batch_adjusted', description: `Batch adjusted ${newlyAdjusted} product(s) by ${signedDelta}: ${request.reason}`, performedBy: request.performedBy, entityType: 'inventory' });
+      }
+
+      if (adjustedCount === request.rows.length) {
+        if (resolveFailed) {
+          toast('warning', `Adjusted ${adjustedCount} product(s) by ${signedDelta}, but this browser could not record that the batch finished. If it reappears as unconfirmed, retrying it will not move stock again.`);
+        } else {
+          toast('success', `Adjusted ${adjustedCount} product(s) by ${signedDelta}`);
+        }
+        resetAndClose();
+        return;
+      }
+
+      const summary = `${adjustedCount} adjusted, ${refusedCount} refused, ${uncertainCount} not confirmed, ${bindingCount} need checking.`;
+      if (uncertainCount > 0) {
+        toast('warning', `${summary} Some adjustments may already have gone through. Retry the batch unchanged; rows that went through will not move again.`);
+      } else if (bindingCount > 0) {
+        toast('error', `${summary} Nothing changed for the rows marked "Check stock history", but an earlier attempt may have. Check each product's stock history before adjusting it again.`);
+      } else {
+        toast('error', summary);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const quantityById = new Map(items.map((it) => [it.id, it.quantity_available]));
+  const listedRows = frozen
+    ? frozen.rows
+    : [
+      ...lastBatchRows,
+      ...items
+        .filter((it) => !lastBatchRows.some((row) => row.inventoryId === it.id))
+        .map((it) => ({ inventoryId: it.id, productName: it.product_name })),
+    ];
+  const displayRows = listedRows.map((row) => ({
+    id: row.inventoryId,
+    name: row.productName,
+    qty: frozen || finishedElsewhere ? null : quantityById.get(row.inventoryId) ?? null,
+  }));
+  const actionCount = frozen
+    ? frozen.rows.filter((row) => !SETTLED.has(rowResults[row.inventoryId]?.outcome)).length
+    : pendingItems.length;
+
   return (
-    <Modal open={open} onClose={onClose} title="Batch" accent="Adjustment">
+    <Modal open={open} onClose={handleClose} title="Batch" accent="Adjustment">
       <div className="space-y-4">
         <p className="text-sm text-secondary">
-          Adjusting <strong>{items.length}</strong> product{items.length !== 1 ? 's' : ''}
+          Adjusting <strong>{displayRows.length}</strong> product{displayRows.length !== 1 ? 's' : ''}
         </p>
+
+        {frozen && (
+          <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900" role="status">
+            <strong>Unconfirmed batch:</strong> the last batch adjustment ({frozen.delta > 0 ? '+' : ''}{frozen.delta}, “{frozen.reason}”) may have partly gone through. Retry it unchanged — a product this batch already moved will not move again. If you have adjusted any of these products another way since, check its stock history first.
+          </div>
+        )}
+
+        {finishedElsewhere && (
+          <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900" role="status">
+            <strong>Finished in another tab:</strong> {FINISHED_ELSEWHERE_MESSAGE}
+          </div>
+        )}
 
         {/* Preview list */}
         <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg divide-y">
-          {items.map((it) => {
-            const projected = it.quantity_available + delta;
-            const willGoNegative = hasDelta && projected < 0;
+          {displayRows.map((row) => {
+            const outcome = rowResults[row.id]?.outcome;
+            const projected = row.qty === null ? null : row.qty + delta;
+            const willGoNegative = hasDelta && projected !== null && projected < 0;
+            let label: string | null = outcome ? OUTCOME_LABEL[outcome] : null;
+            if (outcome === 'refused' && frozen) label = 'Refused — will retry';
+            if (outcome && outcome !== 'adjusted' && finishedElsewhere) label = FINISHED_ELSEWHERE_LABEL;
             return (
-              <div key={it.id} className="flex items-center justify-between px-3 py-2 text-sm">
-                <span className="truncate">{it.product_name}</span>
-                <span className={`whitespace-nowrap ml-2 ${willGoNegative ? 'text-red-600 font-medium' : 'text-secondary'}`}>
-                  {it.quantity_available} → {projected}
-                </span>
+              <div key={row.id} className="px-3 py-2 text-sm" data-testid={`batch-row-${row.id}`}>
+                <div className="flex items-center justify-between">
+                  <span className="truncate">{row.name}</span>
+                  {outcome ? (
+                    <span className={`whitespace-nowrap ml-2 ${OUTCOME_CLASS[outcome]}`}>{label}</span>
+                  ) : row.qty !== null ? (
+                    <span className={`whitespace-nowrap ml-2 ${willGoNegative ? 'text-red-600 font-medium' : 'text-secondary'}`}>
+                      {row.qty} → {projected}
+                    </span>
+                  ) : null}
+                </div>
+                {outcome && outcome !== 'adjusted' && !finishedElsewhere && rowMessages[row.id] && (
+                  <p className="text-xs text-secondary mt-0.5">{rowMessages[row.id]}</p>
+                )}
               </div>
             );
           })}
         </div>
 
-        {negativeCount > 0 && (
+        {!frozen && !finishedElsewhere && negativeCount > 0 && (
           <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900">
             <strong>Warning:</strong> this adjustment will drive {negativeCount} product{negativeCount !== 1 ? 's' : ''} below zero. Verify with a physical count before proceeding.
           </div>
@@ -149,26 +461,30 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
         <Input
           label="Adjustment Quantity (+ or -)"
           type="number"
-          value={uniformDelta}
+          value={frozen ? String(frozen.delta) : uniformDelta}
           onChange={(e) => setUniformDelta(e.target.value)}
           placeholder="e.g. 5 or -3"
+          disabled={Boolean(frozen) || finishedElsewhere}
         />
 
         <Input
           label="Reason (required)"
-          value={reason}
+          value={frozen ? frozen.reason : reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder="e.g. Cycle count correction, Damaged goods"
+          disabled={Boolean(frozen) || finishedElsewhere}
         />
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button variant="secondary" onClick={handleClose} disabled={saving}>Cancel</Button>
           <Button
             onClick={handleSubmit}
             loading={saving}
-            disabled={delta === 0 || !reason.trim()}
+            disabled={finishedElsewhere || (!frozen && (delta === 0 || !reason.trim() || pendingItems.length === 0))}
           >
-            Adjust {items.length} Product{items.length !== 1 ? 's' : ''}
+            {frozen
+              ? `Retry ${actionCount} Unchanged`
+              : `Adjust ${actionCount} Product${actionCount !== 1 ? 's' : ''}`}
           </Button>
         </div>
       </div>
