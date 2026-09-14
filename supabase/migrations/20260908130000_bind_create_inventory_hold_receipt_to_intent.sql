@@ -90,15 +90,10 @@
 --   create_inventory_hold receipt exists — the same rule 20260826221000 applies
 --   (SECTION9_ACTIVE_LEGACY_IDEMPOTENCY_RECEIPTS). Apply in a quiet window; if
 --   it refuses, wait for the receipts to expire (<= 24h) and re-run.
---   No post-apply path can write an unbound create_inventory_hold receipt: the
---   impl is executable only by postgres, no migration calls
---   create_inventory_hold from SQL, and the wrapper binds the receipt in the
---   same transaction or rolls back (IDEMPOTENCY_RECEIPT_MISSING). That is why
---   this file does not add a BEFORE INSERT binding trigger arm like
---   _section9_bind_idempotency_receipt_20260826; in-flight callers that
---   resolved the old body before the rename are drained by the ACCESS EXCLUSIVE
---   lock below (the old body reads idempotency_keys first, so it holds ACCESS
---   SHARE for the rest of its transaction).
+--   Both standalone hold inserts and receipt inserts require the wrapper's
+--   actor-bound context. The insert barrier catches a late old-body call even
+--   when its NULL key bypasses the receipt table entirely. Source-backed
+--   job/program sync inserts keep their established path.
 --   Atomicity: this file carries no BEGIN/COMMIT of its own. Apply it ONLY
 --   through the protected scripts/apply-migration-file.mjs production gate.
 --   psql -1 is ONLY for isolated/local proof. Both wrap the whole
@@ -128,35 +123,21 @@
 -- for operations they do not own, and create_inventory_hold's body is the only
 -- writer of that operation's receipts anywhere in the repo.
 --
--- RESIDUAL, KNOWN AND ACCEPTED (Codex HIGH, 2026-09-08): the trigger above
--- fires on INSERT INTO idempotency_keys, so it cannot see an in-flight old-body
--- call that passed p_idempotency_key => NULL. That call skips the receipt table
--- ENTIRELY -- both the read (old body line 131) and the write (line 215) sit
--- behind `IF p_idempotency_key IS NOT NULL` -- so the ACCESS EXCLUSIVE lock
--- never drains it either. It could commit one unreceipted hold just after this
--- migration lands, carrying the old missing-profile and NULL-p_force behaviour.
--- NOT FIXED HERE, deliberately. The only way to catch it is a guard on
--- public.inventory_holds, which is written by 16 migrations including the live
--- job-reservation, quote-coordination and planned-program flows; a scoping
--- mistake there breaks customer bookings. That is a LARGER risk than the one it
--- removes, because: (a) the window is the apply transaction only, seconds long
--- and attended -- PREFLIGHT_LEGACY_RECEIPTS already forces a quiet window;
--- (b) the sole caller (InventoryPage callCreateHoldRpc) ALWAYS sends a key --
--- getIdempotencyKey() throws rather than returning null; and (c) this is not a
--- regression: keyless calls behave exactly this way on live TODAY, for every
--- call, permanently. This migration shrinks that exposure from always to a few
--- seconds, it does not create it. POST-APPLY DETECTION (run once, read-only,
--- right after applying) -- it must return zero rows:
---   SELECT h.id, h.created_at, h.hold_type, h.quantity
---     FROM public.inventory_holds h
---    WHERE h.hold_type IN ('manual', 'crop_program')
---      AND h.created_at >= now() - interval '15 minutes'
---      AND NOT EXISTS (SELECT 1 FROM public.idempotency_keys k
---                       WHERE k.operation = 'create_inventory_hold'
---                         AND k.request_actor_id IS NOT NULL
---                         AND k.result ->> 'hold_id' = h.id::text);
--- A row means a keyless call slipped through the cutover: verify it with the
--- customer and delete it if it was not intended.
+-- KEYLESS CUTOVER CORRECTION (independent Sol HIGH, 2026-09-13): the earlier
+-- candidate documented accepting a late keyless old-body call. Actual isolated
+-- proof reproduced a sales user reserving 500 against 100 available after the
+-- wrapper installed, with NULL force and no receipt. That disposition is
+-- superseded. Read-only live pg_proc inspection found four current hold writers:
+-- create_inventory_hold and the job/planned/quote-job sync helpers. The latter
+-- always attach source_id; the pinned standalone body omits it. A separate
+-- BEFORE INSERT guard owns manual/crop_program rows with NULL source_id and
+-- requires the wrapper's actor-bound key/fingerprint context. It is installed
+-- before rename. Source_id shape is preflight-checked; the guard body is pinned
+-- on replay. The existing uncertainty error token preserves a keyed old call's
+-- original browser retry if a new-wrapper call using that key already won.
+-- The full real-schema prover observes zero late holds, identical keyed replay
+-- IDs, source-backed insert boundaries, successful rerun, and changed guard
+-- refusal. No traffic revocation or separate multi-transaction cutover is used.
 --
 -- PREFLIGHT: check_idempotency_intent(text,text,uuid,text),
 -- extensions.digest(bytea,text) and pg_catalog.trim_scale(numeric) installed;
@@ -182,8 +163,9 @@
 -- active-role gate, so source scanners and review see the actual restored body.
 -- Do not use a bare rename of the implementation: its old role gate fails open.
 -- The new rollback migration restores deliberate authenticated EXECUTE grants,
--- and MUST also drop trigger bind_create_inventory_hold_receipt_20260905 —
--- leaving it while restoring the old body would make every hold fail closed.
+-- and MUST also drop bind_create_inventory_hold_receipt_20260905 on
+-- idempotency_keys and guard_create_inventory_hold_insert_20260913 on
+-- inventory_holds. Leaving either while restoring an unbound body fails closed.
 -- PROOF: scripts/smoke/prove-create-inventory-hold-intent-binding-real-schema.mjs
 -- (network-disabled throwaway Supabase PostgreSQL 17 image on the checked-in
 -- 2026-07-27 baseline plus every later migration; two-session same-key race
@@ -197,10 +179,14 @@
 -- UNBOUND receipt after cutover.
 -- ============================================================================
 
--- The whole file runs in one transaction (psql -1 / the apply script). Holding
--- the receipt table exclusively for the few milliseconds of the swap means no
--- hold can be created between "old body renamed" and "wrapper installed".
+-- The whole file runs in one transaction (psql -1 / the apply script). Hold and
+-- receipt table locks drain existing writers; insert-time guards protect calls
+-- that have not touched those tables before the swap.
 SET LOCAL lock_timeout = '10s';
+-- Drain hold writers before taking the receipt lock: the old body writes its
+-- hold before its receipt. Calls that have not touched this table yet must pass
+-- the newly installed insert barrier when they resume after the commit.
+LOCK TABLE public.inventory_holds IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;
 
 DO $preflight$
@@ -227,7 +213,26 @@ DECLARE
   -- not change the value it pins.
   v_wrapper_pin text := '71fa8fafcfd04bf286678ab51c44c9fde05901a79b57ac563b165fecd0750d02';
   v_wrapper_sha text;
+  v_insert_guard_oid oid;
+  v_insert_guard_pin text := 'ce2fe3004a511516afa86ce8a1090dd1a2fba6b40cb0be1163dc93997d2ff0dd';
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_attribute a
+    WHERE a.attrelid = 'public.inventory_holds'::regclass
+      AND a.attname = 'source_id' AND NOT a.attisdropped
+      AND a.atttypid = 'uuid'::regtype AND NOT a.attnotnull
+      AND NOT EXISTS (SELECT 1 FROM pg_attrdef d
+                      WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum)
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_HOLD_SOURCE_SHAPE: standalone hold source_id must be nullable uuid with no default.';
+  END IF;
+  SELECT count(*) INTO v_count FROM pg_proc
+   WHERE pronamespace = 'public'::regnamespace
+     AND proname = '_guard_create_inventory_hold_insert_20260913';
+  v_insert_guard_oid := to_regprocedure('public._guard_create_inventory_hold_insert_20260913()');
+  IF v_count > 1 OR (v_count = 1 AND v_insert_guard_oid IS NULL) THEN
+    RAISE EXCEPTION 'PREFLIGHT_INSERT_GUARD_OVERLOAD';
+  END IF;
   -- Helpers first: the body hash below calls extensions.digest, so a missing
   -- helper must be reported by name, not by a raw "does not exist" error.
   IF to_regprocedure('public.check_idempotency_intent(text,text,uuid,text)') IS NULL THEN
@@ -241,6 +246,14 @@ BEGIN
   IF to_regprocedure('pg_catalog.trim_scale(numeric)') IS NULL THEN
     RAISE EXCEPTION
       'PREFLIGHT_MISSING_HELPER: pg_catalog.trim_scale(numeric) is not installed (PostgreSQL 13+).';
+  END IF;
+
+  IF v_insert_guard_oid IS NOT NULL THEN
+    SELECT encode(extensions.digest(convert_to(replace(prosrc, E'\r\n', E'\n'), 'UTF8'), 'sha256'), 'hex')
+      INTO v_sha FROM pg_proc WHERE oid = v_insert_guard_oid;
+    IF v_sha IS DISTINCT FROM v_insert_guard_pin THEN
+      RAISE EXCEPTION 'PREFLIGHT_INSERT_GUARD_DRIFT: standalone hold insert barrier was changed; refusing to replace it.';
+    END IF;
   END IF;
 
   v_public_oid := to_regprocedure(v_public_sig);
@@ -404,6 +417,62 @@ $preflight$;
 -- write an unbound receipt. While this trigger exists and the old body is still
 -- installed, an old-body hold FAILS CLOSED rather than booking unreceipted.
 -- ---------------------------------------------------------------------------
+-- A keyless old invocation never writes a receipt. Reject its standalone hold
+-- INSERT as well. Current job/program sync writers set source_id; the pinned
+-- old create_inventory_hold body always omits it. This trigger is registered
+-- before the rename and is observed by a call paused at the earlier stock lock.
+CREATE OR REPLACE FUNCTION public._guard_create_inventory_hold_insert_20260913()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $insert_guard$
+DECLARE
+  v_context_text text;
+  v_context jsonb;
+  v_actor uuid := auth.uid();
+BEGIN
+  IF NEW.source_id IS NOT NULL
+     OR (NEW.hold_type IS DISTINCT FROM 'manual'
+         AND NEW.hold_type IS DISTINCT FROM 'crop_program') THEN
+    RETURN NEW;
+  END IF;
+
+  v_context_text := current_setting('crx.create_inventory_hold_intent', true);
+  BEGIN
+    v_context := NULLIF(v_context_text, '')::jsonb;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_CONCURRENT_REPLAY_RETRY: create_inventory_hold cutover rejected invalid standalone insert context; retry the exact saved request.';
+  END;
+
+  IF v_actor IS NULL
+     OR NEW.created_by IS DISTINCT FROM v_actor
+     OR v_context ->> 'operation' IS DISTINCT FROM 'create_inventory_hold'
+     OR v_context ->> 'actor_id' IS DISTINCT FROM v_actor::text
+     OR COALESCE(btrim(v_context ->> 'idempotency_key'), '') = ''
+     OR COALESCE(v_context ->> 'fingerprint', '') !~ '^[0-9a-f]{64}$'
+     OR NOT EXISTS (SELECT 1 FROM public.profiles
+                    WHERE id = v_actor AND is_active IS TRUE
+                      AND role IN ('admin', 'sales_rep')) THEN
+    -- A keyed old invocation may overlap a successful new-wrapper retry.
+    -- Use the existing uncertainty token so its browser retains the old key.
+    RAISE EXCEPTION 'IDEMPOTENCY_CONCURRENT_REPLAY_RETRY: create_inventory_hold cutover rejected a standalone insert without current actor-bound context; retry the exact saved request.';
+  END IF;
+  RETURN NEW;
+END;
+$insert_guard$;
+
+ALTER FUNCTION public._guard_create_inventory_hold_insert_20260913() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public._guard_create_inventory_hold_insert_20260913()
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._guard_create_inventory_hold_insert_20260913() TO postgres;
+
+DROP TRIGGER IF EXISTS guard_create_inventory_hold_insert_20260913 ON public.inventory_holds;
+CREATE TRIGGER guard_create_inventory_hold_insert_20260913
+BEFORE INSERT ON public.inventory_holds
+FOR EACH ROW
+EXECUTE FUNCTION public._guard_create_inventory_hold_insert_20260913();
+
 CREATE OR REPLACE FUNCTION public._bind_create_inventory_hold_receipt_20260905()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -731,6 +800,26 @@ BEGIN
   FOREACH v_role IN ARRAY ARRAY['authenticated', 'service_role'] LOOP
     IF NOT has_function_privilege(v_role, v_public_sig, 'EXECUTE') THEN
       RAISE EXCEPTION 'POSTFLIGHT_ACL: % cannot execute %.', v_role, v_public_sig;
+    END IF;
+  END LOOP;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger
+                  WHERE tgrelid = 'public.inventory_holds'::regclass
+                    AND tgname = 'guard_create_inventory_hold_insert_20260913'
+                    AND tgfoid = to_regprocedure('public._guard_create_inventory_hold_insert_20260913()')
+                    AND tgtype = 7 AND tgenabled = 'O' AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_INSERT_BARRIER: enabled BEFORE INSERT row guard missing on inventory_holds.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+                 WHERE p.oid = to_regprocedure('public._guard_create_inventory_hold_insert_20260913()')
+                   AND r.rolname = 'postgres' AND NOT p.prosecdef
+                   AND p.prorettype = 'trigger'::regtype
+                   AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_INSERT_BARRIER_SHAPE';
+  END IF;
+  FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
+    IF has_function_privilege(v_role, 'public._guard_create_inventory_hold_insert_20260913()', 'EXECUTE') THEN
+      RAISE EXCEPTION 'POSTFLIGHT_ACL: % can execute the standalone hold insert barrier.', v_role;
     END IF;
   END LOOP;
 

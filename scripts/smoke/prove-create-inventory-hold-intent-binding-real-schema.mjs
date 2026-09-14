@@ -45,6 +45,8 @@ const ADMIN = '5a000000-0000-4000-8000-00000000000a';
 const CUSTOMER = '5a000000-0000-4000-8000-0000000000c1';
 const RACE_PRODUCT_BEFORE = '5a000000-0000-4000-8000-0000000000e1';
 const RACE_PRODUCT_AFTER = '5a000000-0000-4000-8000-0000000000e2';
+const RACE_PRODUCT_CUTOVER = '5a000000-0000-4000-8000-0000000000e3';
+const CUTOVER_SALES = '5a000000-0000-4000-8000-00000000000b';
 
 function docker(args, options = {}) {
   const r = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options });
@@ -181,6 +183,51 @@ async function raceSameKey(productId, key) {
   return { id1, id2, s2Code: r2.code, s2Error: r2.stderr.trim(), holds, receipts, boundActor };
 }
 
+async function proveKeylessCutover() {
+  // The real old body reaches its stock lock without touching idempotency_keys
+  // when the key is NULL. Pause it there while installing the candidate.
+  psql(`BEGIN; ${claims}
+    INSERT INTO auth.users (id,email,raw_user_meta_data) VALUES
+      ('${CUTOVER_SALES}','cutover-sales-prover@example.invalid','{"full_name":"[PROVER] Cutover Sales","role":"sales_rep"}'::jsonb)
+      ON CONFLICT DO NOTHING;
+    INSERT INTO public.profiles (id,email,full_name,role,is_active) VALUES
+      ('${CUTOVER_SALES}','cutover-sales-prover@example.invalid','[PROVER] Cutover Sales','sales_rep',true)
+      ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role, is_active=EXCLUDED.is_active;
+    COMMIT;`);
+  const stockOwner = startSqlWithMarker(`BEGIN;
+    SELECT id FROM public.inventory WHERE product_id = '${RACE_PRODUCT_CUTOVER}' FOR UPDATE;
+    \\echo KEYLESS_STOCK_LOCKED
+    SELECT pg_sleep(12); COMMIT;`, 'KEYLESS_STOCK_LOCKED');
+  await stockOwner.ready;
+  const oldCall = startSqlWithMarker(`BEGIN;
+    SET LOCAL application_name = 'prover-keyless-cutover';
+    SET LOCAL ROLE authenticated;
+    ${claims.replaceAll(ADMIN, CUTOVER_SALES)}
+    SELECT public.create_inventory_hold('${RACE_PRODUCT_CUTOVER}'::uuid,
+      '${CUSTOMER}'::uuid, 500, 'manual', DATE '2026-12-31', 'keyless-cutover-race',
+      '${CUTOVER_SALES}'::uuid, NULL, NULL, NULL);
+    COMMIT;`, null);
+  let reachedStockLock = false;
+  for (let i = 0; i < 30; i += 1) {
+    if (scalar(`SELECT count(*) FROM pg_stat_activity WHERE application_name = 'prover-keyless-cutover'
+      AND state = 'active' AND wait_event_type = 'Lock';`) === '1') {
+      reachedStockLock = true;
+      break;
+    }
+    wait(100);
+  }
+  assert.ok(reachedStockLock, 'keyless old-body invocation did not reach the controlled stock lock');
+  const applied = apply('candidate.sql', true);
+  const atCutover = Number(scalar(`SELECT count(*) FROM public.inventory_holds WHERE product_id = '${RACE_PRODUCT_CUTOVER}';`));
+  const [stockResult, oldResult] = await Promise.all([stockOwner.completion, oldCall.completion]);
+  assert.equal(stockResult.code, 0, `stock-lock owner failed: ${stockResult.stderr}`);
+  assert.equal(applied.status, 0, `candidate failed during keyless cutover: ${applied.output}`);
+  const afterCutover = Number(scalar(`SELECT count(*) FROM public.inventory_holds WHERE product_id = '${RACE_PRODUCT_CUTOVER}';`));
+  console.log(`[prover] keyless cutover: holds_at_candidate_commit=${atCutover} holds_after_old_call=${afterCutover} old_call_exit=${oldResult.code}`);
+  assert.equal(afterCutover, atCutover, 'KEYLESS_CUTOVER_UNSAFE: unauthorized old-body hold committed after the candidate installed');
+  return applied;
+}
+
 async function main() {
   docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
   ready();
@@ -225,11 +272,13 @@ async function main() {
     INSERT INTO public.customers (id,farm_name) VALUES ('${CUSTOMER}','[PROVER] Hold Farm') ON CONFLICT (id) DO NOTHING;
     INSERT INTO public.products (id,product_name,sku,is_active) VALUES
       ('${RACE_PRODUCT_BEFORE}','[PROVER] Race Before','PROVER-RACE-1',true),
-      ('${RACE_PRODUCT_AFTER}','[PROVER] Race After','PROVER-RACE-2',true)
+      ('${RACE_PRODUCT_AFTER}','[PROVER] Race After','PROVER-RACE-2',true),
+      ('${RACE_PRODUCT_CUTOVER}','[PROVER] Keyless Cutover','PROVER-RACE-3',true)
     ON CONFLICT (id) DO NOTHING;
     INSERT INTO public.inventory (product_id,location,quantity_available,quantity_prebooked,quantity_on_order) VALUES
       ('${RACE_PRODUCT_BEFORE}','Main Warehouse',100,0,0),
-      ('${RACE_PRODUCT_AFTER}','Main Warehouse',100,0,0);`);
+      ('${RACE_PRODUCT_AFTER}','Main Warehouse',100,0,0),
+      ('${RACE_PRODUCT_CUTOVER}','Main Warehouse',100,0,0);`);
 
   // 1. The chain must not pass against the live body.
   stageSql(SMOKE, 'hold-smoke.sql');
@@ -268,7 +317,7 @@ async function main() {
   // 3b. Expire that receipt the way time would (container only — the live rule
   //     is to WAIT for expiry, never delete), then the candidate applies.
   psql(`UPDATE public.idempotency_keys SET expires_at = now() - interval '1 minute' WHERE idempotency_key = 'prover-race-key-before';`);
-  r = apply('candidate.sql');
+  r = await proveKeylessCutover();
   assert.match(r.output, /no unexpired pre-migration receipts; safe to swap/, `candidate did not confirm a clean receipt table:\n${r.output}`);
   console.log('[prover] candidate applied');
 
@@ -286,6 +335,19 @@ async function main() {
   assert.equal(after.receipts, 1, 'expected exactly one receipt');
   assert.equal(after.boundActor, ADMIN, 'expected the receipt bound to the actor');
 
+  // Source-backed automatic job and program inserts do not use the standalone
+  // wrapper context. Verify the boundary with the real table/trigger installed.
+  const automaticShapes = psql(`BEGIN; ${claims}
+    SELECT set_config('crx.create_inventory_hold_intent', '', true);
+    INSERT INTO public.inventory_holds
+      (product_id, customer_id, quantity, hold_type, source_id, notes, created_by, is_active)
+    VALUES ('${RACE_PRODUCT_CUTOVER}', '${CUSTOMER}', 1, 'job', '${CUSTOMER}', 'job shape', '${ADMIN}', true),
+           ('${RACE_PRODUCT_CUTOVER}', '${CUSTOMER}', 1, 'crop_program', '${CUSTOMER}', 'program shape', '${ADMIN}', true);
+    SELECT 'SOURCE_BACKED_HOLDS:' || count(*) FROM public.inventory_holds WHERE product_id = '${RACE_PRODUCT_CUTOVER}';
+    ROLLBACK;`);
+  assert.match(automaticShapes.stdout, /SOURCE_BACKED_HOLDS:2/, 'source-backed automatic hold shapes were blocked');
+  console.log('[prover] source-backed job/program hold insert boundary passes without standalone context (rolled back)');
+
   // 6. Re-runnable.
   r = apply('candidate.sql');
   const overloads = scalar(`SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('create_inventory_hold','_create_inventory_hold_intent_impl_20260905');`);
@@ -293,7 +355,18 @@ async function main() {
   r = apply('hold-smoke.sql', true);
   assert.equal(rollbackPass(r.output), true, `hold smoke chain failed after candidate re-run:\n${r.output}`);
 
-  console.log(`CREATE_INVENTORY_HOLD_INTENT_REAL_SCHEMA_PASS pre_chain=FAIL pre_race=${before.holds}_hold_loser_errors legacy_receipt=REFUSED post_chain=PASS post_race=${after.holds}_hold_loser_replays rerun=PASS`);
+  psql(`CREATE OR REPLACE FUNCTION public._guard_create_inventory_hold_insert_20260913()
+    RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp
+    AS $tampered$ BEGIN RETURN NEW; END; $tampered$;`);
+  r = apply('candidate.sql', true);
+  assert.notEqual(r.status, 0, 'candidate silently replaced a changed standalone insert barrier');
+  assert.match(r.output, /PREFLIGHT_INSERT_GUARD_DRIFT/, 'changed barrier did not produce the named drift refusal');
+  assert.equal(scalar(`SELECT position('v_context' IN prosrc) = 0 FROM pg_proc
+    WHERE oid = to_regprocedure('public._guard_create_inventory_hold_insert_20260913()');`), 't',
+  'refused migration modified the changed insert barrier');
+  console.log('[prover] changed insert barrier is refused and preserved (container-only mutation)');
+
+  console.log(`CREATE_INVENTORY_HOLD_INTENT_REAL_SCHEMA_PASS pre_chain=FAIL pre_race=${before.holds}_hold_loser_errors legacy_receipt=REFUSED keyless_cutover=BLOCKED source_backed_shapes=PASS post_chain=PASS post_race=${after.holds}_hold_loser_replays rerun=PASS insert_guard_drift=REFUSED`);
 }
 
 try { await main(); }

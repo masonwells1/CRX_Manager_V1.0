@@ -2047,10 +2047,16 @@ admin/sales_rep gate, key required, request fingerprint, then `check_idempotency
 advisory lock, actor + fingerprint binding) BEFORE any mutation, then the renamed body, then receipt
 binding. Post-fix race in the same container = 1 hold, both sessions succeed with the same `hold_id`;
 the rolled-back chain `smoke-create-inventory-hold-intent-binding.sql` passes; re-apply is clean.
-Neither proof pauses a real old-body call across the migration: the cutover guard (a `BEFORE INSERT`
-trigger on `idempotency_keys`, created before the rename, that refuses an unbound hold receipt) is
-proven by an equivalent-path smoke that calls the renamed body directly, plus the same-key race run
-before and after the candidate — not by a literal pause/resume interleaving test.
+The 2026-09-13 independent Sol HIGH review identified the previously accepted keyless cutover gap.
+The extended real-schema prover now pauses an actual authenticated sales-user old-body invocation at
+the stock lock, installs the candidate, then releases the call. The prior candidate committed a
+500-unit unreceipted hold against 100 available after cutover. The corrected standalone insert barrier
+rejects that call with zero holds. It owns manual/crop_program inserts with NULL source_id; read-only
+live inspection confirms the three automatic sync writers attach source_id. Source-backed job/program
+insert boundaries pass without standalone context, while the receipt trigger still rejects a valid
+stale context naming a different key. Rerun succeeds; deliberately changed insert-barrier code is
+refused and preserved. This supersedes the old residual acceptance and absence of literal interleaving
+proof. The boundary test does not execute every automatic sync RPC end to end.
 **No live apply is authorized.** Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
 and every preflight condition held: one overload, owner `postgres`, `plpgsql`, SECURITY DEFINER,
 `proconfig = {search_path=public, pg_temp}`, the pinned argument list with defaults,

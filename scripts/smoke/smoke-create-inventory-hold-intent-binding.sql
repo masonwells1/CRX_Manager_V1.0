@@ -465,7 +465,7 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: the old body wrote an UNBOUND receipt after cutover';
   EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM NOT LIKE '%CREATE_INVENTORY_HOLD_UNBOUND_RECEIPT%' THEN RAISE; END IF;
+    IF SQLSTATE <> 'P0001' OR SQLERRM NOT LIKE 'IDEMPOTENCY_CONCURRENT_REPLAY_RETRY: create_inventory_hold cutover%' THEN RAISE; END IF;
   END;
 
   -- (b) a STALE context left in the transaction by an earlier bound call must
@@ -474,7 +474,9 @@ BEGIN
     'operation', 'create_inventory_hold',
     'idempotency_key', 'smoke-hold-key-force',
     'actor_id', v_admin,
-    'fingerprint', 'stale'
+    'fingerprint', (SELECT request_fingerprint FROM public.idempotency_keys
+                     WHERE idempotency_key = 'smoke-hold-key-force'
+                       AND operation = 'create_inventory_hold')
   )::text, true);
   BEGIN
     PERFORM public._create_inventory_hold_intent_impl_20260905(
