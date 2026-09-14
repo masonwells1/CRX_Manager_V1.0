@@ -139,7 +139,8 @@ approved a small change to the shared hook.
   refresh is covered by the component test only.
 
 **Codex (gpt-5.6-sol, high) exact-SHA review of `d1f348069`: BLOCKERS, 1 HIGH —
-open, with Mason.** A tab that is suspended while another tab's batch freezes and
+accepted by Mason as a known limit ("ship with known limit", 2026-09-13; recorded in
+`docs/manual/KNOWN_ISSUES.md`).** A tab that is suspended while another tab's batch freezes and
 is then resolved handles both storage events only after storage already says
 "resolved" (the hook re-reads the current value, not the event's `newValue`), so
 it never shows the frozen batch and its own stale form can send a fresh
@@ -149,7 +150,15 @@ another tab, and the same double adjustment happens with no lost reply at all
 idempotency key can distinguish. Compliance-reviewer on the same SHA: 0 BLOCKER /
 0 HIGH / 2 MED (no test for the in-transaction key mismatch against a newer
 pending request; "Finished in another tab" is also shown for conflicts that are
-not a finished batch) / 5 LOW — not yet fixed.
+not a finished batch) / 5 LOW. Both MED fixed: a new hook test sets IndexedDB to a
+newer pending request behind a stale localStorage copy of the original and expects
+the required-key retry to be refused without claiming the newer request; the
+dialog now says "Finished in another tab" only when no unconfirmed batch remains,
+and otherwise tells the operator the batch now shown can be retried unchanged.
+LOW: the unreachable `sawFrozenBatch` operand in the stale-render guard was
+removed; the rest (option type inline, unreachable empty-key message, a leftover
+live-claim lease after a key conflict, no test for the stale-render branch) are
+accepted as-is.
 
 **Proof.**
 - `src/components/inventory/BatchAdjustModal.retry.test.tsx` renders the real

@@ -116,6 +116,8 @@ const OUTCOME_CLASS: Record<RowOutcome, string> = {
 const FINISHED_ELSEWHERE_LABEL = 'Finished elsewhere — check stock';
 const FINISHED_ELSEWHERE_MESSAGE =
   'This batch was finished in another tab or window. Close this dialog to load current stock before adjusting these products again.';
+const REPLACED_BATCH_MESSAGE =
+  'Nothing was sent: another tab changed the unconfirmed batch. The batch now shown can be retried unchanged.';
 
 interface Props {
   open: boolean;
@@ -220,7 +222,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     let candidate = batchIntent.getUnresolvedIntent();
     const retryingFrozenBatch = candidate !== null;
     const frozenBatchKey = batchIntent.getPendingIdempotencyKey();
-    if (!candidate && (frozen || sawFrozenBatch)) {
+    if (!candidate && frozen) {
       // This dialog showed a frozen batch that another tab has already resolved,
       // and this render has not caught up. Its form is stale: a new batch would
       // use fresh keys and could move the stock a second time.
@@ -266,9 +268,11 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
         const message = err instanceof Error ? err.message : '';
         if (message === UNCERTAIN_MUTATION_INTENT_CONFLICT && retryingFrozenBatch) {
           // The frozen batch was resolved or replaced in another tab after this
-          // dialog read it. Nothing was sent.
+          // dialog read it. Nothing was sent. If a newer unconfirmed batch took its
+          // place, the dialog now shows that batch for an unchanged retry instead.
           setSawFrozenBatch(true);
-          toast('warning', FINISHED_ELSEWHERE_MESSAGE);
+          if (batchIntent.getUnresolvedIntent()) toast('warning', REPLACED_BATCH_MESSAGE);
+          else toast('warning', FINISHED_ELSEWHERE_MESSAGE);
         } else if (message === UNCERTAIN_MUTATION_INTENT_CONFLICT) toast('error', UNCERTAIN_MUTATION_OTHER_SURFACE_MESSAGE);
         else if (message === UNCERTAIN_MUTATION_RETRY_EXPIRED) toast('error', UNCERTAIN_MUTATION_RECONCILIATION_MESSAGE);
         else toast('error', sanitizeError(err));

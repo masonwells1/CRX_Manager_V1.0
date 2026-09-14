@@ -547,6 +547,29 @@ describe('useUncertainMutationIntent', () => {
       expect(secondTab.result.current.unresolvedIntent).toBeNull();
     });
 
+    it('fails closed inside the durable transaction when a stale mirror hides a newer pending request', async () => {
+      const { firstTab, secondTab } = renderTwoTabs();
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const originalKey = firstTab.result.current.getIdempotencyKey();
+      const originalMirror = window.localStorage.getItem(storageKey)!;
+      await act(async () => firstTab.result.current.resolveIntent());
+      await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
+      const newerKey = firstTab.result.current.getIdempotencyKey();
+      // IndexedDB holds the newer pending request; localStorage still shows the
+      // original one, so only the in-transaction check can see the replacement.
+      window.localStorage.setItem(storageKey, originalMirror);
+
+      await act(async () => {
+        await expect(secondTab.result.current.beginIntent(
+          { batch: 'B-1' },
+          { requireIdempotencyKey: originalKey },
+        )).rejects.toThrow('DURABLE_MUTATION_INTENT_CONFLICT');
+      });
+      const stored = JSON.parse(window.localStorage.getItem(storageKey)!);
+      expect(stored.idempotencyKey).toBe(newerKey);
+      expect(stored.claimTabIds.some((claim: string) => claim.startsWith('required-key-tab-b:'))).toBe(false);
+    });
+
     it('fails closed when the request was replaced by a newer pending one', async () => {
       const { firstTab, secondTab } = renderTwoTabs();
       await act(async () => firstTab.result.current.beginIntent({ batch: 'B-1' }));
