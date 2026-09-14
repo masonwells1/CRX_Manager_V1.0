@@ -314,6 +314,21 @@ const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
 };
 const KNOWN_UNFIXED = new Set(Object.keys(KNOWN_UNFIXED_SITES));
 
+// The repo-wide checks classify every reset in a file against the same `lines` array.
+// Re-masking the prefix for each reset made those checks quadratic in file length and
+// pushed them past Vitest's timeout on slower machines (Codex App, PR #687), so the mask is
+// computed once per array and reused.
+const maskedLinesCache = new WeakMap<string[], string[]>();
+
+function maskedLinesOf(lines: string[]): string[] {
+  let masked = maskedLinesCache.get(lines);
+  if (!masked) {
+    masked = maskNonCode(lines.join('\n')).split('\n');
+    maskedLinesCache.set(lines, masked);
+  }
+  return masked;
+}
+
 /** Classify one hit from the surrounding source, or null if nothing excuses it. */
 function classify(lines: string[], lineNo: number): Reason | null {
 
@@ -321,10 +336,11 @@ function classify(lines: string[], lineNo: number): Reason | null {
   // per-line stripNoise() cannot see a multi-line block comment, a regex literal, or a
   // template literal that spans lines, so any of them could supply a recovery marker,
   // `.throwOnError()` or `onClick=` and excuse a reset with no executable guard.
-  // maskNonCode() masks all of them across the whole prefix up to the reset, so a block
-  // or template opened above a window still counts. It keeps newlines, so masked[i] is
-  // still source line i + 1.
-  const masked = maskNonCode(lines.slice(0, lineNo).join('\n')).split('\n');
+  // maskNonCode() masks all of them across the whole source, so a block or template
+  // opened above a window still counts. It keeps newlines, so masked[i] is still source
+  // line i + 1. Only lines up to the reset are read below, and those are the same whether
+  // the whole file or just its prefix is masked, so each file is masked once.
+  const masked = maskedLinesOf(lines);
   const above = masked.slice(Math.max(0, lineNo - 9), lineNo - 1).join('\n');
   const callWindow = masked.slice(Math.max(0, lineNo - 16), lineNo - 1).join('\n');
 
@@ -831,11 +847,22 @@ function siteIdentifiers(line: string, names: string[]): string[] {
   return found.length > 0 ? found : [clean.trim().slice(0, 60)];
 }
 
+// Three repo-wide checks each call findResetBeforeAssert() on every source file, so the
+// masked lines are computed once per file and shared (Codex App, PR #687).
+const scannedLinesCache = new Map<string, string[]>();
+// The first repo-wide check still masks every swept file once (about 0.9 s locally for
+// 409 files); this bound keeps slower machines from failing on Vitest's 5 s default.
+const REPO_SWEEP_TIMEOUT_MS = 30_000;
+
 function findResetBeforeAssert(file: string): number[] {
   const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
   // Scan the whole-file mask, as classify() does: a per-line strip cannot see a multi-line
   // comment, so its text could otherwise pose as a call followed by a reset.
-  const lines = maskNonCode(source).split('\n').map(stripNoise);
+  let lines = scannedLinesCache.get(file);
+  if (!lines) {
+    lines = maskNonCode(source).split('\n').map(stripNoise);
+    scannedLinesCache.set(file, lines);
+  }
   const alias = aliasResetPattern(source);
   const isReset = (l: string) => RESET.test(l) || (alias !== null && alias.test(l));
   const hits: number[] = [];
@@ -1003,7 +1030,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
       }
     }
     expect(offenders).toEqual([]);
-  });
+  }, REPO_SWEEP_TIMEOUT_MS);
 
   it('every known-unfixed file flags EXACTLY its pinned sites', () => {
     // The point of the pin: a NEW reset-before-assert in one of these files must FAIL
@@ -1028,7 +1055,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
         .sort();
     }
     expect(actual).toEqual(KNOWN_UNFIXED_SITES);
-  });
+  }, REPO_SWEEP_TIMEOUT_MS);
 
   it('no allowlist entry is stale', () => {
     // An allowlist that no longer matches anything is dead weight that would silently
@@ -1043,7 +1070,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
         expect(seen.has(reason), `${file} declares '${reason}' but no site exhibits it`).toBe(true);
       }
     }
-  });
+  }, REPO_SWEEP_TIMEOUT_MS);
 
   it('the create-invoice click path no longer mints a key per click', () => {
     // FAIL-CLOSED (Codex MEDIUM, F1): the first version sliced on unchecked indexOf

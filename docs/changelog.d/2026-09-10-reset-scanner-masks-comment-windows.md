@@ -84,3 +84,14 @@ each line on its own, so a multi-line comment could pose as a call followed by a
 the same whole-file `maskNonCode()` text as `classify()`. The same review's Major, a regex written
 after a statement-block `}`, is the documented `}` limitation above; Mason deferred it on 2026-09-14
 and it is tracked in issue #686.
+
+Seventh round — the Codex App review of delivery PR #687 at `8b587e76e` (P1) found the repo-wide
+checks could exceed Vitest's 5-second timeout. `classify()` re-masked the source prefix for every
+reset it judged, and `findResetBeforeAssert()` masked every scanned file once per check, three
+checks in all. One full `maskNonCode()` pass over the 409 swept files (7.6 MB) measured 856 ms
+locally, so a machine several times slower reached the limit. Each file is now masked once per run:
+`classify()` reuses one whole-file mask per `lines` array, `findResetBeforeAssert()` caches per path,
+and the three repo-wide checks carry an explicit 30-second timeout for slower machines. Reusing the
+whole-file mask is equivalent because `maskNonCode()` never looks back and only looks ahead past a
+construct already opened; a throwaway test compared the prefix mask with the whole-file mask at every
+`resetKey` line under `src/` and found zero mismatches.
