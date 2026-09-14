@@ -345,6 +345,30 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (ACCEPTED by Mason) 2026-09-13 — a SUSPENDED second tab can still send a stale batch adjustment after another tab's batch froze and finished
+
+**Status.** Accepted as a known limit by Mason on 2026-09-13 ("ship with known limit") when the
+Batch Adjust retry-key fix (`src/components/inventory/BatchAdjustModal.tsx`,
+`src/hooks/useUncertainMutationIntent.ts`) reached its fourth exact-SHA Codex round with a
+cross-tab finding.
+
+**The case.** Tab C has Batch Adjust open with an adjustment typed but not sent. While the browser
+has tab C suspended, tab A sends the same adjustment, loses the reply (the batch freezes), retries
+and finishes it. Tab C then receives both storage events after storage already says "finished". The
+hook re-reads the current stored value rather than each event's `newValue`, so tab C never shows the
+frozen batch, is not blocked, and a click on its own Adjust button sends a fresh adjustment under a
+new key — the stock moves again.
+
+**Why it was accepted.** That second move comes from a separate operator click in another tab. The
+same double adjustment already happens with no lost reply at all (tab A succeeds, tab C then
+submits the same typed adjustment), and no idempotency key can tell two deliberate clicks apart.
+The fix guarantees that one click, and every retry of it, moves stock at most once. Codex's proposed
+fix — a monotonic "pending observed while open" signal built from validated `StorageEvent.newValue`
+— would cover only the lost-reply variant. Revisit if duplicate stock adjustments from two open
+tabs are seen in stock history.
+
+---
+
 ## PARKED 2026-09-10 — the ahead-of-pending marker hardening stopped at review round twelve with two HIGH findings open
 
 **Status.** The rewrite of the migration-apply guard's ahead-of-pending override (the marker that lets a

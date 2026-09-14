@@ -407,6 +407,7 @@ async function coordinateDurableRecord<T>(
   tabId: string,
   localMirror: DurableMutationIntentRecord<T> | null = null,
   ownAttemptRequestVersion: string | null = null,
+  expectedIdempotencyKey?: string,
 ): Promise<{ record: DurableMutationIntentRecord<T>; conflict: boolean }> {
   const db = await openDurableIntentDb();
   try {
@@ -429,6 +430,18 @@ async function coordinateDurableRecord<T>(
           : stored
             ? blockedDurableRecord(options)
             : localMirror ?? proposed;
+        if (
+          expectedIdempotencyKey !== undefined
+          && (existing.status !== 'pending' || existing.idempotencyKey !== expectedIdempotencyKey)
+        ) {
+          // The caller is retrying one specific request that was resolved or
+          // replaced after the caller read it. Claiming or minting a record here
+          // would send that request again under a different key, so nothing is
+          // written. If IndexedDB lost its row, the local mirror must still
+          // identify the pending request and its required key.
+          result = { record: existing, conflict: true };
+          return;
+        }
         if (ownAttemptRequestVersion !== null && existing.requestVersion !== ownAttemptRequestVersion) {
           // A newer shared request cannot acknowledge this tab's older one.
           // Keep reconciliation locked instead of minting another receipt.
@@ -693,6 +706,8 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   const retryNotAfterRef = useRef<number | null>(initialPending ? initialVisible.retryNotAfterMs : null);
   const [unresolvedIntent, setUnresolvedIntent] = useState<T | null>(initialOwned ? initialVisible.intent : null);
   const [hasUnresolvedRecord, setHasUnresolvedRecord] = useState(initialPending);
+  const [isIntentResolved, setIsIntentResolved] = useState(initialRecord?.status === 'resolved'
+    && (!savedAttempt || initialRecord.requestVersion === savedAttempt.requestVersion));
   const [isForeignIntentLocked, setIsForeignIntentLocked] = useState(Boolean(initialPending && !initialOwned));
   const [retryNotAfterMs, setRetryNotAfterMs] = useState<number | null>(
     initialPending ? initialVisible.retryNotAfterMs : null,
@@ -710,6 +725,8 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     const pending = visible?.status === 'pending';
     const owned = pending && visible.surface === surface && visible.scope === scope;
     recordRef.current = attempt?.surface === '__reconciliation_required__' ? attempt : record ?? attempt;
+    setIsIntentResolved(recordRef.current?.status === 'resolved'
+      && (!attempt || recordRef.current.requestVersion === attempt.requestVersion));
     idempotencyKeyRef.current = pending ? visible.idempotencyKey : null;
     intentRef.current = owned ? visible.intent : null;
     retryNotAfterRef.current = pending ? visible.retryNotAfterMs : null;
@@ -798,10 +815,26 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     return () => window.clearTimeout(timer);
   }, [retryNotAfterMs]);
 
-  const beginIntent = useCallback(async (intent: T): Promise<T> => {
+  // `requireIdempotencyKey` is for retrying a request the caller has already
+  // shown as unresolved: the retry proceeds only while that exact request is
+  // still pending under that key, checked again inside the durable transaction.
+  // If another tab resolved or replaced it in the meantime, this throws
+  // UNCERTAIN_MUTATION_INTENT_CONFLICT without starting a new request, because a
+  // new request would carry a new key and could apply the mutation twice.
+  const beginIntent = useCallback(async (
+    intent: T,
+    beginOptions?: { requireIdempotencyKey?: string },
+  ): Promise<T> => {
     activateCurrentIdentity(true);
-    if (!options && intentRef.current !== null) return intentRef.current;
+    const requiredKey = beginOptions?.requireIdempotencyKey;
     const mirrorRecord = recordRef.current;
+    if (
+      requiredKey !== undefined
+      && (!options || mirrorRecord?.status !== 'pending' || mirrorRecord.idempotencyKey !== requiredKey)
+    ) {
+      throw new Error(UNCERTAIN_MUTATION_INTENT_CONFLICT);
+    }
+    if (!options && intentRef.current !== null) return intentRef.current;
     if (options) {
       if (!storageKey) throw new Error('DURABLE_MUTATION_INTENT_IDENTITY_MISSING');
       // A malformed mirror cannot establish whether it represented a pending
@@ -850,6 +883,7 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
           currentClaimId,
           mirrorRecord,
           attemptRecordRef.current?.requestVersion ?? null,
+          requiredKey,
         );
         writeDurableRecord(storageKey, coordinated.record);
         if (coordinated.conflict) {
@@ -1033,6 +1067,20 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
   // correct immediately after classifyFailure()/beginIntent() resolve. Use the
   // state field for rendering; use this when branching inside an async handler.
   const getUnresolvedIntent = useCallback(() => intentRef.current, []);
+  // A known resolved record cannot satisfy an opt-in pending-key retry, even
+  // while this tab retains its original attempt for receipt reconciliation.
+  // This accessor does not start or claim anything.
+  const getPendingIdempotencyKey = useCallback(
+    () => (intentRef.current !== null && recordRef.current?.status === 'pending'
+      ? idempotencyKeyRef.current : null),
+    [],
+  );
+  const getIsIntentResolved = useCallback(() => {
+    const record = recordRef.current;
+    const attempt = attemptRecordRef.current;
+    return record?.status === 'resolved'
+      && (!attempt || record.requestVersion === attempt.requestVersion);
+  }, []);
 
   return {
     beginIntent,
@@ -1041,6 +1089,9 @@ export function useUncertainMutationIntent<T>(options?: DurableMutationIntentOpt
     classifyFailure,
     unresolvedIntent,
     getUnresolvedIntent,
+    getPendingIdempotencyKey,
+    isIntentResolved,
+    getIsIntentResolved,
     isIntentLocked: hasUnresolvedRecord,
     isForeignIntentLocked,
     isRetryExpired: retryNotAfterMs !== null && Date.now() >= retryNotAfterMs,
