@@ -30,6 +30,16 @@ import {
 
 const targetRoot = mkdtempSync(path.join(os.tmpdir(), "crx-sync-write-"));
 
+// Release instructions must use the executable parameter/contract matcher,
+// not bless actor-forgery exemptions by their violation keys alone.
+for (const command of ["ship", "codex-gauntlet", "preflight"]) {
+  const source = readFileSync(new URL(`../.claude/commands/${command}.md`, import.meta.url), "utf8");
+  assert.ok(source.includes("--adjudicate"), `${command} must adjudicate captured MCP packets`);
+  assert.ok(/function_contracts|authorization-dependency/.test(source), `${command} must capture dependency contracts`);
+  assert.doesNotMatch(source, /compare (?:returned )?`violation_key`s (?:against|to)/,
+    `${command} must not instruct key-only allowlisting`);
+}
+
 try {
   // The two entries writeExpected() subtracts from its count (README + manifest)
   // are irrelevant here; any Map of relative-path -> content exercises the loop.

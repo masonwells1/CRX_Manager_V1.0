@@ -1469,10 +1469,13 @@ try {
   const migrations = selectedMigrations();
   const candidateIndex = migrations.indexOf(CANDIDATE);
   const guardIndex = migrations.indexOf(CROSS_SEASON_GUARD);
+  const unchangedDateGuardIndex = migrations.indexOf(UNCHANGED_DATE_GUARD);
   const creationGuardIndex = migrations.indexOf(GENERIC_CREATION_GUARD);
   const barrierIndex = migrations.indexOf(GENERIC_CUTOVER_BARRIER);
   assert.notEqual(candidateIndex, -1, 'preview candidate must remain in the ledger-selected migration list');
   assert.notEqual(guardIndex, -1, 'cross-season guard must remain in the ledger-selected migration list');
+  assert.notEqual(unchangedDateGuardIndex, -1, 'unchanged-date guard must remain in the ledger-selected migration list');
+  assert.ok(unchangedDateGuardIndex > guardIndex, 'unchanged-date guard must follow the filed-season edit guard');
   assert.ok(guardIndex > candidateIndex, 'cross-season guard must follow the preview candidate');
   assert.notEqual(creationGuardIndex, -1, 'creation guard must remain in the ledger-selected migration list');
   assert.ok(creationGuardIndex > guardIndex, 'creation guard must follow the filed-season edit guard');

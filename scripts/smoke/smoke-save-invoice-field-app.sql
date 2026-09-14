@@ -170,6 +170,25 @@ BEGIN
   IF (SELECT invoice_type FROM invoices WHERE id=v_inv) <> 'field_application'
     THEN RAISE EXCEPTION 'SMOKE_FAIL: field invoice was reclassified out of field_application (DELTA-F lock broken)'; END IF;
 
+  -- Negative control before the authorized edit below: current below-cost
+  -- governance must refuse a missing reason, rolling back the entire edit.
+  BEGIN
+    PERFORM save_invoice(
+      jsonb_build_object('id', v_chem_inv, 'customer_id', v_cust_b, 'invoice_type','misc_charge', 'invoice_date', CURRENT_DATE::text),
+      jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','Chem', 'quantity', 5, 'unit_price_cents', 200, 'extended_cents', 1, 'sort_order', 1)), NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: missing below-cost reason was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'BELOW_COST_REASON_REQUIRED:%' THEN RAISE; END IF;
+  END;
+  IF (SELECT customer_id FROM invoices WHERE id = v_chem_inv) IS DISTINCT FROM v_cust
+    OR (SELECT invoice_type FROM invoices WHERE id = v_chem_inv) IS DISTINCT FROM 'chemical_sale'
+    OR (SELECT total_amount_cents FROM invoices WHERE id = v_chem_inv) IS DISTINCT FROM 200::bigint
+    OR (SELECT total_cost_cents FROM invoices WHERE id = v_chem_inv) IS DISTINCT FROM 77777::bigint
+    OR (SELECT quantity FROM invoice_items WHERE invoice_id = v_chem_inv) IS DISTINCT FROM 1::numeric
+    OR (SELECT amount_cents FROM invoice_shares WHERE invoice_id = v_chem_inv) IS DISTINCT FROM 999::bigint THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: refused below-cost edit left a partial mutation';
+  END IF;
+
   -- CONTROL: chemical_sale invoice with a (deliberately wrong) share is NOT touched; product line still recomputed
   -- a non-fee product line that LIES about extended_cents must be recomputed (anti-tamper): 5 x 200 = 1000, NOT the 1 sent.
   -- DELTA-D control: a chemical_sale invoice DOES honor a customer change (pass v_cust_b -> it sticks).

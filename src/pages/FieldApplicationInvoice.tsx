@@ -153,8 +153,8 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
 function fieldAppError(err: unknown): string {
   if (hasRpcCode(err, RpcErrorCodes.ZERO_APPLIED_ACRES)) return 'A location has 0 or blank applied acres. Open the Locations tab and enter the acres sprayed for each field.';
   if (hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)) return 'Your sign-in could not be verified. Refresh the page and try again.';
-  if (hasRpcCode(err, RpcErrorCodes.INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED)) return 'This invoice date is outside the season it was filed under. Keep the date inside the allowed range shown below the Transaction Date.';
-  if (hasRpcCode(err, RpcErrorCodes.INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED)) return 'This invoice is already filed in a season that cannot be changed. Keep the transaction date inside the allowed range shown below.';
+  if (hasRpcCode(err, RpcErrorCodes.INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED)) return 'This date conflicts with the filed season of this invoice or another invoice in its split group. Keep the original transaction date; every group member must keep its filed season.';
+  if (hasRpcCode(err, RpcErrorCodes.INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED)) return 'The filed season of this invoice or another invoice in its split group cannot be changed. Keep the original transaction date and each group member’s filed season.';
   // U7: this invoice is one member of a multi-owner split group — it can't be reversed
   // member-by-member (that would reopen the job while the other owners' invoices stay live).
   if (hasRpcCode(err, RpcErrorCodes.JOB_BILLED_AS_GROUP)) return 'This job was invoiced as a multi-owner split. To return it to scheduling, void each owner’s invoice — voiding the last one reopens the job.';
@@ -183,10 +183,8 @@ export default function FieldApplicationInvoice() {
   // and the server dedup never double-applies.
   const billingKeysRef = useRef<Record<string, string>>({});
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
-  // F1: scoped by the route id — these two keys' post-RPC resets moved after
-  // assertRpcResult, and this component does NOT remount when the route id changes
-  // (App.tsx renders both invoices/field-app/:id and .../new without a key) while line
-  // ~1710 navigates to a DIFFERENT field-app invoice.
+  // Keep receipt ownership scoped by invoice id even though the route wrapper now
+  // remounts per record. Reset only after assertRpcResult confirms success.
   const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '', id ?? '');
   // #27: reverse "Transfer to Scheduling" — push a job-built invoice back to its job.
   const transferToSchedulingIdem = useIdempotencyKey('transfer_invoice_to_job', profile?.id || '', id ?? '');
@@ -1257,16 +1255,23 @@ export default function FieldApplicationInvoice() {
   }, [id, toast, navigate]);
 
   useEffect(() => {
-    // App.tsx reuses this component when navigating between /new and /:id. Never let
-    // the previous invoice's filed season leak into the next route while it loads.
+    // The route wrapper remounts per invoice. Retain these guards for direct
+    // mounts and invalidate abandoned requests on unmount as well as route changes.
     setFiledSeason(null);
     setFiledDate(null);
     return () => { invoiceLoadRef.current.request += 1; };
   }, [id]);
 
   useEffect(() => {
-    fetchInvoice();
-  }, [fetchInvoice]);
+    const startedRoute = invoiceLoadRef.current.route;
+    const expectedRequest = invoiceLoadRef.current.request + 1;
+    void fetchInvoice().catch(() => {
+      const current = invoiceLoadRef.current;
+      if (current.id !== id || current.route !== startedRoute || current.request !== expectedRequest) return;
+      toast('error', 'Failed to load invoice');
+      navigate('/field-invoices');
+    });
+  }, [fetchInvoice, id, toast, navigate]);
 
   // U16b: surface fields using all-inclusive grower-share pricing. This follows the
   // currently selected/loaded locations, so it works for both a saved invoice and a
