@@ -5,7 +5,7 @@
 // both agents. The wrappers write internally and never name the proof path in
 // their tool command, so legitimate proof creation still works.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -40,7 +40,24 @@ const toolInput = payload?.tool_input || payload?.toolInput || {};
 // documentation that merely discusses protected paths allowed.
 const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
 const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+// A field this hook converts to text, whose conversion throws (for example an
+// object whose toString is null), cannot name a real file, directory or command.
+// Left alone it throws an uncaught exception below — while the cwd, the patch
+// destinations or the path candidates are being built — and a hook that exits
+// without a decision is treated as no objection. Refuse it before anything reads
+// it. Only the fields this hook actually converts are checked: an unrelated tool
+// argument that merely carries a `toString` key is none of this hook's business.
+const TEXT_FIELDS_READ = [
+  "cwd", "workdir", "patch", "diff", "input", "changes", "file_path", "filePath",
+  "notebook_path", "notebookPath", "path", "target", "source", "destination", "command", "cmd",
+];
+const unconvertible = (value) => value != null && typeof value === "object" && safeString(value) == null;
+if ([payload?.cwd, payload?.tool_name, payload?.toolName].some(unconvertible) ||
+    TEXT_FIELDS_READ.some((field) => unconvertible(input[field]))) {
+  deny("REVIEW PROOF GUARD: a path, directory or command field in this tool call cannot be converted to text, so its target cannot be classified safely.");
+}
 const toolName = String(payload?.tool_name || payload?.toolName || "");
+const READ_ONLY_SINGLE_FILE_TOOL_RE = /^(?:read|notebookread)$/i;
 const eventCwd = String(payload?.cwd || "");
 // Preserve the event-first cwd used by the shell-state checks below. Patch
 // destinations use pathCandidateCwd instead: an explicit relative tool
@@ -52,9 +69,17 @@ const pathCandidateCwd = nestedWorkingDir
   ? path.resolve(eventCwd || process.cwd(), String(nestedWorkingDir))
   : eventCwd;
 const patchPayloads = [rawPatchBody, input.patch, input.diff, input.input, input.changes];
+const rawNativeReadTarget = READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName) && typeof toolInput === "string"
+  ? [toolInput]
+  : [];
 const rawPathCandidates = [
   input.file_path,
   input.filePath,
+  // NotebookRead/NotebookEdit carry their target here (exact-SHA gpt-5.6-sol
+  // review, round 4: without it the NotebookRead cases below never reached the
+  // guard, so they passed against every version of it).
+  input.notebook_path,
+  input.notebookPath,
   input.path,
   input.target,
   input.source,
@@ -65,15 +90,197 @@ const rawPathCandidates = [
   // legitimately mention proof paths in documentation (Codex round-5). Write's
   // `content` is likewise deliberately not scanned; its target is file_path.
   ...patchPayloads.flatMap((payloadText) => extractPatchDestinations(payloadText)),
+  ...rawNativeReadTarget,
 ];
+// String() that cannot throw: an object with a non-callable toString makes
+// String() throw. The top-of-file check refuses any such input field outright;
+// this helper keeps every later conversion from crashing the hook regardless.
+function safeString(value) {
+  try {
+    return String(value);
+  } catch {
+    return null;
+  }
+}
 // Resolve `..` using the host's native path rules without touching disk. A bare
 // patch destination then matches the file it will write from the event cwd.
 const pathCandidates = rawPathCandidates.map((candidate) => {
   if (candidate == null || !pathCandidateCwd) return candidate;
-  return path.resolve(pathCandidateCwd, String(candidate));
+  const text = safeString(candidate);
+  return text == null ? null : path.resolve(pathCandidateCwd, text);
 });
-if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
+if (pathCandidates.some((candidate) => {
+  const text = safeString(candidate);
+  return text != null && reviewProofPathMentioned(text);
+})) {
   deny("REVIEW PROOF GUARD: Claude/Codex review proof files are wrapper-owned. Run the real review workflow; do not write, edit, move, or delete proof JSON directly.");
+}
+// The basename matcher above sees the NAME the tool was given, not the file the
+// operating system will open. On Windows every long name also answers to an 8.3
+// short alias — `.claude/session-state/CODEX-~1.JSO` IS `codex-review-<sha>.json`
+// (exact-SHA gpt-5.6-sol review, round 4, HIGH: a native Read through the alias
+// was allowed) — and a symlink can carry any name at all. For the native
+// single-file readers, resolve the target through the OS and run the proof-file
+// rule again on the real path. The verdict is one of five explicit words, never
+// an ambiguous null (exact-SHA gpt-5.6-sol review, round 6: an earlier draft
+// folded "multi-link" into "unresolvable" and so let an OUTSIDE symlink to a
+// hard-linked proof through — the proof-name check must come first):
+//   "proof"        — resolves to a regular file whose REAL name is a proof or
+//                    the ledger: deny wherever the read points;
+//   "evidence"     — resolves into the state directory with a `.json` real
+//                    name that the proof-name rule does not list. Every wrapper
+//                    writes its evidence as JSON — `migration-review-<name>.json`
+//                    (write-apply-proofs.mjs, consumed by migration-apply-lib),
+//                    `codex-review-mig-<name>.json`, `claude-review-push.json`,
+//                    the applied-migrations snapshot, the ledger — and the name
+//                    rule only ever listed some of them (exact-SHA gpt-5.6-sol
+//                    review, round 11, HIGH: a native Read of
+//                    `migration-review-*.json` was allowed). The legitimate reads
+//                    the exemption exists for are all `.flag` and `.txt` files,
+//                    so JSON in the state directory is evidence by shape and
+//                    fails closed here, present and future producers alike;
+//   "aliased"      — resolves into the state directory with more than one hard
+//                    link. A hard link has no "real" name to resolve to (both
+//                    names ARE the file); the wrappers never hard-link what they
+//                    write, so a second name there can only be an alias made to
+//                    read a proof. Outside the state directory link counts are
+//                    ignored — pnpm-style stores hard-link every module file;
+//   "unresolvable" — missing, a directory, or a path the OS cannot resolve;
+//   "clear"        — a regular file that is none of the above.
+const STATE_DIR_REAL_PATH_RE = /[\\/]\.claude[\\/]session-state[\\/]/i;
+const STATE_DIR_EVIDENCE_RE = /\.json$/i;
+// Membership in the state directory is decided three ways, because when
+// `.claude/session-state` is ITSELF a junction or symlink to somewhere else,
+// realpath strips the protected components from every file under it and a
+// resolved-path test alone says "outside" (Codex GitHub App review of
+// eb887fd47, P1 — reproduced with a symlinked state directory):
+//   1. the RESOLVED path spells `.claude/session-state/` (the normal case, and
+//      the 8.3-aliased-component case, since realpath expands the alias);
+//   2. the LEXICAL path the tool was given spells it (a junctioned directory
+//      read through its protected name);
+//   3. the resolved file's directory IS the real location of this checkout's
+//      own state directory (the junction target read by its external name).
+// Residual, documented in KNOWN_ISSUES: a junctioned state directory of a
+// DIFFERENT checkout read by its external name is not this checkout's to know.
+const samePath = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+function realStateDirOf(baseDir) {
+  try {
+    return realpathSync.native(path.join(baseDir, ".claude", "session-state"));
+  } catch {
+    return null;
+  }
+}
+// The payload `cwd` can sit BELOW the checkout root — a Read issued from
+// `<repo>/src` arrives with that cwd — and probing `<cwd>/.claude/session-state`
+// then finds nothing, so rule 3 silently switched off and the junction target
+// read by its external name classified "clear" (Codex GitHub App review of
+// 22e2be806, P1 — reproduced with cwd=<repo>/src). Walk from each starting
+// directory up to the filesystem root and take the nearest ancestor that owns a
+// state directory: that is this checkout's. CLAUDE_PROJECT_DIR is an extra
+// candidate, not the only one — the harness pins it to the PRIMARY checkout
+// even when the session runs inside a worktree, so on its own it would name the
+// wrong checkout's state directory. Over-inclusion here can only deny more.
+function ownStateDirsOf(startDirs) {
+  const found = [];
+  for (const start of startDirs) {
+    if (start == null || String(start) === "") continue;
+    let dir = path.resolve(String(start));
+    for (;;) {
+      const real = realStateDirOf(dir);
+      if (real != null) {
+        if (!found.some((known) => samePath(known, real))) found.push(real);
+        break;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return found;
+}
+const ownStateDirsReal = ownStateDirsOf([hookCwd, process.cwd(), process.env.CLAUDE_PROJECT_DIR]);
+function pathIsStateDirOrDescendant(candidate, stateDir) {
+  const relative = path.relative(stateDir, candidate);
+  return relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+// NTFS alternate data streams qualify a path component after its drive letter:
+// `x.json:stream` and `x.json::$DATA` both open bytes attached to x.json.
+// Do not mistake the drive's `C:` for a stream; only a colon following a path
+// component counts. Strip the qualifier before name classification because
+// realpathSync.native may preserve it for named streams.
+// Only Windows (NTFS) treats a colon after a path component as a stream
+// qualifier. On POSIX a colon is an ordinary filename character — `x.json::$DATA`
+// is just a differently named file — so there is nothing to strip or refuse.
+const STREAMS_APPLY = process.platform === "win32";
+function hasNtfsStreamQualifier(value) {
+  const text = safeString(value);
+  return STREAMS_APPLY && text != null && /(?:^|[\\/])[^\\/:]+:[^\\/]+/.test(text);
+}
+function withoutNtfsStreamQualifier(value) {
+  const text = safeString(value);
+  if (text == null) return null;
+  return STREAMS_APPLY ? text.replace(/(^|[\\/])([^\\/:]+):[^\\/]+(?=[\\/]|$)/g, "$1$2") : text;
+}
+function classifyReadTarget(candidate) {
+  const raw = safeString(candidate);
+  if (raw == null) return "malformed";
+  const lexical = path.resolve(hookCwd || process.cwd(), raw);
+  const lexicalBase = withoutNtfsStreamQualifier(lexical);
+  const streamQualified = hasNtfsStreamQualifier(raw) || hasNtfsStreamQualifier(lexical);
+  const lexicalStateDir = STATE_DIR_REAL_PATH_RE.test(lexical);
+  // Resolve the path the way the operating system will OPEN it, not the way
+  // `path.resolve` spells it. `path.resolve` collapses `alias/..` lexically, but
+  // a POSIX open() follows the `alias` symlink FIRST and only then applies `..`:
+  // `/tmp/alias/../migration-review-x.json` with `alias -> <state-dir>/subdir`
+  // opens the proof while the normalized string names an unrelated
+  // `/tmp/migration-review-x.json` (Codex GitHub App review of e25605efd, P1 —
+  // reproduced: empty allow while the file tool returned the proof). libc
+  // realpath applies the same symlink-then-`..` order as open(), so on POSIX the
+  // raw string (joined to the cwd, never normalized) is what gets resolved.
+  // Windows collapses `..` textually before any reparse point is consulted, so
+  // there the normalized form IS what the kernel opens. `lexical` is otherwise
+  // used only for the over-inclusive name checks below.
+  const asOpened = process.platform === "win32" || path.isAbsolute(raw)
+    ? (process.platform === "win32" ? lexical : raw)
+    : `${hookCwd || process.cwd()}${path.sep}${raw}`;
+  let resolved;
+  let stats;
+  try {
+    resolved = realpathSync.native(asOpened);
+    stats = statSync(resolved);
+  } catch {
+    if (streamQualified && (lexicalStateDir ||
+        reviewProofPathMentioned(lexicalBase))) return "stream";
+    return "unresolvable";
+  }
+  if (!stats.isFile()) return "unresolvable";
+  const resolvedBase = withoutNtfsStreamQualifier(resolved);
+  const inStateDir = STATE_DIR_REAL_PATH_RE.test(resolved) ||
+    lexicalStateDir ||
+    ownStateDirsReal.some((stateDir) => pathIsStateDirOrDescendant(resolved, stateDir));
+  // A stream is denied whenever it enters this checkout's state directory. A
+  // stream attached to a review-proof base name is also denied outside
+  // it, since the stream suffix must not hide the base filename from the guard.
+  if (streamQualified && (inStateDir || reviewProofPathMentioned(resolvedBase) ||
+      reviewProofPathMentioned(lexicalBase))) return "stream";
+  if (reviewProofPathMentioned(resolvedBase) || reviewProofPathMentioned(lexicalBase)) return "proof";
+  if (inStateDir && (STATE_DIR_EVIDENCE_RE.test(resolvedBase) || STATE_DIR_EVIDENCE_RE.test(lexicalBase))) return "evidence";
+  if (inStateDir && stats.nlink > 1) return "aliased";
+  return "clear";
+}
+if (READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName)) {
+  // Keep this loop on the raw tool spelling. On POSIX, normalizing an
+  // `alias/..` segment before realpath changes which file open() reaches.
+  for (const rawCandidate of rawPathCandidates) {
+    if (rawCandidate == null || String(rawCandidate) === "") continue;
+    const verdict = classifyReadTarget(rawCandidate);
+    if (verdict === "proof") deny("REVIEW PROOF GUARD: that path resolves to a wrapper-owned review proof or applied-source ledger. Run the real review workflow; proof files are not readable through file tools.");
+    if (verdict === "evidence") deny("REVIEW PROOF GUARD: a .json file in the review state directory is refused by shape because wrapper evidence is JSON. Use the real review workflow; only non-JSON regular files can use the native-read exception.");
+    if (verdict === "aliased") deny("REVIEW PROOF GUARD: a file in the review state directory has more than one hard link. A hard link can alias a wrapper proof, so native file reads refuse it.");
+    if (verdict === "stream") deny("REVIEW PROOF GUARD: a stream-qualified path into the review state directory, or onto a review-proof file name, is refused because an NTFS alternate data stream can hide the base name this guard classifies.");
+    if (verdict === "malformed") deny("REVIEW PROOF GUARD: this native read target is malformed and cannot be resolved safely.");
+  }
 }
 // A native or MCP file-mutation tool (Write/Edit, move_file, delete_directory,
 // …) that targets the state DIRECTORY itself — not a protected basename — moves
@@ -118,7 +325,14 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 const ACK_VALVE_RE = /(?:^|\/)\.claude\/session-state\/stop-wrap-ack\.json$/;
 const isAckValvePath = (candidate) =>
   ACK_VALVE_RE.test(String(candidate).replace(/\\/g, "/").replace(/\/+$/, ""));
-const stateDirCandidates = pathCandidates.filter((c) => c != null && cdTargetEntersStateDir(c));
+// Patch and mutation targets use the normalized path that the tool resolves
+// from its event cwd. Keep the raw spelling beside each target only for the
+// native-read classifier, whose POSIX symlink-then-`..` behavior must match
+// open(), rather than path.resolve().
+const stateDirCandidatePairs = rawPathCandidates
+  .map((rawCandidate, index) => ({ rawCandidate, candidate: pathCandidates[index] }))
+  .filter(({ candidate }) => candidate != null && cdTargetEntersStateDir(candidate));
+const stateDirCandidates = stateDirCandidatePairs.map(({ candidate }) => candidate);
 const isMoveOrDeleteShape =
   (input.source != null && input.destination != null) ||
   patchPayloads.some((payloadText) => /^\*{3}\s*(?:Delete\s+File:|Move\s+to:)/im.test(String(payloadText || ""))) ||
@@ -126,7 +340,36 @@ const isMoveOrDeleteShape =
 const isPureAckWrite = stateDirCandidates.length > 0 &&
   !isMoveOrDeleteShape &&
   stateDirCandidates.every((c) => isAckValvePath(c));
-if (stateDirCandidates.length > 0 && !isPureAckWrite) {
+// A native single-file READ cannot create, move, or delete anything, and it can
+// only open the ONE path it names. So the whole-directory rule below does not
+// apply to `Read`/`NotebookRead` — PROVIDED the path it names resolves, through
+// the operating system, to a regular file whose REAL name the proof-file rule
+// clears (the alias check above) AND that is not JSON: every wrapper writes its
+// evidence as `.json`, and the reads this exemption exists for are flags and
+// `.txt` captures (round 11 closed `migration-review-*.json`, which the name
+// rule never listed). Inside the state directory a target that does not resolve
+// fails closed: there is nothing to read from a missing file, and a directory or
+// an unresolvable alias is not "the one file it names". The directory rule was
+// also refusing legitimate reads: reading `OVERNIGHT-INTENT.flag` or
+// `codex-review-latest.txt` back is exactly what the guards' own messages and
+// the codex-review skill tell an agent to do (33 such denials, 2026-09-04 audit).
+// `Grep` and `Glob` are deliberately NOT exempt (exact-SHA gpt-5.6-sol review of
+// the first cut, HIGH): a directory-level search SELECTS files by pattern, so
+// `Grep(path=".claude/session-state", pattern="verdict")` reads proof JSON line
+// by line while naming no proof basename. Fail closed there; search a narrower
+// path (`.claude/hooks`) instead. NAME-matched, never shape-matched, and only the
+// built-in reader — an MCP reader keeps the deny because its name proves nothing.
+// @proven-by review-proof-guard.test.mjs (the read-only session-state block pins
+// both directions: a native Read of a real non-proof file allows; a Read of a
+// proof basename, of a proof's 8.3 or symlink alias, of a missing file, of the
+// directory itself, a Grep/Glob over the directory, and an MCP read still deny).
+const isCanonicalSingleFileRead = READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName) &&
+  stateDirCandidates.length > 0 &&
+  stateDirCandidatePairs.every(({ rawCandidate }) => classifyReadTarget(rawCandidate) === "clear");
+if (stateDirCandidates.length > 0 && !isPureAckWrite && !isCanonicalSingleFileRead) {
+  if (READ_ONLY_SINGLE_FILE_TOOL_RE.test(toolName)) {
+    deny("REVIEW PROOF GUARD: this native read target is missing, a directory, or otherwise unresolvable inside the wrapper-owned review state directory, so it cannot use the single-file read exception.");
+  }
   deny("REVIEW PROOF GUARD: the review state directory (.claude/session-state) and its wrapper-owned contents cannot be created, moved, or deleted through a file tool. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
 }
 
@@ -401,6 +644,17 @@ if (shellTool) {
   // even when its basename is globbed.
   const namesStateDir = (v) =>
     reviewStateDirectoryMentioned(v) || STATE_DIR_ANCESTOR_RE.test(v) || segmentsHitStateDir(v);
+  // KNOWN OVER-BLOCK, kept on purpose (2026-09-05). The user's HOME `.claude`
+  // (`~/.claude/projects`, the transcripts) is Claude Code's own data directory,
+  // not a checkout, yet `find ~/.claude/projects … -exec du {} +` is refused here
+  // because `.claude` reads as the repo ancestor (22 refusals in the 2026-09-04
+  // usage audit, all read-only scans). Three exact-SHA gpt-5.6-sol rounds tried
+  // to carve that out and each found a real bypass in the carve-out: `..`
+  // climbing back into `~/.claude/worktrees`, `worktrees` followed by a space,
+  // and `find … -exec cat {} + > ~/.claude/history.jsonl` truncating the file
+  // before the read. Every one of those is a pinned deny case in the test file.
+  // The rule stays as it was; the workaround is a pipeline with no `-exec`
+  // (`find … -name x | xargs du -m`), which this rule never matched.
   if (destructiveViews.some((v) => (hitsDestructiveVerb(v) && namesStateDir(v)) || redirectTargetsStateDir(v))) {
     deny("REVIEW PROOF GUARD: destructive or overwriting shell commands touching the .claude review state directory (or its parent) are blocked — it holds wrapper-owned proofs and the applied-source ledger. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
   }
@@ -738,8 +992,18 @@ if (shellTool) {
   // Judged over the WHOLE command, not per segment, because the definition and
   // the call are deliberately in different segments. This denies only commands
   // that ALSO name a protected path, so ordinary shell functions are unaffected.
+  // KNOWN OVER-BLOCK, kept on purpose (2026-09-05): the WORD "function" inside a
+  // quoted search pattern — `grep -rn "export function" .claude/hooks/x.mjs` — is
+  // refused, because the quote-stripped view turns it into `function .claude`
+  // (8 refusals in the 2026-09-04 usage audit). Three exact-SHA gpt-5.6-sol
+  // rounds rejected every narrowing tried: requiring `(`/`{` after the name
+  // missed `function Get-Content # comment\n{`, then `function global:Get-Content
+  // <#note#> {`; reading a quotes-removed view missed `x="a\""; function cat {`.
+  // Each is a pinned deny case now. The arm stays as broad as it was; the
+  // workaround is a bracket class (`"export [f]unction"`), the same one the
+  // segment-split over-block below already documents.
   const REDEFINES_COMMANDS_RE =
-    /(?:^|[\s;&|(){}])(?:function\s+[\w.-]+|[\w.-]+\s*\(\s*\)|alias\s|eval\s|source\s|\.\s+\/)/;
+    /(?:^|[\s;&|(){}])(?:function\s+[\w.:-]+|[\w.-]+\s*\(\s*\)|alias\s|eval\s|source\s|\.\s+\/)/;
   // NESTED EXECUTION. Sixth gpt-5.6-sol round, HIGH: only the OUTER head was
   // inspected, so `echo $(rm -f .husky/pre-push)` was ALLOW — `echo` is
   // allowlisted and the real command hid inside the substitution. Command
