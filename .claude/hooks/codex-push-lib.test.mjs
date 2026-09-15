@@ -3098,6 +3098,26 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   }
 }
 
+// ── shell composition compared per command in a chain (Codex sol, 2026-09-14) ─
+{
+  const BT = String.fromCharCode(96);
+  assert.equal(
+    ghHiddenByShellComposition(`gh pr merge 1 --squash; gh pr me${BT}rge 2 --admin --squash`),
+    true,
+    "a backtick hiding the SECOND merge of a chain is composition, though the first merge reads the same",
+  );
+  assert.equal(
+    ghHiddenByShellComposition(`gh pr merge 1 --squash && gh api --met${BT}hod=DELETE repos/o/r/branches/main/protection`),
+    true,
+    "a backtick hiding a later mutating gh api call is composition",
+  );
+  assert.equal(
+    ghHiddenByShellComposition(`Write-Host a${BT}tb; gh pr merge 1 --squash`),
+    false,
+    "CONTROL: a backtick that changes no gh operation in any command is not composition",
+  );
+}
+
 // ── PowerShell reading of `\ ` (Codex sol, 2026-09-14) ───────────────────────
 // PowerShell keeps a backslash and still splits on the space after it; POSIX
 // binds `\ ` into one word. The union must include PowerShell's reading, or

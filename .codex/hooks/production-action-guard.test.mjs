@@ -2181,6 +2181,32 @@ try {
     assert.match(String(verdict.reason), pattern, `${label} denial names the offence`);
   }
 
+  // A backtick hiding the SECOND merge of a chain (Codex sol, 2026-09-14): the
+  // first merge is green and identical under both readings, so only a
+  // per-command comparison sees the spliced administrator merge.
+  const backtickChar = String.fromCharCode(96);
+  const splicedSecondMergeVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --squash; gh pr me${backtickChar}rge 456 --admin --squash` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: greenGh,
+  });
+  assert.equal(splicedSecondMergeVerdict.blocked, true, "a backtick-spliced second merge in a chain is denied");
+  assert.match(String(splicedSecondMergeVerdict.reason), /backtick/, "the chained denial names the shell escape");
+  const unrelatedBacktickVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `Write-Host a${backtickChar}tb; gh pr merge 123 --squash` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: greenGh,
+  });
+  assert.doesNotMatch(
+    String(unrelatedBacktickVerdict.reason ?? ""),
+    /backtick/,
+    "CONTROL: a backtick that changes no gh operation is not refused as composition",
+  );
+
   // ── round 9: the GitHub-connector merge tool must get the advisory too ─────
   // Codex HIGH on the exact-SHA proof of dc965401f — a regression round 8
   // introduced. Moving the lookup out of gatePullRequestMerge() left the

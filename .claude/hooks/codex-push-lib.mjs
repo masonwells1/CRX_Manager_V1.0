@@ -2538,10 +2538,27 @@ export function ghHiddenByShellComposition(cmd) {
     .replace(/`(?=[^\r\n])/g, "")
     .replace(/\^(?=[^\r\n])/g, "");
   if (unwrapped === text) return false;
-  const hidesMerge = !sameMergeRequest(ghMergeRequest(unwrapped), ghMergeRequest(text));
-  const hidesApiMerge = !sameMergeRequest(ghApiMergeRequest(unwrapped), ghApiMergeRequest(text));
-  const hidesMutation = ghApiMutates(unwrapped) !== ghApiMutates(text);
-  return hidesMerge || hidesApiMerge || hidesMutation;
+  // Compared over EVERY command in the chain, not the whole text. The parsers
+  // read the first command they find, so `gh pr merge 1 --squash; gh pr me`rge 2
+  // --admin` looked identical both ways while PowerShell ran an administrator
+  // merge second (Codex sol, 2026-09-14). Each reading becomes the SET of
+  // operations its segments parse to; any operation in one set and not the
+  // other is a difference in what the command does.
+  const operations = (reading) => new Set(splitCommandSegments(reading).map((segment) => {
+    const shape = (request) => (request
+      ? [request.selector, request.repo, request.auto, request.admin]
+      : null);
+    return JSON.stringify([
+      shape(ghMergeRequest(segment)),
+      shape(ghApiMergeRequest(segment)),
+      ghApiMutates(segment),
+    ]);
+  }));
+  const raw = operations(text);
+  const shell = operations(unwrapped);
+  if (raw.size !== shell.size) return true;
+  for (const operation of shell) if (!raw.has(operation)) return true;
+  return false;
 }
 
 // Top-level command segmentation, quote-aware.
