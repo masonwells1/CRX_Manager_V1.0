@@ -186,7 +186,7 @@ describe('transferInvoiceErrorMessage', () => {
 
 describe('assertTransferResultForJob', () => {
   it('accepts a job_id that differs from the requested id only in letter case', () => {
-    const result = { success: true, job_id: 'A1B2C3D4-0000-4000-8000-00000000ABCD' };
+    const result = { success: true, job_id: 'A1B2C3D4-0000-4000-8000-00000000ABCD', invoice_id: 'b1b2c3d4-0000-4000-8000-00000000abcd' };
     expect(assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd')).toBe(result);
   });
 
@@ -195,6 +195,28 @@ describe('assertTransferResultForJob', () => {
       { success: true, job_id: 42 },
       'a1b2c3d4-0000-4000-8000-00000000abcd',
     )).toThrow(/^TRANSFER_INVOICE_RESULT_INVALID:/);
+  });
+
+  // CodeRabbit (PR #699): both callers retire the key on success and JobDetail navigates to
+  // result.invoice_id, so a result without a usable invoice id is not a verified success.
+  it.each([
+    ['missing', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd' }],
+    ['blank', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: '  ' }],
+    ['non-string', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: 7 }],
+  ])('rejects a result with a %s invoice id', (_label, result) => {
+    expect(() => assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd'))
+      .toThrow(/^TRANSFER_INVOICE_RESULT_INVALID:/);
+  });
+
+  it('accepts a split result that carries its anchor invoice id', () => {
+    const result = {
+      success: true,
+      job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd',
+      invoice_id: 'b1b2c3d4-0000-4000-8000-00000000abcd',
+      split: true,
+      invoice_count: 2,
+    };
+    expect(assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd')).toBe(result);
   });
 });
 

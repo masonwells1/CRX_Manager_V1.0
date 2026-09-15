@@ -340,6 +340,7 @@ describe('JobDetail transfer intent recovery', () => {
   it.each([
     ['another job', { job_id: 'job-other', invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
     ['no job', { invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
+    ['this job with no invoice id', { job_id: 'job-transfer', invoice_number: 'INV-1' }],
   ])('does not trust a transfer result for %s and reconciles before a new key', async (_label, wrongResult) => {
     let resolveReconciliation!: (result: { data: unknown; error: unknown }) => void;
     const reconciliation = new Promise<{ data: unknown; error: unknown }>((resolve) => {
@@ -370,6 +371,7 @@ describe('JobDetail transfer intent recovery', () => {
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', recoveryMessage));
     await waitFor(() => expect(jobReads).toBe(2));
     expect(mockNavigate).not.toHaveBeenCalledWith('/field-invoices/invoice-other');
+    expect(mockNavigate).not.toHaveBeenCalledWith('/field-invoices/undefined');
     expect(mockTransferResetKey).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Transfer to Invoice' })).toBeDisabled();
 

@@ -623,7 +623,22 @@ function maskNonCode(code: string): string {
     if ((out[j] === '+' || out[j] === '-') && out[j - 1] === out[j] && out[j - 2] !== out[j]) {
       return false;
     }
-    if (/[(,=:[!&|?{;+\-*%~^]/.test(out[j])) return true;
+    // A `!` right after an operand is TypeScript's postfix non-null assertion (`value! / 2`),
+    // so the `/` is division (CodeRabbit, PR #699). After an operator, a keyword or a control
+    // head it is the prefix NOT (`return ! /re/`), so a regex can start.
+    if (out[j] === '!') {
+      let p = j - 1;
+      while (p >= 0 && (out[p] === '!' || /\s/.test(out[p]))) p -= 1;
+      if (p >= 0 && (out[p] === ']' || (out[p] === ')' && controlCloseAt !== p))) return false;
+      if (p >= 0 && /[\w$]/.test(out[p])) return wordAllowsRegex(p);
+      return true;
+    }
+    if (/[(,=:[&|?{;+\-*%~^]/.test(out[j])) return true;
+    return wordAllowsRegex(j);
+  }
+
+  // Whether the word ending at `j` is a keyword after which an expression (so a regex) starts.
+  function wordAllowsRegex(j: number): boolean {
     let k = j;
     while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
     // `obj.return / 2` is division by a property, not a `return` statement.
@@ -1029,6 +1044,26 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     // third operator is binary, so a regex starts and its text is not evidence.
     expect(classify(['  const r = count+++ /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
     expect(classify(['  const r = count--- /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+  });
+
+  // CodeRabbit (PR #699): a `!` after an operand is TypeScript's postfix non-null assertion,
+  // so the `/` after it is division and a mutation between two divisions stays visible.
+  it('division after a TypeScript non-null assertion cannot hide a mutation', () => {
+    const reset = '  idem.resetKey();';
+    const handler = '  onClick={() => {';
+    expect(classify([handler, "    const r = value! / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = rows[0]! / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = total()! / 2 + supabase.from('t').delete() / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = obj.return! / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+
+    // Positive controls: a prefix `!` (after an operator, a keyword or a control head) still
+    // lets a regex start, so the regex text is not evidence.
+    expect(classify(['  const ok = ! /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  if (!/getIdempotencyBindingRejection/.test(value)) {', reset], 2)).toBeNull();
+    expect(classify(['  return ! /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  if (ready) ! /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    // Executable evidence after a non-null division stays visible.
+    expect(classify(['  const r = value! / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
   });
 
   // CodeRabbit (PR #697): a `/` that is itself division is an operator, so a second `/` right

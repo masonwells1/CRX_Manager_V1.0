@@ -482,11 +482,17 @@ export function transferInvoiceErrorMessage(err: unknown): string | null {
  * job's result (Sol, PR #638). A missing or different job_id throws
  * TRANSFER_INVOICE_RESULT_INVALID, which both callers already route to
  * reconciliation: reload the job first, and only then allow a new key.
+ * The RPC always returns invoice_id (the anchor member for a split), and callers
+ * retire the key and navigate on it, so a missing or blank one throws the same
+ * code (CodeRabbit, PR #699).
  */
-export function assertTransferResultForJob<T extends { job_id?: unknown }>(result: T, jobId: string): T {
+export function assertTransferResultForJob<T extends { job_id?: unknown; invoice_id?: unknown }>(result: T, jobId: string): T {
   const returnedJobId = typeof result.job_id === 'string' ? result.job_id.toLowerCase() : null;
   if (returnedJobId === null || returnedJobId !== jobId.toLowerCase()) {
     throw new Error(`${RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID}: transfer result is not for the requested job`);
+  }
+  if (typeof result.invoice_id !== 'string' || result.invoice_id.trim() === '') {
+    throw new Error(`${RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID}: transfer result has no invoice id`);
   }
   return result;
 }
