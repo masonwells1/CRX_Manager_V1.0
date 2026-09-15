@@ -41,7 +41,7 @@ Actions run before dispatch. A review must be submitted after that receipt;
 reconciliation verifies the original run's workflow, actor and candidate and
 requires both commits still to match. Receipts survive resets. A preexisting
 same-head review or retained attempt cannot establish attribution for another
-base: preserve the PR and create a fresh delivery PR before another request. The receipt and labels
+base: create a fresh delivery PR before another request, then close the superseded PR as described below. The receipt and labels
 record attempts; neither establishes merge authorization.
 
 The trusted workflow records the original `opened` webhook's head and base.
@@ -74,7 +74,12 @@ The positive opt-in label delivered a first review but a same-PR follow-up at
 another head was observed to skip with `incremental reviews are disabled`.
 Keep `auto_incremental_review: false`: enabling it could spend quota on an
 unvalidated push. Finish corrections and required checks before opening a fresh
-delivery PR; preserve the previous PR, branch, comments and findings. PRs opened
+delivery PR. As soon as the fresh PR exists, close the previous PR with a comment
+naming its replacement (`Replaced by #N`); do not leave it open "as the record".
+Closing keeps the branch, commits, comments and findings, is reversible, and the
+`closed` event only resets that PR's own workflow labels. Leaving superseded PRs
+open buried real work under about 40 stale copies by 2026-09-14. If a manual or
+status document names the old PR as a task owner, point it at the new PR. PRs opened
 before the trusted opened capture becomes available also need a fresh PR for
 normal native delivery. The introducing repair uses only the approved bootstrap.
 
