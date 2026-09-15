@@ -99,6 +99,11 @@ export const RpcErrorCodes = {
   FORCE_REQUIRES_REASON: 'FORCE_REQUIRES_REASON',
   INSUFFICIENT_HOLD_INVENTORY: 'INSUFFICIENT_HOLD_INVENTORY',
   INVENTORY_NOT_FOUND: 'INVENTORY_NOT_FOUND',
+  // adjust_inventory (20260911120000): a NULL, NaN or infinite delta is refused.
+  INVALID_ADJUSTMENT_QUANTITY: 'INVALID_ADJUSTMENT_QUANTITY',
+  // adjust_inventory cutover trigger: a receipt written without actor/fingerprint
+  // binding (an old-body call caught mid-apply) is refused and the call rolls back.
+  ADJUST_INVENTORY_UNBOUND_RECEIPT: 'ADJUST_INVENTORY_UNBOUND_RECEIPT',
   // save_purchase_order — global bulk-import claim identity guards
   BULK_PO_VENDOR_REQUIRED: 'BULK_PO_VENDOR_REQUIRED',
   BULK_PO_INTENT_VENDOR_CONFLICT: 'BULK_PO_INTENT_VENDOR_CONFLICT',
