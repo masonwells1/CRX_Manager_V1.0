@@ -11,6 +11,13 @@ import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   claudeProofValid,
   contentIsRisky,
+  shellArgvWord,
+  splitShellArgv,
+  ghApiMutates,
+  ghHiddenByShellComposition,
+  splitCommandSegments,
+  ghMergeRequest,
+  ghApiMergeRequest,
   describeRiskyContent,
   riskyContentMatches,
   sanitizeForMessage,
@@ -1046,6 +1053,107 @@ assert.equal(
   pushHiddenByShellComposition("$(git push origin HEAD:main)"), true,
   "so the substitution check is still the thing that catches it",
 );
+
+// ── the binary is a SHAPE, not a list of extensions ──────────────────────────
+// `git(?:\.exe)?` was a one-item extension list, and every spelling below
+// returned isGitPush === false at 336f92e4d — so the guard exited before the
+// force, destination, risky-diff and Codex-proof checks. `.cmd` is what Windows
+// resolves `git` to when Git ships its shim and PATHEXT is user-configurable, so
+// these are ordinary invocations, not exotic ones. Verified by execution against
+// the pre-fix library, not by reading the pattern.
+for (const cmd of [
+  "git push origin HEAD:main",                            // was already seen
+  "git.exe push origin HEAD:main",                        // was already seen
+  "git.cmd push origin HEAD:main",
+  "git.ps1 push origin HEAD:main",
+  "git.com push origin HEAD:main",
+  "git.bat push origin HEAD:main",
+  "git.EXE push origin HEAD:main",
+  "git.cmd push --force origin main",
+  'git.cmd -C "C:/CRX Manager/wt" push origin HEAD:main', // extension AND a spaced -C path
+  "C:\\Tools\\git.cmd push origin main",
+  "/usr/bin/git.cmd push origin main",
+  '"C:/Program Files/Git/bin/git.cmd" push origin main',  // quoted path + extension
+  "npm test&&git.cmd push origin HEAD:main",              // extension after a separator
+]) {
+  assert.equal(isGitPush(cmd), true, `any binary extension is still a push: ${cmd}`);
+  assert.equal(eachPush(cmd).length, 1, `and is enumerated for per-push checks: ${cmd}`);
+}
+
+// The other direction, which is the half that decides whether the guard survives
+// contact with real work: a guard that over-denies gets switched off. `-` is not
+// `.`, so the extension tail never opens on a hyphenated neighbour, and `\b`
+// never even matches inside a longer word.
+for (const cmd of [
+  "git-crypt push",
+  "git-lfs push origin main",
+  "github-release push",
+  "gitfoo push",
+  "npm run gitpush",
+  'git commit -m "fix the push bug"',
+  "git status --short --branch",
+  "git log --grep push",
+  "echo digit push",
+  "cat legit push.txt",
+]) {
+  assert.equal(isGitPush(cmd), false, `a neighbouring command is not a push: ${cmd}`);
+}
+// PRE-EXISTING over-match, pinned rather than claimed as new: a bare `git` token
+// followed by a word starting `push` reads as a push whatever the surrounding
+// command is. It returned true before this change too (verified by execution
+// against the pre-fix library), so the shape fix neither caused it nor widened
+// it — and an extra denial is the safe side for a gate that demands a proof.
+assert.equal(
+  isGitPush("grep git push.log"), true,
+  "an unrelated command whose words happen to be `git push…` still over-matches (unchanged)",
+);
+
+// The two argv-walking parsers carried the SAME one-item list as a literal token
+// set, so they were blind to the same spellings independently of the regex.
+assert.equal(
+  gitSubcommandIsDynamic("git.cmd $verb origin main"), true,
+  "an uninspectable subcommand is seen through any binary extension",
+);
+assert.equal(
+  gitSubcommandIsDynamic("C:\\Tools\\git.ps1 %verb% origin main"), true,
+  "…including through a path prefix",
+);
+assert.deepEqual(
+  unknownGitGlobalOptions("git.cmd --namespace=x push origin main"), ["--namespace=x"],
+  "an unlisted global option is still reported through any binary extension",
+);
+assert.equal(
+  pushUsesExecPathOption("git.cmd --exec-path=/tmp/evil push origin main"), true,
+  "and --exec-path is still refused through any binary extension",
+);
+// Neither parser widens onto a neighbour: the basename is the name plus AT MOST
+// one dot-segment, so a second dot or a hyphen is not a git binary.
+assert.equal(
+  gitSubcommandIsDynamic("mine.git $verb origin main"), false,
+  "a file merely NAMED *.git is not the git binary",
+);
+assert.deepEqual(
+  unknownGitGlobalOptions("git-crypt --namespace=x push origin main"), [],
+  "and git-crypt is not git",
+);
+
+// Linear, not catastrophic. The extension is bounded (no dot, no separator, no
+// quote inside it) precisely so it cannot swallow the command and hand it back
+// one character at a time at every position the name can start. A first draft of
+// this shape elsewhere took 414ms on this input; measure, do not assume.
+for (const [label, input] of [
+  ["git.git.git…", "git." + "git.".repeat(5000) + " push"],
+  ["gitgitgit…", "git".repeat(6666) + " push"],
+  ["gh.gh.gh…", "gh." + "gh.".repeat(6000) + " pr merge 1"],
+]) {
+  const started = process.hrtime.bigint();
+  isGitPush(input);
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(
+    elapsedMs < 250,
+    `binary matching stays linear on ${label} (${input.length} chars): ${elapsedMs.toFixed(2)}ms`,
+  );
+}
 
 // ── round 19: the shell runs something other than the text we matched ────────
 // Three spellings Codex probed straight past every check in the file. The rule
@@ -2546,6 +2654,444 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── the argv a shell actually produces (CodeRabbit, PR #630) ────────────────
+// Two separate defects lived here. splitShellArgs treated a QUOTE as a word
+// boundary, so `"--method"=POST` — one word to every shell — arrived as the two
+// tokens `--method` and `=POST`, and no comparison saw the option at all. And
+// the words it produced were never resolved to the form the program receives,
+// so `--met""hod=POST`, `--meth\od=POST` and `-"X" POST` matched nothing either.
+// Both made ghApiMutates return false while gh performed the POST.
+{
+  // Syntax the shell CONSUMES is removed...
+  for (const [typed, argv] of [
+    ["--method=POST", "--method=POST"],
+    ['--met""hod=POST', "--method=POST"],
+    ["--met''hod=POST", "--method=POST"],
+    ['"--method"=POST', "--method=POST"],
+    ["--meth\\od=POST", "--method=POST"],
+    ['"merge"', "merge"],
+    ['me""rge', "merge"],
+    ['--method="POST', "--method=POST"],   // unterminated quote: fail closed
+  ]) {
+    assert.equal(shellArgvWord(typed), argv, `shell-consumed syntax is removed: ${typed}`);
+  }
+  // ...and syntax that SURVIVES to the program is kept. Deleting every quote and
+  // backslash would be a second bug in the opposite direction: `--method='P"OST'`
+  // really does pass `P"OST`, which is not a POST.
+  for (const [typed, argv] of [
+    ["--method='P\"OST'", '--method=P"OST'],
+    ['--method="P\\"OST"', '--method=P"OST'],
+    ["--field=path='C:\\tmp'", "--field=path=C:\\tmp"],
+    ['"C:\\Program Files\\gh.exe"', "C:\\Program Files\\gh.exe"],
+    ['--body="a `b` $c"', "--body=a `b` $c"],
+  ]) {
+    assert.equal(shellArgvWord(typed), argv, `a literal quote or separator survives: ${typed}`);
+  }
+  // Only UNQUOTED whitespace separates words. `\ ` binds, a quoted span binds,
+  // and a quote never splits one word into two.
+  assert.deepEqual(splitShellArgv('gh api "--method"=POST repos/o/r/issues/1'),
+    ["gh", "api", "--method=POST", "repos/o/r/issues/1"], "a quote is not a word boundary");
+  assert.deepEqual(splitShellArgv('git -C "C:\\CRX Manager" push origin HEAD:main'),
+    ["git", "-C", "C:\\CRX Manager", "push", "origin", "HEAD:main"], "a quoted Windows path stays one word, separators intact");
+  assert.deepEqual(splitShellArgv("gh pr merge 1 --body 'a b'"),
+    ["gh", "pr", "merge", "1", "--body", "a b"], "quoted whitespace does not split a word");
+
+  // The classifiers, at the level the guards call them.
+  for (const command of [
+    'gh api --met""hod=POST repos/o/r/issues/1/comments',
+    'gh api "--method"=POST repos/o/r/issues/1/comments',
+    "gh api --meth\\od=POST repos/o/r/issues/1/comments",
+    'gh api -"X" POST repos/o/r/issues/1/comments',
+    'gh api -X PO""ST repos/o/r/issues/1/comments',
+    'gh a""pi -X POST repos/o/r/issues/1/comments',
+    'gh api repos/o/r/issues/1/comments --fi""eld body=x',
+  ]) {
+    assert.equal(ghApiMutates(command), true, `a spliced mutating gh api call is still mutating: ${command}`);
+  }
+  for (const command of [
+    "gh api --method='P\"OST' repos/o/r/issues/1",
+    "gh api -X 'P\"OST' repos/o/r/issues/1",
+    "gh api repos/o/r/issues/1",
+    "gh api repos/o/r/issues/1 --jq .title",
+    "gh api -X GET repos/o/r/issues/1",
+  ]) {
+    assert.equal(ghApiMutates(command), false, `a read, or a literal quote in the method, is not a mutation: ${command}`);
+  }
+  for (const command of [
+    'gh pr me""rge 123 --squash',
+    "gh pr me''rge 123 --squash",
+    'gh p""r merge 123 --squash',
+    'gh "pr" "merge" 123 --squash',
+    "gh pr me\\rge 123 --squash",
+  ]) {
+    assert.equal(ghMergeRequest(command)?.selector, "123", `a spliced merge still resolves its PR: ${command}`);
+  }
+  for (const command of [
+    "gh-dash pr merge 1", "ghq push", "ghost pr merge 1", "npm run ghpr",
+    "echo highlight pr merge", "gh pr view 123", "gh pr list",
+    'gh pr merge 123 --disable-a""uto',
+  ]) {
+    assert.equal(ghMergeRequest(command), null, `a benign neighbour still stands the merge gate down: ${command}`);
+  }
+  assert.equal(ghApiMergeRequest('gh api --met""hod=PUT repos/o/r/pulls/123/merge')?.selector, "123",
+    "a spliced REST merge resolves through the merge route rather than slipping past it");
+
+  // A stalled PreToolUse hook is a timed-out hook, and silence means ALLOW, so
+  // the word walk is measured on the shapes that could force a re-scan.
+  for (const pathological of [
+    `gh api ${'"'.repeat(40000)} -X POST repos/o/r/issues/1/comments`,
+    `gh api ${"'".repeat(40000)} -X POST repos/o/r/issues/1/comments`,
+    `gh api ${'a""'.repeat(12000)} -X POST repos/o/r/issues/1/comments`,
+    `gh pr merge 1 ${"\\\"".repeat(20000)}`,
+  ]) {
+    const started = process.hrtime.bigint();
+    splitShellArgv(pathological);
+    ghApiMutates(pathological);
+    ghMergeRequest(pathological);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `shell word splitting stays linear on adversarial quoting (${elapsedMs.toFixed(1)}ms)`);
+  }
+}
+
+// ── Codex sol, 2026-09-08: the second round on the same change ────────────────
+// Every case below was measured through the guards before it was written, and
+// each names the finding it pins. Both directions, because a guard that starts
+// refusing ordinary work is a guard that gets switched off.
+{
+  // Finding 1 — gh parses with pflag, which accepts a short option separate,
+  // attached, `=`-attached, and BUNDLED behind booleans. Only the first two were
+  // recognised, so a DELETE arrived at the connector reading as a plain GET.
+  for (const command of [
+    "gh api -X=DELETE repos/o/r/issues/comments/1",
+    "gh api -iXDELETE repos/o/r/issues/comments/1",
+    "gh api -iFbody=hello repos/o/r/issues/1/comments",
+    "gh api -XPOST repos/o/r/issues/1/comments",
+    "gh api -X POST repos/o/r/issues/1/comments",
+    "gh api -fbody=hi repos/o/r/issues/1/comments",
+    "gh api -iF body=hello repos/o/r/issues/1/comments",
+  ]) {
+    assert.equal(ghApiMutates(command), true, `every pflag spelling of a mutating gh api call is a mutation: ${command}`);
+  }
+  // The same walk must not turn a READ into a mutation. `-q`/`-t`/`-H`/`-p` take
+  // values too, and their values must not be read as a method or a field.
+  for (const command of [
+    "gh api -i repos/o/r",
+    "gh api -q .title repos/o/r/pulls/1",
+    "gh api -H 'Accept: application/vnd.github+json' repos/o/r",
+    "gh api -t '{{.name}}' repos/o/r",
+    "gh api -X GET repos/o/r/pulls/1",
+    "gh api -XGET repos/o/r/pulls/1",
+    "gh api -X=GET repos/o/r/pulls/1",
+    "gh api --paginate repos/o/r/issues",
+  ]) {
+    assert.equal(ghApiMutates(command), false, `an ordinary read stays a read: ${command}`);
+  }
+  assert.equal(ghApiMergeRequest("gh api -iXPUT repos/o/r/pulls/123/merge")?.selector, "123",
+    "a bundled -X PUT still resolves through the REST merge route");
+
+  // Finding 2 — `--disable-auto` stands the merge gate down, and it was matched
+  // anywhere in the word list. As the VALUE of `--body`/`-t` it is data, and the
+  // command it was standing down was an ADMINISTRATOR merge.
+  for (const command of [
+    "gh pr merge 123 --body '--disable-auto' --admin --squash",
+    "gh pr merge 123 -t '--disable-auto' --admin --squash",
+    'gh pr merge 123 --subject "--disable-auto" --admin --squash',
+    "gh pr merge 123 --body-file --disable-auto --admin --squash",
+  ]) {
+    const request = ghMergeRequest(command);
+    assert.ok(request, `a merge whose body merely CONTAINS --disable-auto is still a merge: ${command}`);
+    assert.equal(request.admin, true, `and its --admin flag is still seen: ${command}`);
+  }
+  // The stand-down itself must survive, in every spelling that really disables.
+  for (const command of [
+    "gh pr merge 123 --disable-auto",
+    'gh pr merge 123 --disable-a""uto',
+    "gh pr merge 123 --disable-auto=true",
+  ]) {
+    assert.equal(ghMergeRequest(command), null, `a real --disable-auto still stands the gate down: ${command}`);
+  }
+  // `--disable-auto=false` asks gh NOT to disable, so it must not stand down.
+  assert.ok(ghMergeRequest("gh pr merge 123 --disable-auto=false --admin"),
+    "--disable-auto=false does not disable anything, so the gate still runs");
+  // A value must not be mistaken for the PR selector either.
+  assert.equal(ghMergeRequest("gh pr merge --body 456 123 --squash")?.selector, "123",
+    "the word after --body is its value, not the PR number");
+
+  // Finding 5 — the binary itself can carry the splice. `g""h` is an ordinary
+  // `gh` to every shell, and GH_BIN_RE needs a contiguous literal `gh`.
+  for (const command of ['g""h pr merge 123 --admin --squash', "g''h pr merge 123 --squash", 'g""h api -X POST repos/o/r/issues/1/comments']) {
+    assert.ok(ghMergeRequest(command) || ghApiMutates(command), `a spliced gh binary is still gh: ${command}`);
+  }
+
+  // Finding 3 — PowerShell's backtick and cmd.exe's caret are consumed before gh
+  // sees the word, and shellArgvWord models POSIX only, by design. The caller
+  // refuses these rather than analysing them.
+  for (const command of [
+    "gh pr me`rge 123 --admin --squash",
+    "g`h pr merge 123 --admin --squash",
+    "gh pr me^rge 123 --admin --squash",
+    "gh api --met`hod=DELETE repos/o/r/issues/comments/1",
+    "gh api --met^hod=DELETE repos/o/r/issues/comments/1",
+  ]) {
+    assert.equal(ghHiddenByShellComposition(command), true, `a backtick or caret escape hides this gh command: ${command}`);
+  }
+  // It must stay quiet on text it does not rewrite, and — the point CodeRabbit
+  // made on PR #630 — it must NOT be a blanket quote strip: `--method='P"OST'`
+  // really does pass P"OST, and erasing the quote would deny a non-POST.
+  for (const command of [
+    "gh pr view 123", "gh pr merge 123 --squash", "npm run build",
+    "gh api --method='P\"OST' repos/o/r", "gh api repos/o/r --jq .title",
+    "gh pr comment 1 --body 'see the merge notes'",
+  ]) {
+    assert.equal(ghHiddenByShellComposition(command), false, `an unrewritten command is not hidden: ${command}`);
+  }
+
+  // Finding 9 — my own regression. A Windows local-repo push is ordinary work,
+  // and the composition helper refused it: the whole-command unwrap deleted the
+  // quotes that held `C:\scratch repo\repo.git` together, so one destination word
+  // read back as two. It has read them that way since 2026-07-30, so the CLAUDE
+  // guard refused them too — wiring the Codex side in only made it visible.
+  for (const command of [
+    "git push C:\\scratch\\repo.git HEAD:feature",
+    'git push "C:\\scratch repo\\repo.git" HEAD:feature',
+    'git push "C:/scratch repo/repo.git" HEAD:feature',
+    "git push \\\\server\\share\\repo.git HEAD:feature",
+    "git -C C:\\CRX_Manager push origin HEAD:feature/x",
+  ]) {
+    assert.equal(pushHiddenByShellComposition(command), false, `an ordinary Windows-path push is not a hidden push: ${command}`);
+  }
+  // Narrowing that comparison must not cost either signal it carried. The second
+  // one — a destination decided at run time — has no quote or escape in any word,
+  // so the word-wise comparison alone reads it back as unchanged. Caught by the
+  // differential sweep over this file's other consumers, not by review.
+  for (const command of [
+    "git push $(cat ref) HEAD:main",
+    "git push `cat ref` HEAD:main",
+    "git push origin ('HEAD:m' + 'ain')",
+    'git push origin HEAD:m""ain',
+    "git p\\ush origin HEAD:main",
+    "git pu`sh origin HEAD:main",
+    "git pu^sh origin HEAD:main",
+  ]) {
+    assert.equal(pushHiddenByShellComposition(command), true, `a computed or rewritten push is still refused: ${command}`);
+  }
+
+  // The new helpers are hooks too: a stalled hook is a killed hook, and a killed
+  // PreToolUse hook emits nothing, which means ALLOW.
+  for (const pathological of [
+    `gh pr merge 1 ${"`".repeat(40000)}`,
+    `gh api ${"^".repeat(40000)} -X POST repos/o/r/issues/1/comments`,
+    `git push origin ${"\\".repeat(40000)}HEAD:main`,
+    `git push ${'"'.repeat(40000)} HEAD:main`,
+  ]) {
+    const started = process.hrtime.bigint();
+    ghHiddenByShellComposition(pathological);
+    pushHiddenByShellComposition(pathological);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `the composition readings stay linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
+  }
+}
+
+// ── Codex sol, 2026-09-08: the THIRD round, on the second round's own fix ─────
+{
+  // SEC-001. A quoted separator is not a separator. The regex split this
+  // replaces produced ["gh pr merge 123 --body 'note", "more' --admin --squash"]
+  // -- a merge with no --admin, and an override in a segment with no gh.
+  //
+  // Round FIVE changed this function's contract from "the one right reading" to
+  // "the UNION of several readings", so these assert what actually protects the
+  // gate -- that the whole command is among the readings, so no quote can carry
+  // --admin out of every inspected segment -- rather than an exact segment list.
+  // Pinning the exact list would forbid the extra readings that close SEC-004.
+  assert.ok(
+    splitCommandSegments("gh pr merge 123 --body 'note&more' --admin --squash")
+      .includes("gh pr merge 123 --body 'note&more' --admin --squash"),
+    "a quoted & leaves the whole command among the readings",
+  );
+  assert.ok(
+    splitCommandSegments('gh pr merge 123 --body "a;b|c&d" --admin')
+      .includes('gh pr merge 123 --body "a;b|c&d" --admin'),
+    "no quoted separator of any kind removes the whole-command reading",
+  );
+  // ...and every UNQUOTED separator still does, or the round-two fix is undone.
+  for (const expected of ["gh pr view 1", "gh pr merge 2 --admin"]) {
+    assert.ok(
+      splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin").includes(expected),
+      `a bare & still separates, exposing: ${expected}`,
+    );
+  }
+  for (const expected of ["a", "b", "c", "d", "e", "f"]) {
+    assert.ok(
+      splitCommandSegments("a && b || c | d ; e\nf").includes(expected),
+      `&&, ||, |, ; and a newline all still separate, exposing: ${expected}`,
+    );
+  }
+  assert.deepEqual(splitCommandSegments(""), [], "empty input yields no segments");
+  assert.ok(
+    splitCommandSegments("gh pr merge 1 --body 'unterminated & --admin")
+      .includes("gh pr merge 1 --body 'unterminated & --admin"),
+    "an unterminated quote runs to the end, and that whole reading survives",
+  );
+
+  // SEC-002. Comparing only WHETHER each reading is a merge missed a merge that
+  // is a merge both ways while the ADMIN flag differs.
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --ad`min --squash"),
+    true,
+    "a backtick-escaped --admin is refused",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --ad^min --squash"),
+    true,
+    "a caret-escaped --admin is refused",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --re`po owner/other --squash"),
+    true,
+    "an escaped --repo is refused: the guard would verify one repository while gh operates on another",
+  );
+  // Both directions. A command with no backtick or caret is untouched, and one
+  // whose escapes change nothing security-relevant is not refused.
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --admin --squash"),
+    false,
+    "a plainly spelled --admin is left to the --admin refusal, not this one",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("gh pr merge 123 --squash --body 'plain note'"),
+    false,
+    "an ordinary merge with no escapes is not refused",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("npm run build"),
+    false,
+    "an unrelated command is not refused",
+  );
+
+  // Backtracking: the segmenter is a character walk, so it must stay linear.
+  for (const filler of ["'".repeat(40000), '"a'.repeat(20000), "\\&".repeat(20000), "&".repeat(40000)]) {
+    const started = process.hrtime.bigint();
+    splitCommandSegments(`gh pr merge 1 ${filler} --admin`);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `the segmenter stays linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
+  }
+}
+
+// ── Codex sol, 2026-09-08: the FOURTH round, on the third round's own fix ─────
+{
+  // The quote-aware segmenter knew ONE escape character, POSIX `\`. PowerShell
+  // spells the same escape with a backtick and cmd.exe with a caret, so
+  // `gh pr merge 123 --body x^&y --admin --squash` is ONE command to cmd.exe
+  // while the segmenter cut it in two -- handing the loop a merge carrying no
+  // --admin and a second segment carrying no gh. That is SEC-001 again, in the
+  // spelling the third round did not cover.
+  for (const [name, escape] of [["POSIX backslash", "\\"], ["PowerShell backtick", "`"], ["cmd.exe caret", "^"]]) {
+    const command = `gh pr merge 123 --body x${escape}&y --admin --squash`;
+    assert.ok(
+      splitCommandSegments(command).includes(command),
+      `an escaped & leaves the whole command among the readings (${name})`,
+    );
+    assert.ok(
+      splitCommandSegments(command).some((segment) => ghMergeRequest(segment)?.admin === true),
+      `the --admin after an escaped & is still seen (${name})`,
+    );
+  }
+  // Consuming one more escape character can only JOIN segments, never divide
+  // them, so a shell that treats the character literally leaves the parsers
+  // reading MORE text -- the fail-safe direction. Every unquoted, unescaped
+  // separator must still separate, or the second round's fix is undone.
+  assert.ok(
+    splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin").includes("gh pr merge 2 --admin"),
+    "an UNescaped & still separates after the escape set widened",
+  );
+  // And the escape characters keep their OWN refusal: joining them back into
+  // one segment must not stand down ghHiddenByShellComposition, which strips
+  // them independently of the segmenter.
+  assert.equal(
+    ghHiddenByShellComposition("gh^ pr merge 123 --squash"),
+    true,
+    "a caret splicing the gh binary is still refused",
+  );
+  assert.equal(
+    ghHiddenByShellComposition("gh pr me`rge 123 --squash"),
+    true,
+    "a backtick splicing the gh subcommand is still refused",
+  );
+}
+
+// ── Codex sol, 2026-09-09: the FIFTH round, on the fourth round's own fix ─────
+{
+  // Round four claimed a LONGER segment was automatically the safe direction.
+  // It is not, and this is the assertion that says so. The parsers read the
+  // FIRST command of a segment, so JOINING two commands hides the second one as
+  // surely as splitting hides the tail of the first. `\` and `^` are not escapes
+  // in PowerShell, so this is a real pipeline whose second half pushes main:
+  const joined = splitCommandSegments("git push origin HEAD:feature \\| git push origin HEAD:main");
+  assert.ok(
+    joined.includes("git push origin HEAD:main"),
+    "the second command of an escaped pipeline is still exposed as its own segment",
+  );
+  for (const escape of ["\\", "^", "`"]) {
+    assert.ok(
+      splitCommandSegments(`gh pr view 1 ${escape}| gh pr merge 2 --admin --squash`)
+        .some((segment) => ghMergeRequest(segment)?.admin === true),
+      `an escaped pipeline still exposes its administrator merge (${escape})`,
+    );
+  }
+
+  // SEC-004 finding 1. `2>&1`, `>&2` and `&>file` are REDIRECTIONS. Treating the
+  // `&` as a separator left `--admin` in a segment holding no gh, and `main`
+  // blocks that command today -- so round four was a REGRESSION against main.
+  for (const command of [
+    "gh pr merge 123 --squash 2>&1 --admin",
+    "gh pr merge 123 --squash >&2 --admin",
+    "gh pr merge 123 --squash &>log --admin",
+  ]) {
+    assert.ok(
+      splitCommandSegments(command).some((segment) => ghMergeRequest(segment)?.admin === true),
+      `a redirection is not a command separator: ${command}`,
+    );
+  }
+  assert.deepEqual(
+    splitCommandSegments("gh api repos/o/r/issues/comments/1 2>&1 -X DELETE").filter(ghApiMutates).length > 0,
+    true,
+    "a redirection does not hide a mutating gh api verb",
+  );
+  // ...but a separator `&` that merely sits NEAR a redirection still separates.
+  assert.ok(
+    splitCommandSegments("gh pr view 1 > log & gh pr merge 2 --admin")
+      .some((segment) => ghMergeRequest(segment)?.admin === true),
+    "an & after a completed redirection is still a separator",
+  );
+
+  // SEC-004 finding 3. Inside DOUBLE quotes a backslash escapes the closing
+  // quote, so `\"` does not end the string. Closing early split at the literal
+  // & and carried --admin into an uninspected segment.
+  assert.ok(
+    splitCommandSegments('gh pr merge 123 --body "note\\"&more" --admin --squash')
+      .some((segment) => ghMergeRequest(segment)?.admin === true),
+    "an escaped quote inside a double-quoted body does not close it",
+  );
+
+  // Every earlier round must still hold under the union reading.
+  assert.ok(
+    splitCommandSegments("gh pr view 1 & gh pr merge 2 --admin").some((s) => ghMergeRequest(s)?.admin === true),
+    "a bare & still exposes the second command",
+  );
+  assert.ok(
+    splitCommandSegments("gh pr merge 123 --body 'note&more' --admin --squash")
+      .some((segment) => ghMergeRequest(segment)?.admin === true),
+    "a quoted & still yields a whole-command reading carrying --admin",
+  );
+  // Linearity: three walks over the input, still linear.
+  for (const filler of ["'".repeat(40000), '"a'.repeat(20000), "\\&".repeat(20000), "&".repeat(40000)]) {
+    const started = process.hrtime.bigint();
+    splitCommandSegments(`gh pr merge 1 ${filler} --admin`);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `the union segmenter stays linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
   }
 }
 
