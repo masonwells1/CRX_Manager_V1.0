@@ -90,7 +90,7 @@ DECLARE
   v_n int;
   v_feed RECORD;
 BEGIN
-  v_idem := '[SMOKE] tji-' || v_sfx;
+  v_idem := 'SMOKE-tji-' || v_sfx;
 
   SELECT id INTO v_admin FROM profiles WHERE role = 'admin' AND is_active = true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL THEN

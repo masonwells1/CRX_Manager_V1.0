@@ -155,12 +155,10 @@ describe('F1 — the key survives until the reply is confirmed', () => {
  *    There is no payload to assert.
  *  - `intent-rotation` — the reset runs from a JSX `onClick`/`onChange`, deliberately
  *    minting a new key because the payload genuinely varies with what the user typed.
- *  - `doc-comment` — the hook's own usage example, not executable code.
  */
-type Reason = 'recovery' | 'throw-on-error' | 'intent-rotation' | 'doc-comment';
+type Reason = 'recovery' | 'throw-on-error' | 'intent-rotation';
 
 const ALLOWED_REASONS: Record<string, Reason[]> = {
-  'src/hooks/useIdempotencyKey.ts': ['doc-comment'],
   'src/components/deliveries/QuickDeliveryModal.tsx': ['recovery'],
   'src/pages/Returns.tsx': ['recovery'],
   'src/pages/InvoiceDetail.tsx': ['recovery', 'throw-on-error'],
@@ -244,7 +242,6 @@ const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
   'src/pages/JobDetail.tsx': [
     'completeJobIdem.resetKey',
     'saveJobIdem.resetKey',
-    'transferJobIdem.resetKey',
   ],
   'src/pages/QuoteBuilder.tsx': [
     'closeAppliedIdem.resetKey',
@@ -317,13 +314,35 @@ const KNOWN_UNFIXED_SITES: Record<string, string[]> = {
 };
 const KNOWN_UNFIXED = new Set(Object.keys(KNOWN_UNFIXED_SITES));
 
+// The repo-wide checks classify every reset in a file against the same `lines` array.
+// Re-masking the prefix for each reset made those checks quadratic in file length and
+// pushed them past Vitest's timeout on slower machines (Codex App, PR #687), so the mask is
+// computed once per array and reused.
+const maskedLinesCache = new WeakMap<string[], string[]>();
+
+function maskedLinesOf(lines: string[]): string[] {
+  let masked = maskedLinesCache.get(lines);
+  if (!masked) {
+    masked = maskNonCode(lines.join('\n')).split('\n');
+    maskedLinesCache.set(lines, masked);
+  }
+  return masked;
+}
+
 /** Classify one hit from the surrounding source, or null if nothing excuses it. */
 function classify(lines: string[], lineNo: number): Reason | null {
-  const self = lines[lineNo - 1] ?? '';
-  const above = lines.slice(Math.max(0, lineNo - 9), lineNo - 1).join('\n');
-  const callWindow = lines.slice(Math.max(0, lineNo - 16), lineNo - 1).join('\n');
 
-  if (/^\s*(\*|\/\/)/.test(self)) return 'doc-comment';
+  // Every window below reads MASKED source (CodeRabbit, PR #638, two reviews). The
+  // per-line stripNoise() cannot see a multi-line block comment, a regex literal, or a
+  // template literal that spans lines, so any of them could supply a recovery marker,
+  // `.throwOnError()` or `onClick=` and excuse a reset with no executable guard.
+  // maskNonCode() masks all of them across the whole source, so a block or template
+  // opened above a window still counts. It keeps newlines, so masked[i] is still source
+  // line i + 1. Only lines up to the reset are read below, and those are the same whether
+  // the whole file or just its prefix is masked, so each file is masked once.
+  const masked = maskedLinesOf(lines);
+  const above = masked.slice(Math.max(0, lineNo - 9), lineNo - 1).join('\n');
+  const callWindow = masked.slice(Math.max(0, lineNo - 16), lineNo - 1).join('\n');
 
   // A recovery marker only excuses this reset if it is in the SAME branch. A
   // recovery branch always exits with `throw` or `return`, so any such exit between
@@ -354,13 +373,22 @@ function classify(lines: string[], lineNo: number): Reason | null {
   // one. Leaving it unrecognised reported four correct sites as defects.
   const RECOVERY_MARKER =
     /getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection|committed[A-Za-z]*(Id|Result)/;
+  // The predicate receives the caught RPC value directly. Restrict it to one
+  // identifier so a nested reset (including an aliased reset function) cannot
+  // make an unsafe reset look like recovery.
+  const RECOVERY_ERROR_VALUE = /[A-Za-z_$][\w$]*/;
+  const SAME_LINE_RECOVERY_GUARD =
+    new RegExp(
+      `^\\s*if\\s*\\(\\s*(?:getIdempotencyMismatchResult|isDefinitiveRpcRejection|getIdempotencyBindingRejection)\\s*\\(\\s*${RECOVERY_ERROR_VALUE.source}\\s*\\)\\s*\\)\\s*\\{?\\s*(?:[A-Za-z_$][\\w$]*\\.)?resetKey(?:For)?\\s*\\([^)]*\\)\\s*;?\\s*\\}?\\s*$`,
+    );
 
   // A marker on the RESET'S OWN LINE — `if (marker(error)) idem.resetKeyFor(scope);` —
   // is the strongest same-branch evidence available: there is no room between the two
   // for a branch to open or close, so exitsBranch has nothing to rule out. classify()
   // read only the lines ABOVE the reset, so this single-line guard form was
   // unclassifiable and every instance of it read as a defect.
-  if (RECOVERY_MARKER.test(self)) return 'recovery';
+  const cleanSelf = masked[lineNo - 1] ?? '';
+  if (SAME_LINE_RECOVERY_GUARD.test(cleanSelf)) return 'recovery';
 
   const aboveLines = above.split('\n');
   const markerIdx = lastIndexMatching(aboveLines, RECOVERY_MARKER);
@@ -385,14 +413,14 @@ function classify(lines: string[], lineNo: number): Reason | null {
   //
   // GAP, stated (Codex round-6 MEDIUM): the mutating-call list below omits `.insert()`
   // and `.upsert()`, which therefore neither block this excuse nor set the scanner's
-  // CALL state. classify() also reads RAW lines, so an `onClick=` inside a comment or
-  // string can still excuse a real hit.
-  const rotationLines = lines.slice(Math.max(0, lineNo - 15), lineNo);
+  // CALL state. Comment and string text no longer excuses a hit: this window, like the
+  // two above, is read from the masked source built at the top of classify().
+  const rotationLines = masked.slice(Math.max(0, lineNo - 15), lineNo);
   const handlerIdx = lastIndexMatching(rotationLines, /onClick=|onChange=/);
   if (handlerIdx >= 0) {
     const between = rotationLines.slice(handlerIdx + 1);
     const mutatesBetween = between.some((l) =>
-      /\.rpc\(|functions\.invoke\(|\.update\(|\.delete\(/.test(stripNoise(l)),
+      /\.rpc\(|functions\.invoke\(|\.update\(|\.delete\(/.test(l),
     );
     if (!mutatesBetween) return 'intent-rotation';
   }
@@ -427,14 +455,15 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  *  - a whole TEMPLATE LITERAL is removed including its `${…}` interpolations, so a
  *    reset executed inside one is invisible, and a multi-line template body still
  *    reads as code because stripping is line-based;
- *  - only the hit scan is stripped. classify() and aliasNames() read RAW lines, so a
- *    comment or string can excuse a real hit or invent an alias.
+ *  - aliasNames() still reads RAW source, so a comment or string can invent an alias.
+ *    classify() does not use this function: it reads its windows through maskNonCode().
  */
 function stripNoise(line: string): string {
   return line
     .replace(/'(?:[^'\\]|\\.)*'/g, "''")
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .replace(/`(?:[^`\\]|\\.)*`/g, '``')
+    .replace(/\/\*.*?(?:\*\/|$)/g, '')
     .replace(/\/\/.*$/, '');
 }
 
@@ -504,6 +533,218 @@ function stripCommentsOnly(code: string): string {
     out += c;
     i += 1;
   }
+  return out;
+}
+
+/**
+ * Mask everything that is not executable code, for classify()'s look-back windows.
+ *
+ * Comments, string contents, template-literal text and regex-literal bodies become spaces.
+ * Newlines are kept, so line i of the result is still line i of the input. Unlike
+ * stripCommentsOnly() and the per-line stripNoise(), this tracks all four across lines, so
+ * a regex literal on the line above a reset, or a template literal spanning several
+ * lines, cannot supply the text classify() accepts as evidence (CodeRabbit, PR #638).
+ * A template's `${…}` interpolation is code and stays visible. A quote that is not closed
+ * on its own line ends at the line break, so JSX text such as `Don't` cannot mask the
+ * lines after it.
+ *
+ * A `/` opens a regex only where an expression can start: at the beginning, after one of
+ * `( , = : [ ! & | ? { ; + - * % ~ ^`, after `=>`, or after a keyword such as `return`.
+ * A word whose nearest non-space character before it is `.` is a property name, not a keyword,
+ * so `obj.return / 2` and `obj?.typeof / 2` stay division (CodeRabbit, PR #668).
+ * Anywhere else it is division, and so is a candidate that reaches a line break before its
+ * closing `/`. A `)` counts only when it closes an `if`, `for` (including `for await`), `while`, `switch` or `catch`
+ * head — never a method named like one, such as `helpers.if(a)` — so a regex written as a control
+ * statement's BODY is masked while division after an ordinary `)` is not (CodeRabbit, PR #638). This is still a scanner, not a TypeScript lexer:
+ * a regex written after `]`, `}` or `<` is read as division and its text stays visible, as it
+ * always was, and a `//` inside JSX text still masks the rest of its line.
+ */
+function maskNonCode(code: string): string {
+  let out = '';
+  let i = 0;
+  const keep = (n = 1) => {
+    out += code.slice(i, i + n);
+    i += n;
+  };
+  const blank = () => {
+    out += code[i] === '\n' ? '\n' : ' ';
+    i += 1;
+  };
+
+  // A `)` precedes a regex only when it closes a CONTROL statement's head, as in
+  // `if (ready) /re/.test(v)`; after any other `)` the next `/` is division. Track which
+  // `(` opened such a head and where its matching `)` landed in `out`.
+  const controlHead: boolean[] = [];
+  let controlCloseAt = -1;
+  // Where the closing `/` of the most recent masked regex literal landed in `out`.
+  let regexCloseAt = -1;
+
+  // The identifier ending at or before `end` in `out` (whitespace skipped), and the index just
+  // before it.
+  function wordBefore(end: number): [string, number] {
+    let j = end;
+    while (j >= 0 && /\s/.test(out[j])) j -= 1;
+    let k = j;
+    while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
+    return [out.slice(k + 1, j + 1), k];
+  }
+
+  // True when the identifier just after index `before` is a property NAME, such as the
+  // `return` in `obj.return` or `obj?.return`, rather than a keyword: the nearest
+  // non-space character before it is `.` (CodeRabbit, PR #668).
+  function isPropertyName(before: number): boolean {
+    let m = before;
+    while (m >= 0 && /\s/.test(out[m])) m -= 1;
+    return out[m] === '.';
+  }
+
+  function opensControlHead(): boolean {
+    const [word, before] = wordBefore(out.length - 1);
+    // `helpers.if(…)` is a method call, not an `if` head.
+    if (isPropertyName(before)) return false;
+    // `for await (…)` opens a `for` head; a bare `await (…)` does not.
+    if (word === 'await') return wordBefore(before)[0] === 'for';
+    return /^(if|for|while|switch|catch)$/.test(word);
+  }
+
+  function regexCanStart(): boolean {
+    let j = out.length - 1;
+    while (j >= 0 && /\s/.test(out[j])) j -= 1;
+    if (j < 0) return true;
+    if (out[j] === '>') return out[j - 1] === '=';
+    if (out[j] === ')') return controlCloseAt === j;
+    // A `/` in `out` is a division operator (comments are blanked), so a regex may follow it
+    // (`value / /re/.test(v)`, CodeRabbit, PR #697) — unless it is the closing `/` of a masked
+    // regex literal with no flags, which ends an operand (`/x/ / 2`).
+    if (out[j] === '/') return regexCloseAt !== j;
+    // An exact `++` or `--` right before `/` ends a postfix operator (`count++ / 2`), so the
+    // `/` is division (CodeRabbit, PR #690). A third one (`count+++ /re/`) is binary, so a
+    // regex can start (CodeRabbit, PR #696).
+    if ((out[j] === '+' || out[j] === '-') && out[j - 1] === out[j] && out[j - 2] !== out[j]) {
+      return false;
+    }
+    // A `!` right after an operand is TypeScript's postfix non-null assertion (`value! / 2`),
+    // so the `/` is division (CodeRabbit, PR #699). After an operator, a keyword or a control
+    // head it is the prefix NOT (`return ! /re/`), so a regex can start.
+    if (out[j] === '!') {
+      let p = j - 1;
+      while (p >= 0 && (out[p] === '!' || /\s/.test(out[p]))) p -= 1;
+      if (p >= 0 && (out[p] === ']' || (out[p] === ')' && controlCloseAt !== p))) return false;
+      if (p >= 0 && /[\w$]/.test(out[p])) return wordAllowsRegex(p);
+      return true;
+    }
+    if (/[(,=:[&|?{;+\-*%~^]/.test(out[j])) return true;
+    return wordAllowsRegex(j);
+  }
+
+  // Whether the word ending at `j` is a keyword after which an expression (so a regex) starts.
+  function wordAllowsRegex(j: number): boolean {
+    let k = j;
+    while (k >= 0 && /[\w$]/.test(out[k])) k -= 1;
+    // `obj.return / 2` is division by a property, not a `return` statement.
+    if (isPropertyName(k)) return false;
+    return /^(return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await|instanceof)$/.test(
+      out.slice(k + 1, j + 1),
+    );
+  }
+
+  // Index just past the regex literal (flags included) that starts at `start`, or -1
+  // when no closing `/` appears before the line ends.
+  function regexEnd(start: number): number {
+    let inClass = false;
+    for (let j = start + 1; j < code.length; j += 1) {
+      const ch = code[j];
+      if (ch === '\n') return -1;
+      if (ch === '\\') {
+        if (code[j + 1] === '\n') return -1;
+        j += 1;
+      } else if (inClass) {
+        inClass = ch !== ']';
+      } else if (ch === '[') {
+        inClass = true;
+      } else if (ch === '/') {
+        let end = j + 1;
+        while (end < code.length && /[a-z]/i.test(code[end])) end += 1;
+        return end;
+      }
+    }
+    return -1;
+  }
+
+  function scanTemplate(): void {
+    while (i < code.length) {
+      if (code[i] === '\\') {
+        blank();
+        if (i < code.length) blank();
+      } else if (code[i] === '`') {
+        keep();
+        return;
+      } else if (code[i] === '$' && code[i + 1] === '{') {
+        keep(2);
+        scanCode(true);
+        if (i < code.length) keep(); // the interpolation's closing brace
+      } else {
+        blank();
+      }
+    }
+  }
+
+  // Inside an interpolation, returns at its closing brace without consuming it.
+  function scanCode(inInterpolation: boolean): void {
+    let depth = 0;
+    while (i < code.length) {
+      const c = code[i];
+      const next = code[i + 1];
+      if (c === '/' && next === '/') {
+        while (i < code.length && code[i] !== '\n') blank();
+        continue;
+      }
+      if (c === '/' && next === '*') {
+        const close = code.indexOf('*/', i + 2);
+        const end = close === -1 ? code.length : close + 2;
+        while (i < end) blank();
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        keep();
+        while (i < code.length && code[i] !== c && code[i] !== '\n') {
+          if (code[i] === '\\' && i + 1 < code.length) blank();
+          blank();
+        }
+        if (code[i] === c) keep();
+        continue;
+      }
+      if (c === '`') {
+        keep();
+        scanTemplate();
+        continue;
+      }
+      if (c === '/' && regexCanStart()) {
+        const end = regexEnd(i);
+        if (end > 0) {
+          const close = code.lastIndexOf('/', end - 1);
+          regexCloseAt = out.length + (close - i);
+          out += `/${' '.repeat(close - i - 1)}${code.slice(close, end)}`;
+          i = end;
+          continue;
+        }
+      }
+      if (inInterpolation && c === '}') {
+        if (depth === 0) return;
+        depth -= 1;
+      } else if (inInterpolation && c === '{') {
+        depth += 1;
+      }
+      if (c === '(') {
+        controlHead.push(opensControlHead());
+      } else if (c === ')' && controlHead.pop()) {
+        controlCloseAt = out.length;
+      }
+      keep();
+    }
+  }
+
+  scanCode(false);
   return out;
 }
 
@@ -582,7 +823,8 @@ function stripCommentsAndStrings(code: string): string {
  *
  * NOTE (Codex round-6 MEDIUM): this scans RAW source, so a comment or string containing
  * `resetKey:` can invent an alias and produce false reports. The hit scan is stripped
- * of comments and strings; alias discovery and classify() are not.
+ * of comments and strings, and classify() masks its windows (CodeRabbit, PR #638);
+ * alias discovery is not.
  *
  * WHAT THIS DOES NOT CATCH (Codex round-4 MEDIUM — stated so the guard is not trusted
  * past its reach): only a DIRECT destructure in the same file, `{ resetKey: name }`.
@@ -633,9 +875,22 @@ function siteIdentifiers(line: string, names: string[]): string[] {
   return found.length > 0 ? found : [clean.trim().slice(0, 60)];
 }
 
+// Three repo-wide checks each call findResetBeforeAssert() on every source file, so the
+// masked lines are computed once per file and shared (Codex App, PR #687).
+const scannedLinesCache = new Map<string, string[]>();
+// The first repo-wide check still masks every swept file once (about 0.9 s locally for
+// 409 files); this bound keeps slower machines from failing on Vitest's 5 s default.
+const REPO_SWEEP_TIMEOUT_MS = 30_000;
+
 function findResetBeforeAssert(file: string): number[] {
   const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
-  const lines = source.split('\n').map(stripNoise);
+  // Scan the whole-file mask, as classify() does: a per-line strip cannot see a multi-line
+  // comment, so its text could otherwise pose as a call followed by a reset.
+  let lines = scannedLinesCache.get(file);
+  if (!lines) {
+    lines = maskNonCode(source).split('\n').map(stripNoise);
+    scannedLinesCache.set(file, lines);
+  }
   const alias = aliasResetPattern(source);
   const isReset = (l: string) => RESET.test(l) || (alias !== null && alias.test(l));
   const hits: number[] = [];
@@ -659,6 +914,171 @@ function findResetBeforeAssert(file: string): number[] {
 // not verified clean; they are pinned to the exact sites the scanner already finds.
 describe('F1 guard — resets are verified outside the pinned files, and the pinned files cannot drift', () => {
   const files = walk('src').map((f) => f.replace(/\\/g, '/'));
+
+  it('requires executable recovery evidence on a reset line', () => {
+    expect(classify(['idem.resetKey(); // getIdempotencyMismatchResult(error)'], 1)).toBeNull();
+    expect(classify(['idem.resetKey(); /* getIdempotencyBindingRejection(error) */'], 1)).toBeNull();
+    expect(classify(['idem.resetKey(); /* isDefinitiveRpcRejection(error)'], 1)).toBeNull();
+    expect(classify(["const note = 'isDefinitiveRpcRejection'; idem.resetKey();"], 1)).toBeNull();
+    expect(classify(['const marker = /isDefinitiveRpcRejection/; idem.resetKey();'], 1)).toBeNull();
+    expect(classify(["console.debug('/*'); idem.resetKey();"], 1)).toBeNull();
+    expect(classify(['console.debug(isDefinitiveRpcRejection(error)); idem.resetKey();'], 1)).toBeNull();
+    expect(classify(['if (isDefinitiveRpcRejection(error)) idem.resetKey();'], 1)).toBe('recovery');
+    expect(classify(['if (isDefinitiveRpcRejection(error)) { idem.resetKey(); }'], 1)).toBe('recovery');
+    expect(
+      classify(['if (isDefinitiveRpcRejection(unsafeIdem.resetKey())) safeIdem.resetKey();'], 1),
+    ).toBeNull();
+    expect(classify(['if (isDefinitiveRpcRejection(unsafeReset())) safeIdem.resetKey();'], 1)).toBeNull();
+    expect(classify(['unsafe.resetKey(); if (isDefinitiveRpcRejection(error)) safe.resetKey();'], 1)).toBeNull();
+    expect(classify(['if (isDefinitiveRpcRejection(error)) safe.resetKey(); unsafe.resetKey();'], 1)).toBeNull();
+  });
+
+  // CodeRabbit (PR #638, review at 0e7ee9d4b): every classify() window read RAW lines,
+  // and the per-line stripper cannot see a multi-line block comment, so comment prose
+  // could supply each of the three excuses. One row per excuse, plus positive controls
+  // proving the mask removes only comment and string text.
+  it('comment and string text above a reset cannot excuse it', () => {
+    const reset = '  idem.resetKey();';
+    // Recovery marker (aboveLines).
+    expect(classify(['  /*', '   getIdempotencyBindingRejection(error)', '  */', reset], 4)).toBeNull();
+    expect(classify(['  // if (isDefinitiveRpcRejection(error)) {', reset], 2)).toBeNull();
+    expect(classify(["  const note = 'getIdempotencyBindingRejection';", reset], 2)).toBeNull();
+    // A block comment opened ABOVE the 8-line window still masks the marker inside it.
+    const longComment = ['/*', ...Array.from({ length: 9 }, () => ' * filler'), ' getIdempotencyBindingRejection(error)', '*/', reset];
+    expect(classify(longComment, longComment.length)).toBeNull();
+    // Fire-and-forget (callWindow).
+    expect(classify(['  /*', '   await query.throwOnError();', '  */', reset], 4)).toBeNull();
+    // Intent rotation (rotationLines).
+    expect(classify(['  /*', '   <button onClick={openDialog}>', '  */', reset], 4)).toBeNull();
+    expect(classify(["  const hint = 'onChange=';", reset], 2)).toBeNull();
+
+    // Positive controls: executable evidence is still recognised, including after a
+    // block comment that closes on the same line.
+    expect(classify(['  if (getIdempotencyBindingRejection(error)) {', reset], 2)).toBe('recovery');
+    expect(classify(['  /* why */ if (isDefinitiveRpcRejection(error)) {', reset], 2)).toBe('recovery');
+    expect(classify(["  await supabase.from('t').update(row).throwOnError();", reset], 2)).toBe('throw-on-error');
+    expect(classify(['  onClick={() => {', reset], 2)).toBe('intent-rotation');
+  });
+
+  // CodeRabbit (PR #638, review at 00993da04): the mask above still blanked strings one
+  // line at a time and never blanked a regex literal, so a regex on the line above a
+  // reset, or a template literal spanning lines, could supply an excuse. Every negative
+  // row below excused its reset under that mask.
+  it('regex and multi-line template text above a reset cannot excuse it', () => {
+    const reset = '  idem.resetKey();';
+    // A regex literal on the line above, one row per excuse.
+    expect(classify(['  const marker = /getIdempotencyBindingRejection/;', reset], 2)).toBeNull();
+    expect(classify(['  const call = /query.throwOnError()/;', reset], 2)).toBeNull();
+    expect(classify(['  const handler = /onClick=/;', reset], 2)).toBeNull();
+    // A quote inside a regex no longer opens a false string that leaves the block
+    // comment after it unmasked.
+    const quoteThenComment = ["  const quote = /['\"]/;", '  /*', '   getIdempotencyBindingRejection(error)', '  */', reset];
+    expect(classify(quoteThenComment, 5)).toBeNull();
+    // A template literal spanning lines, one row per excuse.
+    expect(classify(['  const note = `', '    getIdempotencyBindingRejection(error)', '  `;', reset], 4)).toBeNull();
+    expect(classify(['  const note = `', '    await query.throwOnError();', '  `;', reset], 4)).toBeNull();
+    expect(classify(['  const note = `', '    <button onClick={openDialog}>', '  `;', reset], 4)).toBeNull();
+
+    // Positive controls: the code around these literals is still read as code.
+    // Division is not a regex, even with a second `/` later on the line.
+    const division = '  if (total / 2 > 1 && getIdempotencyBindingRejection(error) && n / 2) {';
+    expect(classify([division, reset], 2)).toBe('recovery');
+    // A template's interpolation is code.
+    expect(classify(['  const note = `${', '    await query.throwOnError()', '  }`;', reset], 4)).toBe('throw-on-error');
+    // An apostrophe in JSX text does not mask the next line.
+    expect(classify(["  <p>Don't retry</p>", '  if (getIdempotencyBindingRejection(error)) {', reset], 3)).toBe('recovery');
+    // A JSX closing tag `</` is not a regex, so the handler between two of them survives.
+    expect(classify(['  <b>1</b><button onClick={open}>x</button>', reset], 2)).toBe('intent-rotation');
+    // A regex literal does not hide the mutating call after it on the same line.
+    expect(classify(['  onClick={() => {', "    if (/^x/.test(v)) void supabase.rpc('save');", reset], 3)).toBeNull();
+  });
+
+  // CodeRabbit (PR #638, review at fb1c7cd0f): `regexCanStart()` rejected `/` after `)`, so a
+  // regex written as a control statement's BODY stayed visible and could supply an excuse.
+  it('a regex used as a control-statement body cannot excuse a reset', () => {
+    const reset = '  idem.resetKey();';
+    expect(classify(['  if (ready) /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  while (more) /query.throwOnError()/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  for (const v of values) /onClick=/.test(v);', reset], 2)).toBeNull();
+    expect(classify(['  for await (const v of values) /getIdempotencyBindingRejection/.test(v);', reset], 2)).toBeNull();
+
+    // Positive controls: only a control head's `)` opens a regex, so division after an
+    // ordinary `)` still reads as code, and an executable body is still recognised.
+    expect(classify(['  const rate = (a + b) / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    // A bare `await (…)` is not a control head: the `/` after it is still division.
+    expect(classify(['  const rate = await (a + b) / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    expect(classify(['  if (isReady) total = count / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    expect(classify(['  if (ready) handleRecovery(getIdempotencyBindingRejection(error));', reset], 2)).toBe('recovery');
+  });
+
+  // CodeRabbit (PR #668, round 5): keyword detection read a property NAME as a keyword, so the
+  // `/` after `obj.return` or after `helpers.if(a)` opened a false regex that masked the rest of
+  // the line, including a mutating call that must block an intent-rotation excuse.
+  it('a property named like a keyword does not open a regex', () => {
+    const reset = '  idem.resetKey();';
+    const handler = '  onClick={() => {';
+    expect(classify([handler, "    const r = obj.return / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = obj?.typeof / 2 + supabase.from('t').delete() / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    if (helpers.if(a) / 2 + supabase.from('t').update(row) / 3) done();", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = helpers.for(a) / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+
+    // Positive controls: the same property-then-division lines leave executable evidence visible.
+    expect(classify(['  const r = obj.return / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    expect(classify(['  const r = helpers.while(a) / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    // A real keyword and a real control head still open a regex.
+    expect(classify(['  return /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  if (ready) /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+  });
+
+  it('division after a postfix ++ or -- cannot hide a mutation', () => {
+    const reset = '  idem.resetKey();';
+    const handler = '  onClick={() => {';
+    expect(classify([handler, "    const r = count++ / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = count-- / 2 + supabase.from('t').delete() / 3;", reset], 3)).toBeNull();
+
+    // Positive controls: executable evidence after a postfix operator stays visible, and a
+    // binary `+` or `-` still lets a regex start.
+    expect(classify(['  const r = count++ / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+    expect(classify(['  const r = a + /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    // `count+++ /re/` is `count++ + /re/` and `count--- /re/` is `count-- - /re/`: the
+    // third operator is binary, so a regex starts and its text is not evidence.
+    expect(classify(['  const r = count+++ /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  const r = count--- /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+  });
+
+  // CodeRabbit (PR #699): a `!` after an operand is TypeScript's postfix non-null assertion,
+  // so the `/` after it is division and a mutation between two divisions stays visible.
+  it('division after a TypeScript non-null assertion cannot hide a mutation', () => {
+    const reset = '  idem.resetKey();';
+    const handler = '  onClick={() => {';
+    expect(classify([handler, "    const r = value! / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = rows[0]! / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = total()! / 2 + supabase.from('t').delete() / 3;", reset], 3)).toBeNull();
+    expect(classify([handler, "    const r = obj.return! / 2 + supabase.rpc('save') / 3;", reset], 3)).toBeNull();
+
+    // Positive controls: a prefix `!` (after an operator, a keyword or a control head) still
+    // lets a regex start, so the regex text is not evidence.
+    expect(classify(['  const ok = ! /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  if (!/getIdempotencyBindingRejection/.test(value)) {', reset], 2)).toBeNull();
+    expect(classify(['  return ! /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    expect(classify(['  if (ready) ! /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
+    // Executable evidence after a non-null division stays visible.
+    expect(classify(['  const r = value! / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+  });
+
+  // CodeRabbit (PR #697): a `/` that is itself division is an operator, so a second `/` right
+  // after it opens a regex (`value / /re/.test(v)`); its text must not supply an excuse.
+  it('a regex right after a division operator cannot excuse a reset', () => {
+    const reset = '  idem.resetKey();';
+    expect(classify(['  const r = value / /getIdempotencyBindingRejection/.test(input);', reset], 2)).toBeNull();
+    expect(classify(['  const r = (a + b) / /query.throwOnError()/.test(input);', reset], 2)).toBeNull();
+
+    // Positive controls: plain division, a closed regex followed by division, and a `//`
+    // comment after division all leave the executable call visible.
+    expect(classify(['  const r = a / b / 2 + getIdempotencyBindingRejection(error);', reset], 2)).toBe('recovery');
+    expect(classify(['  const r = /x/g / 2 + getIdempotencyBindingRejection(error);', reset], 2)).toBe('recovery');
+    expect(classify(['  const r = a / 2; // note', '  if (getIdempotencyBindingRejection(error)) {', reset], 3)).toBe('recovery');
+  });
 
   it('scans a meaningful number of source files', () => {
     // Guards that cannot fire are worse than no guard: prove the sweep found work.
@@ -688,7 +1108,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
       }
     }
     expect(offenders).toEqual([]);
-  });
+  }, REPO_SWEEP_TIMEOUT_MS);
 
   it('every known-unfixed file flags EXACTLY its pinned sites', () => {
     // The point of the pin: a NEW reset-before-assert in one of these files must FAIL
@@ -713,7 +1133,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
         .sort();
     }
     expect(actual).toEqual(KNOWN_UNFIXED_SITES);
-  });
+  }, REPO_SWEEP_TIMEOUT_MS);
 
   it('no allowlist entry is stale', () => {
     // An allowlist that no longer matches anything is dead weight that would silently
@@ -728,7 +1148,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
         expect(seen.has(reason), `${file} declares '${reason}' but no site exhibits it`).toBe(true);
       }
     }
-  });
+  }, REPO_SWEEP_TIMEOUT_MS);
 
   it('the create-invoice click path no longer mints a key per click', () => {
     // FAIL-CLOSED (Codex MEDIUM, F1): the first version sliced on unchecked indexOf
