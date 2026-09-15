@@ -44,7 +44,7 @@ import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { centsTimesQuantity, isExactDecimalText, quantitySurvivesSave } from '../lib/money';
-import { applyChemEdit, chemLineBillingHazard, chemQuantityDisagreesWithRate, chemQuantityExpectedButZero, chemUnitUnspecifiedSides, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, sumAcresExact, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
+import { applyChemEdit, chemLineBillingHazard, chemQuantityDisagreesWithRate, chemQuantityExpectedButZero, chemUnitUnspecifiedSides, fieldAcresSurvivesSave, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, sumAcresExact, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, normalizeRateUnit, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
@@ -1480,7 +1480,7 @@ export default function JobDetail() {
   // Keyed by row index so the grid can mark the exact offending line.
   const chemBillingHazards = useMemo(() => {
     const byIndex = new Map<number, ChemBillingHazard>();
-    const acres = sumAcres(fieldRows);
+    const acres = sumAcresExact(fieldRows) ?? '0';
     chemRows.forEach((c, i) => {
       if (!c.product_id) return;
       const h = chemLineBillingHazard(c, acres, productFormFor(c.product_id));
@@ -2645,6 +2645,10 @@ export default function JobDetail() {
     });
     if (hasInvalidFieldAcres) {
       toast('error', 'Field acreage must be a finite, non-negative number. Correct the acreage and save again.');
+      return;
+    }
+    if (fieldRows.some((field) => !fieldAcresSurvivesSave(field.acres_to_treat))) {
+      toast('error', 'Field acreage would lose precision when saved. Enter acreage that can be saved unchanged and try again.');
       return;
     }
 
