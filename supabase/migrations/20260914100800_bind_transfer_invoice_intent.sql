@@ -24,7 +24,8 @@
 -- destructive (it deletes expired retry-cache rows, never invoices or jobs), so
 -- it can only be applied in an attended session.
 --
--- First-apply prerequisite: 20260905200400 has already replaced the reviewed
+-- First-apply prerequisite: 20260914100500 (formerly 20260905200400; restamped
+-- 2026-09-14 by PR #704) has already replaced the reviewed
 -- live preimage (md5 78b827f8509a2740ea9879364747c372) with its Chicago-date
 -- postimage (md5 85cd07a0a6b978cb066edab7df369fea). The same Chicago postimage
 -- is required again on replay when it is held under the private name.

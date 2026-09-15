@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { assertWrappable } from '../../.claude/hooks/migration-wrappability-lib.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const migrationPath = path.join(root, 'supabase', 'migrations', '20260908130800_bind_transfer_invoice_intent.sql');
+const migrationPath = path.join(root, 'supabase', 'migrations', '20260914100800_bind_transfer_invoice_intent.sql');
 const name = `crx-transfer-intent-${process.pid}`;
 const mutantName = `${name}-mutant`;
 const image = 'postgres:17-alpine';

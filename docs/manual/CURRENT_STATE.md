@@ -25,7 +25,7 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-08 for the migration ledger (read-only `list_migrations` against project
+**Last verified: 2026-09-14 for the migration ledger (read-only ledger query against project
 `rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-05 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
 migration list includes both routine-only migrations from that refresh:
@@ -40,31 +40,34 @@ A candidate must now sort above the `20260906120000` name-stamp, not above the 0
 (Point-in-time, like every capture here: a read-only re-read on 2026-09-11 found the ledger had moved
 again — 1001 rows / 994 distinct names, `max(version)` `20260909023300`, prefixed high-water
 `20260908120000_close_pr535_live_gaps`, the PR #535 gap-closer whose file and ledger record are owned
-by open PR #646. This page states the boundary as of 2026-09-08; PR #646 restates it when it lands.)
-Seven local commission follow-ups are not applied: five older-stamp candidates
-(`20260905200000`, `20260905200200`, `20260905200300`, `20260905200400`, and
-`20260905200600`), the transfer intent wrapper `20260908130800`, and the tail repair
-`20260908130900`. The original six-file set (the five older-stamp candidates plus the repair)
-was restamped together above the prior 2026-09-05 boundary. The live boundary has since moved:
-the five `20260905*` candidates now sort below it and must be restamped together, preserving
-their dependency order, before any future apply. The transfer wrapper and repair sort above the
-current boundary, and their latest restamp removes a version collision with the separate parked
-PR #535 migration at `20260908120000`; they are still not independently apply-ready because the
-wrapper requires the parked Chicago-date candidate first. This correction applies none of them.
+by open PR #646. A read-only re-read on 2026-09-14 found the same figures, and confirmed that none of the
+seven restamped `20260914100100`..`20260914100900` candidates, `20260908130000`, `20260911120000`, or
+`bind_transfer_invoice_intent` is applied. This page states the boundary as of 2026-09-08; PR #646 restates it when it lands.)
 
 **Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and remains unapplied.
 
+Six local commission follow-ups (`20260914100200` through `20260914100900`, with no `20260905200500` file) are not applied. The
+six-file set was restamped together on 2026-09-05 evening and again on 2026-09-14 (from
+`20260905200000`..`20260905210000`, to sort above the applied `20260908120000_close_pr535_live_gaps`),
+preserving its order each time; both times the set had sorted below a newly applied row and the
+ordering guard would have refused it.
+A seventh local follow-up, the transfer intent wrapper `20260914100800_bind_transfer_invoice_intent`
+(formerly `20260908130800`, restamped with the set on 2026-09-14 so it sorts between `20260914100600`
+and the `20260914100900` repair), is also not applied. It is not independently apply-ready: its
+first-apply prerequisite is the parked Chicago-date candidate `20260914100500` (formerly
+`20260905200400`), which must apply first. This correction applies none of them.
 They harden snapshot replay, refuse a payment batch if its recipient became stale before posting,
 park an America/Chicago payout business-date guard, pair commission source-date inheritance with
 Chicago-based source document dates, make balance-report recipient labels follow the latest
 earned-state observation at the requested cutoff (including paid-only rows), and — last in the
 ordered plan on purpose — append corrected labels for 34 un-settled opening commission snapshots.
-That label repair followed the explicit rename chain `20260905020100` -> `20260905190000` ->
-`20260905210000` -> `20260908130000` -> `20260908130900`; its final move keeps it after the new transfer
-wrapper so the repair remains last. It refuses to run
+That label repair (`20260914100900`, renumbered from `20260905020100` on 2026-09-05 to run last,
+then restamped again with the rest of the set on 2026-09-05 and 2026-09-14; on PR #638's branch it
+briefly sat at `20260908130000` and then `20260908130900`, a name that no longer exists) sorts after
+the `20260914100800` transfer wrapper so the repair remains last. It refuses to run
 once any commission payment has been posted; running it last means such a refusal stops nothing
 else, whereas at its old position it would have halted the payout guard and the date fixes behind
-it. The unified date candidate at `20260905200400` closes the September 30 boundary atomically:
+it. The unified date candidate at `20260914100500` (formerly `20260905200400`) closes the September 30 boundary atomically:
 it drains old writers, then replaces both commission helpers and all four source-document writers
 in one migration transaction. A transaction-local marker plus three owner-only compatibility
 triggers rejects any cached pre-cutover body when it reaches its first affected DML, requiring the
@@ -117,11 +120,12 @@ source files formerly missing from `main`,
 `20260903230000_commission_report_snapshot_contract`, were reconciled when PR #592 merged on
 2026-09-08. That PR also carried two NOT-YET-APPLIED files originally named
 `20260905020000_commission_history_report_replay_guard` and
-`20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: the five
-commission candidates are exactly `20260905200000`, `20260905200200`, `20260905200300`,
-`20260905200400` and `20260905200600`; the intent wrapper is `20260908130800` and the repair remains last at
-`20260908130900`). The five `20260905*` candidates are now below the 2026-09-08 live ordering
-boundary and require a future coordinated restamp before apply.
+`20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: after the
+2026-09-14 restamp the commission candidates are exactly `20260914100200`, `20260914100300`,
+`20260914100400`, `20260914100500` and `20260914100600`, with no `20260905200500` file; the intent
+wrapper is `20260914100800` (formerly `20260908130800`) and the repair remains last at
+`20260914100900`). All of them sort above the applied high-water
+`20260908120000_close_pr535_live_gaps`; none is applied.
 
 **Corrected 2026-09-08 against a live `list_migrations` read.** An earlier version of this paragraph
 called `20260904185900` a pending "#582 candidate" sitting above the live high-water. Every clause of
@@ -162,7 +166,9 @@ this parked SQL does not authorize or perform a live apply. Fresh apply-time pre
 protected production gate remain required. Its stamp is authored above PR #592's pending `20260905*` files, and
 deliberately clear of `20260905210000`, which PR #592 occupies with
 `20260905210000_repair_commission_history_label_snapshots.sql` (two migration files sharing one
-timestamp would have undefined apply order), and its safety argument pins the `create_inventory_hold` body by `prosrc`
+timestamp would have undefined apply order). (Since 2026-09-14 those pending files are restamped
+`20260914100100`..`20260914100600`, and the repair is `20260914100900_repair_commission_history_label_snapshots.sql`,
+which still sorts after this file.) Its safety argument pins the `create_inventory_hold` body by `prosrc`
 sha256 (`3c86421e…`, the body the checked-in 2026-07-27 production dump carries) and fails closed at
 apply time if the installed body differs. **Mason authorized a read-only live check on 2026-09-06 and
 every preflight condition was met**: exactly one `create_inventory_hold` overload, owner `postgres`,

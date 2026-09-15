@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const migrations = path.join(root, 'supabase', 'migrations');
-const filename = '20260908130800_bind_transfer_invoice_intent.sql';
+const filename = '20260914100800_bind_transfer_invoice_intent.sql';
 const source = fs.readFileSync(path.join(migrations, filename), 'utf8');
 const wrapper = source.slice(source.indexOf('CREATE OR REPLACE FUNCTION public.transfer_job_to_invoice('));
 const bodyMd5 = (pattern, label) => {
@@ -34,11 +34,11 @@ assert.equal(source.match(/b083dd371b091d7b70bb4cdc015c9bc8/g)?.length, 2, 'runt
 assert.match(source, /CREATE TEMP TABLE crx_transfer_invoice_intent_transaction_guard[\s\S]*ON COMMIT DROP;[\s\S]*INSERT INTO crx_transfer_invoice_intent_transaction_guard/, 'autocommit refuses before shared-state changes');
 assert.match(source, /SET LOCAL lock_timeout = '5s'/, 'cutover lock wait is bounded');
 const cohort = [
-  '20260905200000_commission_history_report_replay_guard.sql',
-  '20260905200200_refuse_stale_commission_payment_recipient.sql',
-  '20260905200300_enforce_commission_payment_business_date.sql',
-  '20260905200400_commission_dates_follow_chicago_business_day.sql',
-  '20260905200600_latest_commission_recipient_label.sql',
+  '20260914100200_commission_history_report_replay_guard.sql',
+  '20260914100300_refuse_stale_commission_payment_recipient.sql',
+  '20260914100400_enforce_commission_payment_business_date.sql',
+  '20260914100500_commission_dates_follow_chicago_business_day.sql',
+  '20260914100600_latest_commission_recipient_label.sql',
 ];
 
 const at = (needle) => {
@@ -51,7 +51,8 @@ for (const prerequisite of cohort) {
   assert(filename.slice(0, 14) > prerequisite.slice(0, 14), `${filename} must order after ${prerequisite}`);
   assert(fs.existsSync(path.join(migrations, prerequisite)), `missing commission prerequisite ${prerequisite}`);
 }
-assert(filename < '20260908130900_repair_commission_history_label_snapshots.sql', 'transfer wrapper must precede the tail repair');
+assert(filename < '20260914100900_repair_commission_history_label_snapshots.sql', 'transfer wrapper must precede the tail repair');
+assert(fs.existsSync(path.join(migrations, '20260914100900_repair_commission_history_label_snapshots.sql')), 'missing tail repair');
 
 assert.match(source, /md5\(v_public_src\).*85cd07a0a6b978cb066edab7df369fea/s, 'first apply pins Chicago preimage');
 assert.match(source, /md5\(p\.prosrc\).*edc73be809069669e8441eba7acf443d/s, 'helper body pin is present');
