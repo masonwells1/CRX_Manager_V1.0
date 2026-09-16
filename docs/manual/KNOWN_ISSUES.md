@@ -1,9 +1,21 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-08 against the live ledger (read-only `list_migrations`: 1000 rows,
-`max(version)` `20260908045843`, effective high-water
-`20260906120000_preview_field_app_season_follows_invoice_date`); the F2 entry retains its separate
-2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
+**Superseded 2026-09-06 header, kept for provenance — every boundary claim in this paragraph is
+superseded by the 2026-09-08 header that follows it.** That read confirmed the unprefixed-ledger-name
+trap: `20260904185900_refuse_null_job_field_acres` (PR #606, merged `719faac73`) applied live on
+2026-09-05 under the bare name `refuse_null_job_field_acres`, invisible to a name-ordered query, so
+the authored high-water at that time was `20260904185900` while a name-ordered query still returned
+`20260904180000_invoice_season_follows_invoice_date`. Identity was confirmed live, not inferred:
+`save_job` one overload at body md5 `8acf34542105a90212ddb0a5e7c5d272`, carrying that file's
+`JOB_ACRES_NOT_FINITE` refusal. F2 (`20260903160000_gate_number_generators_active_profile_role`,
+ledger version `20260904023121`) was the boundary earlier in that sequence. The row count and
+`max(version)` from that read are deliberately not repeated here — see the rule in the current header
+below; they live in `docs/reference/migration-history.md`.
+
+**Last verified: 2026-09-14 against the live ledger (read-only ledger query, which confirmed that none of
+the parked commission or next-invoice-number candidates below is applied; boundary figures are
+recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
+separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
 there before any apply decision, and update it there — never restate it here. The reason is a trap
@@ -20,18 +32,19 @@ and diverge, so reading the boundary off `version` gives a plausible wrong answe
 returns garbage, because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …)
 sort above digits — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` in
 that capture as a point-in-time observation, not a fact** — any lane applying a migration moves
-them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05.
+them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05. The live `create_inventory_hold` surface described in the OPEN 2026-09-05 manual-hold entry below was separately re-read READ-ONLY on 2026-09-06 for the `20260908130000` candidate's preconditions (no boundary facts restated here on purpose — see that entry and the migration header).
 The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
 
-Six local commission candidates (`20260905200000` through `20260905210000`, excluding superseded `20260905200500`) remain unapplied;
-the complete six-file set was restamped together on 2026-09-05 evening, after a #606 apply moved the
+Six local commission candidates (`20260914100200` through `20260914100900`, excluding superseded `20260905200500`) remain unapplied;
+the complete six-file set was restamped together on 2026-09-05 evening (and again on 2026-09-14, from
+`20260905200000`..`20260905210000`, after `20260908120000_close_pr535_live_gaps` applied live), after a #606 apply moved the
 live ordering boundary above most of the set, and the set's relative order was preserved during the
 restamp. This file deliberately does not name that boundary — re-read it from the live-ledger capture
 in `docs/reference/migration-history.md` before any apply decision.
-The label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
+The label repair (`20260914100900`, renumbered from `20260905020100` on 2026-09-05 so it runs last, and restamped with the set on 2026-09-14)
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
 now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes. The settlement-recipient guard closes the live case where a batch prepared for A
@@ -39,7 +52,7 @@ could still credit A after its commission was reassigned to B; until that candid
 approved and applied, production still carries that narrow stale-batch risk. Until the parked
 business-date guard is separately approved and applied, a noncanonical writer can still store a
 commission payment date after the current America/Chicago business date. The unified
-`20260905200400` candidate makes commission dates inherit their source documents and moves every
+`20260914100500` candidate makes commission dates inherit their source documents and moves every
 affected source-document writer off UTC `CURRENT_DATE` under one writer-drain lock boundary. Its
 same-transaction compatibility triggers reject a cached pre-cutover body at its first affected DML
 with `CHICAGO_DATE_CUTOVER_RETRY`, so a backend that resolved an old PL/pgSQL plan before the lock
@@ -334,6 +347,56 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (ACCEPTED by Mason) 2026-09-13 — a SUSPENDED second tab can still send a stale batch adjustment after another tab's batch froze and finished
+
+**Status.** Accepted as a known limit by Mason on 2026-09-13 ("ship with known limit") when the
+Batch Adjust retry-key fix (`src/components/inventory/BatchAdjustModal.tsx`,
+`src/hooks/useUncertainMutationIntent.ts`) reached its fourth exact-SHA Codex round with a
+cross-tab finding.
+
+**The case.** Tab C has Batch Adjust open with an adjustment typed but not sent. While the browser
+has tab C suspended, tab A sends the same adjustment, loses the reply (the batch freezes), retries
+and finishes it. Tab C then receives both storage events after storage already says "finished". The
+hook re-reads the current stored value rather than each event's `newValue`, so tab C never shows the
+frozen batch, is not blocked, and a click on its own Adjust button sends a fresh adjustment under a
+new key — the stock moves again.
+
+**Why it was accepted.** That second move comes from a separate operator click in another tab. The
+same double adjustment already happens with no lost reply at all (tab A succeeds, tab C then
+submits the same typed adjustment), and no idempotency key can tell two deliberate clicks apart.
+The fix guarantees that one click, and every retry of it, moves stock at most once. Codex's proposed
+fix — a monotonic "pending observed while open" signal built from validated `StorageEvent.newValue`
+— would cover only the lost-reply variant. Revisit if duplicate stock adjustments from two open
+tabs are seen in stock history.
+
+---
+
+## PARKED 2026-09-10 — the ahead-of-pending marker hardening stopped at review round twelve with two HIGH findings open
+
+**Status.** The rewrite of the migration-apply guard's ahead-of-pending override (the marker that lets a
+newer migration apply while an older one is still unapplied) lives only on the local, unpushed branch
+`claude/cycle-count-revision-ahead-of-pending` (guard code `d71f77376`, parking notes `f29f301c2`; no
+SQL). **Mason decided on 2026-09-10 to cap the review loop at round twelve:** its exact-SHA Codex proof
+returned BLOCKERS, so the branch is parked and no further review round is commissioned without a new
+decision from him. `main` keeps the older marker, which unlocks the apply without binding which files it
+covers.
+
+**Open 1 (HIGH, also on `main`) — the guard's time limit does not cover its last step.** In
+`.claude/hooks/migration-apply-lib.mjs` the reviewer-proof scan reads the whole session-state folder
+in-process with no time bound. If the hook runs past the harness's 15-second limit it prints nothing, and
+a hook that prints nothing does not block — the apply proceeds without the reviewer-proof and autopilot
+checks. `main` has the same scan and no deadline at all.
+
+**Open 2 (HIGH, branch only) — the branch's new file binding is not re-checked at the end.** The branch
+binds the marker to a digest of the pending migration files, but lists the working tree once and
+re-validates only the git refs before honouring the marker, so a file added or edited in that window can
+be missed. Not a regression: `main`'s marker binds nothing.
+
+**Pre-existing test gap, found in passing (low).** In `.claude/hooks/migration-apply-lib.test.mjs`, three
+refusals of `scripts/apply-migration-file.mjs` (`--project … --confirm`, `--name … --confirm`,
+`--project=ref`) assert only exit status 1. An uncaught crash also exits 1, so a crash on those paths
+would pass; their sibling checks also assert the refusal text.
+
 ## FIXED 2026-09-08 — receiving could record goods against the WRONG purchase order
 
 **Resolved on `main` and no longer live.** `src/pages/PurchaseOrderDetail.tsx` now carries a
@@ -507,7 +570,7 @@ failed for a reason unrelated to its assertion. Both mocks now mirror the hook's
 ---
 ## PARKED 2026-09-05 (WRITTEN, REVIEWED, PROVEN — NOT APPLIED) — invoice numbers take their year from UTC, so the last six hours of 31 December are numbered into the next year
 
-**Migration file:** `supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql`.
+**Migration file:** `supabase/migrations/20260914100100_next_invoice_number_year_chicago.sql`.
 **Deadline: 31 December 2026** — months out, which is why this is parked rather than rushed.
 **Mason applies it himself.** Nothing about it has been applied, and the standing hands-free
 migration allowance was deliberately not used.
@@ -538,7 +601,8 @@ and `20260904180000` (both applied live 2026-09-04) and the settled ~2026-07-10 
   misclassify three already-applied migrations as pending. Refresh it from a live ledger read first.
 - The `20260905090000` stamp was the correct next slot on 2026-09-05 (effective high-water by NAME
   was `20260904180000`), but a parked file's timestamp perishes. Re-derive it immediately before
-  apply and expect renumbering.
+  apply and expect renumbering. (It was restamped to `20260914100100` on 2026-09-14, after
+  `20260908120000_close_pr535_live_gaps` applied live.)
 
 Also re-run `scripts/smoke/prove-next-invoice-number-year-chicago.mjs` (35/35 at parking time, real
 PostgreSQL 17 container) and confirm the live body still matches pin `b53499d0…` — a drifted body
@@ -570,7 +634,7 @@ the December work is filed under the wrong year and consumes that year's first n
 **Same 31 December 2026 deadline.**
 The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
 they were deliberately not bundled into the parked migration because that file is pinned to one
-function's body md5. **Do not close this family when `20260905090000` is applied.**
+function's body md5. **Do not close this family when `20260914100100` (formerly `20260905090000`) is applied.**
 
 The general lesson, worth more than the six fixes: **a sweep proves only the question it asked.**
 Searching for `now()` cannot clear `CURRENT_DATE`, and on a UTC server the two are the same bug.
@@ -674,7 +738,7 @@ changed on 2026-09-04 is that it is now written down instead of only being known
 
 ---
 
-## SETTLED 2026-09-03 (basis) / FIXED IN CODE, MIGRATION PENDING LIVE APPLY (UTC fallbacks) — "invoice due dates derive from the invoice date, not the Chicago posting date"
+## SETTLED 2026-09-03 (basis) / CLOSED 2026-09-04 — BOTH UTC-fallback migrations APPLIED LIVE — "invoice due dates derive from the invoice date, not the Chicago posting date"
 
 **Report (`codex-transaction-review`, 2026-09-03):** due dates derive from `invoice_date` rather
 than the America/Chicago posting date, so a late-evening invoice lands on the wrong day. Verified
@@ -694,8 +758,16 @@ moves them to the Chicago business day (container proof
 (ledger version `20260904130047`) under Mason's in-chat OK, verified post-apply: all four bodies at
 their candidate pins, one overload each, SECDEF + `search_path` intact. That hole is CLOSED.
 
-**Two residuals remain open, both raised by the pre-apply gate and accepted rather than blocked.**
-(a) **OPEN, DEADLINE 2026-09-30 — `season` is still UTC in two of those four bodies.**
+**Of the two residuals raised by the pre-apply gate, (a) is now CLOSED and (b) remains an owner decision.**
+(a) **CLOSED 2026-09-04 — applied live as ledger version `20260904152221`
+(`20260904180000_invoice_season_follows_invoice_date`). The 2026-09-30 window is shut on the
+database side.** Post-apply read-only verification: both bodies at their candidate pins
+(`e3fc9bd9…`, `29d699a8…`), ZERO current-season-helper calls, ZERO UTC current-date tokens, one
+overload each, SECDEF + `search_path` and grants unchanged. The companion frontend fix
+(`src/pages/FieldApplicationInvoice.tsx`, which defaulted its transaction date in UTC) ships with
+PR #599 and reaches production only on merge — until then that page can still pre-fill tomorrow's
+date after ~7 pm Chicago, though the season it produces will now agree with whatever date it sends.
+Historical description of the defect follows. **WAS OPEN, DEADLINE 2026-09-30 — `season` was still UTC in two of those four bodies.**
 `_save_invoice_lineage_unaware_impl_20260827` and `_save_field_app_invoice_impl_20260714` stamp
 `season` from `current_season()` = `compute_season(CURRENT_DATE)`, which the migration did not
 change. `compute_season` rolls at month >= 10, so on **2026-09-30 after 7 pm Chicago** a row would be
@@ -703,17 +775,224 @@ dated 2026-09-30 (season 2026) while stamped `season = 2027`. Before the apply b
 therefore agreed with each other; making the date correct exposed the coupling. `season` drives
 `customer_application_rates` lookups and year-end statements. The correct pattern already exists in
 `_save_field_app_split_invoice_impl`, which derives the season from the same COALESCEd Chicago date.
-Needs a follow-up migration before 2026-09-30. Same class, later window: `next_invoice_number`
-derives its year from `extract(year FROM now())` (UTC), so a 2026-12-31 evening invoice is dated
-2026 and numbered 2027.
+**FIXED IN CODE 2026-09-04 AND APPLIED LIVE THE SAME DAY** (ledger version `20260904152221`; see
+the CLOSED note above — this paragraph is the historical description of the defect):
+`supabase/migrations/20260904180000_invoice_season_follows_invoice_date.sql` re-emits both bodies
+with `compute_season(COALESCE(<payload invoice_date>, (now() AT TIME ZONE 'America/Chicago')::date))`,
+mirroring the split-invoice pattern. The pre-apply gate found a THIRD site the original residual did
+not name: `_save_field_app_invoice_impl_20260714` also matched `customer_application_rates` on
+`car.season = current_season()`, so fixing only the stamp would have filed the invoice under one
+season and priced it at another. **Do not "simplify" this to one pre-loop variable feeding both
+sites** — that is exactly the design the prover reproduces as a defect in PHASE 8d (it files an
+edited invoice under one season and charges the other's rate, and NO static guard catches it). The
+shipped code stamps a NEW invoice from `v_season` (the invoice date's season) and binds the
+`customer_application_rates` lookup to `v_invoice_season` — the season the ROW carries, returned by
+the INSERT and read back from the UPDATE. Container proof:
+`scripts/smoke/prove-invoice-season-follows-invoice-date.mjs` — it reproduces the defect through the
+REAL installed functions (an invoice dated 2026-10-01 filed under season 2026 and charged the
+season-2026 rate), then shows both fixed on either side of the boundary, and instruments the clock
+wiring itself. **Deliberate behaviour change recorded with it:** a caller-supplied `invoice_date` in
+another season now files AND prices under that date's season, which is the rule the split-invoice
+body already follows.
+
+**Three consequences of never re-seasoning on edit — all SETTLED by Mason on 2026-09-04
+(`docs/manual/DECISION_LOG.md`, 2026-09-04 entry): an invoice is priced at the season IT is filed
+under, and an edit never rewrites an existing invoice's season.** All are confined to an EDIT that
+moves an invoice date across October 1, none is in the 2026-09-30 evening window, and all three are
+OBSERVED by prover phases 6c/6d/6e rather than inferred. Recorded here so they are not re-opened as
+bugs:
+1. On such an edit the two stamps stay divergent: `invoice_date` moves, `season` does not. The file
+   never re-seasons an existing record (that would move it onto a different year-end statement, and
+   the split-provenance triggers refuse it outright), so the "date and season agree" claim holds on
+   CREATE, not on EDIT.
+2. In a MULTI-GROWER group, an edit that also ADDS a grower prices the pre-existing invoices at
+   their stored season and the new one at the invoice date's season — **two growers on the same
+   application billed at different seasons' rates**. Before this change all of them priced from the
+   clock, so the stamps could already diverge but the prices could not.
+3. If no `customer_application_rates` row exists for the season the invoice is filed under, the fee
+   silently falls back to the service default rate. Pre-existing behaviour on a newly reachable
+   path — e.g. an override entered for the new season after the roll, since
+   `src/pages/ApplicationServiceDetail.tsx` defaults its Season box to the current season.
 (b) **OPEN OWNER DECISION** — the split-invoice body's commission-record `CURRENT_DATE` is
 deliberately retained (pinned at exactly 1 by the postflight so it cannot drift silently). It now
 *disagrees* with the Chicago-dated invoice written in the same transaction on a Chicago evening,
 where before the apply the two always agreed. Whether commissions should follow the invoice date is
 Mason's call, not a defect to fix unilaterally.
 
-Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md` and
-`docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md`.
+Full record: `docs/changelog.d/2026-09-03-invoice-date-fallbacks-chicago.md`,
+`docs/changelog.d/2026-09-04-invoice-date-fallbacks-applied-live.md` and
+`docs/changelog.d/2026-09-04-invoice-season-follows-invoice-date.md`.
+
+## OPEN 2026-09-04 — other paths still stamp `invoices.season` from the UTC clock
+
+Surfaced by `migration-drift-reviewer` (M8) and `rls-security-reviewer` (M5) while reviewing
+`20260904180000_invoice_season_follows_invoice_date.sql`, which closes the 2026-09-30 window for
+only the **two** invoice-creating bodies it re-emits. These are the same class and are NOT closed:
+
+- **The `invoices.season` column DEFAULT is itself the UTC clock read** —
+  `season integer NOT NULL DEFAULT current_season()`
+  (`supabase/migrations/20260213100000_phase2_billing_architecture.sql:50`). Any path that inserts
+  into `invoices` without naming `season` gets the UTC calendar day. The two fixed bodies always
+  pass `season` explicitly, so they are unaffected.
+- `issue_return_credit` — credit-memo invoice stamped `current_season()`
+  (`20260701202000_returns_rpc_gating.sql:361`).
+- The blend-ticket → invoice path — `COALESCE(v_ticket.season, current_season())` for both the stamp
+  and the rate lookup (`20260714230200_blend_ticket_order_lifecycle.sql:723,881`).
+- The delivery-split paths — `COALESCE(v_order.season, current_season())`
+  (`20260707070000_u7_delivery_split_billing.sql:654`, `20260707090000_u7_split_gate_allow_predelivery.sql:213`).
+
+**Not yet verified against the live catalog** — those are the latest occurrences in migration
+*sources*, and superseded bodies are noise. Confirm which are the currently installed bodies before
+acting. Deliberately not folded into `20260904180000`: that file has a hard 2026-09-30 deadline and
+each additional md5-pinned body widens its blast radius.
+
+### OPEN 2026-09-04 — client-side season READS still follow the browser clock, including ONE SAFETY path
+
+Separate from the server-side stamps above. Found by the adversarial sweep that caught the fifth
+invoice-date site, then corrected by a second review that caught this entry itself understating the
+severity — it originally said "reporting only", which is **wrong**.
+
+`src/utils/season.ts:14` `computeSeason(date = new Date())` uses `getMonth()` / `getFullYear()` —
+the BROWSER's clock, not Chicago's. None of its callers WRITES `season` or `invoice_date`, but one
+of them gates a safety warning:
+
+**The one that is not cosmetic — `src/pages/JobDetail.tsx:1342`.**
+`computeSeason(jobDate ? new Date(jobDate + 'T00:00:00') : new Date())` selects which season's
+`field_crop_history` row to read for the earliest harvest date, and that drives the
+**pre-harvest-interval (PHI) warning** on a chemical application. `jobDate` defaults to
+`localToday()` (`:344`), i.e. the browser clock. At the October 1 boundary a user outside Chicago
+can therefore query the WRONG season's harvest row; the query is written to degrade silently
+("No harvest row => no warning"), so the failure mode is a **suppressed PHI warning**, not a visible
+error. Narrow window and pre-existing, but it is a safety path, not a report filter, and a user
+cannot see that anything was skipped.
+
+**The cosmetic ones** — report/dialog defaults the user can change in the UI:
+`ARaging.tsx:80`, `CropPrograms.tsx:55`, `FieldProfitability.tsx:62`, `YearEndSummaryDialog.tsx:26`,
+`ReportShell.tsx:20-29`, `FieldInvoices.tsx:44`, `ApplicationRecords.tsx:36`, `Reports.tsx:94,98`,
+`SalesReports.tsx:29,33,100`. `AccountsReceivable.tsx:45` and `CustomerContextCard.tsx:46` similarly
+pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
+
+`FieldApplicationInvoice.tsx:520` is **fine** — it inherits `transactionDate`, which is now the
+Chicago business date.
+
+Deliberately NOT changed alongside the invoice-date work: that change is about what gets STORED and
+priced, and widening it would have added untested surface to a deadline-bound money PR. **Recommend
+fixing `JobDetail.tsx:1342` on its own merits**, ahead of the cosmetic ones. Tracked so the next
+person does not mistake the invoice-date sweep for a whole-app one.
+
+## SERVER HALF FIXED LIVE 2026-09-08; FRONTEND NOT YET MERGED — the field-app split PREVIEW priced from the UTC clock while SAVE priced from the invoice date
+
+**Status as of 2026-09-08: the server half IS APPLIED LIVE** (ledger version `20260908045843`), with
+Mason's explicit in-conversation approval. Verified from the live catalog — one overload, 5 arguments,
+`md5(prosrc)` `83f6600412ced085d0876a3c7339ff12`, `proacl` carrying no `anon` and no PUBLIC — and
+separately through a real PostgREST call in both the 5- and 4-argument shapes, each returning
+`42501` rather than `PGRST202`, which proves the API layer resolves the new signature AND that the
+legacy 4-argument caller still works through the DEFAULT.
+
+**The frontend half is still on PR #599 and NOT merged, so the defect is still visible to users.**
+The order is deliberate and must not be reversed: the database is backward compatible (a 4-argument
+call resolves through the DEFAULT), so DB-first is safe, whereas merging the frontend first would
+send a fifth named argument to a 4-argument function and return `PGRST202` on EVERY Preview click —
+not merely the season edge case.
+
+Historical detail from when this was a candidate:
+`supabase/migrations/20260906120000_preview_field_app_season_follows_invoice_date.sql` gives
+`preview_field_app_invoice_split` a fifth argument, `p_invoice_date date DEFAULT NULL`, and prices the
+application fee at the season the invoice is (or would be) filed under, reproducing
+`_save_field_app_invoice_impl_20260714`'s branch order exactly — an existing live member of the group
+or a single-customer edit prices at that row's STORED season; only a genuinely new invoice uses
+`compute_season(p_invoice_date)`. `src/pages/FieldApplicationInvoice.tsx` `handlePreview` now sends the
+same `transactionDate` it already sends to save. Proof:
+`scripts/smoke/prove-preview-field-app-season.mjs` → `PREVIEW_SEASON_PROOF_PASS`, which reproduces
+both windows as observed rate disagreements (1111c/acre quoted vs 2222c/acre charged) through the real
+installed functions before the candidate, shows every case agreeing after it, and catches three
+mutants — the fix removed, the stored season ignored, and the `anon` REVOKE dropped. Details in
+`docs/changelog.d/2026-09-06-preview-field-app-season-follows-invoice-date.md` and row 918 of
+`docs/reference/migration-history.md`.
+
+**This entry stays open until PR #599's frontend half is merged and observed on production.** The
+server half is applied (above); the only remaining gate is the merge itself, which needs the exact-SHA
+proof `pr-merge-guard` requires. Everything below this line is the 2026-09-04 report as written at
+the time, kept for provenance. Where it says the live function has no date or season parameter, or
+that a migration is still needed, that was true until `20260906120000` applied on 2026-09-08 and is
+NOT the live state now; the caller-side change it asks for is the frontend half on PR #599.
+
+### HISTORICAL — the original report (2026-09-04), superseded on the server side 2026-09-08
+
+Raised by the Codex GitHub App (P1) on PR #599 and **verified against the live catalog on
+2026-09-04**, after `20260904180000_invoice_season_follows_invoice_date` was applied:
+
+| body | season-helper refs | America/Chicago refs |
+|---|---|---|
+| `_save_field_app_invoice_impl_20260714` | 0 | 4 |
+| `_save_invoice_lineage_unaware_impl_20260827` | 0 | 4 |
+| `preview_field_app_invoice_split` | **1** | **0** |
+
+`20260904180000` moved the two SAVE bodies onto the invoice's own season. It did not touch
+`preview_field_app_invoice_split`, whose application-fee lookup still filters
+`car.season = <UTC clock season>` (latest source
+`supabase/migrations/20260630180000_field_app_pricing_unit_fix.sql:862`; live body md5
+`ca33fb973d86dbf3a2788dc11fbc49a5`). So the "Customers" breakdown Mason approves can display one
+application-fee rate while the save charges another.
+
+**This divergence is NEW — it is the cost of the save-side fix.** Before 2026-09-04 both sides read
+the same UTC clock, so they agreed (and were both wrong together). Now the save side is right and
+the preview is the one that can be wrong.
+
+**Severity is display-only, not a wrong charge.** `previewData` in
+`src/pages/FieldApplicationInvoice.tsx` is only passed to the breakdown component as a `preview`
+prop — it never feeds the save payload, and save recomputes the fee independently. The customer is
+billed the correct season's rate; the on-screen number Mason approves beforehand can differ.
+
+**Two windows, and the second is the big one:**
+- ~5 hours a year: 7 pm–midnight Chicago on 2026-09-30, when the clock season has rolled and the
+  invoice date has not.
+- **All year:** editing any invoice whose season differs from the current clock season — e.g.
+  re-opening a September 2026 invoice in November 2026 previews 2027 rates against a 2026 save.
+
+**Cannot be fixed in the frontend** (HISTORICAL — since 2026-09-08 the live function accepts a fifth
+argument, `p_invoice_date`; the caller change ships with PR #599). At the time the live function took 4 arguments
+(`p_locations`, `p_chemicals`, `p_application_service_id`, `p_invoice_id`) and has no date or season
+parameter, so the caller has nothing to pass. The fix needs a new migration that either accepts an
+invoice date or derives the season from `p_invoice_id`, plus a matching caller change.
+
+Deliberately NOT folded into PR #599: that PR's migration is already applied live, so holding it
+does not un-ship this divergence, and its frontend fix is what closes the 2026-09-30 window.
+**Recommended before 2026-09-30**, tracked as a follow-up.
+
+**PARTIALLY CLOSED 2026-09-04 — the stale-preview half is fixed; the server half is not.** The
+`gpt-5.6-sol` push-proof review raised a second, sharper vector that the earlier reviews missed:
+the transaction-date input did **not** invalidate a rendered preview, even though locations
+(`:1314`), chemicals (`:1367`) and the application-service selector (`:2672`) all did. So an
+operator could preview on 2026-09-30, move the date to 2026-10-01, and save with the season-2026
+per-acre rate still on screen while the save charged the season-2027 rate — approving a number that
+was not billed, with no boundary or timezone involved. `FieldApplicationInvoice.tsx:2645` now clears
+`previewData` on date change, with a regression test that fails if the clear is removed.
+
+**What was still open at the time (CLOSED on the server 2026-09-08 by `20260906120000`; the caller
+side ships with PR #599):** `preview_field_app_invoice_split` itself then priced from the UTC clock,
+so a *freshly generated* preview could still disagree with the save on a backdated or cross-boundary
+invoice. That needed the migration named at the top of this entry — the live function then had no
+date or season parameter. The fix above only removed the STALE-preview vector, which was the part
+reachable without any clock edge case at all.
+
+## OPEN 2026-09-04, DEADLINE 2026-12-31 — `next_invoice_number` takes its YEAR from the UTC clock
+
+Split out of the invoice-date/season entry above on 2026-09-04 so it is not closed along with it —
+it is the same class of defect but a different function, a different migration lineage, a narrower
+window and a later deadline.
+
+`next_invoice_number()` derives the year in the invoice number from `extract(year FROM now())`,
+which on live is UTC (`supabase/migrations/20260903160000_gate_number_generators_active_profile_role.sql:391`).
+Between 6 pm America/Chicago on 2026-12-31 and midnight UTC, an invoice is dated 2026-12-31 but
+numbered with 2027. Unlike `season`, this does not change what the customer is charged or which
+year-end statement the invoice lands on — it makes the human-readable number disagree with the date
+printed beside it, and it consumes a number out of the next year's sequence.
+
+Deliberately NOT folded into `20260904180000_invoice_season_follows_invoice_date.sql`: that file has
+a hard 2026-09-30 deadline, and adding a third md5-pinned body widens its blast radius for a window
+that does not open for another three months. Changing the year source also has sequence-uniqueness
+consequences of its own that deserve their own review.
 
 ## FIXED 2026-09-05 — the CodeRabbit gate reported "requested" without ever confirming a review was requested, and spent slots on unmergeable PRs
 
@@ -1744,6 +2023,106 @@ A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-rec
 duplicates one of #449's fixes — delete it rather than continuing it.
 
 
+## OPEN 2026-09-11 — an expired uncertain request locks its dialog with no in-app way to clear it
+
+**Owner:** Codex PR #624 landing coordinator. Recovery design and verification plan due 2026-09-18;
+implementation gets a separate product queue slot under section 8 of the approved 2026-09-11 backlog
+plan. Product UI work, so the 2026-09-11 to 2026-09-25 guard-logic freeze does not apply.
+
+`useUncertainMutationIntent` keeps a request whose reply was lost as pending for a 23-hour safe retry
+window. Once that window passes, the record is still restored as pending on every visit: the dialog
+reopens locked, shows "The safe automatic retry window expired. Do not submit this mutation again",
+disables its retry button, and cannot be closed. Nothing in the app clears an expired pending record; only
+a successful retry or a positively identified server refusal releases it, and after expiry neither can
+run. The lock lives in that one browser.
+
+Pre-existing on `main` for the Inventory page Receive dialog, `QuickReceivePanel`, `ReceivingHubPanel` and
+`NewVendorBill`. PR #624 extends it to the Inventory page Adjust and Hold dialogs.
+
+**Interim:** the staff recovery steps in `docs/workflows/INVENTORY_RULES.md` ("Staff recovery", step 5):
+verify the outcome in Active Holds or View transaction history, tell an admin, and re-enter from another
+browser only if it did not go through. **Fix:** an admin "verified, clear this request" control that
+records who cleared it and what they checked.
+
+
+## OPEN 2026-09-05 — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold (fix written and proven, not applied)
+
+**Owner:** the PR #624 lane (worktree `inventory-idempotency-key-reset-888161`), reassignable by the fleet
+coordinator. **Exposure assessment due 2026-09-18:** a read-only look at live holds for the two server
+defects the parked migration closes while it stays unapplied: a NULL `p_force` that skips the admin and
+free-stock checks, and holds created by staff whose profile is missing or inactive. The live read needs
+Mason's explicit OK at the time; the result decides whether the apply moves up.
+
+The live `create_inventory_hold` body (the `20260630173022` parked_010 body — the 2026-07-27 production
+dump proves it IS installed; earlier notes calling it "parked, never applied" were wrong) reads its
+idempotency receipt with a plain SELECT before the stock lock and writes it after the hold with
+`ON CONFLICT DO NOTHING`. Two overlapping calls with the same key both pass the receipt read. The live
+BEFORE INSERT guard on `idempotency_keys` (`_guard_idempotency_key_insert`, 20260714230000 /
+20260716160000) then rolls the loser back with `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY`, so the table
+ends with ONE hold — but the losing caller is told its hold failed although the winner created exactly
+that hold. The browser classifies that SQLSTATE P0001 as a definitive refusal, releases the key, and the
+operator's next click mints a NEW key and creates a second hold. Measured on 2026-09-05 in a
+network-disabled container built from the 2026-07-27 baseline plus all 75 later migrations
+(`scripts/smoke/prove-create-inventory-hold-intent-binding-real-schema.mjs`): pre-fix race = 1 hold,
+session 2 exits with that error. The same body also gates role with `v_role NOT IN (...)`, which lets a
+caller with no `profiles` row through (NULL is not IN anything), and accepts a NULL key.
+
+Local forward migration `20260908130000_bind_create_inventory_hold_receipt_to_intent.sql` renames the
+live body to `_create_inventory_hold_intent_impl_20260905` (postgres-only EXECUTE) and installs a
+same-signature wrapper: AUTH_REQUIRED, ACTOR_MISMATCH on a forged `p_performed_by`, a NULL-safe ACTIVE
+admin/sales_rep gate, key required, request fingerprint, then `check_idempotency_intent` (per-key
+advisory lock, actor + fingerprint binding) BEFORE any mutation, then the renamed body, then receipt
+binding. Post-fix race in the same container = 1 hold, both sessions succeed with the same `hold_id`;
+the rolled-back chain `smoke-create-inventory-hold-intent-binding.sql` passes; re-apply is clean.
+The 2026-09-13 independent Sol HIGH review identified the previously accepted keyless cutover gap.
+The extended real-schema prover now pauses an actual authenticated sales-user old-body invocation at
+the stock lock, installs the candidate, then releases the call. The prior candidate committed a
+500-unit unreceipted hold against 100 available after cutover. The corrected standalone insert barrier
+rejects that call with zero holds. It owns manual/crop_program inserts with NULL source_id; read-only
+live inspection confirms the three automatic sync writers attach source_id. Source-backed job/program
+insert boundaries pass without standalone context, while the receipt trigger still rejects a valid
+stale context naming a different key. Rerun succeeds; deliberately changed insert-barrier code is
+refused and preserved. This supersedes the old residual acceptance and absence of literal interleaving
+proof. The boundary test does not execute every automatic sync RPC end to end.
+**No live apply is authorized.** Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
+and every preflight condition held: one overload, owner `postgres`, `plpgsql`, SECURITY DEFINER,
+`proconfig = {search_path=public, pg_temp}`, the pinned argument list with defaults,
+`md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` for the 4,046-character body whose sha256 is the
+pinned `3c86421e…` (md5 recomputed locally from the 2026-07-27 dump for comparison — the live-data
+guard's read-only allowlist has no `digest()`), the private impl name absent, all three helpers
+present, both binding columns present, EXECUTE held by `authenticated`/`service_role` and not `anon`,
+`check_idempotency_intent` executable by none of those three, and ZERO unexpired
+`create_inventory_hold` receipts of any kind. The pre-existing
+`section9_bind_idempotency_receipt_20260826` BEFORE INSERT trigger short-circuits for operations
+outside its AP/receiving list, so it leaves hold receipts alone. The preflight still fails closed if the
+installed body hash or argument list differs from the pins, and REFUSES (`PREFLIGHT_LEGACY_RECEIPTS`) while
+any unexpired receipt written by the old body exists — such a receipt would otherwise lock its operator out
+of creating any hold for up to 24 hours after the swap, so the apply belongs in a quiet window and may need
+a second attempt. The frontend fix for the per-open `resetKey()` on the same page ships in this same PR (#624)
+and is safe to merge BEFORE the apply (re-checked 2026-09-11): it sends the installed body exactly the
+arguments `main` sends, and a key is re-sent only with its original frozen request or after another tab
+confirmed that request committed; the installed body replays both by key. A racing loser's
+`IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` now keeps the key instead of releasing it. After the apply, a
+retained key whose request CHANGES raises `IDEMPOTENCY_INTENT_MISMATCH`, which the page treats as
+"uncertain" and locks the dialog — acceptable, deliberate. Do not author a competing migration.
+
+**Compatibility, installed vs parked contract (2026-09-11).** The branch sends `create_inventory_hold` (10
+arguments), `adjust_inventory` (5) and `retire_inventory_item` (3) exactly the argument sets `main` sends, and
+the migration keeps the same signature, so the frontend runs on either body. Key rules: a key is re-sent only
+with its frozen request or after another tab confirmed that request committed; a racing loser's
+`IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` keeps the key; a definitive refusal releases it. Server side, the
+real-schema prover covers both bodies (`pre_race=1_hold_loser_errors`, `post_race=1_hold_loser_replays`).
+Two gaps, stated plainly: key-cleanup failures are not exercised, and there is no live old-body run (by
+design: production gets observation only, so the isolated prover is the evidence).
+
+**Known gap, not introduced here:** once the 23-hour safe retry window passes, a locked dialog shows "The
+safe automatic retry window expired", disables its retry button, cannot be closed, and reopens on every
+visit, because nothing in the app clears an expired request. The Inventory page's Receive dialog and the
+receiving and vendor-bill screens already behave this way on `main`; this PR extends it to Adjust and Hold.
+The lock lives in that one browser. Tracked as its own item: OPEN 2026-09-11 (expired uncertain
+request) above.
+
+
 ## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
 
 `chemLineBillingHazard` checks chemical rows whose rate and stock units differ by converting with
@@ -1755,7 +2134,18 @@ Keep this separate from the equal-unit exact-decimal fix, and replace the conver
 exact rational/decimal conversion in a focused follow-up.
 
 
-## OPEN 2026-09-04 — Server acreage refusal is written and proven, not yet applied
+## CLOSED 2026-09-05 — Server acreage refusal is merged and applied live
+
+**Status corrected 2026-09-06.** `20260904185900_refuse_null_job_field_acres.sql` merged as
+`719faac73` (PR #606) and was applied to production on 2026-09-05, registering in the ledger as
+version `20260905185938` under the unprefixed name `refuse_null_job_field_acres`. Confirmed
+read-only on 2026-09-06: live `save_job` is one overload at body md5
+`8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin — and the live body carries its
+`JOB_ACRES_NOT_FINITE` refusal. The "no live apply is authorized" line below is the pre-apply record
+and no longer describes production. The separate different-unit chemical conversion issue above
+remains open.
+
+### The original entry (2026-09-04, pre-apply)
 
 An acreage entry such as `1e999` parses to JavaScript `Infinity`, which JSON serializes as
 `null`; negative acreage is also not a valid job input. PR #596's client candidate blocks every
