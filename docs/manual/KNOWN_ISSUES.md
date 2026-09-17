@@ -12,8 +12,9 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-08 against the live ledger (read-only `list_migrations`; the figures from
-that read are recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
+**Last verified: 2026-09-14 against the live ledger (read-only ledger query, which confirmed that none of
+the parked commission or next-invoice-number candidates below is applied; boundary figures are
+recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
@@ -31,18 +32,19 @@ and diverge, so reading the boundary off `version` gives a plausible wrong answe
 returns garbage, because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …)
 sort above digits — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` in
 that capture as a point-in-time observation, not a fact** — any lane applying a migration moves
-them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05.
+them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05. The live `create_inventory_hold` surface described in the OPEN 2026-09-05 manual-hold entry below was separately re-read READ-ONLY on 2026-09-06 for the `20260908130000` candidate's preconditions (no boundary facts restated here on purpose — see that entry and the migration header).
 The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
 
-Six local commission candidates (`20260905200000` through `20260905210000`, excluding superseded `20260905200500`) remain unapplied;
-the complete six-file set was restamped together on 2026-09-05 evening, after a #606 apply moved the
+Six local commission candidates (`20260914100200` through `20260914100900`, excluding superseded `20260905200500`) remain unapplied;
+the complete six-file set was restamped together on 2026-09-05 evening (and again on 2026-09-14, from
+`20260905200000`..`20260905210000`, after `20260908120000_close_pr535_live_gaps` applied live), after a #606 apply moved the
 live ordering boundary above most of the set, and the set's relative order was preserved during the
 restamp. This file deliberately does not name that boundary — re-read it from the live-ledger capture
 in `docs/reference/migration-history.md` before any apply decision.
-The label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
+The label repair (`20260914100900`, renumbered from `20260905020100` on 2026-09-05 so it runs last, and restamped with the set on 2026-09-14)
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
 now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes. The settlement-recipient guard closes the live case where a batch prepared for A
@@ -50,7 +52,7 @@ could still credit A after its commission was reassigned to B; until that candid
 approved and applied, production still carries that narrow stale-batch risk. Until the parked
 business-date guard is separately approved and applied, a noncanonical writer can still store a
 commission payment date after the current America/Chicago business date. The unified
-`20260905200400` candidate makes commission dates inherit their source documents and moves every
+`20260914100500` candidate makes commission dates inherit their source documents and moves every
 affected source-document writer off UTC `CURRENT_DATE` under one writer-drain lock boundary. Its
 same-transaction compatibility triggers reject a cached pre-cutover body at its first affected DML
 with `CHICAGO_DATE_CUTOVER_RETRY`, so a backend that resolved an old PL/pgSQL plan before the lock
@@ -345,6 +347,30 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (ACCEPTED by Mason) 2026-09-13 — a SUSPENDED second tab can still send a stale batch adjustment after another tab's batch froze and finished
+
+**Status.** Accepted as a known limit by Mason on 2026-09-13 ("ship with known limit") when the
+Batch Adjust retry-key fix (`src/components/inventory/BatchAdjustModal.tsx`,
+`src/hooks/useUncertainMutationIntent.ts`) reached its fourth exact-SHA Codex round with a
+cross-tab finding.
+
+**The case.** Tab C has Batch Adjust open with an adjustment typed but not sent. While the browser
+has tab C suspended, tab A sends the same adjustment, loses the reply (the batch freezes), retries
+and finishes it. Tab C then receives both storage events after storage already says "finished". The
+hook re-reads the current stored value rather than each event's `newValue`, so tab C never shows the
+frozen batch, is not blocked, and a click on its own Adjust button sends a fresh adjustment under a
+new key — the stock moves again.
+
+**Why it was accepted.** That second move comes from a separate operator click in another tab. The
+same double adjustment already happens with no lost reply at all (tab A succeeds, tab C then
+submits the same typed adjustment), and no idempotency key can tell two deliberate clicks apart.
+The fix guarantees that one click, and every retry of it, moves stock at most once. Codex's proposed
+fix — a monotonic "pending observed while open" signal built from validated `StorageEvent.newValue`
+— would cover only the lost-reply variant. Revisit if duplicate stock adjustments from two open
+tabs are seen in stock history.
+
+---
+
 ## PARKED 2026-09-10 — the ahead-of-pending marker hardening stopped at review round twelve with two HIGH findings open
 
 **Status.** The rewrite of the migration-apply guard's ahead-of-pending override (the marker that lets a
@@ -544,7 +570,7 @@ failed for a reason unrelated to its assertion. Both mocks now mirror the hook's
 ---
 ## PARKED 2026-09-05 (WRITTEN, REVIEWED, PROVEN — NOT APPLIED) — invoice numbers take their year from UTC, so the last six hours of 31 December are numbered into the next year
 
-**Migration file:** `supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql`.
+**Migration file:** `supabase/migrations/20260914100100_next_invoice_number_year_chicago.sql`.
 **Deadline: 31 December 2026** — months out, which is why this is parked rather than rushed.
 **Mason applies it himself.** Nothing about it has been applied, and the standing hands-free
 migration allowance was deliberately not used.
@@ -575,7 +601,8 @@ and `20260904180000` (both applied live 2026-09-04) and the settled ~2026-07-10 
   misclassify three already-applied migrations as pending. Refresh it from a live ledger read first.
 - The `20260905090000` stamp was the correct next slot on 2026-09-05 (effective high-water by NAME
   was `20260904180000`), but a parked file's timestamp perishes. Re-derive it immediately before
-  apply and expect renumbering.
+  apply and expect renumbering. (It was restamped to `20260914100100` on 2026-09-14, after
+  `20260908120000_close_pr535_live_gaps` applied live.)
 
 Also re-run `scripts/smoke/prove-next-invoice-number-year-chicago.mjs` (35/35 at parking time, real
 PostgreSQL 17 container) and confirm the live body still matches pin `b53499d0…` — a drifted body
@@ -607,7 +634,7 @@ the December work is filed under the wrong year and consumes that year's first n
 **Same 31 December 2026 deadline.**
 The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
 they were deliberately not bundled into the parked migration because that file is pinned to one
-function's body md5. **Do not close this family when `20260905090000` is applied.**
+function's body md5. **Do not close this family when `20260914100100` (formerly `20260905090000`) is applied.**
 
 The general lesson, worth more than the six fixes: **a sweep proves only the question it asked.**
 Searching for `now()` cannot clear `CURRENT_DATE`, and on a UTC server the two are the same bug.
@@ -1994,6 +2021,106 @@ but still does not solve the naming-scope limit.
 landing after one clean review round, as an improvement to a capped control rather than a resumed programme.
 A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-recut-20260831` (no PR) and
 duplicates one of #449's fixes — delete it rather than continuing it.
+
+
+## OPEN 2026-09-11 — an expired uncertain request locks its dialog with no in-app way to clear it
+
+**Owner:** Codex PR #624 landing coordinator. Recovery design and verification plan due 2026-09-18;
+implementation gets a separate product queue slot under section 8 of the approved 2026-09-11 backlog
+plan. Product UI work, so the 2026-09-11 to 2026-09-25 guard-logic freeze does not apply.
+
+`useUncertainMutationIntent` keeps a request whose reply was lost as pending for a 23-hour safe retry
+window. Once that window passes, the record is still restored as pending on every visit: the dialog
+reopens locked, shows "The safe automatic retry window expired. Do not submit this mutation again",
+disables its retry button, and cannot be closed. Nothing in the app clears an expired pending record; only
+a successful retry or a positively identified server refusal releases it, and after expiry neither can
+run. The lock lives in that one browser.
+
+Pre-existing on `main` for the Inventory page Receive dialog, `QuickReceivePanel`, `ReceivingHubPanel` and
+`NewVendorBill`. PR #624 extends it to the Inventory page Adjust and Hold dialogs.
+
+**Interim:** the staff recovery steps in `docs/workflows/INVENTORY_RULES.md` ("Staff recovery", step 5):
+verify the outcome in Active Holds or View transaction history, tell an admin, and re-enter from another
+browser only if it did not go through. **Fix:** an admin "verified, clear this request" control that
+records who cleared it and what they checked.
+
+
+## OPEN 2026-09-05 — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold (fix written and proven, not applied)
+
+**Owner:** the PR #624 lane (worktree `inventory-idempotency-key-reset-888161`), reassignable by the fleet
+coordinator. **Exposure assessment due 2026-09-18:** a read-only look at live holds for the two server
+defects the parked migration closes while it stays unapplied: a NULL `p_force` that skips the admin and
+free-stock checks, and holds created by staff whose profile is missing or inactive. The live read needs
+Mason's explicit OK at the time; the result decides whether the apply moves up.
+
+The live `create_inventory_hold` body (the `20260630173022` parked_010 body — the 2026-07-27 production
+dump proves it IS installed; earlier notes calling it "parked, never applied" were wrong) reads its
+idempotency receipt with a plain SELECT before the stock lock and writes it after the hold with
+`ON CONFLICT DO NOTHING`. Two overlapping calls with the same key both pass the receipt read. The live
+BEFORE INSERT guard on `idempotency_keys` (`_guard_idempotency_key_insert`, 20260714230000 /
+20260716160000) then rolls the loser back with `IDEMPOTENCY_CONCURRENT_REPLAY_RETRY`, so the table
+ends with ONE hold — but the losing caller is told its hold failed although the winner created exactly
+that hold. The browser classifies that SQLSTATE P0001 as a definitive refusal, releases the key, and the
+operator's next click mints a NEW key and creates a second hold. Measured on 2026-09-05 in a
+network-disabled container built from the 2026-07-27 baseline plus all 75 later migrations
+(`scripts/smoke/prove-create-inventory-hold-intent-binding-real-schema.mjs`): pre-fix race = 1 hold,
+session 2 exits with that error. The same body also gates role with `v_role NOT IN (...)`, which lets a
+caller with no `profiles` row through (NULL is not IN anything), and accepts a NULL key.
+
+Local forward migration `20260908130000_bind_create_inventory_hold_receipt_to_intent.sql` renames the
+live body to `_create_inventory_hold_intent_impl_20260905` (postgres-only EXECUTE) and installs a
+same-signature wrapper: AUTH_REQUIRED, ACTOR_MISMATCH on a forged `p_performed_by`, a NULL-safe ACTIVE
+admin/sales_rep gate, key required, request fingerprint, then `check_idempotency_intent` (per-key
+advisory lock, actor + fingerprint binding) BEFORE any mutation, then the renamed body, then receipt
+binding. Post-fix race in the same container = 1 hold, both sessions succeed with the same `hold_id`;
+the rolled-back chain `smoke-create-inventory-hold-intent-binding.sql` passes; re-apply is clean.
+The 2026-09-13 independent Sol HIGH review identified the previously accepted keyless cutover gap.
+The extended real-schema prover now pauses an actual authenticated sales-user old-body invocation at
+the stock lock, installs the candidate, then releases the call. The prior candidate committed a
+500-unit unreceipted hold against 100 available after cutover. The corrected standalone insert barrier
+rejects that call with zero holds. It owns manual/crop_program inserts with NULL source_id; read-only
+live inspection confirms the three automatic sync writers attach source_id. Source-backed job/program
+insert boundaries pass without standalone context, while the receipt trigger still rejects a valid
+stale context naming a different key. Rerun succeeds; deliberately changed insert-barrier code is
+refused and preserved. This supersedes the old residual acceptance and absence of literal interleaving
+proof. The boundary test does not execute every automatic sync RPC end to end.
+**No live apply is authorized.** Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
+and every preflight condition held: one overload, owner `postgres`, `plpgsql`, SECURITY DEFINER,
+`proconfig = {search_path=public, pg_temp}`, the pinned argument list with defaults,
+`md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` for the 4,046-character body whose sha256 is the
+pinned `3c86421e…` (md5 recomputed locally from the 2026-07-27 dump for comparison — the live-data
+guard's read-only allowlist has no `digest()`), the private impl name absent, all three helpers
+present, both binding columns present, EXECUTE held by `authenticated`/`service_role` and not `anon`,
+`check_idempotency_intent` executable by none of those three, and ZERO unexpired
+`create_inventory_hold` receipts of any kind. The pre-existing
+`section9_bind_idempotency_receipt_20260826` BEFORE INSERT trigger short-circuits for operations
+outside its AP/receiving list, so it leaves hold receipts alone. The preflight still fails closed if the
+installed body hash or argument list differs from the pins, and REFUSES (`PREFLIGHT_LEGACY_RECEIPTS`) while
+any unexpired receipt written by the old body exists — such a receipt would otherwise lock its operator out
+of creating any hold for up to 24 hours after the swap, so the apply belongs in a quiet window and may need
+a second attempt. The frontend fix for the per-open `resetKey()` on the same page ships in this same PR (#624)
+and is safe to merge BEFORE the apply (re-checked 2026-09-11): it sends the installed body exactly the
+arguments `main` sends, and a key is re-sent only with its original frozen request or after another tab
+confirmed that request committed; the installed body replays both by key. A racing loser's
+`IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` now keeps the key instead of releasing it. After the apply, a
+retained key whose request CHANGES raises `IDEMPOTENCY_INTENT_MISMATCH`, which the page treats as
+"uncertain" and locks the dialog — acceptable, deliberate. Do not author a competing migration.
+
+**Compatibility, installed vs parked contract (2026-09-11).** The branch sends `create_inventory_hold` (10
+arguments), `adjust_inventory` (5) and `retire_inventory_item` (3) exactly the argument sets `main` sends, and
+the migration keeps the same signature, so the frontend runs on either body. Key rules: a key is re-sent only
+with its frozen request or after another tab confirmed that request committed; a racing loser's
+`IDEMPOTENCY_CONCURRENT_REPLAY_RETRY` keeps the key; a definitive refusal releases it. Server side, the
+real-schema prover covers both bodies (`pre_race=1_hold_loser_errors`, `post_race=1_hold_loser_replays`).
+Two gaps, stated plainly: key-cleanup failures are not exercised, and there is no live old-body run (by
+design: production gets observation only, so the isolated prover is the evidence).
+
+**Known gap, not introduced here:** once the 23-hour safe retry window passes, a locked dialog shows "The
+safe automatic retry window expired", disables its retry button, cannot be closed, and reopens on every
+visit, because nothing in the app clears an expired request. The Inventory page's Receive dialog and the
+receiving and vendor-bill screens already behave this way on `main`; this PR extends it to Adjust and Hold.
+The lock lives in that one browser. Tracked as its own item: OPEN 2026-09-11 (expired uncertain
+request) above.
 
 
 ## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
