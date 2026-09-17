@@ -478,7 +478,7 @@ export function transferInvoiceErrorMessage(err: unknown): string | null {
 
 /**
  * A transfer reply with no data and no error is as unverifiable as a malformed one
- * (CodeRabbit, PR #708). Call it before assertRpcResult() so the empty reply throws
+ * (CodeRabbit, PR #708). Call it before the generic RPC assert so the empty reply throws
  * TRANSFER_INVOICE_RESULT_INVALID and both screens reconcile instead of showing a
  * generic error.
  */
