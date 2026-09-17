@@ -2719,6 +2719,19 @@ function registryMigrationHighWater(): string {
 // AFTER 2026-09-03 12:47 UTC lands, together with src/types/supabase.ts
 // regenerated from production — at that point the generated-names arm covers
 // these RPCs on its own.
+// The two 20260914100* commission candidates below were added on 2026-09-17,
+// when this PR's registry refresh moved migrations_high_water from
+// 20260904152221 to the 20260915033227 ledger version of the applied hold
+// migration. Both files are authored 20260914100*, so they went from ABOVE the
+// high-water to BELOW it, the `timestamp > highWater` arm of the discovery rule
+// went false, and their trigger-only recorders dropped out of the mutator
+// inventory — which surfaced as their MUTATOR_INVENTORY_EXEMPT entries reading
+// stale. Registering them keeps the recorders under the guard instead of
+// deleting the exemptions that describe them.
+//   20260914100300 last defines record_commission_settlement_event;
+//   20260914100900 last defines record_commission_earned_state.
+// Clear them only once src/types/supabase.ts is regenerated from production
+// after these apply, at which point the generated-names arm covers them.
 const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831160000',
   '20260831161000',
@@ -2726,6 +2739,8 @@ const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831212415',
   '20260831233000',
   '20260831235900',
+  '20260914100300',
+  '20260914100900',
 ]);
 
 /**
@@ -2758,9 +2773,20 @@ function migrationsAwaitingTypeRegeneration(): Set<string> {
     if (!row) {
       throw new Error(`Registered migration ${timestamp} has no docs/reference/migration-history.md row.`);
     }
-    if (!/\*\*(PENDING APPLY|APPLIED LIVE)\b/i.test(row)) {
+    // "LOCAL CANDIDATE - not applied" is the third wording migration-history
+    // actually uses for an unapplied candidate, and it means exactly what
+    // PENDING APPLY means here. Accepting only the first two spellings made a
+    // whole class of pending row impossible to register: the row is real and
+    // correctly worded, yet registering its timestamp threw. That is how the
+    // 20260914100* commission candidates could not be kept in the mutator
+    // inventory once the registry high-water moved above them. The phrasing
+    // matches the same LOCAL CANDIDATE ... NOT APPLIED shape that
+    // localCandidateMigrationPathsFromHistory keys on, so the two guards agree
+    // on which rows are pending.
+    if (!/\*\*(PENDING APPLY|APPLIED LIVE)\b/i.test(row)
+      && !/\bLOCAL\s+CANDIDATE\b[\s\S]*\bNOT\s+APPLIED\b/i.test(row)) {
       throw new Error(
-        `Migration-history row for ${timestamp} must start its purpose with PENDING APPLY or APPLIED LIVE: ${row}`,
+        `Migration-history row for ${timestamp} must state PENDING APPLY, APPLIED LIVE, or LOCAL CANDIDATE ... NOT APPLIED: ${row}`,
       );
     }
     timestamps.add(timestamp);
