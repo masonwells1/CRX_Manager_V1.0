@@ -21,7 +21,7 @@
  * The page is rendered and clicked, not inspected as source: these are claims
  * about what an operator sees after a specific server answer.
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PurchaseOrderDetail from './PurchaseOrderDetail';
@@ -212,6 +212,7 @@ async function openReceiveAndSubmit() {
 describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.captureException.mockReset();
     mocks.from.mockImplementation((table: string) => {
       if (table === 'purchase_orders') return query(po);
       if (table === 'purchase_order_items') return query(poItems);
@@ -357,6 +358,7 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
     // The button says "Retry Exact Receiving" — the real locked-state label, which
     // the earlier all-defaults mock could never have produced.
     const retry = await screen.findByRole('button', { name: /Retry Exact Receiving/i });
+    expect(screen.getByText(/this saved receiving request needs reconciliation/i)).toBeInTheDocument();
     fireEvent.click(retry);
 
     // Positive sentinel: the submission completed.
@@ -371,6 +373,34 @@ describe('PurchaseOrderDetail receiving — post-commit corridor', () => {
     expect(mocks.downloadReceivingPdf).not.toHaveBeenCalled();
     // And nothing claims THIS attempt performed the receipt.
     expect(mocks.toast).not.toHaveBeenCalledWith('success', 'Items received and inventory updated');
+  });
+
+  it('keeps the confirmed cleanup warning visible and isolates a reporting failure', async () => {
+    mocks.intent.unresolvedIntent = LOCKED_REQUEST;
+    mocks.intent.isIntentLocked = true;
+    mocks.resolveIntent.mockRejectedValue(new Error('Acknowledgment cleanup blocked'));
+    mocks.captureException.mockImplementation(() => { throw new Error('Telemetry unavailable'); });
+    render(<MemoryRouter initialEntries={['/purchase-orders/po-1']}><Routes><Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} /></Routes></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /Retry Exact Receiving/i }));
+    await screen.findByText(/these goods were recorded once/i);
+    expect(mocks.captureException).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tags: { source: 'durable-intent-resolve', page: 'purchase-order-detail', operation: 'receive_po_items' } }));
+    const dialog = screen.getByRole('dialog', { name: /receive.*items/i });
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    expect(mocks.toast.mock.calls.filter(([kind]) => kind === 'success' || kind === 'error')).toEqual([]);
+  });
+
+  it.each(['Cancel', 'Close'])('allows %s on a foreign receiving lock without retiring the request', async (control) => {
+    mocks.intent.isIntentLocked = true;
+    mocks.intent.isForeignIntentLocked = true;
+    render(<MemoryRouter initialEntries={['/purchase-orders/po-1']}><Routes><Route path="/purchase-orders/:id" element={<PurchaseOrderDetail />} /></Routes></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /Receive Items/i }));
+    const dialog = screen.getByRole('dialog', { name: /receive.*items/i });
+    expect(within(dialog).getByRole('button', { name: /Retry Exact Receiving/i })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: control }));
+    expect(screen.queryByRole('dialog', { name: /receive.*items/i })).not.toBeInTheDocument();
+    expect(mocks.resolveIntent).not.toHaveBeenCalled();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('receive_po_items', expect.anything());
   });
 
   // gpt-5.6-sol on 2ff8bdafc: the retry after a failed cleanup is the MOST likely

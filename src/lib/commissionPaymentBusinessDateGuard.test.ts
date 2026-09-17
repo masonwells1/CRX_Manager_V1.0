@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync(
-  'supabase/migrations/20260905200300_enforce_commission_payment_business_date.sql',
+  'supabase/migrations/20260914100400_enforce_commission_payment_business_date.sql',
   'utf8',
 ).replace(/\r\n/g, '\n');
 const reports = readFileSync('src/pages/Reports.tsx', 'utf8').replace(/\r\n/g, '\n');
@@ -39,7 +39,7 @@ describe('commission payment Chicago business-date guard', () => {
   it('serializes the preflight and refuses an existing future-dated payment', () => {
     const timeout = migration.indexOf("SET LOCAL lock_timeout = '10s';");
     const lock = migration.indexOf(
-      'LOCK TABLE public.commission_payments IN SHARE ROW EXCLUSIVE MODE;',
+      'LOCK TABLE public.commission_payments IN ACCESS EXCLUSIVE MODE;',
     );
     const preflight = migration.indexOf('DO $preflight$');
     const futureScan = migration.indexOf(
@@ -49,6 +49,24 @@ describe('commission payment Chicago business-date guard', () => {
     expect(timeout).toBeGreaterThan(-1);
     expect(timeout).toBeLessThan(lock);
     expect(lock).toBeLessThan(preflight);
+
+    // No lock upgrade: the file's only LOCK statement is the up-front ACCESS
+    // EXCLUSIVE one, so no weaker commission_payments lock precedes the DROP
+    // TRIGGER. Comments are stripped because the header names the old mode.
+    const lockStatements = (sql: string) =>
+      sql
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('--'))
+        .join('\n')
+        .match(/\bLOCK\s+TABLE\b[\s\S]*?;/gi) ?? [];
+    expect(lockStatements(migration)).toEqual([
+      'LOCK TABLE public.commission_payments IN ACCESS EXCLUSIVE MODE;',
+    ]);
+    const weakerLockAdded = migration.replace(
+      'LOCK TABLE public.commission_payments IN ACCESS EXCLUSIVE MODE;',
+      'LOCK TABLE public.commission_payments IN SHARE ROW EXCLUSIVE MODE;\nLOCK TABLE public.commission_payments IN ACCESS EXCLUSIVE MODE;',
+    );
+    expect(lockStatements(weakerLockAdded)).toHaveLength(2);
     expect(futureScan).toBeGreaterThan(preflight);
     expect(migration).toContain(
       'COMMISSION_PAYMENT_DATE_AFTER_BUSINESS_TODAY: existing future-dated commission payment requires review',
@@ -60,7 +78,7 @@ describe('commission payment Chicago business-date guard', () => {
       'COMMISSION_PAYMENT_BUSINESS_DATE_PREFLIGHT: existing function or trigger drift',
     );
     expect(attributes).toContain(
-      'supabase/migrations/20260905200300_enforce_commission_payment_business_date.sql text eol=lf',
+      'supabase/migrations/20260914100400_enforce_commission_payment_business_date.sql text eol=lf',
     );
   });
 
