@@ -192,9 +192,18 @@ callers. The family is now five spellings deep:
 | `[\s(]` — a character class whose own `s` precedes the `(` | `s()` |
 | `\M(?:` — a regex word boundary before a non-capturing group | `m()` |
 
-Consequence: the `db-invariant-sweeps` actor-forgery predicates cannot be executed verbatim through
-`mcp__supabase__execute_sql`, the documented "Claude mode" path in `run-sweeps.mjs`. `main`'s copy is
-blocked too. Workarounds that preserve row selection are display/alias-only: give function FROM-items
+The 29 `db-invariant-sweeps` predicates used to be refused this way, which blocked the documented
+"Claude mode" path in `run-sweeps.mjs`. Since PR #648 they are **recognised by content
+fingerprint** instead of parsed: the guard keeps the sha256 of each predicate file (after normalising
+line endings, a UTF-8 BOM and trailing ASCII whitespace) and allows those texts and their line-ending,
+BOM and trailing-whitespace variants, so each runs verbatim through `mcp__supabase__execute_sql`. The call-detection defect itself is **unchanged** — any
+other statement using the spellings above is still refused, and so is a predicate that was just added
+or edited until its fingerprint is authorised. To authorise one, run
+`node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs`; it prints the fingerprint block
+and never changes the guard, and applying that block to `.claude/hooks/live-testdata-lib.mjs` is an
+approval-gated hook edit (see `scripts/db-invariant-sweeps/README.md`, "How to add a predicate").
+
+For ad-hoc SQL, the workarounds that preserve row selection are display/alias-only: give function FROM-items
 a bare alias (`unnest(x) WITH ORDINALITY AS named` yields `named.named`), alias the recursive CTE's
 columns in its anchor SELECT instead of in a column list, order character classes so `(` never
 follows an identifier character (`[(\s]`, not `[\s(]`), separate `\M` from `(?:` with `\s*`, and use

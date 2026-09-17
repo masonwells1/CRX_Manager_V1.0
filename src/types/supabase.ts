@@ -14056,6 +14056,7 @@ export type Database = {
         Args: {
           p_application_service_id?: string
           p_chemicals: Json
+          p_invoice_date?: string
           p_invoice_id?: string
           p_locations: Json
         }

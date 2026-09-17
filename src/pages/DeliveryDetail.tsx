@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff,
@@ -116,6 +116,15 @@ export default function DeliveryDetail() {
 
   // Signature signed URL (generated on demand for privacy)
   const [signedSignatureUrl, setSignedSignatureUrl] = useState<string | null>(null);
+  const signatureRouteIdRef = useRef(id);
+
+  // This route reuses the same component instance. Retire the previous delivery's
+  // private signature before paint, and make every async URL response prove it
+  // still belongs to the active route before publishing it.
+  useLayoutEffect(() => {
+    signatureRouteIdRef.current = id;
+    setSignedSignatureUrl(null);
+  }, [id]);
 
   // Driver completion state
   const [signedBy, setSignedBy] = useState('');
@@ -382,7 +391,7 @@ export default function DeliveryDetail() {
             const { data: signedData } = await supabase.storage
               .from('delivery-signatures')
               .createSignedUrl(del.signature_url, 3600); // 1 hour expiry
-            if (signedData?.signedUrl) {
+            if (signatureRouteIdRef.current === id && signedData?.signedUrl) {
               setSignedSignatureUrl(signedData.signedUrl);
             }
           }

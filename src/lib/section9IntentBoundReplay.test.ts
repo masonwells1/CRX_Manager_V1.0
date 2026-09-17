@@ -148,11 +148,21 @@ describe('Section 9 actor-and-intent replay binding', () => {
     expect(vendorBill).toContain('paymentIntent.resolveIntent()');
 
     expect(purchaseOrder).toContain('reverseIdem.resetKey()');
-    // adjust_inventory and retire_inventory_item replay on the key alone — the
-    // live catalog shows no actor/payload binding and no 20260831 migration adds
-    // one — so these two retire a PAYLOAD-SCOPED key, not a page-scoped one.
-    // See the Sol BLOCKERS verdict on ef82064a.
-    expect(inventoryPage).toContain('if (getIdempotencyBindingRejection(error)) adjustIdem.resetKeyFor(scope);');
+    // adjust_inventory still replays on the key alone, but its protection moved
+    // from a per-payload key scope to the durable record that binds the key and
+    // payload together. The RPC must consume that frozen request, not form
+    // state; this is not a reduction back to a bare getKey(). Retirement still
+    // needs its payload-scoped key because it has no durable request record.
+    expect(inventoryPage).toContain('const request = await adjustIntent.beginIntent({');
+    expect(inventoryPage).toContain('const idemKey = adjustIntent.getIdempotencyKey();');
+    expect(inventoryPage).toContain('p_inventory_id: request.inventoryId');
+    expect(inventoryPage).toContain('p_delta: request.delta');
+    expect(inventoryPage).toContain('p_reason: request.note as string');
+    expect(inventoryPage).not.toContain('p_inventory_id: selectedId');
+    expect(inventoryPage).not.toContain('p_delta: qty');
+    expect(inventoryPage).not.toContain('p_reason: adjustNote');
+    expect(inventoryPage).toContain('adjustIntent.classifyFailure(error)');
+    expect(inventoryPage).toContain('await adjustIntent.resolveIntent();');
     expect(inventoryPage).toContain('if (getIdempotencyBindingRejection(error)) retireIdem.resetKeyFor(scope);');
     expect(vendorBill).toContain('editIdem.resetKey();');
     expect(vendorBill).toContain('voidIdem.resetKeyFor(voidBillScope);');
