@@ -19,7 +19,9 @@ JSX closing tags stay code. An unclosed quote ends at the line break, so JSX tex
 `Don't` cannot mask the lines after it. The recovery, fire-and-forget and intent-rotation
 windows, plus the same-line guard check, all read that masked text. Test-only: no
 application code changed. `docs/manual/KNOWN_ISSUES.md` residual (h) and the scanner's own
-comments say that only `aliasNames()` still reads raw source.
+comments said that only `aliasNames()` still reads raw source. **That is no longer true as of
+2026-09-17 (PR #712):** both of its call sites — the sweep's `aliasResetPattern()` and the
+pinned-site label — now pass masked text, so residual (h) is closed.
 
 Proof observed:
 

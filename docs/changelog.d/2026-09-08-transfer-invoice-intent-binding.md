@@ -2,15 +2,17 @@
 
 Delivery: SOURCE/UI-ONLY. Merging PR #638's final delivery PR (#638 is delivered
 through a series of delivery PRs, each replacing the last) ships the two job-invoice screens and repository files; it applies
-no SQL. The migration files in its diff are all parked
-and unapplied:
+no SQL. Exactly one migration file is in its diff, parked and unapplied:
 
-- `20260908130800_bind_transfer_invoice_intent.sql` is new: the wrapper and cutover.
-- `20260908130900_repair_commission_history_label_snapshots.sql` is renamed from
-  `20260905210000_repair_commission_history_label_snapshots.sql` so it still runs
-  after the wrapper; only its ordering comment changed.
-- `20260905200200_refuse_stale_commission_payment_recipient.sql` is edited in place;
-  it has never been applied.
+- `20260914100800_bind_transfer_invoice_intent.sql` is new: the wrapper and cutover.
+  It was written as `20260908130800` and restamped on 2026-09-14 by PR #704, which
+  moved the whole stranded cohort above the applied high-water; see
+  `docs/changelog.d/2026-09-13-restamp-stranded-20260905-migrations.md`.
+
+The repair and the recipient guard are **no longer touched by this delivery**. Earlier
+delivery PRs renamed the repair and edited the recipient guard's comments; after the
+merge with PR #704 both match `main` byte for byte, so the only remaining migration
+change is the wrapper above.
 
 The screens' new `job_id` check works with both contracts. Live's installed
 `transfer_job_to_invoice` returns `job_id` on its single-invoice and split paths, and

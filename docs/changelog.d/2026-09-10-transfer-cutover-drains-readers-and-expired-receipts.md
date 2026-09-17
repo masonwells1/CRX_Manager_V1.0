@@ -1,7 +1,8 @@
 ## 2026-09-10 — Transfer cutover drains readers and clears expired legacy receipts
 
 Sol's exact-SHA review of PR #638 found a replay path in the parked
-`20260908130800_bind_transfer_invoice_intent.sql` cutover. A legacy
+`20260914100800_bind_transfer_invoice_intent.sql` cutover (then stamped
+`20260908130800`; restamped 2026-09-14 by PR #704). A legacy
 `transfer_job_to_invoice` call that starts while its receipt is unexpired waits on the
 key's advisory lock inside `check_idempotency()` before it touches `idempotency_keys`,
 so the cutover's table lock never drains it. If the receipt expires and the cutover

@@ -4,7 +4,8 @@ PR: #638 (delivery PR after #696)
 
 CodeRabbit's review of delivery PR #696 at `b1f0055b2` raised three findings.
 
-- **Parked migration `20260908130800_bind_transfer_invoice_intent.sql` (not applied).**
+- **Parked migration `20260914100800_bind_transfer_invoice_intent.sql` (not applied; then
+  stamped `20260908130800`, restamped 2026-09-14 by PR #704).**
   Its autocommit transaction-guard TEMP table now enables Row Level Security with a
   deny-all policy in the same file, matching the rule that every created table carries
   RLS and a policy. The owning migration role is exempt from its own table's RLS, so the

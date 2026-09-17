@@ -1088,6 +1088,25 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     }
   });
 
+  // CodeRabbit (PR #712): the pinned-site test discovered aliases and labelled sites from RAW
+  // source, the second half of residual (h). A `resetKey:` in a comment or string could invent
+  // an alias there and relabel a pinned site even though the sweep itself ignored it.
+  it('the pinned-site label discovers aliases from masked source only', () => {
+    const commented = ['// const { resetKey: refetch } = useIdempotencyKey();', '  refetch();'].join('\n');
+    // Load-bearing: the raw view DOES invent the alias, which is exactly what used to leak in.
+    expect(aliasNames(commented)).toEqual(['refetch']);
+    expect(aliasNames(maskNonCode(commented).split('\n').map(stripNoise).join('\n'))).toEqual([]);
+
+    // So the site label falls back to the line text instead of a fabricated alias name.
+    const line = '  refetch();';
+    expect(siteIdentifiers(line, aliasNames(commented))).toEqual(['refetch']);
+    expect(siteIdentifiers(line, [])).toEqual(['refetch();']);
+
+    // Positive control: a real declaration survives masking and still names the alias.
+    const real = ['const { resetKey: refetch } = useIdempotencyKey();', '  refetch();'].join('\n');
+    expect(aliasNames(maskNonCode(real).split('\n').map(stripNoise).join('\n'))).toEqual(['refetch']);
+  });
+
   // CodeRabbit (PR #697): a `/` that is itself division is an operator, so a second `/` right
   // after it opens a regex (`value / /re/.test(v)`); its text must not supply an excuse.
   it('a regex right after a division operator cannot excuse a reset', () => {
@@ -1140,7 +1159,12 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     for (const file of Object.keys(KNOWN_UNFIXED_SITES)) {
       const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
       const lines = source.split('\n');
-      const names = aliasNames(source);
+      // classify() masks its own windows, so it takes the raw lines. Alias discovery and the
+      // site label must not: a `resetKey:` inside a comment or string would otherwise invent an
+      // alias and relabel a pinned site. Same masked view findResetBeforeAssert() scans
+      // (CodeRabbit, PR #712 — the second half of residual (h)).
+      const maskedLines = maskNonCode(source).split('\n').map(stripNoise);
+      const names = aliasNames(maskedLines.join('\n'));
       const allowed = ALLOWED_REASONS[file] ?? [];
       // Exclude a site ONLY for a reason this file actually declares. Filtering on
       // "classify returned anything" let a new defect that merely sat near an
@@ -1151,7 +1175,7 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
           const reason = classify(lines, n);
           return !(reason && allowed.includes(reason));
         })
-        .flatMap((n) => siteIdentifiers(lines[n - 1] ?? '', names))
+        .flatMap((n) => siteIdentifiers(maskedLines[n - 1] ?? '', names))
         .sort();
     }
     expect(actual).toEqual(KNOWN_UNFIXED_SITES);

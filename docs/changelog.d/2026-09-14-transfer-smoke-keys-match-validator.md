@@ -1,6 +1,7 @@
 ## 2026-09-14 - Every transfer smoke key now passes the parked wrapper's key format
 
-The parked, unapplied migration `20260908130800_bind_transfer_invoice_intent.sql` accepts
+The parked, unapplied migration `20260914100800_bind_transfer_invoice_intent.sql` (then
+stamped `20260908130800`; restamped 2026-09-14 by PR #704) accepts
 only idempotency keys matching `^[!-~]{1,200}$`, so a key containing a space raises
 `IDEMPOTENCY_KEY_REQUIRED`. The machine-fee chain was corrected earlier, but Codex App's
 review of delivery PR #698 found that other registered rollback chains still passed

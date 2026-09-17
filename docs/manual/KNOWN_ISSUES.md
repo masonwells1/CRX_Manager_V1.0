@@ -1757,8 +1757,13 @@ comments and string literals are stripped before matching (round 5: a comment me
 mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is still not handled.
 (g) The same stripping removes whole TEMPLATE LITERALS including their `${…}` interpolations, so a
 reset executed inside an interpolation is invisible, and because stripping is line-based a multi-line
-template body still reads as code. (h) `aliasNames()` still reads RAW source, so a comment or string
-containing `resetKey:` can invent an alias. `classify()` no longer does (2026-09-10, CodeRabbit on
+template body still reads as code. (h) **CLOSED 2026-09-17 (CodeRabbit on PR #708, then PR #712).**
+`aliasNames()` used to read RAW source, so a comment or string containing `resetKey:` could invent an
+alias. Both of its call sites now pass masked text: the sweep's `aliasResetPattern()` inside
+`findResetBeforeAssert()`, and the pinned-site label in the known-unfixed-sites test, which also
+labels sites from the masked line. A regression case asserts that the raw view still invents the
+alias while the masked view does not, so the fix cannot silently become a no-op. `classify()` no
+longer reads raw source either (2026-09-10, CodeRabbit on
 PR #638): all three of its windows are read from source whose comments, string contents,
 template-literal text and regex-literal bodies are masked from the top of the file, across lines —
 so a `/* … */` block or a template opened above a window still counts, and a template's `${…}`
@@ -1779,8 +1784,11 @@ of its line. (i) The
 `functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
 intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes
 `foo.bar.resetKey()` to `bar.resetKey`, can double-count when an alias is itself named `resetKey`,
-and does not order multiple tokens sharing one line. Closing (a), (b), (f), (g) and (h) needs a real
-tokenizer, not a line scan.
+and does not order multiple tokens sharing one line. Closing (a), (b), (f) and (g) needs a real
+tokenizer, not a line scan. The same applies to the JSX gap noted above — CodeRabbit raised it again
+on PR #712 (2026-09-17), asking that the mask distinguish JSX text from strings, comments, templates
+and regex literals. That is the tokenizer, so it stays deferred with #686 rather than being attempted
+inside a delivery PR.
 
 (k) **A route-id scope binds the record the ROUTE names, not the record the REQUEST sends** — added
 2026-09-04 from CodeRabbit's round-2 finding on PR #584, after the route-scope fix itself had landed.
