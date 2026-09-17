@@ -8,6 +8,7 @@ vi.mock('@supabase/supabase-js', () => ({
 import {
   checkMutationResult,
   assertRpcResult,
+  assertTransferDataPresent,
   assertTransferResultForJob,
   hasRpcCode,
   describePostInvoiceBlock,
@@ -206,6 +207,20 @@ describe('assertTransferResultForJob', () => {
   ])('rejects a result with a %s invoice id', (_label, result) => {
     expect(() => assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd'))
       .toThrow(/^TRANSFER_INVOICE_RESULT_INVALID:/);
+  });
+
+  // CodeRabbit (PR #708): an empty reply without an error is as unverifiable as a malformed
+  // one, so it must reach reconciliation instead of the generic toast.
+  it.each([['null', null], ['undefined', undefined]])('assertTransferDataPresent rejects %s data', (_label, data) => {
+    expect(() => assertTransferDataPresent(data)).toThrow(/^TRANSFER_INVOICE_RESULT_INVALID:/);
+    expect(isTransferInvoiceResultInvalid((() => {
+      try { assertTransferDataPresent(data); } catch (err) { return err; }
+      return null;
+    })())).toBe(true);
+  });
+
+  it('assertTransferDataPresent accepts a present result', () => {
+    expect(() => assertTransferDataPresent({ job_id: 'j' })).not.toThrow();
   });
 
   it('accepts a split result that carries its anchor invoice id', () => {

@@ -26,7 +26,9 @@ The migration now:
 - deletes expired, unbound `transfer_job_to_invoice` receipts under that lock. These are
   expired retry-cache rows, not invoices or jobs; `check_idempotency()` deletes the same
   rows the next time their key is used. Together with the existing refusal of unexpired
-  and no-expiry receipts, no unbound transfer receipt survives cutover.
+  and no-expiry receipts, no unbound transfer receipt remains in the committed table after
+  cutover (a pre-cutover REPEATABLE READ or SERIALIZABLE snapshot can still read a deleted
+  one; see the residual below).
 
 Both job-invoice screens (`JobDetail` and `UnbilledApplicationsPanel`) now also refuse a
 transfer result whose `job_id` is missing or names another job. They route it through

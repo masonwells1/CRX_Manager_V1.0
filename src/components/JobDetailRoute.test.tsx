@@ -341,6 +341,7 @@ describe('JobDetail transfer intent recovery', () => {
     ['another job', { job_id: 'job-other', invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
     ['no job', { invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
     ['this job with no invoice id', { job_id: 'job-transfer', invoice_number: 'INV-1' }],
+    ['no data at all', null],
   ])('does not trust a transfer result for %s and reconciles before a new key', async (_label, wrongResult) => {
     let resolveReconciliation!: (result: { data: unknown; error: unknown }) => void;
     const reconciliation = new Promise<{ data: unknown; error: unknown }>((resolve) => {

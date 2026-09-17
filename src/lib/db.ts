@@ -477,6 +477,18 @@ export function transferInvoiceErrorMessage(err: unknown): string | null {
 }
 
 /**
+ * A transfer reply with no data and no error is as unverifiable as a malformed one
+ * (CodeRabbit, PR #708). Call it before assertRpcResult() so the empty reply throws
+ * TRANSFER_INVOICE_RESULT_INVALID and both screens reconcile instead of showing a
+ * generic error.
+ */
+export function assertTransferDataPresent(data: unknown): void {
+  if (data === null || data === undefined) {
+    throw new Error(`${RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID}: transfer returned no data`);
+  }
+}
+
+/**
  * A transfer screen must not retire its request key on a result for another job.
  * A legacy receipt is scoped only to (key, operation), so a replay can carry any
  * job's result (Sol, PR #638). A missing or different job_id throws

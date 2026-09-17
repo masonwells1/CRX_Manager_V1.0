@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
@@ -455,8 +456,8 @@ const ASSERT = /assertRpcResult|checkMutationResult/;
  *  - a whole TEMPLATE LITERAL is removed including its `${…}` interpolations, so a
  *    reset executed inside one is invisible, and a multi-line template body still
  *    reads as code because stripping is line-based;
- *  - aliasNames() still reads RAW source, so a comment or string can invent an alias.
- *    classify() does not use this function: it reads its windows through maskNonCode().
+ *  - findResetBeforeAssert() discovers aliases from its masked lines, and classify() reads
+ *    its windows through maskNonCode(); neither lets comment or string text invent one.
  */
 function stripNoise(line: string): string {
   return line
@@ -821,10 +822,9 @@ function stripCommentsAndStrings(code: string): string {
  * `save_customer` defect at CustomerDetail.tsx:796 escaped the original 249-site sweep
  * entirely (Codex round-3 HIGH). Aliases are resolved per file and matched as well.
  *
- * NOTE (Codex round-6 MEDIUM): this scans RAW source, so a comment or string containing
- * `resetKey:` can invent an alias and produce false reports. The hit scan is stripped
- * of comments and strings, and classify() masks its windows (CodeRabbit, PR #638);
- * alias discovery is not.
+ * NOTE (Codex round-6 MEDIUM; CodeRabbit, PR #708): findResetBeforeAssert() passes its
+ * masked lines here, the same text its hit scan reads, so a comment or string containing
+ * `resetKey:` cannot invent an alias. classify() masks its windows the same way.
  *
  * WHAT THIS DOES NOT CATCH (Codex round-4 MEDIUM — stated so the guard is not trusted
  * past its reach): only a DIRECT destructure in the same file, `{ resetKey: name }`.
@@ -891,7 +891,9 @@ function findResetBeforeAssert(file: string): number[] {
     lines = maskNonCode(source).split('\n').map(stripNoise);
     scannedLinesCache.set(file, lines);
   }
-  const alias = aliasResetPattern(source);
+  // Aliases come from the same masked lines, so a `resetKey: name` in a comment or string
+  // cannot invent one (CodeRabbit, PR #708).
+  const alias = aliasResetPattern(lines.join('\n'));
   const isReset = (l: string) => RESET.test(l) || (alias !== null && alias.test(l));
   const hits: number[] = [];
   let last: 'CALL' | 'ASSERT' | null = null;
@@ -1064,6 +1066,26 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
     expect(classify(['  if (ready) ! /getIdempotencyBindingRejection/.test(value);', reset], 2)).toBeNull();
     // Executable evidence after a non-null division stays visible.
     expect(classify(['  const r = value! / 2 + getIdempotencyBindingRejection(error) / 3;', reset], 2)).toBe('recovery');
+  });
+
+  // CodeRabbit (PR #708): alias discovery read raw source, so a `resetKey: name` inside a
+  // comment or string made an ordinary `name()` call count as a reset.
+  it('an alias named only in a comment or string is not a reset', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'reset-alias-'));
+    const write = (name: string, body: string[]) => {
+      const file = join(dir, name);
+      writeFileSync(file, body.join('\n'));
+      return file;
+    };
+    try {
+      const callThenRefetch = ['async function go() {', "  await supabase.rpc('save');", '  refetch();', '}'];
+      expect(findResetBeforeAssert(write('comment.ts', ['// const { resetKey: refetch } = useIdempotencyKey();', ...callThenRefetch]))).toEqual([]);
+      expect(findResetBeforeAssert(write('string.ts', ["const doc = 'resetKey: refetch';", ...callThenRefetch]))).toEqual([]);
+      // Positive control: a real destructured alias is still a reset after an unchecked call.
+      expect(findResetBeforeAssert(write('real.ts', ['const { resetKey: refetch } = useIdempotencyKey();', ...callThenRefetch]))).toEqual([4]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // CodeRabbit (PR #697): a `/` that is itself division is an operator, so a second `/` right

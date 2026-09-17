@@ -182,6 +182,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     ['another job', { job_id: 'job-other', invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
     ['no job', { invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
     ['this job with no invoice id', { job_id: 'job-transfer', invoice_number: 'INV-1' }],
+    ['no data at all', null],
   ])('treats a transfer result for %s as unverified and reconciles before a new key', async (_label, wrongResult) => {
     let jobReads = 0;
     let ticketReads = 0;

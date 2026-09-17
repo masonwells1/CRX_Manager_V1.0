@@ -9,6 +9,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   supabase,
   assertRpcResult,
+  assertTransferDataPresent,
   assertTransferResultForJob,
   isTransferInvoiceResultInvalid,
   sanitizeError,
@@ -214,6 +215,7 @@ export default function UnbilledApplicationsPanel() {
       });
       if (error) throw error;
 
+      assertTransferDataPresent(data);
       const result = assertTransferResultForJob(
         assertRpcResult<TransferJobInvoiceResult>(data, 'transfer_job_to_invoice'),
         pendingJobInvoice.row.id,

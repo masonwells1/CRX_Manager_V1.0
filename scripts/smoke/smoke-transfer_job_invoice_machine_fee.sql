@@ -40,9 +40,12 @@ BEGIN
   -- be materialized. Reuse two active catalog products whose locked cost bases
   -- are below the fixture prices; the enclosing DO block still rolls back every
   -- customer, field, job, invoice, and idempotency receipt it creates.
+  -- Every scenario bills both products as liquid (GL lines; Scenario A converts a PT
+  -- rate through convert_to_gl_lb), so a dry product would not match the fixtures.
   SELECT p.id INTO v_prodA
   FROM products p
   WHERE p.is_active = true
+    AND p.product_form = 'liquid'
     AND p.current_cost > 0
     -- Scenario C splits a $25 chemical line 60/40, so both owner members
     -- remain at or above this same governed $10-or-less unit cost.
@@ -53,6 +56,7 @@ BEGIN
   FROM products p
   WHERE p.is_active = true
     AND p.id <> v_prodA
+    AND p.product_form = 'liquid'
     AND p.current_cost > 0
     AND p.current_cost <= 9.99
   ORDER BY p.created_at, p.id
