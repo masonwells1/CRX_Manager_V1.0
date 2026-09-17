@@ -148,7 +148,8 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    restart required checks,
    rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy, freeze and record the
    new SHA, open a fresh delivery PR, then apply the ready label for one review.
-   Preserve the prior PR and its findings; the provider skipped same-PR incremental
+   Close the prior PR with a `Replaced by #N` comment (closing keeps its branch, comments
+   and findings; never leave it open "as the record"); the provider skipped same-PR incremental
    review with the current configuration. Never use `@coderabbitai resume`, and reserve
    `@coderabbitai full review` for a deliberately justified complete reread. An approving GitHub
    review is **NOT** required to merge: Mason removed `required_pull_request_reviews` from `main`
