@@ -52,6 +52,36 @@ ran live on 2026-09-15. The eight-warning figure describes the **pre-refresh** b
 warnings are by design: the pending band is the still-editable band, and those seven files are
 genuinely unapplied.
 
+### The refresh exposed a latent boundary bug in `src/lib/rpcContracts.test.ts`
+
+CI caught this; it was not predicted. `registryMigrationHighWater()` returned `_meta.migrations_high_water`
+raw, and `generatedMutatingRpcInventory()` compares it against a migration's **authored 14-digit filename
+prefix** (`timestamp > highWater`, line 2818). Those are different number spaces:
+`migrations_high_water` is the ledger's **apply-time version**, which Supabase assigns at apply.
+
+Before this refresh the two happened not to collide. After it, `migrations_high_water` became
+`20260915033227` — which sorts **above** the seven authored-`20260914100*` restamped files. Those seven are
+**not applied** and are **not in `src/types/supabase.ts`**, so the raw number falsely asserted "the registry
+already knows about these". Their RPCs dropped out of the mutator inventory, and
+`record_commission_earned_state` / `record_commission_settlement_event` then read as stale exemptions:
+
+    AssertionError: expected [ "record_commission_earned_state",
+                               "record_commission_settlement_event" ] to deeply equal []
+
+The file's own comment (lines 2707-2714) already names this trap from the other direction — six `20260831*`
+migrations sorting *below* an apply-time high-water — and worked around it with the
+`MIGRATIONS_AWAITING_TYPE_REGENERATION` constant rather than correcting the comparison.
+
+**Fixed at the cause, not papered over.** `registryMigrationHighWater()` now prefers the **max authored
+stamp across `_meta.applied_migration_names`**, keeping `migrations_high_water` only as the fallback for a
+registry whose names carry no stamps. That is the identical rule `scripts/check-migration-hard-rules.mjs`,
+`.claude/hooks/migration-ordering-lib.mjs` and `session-staleness.mjs` already apply, for the same reason.
+The boundary resolves to `20260908130000`, the seven restamped files sort above it and are discovered again.
+
+Two entries were deliberately **not** added to `MIGRATIONS_AWAITING_TYPE_REGENERATION`. Suppressing the
+symptom that way would have left the wrong comparison in place to misfire on the next refresh, and the
+constant's own comment warns against exactly that.
+
 ## Verification
 
 - Live ledger read read-only on 2026-09-17 before any file was written:
@@ -81,6 +111,8 @@ genuinely unapplied.
   classifies as pending rather than protected, and `checkMigrationOrdering` returns `ok: true` for
   the `20260908120100` candidate. The tests are bound to this refresh rather than passing by
   construction.
+- `npm run test:contracts`: 121 assertions across 3 files pass. The failing CI run was
+  120 passed / 1 failed; the boundary fix above closes it at the cause.
 - `npm run test:correction-guards` and `node scripts/check-doc-drift.mjs` both green.
 - Registry sanity: `registry_version` 2, all 8 sections present, `status_enums` unchanged at 38.
 
