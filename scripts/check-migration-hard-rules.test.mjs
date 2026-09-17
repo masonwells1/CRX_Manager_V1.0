@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -195,6 +195,49 @@ const equalToHighWater = classifyMigrationChanges([
   { status: 'M', path: `supabase/migrations/${HW}_exact.sql` },
 ], HW);
 eq(equalToHighWater.protectedChanges.length, 1, 'DENY canary: the high-water migration itself is applied');
+
+// ---------------------------------------------------------------------------
+// Bound to the COMMITTED registry, not to a fixture
+//
+// This is the regression test for the hole the 2026-09-17 refresh closes.
+// 20260908120000_close_pr535_live_gaps ran on the live database on 2026-09-08
+// (ledger version 20260909023300), but the registry's newest applied stamp was
+// still 20260904180000, so the guard classified an edit to that file as a
+// revisable PENDING migration. Reading the real committed file is the point: if
+// a later change rolls the registry back or drops those names, the band
+// re-opens, and that must fail here rather than on a live pull request.
+// ---------------------------------------------------------------------------
+const REPO_ROOT = path.join(__dirname, '..');
+const COMMITTED_REGISTRY = readFileSync(path.join(REPO_ROOT, '.claude', 'schema-registry.json'), 'utf8');
+const COMMITTED_BOUNDARY = readHighWater(COMMITTED_REGISTRY);
+const APPLIED_ON_LIVE = 'supabase/migrations/20260908120000_close_pr535_live_gaps.sql';
+const PRE_REFRESH_BOUNDARY = '20260904180000';
+
+ok(/^\d{14}$/.test(COMMITTED_BOUNDARY ?? ''), 'the committed registry yields a 14-digit applied boundary');
+ok(
+  COMMITTED_BOUNDARY >= '20260908130000',
+  `committed boundary ${COMMITTED_BOUNDARY} must cover 20260908130000, applied live 2026-09-15`,
+);
+
+const committedClassification = classifyMigrationChanges(
+  [{ status: 'M', path: APPLIED_ON_LIVE }],
+  COMMITTED_BOUNDARY,
+);
+eq(
+  committedClassification.protectedChanges.map((c) => c.path),
+  [APPLIED_ON_LIVE],
+  'modifying the live-applied 20260908120000 is protected under the committed registry',
+);
+eq(committedClassification.pendingChanges.length, 0, 'and is not in the revisable pending band');
+
+// The contrast, so the assertion above cannot pass vacuously: under the
+// pre-refresh boundary the very same edit read as revisable.
+const preRefreshClassification = classifyMigrationChanges(
+  [{ status: 'M', path: APPLIED_ON_LIVE }],
+  PRE_REFRESH_BOUNDARY,
+);
+eq(preRefreshClassification.pendingChanges.length, 1, 'DENY canary: the pre-refresh boundary read the same edit as pending');
+eq(preRefreshClassification.protectedChanges.length, 0, 'which is exactly the hole the refresh closes');
 
 // ---------------------------------------------------------------------------
 // End to end against throwaway git repositories
@@ -415,6 +458,60 @@ scenarios.push(['a branch behind main is compared at the merge-base, not the bas
   eq(result.status, 0, 'main-only migration is not reported as deleted by the branch');
   ok(result.stdout.includes(`(merge-base) -> ${head.slice(0, 12)}`), 'merge-base used');
   ok(result.stdout.includes(`comparing ${base.slice(0, 12)}`), 'merge-base is the branch point');
+}]);
+
+// A migration body with no CREATE TABLE, so these scenarios turn on the applied
+// boundary alone and never on the RLS rule.
+const FUNCTION_ONLY = 'CREATE OR REPLACE FUNCTION public.f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;';
+
+scenarios.push(['the committed registry refuses an edit to the live-applied 20260908120000', (dir) => {
+  // End to end, with the real committed registry in the MERGE-BASE tree — the
+  // only place runDiffCheck reads it from.
+  write(dir, APPLIED_ON_LIVE, FUNCTION_ONLY);
+  write(dir, '.claude/schema-registry.json', COMMITTED_REGISTRY);
+  write(dir, 'README.md', 'base\n');
+  const base = commitAll(dir, 'base carrying the refreshed registry');
+  write(dir, APPLIED_ON_LIVE, `${FUNCTION_ONLY}\n-- edited after it ran on live\n`);
+  const head = commitAll(dir, 'edit the applied migration');
+  const result = runCli(dir, base, head);
+  eq(result.status, 1, 'exit 1');
+  ok(
+    result.stdout.includes(`MODIFIES an applied migration: ${APPLIED_ON_LIVE}`),
+    'names the live-applied migration',
+  );
+}]);
+
+scenarios.push(['a refreshed registry at the --base TIP does not move the boundary; only the merge-base does', (dir) => {
+  // The trap this pins: swapping the refreshed registry into a synthetic --base
+  // commit and watching the check PASS looks like a disproof of the refresh and
+  // is not one. runDiffCheck reads the registry from `git merge-base base head`
+  // (check-migration-hard-rules.mjs:279-280), so a registry that lands on main
+  // AFTER the branch point is invisible to that branch. The script header's
+  // phrase "the BASE tree's registry" reads as the --base argument and is what
+  // makes this easy to get backwards.
+  const STALE_REGISTRY = JSON.stringify({
+    _meta: { applied_migration_names: [`${PRE_REFRESH_BOUNDARY}_invoice_season_follows_invoice_date`] },
+  });
+  write(dir, APPLIED_ON_LIVE, FUNCTION_ONLY);
+  write(dir, '.claude/schema-registry.json', STALE_REGISTRY);
+  write(dir, 'README.md', 'base\n');
+  const branchPoint = commitAll(dir, 'branch point carrying the stale registry');
+
+  sh(dir, ['checkout', '-q', '-b', 'feature']);
+  write(dir, APPLIED_ON_LIVE, `${FUNCTION_ONLY}\n-- edited on the branch\n`);
+  const head = commitAll(dir, 'edit the applied migration');
+
+  sh(dir, ['checkout', '-q', 'main']);
+  write(dir, '.claude/schema-registry.json', COMMITTED_REGISTRY);
+  const mainTip = commitAll(dir, 'refresh the registry on main, after the branch point');
+
+  const result = runCli(dir, mainTip, head);
+  eq(result.status, 0, 'PASSES, because the merge-base still carries the stale registry');
+  ok(result.stdout.includes('revises a pending migration'), 'the same edit reads as pending, not protected');
+  ok(
+    result.stdout.includes(`comparing ${branchPoint.slice(0, 12)}`),
+    'the boundary came from the merge-base, not from --base',
+  );
 }]);
 
 scenarios.push(['zero base sha skips with a notice', (dir) => {
