@@ -3118,10 +3118,12 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   );
 }
 
-// ── PowerShell reading of `\ ` (Codex sol, 2026-09-14) ───────────────────────
-// PowerShell keeps a backslash and still splits on the space after it; POSIX
-// binds `\ ` into one word. The union must include PowerShell's reading, or
-// `--admin` and `-X DELETE` hide inside the previous word.
+// ── PowerShell reading of a backslash (Codex sol, 2026-09-14, rounds 2 and 4) ─
+// PowerShell keeps a backslash as an ordinary character and still honours the
+// space OR quote after it; POSIX treats it as an escape, binding `\ ` into one
+// word and turning `\"` into a literal quote that unbalances the rest of the
+// line. Either way `--admin` and `-X DELETE` hide inside a preceding word, so
+// the union must include PowerShell's reading of BOTH forms.
 {
   const BS = String.fromCharCode(92);
   const adminCommand = `gh pr merge 123 --body x${BS} --admin --squash`;
@@ -3139,6 +3141,25 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     splitCommandSegments("gh pr merge 123 --squash"),
     ["gh pr merge 123 --squash"],
     "CONTROL: a command with no backslash gains no extra reading",
+  );
+
+  // Round 4: the backslash precedes a QUOTE, not a space. POSIX eats the quote
+  // and reads everything after it as one quoted word; PowerShell passes `\` and
+  // then opens a quoted `x`, leaving the later flags as their own words.
+  const quoteAdmin = `gh pr merge 123 --body ${BS}"foo" --admin --squash`;
+  assert.ok(
+    splitCommandSegments(quoteAdmin).map((segment) => ghMergeRequest(segment)).some((request) => request?.admin === true),
+    'a PowerShell `\\"foo" --admin` reading exposes --admin',
+  );
+  const quoteRepo = `gh pr merge 123 --body ${BS}"foo" --repo evil/other --squash`;
+  assert.ok(
+    splitCommandSegments(quoteRepo).map((segment) => ghMergeRequest(segment)).some((request) => request?.repo === "evil/other"),
+    'a PowerShell `\\"foo" --repo` reading exposes the repo',
+  );
+  const quoteDelete = `gh api --template ${BS}"x" -X DELETE repos/o/r/git/refs/heads/feature`;
+  assert.ok(
+    splitCommandSegments(quoteDelete).some((segment) => ghApiMutates(segment)),
+    'a PowerShell `\\"x" -X DELETE` reading exposes the DELETE',
   );
 }
 

@@ -2157,7 +2157,8 @@ try {
     "defaultRunGh moves to the next executable ONLY when the previous one is missing (ENOENT)",
   );
 
-  // PowerShell keeps `\` and splits on the following space (Codex sol, 2026-09-14).
+  // PowerShell keeps `\` as an ordinary character and still honours the space OR
+  // quote after it (Codex sol, 2026-09-14, rounds 2 and 4).
   const BS = String.fromCharCode(92);
   // A GREEN, mergeable PR: the POSIX reading clears every hard gate, so only the
   // PowerShell reading's --admin can deny it.
@@ -2169,6 +2170,8 @@ try {
   for (const [command, pattern, label] of [
     [`gh api -H X-Test:value${BS} -X DELETE repos/o/r/branches/main/protection`, /./, "an escaped-space `-X DELETE`"],
     [`gh pr merge 123 --body x${BS} --admin --squash`, /--admin/, "an escaped-space `--admin`"],
+    [`gh api --template ${BS}"x" -X DELETE repos/o/r/git/refs/heads/feature`, /./, "a backslash-quote `-X DELETE`"],
+    [`gh pr merge 123 --body ${BS}"foo" --admin --squash`, /--admin/, "a backslash-quote `--admin`"],
   ]) {
     const verdict = evaluateProductionAction({
       toolName: "PowerShell",

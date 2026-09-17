@@ -2660,14 +2660,17 @@ function segmentOneReading(text, { honorQuotes, honorEscapes }) {
 
 export function splitCommandSegments(command) {
   const text = String(command || "");
-  // Reading 3 is PowerShell's: a backslash is an ordinary character there, so
-  // `x\ --admin` is the word `x\` followed by `--admin`. The word splitter follows
-  // POSIX and binds `\ ` into one word, which read `gh pr merge 1 --body x\
-  // --admin` as admin:false and `gh api -H a:b\ -X DELETE …` as a GET (Codex sol,
-  // 2026-09-14). Doubling a backslash that precedes whitespace makes the POSIX
-  // splitter hand the program `x\` and end the word, exactly as PowerShell does.
-  // It is an EXTRA reading: callers deny when any reading is refused.
-  const powershellText = text.replace(/\\(?=\s)/g, "\\\\");
+  // Reading 3 is PowerShell's: a backslash is an ordinary character there,
+  // EVERYWHERE — before a space and before a quote alike. The word splitter
+  // follows POSIX, where a backslash escapes whatever follows it, so `x\ --admin`
+  // became one word (hiding --admin) and `--template \"x" -X DELETE` swallowed the
+  // quote and then read the rest of the line as quoted (hiding -X DELETE). Both are
+  // the same bug; fixing only the space form left it half open (Codex sol,
+  // 2026-09-14 rounds 2 and 4). Doubling EVERY backslash makes the POSIX splitter
+  // treat each one as a literal character and still honour the space or quote after
+  // it, which is exactly PowerShell's argv. It is an EXTRA reading: callers deny
+  // when any reading is refused.
+  const powershellText = text.replace(/\\/g, "\\\\");
   const seen = new Set();
   const union = [];
   for (const segment of [
