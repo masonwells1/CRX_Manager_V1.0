@@ -25,34 +25,59 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-08 for the migration ledger (read-only `list_migrations` against project
+**Last verified: 2026-09-14 for the migration ledger (read-only ledger query against project
 `rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-05 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
 migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
 `20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
 ordering high-water is the newest applied row's effective stamp:
+**`20260908130000_bind_create_inventory_hold_receipt_to_intent`** (ledger version
+`20260915033227`, applied live 2026-09-15 via PR #691; verified live read-only 2026-09-17, 1002
+ledger rows). A candidate must now sort above the `20260908130000` name-stamp.
+
+**Superseded boundary — PR #646's row 923.** Until the 09-15 apply the high-water was
 **`20260908120000_close_pr535_live_gaps`** (row 923, ledger version `20260909023300`, applied live
 2026-09-08; verified live 2026-09-08, 1001 ledger rows). It replaced
 `20260906120000_preview_field_app_season_follows_invoice_date` (ledger version `20260908045843`,
 applied earlier the same day), which in turn replaced `20260905185938_refuse_null_job_field_acres`
 (#606, applied live 2026-09-05 under a bare ledger name, so its stamp was synthesized from its
-version). A candidate must now sort above the `20260908120000` name-stamp.
+version). While it held, a candidate had to sort above the `20260908120000` name-stamp.
 Re-read read-only 2026-09-11: unchanged —
-1001 ledger rows / 994 distinct names, `max(version)` `20260909023300`, same high-water.
-Six local commission follow-ups (`20260905200000` through `20260905210000`, with no `20260905200500` file) are not applied. The
-six-file set was restamped together above that row on 2026-09-05 evening, preserving its order;
-five had sorted below the new high-water and the ordering guard would have refused them.
+1001 ledger rows / 994 distinct names, `max(version)` `20260909023300`, same high-water. That row is still applied and still byte-exact; it is
+simply no longer the newest apply.
+
+**Superseded boundary — the 09-08 pre-apply row.** Before row 923 it was **`20260906120000_preview_field_app_season_follows_invoice_date`** (ledger version `20260908045843`,
+applied live 2026-09-08; verified live 2026-09-08, 1000 ledger rows / 993 distinct names). It
+replaced `20260905185938_refuse_null_job_field_acres` (#606, applied live 2026-09-05 under a bare
+ledger name, so its stamp was synthesized from its version), which held the boundary until then.
+A candidate then had to sort above the `20260906120000` name-stamp, not above the 09-05 row.
+(Point-in-time, like every capture here: a read-only re-read on 2026-09-11 found the ledger had moved
+again — 1001 rows / 994 distinct names, `max(version)` `20260909023300`, prefixed high-water
+`20260908120000_close_pr535_live_gaps`, the PR #535 gap-closer whose file and ledger record are owned
+by open PR #646. A read-only re-read on 2026-09-14 found the same figures, and confirmed that none of the
+seven restamped `20260914100100`..`20260914100900` candidates, `20260908130000`, `20260911120000`, or
+`bind_transfer_invoice_intent` is applied. That 09-14 observation is itself superseded:
+`20260908130000` applied live 2026-09-15 under ledger version `20260915033227` and now holds the
+boundary stated at the top of this section.)
+
+**Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and remains unapplied.
+
+Six local commission follow-ups (`20260914100200` through `20260914100900`, with no `20260905200500` file) are not applied. The
+six-file set was restamped together on 2026-09-05 evening and again on 2026-09-14 (from
+`20260905200000`..`20260905210000`, to sort above the applied `20260908120000_close_pr535_live_gaps`),
+preserving its order each time; both times the set had sorted below a newly applied row and the
+ordering guard would have refused it.
 They harden snapshot replay, refuse a payment batch if its recipient became stale before posting,
 park an America/Chicago payout business-date guard, pair commission source-date inheritance with
 Chicago-based source document dates, make balance-report recipient labels follow the latest
 earned-state observation at the requested cutoff (including paid-only rows), and — last in the
 ordered plan on purpose — append corrected labels for 34 un-settled opening commission snapshots.
-That label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 to run last,
-then restamped again with the rest of the set) refuses to run
+That label repair (`20260914100900`, renumbered from `20260905020100` on 2026-09-05 to run last,
+then restamped again with the rest of the set on 2026-09-05 and 2026-09-14) refuses to run
 once any commission payment has been posted; running it last means such a refusal stops nothing
 else, whereas at its old position it would have halted the payout guard and the date fixes behind
-it. The unified date candidate at `20260905200400` closes the September 30 boundary atomically:
+it. The unified date candidate at `20260914100500` (formerly `20260905200400`) closes the September 30 boundary atomically:
 it drains old writers, then replaces both commission helpers and all four source-document writers
 in one migration transaction. A transaction-local marker plus three owner-only compatibility
 triggers rejects any cached pre-cutover body when it reaches its first affected DML, requiring the
@@ -106,7 +131,7 @@ migrations are applied live with **no file on `main`**. Six belong to PR #535:
 reconstruct any of these nine; land the owning PRs after their own review gates. PR #592 has already
 restamped its two NOT-YET-APPLIED files to `20260905020000_commission_history_report_replay_guard`
 and `20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: the
-six-file set now sits at `20260905200000` through `20260905210000`, with no `20260905200500`
+six-file set now sits at `20260914100200` through `20260914100900` after the 2026-09-14 restamp, with no `20260905200500`
 file, above the applied high-water and with the repair still last).
 
 **Corrected 2026-09-08 against a live `list_migrations` read.** An earlier version of this paragraph
@@ -140,6 +165,32 @@ so any migration whose safety argument rests on "the live body equals the last c
 post-apply `pg_proc.prosrc` body and rechecked that exact pre-image at apply time rather than inferring
 it from migration filenames alone; it has since been applied, so live `save_job` is now at ITS body
 md5 `8acf34542105a90212ddb0a5e7c5d272`, not F06's.
+
+A second local candidate, `20260908130000_bind_create_inventory_hold_receipt_to_intent` (originally on
+`claude/inventory-idempotency-key-reset-888161`, history row 927), is written and container-proven but
+**NOT applied**. Repository delivery is tracked by PR #624 and its landing successors; publishing
+this parked SQL does not authorize or perform a live apply. Fresh apply-time preflight and the
+protected production gate remain required. Its stamp is authored above PR #592's pending `20260905*` files, and
+deliberately clear of `20260905210000`, which PR #592 occupies with
+`20260905210000_repair_commission_history_label_snapshots.sql` (two migration files sharing one
+timestamp would have undefined apply order). (Since 2026-09-14 those pending files are restamped
+`20260914100100`..`20260914100600`, and the repair is `20260914100900_repair_commission_history_label_snapshots.sql`,
+which still sorts after this file.) Its safety argument pins the `create_inventory_hold` body by `prosrc`
+sha256 (`3c86421e…`, the body the checked-in 2026-07-27 production dump carries) and fails closed at
+apply time if the installed body differs. **Mason authorized a read-only live check on 2026-09-06 and
+every preflight condition was met**: exactly one `create_inventory_hold` overload, owner `postgres`,
+`plpgsql`, SECURITY DEFINER, `proconfig = {search_path=public, pg_temp}`, the full argument list with
+defaults equal to the pinned string, `md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` — the same
+4,046-character body whose sha256 is the pinned `3c86421e…` (md5 recomputed locally from the
+2026-07-27 dump for comparison, because the live-data guard's read-only allowlist has no
+`digest()`); the private impl name absent; `check_idempotency_intent`, `extensions.digest` and
+`pg_catalog.trim_scale` installed; both receipt-binding columns present; EXECUTE on the hold RPC
+held by `authenticated` and `service_role` and not `anon`; `check_idempotency_intent` executable by
+none of the three; and **zero** unexpired `create_inventory_hold` receipts of any kind, so
+`PREFLIGHT_LEGACY_RECEIPTS` would not fire at that moment. The pre-existing
+`section9_bind_idempotency_receipt_20260826` BEFORE INSERT trigger returns `NEW` unchanged for
+operations outside its AP/receiving list, so it does not touch hold receipts. No live write was made.
+See `docs/manual/KNOWN_ISSUES.md` (OPEN 2026-09-05, manual-hold same-key race).
 
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
 `20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
@@ -406,6 +457,41 @@ part of the stored ledger name); `docs/reference/migration-history.md` uses the 
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 **Quote/customer row-version rollout is live:** PR #290 deployed the compatible frontend first, then `20260730201230_quote_customer_row_version_guard` applied under Supabase-assigned ledger/disk version `20260730235031`. Live catalog, trigger, overload, ownership, fixed-search-path, grant, and child-table ACL checks passed. Four rollback-only behavior chains reached exact `SMOKE_PASS_ROLLBACK`, zero fixture rows remained, all 21 standing invariant predicates had zero unallowlisted findings, and the schema registry was refreshed through the subsequent AP high-water. Cached pre-migration bundles fail closed until refreshed; no rollout toggle is required.
+
+## Open-PR landing queue (point-in-time, 2026-09-13)
+
+Running record for `docs/plans/2026-09-11-open-pr-backlog-plan.md`. The approved plan is frozen in
+that file; this block is the live queue state and is updated through normal PRs by the fleet
+orchestrator session (the coordinator). Owners are as reported by the coordinator on 2026-09-12
+14:45Z; PR states were read from GitHub on 2026-09-13. Like every capture on this page it ages
+immediately: re-read GitHub before acting on a row.
+
+| PR | Plan disposition | Owner (session, worktree) | State on 2026-09-13 |
+|---|---|---|---|
+| #599 | FINISH (outcome A) | owner session archived after landing | MERGED 2026-09-11 as `791bc3d86`; per the coordinator, the live-site check on 2026-09-12 showed all three invoice screens pre-filling the Chicago date |
+| #650 | FINISH (docs) | coordinator | MERGED 2026-09-11 as `df92df406` |
+| #638 | FINISH | `local_736a899d`, worktree `pr638-merge-handoff-4bdc81` | open, review round running |
+| #646 | FINISH | `local_ca18f288`, worktree `cycle-count-migration-be7fc1` | open, review round running |
+| #624 | FINISH (source-only merge) | `local_1bb7cec9`, worktree `inventory-idempotency-key-reset-888161` | open |
+| #630 | FINISH | `local_45e768d6`, worktree `usage-review-optimization-46d351` | open, fix not started |
+| #631 | FINISH, last in queue | BLOCKED until the coordinator assigns an owner | open |
+| #651 | plan + baseline documentation | efficiency-review session, worktree `guard-denial-baseline-0911` | open, in review |
+| #612, #647, #605, #544, #635 | PARK (plan section 3) | custody per section 3 | open |
+| #634 | CLOSE | none | closed 2026-09-11 |
+| #626 | CLOSE after #630 lands | none | open |
+| #449 | CLOSE once Mason accepts the retirement sentence (plan section 4) | none | CLOSED 2026-09-12 14:05Z; the closing comment records Mason's explicit direction under plan section 4 |
+
+Open coordinator decisions (carried from the plan's section 8, 2026-09-11):
+
+- KNOWN_ISSUES owner for the 2026-09-18 exposure assessment (suggested: the #624 lane, reassignable).
+- Landing order: the coordinator is to confirm the plan's section 2 order (#638, then #646, then #624;
+  the section 2 order stands and is not reopened here) and name who renumbers ledger row 924.
+
+Follow-ups discovered during execution (2026-09-11, moved here verbatim on 2026-09-13):
+
+- PRODUCT (not guard, not frozen): expired pending-request records leave a locked dialog that cannot be closed and reopens on every visit once the 23-hour safe-retry window passes. Pre-existing on main for Inventory Receive, QuickReceive, ReceivingHub, NewVendorBill; #624 extends it to Adjust and Hold. Interim: the staff recovery procedure in INVENTORY_RULES (ships with #624). Fix: an admin "verified, clear this request" control. Owner: unassigned; coordinator to assign a session and a queue slot. Recorded in KNOWN_ISSUES by the #624 lane.
+- #612: PARKED by Mason's own answer in the #612 lane's chat (~02:10Z). Lane closed; head f415258e0; two codex-connector threads answered in prose and left open for the 09-25 resume.
+- #624 sequencing: #599 first, then #624 with its docs batch (staff procedure, KNOWN_ISSUES owner + 09-18 date, compatibility note, stale-line fix, PR description) in ONE push, one review slot (14:22Z earliest), SOURCE-ONLY merge. Pending Mason's answer in the #624 lane's chat.
 
 ## Recent production deployments
 

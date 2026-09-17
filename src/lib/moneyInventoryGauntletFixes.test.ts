@@ -297,7 +297,7 @@ describe('money and inventory gauntlet fixes', () => {
       "useIdempotencyKey('submit_purchase_order', `${profile?.id || ''}:${id || ''}`)",
     );
     expect(detail).toContain(
-      'resetSubmitPOKey();\n    setReceiveOpen(false);\n  }, [id, resetSubmitPOKey]);',
+      'resetSubmitPOKey();\n    setReceiveOpen(false);\n    setReceiveCleanupFailed(false);\n  }, [id, resetSubmitPOKey]);',
     );
     expect(detail).toContain("surface: 'purchase-order-detail'");
     expect(detail).toContain("scope: id || ''");
