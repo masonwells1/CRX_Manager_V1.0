@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Disposable PostgreSQL 17 proof for
- *   supabase/migrations/20260905200400_commission_dates_follow_chicago_business_day.sql
+ *   supabase/migrations/20260914100500_commission_dates_follow_chicago_business_day.sql
  *
  * The four document-date writers stop stamping orders.order_date / invoices.invoice_date
  * (and, in transfer_job_to_invoice, the due date and the derived SEASON) from the UTC
@@ -58,7 +58,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-document-dates-chicago-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
-const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260905200400_commission_dates_follow_chicago_business_day.sql');
+const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260914100500_commission_dates_follow_chicago_business_day.sql');
 const REPLAY_STOP_BEFORE = '20260817120000_carry_allocated_line_cents_through_lifecycle.sql';
 
 // name -> the number of CURRENT_DATE values the candidate converts, read from its own

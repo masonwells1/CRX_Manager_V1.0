@@ -7,18 +7,29 @@
 -- copies. The migration runner wraps this WHOLE FILE and its ledger row in one
 -- transaction; do not add a top-level BEGIN/COMMIT here.
 --
--- Drain pre-cutover writers before *any* preflight or DDL. Normal INSERT/UPDATE
--- writers acquire ROW EXCLUSIVE locks, which conflict with SHARE ROW EXCLUSIVE;
--- readers stay available. The order below is fixed so concurrent rollout attempts
--- cannot deadlock: orders, invoices, jobs, commissions. profiles is read-only in
--- these paths, so locking it would not close a writer race. ACCESS EXCLUSIVE would
--- unnecessarily block ordinary reads and is not required for this writer boundary.
+-- Drain pre-cutover writers (and, on orders/invoices/commissions, readers too)
+-- before *any* preflight or DDL. Normal INSERT/UPDATE writers acquire ROW
+-- EXCLUSIVE locks, which conflict with both modes below.
+-- orders, invoices and commissions take ACCESS EXCLUSIVE up front because this
+-- file later runs ALTER TABLE and DROP TRIGGER on them, which need ACCESS
+-- EXCLUSIVE; upgrading from a weaker lock mid-file can deadlock against a
+-- concurrent read-then-write transaction. Taking the final mode first means the
+-- file never upgrades. It can still wait: each LOCK below is bounded separately
+-- by lock_timeout, and queries on those three tables queue behind it both while
+-- it waits and for the rest of this file, so apply in a quiet window. An app
+-- transaction that reads those tables in a different order (e.g. commissions
+-- then orders) can still deadlock with this lock step; PostgreSQL then cancels
+-- one side and the wrapped file rolls back whole, so treat that as a retry.
+-- jobs has no DDL here, so it keeps SHARE ROW EXCLUSIVE and its readers stay
+-- available. The order is fixed so concurrent rollout attempts cannot deadlock
+-- with each other: orders, invoices, jobs, commissions. profiles is read-only in
+-- these paths, so locking it would not close a writer race.
 SET LOCAL lock_timeout = '10s';
 LOCK TABLE public.orders,
-           public.invoices,
-           public.jobs,
-           public.commissions
-  IN SHARE ROW EXCLUSIVE MODE;
+           public.invoices
+  IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.jobs IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.commissions IN ACCESS EXCLUSIVE MODE;
 
 -- A transaction can retain an already-resolved PL/pgSQL body across the lock
 -- drain. The compatibility trigger below closes that cached-body straggler: an
