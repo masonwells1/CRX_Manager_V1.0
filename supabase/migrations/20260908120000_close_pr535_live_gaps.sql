@@ -11,6 +11,30 @@
 -- with "parked marker and LOCAL CANDIDATE history registry are not one-to-one".
 -- Keep NOT APPLIED LIVE immediately after PARKED.
 --
+-- ordering-guard: ahead-of-pending the seven 20260905* files are already stranded; this strands nothing new
+--
+-- WHY THAT MARKER IS HONEST, not a paste-over. The pending-set guard warns that applying
+-- this file advances the live high-water past seven older tracked-but-unapplied migrations
+-- (20260905090000 next-invoice-number, and the six 20260905200000-20260905210000 commission
+-- files), and that they would then be refused permanently. Every word of that mechanism is
+-- correct. It is the premise that no longer holds: those seven are ALREADY past saving in
+-- place. 20260906120000_preview_field_app_season_follows_invoice_date was applied live on
+-- 2026-09-08 (ledger version 20260908045843), and its stamp is above all seven, so the
+-- high-water had already moved before this file was ever considered.
+--
+-- OBSERVED, not inferred: on 2026-09-08 the oldest of the seven,
+-- 20260905200000_commission_history_report_replay_guard, was run through
+-- scripts/apply-migration-file.mjs as a dry run. It was REFUSED by this same ordering guard
+-- -- "its filename timestamp is 20260905200000, but 20260906120000 has ALREADY BEEN
+-- APPLIED" -- with no contribution from this file. docs/reference/migration-history.md
+-- records the same conclusion independently for 20260905090000: it "needs its own restamp
+-- before it can be applied."
+--
+-- So the seven need a restamp either way, that restamp is owned by their own lanes and
+-- gated on Mason's approval of their own money/date semantics, and holding this live
+-- inventory fix behind that unrelated renumbering would leave the complete_cycle_count
+-- staleness bypass open on production for no gain. Stepping over them costs them nothing.
+--
 -- idempotency-body-check: exempt
 -- complete_cycle_count is a WRAPPER. It performs the CHECKING half of idempotency
 -- inline (public.check_idempotency at the replay gate below) and delegates the
@@ -42,6 +66,31 @@
 -- both are 6d1cab7c4298de34341d517265499896. The precondition block re-checks that
 -- hash inside the transaction, so if anything has replaced the function since, this
 -- migration refuses to run rather than silently reverting someone else's work.
+--
+-- THE HASH IS OVER THE LF-NORMALIZED BODY. core.autocrlf=true in this repository, so the
+-- checked-out file is CRLF on Windows and hashing the body as it sits on disk yields
+-- 1d8a95b5ca88348d415b96b08ea0f3fa instead -- a reviewer re-deriving the pin by hand from
+-- the working tree will otherwise conclude it is wrong. LF is the correct form because
+-- scripts/apply-migration-file.mjs:144 does `.replace(/\r\n/g, "\n")` on read, so the LF
+-- body is what was transmitted for 20260831212415 and what is transmitted here.
+-- (Raised as LOW by the migration-drift review, 2026-09-08.)
+--
+-- NO `SET LOCAL lock_timeout` / `statement_timeout`, and that IS a decision rather than
+-- an oversight -- this file explains every other omission, so silence here would read as
+-- one. 20260831212415:8-9 set both because it took an ACCESS EXCLUSIVE lock to ADD COLUMN
+-- and a LOCK TABLE on idempotency_keys. This file does neither: CREATE OR REPLACE FUNCTION
+-- rewrites one pg_proc tuple and is not blocked by in-flight executions of the function,
+-- so there is no lock queue to bound. The apply path wraps the file in its own
+-- transaction. (Raised as LOW by the migration-drift review, 2026-09-08.)
+--
+-- KNOWN, ACCEPTED, NOT A REGRESSION: an unexpired idempotency_keys receipt written before
+-- this apply by a caller that omitted the revision stored `_expected_item_revision` as
+-- JSON null, and can no longer be redeemed -- the new refusal fires before the replay
+-- gate. Both reviewers raised this independently as LOW and neither recommends a fix:
+-- refusing is the fail-closed direction, the refusal raises before any DML so there is no
+-- money or inventory effect, and the only client that could have written such a receipt is
+-- the cached pre-change tab this migration exists to stop. Recorded so it is not misread
+-- as a regression if it appears in logs.
 --
 -- NOT INCLUDED, deliberately
 --   * create_vendor_bill / update_vendor_bill. Two findings claimed a nullable
@@ -97,6 +146,31 @@ BEGIN
     RAISE EXCEPTION
       'PRECOND: complete_cycle_count is not the body this migration was written against (found md5 %). Someone else has changed it; re-derive the change before applying.',
       md5(v_src);
+  END IF;
+
+  -- The md5 above pins the BODY TEXT and nothing else. For a SECURITY DEFINER function
+  -- the OWNER is the privilege boundary -- it is the role the body executes as -- and
+  -- prosecdef/proconfig decide whether that boundary and a fixed search_path exist at
+  -- all. CREATE OR REPLACE preserves all three, so a value that has drifted since
+  -- 2026-09-03 would be PRESERVED by this migration, not repaired, and the md5 pin would
+  -- still match. 20260831212415:339-344 pinned prosecdef and proconfig for exactly this
+  -- reason; dropping that here would make this block weaker than the one it succeeds.
+  -- Live values, read read-only 2026-09-08: owner postgres, prosecdef true,
+  -- search_path=public, pg_temp.
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_roles r ON r.oid = p.proowner
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname = 'complete_cycle_count'
+      AND p.prosecdef
+      AND r.rolname = 'postgres'
+      AND EXISTS (
+        SELECT 1 FROM unnest(coalesce(p.proconfig, ARRAY[]::text[])) c(value)
+        WHERE replace(c.value, ' ', '') = 'search_path=public,pg_temp'
+      )
+  ) THEN
+    RAISE EXCEPTION 'PRECOND: complete_cycle_count SECURITY DEFINER privilege contract drifted (owner, prosecdef or search_path)';
   END IF;
 END
 $precond$;
@@ -257,6 +331,48 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
      AND has_function_privilege('anon', v_oid, 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTCOND: anon can EXECUTE complete_cycle_count through role membership';
+  END IF;
+
+  -- Everything above proves the ACL of the PUBLIC WRAPPER only. Two other SECURITY
+  -- DEFINER functions reach the SAME inventory-writing code path and neither carries a
+  -- revision check at all:
+  --   * _complete_cycle_count_pre_revision_20260831(uuid,uuid,text) -- the OLD wrapper,
+  --     still live under a rename, with no revision parameter in its signature;
+  --   * _complete_cycle_count_impl(uuid,uuid,text) -- the raw implementation.
+  -- If either were reachable by a browser role, a caller could invoke it straight through
+  -- PostgREST and apply an unreviewed inventory variance -- this migration's entire
+  -- purpose, bypassed, with every check above still green. 20260831212415:219-220 and
+  -- 20260714221000:100-104 revoked them, and 20260831212415:358 asserted the first one at
+  -- apply time. This file re-verifies rather than assumes, for exactly the reason it
+  -- re-verifies the wrapper's own ACL: grants drift between migrations. Live values read
+  -- read-only 2026-09-08 -- impl: {postgres, service_role}; pre-revision: {postgres}.
+  -- service_role is DELIBERATELY NOT forbidden: it holds EXECUTE on the impl today and is
+  -- not a browser-reachable role. anon, authenticated and PUBLIC are the ones that matter.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_proc p,
+         LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS a
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname IN ('_complete_cycle_count_pre_revision_20260831', '_complete_cycle_count_impl')
+      AND a.privilege_type = 'EXECUTE'
+      AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) IN ('anon', 'authenticated'))
+  ) THEN
+    RAISE EXCEPTION 'POSTCOND: a revision-less cycle-count sibling is directly executable by PUBLIC, anon or authenticated';
+  END IF;
+  -- Same pairing as above, and needed for the same reason: aclexplode lists DIRECT grants
+  -- only, so a grant to some third role that anon or authenticated is a MEMBER of does not
+  -- appear in it. has_function_privilege resolves membership but passes vacuously where the
+  -- role does not exist, so it is guarded on pg_roles rather than used alone.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_proc p,
+         unnest(ARRAY['anon', 'authenticated']) AS role_name
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname IN ('_complete_cycle_count_pre_revision_20260831', '_complete_cycle_count_impl')
+      AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name)
+      AND has_function_privilege(role_name, p.oid, 'EXECUTE')
+  ) THEN
+    RAISE EXCEPTION 'POSTCOND: a revision-less cycle-count sibling is reachable through role membership';
   END IF;
 END
 $postcond$;
