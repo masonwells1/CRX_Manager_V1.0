@@ -2732,6 +2732,12 @@ function registryMigrationHighWater(): string {
 //   20260914100900 last defines record_commission_earned_state.
 // Clear them only once src/types/supabase.ts is regenerated from production
 // after these apply, at which point the generated-names arm covers them.
+// The seven entries after them fell below the same high-water move but went
+// unnoticed, because the reverse check below only recognised the PENDING
+// APPLY wording while their rows say LOCAL CANDIDATE ... not applied. Once
+// the reverse check learned that wording it named exactly these seven: the
+// other five commission restamps, 20260908120000, and this PR's own
+// 20260911120000 adjust_inventory binding.
 const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831160000',
   '20260831161000',
@@ -2741,6 +2747,13 @@ const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831235900',
   '20260914100300',
   '20260914100900',
+  '20260908120000',
+  '20260911120000',
+  '20260914100100',
+  '20260914100200',
+  '20260914100400',
+  '20260914100500',
+  '20260914100600',
 ]);
 
 /**
@@ -2767,10 +2780,15 @@ function migrationsAwaitingTypeRegeneration(): Set<string> {
   // clearing it would silently drop these RPCs from the inventory.
   const timestamps = new Set<string>();
   for (const timestamp of MIGRATIONS_AWAITING_TYPE_REGENERATION) {
-    const row = lines.find((line) =>
+    // A timestamp can carry more than one row: 20260914100100 keeps a preserved
+    // HISTORICAL DUPLICATE ordering record (row 925) above its active
+    // local-candidate record (row 917). Judging only the first row in file order
+    // would reject a correctly recorded migration, so any one row stating a
+    // recognised status is enough.
+    const rows = lines.filter((line) =>
       new RegExp(`^\\|\\s*\\d+\\s*\\|\\s*${timestamp}\\s*\\|`).test(line),
     );
-    if (!row) {
+    if (rows.length === 0) {
       throw new Error(`Registered migration ${timestamp} has no docs/reference/migration-history.md row.`);
     }
     // "LOCAL CANDIDATE - not applied" is the third wording migration-history
@@ -2783,10 +2801,12 @@ function migrationsAwaitingTypeRegeneration(): Set<string> {
     // matches the same LOCAL CANDIDATE ... NOT APPLIED shape that
     // localCandidateMigrationPathsFromHistory keys on, so the two guards agree
     // on which rows are pending.
-    if (!/\*\*(PENDING APPLY|APPLIED LIVE)\b/i.test(row)
-      && !/\bLOCAL\s+CANDIDATE\b[\s\S]*\bNOT\s+APPLIED\b/i.test(row)) {
+    const statesRecognisedStatus = (row: string) =>
+      /\*\*(PENDING APPLY|APPLIED LIVE)\b/i.test(row)
+      || /\bLOCAL\s+CANDIDATE\b[\s\S]*\bNOT\s+APPLIED\b/i.test(row);
+    if (!rows.some(statesRecognisedStatus)) {
       throw new Error(
-        `Migration-history row for ${timestamp} must state PENDING APPLY, APPLIED LIVE, or LOCAL CANDIDATE ... NOT APPLIED: ${row}`,
+        `Migration-history row for ${timestamp} must state PENDING APPLY, APPLIED LIVE, or LOCAL CANDIDATE ... NOT APPLIED: ${rows[0]}`,
       );
     }
     timestamps.add(timestamp);
@@ -2814,7 +2834,9 @@ function migrationsAwaitingTypeRegeneration(): Set<string> {
   // comparison would have demanded it and been wrong.
   const highWater = registryMigrationHighWater();
   const unregisteredBelowHighWater = lines
-    .map((line) => line.match(/^\|\s*\d+\s*\|\s*(\d{14})\s*\|\s*\*\*PENDING APPLY\b/i)?.[1])
+    .map((line) => line.match(
+      /^\|\s*\d+\s*\|\s*(\d{14})\s*\|\s*(?:\*\*PENDING APPLY\b|\*\*LOCAL\s+CANDIDATE\b[\s\S]*\bNOT\s+APPLIED\b)/i,
+    )?.[1])
     .filter((timestamp): timestamp is string => Boolean(timestamp))
     .filter((timestamp) => timestamp <= highWater && !timestamps.has(timestamp));
   if (unregisteredBelowHighWater.length > 0) {

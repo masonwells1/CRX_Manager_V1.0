@@ -27,8 +27,9 @@ because those older files were still unapplied.
   helper functions exist with no client EXECUTE.
 - Trigger `guard_create_inventory_hold_insert_20260913` is enabled on `inventory_holds`.
 
-**2026-09-18 exposure look-back.** This follows Mason's 2026-09-14 decision. The apply landed before the
-due date, so the pre-apply check was skipped and this read-only check ran afterwards. All 29
+**Exposure look-back, run 2026-09-15 (it was due by 2026-09-18).** This follows Mason's 2026-09-14
+decision. The apply landed before the due date, so the pre-apply check was skipped and this read-only
+check ran right after the apply, on 2026-09-15. All 29
 `inventory_holds` rows ever created were made by an admin whose profile is active. 20 are manual holds
 from 2026-03-14 and 2026-03-15, all released. 9 are crop_program holds from 2026-04-28, all active. No
 hold has been created since 2026-04-28.

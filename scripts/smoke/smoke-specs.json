@@ -14,7 +14,9 @@
       "description": "CONTAINER ONLY - run via scripts/smoke/prove-adjust-inventory-intent-binding-real-schema.mjs, never through run-smoke.mjs against the live database: the chain plants [SMOKE] users, profiles, products and inventory rows, which the LIVE-DATA GUARD correctly refuses. Covers LOCAL CANDIDATE 20260911120000 (CRX-IDEM-01, not applied): adjust_inventory must authenticate, refuse a forged p_performed_by and require an ACTIVE admin BEFORE it looks at any receipt, so a sales rep, a deactivated admin, a caller with no profile or an unauthenticated caller holding someone else's key gets a refusal instead of that adjustment's product and quantity, and a second admin gets IDEMPOTENCY_ACTOR_MISMATCH with no result attached. Also: a keyed adjustment moves stock once with one ledger row and one receipt bound to actor and fingerprint; an identical retry (5 vs 5.0) replays; a changed delta, reason or row on the same key is IDEMPOTENCY_INTENT_MISMATCH; NULL/blank keys and NULL/zero/NaN/infinite deltas are refused before any work; a pre-migration unbound receipt fails closed; the negative-stock and not-found guards are unchanged and leave no receipt; the cutover trigger refuses an unbound adjust_inventory receipt written the old way (save_idempotency) and ignores other operations; grants. The prover additionally shows, on the real bodies, a sales rep reading an admin's receipt BEFORE the candidate and being refused AFTER it, the preflight refusing to apply over a live unbound receipt, an old-body call caught mid-flight at cutover being rolled back whole by the trigger, a same-key two-session race ending in one stock change with both callers getting the same result, a clean re-run, and that neutering the trigger makes this chain fail.",
       "covers": [
         "adjust_inventory",
-        "check_idempotency_intent"
+        "check_idempotency_intent",
+        "save_idempotency",
+        "_refuse_unbound_adjust_inventory_receipt_20260911"
       ],
       "area": [
         "inventory",

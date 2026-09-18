@@ -157,7 +157,7 @@ A second local candidate, `20260908130000_bind_create_inventory_hold_receipt_to_
 **APPLIED LIVE on 2026-09-15 at 03:32Z** (ledger version `20260915033227`) with Mason's explicit in-chat
 approval and a fresh CLEAN `gpt-5.6-sol`/high apply proof. Post-apply read-only checks confirmed the
 SECURITY DEFINER wrapper (authenticated-only), the private impl with no client EXECUTE, and the enabled
-`guard_create_inventory_hold_insert_20260913` trigger. The 2026-09-18 exposure look-back found all 29
+`guard_create_inventory_hold_insert_20260913` trigger. The exposure look-back (due by 2026-09-18, run 2026-09-15 right after the apply) found all 29
 holds ever created were made by an active admin (newest 2026-04-28), so neither closed defect was
 exercised. The rest of this paragraph is the pre-apply record. Its stamp is authored above PR #592's pending `20260905*` files, and
 deliberately clear of `20260905210000`, which PR #592 occupies with

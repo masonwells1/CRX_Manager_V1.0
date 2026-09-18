@@ -74,7 +74,11 @@ function scalar(sql) {
 function stageSql(file, name) {
   const staged = path.join(tmpdir(), `${NAME}-${name}`);
   try { writeFileSync(staged, readFileSync(file, 'utf8').replaceAll('\r\n', '\n'), 'utf8'); docker(['cp', staged, `${NAME}:/tmp/${name}`]); }
-  finally { try { unlinkSync(staged); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
+  finally {
+    // Log a cleanup failure instead of throwing it: a throw from finally would
+    // replace the staging error that actually explains why the prover stopped.
+    try { unlinkSync(staged); } catch (e) { if (e.code !== 'ENOENT') console.error(`could not remove staged file ${staged}: ${e.message}`); }
+  }
 }
 function apply(name, allowFailure = false) {
   const r = docker([...psqlArgs(), '-1', '-f', `/tmp/${name}`], { allowFailure });
