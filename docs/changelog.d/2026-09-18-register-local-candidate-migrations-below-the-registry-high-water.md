@@ -3,9 +3,11 @@
 CodeRabbit's review of PR #714 (commit `965089215`) found five problems. All five are fixed here in one commit.
 
 - **Seven migrations were quietly outside the mutator inventory.** Refreshing the schema registry moved
-  its high-water mark above seven migrations that are written but not applied. They are the five other
-  commission restamps (`20260914100100`, `100200`, `100400`, `100500`, `100600`), `20260908120000`, and
-  this PR's own `20260911120000`. The safety check meant to catch that only recognised rows worded
+  its high-water mark above seven migrations whose history rows said "not applied". They are the five
+  other commission restamps (`20260914100100`, `100200`, `100400`, `100500`, `100600`), `20260908120000`,
+  and this PR's own `20260911120000`. (`20260908120000` had actually applied live on 2026-09-08; the
+  merge of current main corrects its row. It stays registered because the generated types still predate
+  it.) The safety check meant to catch that only recognised rows worded
   "PENDING APPLY", but these rows say "LOCAL CANDIDATE ... not applied". The check now recognises
   both wordings, and all seven are registered in `MIGRATIONS_AWAITING_TYPE_REGENERATION`.
   The registration check also judged a migration by its first history row. `20260914100100` has a

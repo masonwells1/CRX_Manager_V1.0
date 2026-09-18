@@ -32,20 +32,34 @@ migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
 `20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
 ordering high-water is the newest applied row's effective stamp:
-**`20260906120000_preview_field_app_season_follows_invoice_date`** (ledger version `20260908045843`,
+**`20260908130000_bind_create_inventory_hold_receipt_to_intent`** (ledger version
+`20260915033227`, applied live 2026-09-15 via PR #691; verified live read-only 2026-09-17, 1002
+ledger rows). A candidate must now sort above the `20260908130000` name-stamp.
+
+**Superseded boundary — PR #646's row 923.** Until the 09-15 apply the high-water was
+**`20260908120000_close_pr535_live_gaps`** (row 923, ledger version `20260909023300`, applied live
+2026-09-08; verified live 2026-09-08, 1001 ledger rows). It replaced
+`20260906120000_preview_field_app_season_follows_invoice_date` (ledger version `20260908045843`,
+applied earlier the same day), which in turn replaced `20260905185938_refuse_null_job_field_acres`
+(#606, applied live 2026-09-05 under a bare ledger name, so its stamp was synthesized from its
+version). While it held, a candidate had to sort above the `20260908120000` name-stamp.
+Re-read read-only 2026-09-11: unchanged —
+1001 ledger rows / 994 distinct names, `max(version)` `20260909023300`, same high-water. That row is still applied and still byte-exact; it is
+simply no longer the newest apply.
+
+**Superseded boundary — the 09-08 pre-apply row.** Before row 923 it was **`20260906120000_preview_field_app_season_follows_invoice_date`** (ledger version `20260908045843`,
 applied live 2026-09-08; verified live 2026-09-08, 1000 ledger rows / 993 distinct names). It
 replaced `20260905185938_refuse_null_job_field_acres` (#606, applied live 2026-09-05 under a bare
 ledger name, so its stamp was synthesized from its version), which held the boundary until then.
-A candidate must now sort above the `20260906120000` name-stamp, not above the 09-05 row.
+A candidate then had to sort above the `20260906120000` name-stamp, not above the 09-05 row.
 (Point-in-time, like every capture here: a read-only re-read on 2026-09-11 found the ledger had moved
 again — 1001 rows / 994 distinct names, `max(version)` `20260909023300`, prefixed high-water
 `20260908120000_close_pr535_live_gaps`, the PR #535 gap-closer whose file and ledger record are owned
 by open PR #646. A read-only re-read on 2026-09-14 found the same figures, and confirmed that none of the
-seven restamped `20260914100100`..`20260914100900` candidates, `20260911120000`, or
-`bind_transfer_invoice_intent` is applied. On 2026-09-15 03:32Z
-`20260908130000_bind_create_inventory_hold_receipt_to_intent` was applied live under ledger version
-`20260915033227`, making it the prefixed high-water at 1002 rows; see
-`docs/reference/migration-history.md` row 927. This page states the boundary as of 2026-09-08; PR #646 restates it when it lands.)
+seven restamped `20260914100100`..`20260914100900` candidates, `20260908130000`, `20260911120000`, or
+`bind_transfer_invoice_intent` is applied. That 09-14 observation is itself superseded:
+`20260908130000` applied live 2026-09-15 under ledger version `20260915033227` and now holds the
+boundary stated at the top of this section.)
 
 **Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and was applied live on 2026-09-15 (see below).
 
@@ -232,7 +246,7 @@ migration is **applied live** and its schema marker exists. The schema-shape evi
 grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded, not promoted into post-apply
 proof.
 
-**PR #535 gauntlet chain — all six migrations APPLIED LIVE 2026-09-03.** `20260831160000`, `20260831161000`, `20260831162000` and `20260831212415` applied as ledger versions `20260903023935`, `20260903024550`, `20260903025249` and `20260903025854`; `20260831233000` and `20260831235900` applied as `20260903124710` and `20260903124741`. Live ledger **at that point: 992 rows** — the 2026-09-03 14:01 UTC pre-F06 boundary, superseded by the 993-row 15:34 UTC capture above and not to be used as the current figure. Each went through the full migration-apply gate with Mason's explicit in-chat approval and clean Codex drift + RLS reviews. Post-apply verification against the live catalog: `update_vendor_bill` is a single 9-argument overload accepting `p_confirm_po_overage`/`p_po_overage_reason`; `cycle_counts.item_revision` exists; `trg_bump_cycle_count_item_revision` is present on `cycle_count_items` and its body carries the `CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN` guard. **The frontend half of PR #535 has not merged yet** — until it does, `main` calls none of the new parameters, which is why live is healthy with the database ahead of the deployed app.
+**PR #535 gauntlet chain — all six migrations APPLIED LIVE 2026-09-03.** `20260831160000`, `20260831161000`, `20260831162000` and `20260831212415` applied as ledger versions `20260903023935`, `20260903024550`, `20260903025249` and `20260903025854`; `20260831233000` and `20260831235900` applied as `20260903124710` and `20260903124741`. Live ledger **at that point: 992 rows** — the 2026-09-03 14:01 UTC pre-F06 boundary, superseded by the 993-row 15:34 UTC capture above and not to be used as the current figure. Each went through the full migration-apply gate with Mason's explicit in-chat approval and clean Codex drift + RLS reviews. Post-apply verification against the live catalog: `update_vendor_bill` is a single 9-argument overload accepting `p_confirm_po_overage`/`p_po_overage_reason`; `cycle_counts.item_revision` exists; `trg_bump_cycle_count_item_revision` is present on `cycle_count_items` and its body carries the `CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN` guard. **The frontend half of PR #535 HAS now merged** (commit `914a6d36a`, on `origin/main`), superseding the earlier note here that it had not. `src/pages/CycleCounts.tsx` sends `p_expected_item_revision` at both completion call sites (`:589-594` and `:778-783`), each gated to fail closed when the revision is not a number, and `src/lib/db.ts:174` maps the refusal code to a plain-English reload instruction. That is what made row 923 (`20260908120000_close_pr535_live_gaps`, applied live 2026-09-08) safe to apply: it turns an omitted revision into a hard refusal, and no deployed caller omits it.
 
 The prior header readings are retained as provenance: 977 rows / `20260826205935` / authored
 high-water `20260826150000` after the COMMENT-only apply, and before that 976 rows /

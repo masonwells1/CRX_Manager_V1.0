@@ -2734,10 +2734,13 @@ function registryMigrationHighWater(): string {
 // after these apply, at which point the generated-names arm covers them.
 // The seven entries after them fell below the same high-water move but went
 // unnoticed, because the reverse check below only recognised the PENDING
-// APPLY wording while their rows say LOCAL CANDIDATE ... not applied. Once
+// APPLY wording while their rows said LOCAL CANDIDATE ... not applied. Once
 // the reverse check learned that wording it named exactly these seven: the
 // other five commission restamps, 20260908120000, and this PR's own
-// 20260911120000 adjust_inventory binding.
+// 20260911120000 adjust_inventory binding. 20260908120000 had in fact applied
+// live on 2026-09-08 (ledger 20260909023300) and its row now says so; it stays
+// registered for the same reason as the 20260831* entries — applied, but the
+// generated types have not been regenerated since.
 const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831160000',
   '20260831161000',
