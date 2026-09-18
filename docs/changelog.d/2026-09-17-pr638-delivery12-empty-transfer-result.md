@@ -35,8 +35,12 @@ The new `invoice_id` requirement was checked against the authoritative function 
 against the new tests: both success paths of `transfer_job_to_invoice` always return `invoice_id` -
 the single-invoice path and the U7 multi-owner split path (the anchor member) - in the live
 definition `20260713060000_harden_field_split_sum100.sql` and in the parked `20260914100500`.
-There is no `success:false` return; failures raise and are thrown before the guard runs. The guard
-therefore cannot refuse a real transfer.
+There is no `success:false` return; failures raise and are thrown before the guard runs. This
+frontend `invoice_id` guard therefore cannot refuse a transfer the database completed. That claim is
+about the screen guard only: the database can still refuse a transfer by raising, including the
+parked `20260914100800` receipt trigger's `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` for a pre-cutover
+call that did not go through the intent-bound wrapper. Such a refusal is an error the screens show;
+it never reaches this guard.
 
 **Not verified.** The machine-fee smoke SQL runs only against a real database, and no live database
 was read or written in this work, so that fixture change is verified against
