@@ -25,7 +25,8 @@ JSX text an apostrophe reads as an unterminated string and `//` reads as a line 
 rest of the line and hiding any reset on it. The behaviour is real and already documented in residual
 (h)'s list ("A `//` inside JSX text masks the rest of its line"). Distinguishing JSX text from
 strings, comments, templates and regex literals is the real tokenizer that the same list says is
-needed to close (a), (b), (f) and (g). That work is tracked in issue #686, which Mason deferred on
+needed to close (a) and (b) ((f) and (g) were already closed by the whole-file mask on 2026-09-13,
+recorded 2026-09-18). That work is tracked in issue #686, which Mason deferred on
 2026-09-14, and it does not belong inside a delivery PR whose subject is invoice-transfer binding.
 
 **Proof observed.** `src/__tests__/idempotency-reset-order.test.ts` is 28/28, including a new case

@@ -1751,13 +1751,14 @@ invisible. (c) The identity pin uses the key's own name, so two sites calling th
 are not told apart. (d) The record-scoping check proves a declaration contains a route-id scope, not
 that the RPC sends that id or that the payload carries nothing else. (e) The scanner detects only
 reset-before-**assert**; a reset placed before the CALL that uses the key is a real defect of the
-same consequence and is not looked for at all — two live instances in `JobDetail`. (f) Line
-comments and string literals are stripped before matching (round 5: a comment mentioning
-`assertRpcResult` between a call and an early reset used to hide the reset entirely, and a comment
-mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is still not handled.
-(g) The same stripping removes whole TEMPLATE LITERALS including their `${…}` interpolations, so a
-reset executed inside an interpolation is invisible, and because stripping is line-based a multi-line
-template body still reads as code. (h) **CLOSED 2026-09-17 (CodeRabbit on PR #708, then PR #712).**
+same consequence and is not looked for at all — two live instances in `JobDetail`. (f) and (g) **CLOSED 2026-09-13
+(`fe462c8a0`; recorded 2026-09-18, CodeRabbit on PR #719).** (f) said a MULTI-LINE `/* … */` block
+escaped the per-line strip; (g) said template literals were removed whole, hiding a reset inside a
+`${…}` interpolation, while a multi-line template body still read as code. `findResetBeforeAssert()`
+now scans `maskNonCode()` of the whole file before the per-line strip, the same mask `classify()`
+uses, so block comments and template text are masked across lines and a `${…}` interpolation stays
+code. The `classify()` cases for multi-line block comments and templates, including the
+interpolation positive control, exercise that mask. (h) **CLOSED 2026-09-17 (CodeRabbit on PR #708, then PR #712).**
 `aliasNames()` used to read RAW source, so a comment or string containing `resetKey:` could invent an
 alias. Both of its call sites now pass masked text: the sweep's `aliasResetPattern()` inside
 `findResetBeforeAssert()`, and the pinned-site label in the known-unfixed-sites test, which also
@@ -1784,7 +1785,7 @@ of its line. (i) The
 `functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
 intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes
 `foo.bar.resetKey()` to `bar.resetKey`, can double-count when an alias is itself named `resetKey`,
-and does not order multiple tokens sharing one line. Closing (a), (b), (f) and (g) needs a real
+and does not order multiple tokens sharing one line. Closing (a) and (b) needs a real
 tokenizer, not a line scan. The same applies to the JSX gap noted above — CodeRabbit raised it again
 on PR #712 (2026-09-17), asking that the mask distinguish JSX text from strings, comments, templates
 and regex literals. That is the tokenizer, so it stays deferred with #686 rather than being attempted
