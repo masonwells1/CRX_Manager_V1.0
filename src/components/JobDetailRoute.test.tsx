@@ -302,7 +302,7 @@ describe('JobDetail transfer intent recovery', () => {
       transferAttempts += 1;
       return Promise.resolve(transferAttempts === 1
         ? { data: null, error: { code: 'P0001', message: token, details: null, hint: null } }
-        : { data: { job_id: 'job-transfer', invoice_id: 'invoice-1', invoice_number: 'INV-1' }, error: null });
+        : { data: { job_id: 'job-transfer', invoice_id: 'b1b2c3d4-0000-4000-8000-000000000001', invoice_number: 'INV-1' }, error: null });
     });
 
     mountAt('/jobs/job-transfer');
@@ -338,8 +338,8 @@ describe('JobDetail transfer intent recovery', () => {
   // Sol, PR #638: a legacy receipt replay is not bound to a job. A successful
   // response for another job (or none) must not navigate or retire the key.
   it.each([
-    ['another job', { job_id: 'job-other', invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
-    ['no job', { invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
+    ['another job', { job_id: 'job-other', invoice_id: 'b1b2c3d4-0000-4000-8000-0000000000ff', invoice_number: 'INV-OTHER' }],
+    ['no job', { invoice_id: 'b1b2c3d4-0000-4000-8000-0000000000ff', invoice_number: 'INV-OTHER' }],
     ['this job with no invoice id', { job_id: 'job-transfer', invoice_number: 'INV-1' }],
     ['no data at all', null],
   ])('does not trust a transfer result for %s and reconciles before a new key', async (_label, wrongResult) => {
@@ -361,7 +361,7 @@ describe('JobDetail transfer intent recovery', () => {
       transferAttempts += 1;
       return Promise.resolve(transferAttempts === 1
         ? { data: wrongResult, error: null }
-        : { data: { job_id: 'job-transfer', invoice_id: 'invoice-1', invoice_number: 'INV-1' }, error: null });
+        : { data: { job_id: 'job-transfer', invoice_id: 'b1b2c3d4-0000-4000-8000-000000000001', invoice_number: 'INV-1' }, error: null });
     });
 
     mountAt('/jobs/job-transfer');
@@ -371,7 +371,7 @@ describe('JobDetail transfer intent recovery', () => {
     const recoveryMessage = 'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', recoveryMessage));
     await waitFor(() => expect(jobReads).toBe(2));
-    expect(mockNavigate).not.toHaveBeenCalledWith('/field-invoices/invoice-other');
+    expect(mockNavigate).not.toHaveBeenCalledWith('/field-invoices/b1b2c3d4-0000-4000-8000-0000000000ff');
     expect(mockNavigate).not.toHaveBeenCalledWith('/field-invoices/undefined');
     expect(mockTransferResetKey).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Transfer to Invoice' })).toBeDisabled();
@@ -381,7 +381,7 @@ describe('JobDetail transfer intent recovery', () => {
     expect(mockTransferResetKey).toHaveBeenCalledTimes(1);
 
     await confirmTransfer();
-    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/field-invoices/invoice-1'));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/field-invoices/b1b2c3d4-0000-4000-8000-000000000001'));
     const transferCalls = mockRpc.mock.calls.filter(([name]) => name === 'transfer_job_to_invoice');
     expect(transferCalls).toHaveLength(2);
     const firstKey = (transferCalls[0][1] as { p_idempotency_key: string }).p_idempotency_key;

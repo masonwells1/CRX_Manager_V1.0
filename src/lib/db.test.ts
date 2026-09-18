@@ -204,6 +204,9 @@ describe('assertTransferResultForJob', () => {
     ['missing', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd' }],
     ['blank', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: '  ' }],
     ['non-string', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: 7 }],
+    // CodeRabbit (PR #720): a nonblank string is not enough; the id becomes a route segment.
+    ['non-UUID', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: 'not-an-invoice' }],
+    ['whitespace-padded', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: ' b1b2c3d4-0000-4000-8000-00000000abcd ' }],
   ])('rejects a result with a %s invoice id', (_label, result) => {
     expect(() => assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd'))
       .toThrow(/^TRANSFER_INVOICE_RESULT_INVALID:/);

@@ -140,8 +140,9 @@ events (33 baseline and 2 legacy excluded), zero settlement events, all 10 requi
 enabled, admin-only RLS, zero non-owner ledger grants, and every reviewed function fingerprint. No
 live `[E2E]` fixture rows were created.
 
-**Concurrent documentation integration.** Row 916 below came from merged PR #606. The later
-commission candidates continue at rows 917-921 so every history sequence is unique. PR #599, which
+**Concurrent documentation integration.** Row 916 below came from merged PR #606. History rows
+917-921 follow it so every sequence number is unique: 918, 919 and 920 are commission candidates,
+917 is the separate next-invoice-number candidate, and 921 was superseded before apply with no file. PR #599, which
 then carried a separate row-912 claim, reconciled its documentation and merged on 2026-09-11
 (`791bc3d86`).
 

@@ -488,6 +488,9 @@ export function assertTransferDataPresent(data: unknown): void {
   }
 }
 
+// invoices.id is a Postgres uuid; any version, canonical 8-4-4-4-12 hex, no padding.
+const TRANSFER_INVOICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * A transfer screen must not retire its request key on a result for another job.
  * A legacy receipt is scoped only to (key, operation), so a replay can carry any
@@ -495,15 +498,15 @@ export function assertTransferDataPresent(data: unknown): void {
  * TRANSFER_INVOICE_RESULT_INVALID, which both callers already route to
  * reconciliation: reload the job first, and only then allow a new key.
  * The RPC always returns invoice_id (the anchor member for a split), and callers
- * retire the key and navigate on it, so a missing or blank one throws the same
- * code (CodeRabbit, PR #699).
+ * retire the key and navigate on it, so a missing, blank or non-UUID one throws the
+ * same code (CodeRabbit, PRs #699 and #720).
  */
 export function assertTransferResultForJob<T extends { job_id?: unknown; invoice_id?: unknown }>(result: T, jobId: string): T {
   const returnedJobId = typeof result.job_id === 'string' ? result.job_id.toLowerCase() : null;
   if (returnedJobId === null || returnedJobId !== jobId.toLowerCase()) {
     throw new Error(`${RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID}: transfer result is not for the requested job`);
   }
-  if (typeof result.invoice_id !== 'string' || result.invoice_id.trim() === '') {
+  if (typeof result.invoice_id !== 'string' || !TRANSFER_INVOICE_ID_PATTERN.test(result.invoice_id)) {
     throw new Error(`${RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID}: transfer result has no invoice id`);
   }
   return result;

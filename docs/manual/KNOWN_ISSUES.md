@@ -534,8 +534,8 @@ last two migrations not yet being applied — is **CLEARED**: both applied on 20
 `update_vendor_bill` was verified live as a single 9-argument overload accepting
 `p_confirm_po_overage` and `p_po_overage_reason`, so the branch's call resolves.
 
-**Historical consequence while this was open.** PR #581's schema-registry refresh was parked behind
-#535 because the registry asserted a live high-water whose `20260831*` migrations had no file on
+**Historical consequence while this was open.** PR #581's schema-registry refresh was parked behind PR #535
+because the registry asserted a live high-water whose `20260831*` migrations had no file on
 `main`. PR #535's merge removed that ordering blocker; any registry refresh still follows its own
 current proof gates.
 

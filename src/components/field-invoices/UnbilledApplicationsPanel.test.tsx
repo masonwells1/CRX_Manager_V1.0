@@ -146,7 +146,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
       transferAttempts += 1;
       return Promise.resolve(transferAttempts === 1
         ? { data: null, error: { code: 'P0001', message: token, details: null, hint: null } }
-        : { data: { job_id: 'job-transfer', invoice_id: 'invoice-1', invoice_number: 'INV-1' }, error: null });
+        : { data: { job_id: 'job-transfer', invoice_id: 'b1b2c3d4-0000-4000-8000-000000000001', invoice_number: 'INV-1' }, error: null });
     });
 
     render(<UnbilledApplicationsPanel />);
@@ -179,8 +179,8 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
   // Sol, PR #638: a legacy receipt replay is not bound to a job. A successful
   // response for another job (or none) must not retire the key or report success.
   it.each([
-    ['another job', { job_id: 'job-other', invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
-    ['no job', { invoice_id: 'invoice-other', invoice_number: 'INV-OTHER' }],
+    ['another job', { job_id: 'job-other', invoice_id: 'b1b2c3d4-0000-4000-8000-0000000000ff', invoice_number: 'INV-OTHER' }],
+    ['no job', { invoice_id: 'b1b2c3d4-0000-4000-8000-0000000000ff', invoice_number: 'INV-OTHER' }],
     ['this job with no invoice id', { job_id: 'job-transfer', invoice_number: 'INV-1' }],
     ['no data at all', null],
   ])('treats a transfer result for %s as unverified and reconciles before a new key', async (_label, wrongResult) => {
@@ -199,7 +199,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
       transferAttempts += 1;
       return Promise.resolve(transferAttempts === 1
         ? { data: wrongResult, error: null }
-        : { data: { job_id: 'job-transfer', invoice_id: 'invoice-1', invoice_number: 'INV-1' }, error: null });
+        : { data: { job_id: 'job-transfer', invoice_id: 'b1b2c3d4-0000-4000-8000-000000000001', invoice_number: 'INV-1' }, error: null });
     });
 
     render(<UnbilledApplicationsPanel />);
@@ -303,7 +303,7 @@ describe('UnbilledApplicationsPanel transfer intent recovery', () => {
     });
     mockRpc.mockImplementation((_name: string, args: { p_job_id: string }) => Promise.resolve(
       args.p_job_id === completedJob.id
-        ? { data: { job_id: completedJob.id, invoice_id: 'invoice-1', invoice_number: 'INV-1' }, error: null }
+        ? { data: { job_id: completedJob.id, invoice_id: 'b1b2c3d4-0000-4000-8000-000000000001', invoice_number: 'INV-1' }, error: null }
         : { data: null, error: { code: 'P0001', message: 'TRANSFER_INVOICE_RESULT_INVALID', details: null, hint: null } },
     ));
 
