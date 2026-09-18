@@ -2053,8 +2053,12 @@ defects the parked migration closes while it stays unapplied: a NULL `p_force` t
 free-stock checks, and holds created by staff whose profile is missing or inactive. The live read needs
 Mason's explicit OK at the time; the result decides whether the apply moves up. **Done 2026-09-15:** the
 migration applied before the due date, so per Mason's 2026-09-14 decision the pre-apply check was skipped
-and a read-only look-back ran after the apply. All 29 `inventory_holds` rows ever created were made by an
-active admin (newest 2026-04-28), so neither defect was exercised.
+and a read-only look-back ran after the apply. All 29 `inventory_holds` rows ever created (newest 2026-04-28)
+were made by staff who are active admins today, and the `created_by` foreign key rules out a persisted
+hold with a missing profile. The look-back cannot show whether either defect was exercised: `p_force` is
+not stored on the hold, and the old body's `IF p_force` / `AND NOT p_force` meant a NULL `p_force`
+skipped the free-stock check even for an admin; and profile state is read as of today, not as of each
+hold's creation.
 
 The live `create_inventory_hold` body (the `20260630173022` parked_010 body — the 2026-07-27 production
 dump proves it IS installed; earlier notes calling it "parked, never applied" were wrong) reads its

@@ -34,10 +34,13 @@ check ran right after the apply, on 2026-09-15. All 29
 from 2026-03-14 and 2026-03-15, all released. 9 are crop_program holds from 2026-04-28, all active. No
 hold has been created since 2026-04-28.
 
-Neither closed defect was exercised. The first was a NULL `p_force` skipping the admin and free-stock
-checks, which only matters for a non-admin. The second was holds from a missing or inactive profile. The
-"active" reading is the profile's current state, not its state at hold time, but every creator is an
-admin who is active today.
+What this does and does not prove. The first closed defect was a NULL `p_force` skipping the admin and
+free-stock checks. Because the old body tested `IF p_force` and `AND NOT p_force`, a NULL skipped the
+free-stock check even for an admin, and `p_force` is not stored on the hold, so the look-back cannot
+tell whether that path ran. The second was holds from a missing or inactive profile. The `created_by`
+foreign key rules out a persisted hold with a missing profile, and every creator is an active admin
+today, but the reading is each profile's current state, not its state at hold time, so it cannot prove
+the inactive-profile path never ran either.
 
 **Docs.** The following now record the apply:
 - `docs/reference/migration-history.md`: row 927 and the current-boundary capture.
