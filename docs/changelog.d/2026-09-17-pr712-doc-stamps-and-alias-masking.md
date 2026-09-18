@@ -1,7 +1,8 @@
 ## 2026-09-17 - Restamped filenames corrected in four changelogs; alias masking finished
 
-**What changed.** CodeRabbit's review of delivery PR #712 raised five Minor findings. Four were
-documentation, one was declined with reasons, and one uncovered a real half-finished fix.
+**What changed.** CodeRabbit's review of delivery PR #712 raised five Minor findings: four
+documentation findings, all fixed, and one declined with reasons. One of the four documentation
+findings (residual (h), below) also uncovered a real half-finished fix, so it is not a sixth finding.
 
 - Four changelog entries still named migrations by stamps that PR #704 retired on 2026-09-14, so an
   operator planning the apply would look for files that do not exist. Corrected to the current
