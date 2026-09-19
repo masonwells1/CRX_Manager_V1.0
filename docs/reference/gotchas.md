@@ -322,7 +322,8 @@ For pending or uncertain delivery, preserve requested/dispatch state and check t
 review. After late delivery, reapply `ready-for-coderabbit` to reconcile the existing request;
 do not remove and re-add the provider label. A retained same-head attempt cannot be retried as
 unspent merely by clearing labels: use a fresh candidate after verifying earlier delivery, or
-preserve ambiguous out-of-band evidence and use a fresh PR. Only the workflow's verified cleanup
+open a fresh PR and close the old one with a `Replaced by #N` comment (closing keeps its
+ambiguous out-of-band evidence; do not leave it open). Only the workflow's verified cleanup
 before any provider call permits a same-head retry. Follow
 `docs/reference/coderabbit-native-review.md` for native and bootstrap recovery. Never merge from the ordinary check row alone —
 confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
