@@ -51,7 +51,7 @@ const args = buildReviewerCodexArgs({
   effort: 'high',
   cwd: 'C:\\review-root',
   permissionProfile: 'packet-review',
-  permissionConfig: 'permissions.packet-review={ filesystem = { ":root" = "deny" } }',
+  permissionConfig: 'permissions.packet-review={ filesystem = { ":root" = "read" }, network = { enabled = false } }',
   platform: 'win32',
 });
 assert.equal(args.at(-1), '-', 'Codex must read the review prompt from stdin');

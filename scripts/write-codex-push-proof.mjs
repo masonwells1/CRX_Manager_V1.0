@@ -37,6 +37,7 @@ import {
   readFileSync,
   readdirSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -550,9 +551,120 @@ export function codexExecutable({
 export const CODEX_REVIEW_MODEL = "gpt-5.6-sol";
 export const CODEX_REVIEW_EFFORT = "high";
 export const CODEX_REVIEW_PERMISSION_PROFILE = "packet-review";
-export const CODEX_REVIEW_PERMISSION_CONFIG =
-  'permissions.packet-review={ filesystem = { ":root" = "deny", ":minimal" = "read", ' +
-  '":workspace_roots" = { "." = "read" } }, network = { enabled = false } }';
+
+// ── reviewer read scope ──────────────────────────────────────────────────────
+// Codex 0.155 (2026-09-19) refuses `":root" = "deny"` on Windows: the elevated
+// sandbox now requires whole-disk read and enforces reads only through explicit
+// deny-read entries. Older builds accepted the deny-root profile but silently fell
+// back to plain read-only, so the packet-only read scope was never really in force.
+//
+// Each deny entry is a persistent deny ACE that Windows copies onto every file
+// beneath it, and it is shared with every other sandboxed Codex session on the
+// machine. Denying a large tree (C:\Users, a repo root, a whole drive) therefore
+// takes hours and breaks ordinary Codex work inside it. So the reviewer denies
+// only small credential stores and `.env` secret FILES, found by shape rather
+// than by a hand-written list of repos. Writes and network stay fully denied.
+const HOME_CREDENTIAL_PATHS = [
+  [".codex", "auth.json"],
+  [".ssh"],
+  [".supabase"],
+  [".docker"],
+  [".aws"],
+  [".azure"],
+  [".config", "gh"],
+  [".git-credentials"],
+  [".netrc"],
+  [".npmrc"],
+  [".pgpass"],
+];
+const PUBLIC_ENV_TEMPLATE_RE = /\.(example|sample|template)$/i;
+
+export function isEnvSecretFileName(name) {
+  const lower = String(name).toLowerCase();
+  return (lower === ".env" || lower.startsWith(".env.")) && !PUBLIC_ENV_TEMPLATE_RE.test(lower);
+}
+
+function worktreeRoots(sourceRoot) {
+  const listing = runGit(["worktree", "list", "--porcelain"], { cwd: sourceRoot });
+  return listing
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length));
+}
+
+export function codexReviewDenyReadPaths({
+  sourceRoot = FALLBACK_ROOT,
+  home = homedir(),
+  platform = process.platform,
+  listWorktrees = worktreeRoots,
+  readDir = readdirSync,
+  lstat = lstatSync,
+  realpath = (target) => realpathSync.native(target),
+} = {}) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const found = new Map();
+  const add = (target, wantFile) => {
+    let stat;
+    try {
+      stat = lstat(target);
+    } catch {
+      return;
+    }
+    if (stat.isSymbolicLink()) return;
+    if (wantFile ? !stat.isFile() : !(stat.isFile() || stat.isDirectory())) return;
+    let real;
+    try {
+      real = realpath(target);
+    } catch {
+      return;
+    }
+    found.set(platform === "win32" ? real.toLowerCase() : real, real);
+  };
+  const addEnvFilesIn = (directory) => {
+    let entries = [];
+    try {
+      entries = readDir(directory);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      if (isEnvSecretFileName(name)) add(pathApi.join(directory, name), true);
+    }
+  };
+
+  for (const parts of HOME_CREDENTIAL_PATHS) add(pathApi.join(home, ...parts), false);
+
+  // Every project folder one level below the system drive root (C:\CRX_Manager,
+  // C:\FarmRx, ...), plus every worktree of the repo under review.
+  const driveRoot = pathApi.parse(pathApi.resolve(sourceRoot)).root;
+  let topLevel = [];
+  try {
+    topLevel = readDir(driveRoot);
+  } catch {
+    topLevel = [];
+  }
+  for (const name of topLevel) addEnvFilesIn(pathApi.join(driveRoot, name));
+  addEnvFilesIn(sourceRoot);
+  for (const worktree of listWorktrees(sourceRoot)) addEnvFilesIn(worktree);
+
+  return [...found.values()].sort();
+}
+
+function tomlString(value) {
+  // JSON string escapes are a subset of TOML basic-string escapes.
+  return JSON.stringify(String(value));
+}
+
+export function codexReviewPermissionConfig(denyReadPaths = []) {
+  const filesystem = [
+    '":root" = "read"',
+    '":minimal" = "read"',
+    '":workspace_roots" = { "." = "read" }',
+    ...denyReadPaths.map((target) => `${tomlString(target)} = "deny"`),
+  ];
+  return `permissions.${CODEX_REVIEW_PERMISSION_PROFILE}={ filesystem = { ${filesystem.join(", ")} }, ` +
+    "network = { enabled = false } }";
+}
 
 // ── which Codex agent produced the verdict ───────────────────────────────────
 // Legacy helper retained for callers that inspect workstation configuration.
@@ -706,9 +818,14 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
   ].join("\n");
 }
 
-export function buildCodexExecArgs({ root, prompt, platform = process.platform }) {
-  // `exec` runs the fixed review prompt with a packet-only permission profile
-  // (no reads outside the sanitized packet/minimal runtime, no writes, no network)
+export function buildCodexExecArgs({
+  root,
+  prompt,
+  platform = process.platform,
+  permissionConfig = codexReviewPermissionConfig(codexReviewDenyReadPaths()),
+}) {
+  // `exec` runs the fixed review prompt with a read-only permission profile
+  // (credential stores and `.env` files denied, no writes, no network)
   // even if the workstation default is danger-full-access, and with no
   // approval prompts (so an unattended run never hangs). `-` makes Codex read
   // the fixed prompt from stdin; the wrapper supplies it directly with
@@ -729,15 +846,15 @@ export function buildCodexExecArgs({ root, prompt, platform = process.platform }
     "-c",
     `default_permissions="${CODEX_REVIEW_PERMISSION_PROFILE}"`,
     "-c",
-    CODEX_REVIEW_PERMISSION_CONFIG,
+    permissionConfig,
     "--disable",
     "hooks",
     "-",
   ];
   if (platform === "win32") {
-    // Read-deny permission profiles require the stronger native Windows backend.
-    // Keep auth in the parent Codex process; its model-issued commands receive
-    // the dedicated restricted user and cannot read the real profile/CODEX_HOME.
+    // Deny-read entries require the elevated native Windows backend. Auth stays
+    // in the parent Codex process; model-issued commands run as the dedicated
+    // sandbox user, and CODEX_HOME's auth.json is explicitly denied to it.
     args.splice(args.indexOf("-C"), 0, "-c", 'windows.sandbox="elevated"');
   }
   return args;
@@ -923,7 +1040,11 @@ export function run(argv = process.argv.slice(2)) {
     if (reviewWorkspace.baseSha !== baseBefore || reviewWorkspace.headSha !== headBefore) {
       throw new Error("Sanitized review workspace bindings do not match the guarded source refs.");
     }
-    const args = buildCodexExecArgs({ root: reviewWorkspace.root, prompt });
+    const args = buildCodexExecArgs({
+      root: reviewWorkspace.root,
+      prompt,
+      permissionConfig: codexReviewPermissionConfig(codexReviewDenyReadPaths({ sourceRoot: root })),
+    });
     result = spawnSync(codexBin, args, {
       cwd: reviewWorkspace.root,
       encoding: "utf8",

@@ -119,7 +119,7 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, migrationSql, query
     effort: CODEX_REVIEW_EFFORT,
     cwd: reviewRoot,
     permissionProfile: CODEX_REVIEW_PERMISSION_PROFILE,
-    permissionConfig: CODEX_REVIEW_PERMISSION_CONFIG,
+    permissionConfig: codexReviewPermissionConfig(codexReviewDenyReadPaths({ sourceRoot: process.cwd() })),
   });
   const result = spawnSync(codexBin, args, {
     cwd: reviewRoot,
