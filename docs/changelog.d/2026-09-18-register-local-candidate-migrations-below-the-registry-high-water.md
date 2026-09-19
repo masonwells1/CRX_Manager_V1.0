@@ -26,5 +26,10 @@ CodeRabbit's review of PR #714 (commit `965089215`) found five problems. All fiv
   `_refuse_unbound_adjust_inventory_receipt_20260911` are now listed in its `covers`, so selecting either
   by name reaches this chain.
 
+**2026-09-19 update.** Merging main after PR #721 added `20260914100800_bind_transfer_invoice_intent.sql`,
+another local candidate below the high-water. The widened check failed on it by name. It is now
+registered too. Our migration-history row for `20260911120000` moved from 928 to 929, because #721's
+row for `20260914100800` already uses 928.
+
 Nothing was applied to the live database. `20260911120000` remains a local candidate awaiting Mason's
 explicit approval.
