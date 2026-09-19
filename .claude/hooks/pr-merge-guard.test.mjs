@@ -34,6 +34,40 @@ eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
 eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false, admin: false }, "gh token anywhere still matches (fails safe)");
 eq(ghMergeRequest("npm run build"), null, "unrelated command ignored");
 
+// ── the gh binary is a SHAPE, not a list of extensions ───────────────────────
+// GH_BIN_RE spelled the binary `gh(?:\.exe)?` — a one-item extension list — so
+// every command below returned null at 336f92e4d and the merge gate
+// (green-pipeline, CHANGES_REQUESTED, risky-diff proof) never ran at all.
+// Verified by executing the pre-fix library, not by reading the pattern.
+for (const cmd of [
+  "gh.cmd pr merge 625 --squash",
+  "gh.ps1 pr merge 625 --squash",
+  "gh.bat pr merge 625 --squash",
+  "gh.COM pr merge 625 --squash",
+  "C:\\Tools\\gh.cmd pr merge 625 --squash",
+  "/usr/local/bin/gh.cmd pr merge 625 --squash",
+  '"C:/Program Files/GitHub CLI/gh.cmd" pr merge 625 --squash',
+  "npm test&&gh pr merge 625 --squash",          // separator, not whitespace
+  "echo ok;gh.cmd pr merge 625 --squash",
+]) {
+  ok(ghMergeRequest(cmd) !== null, `any gh binary spelling is still gated: ${cmd}`);
+}
+ok(
+  ghApiMergeRequest("gh.cmd api -X PUT repos/o/r/pulls/625/merge") !== null,
+  "the api merge path is gated through any binary extension too",
+);
+// The other direction. A guard that over-denies gets switched off, so the
+// boundary is pinned: `-` is not `.`, and `\b` does not match inside a word.
+for (const cmd of [
+  "gh-dash pr merge 1",
+  "ghq push",
+  "ghost pr merge 1",
+  "npm run ghpr",
+  "echo highlight pr merge",
+]) {
+  eq(ghMergeRequest(cmd), null, `a neighbouring command is not a gh merge: ${cmd}`);
+}
+
 // ── --admin (Mason's manual review override, 2026-09-01) ─────────────────────
 // "Include administrators" is OFF on main so Mason can hand-merge a stuck PR.
 // The bypass rides on admin rights, so every agent session inherits it; the

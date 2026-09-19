@@ -8,7 +8,52 @@ import path from "node:path";
 // `git --git-dir=... push`, `git -c k=v push` — which used to bypass the gate
 // entirely (observed 2026-07-10: a `git -C` push slipped past this guard).
 const GIT_ARG = `(?:"[^"]*"|'[^']*'|\\S+)`;
-const GIT_BIN = `(?:"[^"]*[\\\\/]git(?:\\.exe)?"|'[^']*[\\\\/]git(?:\\.exe)?'|(?:\\S*[\\\\/])?git(?:\\.exe)?)`;
+
+// The BINARY was a ONE-ITEM EXTENSION LIST — `git(?:\.exe)?`, repeated in all
+// three alternatives — and that is the same "describe how a command is usually
+// written" error this repo has now hit three times (autopilot-lib enumerated
+// option SPELLINGS, then attached-vs-detached option VALUES, then the binary
+// NAME; PR #607 replaced all three with a grammar). This file never got that
+// treatment, so it still carried the original. Reproduced by EXECUTION against
+// this file's own exported predicates at 336f92e4d (2026-09-07), not by reading
+// the pattern: `git.cmd push origin HEAD:main`, `git.ps1 …`, `git.com …`,
+// `git.bat …`, `C:\Tools\git.cmd push …` and `"C:/…/git.cmd" push …` ALL
+// returned isGitPush === false, so the guard exited before the force,
+// destination, risky-diff and Codex-proof checks. `.cmd` is what Windows
+// resolves `git` to when Git ships its shim, and PATHEXT is user-configurable,
+// so this was not a corner case.
+//
+// Listing more extensions would inherit the next list's omissions. The binary is
+// described by SHAPE instead, reusing PR #607's model verbatim rather than
+// inventing a second grammar for the same problem — two different answers to
+// "what is a git command" across two guards is how the next gap appears:
+//
+//   BIN_TAIL   what may sit between the NAME and the whitespace before the
+//              subcommand, and it is exactly two things:
+//                (a) an EXTENSION — a `.` followed by the LAST dot-segment of
+//                    the final path segment, so it contains no separator, no
+//                    further dot and no quote. ANY such extension, because "what
+//                    follows the dot" is a shape, not a list: `.exe`, `.EXE`,
+//                    `.cmd`, `.bat`, `.ps1`, `.com` and whatever PATHEXT gains
+//                    next all match without being named.
+//                (b) a CLOSING QUOTE — a quoted command word ends with one, and
+//                    `"C:/Program Files/Git/bin/git.exe" push` is the ordinary
+//                    Windows spelling of a path containing a space.
+//
+// `\b` after the name is what keeps it off the neighbours: `-` is not `.`, so
+// BIN_TAIL never opens on `git-crypt`/`git-lfs`, and `h` is a word character, so
+// `\b` never even matches inside `github-release`/`gitfoo`. Bounding the
+// extension (no dot, no separator, no quote inside it) is also what keeps this
+// LINEAR — an unbounded tail can swallow the rest of the command and hand it
+// back one character at a time at every position where the name can start.
+// Measured, not assumed; the test file pins a ceiling.
+//
+// The path-prefix alternatives stay because CMD_START below anchors immediately
+// before this pattern, so (unlike #607, which has no such anchor) `\b` alone
+// cannot open on the BASENAME of `C:\Tools\git.cmd`. They lose only their
+// extension list, not their structure.
+const BIN_TAIL = `(?:\\.[^\\s'".\\\\/]*)?["']?`;
+const GIT_BIN = `(?:"[^"]*[\\\\/]git|'[^']*[\\\\/]git|(?:\\S*[\\\\/])?git)\\b${BIN_TAIL}`;
 const GIT_GLOBAL_OPTS =
   // `--config-env` must be listed here or the whole command stops looking like a
   // push: without it `git --config-env=remote.origin.pushurl=VAR push origin main`
@@ -36,14 +81,32 @@ export function isGitPush(cmd) {
 // `$verb='push'; git $verb ...` otherwise looks like a non-push and skips every
 // destination, force and proof check. Refuse the uninspectable Git invocation
 // itself, including dynamic non-pushes, rather than guessing what it becomes.
+// Token-level twin of BIN_TAIL, for the two parsers below that walk argv words
+// instead of matching the raw command text. They compared the final path segment
+// against the literal set {"git", "git.exe"} — the same one-item extension list,
+// with the same consequence: `git.cmd $verb origin main` was not seen as git at
+// all, so gitSubcommandIsDynamic missed the uninspectable subcommand and
+// unknownGitGlobalOptions missed the unlisted global option. Both verified false
+// by execution before the fix.
+//
+// The basename is the NAME plus AT MOST ONE extension, and an extension is a
+// dot-segment with no further dot — the argv-token form of BIN_TAIL(a), so the
+// two parsers and the regex agree on what a git command is. `mine.git`,
+// `git-crypt` and `git.exe.bak` are not git; `git`, `git.exe`, `git.CMD` and
+// `git.ps1` are. Tokens reach here already unquoted by splitShellArgs.
+const GIT_BASENAME_RE = /^git(?:\.[^.]*)?$/i;
+function isGitBinaryToken(token) {
+  const basename = String(token || "").replace(/\\/g, "/").split("/").pop() || "";
+  return GIT_BASENAME_RE.test(basename);
+}
+
 export function gitSubcommandIsDynamic(cmd) {
   const takesValue = new Set(["-c", "-C", "--config-env", "--git-dir", "--work-tree"]);
   const valueless = new Set(["--no-pager", "--literal-pathspecs", "--%"]);
   for (const segment of shellSegments(String(cmd || ""))) {
     const tokens = splitShellArgs(segment);
     for (let index = 0; index < tokens.length; index += 1) {
-      const binary = tokens[index].replace(/\\/g, "/").split("/").pop()?.toLowerCase();
-      if (binary !== "git" && binary !== "git.exe") continue;
+      if (!isGitBinaryToken(tokens[index])) continue;
       let subcommand = index + 1;
       while (subcommand < tokens.length) {
         const token = tokens[subcommand];
@@ -72,8 +135,7 @@ export function unknownGitGlobalOptions(cmd) {
   for (const segment of shellSegments(String(cmd || ""))) {
     const tokens = splitShellArgs(segment);
     for (let index = 0; index < tokens.length; index += 1) {
-      const binary = tokens[index].replace(/\\/g, "/").split("/").pop()?.toLowerCase();
-      if (binary !== "git" && binary !== "git.exe") continue;
+      if (!isGitBinaryToken(tokens[index])) continue;
       for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
         const token = tokens[cursor];
         if (token === "push") break;
@@ -2000,8 +2062,26 @@ export function sessionProofDirs(root, hookCwd, listWorktrees) {
 // logic. Follow-up: production-action-guard should import these instead of
 // carrying its own copies.
 
-// gh binary reference — tolerates quoted absolute paths and gh.exe.
-const GH_BIN_RE = /(?:^|\s)(?:"[^"]*[\\/]gh\.exe"|\S*[\\/]gh(?:\.exe)?|gh(?:\.exe)?)(?:\s|$)/i;
+// gh binary reference — the SAME shape rule as GIT_BIN above, not a second one.
+// This carried the identical one-item extension list (`gh(?:\.exe)?`), and with
+// the same consequence one layer up: `gh.cmd pr merge 625 --squash`,
+// `gh.ps1 …`, `gh.bat …`, `C:\Tools\gh.cmd pr merge …` and
+// `"C:/Program Files/GitHub CLI/gh.cmd" pr merge …` all returned null from
+// ghMergeRequest at 336f92e4d, so the merge gate — green-pipeline,
+// CHANGES_REQUESTED and risky-diff proof — never ran. Verified by execution.
+//
+// The command-start class is widened from `\s` to CMD_START's `[\s;&|]` for the
+// reason this file already recorded for git at line 18: `npm test&&gh pr merge
+// 625` is an ordinary shell line, the separators ARE word boundaries to the
+// shell, and requiring whitespace meant the gate saw no merge at all (also
+// reproduced by execution — false before, true after). `(` stays out, matching
+// git's treatment. Widening here is cheap: ghMergeRequest still needs the words
+// `pr` and `merge`, and the file already accepts over-matching as fail-safe
+// ("gh token anywhere still matches" in pr-merge-guard.test.mjs).
+const GH_BIN_RE = new RegExp(
+  `${CMD_START}(?:"[^"]*[\\\\/]gh|'[^']*[\\\\/]gh|(?:\\S*[\\\\/])?gh)\\b${BIN_TAIL}(?:\\s|$)`,
+  "i",
+);
 
 // `gh pr merge` with global flags possibly between words (`gh -R o/r pr merge`).
 // Over-matching (e.g. `gh pr view merge-notes`) only routes a read through the
