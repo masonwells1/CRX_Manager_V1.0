@@ -48,7 +48,7 @@ BEGIN
     VALUES ('[SMOKE] REC-'||v_sfx, 'job', v_job, v_cust, CURRENT_DATE-1, v_admin) RETURNING id INTO v_apprec;
   UPDATE jobs SET status='in_progress' WHERE id=v_job; UPDATE jobs SET status='completed' WHERE id=v_job;
 
-  v_res := transfer_job_to_invoice(v_job, v_admin, '[SMOKE] rt-fwd-'||v_sfx);
+  v_res := transfer_job_to_invoice(v_job, v_admin, 'SMOKE-rt-fwd-'||v_sfx);
   v_inv := (v_res->>'invoice_id')::uuid;
   SELECT * INTO v_invR FROM invoices WHERE id=v_inv;
   SELECT * INTO v_jobR FROM jobs WHERE id=v_job;
@@ -96,7 +96,7 @@ BEGIN
   IF v_n<>1 THEN RAISE EXCEPTION 'SMOKE_FAIL: idempotent replay wrote a 2nd audit row (%)', v_n; END IF;
 
   -- The job is reusable: re-transfer the now-completed job to a NEW invoice.
-  v_res := transfer_job_to_invoice(v_job, v_admin, '[SMOKE] rt-fwd2-'||v_sfx);
+  v_res := transfer_job_to_invoice(v_job, v_admin, 'SMOKE-rt-fwd2-'||v_sfx);
   v_inv2 := (v_res->>'invoice_id')::uuid;
   IF v_inv2 = v_inv THEN RAISE EXCEPTION 'SMOKE_FAIL: re-transfer reused cancelled invoice id'; END IF;
   SELECT status INTO v_jobR.status FROM jobs WHERE id=v_job;

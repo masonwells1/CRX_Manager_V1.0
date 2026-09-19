@@ -170,7 +170,7 @@ BEGIN
   IF v_n <> 1 THEN RAISE EXCEPTION 'FAIL: complete_job replay made a 2nd application_record (%)', v_n; END IF;
 
   -- =================================================== 3) transfer_job_to_invoice
-  v_res := transfer_job_to_invoice(v_job, v_admin, '[SMOKE] tji-' || v_sfx);
+  v_res := transfer_job_to_invoice(v_job, v_admin, 'SMOKE-tji-' || v_sfx);
   IF COALESCE(v_res->>'success','') <> 'true' THEN
     RAISE EXCEPTION 'FAIL transfer_job_to_invoice: %', v_res;
   END IF;

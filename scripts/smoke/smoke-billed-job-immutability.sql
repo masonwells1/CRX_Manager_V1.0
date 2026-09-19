@@ -77,7 +77,7 @@ BEGIN
   UPDATE jobs SET status='in_progress' WHERE id=v_job;
   UPDATE jobs SET status='completed'   WHERE id=v_job;
 
-  v_res := transfer_job_to_invoice(v_job, v_admin, '[SMOKE] im-fwd-'||v_sfx);   -- L1 (setup)
+  v_res := transfer_job_to_invoice(v_job, v_admin, 'SMOKE-im-fwd-'||v_sfx);   -- L1 (setup)
   v_inv := (v_res->>'invoice_id')::uuid;
   SELECT * INTO v_jobR FROM jobs WHERE id=v_job;
   IF v_jobR.status<>'invoiced' OR v_jobR.invoice_id<>v_inv THEN
@@ -93,7 +93,7 @@ BEGIN
     VALUES (v_job2, v_prodA, 5, 'GL', 0.5, 'PT', 2000, 5000, 1);
   UPDATE jobs SET status='in_progress' WHERE id=v_job2;
   UPDATE jobs SET status='completed'   WHERE id=v_job2;
-  v_res := transfer_job_to_invoice(v_job2, v_admin, '[SMOKE] im-fwd2-'||v_sfx);
+  v_res := transfer_job_to_invoice(v_job2, v_admin, 'SMOKE-im-fwd2-'||v_sfx);
   v_inv2 := (v_res->>'invoice_id')::uuid;
 
   -- ════════════════════════════════════════════════════════════════════════
@@ -227,7 +227,7 @@ BEGIN
       VALUES (v_job3, v_prodA, 3, 'GL', 0.5, 'PT', 2000, 5000, 1);
     UPDATE jobs SET status='in_progress' WHERE id=v_job3;
     UPDATE jobs SET status='completed'   WHERE id=v_job3;
-    v_res := transfer_job_to_invoice(v_job3, v_admin, '[SMOKE] im-L1-'||v_sfx);
+    v_res := transfer_job_to_invoice(v_job3, v_admin, 'SMOKE-im-L1-'||v_sfx);
     v_inv3 := (v_res->>'invoice_id')::uuid;
     SELECT * INTO v_jobR FROM jobs WHERE id=v_job3;
     IF v_jobR.status<>'invoiced' OR v_jobR.invoice_id<>v_inv3 THEN
