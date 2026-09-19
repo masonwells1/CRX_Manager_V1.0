@@ -12,8 +12,8 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-14 against the live ledger (read-only ledger query, which confirmed that none of
-the parked commission or next-invoice-number candidates below is applied; boundary figures are
+**Last verified: 2026-09-19 against the live ledger (read-only ledger query, which confirmed by name that none of
+the parked commission, next-invoice-number or six-generator year candidates below is applied; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
@@ -643,7 +643,21 @@ calendar date — identical rollover, identical six-hour window (re-verified rea
 | `next_cycle_count_number` | `EXTRACT(YEAR FROM CURRENT_DATE)` | `CC-<year>-nnnn` |
 | `next_job_number` | `extract(year FROM current_date)` | `JOB-<year>-nnnn` |
 | `next_po_number` | `extract(year FROM current_date)` | `PO-<year>-nnnn` |
-| `next_return_number` | `extract(year FROM current_date)` | `RET-<year>-nnnn` |
+| `next_return_number` | `extract(year FROM current_date)` | `RMA-<year>-nnnn` (this table said `RET-`; live is `RMA-`) |
+
+**FIX WRITTEN 2026-09-19, NOT APPLIED (issue #617).** `supabase/migrations/20260908140000_number_generators_year_chicago.sql`
+re-emits all six from their live `prosrc` (read read-only 2026-09-19) with only the year line changed,
+pins each live and candidate md5 (the candidate pins were computed on live as
+`md5(replace(prosrc, old, new))`), and asserts the per-function ACL on both directions:
+`next_job_number` and `next_cycle_count_number` are called from the browser, so `authenticated` holds
+EXECUTE on those two and must keep it; the other four are postgres/service_role only.
+`scripts/smoke/prove-number-generators-year-chicago.mjs` (real PostgreSQL 17 container, 125/125)
+proves the transcription byte-exact against the live pins, shows the real bodies minting `-2027-` at
+20:00 Chicago on 31 December before the fix and `-2026-` after, and makes every refusal fire by
+mutation. It is stamped BELOW the parked `20260914100100`..`20260914100900` cohort and above the
+live high-water, so it can apply before them without tripping the pending-migration guard or
+stranding them; if anything applies live above `20260908140000` first, restamp it.
+Still needed: exact-SHA Sol review, then Mason's attended apply before 31 December 2026.
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its advisory lock key, its `MAX()` scan **and** its returned number, exactly as `next_invoice_number`
