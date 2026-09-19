@@ -28,7 +28,7 @@
  *   CONTROL   the OLD order (repair right after the replay guard) halts at the repair
  *             and the recipient guard never installs — the harness sees the defect
  *   ROLLOUT   the REAL order, applied file by file with per-file commits exactly as
- *             the runner does, installs every file through 20260914100600, leaves the
+ *             the runner does, installs every file through the intent wrapper, leaves the
  *             recipient guard's recorder body + trigger in place, and refuses ONLY the
  *             repair, as the final file, with COMMISSION_HISTORY_LABEL_REPAIR_SETTLED
  *   PIN       narrowing the repair's settlement-recorder pin back to the single
@@ -41,7 +41,7 @@
  *   LEDGER    every parked file clears checkMigrationOrdering against the live applied
  *             high-water, and the pre-renumber names did not (negative control)
  *
- * Every file in the six named parked commission candidates is asserted wrappable
+ * Every file in the seven named parked commission candidates is asserted wrappable
  * (the real single-transaction delivery path) before it is applied. The separate
  * parked next-invoice-number prerequisite is also asserted wrappable here before
  * this full-plan harness executes it; its independent prover owns its behavior.
@@ -61,7 +61,8 @@ const REPLAY_GUARD = '20260914100200_commission_history_report_replay_guard.sql'
 const RECIPIENT_GUARD = '20260914100300_refuse_stale_commission_payment_recipient.sql';
 const PAYMENT_DATE_GUARD = '20260914100400_enforce_commission_payment_business_date.sql';
 const CHICAGO_DATE_CUTOVER = '20260914100500_commission_dates_follow_chicago_business_day.sql';
-const REPAIR = '20260914100900_repair_commission_history_label_snapshots.sql';
+const TRANSFER_INTENT = '20260914100800_bind_transfer_invoice_intent.sql';
+const REPAIR ='20260914100900_repair_commission_history_label_snapshots.sql';
 const LABEL_FIX = '20260914100600_latest_commission_recipient_label.sql';
 const NEXT_INVOICE_YEAR = '20260914100100_next_invoice_number_year_chicago.sql';
 const PARKED_COMMISSION_NAMES = [
@@ -70,6 +71,7 @@ const PARKED_COMMISSION_NAMES = [
   PAYMENT_DATE_GUARD,
   CHICAGO_DATE_CUTOVER,
   LABEL_FIX,
+  TRANSFER_INTENT,
   REPAIR,
 ];
 const WRAPPABLE_PLAN_NAMES = [...PARKED_COMMISSION_NAMES, NEXT_INVOICE_YEAR];
@@ -175,8 +177,8 @@ if (existsSync(appliedSnapshot)) {
   if (Array.isArray(snapshot.applied)) appliedNames = appliedNames.concat(snapshot.applied);
 }
 const parkedNames = trailingNames.filter((name) => PARKED_COMMISSION_NAMES.includes(name));
-assert.equal(parkedNames.length, PRE_RENUMBER_NAMES.length,
-  `parked set is ${parkedNames.length} files but the negative control lists ${PRE_RENUMBER_NAMES.length}; update PRE_RENUMBER_NAMES`);
+assert.equal(parkedNames.length, PARKED_COMMISSION_NAMES.length,
+  `parked set is ${parkedNames.length} files on disk but ${PARKED_COMMISSION_NAMES.length} parked files are expected`);
 // Negative control first: the SAME guard against the SAME ledger refuses the old names.
 const refusedBefore = PRE_RENUMBER_NAMES.filter((name) => checkMigrationOrdering({ name, sql: '', appliedNames }).ok === false);
 assert.equal(refusedBefore.length, PRE_RENUMBER_NAMES.length,
