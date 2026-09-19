@@ -2766,7 +2766,13 @@ function registryMigrationHighWater(): string {
 // 20260911120000 adjust_inventory binding. 20260908120000 had in fact applied
 // live on 2026-09-08 (ledger 20260909023300) and its row now says so; it stays
 // registered for the same reason as the 20260831* entries — applied, but the
-// generated types have not been regenerated since.
+// generated types have not been regenerated since. 20260914100800 (PR #721)
+// was added on 2026-09-19 when the widened reverse check named it after a main merge.
+// PR #722 then moved registryMigrationHighWater() to the newest AUTHORED stamp
+// among applied names (20260908130000 at that refresh), so the 2026091* entries
+// here now sort above the boundary and are discovered without registration. They
+// stay registered so a later refresh that moves the boundary past them cannot
+// silently drop them; clear them on the same type-regeneration rule as above.
 const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831160000',
   '20260831161000',

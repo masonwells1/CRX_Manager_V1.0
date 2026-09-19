@@ -31,5 +31,10 @@ another local candidate below the high-water. The widened check failed on it by 
 registered too. Our migration-history row for `20260911120000` moved from 928 to 929, because #721's
 row for `20260914100800` already uses 928.
 
+After PR #722 merged, the contract test reads its boundary as the newest authored stamp among applied
+migrations (`20260908130000`), not the apply-time ledger version. The `2026091*` entries now sort above
+that boundary and are discovered on their own. They stay registered as a backstop, and the widened
+reverse check still names any pending migration that falls below a future boundary.
+
 Nothing was applied to the live database. `20260911120000` remains a local candidate awaiting Mason's
 explicit approval.
