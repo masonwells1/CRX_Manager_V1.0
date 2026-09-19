@@ -308,6 +308,13 @@ export const RpcErrorCodes = {
   FIELD_SPLIT_NOT_100: 'FIELD_SPLIT_NOT_100',
   // transfer_job_to_invoice (U7) — a multi-owner job with zero billable acres
   SPLIT_NO_ACRES: 'SPLIT_NO_ACRES',
+  // transfer_job_to_invoice intent binding — a cached pre-cutover implementation
+  // must retry through the new wrapper, and every replay must retain the expected
+  // job result identity before the receipt is trusted.
+  TRANSFER_INVOICE_INTENT_CUTOVER_RETRY: 'TRANSFER_INVOICE_INTENT_CUTOVER_RETRY',
+  TRANSFER_INVOICE_RESULT_INVALID: 'TRANSFER_INVOICE_RESULT_INVALID',
+  IDEMPOTENCY_RESULT_INVALID: 'IDEMPOTENCY_RESULT_INVALID',
+  IDEMPOTENCY_RECEIPT_MISSING: 'IDEMPOTENCY_RECEIPT_MISSING',
   // transfer_invoice_to_job (U7) — this invoice is one member of a multi-owner group;
   // return the job to scheduling by voiding each owner invoice instead
   JOB_BILLED_AS_GROUP: 'JOB_BILLED_AS_GROUP',
@@ -441,6 +448,68 @@ export function rpcAuthErrorMessage(err: unknown): string | null {
     return 'Your sign-in could not be verified. Refresh the page and try again.';
   }
   return null;
+}
+
+/**
+ * Safe operator recovery for the two intent-wrapper failures that must not fall
+ * through to a raw PostgreSQL token. Neither branch rotates the idempotency key:
+ * the cutover case should retry the same request, while an invalid result must be
+ * reconciled from a fresh job read before the operator decides whether to retry.
+ */
+export function isTransferInvoiceResultInvalid(err: unknown): boolean {
+  return hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID)
+    || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RESULT_INVALID)
+    || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_RECEIPT_MISSING);
+}
+
+/** Shown when a transfer result could not be verified, and again if a retry is attempted before reconciliation. */
+export const TRANSFER_INVOICE_UNVERIFIED_MESSAGE =
+  'The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.';
+
+export function transferInvoiceErrorMessage(err: unknown): string | null {
+  if (hasRpcCode(err, RpcErrorCodes.TRANSFER_INVOICE_INTENT_CUTOVER_RETRY)) {
+    return 'The invoice safety update finished during this transfer. Try Transfer to Invoice again — the app will safely reuse the same request.';
+  }
+  if (isTransferInvoiceResultInvalid(err)) {
+    return TRANSFER_INVOICE_UNVERIFIED_MESSAGE;
+  }
+  return null;
+}
+
+/**
+ * A transfer reply with no data and no error is as unverifiable as a malformed one
+ * (CodeRabbit, PR #708). Call it before the generic RPC assert so the empty reply throws
+ * TRANSFER_INVOICE_RESULT_INVALID and both screens reconcile instead of showing a
+ * generic error.
+ */
+export function assertTransferDataPresent(data: unknown): void {
+  if (data === null || data === undefined) {
+    throw new Error(`${RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID}: transfer returned no data`);
+  }
+}
+
+// invoices.id is a Postgres uuid; any version, canonical 8-4-4-4-12 hex, no padding.
+const TRANSFER_INVOICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A transfer screen must not retire its request key on a result for another job.
+ * A legacy receipt is scoped only to (key, operation), so a replay can carry any
+ * job's result (Sol, PR #638). A missing or different job_id throws
+ * TRANSFER_INVOICE_RESULT_INVALID, which both callers already route to
+ * reconciliation: reload the job first, and only then allow a new key.
+ * The RPC always returns invoice_id (the anchor member for a split), and callers
+ * retire the key and navigate on it, so a missing, blank or non-UUID one throws the
+ * same code (CodeRabbit, PRs #699 and #720).
+ */
+export function assertTransferResultForJob<T extends { job_id?: unknown; invoice_id?: unknown }>(result: T, jobId: string): T {
+  const returnedJobId = typeof result.job_id === 'string' ? result.job_id.toLowerCase() : null;
+  if (returnedJobId === null || returnedJobId !== jobId.toLowerCase()) {
+    throw new Error(`${RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID}: transfer result is not for the requested job`);
+  }
+  if (typeof result.invoice_id !== 'string' || !TRANSFER_INVOICE_ID_PATTERN.test(result.invoice_id)) {
+    throw new Error(`${RpcErrorCodes.TRANSFER_INVOICE_RESULT_INVALID}: transfer result has no invoice id`);
+  }
+  return result;
 }
 
 /**
