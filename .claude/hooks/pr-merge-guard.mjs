@@ -31,8 +31,11 @@ import {
   contentIsRisky,
   describeRiskyContent,
   ghApiMergeRequest,
+  ghHiddenByShellComposition,
+  splitCommandSegments,
   ghMergeRequest,
   mcpMergeRequest,
+  mergeRequestKey,
   proofSearchDirs,
   proofValid,
   pullRequestApproved,
@@ -68,11 +71,51 @@ const toolInput = payload?.tool_input || {};
 // let the second run ungated, and a raw REST call after a gh merge would never
 // be seen at all (Codex round-6 finding on this guard's own PR). Collect every
 // request; deny immediately on any unresolvable form in any segment.
+//
+// Command segments are collected through addRequest, which drops a request
+// already collected. The connector path below pushes directly: it resolves ONE
+// request from structured tool input, so it has no second reading to collapse.
+// splitCommandSegments returns a UNION of readings, so a command carrying a
+// quote or an escape resolves to the same merge twice; gating it twice spends a
+// `gh pr view` and an advisory lookup on a verdict already known. This hook is
+// bounded (30s) and each gh call is capped at 10s — and a PreToolUse hook killed
+// mid-call emits nothing, which ALLOWS. Duplicated lookups therefore spend the
+// budget protecting the hard gates, so this is a fail-OPEN risk, not merely slow
+// (CodeRabbit, 2026-09-09). De-duplicating HERE rather than at the gate loop
+// keeps that loop the single, pinned call site codex-bot-review-lib.test.mjs
+// measures the advisory ordering against.
 const requests = [];
+const collectedRequestKeys = new Set();
+function addRequest(request) {
+  if (!request) return;
+  // Keyed on the COMPLETE parse, never selector+repository: the two readings of
+  // `gh pr merge 1 --body 'note&more' --admin --squash` match in selector AND
+  // repository and differ ONLY in `admin`, so a narrower key could keep the
+  // admin:false reading and erase the offence. See mergeRequestKey.
+  const key = mergeRequestKey(request);
+  if (collectedRequestKeys.has(key)) return;
+  collectedRequestKeys.add(key);
+  requests.push(request);
+}
 if (GITHUB_MERGE_TOOL.test(toolName)) {
   requests.push(mcpMergeRequest(toolInput));
 } else if (typeof toolInput.command === "string" && toolInput.command) {
-  for (const segment of toolInput.command.split(/(?:&&|\|\|?|;|\r?\n)/)) {
+  // Refused before the segment scan, not analysed: a PowerShell backtick or a
+  // cmd.exe caret is consumed before gh sees the word, so ``gh pr me`rge 1
+  // --admin`` is an ordinary administrator merge that ghMergeRequest reads as an
+  // unknown word and this whole loop skips (Codex sol, 2026-09-08, finding 3).
+  // Same helper and same reasoning as the push side's composition refusal.
+  if (ghHiddenByShellComposition(toolInput.command)) {
+    deny("PR MERGE GATE: a PowerShell backtick or cmd.exe caret escape changes which gh command this runs (for example ``gh pr me`rge 1`` or `gh api --met^hod=PUT …/merge`). The gate reads command text, so analysing a spelling the shell rewrites would not prove the subcommand or the HTTP method. Write the gh command plainly: `gh pr merge <number> …`.");
+  }
+  // A single `&` separates commands too — POSIX backgrounds the left side, cmd
+  // runs it first, and either way BOTH run. Without it `gh pr merge 1 & gh pr
+  // merge 2` was one segment and only the first merge was resolved
+  // (Codex sol, 2026-09-08, finding 4). The split is QUOTE-AWARE: a bare regex
+  // splits inside `--body 'note&more'`, which would hand this loop a merge whose
+  // `--admin` had been carried off into a segment containing no `gh` at all
+  // (Codex sol, 2026-09-08, SEC-001).
+  for (const segment of splitCommandSegments(toolInput.command)) {
     // The mergePullRequest mutation is denied by NAME, whatever transport
     // carries it — `gh api graphql`, curl, Invoke-RestMethod, a fetch in a node
     // one-liner. Until 2026-09-01 only the `gh api graphql` spelling was caught
@@ -121,7 +164,7 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
         "never sees. Run the merge as its own plain command, with the PR number and flags spelled out."
       );
     }
-    if (found) { requests.push(found); continue; }
+    if (found) { addRequest(found); continue; }
   }
 }
 if (requests.length === 0) passthrough();
