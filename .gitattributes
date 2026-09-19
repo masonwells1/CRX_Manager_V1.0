@@ -239,6 +239,9 @@ supabase/migrations/20260914100600_latest_commission_recipient_label.sql text eo
 # proofs read it byte-for-byte; a CRLF checkout would change body hashes and make the
 # candidate refuse itself.
 supabase/migrations/20260914100500_commission_dates_follow_chicago_business_day.sql text eol=lf
+supabase/migrations/20260914100800_bind_transfer_invoice_intent.sql text eol=lf
+scripts/smoke/prove-transfer-invoice-intent-binding-static.mjs text eol=lf
+scripts/smoke/prove-transfer-invoice-intent-binding.mjs text eol=lf
 scripts/smoke/prove-commission-dates-chicago.mjs text eol=lf
 scripts/smoke/prove-document-dates-chicago.mjs text eol=lf
 scripts/smoke/prove-commission-report-snapshot-contract.mjs text eol=lf

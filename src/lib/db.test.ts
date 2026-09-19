@@ -8,9 +8,13 @@ vi.mock('@supabase/supabase-js', () => ({
 import {
   checkMutationResult,
   assertRpcResult,
+  assertTransferDataPresent,
+  assertTransferResultForJob,
   hasRpcCode,
   describePostInvoiceBlock,
+  isTransferInvoiceResultInvalid,
   rpcAuthErrorMessage,
+  transferInvoiceErrorMessage,
   RpcErrorCodes,
 } from './db';
 
@@ -148,6 +152,89 @@ describe('rpcAuthErrorMessage', () => {
     expect(rpcAuthErrorMessage({ message: 'IDEMPOTENCY_ACTOR_MISMATCH' })).toBeNull();
     expect(rpcAuthErrorMessage({ message: 'Billing splits must total 100%' })).toBeNull();
     expect(rpcAuthErrorMessage(null)).toBeNull();
+  });
+});
+
+describe('transferInvoiceErrorMessage', () => {
+  it('tells a cached cutover caller to retry the same protected request', () => {
+    expect(transferInvoiceErrorMessage({
+      code: 'P0001',
+      message: 'TRANSFER_INVOICE_INTENT_CUTOVER_RETRY',
+    })).toBe('The invoice safety update finished during this transfer. Try Transfer to Invoice again — the app will safely reuse the same request.');
+  });
+
+  it('requires reconciliation before retrying an invalid server result', () => {
+    expect(transferInvoiceErrorMessage(new Error('TRANSFER_INVOICE_RESULT_INVALID')))
+      .toBe('The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.');
+    expect(transferInvoiceErrorMessage({ code: 'P0001', message: 'IDEMPOTENCY_RESULT_INVALID' }))
+      .toBe('The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.');
+    expect(transferInvoiceErrorMessage({ code: 'P0001', message: 'IDEMPOTENCY_RECEIPT_MISSING' }))
+      .toBe('The server could not verify the invoice result. Refresh this job and confirm whether an invoice was created before trying again.');
+  });
+
+  it('classifies every untrusted receipt outcome for reconciliation', () => {
+    expect(isTransferInvoiceResultInvalid(new Error('TRANSFER_INVOICE_RESULT_INVALID'))).toBe(true);
+    expect(isTransferInvoiceResultInvalid({ message: 'IDEMPOTENCY_RESULT_INVALID' })).toBe(true);
+    expect(isTransferInvoiceResultInvalid({ message: 'IDEMPOTENCY_RECEIPT_MISSING' })).toBe(true);
+    expect(isTransferInvoiceResultInvalid({ message: 'SPLIT_OVERRIDE_UNSUPPORTED' })).toBe(false);
+  });
+
+  it('leaves unrelated transfer errors to the existing handlers', () => {
+    expect(transferInvoiceErrorMessage({ message: 'SPLIT_OVERRIDE_UNSUPPORTED' })).toBeNull();
+    expect(transferInvoiceErrorMessage(null)).toBeNull();
+  });
+});
+
+describe('assertTransferResultForJob', () => {
+  it('accepts a job_id that differs from the requested id only in letter case', () => {
+    const result = { success: true, job_id: 'A1B2C3D4-0000-4000-8000-00000000ABCD', invoice_id: 'b1b2c3d4-0000-4000-8000-00000000abcd' };
+    expect(assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd')).toBe(result);
+  });
+
+  it('rejects a result with a non-string job id', () => {
+    expect(() => assertTransferResultForJob(
+      { success: true, job_id: 42 },
+      'a1b2c3d4-0000-4000-8000-00000000abcd',
+    )).toThrow(/^TRANSFER_INVOICE_RESULT_INVALID:/);
+  });
+
+  // CodeRabbit (PR #699): both callers retire the key on success and JobDetail navigates to
+  // result.invoice_id, so a result without a usable invoice id is not a verified success.
+  it.each([
+    ['missing', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd' }],
+    ['blank', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: '  ' }],
+    ['non-string', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: 7 }],
+    // CodeRabbit (PR #720): a nonblank string is not enough; the id becomes a route segment.
+    ['non-UUID', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: 'not-an-invoice' }],
+    ['whitespace-padded', { success: true, job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd', invoice_id: ' b1b2c3d4-0000-4000-8000-00000000abcd ' }],
+  ])('rejects a result with a %s invoice id', (_label, result) => {
+    expect(() => assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd'))
+      .toThrow(/^TRANSFER_INVOICE_RESULT_INVALID:/);
+  });
+
+  // CodeRabbit (PR #708): an empty reply without an error is as unverifiable as a malformed
+  // one, so it must reach reconciliation instead of the generic toast.
+  it.each([['null', null], ['undefined', undefined]])('assertTransferDataPresent rejects %s data', (_label, data) => {
+    expect(() => assertTransferDataPresent(data)).toThrow(/^TRANSFER_INVOICE_RESULT_INVALID:/);
+    expect(isTransferInvoiceResultInvalid((() => {
+      try { assertTransferDataPresent(data); } catch (err) { return err; }
+      return null;
+    })())).toBe(true);
+  });
+
+  it('assertTransferDataPresent accepts a present result', () => {
+    expect(() => assertTransferDataPresent({ job_id: 'j' })).not.toThrow();
+  });
+
+  it('accepts a split result that carries its anchor invoice id', () => {
+    const result = {
+      success: true,
+      job_id: 'a1b2c3d4-0000-4000-8000-00000000abcd',
+      invoice_id: 'b1b2c3d4-0000-4000-8000-00000000abcd',
+      split: true,
+      invoice_count: 2,
+    };
+    expect(assertTransferResultForJob(result, 'a1b2c3d4-0000-4000-8000-00000000abcd')).toBe(result);
   });
 });
 
