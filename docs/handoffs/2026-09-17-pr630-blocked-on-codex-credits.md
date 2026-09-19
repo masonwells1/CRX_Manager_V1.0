@@ -1,5 +1,9 @@
 # PR #630 — parked at the Codex proof gate, 2026-09-17
 
+> **Resumed 2026-09-19:** merged the GitHub branch update (`c98ae38b9`) and current `origin/main`,
+> re-ran all seven suites green, then ran the exact-SHA Codex proof once credits reset. This file is
+> kept as the record of the park; the state below is as of 2026-09-17.
+
 ## One-line state
 
 Every known finding is fixed and every suite is green, but the branch **cannot be pushed** until
