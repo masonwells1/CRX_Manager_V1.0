@@ -26,7 +26,7 @@ records the fix as written but not applied, and corrects the returns prefix to `
 `docs/reference/migration-history.md` row 929; the ledger re-read stamps in `CURRENT_STATE.md`,
 `KNOWN_ISSUES.md` and the migration-history boundary block.
 
-**Proof observed.** `node scripts/smoke/prove-number-generators-year-chicago.mjs` → 125/125,
+**Proof observed.** `node scripts/smoke/prove-number-generators-year-chicago.mjs` → 128/128,
 `NUMBER_GENERATORS_YEAR_CHICAGO_PROOF_PASS` on a throwaway `postgres:17-alpine` container:
 - It derives each live body from the file by reversing its one line, and each hashes to the live pin,
   so the transcription is byte-exact.
@@ -38,9 +38,20 @@ records the fix as written but not applied, and corrects the returns prefix to `
   a changed owner, a second overload, a changed signature, a changed volatility, anon direct and
   indirect, a NULL ACL, a third-party grantee, authenticated added or removed, and service_role
   removed.
-- Both review subagents (rls-security, migration-drift) found no BLOCKER. Their HIGH and LOW notes
-  were fixed: the stamp, the header wording, a stray grant in the prover, the missing
-  "nothing changed" checks, and the untested guards above.
+- Two rounds of both review subagents (rls-security, migration-drift) found no BLOCKER. The
+  first-round HIGH (the stamp) is fixed. Second round: one MED, the undocumented apply order below,
+  now fixed. Most LOWs are fixed: header wording, a stray grant in the prover, "nothing changed"
+  checks on every drift mutation, the untested guards above, and a postflight volatility check.
+  Left open and documented: `proisstrict`/`proparallel`/`proleakproof`/`procost` are not pinned,
+  and the re-emit resets them to defaults, which is what live uses (read read-only 2026-09-19: all six not strict, parallel unsafe, not leakproof, cost 100). The ACL checks skip a role that
+  does not exist, which only matters on a rebuild. Proof step 0 checks the file against the
+  recorded live pins; it does not re-read live. The preflight re-reads live at apply time.
+
+**Apply order: this file must go FIRST.** It sorts below every other unapplied migration. That is
+the `main` cohort above. It is also, on unmerged branches, #664's `20260911120000` and the
+field-app season files `20260908190000`, `20260912165758`, `20260913040359` and `20260913152700`.
+The pending guard's own code confirms that, once this merges, it refuses all of those until this
+file is applied. If any of them applies live first, this file must be restamped.
 
 A read-only live ledger re-read (1002 rows, `max(version)` `20260915033227`) confirmed that no parked
 candidate is applied.

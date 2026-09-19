@@ -66,8 +66,12 @@
 -- (the 31 December deadline may not wait for the cohort) and leaves the high-water
 -- beneath them. No file in that cohort references any of these six functions
 -- (20260914100100 names them only in comments), so the SQL is independent too.
--- Re-derive the stamp immediately before apply: if anything applies live above
--- 20260908140000 first, this file must be restamped.
+-- It also sorts below unapplied migrations on unmerged branches: #664's
+-- 20260911120000 (bind_adjust_inventory_receipt_to_intent) and the field-app
+-- season files 20260908190000, 20260912165758, 20260913040359, 20260913152700.
+-- Once this merges, the pending guard refuses all of them until this applies, so
+-- APPLY THIS FIRST. Re-derive the stamp immediately before apply: if anything
+-- applies live above 20260908140000 first, this file must be restamped.
 --
 -- PREFLIGHT PIN. Refuses to run unless every installed body is byte-for-byte the
 -- reviewed live body or this file's own candidate body (so a replay is a no-op).
@@ -433,6 +437,7 @@ DECLARE
   v_acl         text;
   v_oid         oid;
   v_unexpected  text;
+  v_volatile    "char";
   v_year_utc     text;
   v_year_chicago text;
 BEGIN
@@ -458,8 +463,8 @@ BEGIN
     END IF;
 
     SELECT p.oid, p.pronargs, md5(p.prosrc), length(p.prosrc), position(chr(13) in p.prosrc),
-           p.prosecdef, p.proconfig::text, p.proowner::regrole::text, p.proacl::text
-      INTO v_oid, v_nargs, v_md5, v_len, v_cr, v_secdef, v_config, v_owner, v_acl
+           p.prosecdef, p.proconfig::text, p.proowner::regrole::text, p.proacl::text, p.provolatile
+      INTO v_oid, v_nargs, v_md5, v_len, v_cr, v_secdef, v_config, v_owner, v_acl, v_volatile
       FROM pg_proc p
       JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public' AND p.proname = v_fn.fn_name;
@@ -487,6 +492,10 @@ BEGIN
 
     IF v_owner <> 'postgres' THEN
       RAISE EXCEPTION '%: owner is now %, expected postgres. A SECURITY DEFINER body runs as its owner.', v_fn.fn_name, v_owner;
+    END IF;
+
+    IF v_volatile <> 'v' THEN
+      RAISE EXCEPTION '%: the re-emit is not VOLATILE (provolatile %)', v_fn.fn_name, v_volatile;
     END IF;
 
     -- A NULL proacl means DEFAULT privileges — EXECUTE TO PUBLIC — the most open

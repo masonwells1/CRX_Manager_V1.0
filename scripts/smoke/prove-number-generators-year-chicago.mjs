@@ -24,7 +24,8 @@
 //      from the existing MAX for the year
 //   7. the ACL assertions actually FIRE (mutations): anon direct, anon indirect,
 //      NULL ACL, a third-party grantee, authenticated added to a server-only
-//      generator, authenticated removed from a browser-called one
+//      generator, authenticated removed from a browser-called one, service_role
+//      removed
 //
 // Read-only with respect to production: this never touches Supabase.
 // Usage: node scripts/smoke/prove-number-generators-year-chicago.mjs
@@ -359,25 +360,31 @@ function main() {
 
   // 5e — a second overload beside the reviewed one.
   psql("CREATE FUNCTION public.next_job_number(p_x integer) RETURNS text LANGUAGE sql AS $$ SELECT 'x' $$");
+  before = allMd5s();
   result = applyMigration();
   ok(result.refused && /next_job_number: expected exactly 1 overload, found 2/.test(result.message),
      "a second overload is refused");
+  ok(allMd5s() === before, "no function changed");
   psql("DROP FUNCTION public.next_job_number(integer)");
 
   // 5f — the only overload now takes an argument.
   psql("DROP FUNCTION public.next_po_number(); " +
        "CREATE FUNCTION public.next_po_number(p_x integer) RETURNS text LANGUAGE sql AS $$ SELECT 'x' $$");
+  before = allMd5s();
   result = applyMigration();
   ok(result.refused && /next_po_number: live signature has 1 arguments, expected 0/.test(result.message),
      "a changed signature is refused");
+  ok(allMd5s() === before, "no function changed");
   psql("DROP FUNCTION public.next_po_number(integer)");
   installLiveBodies(liveBodies);
 
   // 5g — volatility changed out of band.
   psql("ALTER FUNCTION public.next_application_record_number() STABLE");
+  before = allMd5s();
   result = applyMigration();
   ok(result.refused && /next_application_record_number: the LIVE function is not VOLATILE/.test(result.message),
      "a changed volatility is refused");
+  ok(allMd5s() === before, "no function changed");
   installLiveBodies(liveBodies);
   ok(FUNCTIONS.every((fn) => bodyMd5(fn.name) === fn.liveMd5), "starting state restored to the live bodies");
   ok(FUNCTIONS.every((fn) => fnRow(fn.name, "p.proacl::text") === liveAcl(fn)
