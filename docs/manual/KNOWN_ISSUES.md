@@ -651,10 +651,10 @@ pins each live and candidate md5 (the candidate pins were computed on live as
 `md5(replace(prosrc, old, new))`), and asserts the per-function ACL on both directions:
 `next_job_number` and `next_cycle_count_number` are called from the browser, so `authenticated` holds
 EXECUTE on those two and must keep it; the other four are postgres/service_role only.
-`scripts/smoke/prove-number-generators-year-chicago.mjs` (real PostgreSQL 17 container, 128/128)
-proves the transcription byte-exact against the live pins, shows the real bodies minting `-2029-` at
+`scripts/smoke/prove-number-generators-year-chicago.mjs` (PostgreSQL 17 container pinned by digest, 139/139)
+proves the transcription byte-exact against the recorded live pins (the apply-time preflight re-checks live itself), shows the real bodies minting `-2029-` at
 20:00 Chicago on 31 December 2028 before the fix and `-2028-` after (years chosen so a missed clock
-substitution cannot pass by matching the real year), and makes every refusal fire by mutation.
+substitution cannot pass by matching the real year), and makes each tested refusal fire by mutation (drift, owner, overload, signature, volatility, strictness, cost, ACL grantees, grant option, missing roles; not the CR check or the timezone-data assertion).
 **Apply order — this file must go FIRST.** It is stamped `20260908140000`: above the live high-water
 `20260908130000` and below every other unapplied migration. That is the parked
 `20260914100100`..`20260914100900` cohort on `main`. It is also, on unmerged branches, #664's

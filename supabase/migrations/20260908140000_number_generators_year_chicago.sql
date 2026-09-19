@@ -16,8 +16,12 @@
 -- WHAT THE DEFECT IS: a wrong-year LABEL. Each generator takes MAX(...) + 1 over
 -- the numbers already issued for v_year, under an advisory lock, and returns
 -- '<PREFIX>-' || v_year || '-nnnn'. A wrong v_year files that document under the
--- wrong year; the real first document of 2027 simply takes -0002. No number is
--- issued twice and nothing is overwritten.
+-- wrong year; the real first document of 2027 simply takes -0002. The wrong year
+-- creates no duplicate and overwrites nothing. (Separate and pre-existing, NOT
+-- changed here: the advisory lock is released when the RPC's transaction ends, so
+-- next_job_number and next_cycle_count_number, which the browser calls as a
+-- PREVIEW before a separate save, can show two users the same next number. That
+-- race exists today with either year expression.)
 --
 -- WHAT THIS CHANGES: exactly ONE line in each of six function bodies, re-emitted
 -- from their LIVE installed text (pg_proc.prosrc, read read-only 2026-09-19):
@@ -59,7 +63,8 @@
 --
 -- WHY THIS STAMP (20260908140000). It must sort ABOVE the live ordering
 -- high-water 20260908130000_bind_create_inventory_hold_receipt_to_intent and is
--- deliberately BELOW the parked, unapplied cohort 20260914100100..20260914100900.
+-- deliberately BELOW the parked, unapplied cohort 20260914100100..20260914100900
+-- (eight files; there is no 20260914100700).
 -- The pending-migration guard refuses a file stamped above an unapplied tracked
 -- migration, and forcing one through would lift the live high-water over that
 -- cohort and strand all eight. Stamped below them, this file can apply first
@@ -106,7 +111,7 @@ DECLARE
   v_secdef    boolean;
   v_config    text;
   v_owner     text;
-  v_volatile  "char";
+  v_attrs     text;
 BEGIN
   FOR v_fn IN
     SELECT *
@@ -130,10 +135,13 @@ BEGIN
     END IF;
 
     SELECT p.pronargs, md5(p.prosrc), length(p.prosrc),
-           p.prosecdef, p.proconfig::text, p.proowner::regrole::text, p.provolatile
-      INTO v_nargs, v_md5, v_len, v_secdef, v_config, v_owner, v_volatile
+           p.prosecdef, p.proconfig::text, p.proowner::regrole::text,
+           concat_ws('/', l.lanname, p.provolatile, p.proisstrict, p.proparallel,
+                     p.proleakproof, p.procost, p.prorettype::regtype, p.proretset)
+      INTO v_nargs, v_md5, v_len, v_secdef, v_config, v_owner, v_attrs
       FROM pg_proc p
       JOIN pg_namespace n ON n.oid = p.pronamespace
+      JOIN pg_language l ON l.oid = p.prolang
      WHERE n.nspname = 'public' AND p.proname = v_fn.fn_name;
 
     -- md5(prosrc) is blind to the declaration, so pin the signature separately.
@@ -165,11 +173,15 @@ BEGIN
         v_fn.fn_name, v_owner;
     END IF;
 
-    -- The re-emit declares no volatility, so it resets to VOLATILE — correct for a
-    -- function that takes a lock, and what live has. Refuse if live was changed.
-    IF v_volatile <> 'v' THEN
-      RAISE EXCEPTION '%: the LIVE function is not VOLATILE (provolatile %). Re-review before applying.',
-        v_fn.fn_name, v_volatile;
+    -- The re-emit declares language and return type but no volatility,
+    -- strictness, parallel safety, leakproof or cost, so those reset to their
+    -- defaults. Live holds exactly those defaults (read read-only 2026-09-19:
+    -- plpgsql, VOLATILE, not strict, parallel unsafe, not leakproof, cost 100,
+    -- returns text, not a set). Refuse if live was changed, rather than silently
+    -- resetting it.
+    IF v_attrs IS DISTINCT FROM 'plpgsql/v/f/u/f/100/text/f' THEN
+      RAISE EXCEPTION '%: the LIVE function attributes are % (lang/volatile/strict/parallel/leakproof/cost/returns/setof), expected plpgsql/v/f/u/f/100/text/f. Re-review before applying.',
+        v_fn.fn_name, v_attrs;
     END IF;
   END LOOP;
 END;
@@ -437,7 +449,7 @@ DECLARE
   v_acl         text;
   v_oid         oid;
   v_unexpected  text;
-  v_volatile    "char";
+  v_attrs       text;
   v_year_utc     text;
   v_year_chicago text;
 BEGIN
@@ -445,13 +457,20 @@ BEGIN
     SELECT *
       FROM (VALUES
         -- browser_callable: authenticated holds EXECUTE on live and must keep it.
-        ('next_application_record_number', '9bf10abef4830cd6b0ee3aea41c07469', false),
-        ('next_commission_payment_number', '3f876d7588865bccd77b9b4a384ab8d7', false),
-        ('next_cycle_count_number',        'd6626bf1550a996716f4188c407975d4', true),
-        ('next_job_number',                'b97a23c4ba96e772278e063111d3ebf6', true),
-        ('next_po_number',                 '0fd0c7861511a67d5dbe12069914d7f9', false),
-        ('next_return_number',             '0c5ab61fc8293ac2be8670289528d9c2', false)
-      ) AS pins(fn_name, candidate_md5, browser_callable)
+        -- expected_acl: the exact live proacl, read read-only 2026-09-19.
+        ('next_application_record_number', '9bf10abef4830cd6b0ee3aea41c07469', false,
+         '{postgres=X/postgres,service_role=X/postgres}'),
+        ('next_commission_payment_number', '3f876d7588865bccd77b9b4a384ab8d7', false,
+         '{postgres=X/postgres,service_role=X/postgres}'),
+        ('next_cycle_count_number',        'd6626bf1550a996716f4188c407975d4', true,
+         '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+        ('next_job_number',                'b97a23c4ba96e772278e063111d3ebf6', true,
+         '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+        ('next_po_number',                 '0fd0c7861511a67d5dbe12069914d7f9', false,
+         '{postgres=X/postgres,service_role=X/postgres}'),
+        ('next_return_number',             '0c5ab61fc8293ac2be8670289528d9c2', false,
+         '{postgres=X/postgres,service_role=X/postgres}')
+      ) AS pins(fn_name, candidate_md5, browser_callable, expected_acl)
   LOOP
     SELECT count(*) INTO v_count
       FROM pg_proc p
@@ -463,10 +482,13 @@ BEGIN
     END IF;
 
     SELECT p.oid, p.pronargs, md5(p.prosrc), length(p.prosrc), position(chr(13) in p.prosrc),
-           p.prosecdef, p.proconfig::text, p.proowner::regrole::text, p.proacl::text, p.provolatile
-      INTO v_oid, v_nargs, v_md5, v_len, v_cr, v_secdef, v_config, v_owner, v_acl, v_volatile
+           p.prosecdef, p.proconfig::text, p.proowner::regrole::text, p.proacl::text,
+           concat_ws('/', l.lanname, p.provolatile, p.proisstrict, p.proparallel,
+                     p.proleakproof, p.procost, p.prorettype::regtype, p.proretset)
+      INTO v_oid, v_nargs, v_md5, v_len, v_cr, v_secdef, v_config, v_owner, v_acl, v_attrs
       FROM pg_proc p
       JOIN pg_namespace n ON n.oid = p.pronamespace
+      JOIN pg_language l ON l.oid = p.prolang
      WHERE n.nspname = 'public' AND p.proname = v_fn.fn_name;
 
     IF v_md5 <> v_fn.candidate_md5 THEN
@@ -494,8 +516,9 @@ BEGIN
       RAISE EXCEPTION '%: owner is now %, expected postgres. A SECURITY DEFINER body runs as its owner.', v_fn.fn_name, v_owner;
     END IF;
 
-    IF v_volatile <> 'v' THEN
-      RAISE EXCEPTION '%: the re-emit is not VOLATILE (provolatile %)', v_fn.fn_name, v_volatile;
+    IF v_attrs IS DISTINCT FROM 'plpgsql/v/f/u/f/100/text/f' THEN
+      RAISE EXCEPTION '%: the re-emit has attributes % (lang/volatile/strict/parallel/leakproof/cost/returns/setof), expected plpgsql/v/f/u/f/100/text/f',
+        v_fn.fn_name, v_attrs;
     END IF;
 
     -- A NULL proacl means DEFAULT privileges — EXECUTE TO PUBLIC — the most open
@@ -539,17 +562,26 @@ BEGIN
         v_fn.fn_name, v_unexpected, v_acl;
     END IF;
 
-    -- The POSITIVE direction: the legitimate callers still hold EXECUTE.
-    IF to_regrole('service_role') IS NOT NULL
-       AND NOT has_function_privilege('service_role', v_oid, 'EXECUTE') THEN
-      RAISE EXCEPTION '%: service_role LOST EXECUTE (acl %).', v_fn.fn_name, v_acl;
+    -- The POSITIVE direction: the legitimate callers still hold EXECUTE. These
+    -- roles MUST exist; a missing role is refused, never skipped.
+    IF to_regrole('service_role') IS NULL
+       OR NOT has_function_privilege('service_role', v_oid, 'EXECUTE') THEN
+      RAISE EXCEPTION '%: service_role LOST EXECUTE or does not exist (acl %).', v_fn.fn_name, v_acl;
     END IF;
 
     IF v_fn.browser_callable
-       AND to_regrole('authenticated') IS NOT NULL
-       AND NOT has_function_privilege('authenticated', v_oid, 'EXECUTE') THEN
-      RAISE EXCEPTION '%: authenticated LOST EXECUTE (acl %) — the app calls this directly and would break.',
+       AND (to_regrole('authenticated') IS NULL
+            OR NOT has_function_privilege('authenticated', v_oid, 'EXECUTE')) THEN
+      RAISE EXCEPTION '%: authenticated LOST EXECUTE or does not exist (acl %) — the app calls this directly and would break.',
         v_fn.fn_name, v_acl;
+    END IF;
+
+    -- EXACT ACL. The checks above reason about roles; this pins the whole
+    -- contract, including grantors, the owner's direct item and WITH GRANT
+    -- OPTION (an asterisk in the ACL text), none of which they can see.
+    IF v_acl IS DISTINCT FROM v_fn.expected_acl THEN
+      RAISE EXCEPTION '%: ACL is %, expected exactly % (grantor, grant option or grantee differs).',
+        v_fn.fn_name, v_acl, v_fn.expected_acl;
     END IF;
   END LOOP;
 

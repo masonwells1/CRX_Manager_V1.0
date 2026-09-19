@@ -16,8 +16,8 @@
 //      (which differ per function) survive the re-emit
 //   4. a replay is idempotent
 //   5. a drifted body, a stripped search_path, a SECURITY INVOKER body, a changed
-//      owner, a second overload, a changed signature and a changed volatility are
-//      each REFUSED
+//      owner, a second overload, a changed signature, and a changed volatility,
+//      strictness or cost are each REFUSED
 //   6. behaviour: each REAL body, with its clock pinned to 2029-01-01 02:00 UTC
 //      (= 2028-12-31 20:00 Chicago), returns a 2029 number before the fix and a
 //      2028 number after it; outside the window both agree; numbering continues
@@ -25,7 +25,8 @@
 //   7. the ACL assertions actually FIRE (mutations): anon direct, anon indirect,
 //      NULL ACL, a third-party grantee, authenticated added to a server-only
 //      generator, authenticated removed from a browser-called one, service_role
-//      removed
+//      removed, a grant option on an expected grantee, and a missing
+//      service_role or authenticated role (refused, never skipped)
 //
 // Read-only with respect to production: this never touches Supabase.
 // Usage: node scripts/smoke/prove-number-generators-year-chicago.mjs
@@ -42,7 +43,9 @@ const REPO = path.join(HERE, "..", "..");
 const MIGRATION_NAME = "20260908140000_number_generators_year_chicago";
 const MIGRATION = path.join(REPO, "supabase", "migrations", `${MIGRATION_NAME}.sql`);
 const CONTAINER = `crx-ngy-proof-${process.pid}`;
-const IMAGE = "postgres:17-alpine";
+// Pinned by digest so a recorded result is reproducible (PostgreSQL patch level,
+// Alpine base and tzdata cannot drift between runs). postgres:17-alpine as of 2026-09-19.
+const IMAGE = "postgres@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193";
 
 const CHICAGO = "(now() AT TIME ZONE 'America/Chicago')::date";
 
@@ -166,7 +169,9 @@ AS $fn$`;
 function grantsFor(fn) {
   const sig = `public.${fn.name}()`;
   return [
-    `REVOKE ALL ON FUNCTION ${sig} FROM PUBLIC;`,
+    // Revoke from every role a mutation step may touch, so grant options and
+    // stray grants never leak from one step into the next.
+    `REVOKE ALL ON FUNCTION ${sig} FROM PUBLIC, anon, authenticated, service_role;`,
     // Grant order fixes the ACL string order; live lists authenticated before service_role.
     ...(fn.browser ? [`GRANT EXECUTE ON FUNCTION ${sig} TO authenticated;`] : []),
     `GRANT EXECUTE ON FUNCTION ${sig} TO service_role;`,
@@ -382,15 +387,37 @@ function main() {
   psql("ALTER FUNCTION public.next_application_record_number() STABLE");
   before = allMd5s();
   result = applyMigration();
-  ok(result.refused && /next_application_record_number: the LIVE function is not VOLATILE/.test(result.message),
+  ok(result.refused && /next_application_record_number: the LIVE function attributes are plpgsql\/s\//.test(result.message),
      "a changed volatility is refused");
   ok(allMd5s() === before, "no function changed");
+  installLiveBodies(liveBodies);
+
+  // 5h — strictness changed out of band (the re-emit would silently reset it).
+  psql("ALTER FUNCTION public.next_commission_payment_number() STRICT");
+  before = allMd5s();
+  result = applyMigration();
+  ok(result.refused && /next_commission_payment_number: the LIVE function attributes are plpgsql\/v\/t\//.test(result.message),
+     "a changed strictness is refused");
+  ok(allMd5s() === before, "no function changed");
+  installLiveBodies(liveBodies);
+  psql("ALTER FUNCTION public.next_commission_payment_number() CALLED ON NULL INPUT");
+
+  // 5i — cost changed out of band.
+  psql("ALTER FUNCTION public.next_return_number() COST 5");
+  before = allMd5s();
+  result = applyMigration();
+  ok(result.refused && /next_return_number: the LIVE function attributes are plpgsql\/v\/f\/u\/f\/5\//.test(result.message),
+     "a changed cost is refused");
+  ok(allMd5s() === before, "no function changed");
+  psql("ALTER FUNCTION public.next_return_number() COST 100");
   installLiveBodies(liveBodies);
   ok(FUNCTIONS.every((fn) => bodyMd5(fn.name) === fn.liveMd5), "starting state restored to the live bodies");
   ok(FUNCTIONS.every((fn) => fnRow(fn.name, "p.proacl::text") === liveAcl(fn)
                           && fnRow(fn.name, "p.provolatile") === "v"
+                          && fnRow(fn.name, "p.proisstrict") === "f"
+                          && fnRow(fn.name, "p.procost") === "100"
                           && fnRow(fn.name, "p.proowner::regrole::text") === "postgres"),
-     "starting ACLs, volatility and owners restored to live");
+     "starting ACLs, volatility, strictness, cost and owners restored to live");
 
   console.log("\n7. The ACL assertions actually FIRE (mutation tests)");
   const expectRefusal = (setupSql, pattern, label) => {
@@ -433,6 +460,38 @@ GRANT EXECUTE ON FUNCTION public.next_po_number() TO reporting_reader;`,
 
   expectRefusal("REVOKE EXECUTE ON FUNCTION public.next_job_number() FROM service_role;",
     /next_job_number: service_role LOST EXECUTE/, "7g service_role removed");
+
+  // 7h — a grant WITH GRANT OPTION to an expected grantee. Every role-level check
+  // passes it; only the exact-ACL pin sees the asterisk.
+  expectRefusal("GRANT EXECUTE ON FUNCTION public.next_po_number() TO service_role WITH GRANT OPTION;",
+    /next_po_number: ACL is \{postgres=X\/postgres,service_role=X\*\/postgres\}/,
+    "7h a grant option on service_role (invisible to the role checks)");
+
+  // 7i — the service_role role does not exist. It must be REFUSED, not skipped.
+  psqlFile(writeTmp("drop-service-role.sql",
+    [...FUNCTIONS.map((fn) => `REVOKE ALL ON FUNCTION public.${fn.name}() FROM service_role;`),
+     "DROP ROLE service_role;"].join("\n")));
+  let md5s = allMd5s();
+  result = applyMigration();
+  ok(result.refused && /service_role LOST EXECUTE or does not exist/.test(result.message),
+     "7i a missing service_role is refused, not skipped");
+  ok(allMd5s() === md5s, "  ...and nothing changed");
+  psql("CREATE ROLE service_role");
+  installLiveBodies(liveBodies);
+
+  // 7j — the authenticated role does not exist: the two browser-called
+  // generators would be uncallable, so this is refused too.
+  psqlFile(writeTmp("drop-authenticated.sql",
+    [...FUNCTIONS.map((fn) => `REVOKE ALL ON FUNCTION public.${fn.name}() FROM authenticated;`),
+     "DROP ROLE authenticated;"].join("\n")));
+  md5s = allMd5s();
+  result = applyMigration();
+  ok(result.refused && /next_cycle_count_number: authenticated LOST EXECUTE or does not exist/.test(result.message),
+     "7j a missing authenticated role is refused, not skipped");
+  ok(allMd5s() === md5s, "  ...and nothing changed");
+  psql("CREATE ROLE authenticated");
+  installLiveBodies(liveBodies);
+  ok(FUNCTIONS.every((fn) => fnRow(fn.name, "p.proacl::text") === liveAcl(fn)), "every ACL restored to live at the end");
 
   console.log(`\n${failures === 0 ? "NUMBER_GENERATORS_YEAR_CHICAGO_PROOF_PASS" : `PROOF FAILED — ${failures} check(s)`}\n`);
 }

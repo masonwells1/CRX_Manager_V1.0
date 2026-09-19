@@ -6,7 +6,9 @@ re-emits `next_application_record_number`, `next_commission_payment_number`,
 live `pg_proc.prosrc` (read read-only 2026-09-19). One line changes in each: the year comes from
 `(now() AT TIME ZONE 'America/Chicago')::date` instead of the UTC `CURRENT_DATE`. Without it, work
 done after 6 pm Chicago on 31 December 2026 is numbered with 2027 (`JOB-2027-0001`). It is a
-wrong-year label, not a duplicate number.
+wrong-year label; the year change creates no duplicate. (Pre-existing and unchanged: the job and cycle-count
+screens call their generator as a preview before a separate save, so two users can see the same next
+number.)
 
 The file pins each live and candidate body md5 (the candidate pins were computed on live), the
 zero-argument signature, SECURITY DEFINER, search_path, owner and volatility. Its postflight pins each
@@ -26,10 +28,10 @@ records the fix as written but not applied, and corrects the returns prefix to `
 `docs/reference/migration-history.md` row 929; the ledger re-read stamps in `CURRENT_STATE.md`,
 `KNOWN_ISSUES.md` and the migration-history boundary block.
 
-**Proof observed.** `node scripts/smoke/prove-number-generators-year-chicago.mjs` → 128/128,
+**Proof observed.** `node scripts/smoke/prove-number-generators-year-chicago.mjs` → 139/139,
 `NUMBER_GENERATORS_YEAR_CHICAGO_PROOF_PASS` on a throwaway `postgres:17-alpine` container:
 - It derives each live body from the file by reversing its one line, and each hashes to the live pin,
-  so the transcription is byte-exact.
+  so the transcription is byte-exact to the recorded live pins (the apply-time preflight re-checks live).
 - With the clock pinned to 2029-01-01 02:00 UTC (20:00 Chicago on 31 December 2028), the real live
   bodies mint `-2029-` and the fixed ones `-2028-`. Neither is the year the prover runs in, so a
   missed clock substitution fails instead of passing by coincidence. Outside the window both agree.
@@ -42,10 +44,24 @@ records the fix as written but not applied, and corrects the returns prefix to `
   first-round HIGH (the stamp) is fixed. Second round: one MED, the undocumented apply order below,
   now fixed. Most LOWs are fixed: header wording, a stray grant in the prover, "nothing changed"
   checks on every drift mutation, the untested guards above, and a postflight volatility check.
-  Left open and documented: `proisstrict`/`proparallel`/`proleakproof`/`procost` are not pinned,
-  and the re-emit resets them to defaults, which is what live uses (read read-only 2026-09-19: all six not strict, parallel unsafe, not leakproof, cost 100). The ACL checks skip a role that
-  does not exist, which only matters on a rebuild. Proof step 0 checks the file against the
-  recorded live pins; it does not re-read live. The preflight re-reads live at apply time.
+  Left open and documented: proof step 0 checks the file against the recorded live pins and does
+  not re-read live; the preflight re-reads live at apply time.
+- **Independent `gpt-5.6-sol` high-effort review (inline diff), verdict CLEAN**, run marker
+  `tokens used` present. It was run by hand, not through `write-codex-push-proof.mjs`. That wrapper
+  fails before review since the 2026-09-19 Codex update: its elevated Windows sandbox now demands
+  `:root` read access. The hand run pasted the diff inline and kept the wrapper's deny-all
+  filesystem profile, no network and `project_doc_max_bytes=0`. So it is a real review, but it
+  mints NO push proof. Its four MED and four LOW findings are all fixed:
+  - the postflight now pins each function's EXACT ACL, which catches grantors, the owner's item and
+    WITH GRANT OPTION;
+  - a missing `service_role`, or a missing `authenticated` on the browser-called pair, is refused
+    rather than skipped;
+  - the preflight and postflight pin language, volatility, strictness, parallel safety, leakproof,
+    cost and return type. Live values were read read-only 2026-09-19: plpgsql, VOLATILE, not strict,
+    parallel unsafe, not leakproof, cost 100, returns text;
+  - the "never issued twice" claim is scoped to the year change;
+  - the proof image is pinned by digest;
+  - proof and cohort wording is corrected.
 
 **Apply order: this file must go FIRST.** It sorts below every other unapplied migration. That is
 the `main` cohort above. It is also, on unmerged branches, #664's `20260911120000` and the
