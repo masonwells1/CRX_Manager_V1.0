@@ -566,6 +566,9 @@ export const CODEX_REVIEW_PERMISSION_PROFILE = "packet-review";
 // than by a hand-written list of repos. Writes and network stay fully denied.
 const HOME_CREDENTIAL_PATHS = [
   [".codex", "auth.json"],
+  [".claude", ".credentials.json"],
+  [".claude.json"],
+  ["AppData", "Roaming", "Claude", "claude_desktop_config.json"],
   [".ssh"],
   [".supabase"],
   [".docker"],
@@ -595,29 +598,28 @@ function worktreeRoots(sourceRoot) {
 export function codexReviewDenyReadPaths({
   sourceRoot = FALLBACK_ROOT,
   home = homedir(),
+  codexHome = process.env.CODEX_HOME,
   platform = process.platform,
   listWorktrees = worktreeRoots,
   readDir = readdirSync,
-  lstat = lstatSync,
+  stat = statSync,
   realpath = (target) => realpathSync.native(target),
 } = {}) {
   const pathApi = platform === "win32" ? path.win32 : path.posix;
   const found = new Map();
   const add = (target, wantFile) => {
-    let stat;
-    try {
-      stat = lstat(target);
-    } catch {
-      return;
-    }
-    if (stat.isSymbolicLink()) return;
-    if (wantFile ? !stat.isFile() : !(stat.isFile() || stat.isDirectory())) return;
+    // Resolve symlinks and junctions first and deny the TARGET: the deny ACE
+    // protects the real file whichever path the reviewer opens it through. A
+    // broken link resolves to nothing readable, so it needs no entry.
     let real;
+    let info;
     try {
       real = realpath(target);
+      info = stat(real);
     } catch {
       return;
     }
+    if (wantFile ? !info.isFile() : !(info.isFile() || info.isDirectory())) return;
     found.set(platform === "win32" ? real.toLowerCase() : real, real);
   };
   const addEnvFilesIn = (directory) => {
@@ -633,6 +635,9 @@ export function codexReviewDenyReadPaths({
   };
 
   for (const parts of HOME_CREDENTIAL_PATHS) add(pathApi.join(home, ...parts), false);
+  // codexReviewerEnvironment() keeps an operator's CODEX_HOME for auth, so its
+  // credential file must be denied too, not only the default ~/.codex one.
+  if (codexHome) add(pathApi.join(codexHome, "auth.json"), true);
 
   // Every project folder one level below the system drive root (C:\CRX_Manager,
   // C:\FarmRx, ...), plus every worktree of the repo under review.
@@ -655,7 +660,14 @@ function tomlString(value) {
   return JSON.stringify(String(value));
 }
 
-export function codexReviewPermissionConfig(denyReadPaths = []) {
+// Only the elevated Windows sandbox refuses a deny-root profile; other platforms
+// keep packet-only reads.
+const DENY_ROOT_PERMISSION_CONFIG =
+  `permissions.${CODEX_REVIEW_PERMISSION_PROFILE}={ filesystem = { ":root" = "deny", ":minimal" = "read", ` +
+  '":workspace_roots" = { "." = "read" } }, network = { enabled = false } }';
+
+export function codexReviewPermissionConfig(denyReadPaths = [], platform = process.platform) {
+  if (platform !== "win32") return DENY_ROOT_PERMISSION_CONFIG;
   const filesystem = [
     '":root" = "read"',
     '":minimal" = "read"',
@@ -822,7 +834,7 @@ export function buildCodexExecArgs({
   root,
   prompt,
   platform = process.platform,
-  permissionConfig = codexReviewPermissionConfig(codexReviewDenyReadPaths()),
+  permissionConfig = codexReviewPermissionConfig(codexReviewDenyReadPaths({ platform }), platform),
 }) {
   // `exec` runs the fixed review prompt with a read-only permission profile
   // (credential stores and `.env` files denied, no writes, no network)

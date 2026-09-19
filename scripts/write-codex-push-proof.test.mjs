@@ -101,7 +101,7 @@ assert.ok(
   "prompt demands the machine verdict token in both forms",
 );
 
-const permissionConfig = codexReviewPermissionConfig(["C:\\Users\\me\\.codex\\auth.json", "C:\\Repo\\.env.local"]);
+const permissionConfig = codexReviewPermissionConfig(["C:\\Users\\me\\.codex\\auth.json", "C:\\Repo\\.env.local"], "win32");
 const args = buildCodexExecArgs({ root: "/repo/root", prompt, platform: "win32", permissionConfig });
 assert.deepEqual(
   args,
@@ -141,11 +141,18 @@ assert.equal(
     '"C:\\\\Repo\\\\.env.local" = "deny" }, network = { enabled = false } }',
   "deny paths are TOML-escaped basic-string keys and network stays disabled",
 );
-assert.ok(!codexReviewPermissionConfig([]).includes("write"), "the reviewer profile never grants writes");
+assert.ok(!codexReviewPermissionConfig([], "win32").includes("write"), "the reviewer profile never grants writes");
+// Only Windows' elevated sandbox needs whole-disk read; elsewhere reads stay packet-only.
+assert.equal(
+  codexReviewPermissionConfig(["/home/me/.codex/auth.json"], "linux"),
+  'permissions.packet-review={ filesystem = { ":root" = "deny", ":minimal" = "read", ' +
+    '":workspace_roots" = { "." = "read" } }, network = { enabled = false } }',
+  "non-Windows reviewers keep the deny-root profile",
+);
 
 // Deny paths are discovered by SHAPE: home credential stores plus `.env*` secret
 // files one level below the drive root and in every worktree — never templates,
-// never symlinks, never whole project trees (a deny ACE on a big tree takes hours
+// symlinks resolved to their targets, never whole project trees (a deny ACE on a big tree takes hours
 // to propagate and blocks every other sandboxed Codex session inside it).
 {
   const fakeTree = {
@@ -162,29 +169,32 @@ assert.ok(!codexReviewPermissionConfig([]).includes("write"), "the reviewer prof
     "C:\\CRX_Manager\\.claude\\worktrees\\wt\\.env.local",
     "C:\\Users\\me\\.codex\\auth.json",
     "C:\\Users\\me\\.git-credentials",
+    "D:\\secrets\\real.env",
+    "D:\\alt-codex\\auth.json",
   ]);
   const dirs = new Set(["C:\\Users\\me\\.ssh", "C:\\CRX_Manager\\src"]);
-  const links = new Set(["C:\\CRX_Manager\\.claude\\worktrees\\wt\\.env.link"]);
+  const links = new Map([["C:\\CRX_Manager\\.claude\\worktrees\\wt\\.env.link", "D:\\secrets\\real.env"]]);
   const denies = codexReviewDenyReadPaths({
     sourceRoot: "C:\\CRX_Manager\\.claude\\worktrees\\wt",
     home: "C:\\Users\\me",
+    codexHome: "D:\\alt-codex",
     platform: "win32",
     listWorktrees: () => ["C:\\CRX_Manager", "C:\\CRX_Manager\\.claude\\worktrees\\wt"],
     readDir: (dir) => {
       if (!(dir in fakeTree)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       return fakeTree[dir];
     },
-    lstat: (target) => {
-      if (!files.has(target) && !dirs.has(target) && !links.has(target)) {
+    stat: (target) => {
+      if (!files.has(target) && !dirs.has(target)) {
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       }
-      return {
-        isSymbolicLink: () => links.has(target),
-        isFile: () => files.has(target),
-        isDirectory: () => dirs.has(target),
-      };
+      return { isFile: () => files.has(target), isDirectory: () => dirs.has(target) };
     },
-    realpath: (target) => target,
+    realpath: (target) => {
+      if (links.has(target)) return links.get(target);
+      if (!files.has(target) && !dirs.has(target)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return target;
+    },
   });
   assert.deepEqual(denies, [
     "C:\\CRX_Manager\\.claude\\worktrees\\wt\\.env.local",
@@ -194,6 +204,8 @@ assert.ok(!codexReviewPermissionConfig([]).includes("write"), "the reviewer prof
     "C:\\Users\\me\\.codex\\auth.json",
     "C:\\Users\\me\\.git-credentials",
     "C:\\Users\\me\\.ssh",
+    "D:\\alt-codex\\auth.json",
+    "D:\\secrets\\real.env",
   ]);
 }
 assert.equal(args[args.indexOf("--model") + 1], CODEX_REVIEW_MODEL);

@@ -34,8 +34,10 @@ import {
   CODEX_REVIEW_PERMISSION_PROFILE,
   codexExecutable,
   codexReviewDenyReadPaths,
+  codexReviewerEnvironment,
   codexReviewPermissionConfig,
   codexReviewProofVerdict,
+  safeReviewCaptureText,
 } from './write-codex-push-proof.mjs';
 import {
   REVIEW_TIMEOUT_MS,
@@ -124,6 +126,9 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, migrationSql, query
   });
   const result = spawnSync(codexBin, args, {
     cwd: reviewRoot,
+    // Same scrubbed environment as the push reviewer: model-issued commands must
+    // not inherit API keys or tokens from the operator's shell.
+    env: codexReviewerEnvironment(process.env, reviewRoot),
     encoding: 'utf8',
     // Codex CLI 0.145+ reads the complete prompt from stdin when the final
     // argument is `-`. This avoids Windows' argv size limit for large SQL while
@@ -136,7 +141,7 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, migrationSql, query
     windowsHide: true,
   });
   const capturePath = path.join(stateDir, `codex-review-mig-${safe}-${reviewerName}-capture.txt`);
-  writeFileSync(capturePath, `exit=${result.status}\n\nSTDOUT\n${result.stdout || ''}\n\nSTDERR\n${result.stderr || ''}\n`, 'utf8');
+  writeFileSync(capturePath, `exit=${result.status}\n\nSTDOUT\n${safeReviewCaptureText(result.stdout, 'STDOUT')}\n\nSTDERR\n${safeReviewCaptureText(result.stderr, 'STDERR')}\n`, 'utf8');
   console.log(`  → captured to ${capturePath}`);
   return { verdict: codexReviewProofVerdict({ status: result.status, stdout: result.stdout }), error: null };
 }
