@@ -28,7 +28,7 @@ records the fix as written but not applied, and corrects the returns prefix to `
 `docs/reference/migration-history.md` row 929; the ledger re-read stamps in `CURRENT_STATE.md`,
 `KNOWN_ISSUES.md` and the migration-history boundary block.
 
-**Proof observed.** `node scripts/smoke/prove-number-generators-year-chicago.mjs` → 139/139,
+**Proof observed.** `node scripts/smoke/prove-number-generators-year-chicago.mjs` → 142/142,
 `NUMBER_GENERATORS_YEAR_CHICAGO_PROOF_PASS` on a throwaway `postgres:17-alpine` container:
 - It derives each live body from the file by reversing its one line, and each hashes to the live pin,
   so the transcription is byte-exact to the recorded live pins (the apply-time preflight re-checks live).
@@ -62,6 +62,11 @@ records the fix as written but not applied, and corrects the returns prefix to `
   - the "never issued twice" claim is scoped to the year change;
   - the proof image is pinned by digest;
   - proof and cohort wording is corrected.
+- **Sol re-review of those fixes: CLEAN** (`tokens used` present). One MED: `prosupport` was
+  not pinned, so a planner support function added out of band would be silently dropped. Live
+  has none (read 2026-09-19); both flights now pin it, and prover step 5j proves the refusal. One
+  LOW: the role-existence checks used OR/AND, whose evaluation order PostgreSQL does not
+  guarantee; they are now nested IFs.
 
 **Apply order: this file must go FIRST.** It sorts below every other unapplied migration. That is
 the `main` cohort above. It is also, on unmerged branches, #664's `20260911120000` and the

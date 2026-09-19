@@ -137,7 +137,8 @@ BEGIN
     SELECT p.pronargs, md5(p.prosrc), length(p.prosrc),
            p.prosecdef, p.proconfig::text, p.proowner::regrole::text,
            concat_ws('/', l.lanname, p.provolatile, p.proisstrict, p.proparallel,
-                     p.proleakproof, p.procost, p.prorettype::regtype, p.proretset)
+                     p.proleakproof, p.procost, p.prorettype::regtype, p.proretset,
+                     p.prosupport::regproc)
       INTO v_nargs, v_md5, v_len, v_secdef, v_config, v_owner, v_attrs
       FROM pg_proc p
       JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -174,13 +175,13 @@ BEGIN
     END IF;
 
     -- The re-emit declares language and return type but no volatility,
-    -- strictness, parallel safety, leakproof or cost, so those reset to their
-    -- defaults. Live holds exactly those defaults (read read-only 2026-09-19:
-    -- plpgsql, VOLATILE, not strict, parallel unsafe, not leakproof, cost 100,
-    -- returns text, not a set). Refuse if live was changed, rather than silently
+    -- strictness, parallel safety, leakproof, cost or SUPPORT function, so those
+    -- reset to their defaults. Live holds exactly those defaults (read read-only
+    -- 2026-09-19: plpgsql, VOLATILE, not strict, parallel unsafe, not leakproof,
+    -- cost 100, returns text, not a set, no support function). Refuse if live was changed, rather than silently
     -- resetting it.
-    IF v_attrs IS DISTINCT FROM 'plpgsql/v/f/u/f/100/text/f' THEN
-      RAISE EXCEPTION '%: the LIVE function attributes are % (lang/volatile/strict/parallel/leakproof/cost/returns/setof), expected plpgsql/v/f/u/f/100/text/f. Re-review before applying.',
+    IF v_attrs IS DISTINCT FROM 'plpgsql/v/f/u/f/100/text/f/-' THEN
+      RAISE EXCEPTION '%: the LIVE function attributes are % (lang/volatile/strict/parallel/leakproof/cost/returns/setof/support), expected plpgsql/v/f/u/f/100/text/f/-. Re-review before applying.',
         v_fn.fn_name, v_attrs;
     END IF;
   END LOOP;
@@ -484,7 +485,8 @@ BEGIN
     SELECT p.oid, p.pronargs, md5(p.prosrc), length(p.prosrc), position(chr(13) in p.prosrc),
            p.prosecdef, p.proconfig::text, p.proowner::regrole::text, p.proacl::text,
            concat_ws('/', l.lanname, p.provolatile, p.proisstrict, p.proparallel,
-                     p.proleakproof, p.procost, p.prorettype::regtype, p.proretset)
+                     p.proleakproof, p.procost, p.prorettype::regtype, p.proretset,
+                     p.prosupport::regproc)
       INTO v_oid, v_nargs, v_md5, v_len, v_cr, v_secdef, v_config, v_owner, v_acl, v_attrs
       FROM pg_proc p
       JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -516,8 +518,8 @@ BEGIN
       RAISE EXCEPTION '%: owner is now %, expected postgres. A SECURITY DEFINER body runs as its owner.', v_fn.fn_name, v_owner;
     END IF;
 
-    IF v_attrs IS DISTINCT FROM 'plpgsql/v/f/u/f/100/text/f' THEN
-      RAISE EXCEPTION '%: the re-emit has attributes % (lang/volatile/strict/parallel/leakproof/cost/returns/setof), expected plpgsql/v/f/u/f/100/text/f',
+    IF v_attrs IS DISTINCT FROM 'plpgsql/v/f/u/f/100/text/f/-' THEN
+      RAISE EXCEPTION '%: the re-emit has attributes % (lang/volatile/strict/parallel/leakproof/cost/returns/setof/support), expected plpgsql/v/f/u/f/100/text/f/-',
         v_fn.fn_name, v_attrs;
     END IF;
 
@@ -529,18 +531,21 @@ BEGIN
     END IF;
 
     -- has_function_privilege resolves role membership, so it also catches EXECUTE
-    -- reaching anon indirectly. to_regrole is NULL on a rebuild without the role.
-    IF to_regrole('anon') IS NOT NULL
-       AND has_function_privilege('anon', v_oid, 'EXECUTE') THEN
-      RAISE EXCEPTION '%: anon holds EXECUTE (acl %). anon must never run a SECURITY DEFINER number generator.',
-        v_fn.fn_name, v_acl;
+    -- reaching anon indirectly. A missing anon role cannot hold anything, so it
+    -- is skipped — via a nested IF, because AND does not fix evaluation order and
+    -- has_function_privilege raises on a missing role.
+    IF to_regrole('anon') IS NOT NULL THEN
+      IF has_function_privilege('anon', v_oid, 'EXECUTE') THEN
+        RAISE EXCEPTION '%: anon holds EXECUTE (acl %). anon must never run a SECURITY DEFINER number generator.',
+          v_fn.fn_name, v_acl;
+      END IF;
     END IF;
 
-    IF NOT v_fn.browser_callable
-       AND to_regrole('authenticated') IS NOT NULL
-       AND has_function_privilege('authenticated', v_oid, 'EXECUTE') THEN
-      RAISE EXCEPTION '%: authenticated holds EXECUTE (acl %). Only postgres/service_role may hold it.',
-        v_fn.fn_name, v_acl;
+    IF NOT v_fn.browser_callable AND to_regrole('authenticated') IS NOT NULL THEN
+      IF has_function_privilege('authenticated', v_oid, 'EXECUTE') THEN
+        RAISE EXCEPTION '%: authenticated holds EXECUTE (acl %). Only postgres/service_role may hold it.',
+          v_fn.fn_name, v_acl;
+      END IF;
     END IF;
 
     -- Enumerate the ACL so a grant to ANY other role is caught, not just the
@@ -564,16 +569,24 @@ BEGIN
 
     -- The POSITIVE direction: the legitimate callers still hold EXECUTE. These
     -- roles MUST exist; a missing role is refused, never skipped.
-    IF to_regrole('service_role') IS NULL
-       OR NOT has_function_privilege('service_role', v_oid, 'EXECUTE') THEN
+    -- Nested IFs, not OR: PostgreSQL does not promise to evaluate the role-exists
+    -- test first, and has_function_privilege raises on a missing role.
+    IF to_regrole('service_role') IS NULL THEN
+      RAISE EXCEPTION '%: service_role LOST EXECUTE or does not exist (the role is missing).', v_fn.fn_name;
+    END IF;
+    IF NOT has_function_privilege('service_role', v_oid, 'EXECUTE') THEN
       RAISE EXCEPTION '%: service_role LOST EXECUTE or does not exist (acl %).', v_fn.fn_name, v_acl;
     END IF;
 
-    IF v_fn.browser_callable
-       AND (to_regrole('authenticated') IS NULL
-            OR NOT has_function_privilege('authenticated', v_oid, 'EXECUTE')) THEN
-      RAISE EXCEPTION '%: authenticated LOST EXECUTE or does not exist (acl %) — the app calls this directly and would break.',
-        v_fn.fn_name, v_acl;
+    IF v_fn.browser_callable THEN
+      IF to_regrole('authenticated') IS NULL THEN
+        RAISE EXCEPTION '%: authenticated LOST EXECUTE or does not exist (the role is missing) — the app calls this directly and would break.',
+          v_fn.fn_name;
+      END IF;
+      IF NOT has_function_privilege('authenticated', v_oid, 'EXECUTE') THEN
+        RAISE EXCEPTION '%: authenticated LOST EXECUTE or does not exist (acl %) — the app calls this directly and would break.',
+          v_fn.fn_name, v_acl;
+      END IF;
     END IF;
 
     -- EXACT ACL. The checks above reason about roles; this pins the whole

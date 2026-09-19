@@ -17,7 +17,7 @@
 //   4. a replay is idempotent
 //   5. a drifted body, a stripped search_path, a SECURITY INVOKER body, a changed
 //      owner, a second overload, a changed signature, and a changed volatility,
-//      strictness or cost are each REFUSED
+//      strictness, cost or support function are each REFUSED
 //   6. behaviour: each REAL body, with its clock pinned to 2029-01-01 02:00 UTC
 //      (= 2028-12-31 20:00 Chicago), returns a 2029 number before the fix and a
 //      2028 number after it; outside the window both agree; numbering continues
@@ -411,6 +411,18 @@ function main() {
   ok(allMd5s() === before, "no function changed");
   psql("ALTER FUNCTION public.next_return_number() COST 100");
   installLiveBodies(liveBodies);
+
+  // 5j — a planner SUPPORT function added out of band (CREATE OR REPLACE would
+  // silently drop it).
+  psql("ALTER FUNCTION public.next_po_number() SUPPORT textlike_support");
+  before = allMd5s();
+  result = applyMigration();
+  ok(result.refused && /next_po_number: the LIVE function attributes are plpgsql\/v\/f\/u\/f\/100\/text\/f\/textlike_support/.test(result.message),
+     "an added support function is refused");
+  ok(allMd5s() === before, "no function changed");
+  psql("DROP FUNCTION public.next_po_number()");
+  installLiveBodies(liveBodies);
+  ok(fnRow("next_po_number", "p.prosupport::regproc::text") === "-", "support function cleared again");
   ok(FUNCTIONS.every((fn) => bodyMd5(fn.name) === fn.liveMd5), "starting state restored to the live bodies");
   ok(FUNCTIONS.every((fn) => fnRow(fn.name, "p.proacl::text") === liveAcl(fn)
                           && fnRow(fn.name, "p.provolatile") === "v"
