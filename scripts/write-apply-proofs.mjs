@@ -31,9 +31,10 @@ import path from 'node:path';
 import {
   CODEX_REVIEW_EFFORT,
   CODEX_REVIEW_MODEL,
-  CODEX_REVIEW_PERMISSION_CONFIG,
   CODEX_REVIEW_PERMISSION_PROFILE,
   codexExecutable,
+  codexReviewDenyReadPaths,
+  codexReviewPermissionConfig,
   codexReviewProofVerdict,
 } from './write-codex-push-proof.mjs';
 import {

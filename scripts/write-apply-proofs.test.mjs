@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {
   existsSync,
   mkdirSync,
@@ -139,6 +141,18 @@ try {
 } finally {
   if (packetRoot) rmSync(packetRoot, { recursive: true, force: true });
   rmSync(sourceRoot, { recursive: true, force: true });
+}
+
+// The CLI entry point runs on import, so link it in a child process: a renamed
+// export from write-codex-push-proof.mjs must fail here, not at migration time.
+{
+  const cli = spawnSync(process.execPath, [
+    fileURLToPath(new URL('./write-apply-proofs.mjs', import.meta.url)),
+    '00000000000000_module_link_check',
+  ], { encoding: 'utf8', timeout: 60_000 });
+  assert.doesNotMatch(cli.stderr, /SyntaxError|does not provide an export/, 'write-apply-proofs.mjs must link');
+  assert.match(cli.stderr, /not found/, 'the CLI must reach its own argument handling');
+  assert.notEqual(cli.status, 0, 'an unknown migration must never mint a proof');
 }
 
 console.log('PASS - apply-proof review uses a single-read hash and sanitized stdin review packet.');
