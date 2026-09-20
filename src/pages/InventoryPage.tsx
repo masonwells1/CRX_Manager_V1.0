@@ -101,13 +101,15 @@ export default function InventoryPage() {
       p_allow_over_receive: false,
     }),
   });
-  // adjust_inventory and create_inventory_hold replay on the idempotency KEY
-  // ALONE: the server matches key + operation and never compares the actor or
-  // the payload (adjust: migration 20260317200000; holds: 20260507200000 and
-  // installed 20260630173022; intent binding 20260908130000 is still parked).
-  // So the browser has to guarantee that a request
-  // whose reply was lost is retried with its exact payload under its original
-  // key, and is never edited into a "new" request. The old per-open resetKey()
+  // adjust_inventory and create_inventory_hold now bind the actor AND a payload
+  // fingerprint server-side through check_idempotency_intent (holds: migration
+  // 20260908130000, applied 2026-09-15; adjustments: 20260911120000, applied
+  // 2026-09-20). A replay by a different admin is refused with
+  // IDEMPOTENCY_ACTOR_MISMATCH, and a changed payload under the same key with
+  // IDEMPOTENCY_INTENT_MISMATCH, so the server is the authoritative duplicate
+  // check. Keep freezing the payload anyway: that is what turns a lost reply
+  // into a replayable retry rather than a refusal the operator has to resolve.
+  // The old per-open resetKey()
   // did the opposite: closing and reopening the dialog after a lost reply
   // minted a fresh key, and PostgreSQL applied the adjustment (or inserted the
   // hold) a second time. Freeze the payload instead, as receive_po_items does.
