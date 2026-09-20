@@ -598,6 +598,10 @@ function worktreeRoots(sourceRoot) {
 export function codexReviewDenyReadPaths({
   sourceRoot = FALLBACK_ROOT,
   home = homedir(),
+  // codexReviewerEnvironment() passes HOME and USERPROFILE through, and Git Bash
+  // sets a HOME that can differ from os.homedir(). Deny every home the reviewer
+  // can actually resolve, not just the default one.
+  extraHomes = [process.env.HOME, process.env.USERPROFILE],
   codexHome = process.env.CODEX_HOME,
   platform = process.platform,
   listWorktrees = worktreeRoots,
@@ -634,7 +638,10 @@ export function codexReviewDenyReadPaths({
     }
   };
 
-  for (const parts of HOME_CREDENTIAL_PATHS) add(pathApi.join(home, ...parts), false);
+  for (const candidateHome of [home, ...extraHomes]) {
+    if (!candidateHome) continue;
+    for (const parts of HOME_CREDENTIAL_PATHS) add(pathApi.join(candidateHome, ...parts), false);
+  }
   // codexReviewerEnvironment() keeps an operator's CODEX_HOME for auth, so its
   // credential file must be denied too, not only the default ~/.codex one.
   if (codexHome) add(pathApi.join(codexHome, "auth.json"), true);

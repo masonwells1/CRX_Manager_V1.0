@@ -171,12 +171,15 @@ assert.equal(
     "C:\\Users\\me\\.git-credentials",
     "D:\\secrets\\real.env",
     "D:\\alt-codex\\auth.json",
+    "C:\\git-home\\.git-credentials",
   ]);
   const dirs = new Set(["C:\\Users\\me\\.ssh", "C:\\CRX_Manager\\src"]);
   const links = new Map([["C:\\CRX_Manager\\.claude\\worktrees\\wt\\.env.link", "D:\\secrets\\real.env"]]);
   const denies = codexReviewDenyReadPaths({
     sourceRoot: "C:\\CRX_Manager\\.claude\\worktrees\\wt",
     home: "C:\\Users\\me",
+    // A Git Bash HOME that differs from os.homedir() must be denied as well.
+    extraHomes: ["C:\\git-home", "C:\\Users\\me"],
     codexHome: "D:\\alt-codex",
     platform: "win32",
     listWorktrees: () => ["C:\\CRX_Manager", "C:\\CRX_Manager\\.claude\\worktrees\\wt"],
@@ -204,6 +207,7 @@ assert.equal(
     "C:\\Users\\me\\.codex\\auth.json",
     "C:\\Users\\me\\.git-credentials",
     "C:\\Users\\me\\.ssh",
+    "C:\\git-home\\.git-credentials",
     "D:\\alt-codex\\auth.json",
     "D:\\secrets\\real.env",
   ]);
