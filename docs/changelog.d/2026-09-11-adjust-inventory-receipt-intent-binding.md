@@ -1,5 +1,10 @@
 ## 2026-09-11 — adjust_inventory checks who is calling before it replays a saved result (LOCAL CANDIDATE, not applied)
 
+> **STATUS SUPERSEDED 2026-09-20:** this migration is now **APPLIED LIVE** (ledger version
+> `20260920052149`). The "not applied" wording below is the record as it stood on 2026-09-11 and is
+> kept for history; for the apply itself, its gates and its postflight evidence, see
+> `2026-09-20-adjust-inventory-receipt-binding-applied-live.md`.
+
 Follow-up to CRX-IDEM-01 from the gpt-5.6-sol exact-SHA review of PR #624 (severity Low). The live `adjust_inventory` looks up a saved idempotency receipt first and returns it before it checks who is calling or whether they are an admin. Anyone who can call the function and holds an unexpired adjustment key could read that adjustment's product and new quantity. That includes a sales rep, a deactivated admin, or a script running on the same site. It could not make a new stock change.
 
 New migration `20260911120000_bind_adjust_inventory_receipt_to_intent.sql`, **not applied**:
@@ -7,7 +12,7 @@ New migration `20260911120000_bind_adjust_inventory_receipt_to_intent.sql`, **no
 - **Order of checks:** sign-in, then the caller may name only themselves, then an active admin profile is required, then a non-blank key. Only after all of that is a saved receipt looked at. The receipt lookup goes through `check_idempotency_intent`, which queues same-key calls behind each other. It replays a receipt only for the same person and the same request (inventory row, quantity, reason). Another admin gets `IDEMPOTENCY_ACTOR_MISMATCH` with no result attached. The same person changing the request gets `IDEMPOTENCY_INTENT_MISMATCH`.
 - **Quantity check:** refuses a missing, NaN or infinite quantity. PostgreSQL sorts NaN above every number, so today's body would write it straight into stock. The stock column has no constraint to catch it.
 - **Receipts:** each new receipt records who made it and a fingerprint of the request.
-- **Cutover safety:** a new trigger refuses any adjust_inventory receipt that lacks the owner and fingerprint. So an old-version call caught mid-flight while the migration installs is rolled back entirely.
+- **Cutover safety:** a new trigger refuses any adjust_inventory receipt that lacks the owner and fingerprint. So an old-version call that is caught mid-flight **and carries a key** is rolled back entirely — stock change and ledger row together — because writing its unbound receipt is what the trigger refuses. **Residual, known and accepted:** an old-version call that carries NO key never touches the receipt table at all, so neither the cutover lock nor the trigger sees it, and it can commit one unreceipted adjustment during the install. That is an authenticated admin making an adjustment the live function already allows on every keyless call today, and both screens that call this always send a key. Detect it afterwards read-only by comparing `adjusted` ledger rows written during the install window against bound receipts written in the same window; inspect any extra row, do not reverse it blindly.
 - **Refuses to install while old-style receipts exist:** it will not apply while any unexpired old-style adjust_inventory receipt exists. There were none on live on 2026-09-11.
 - **Unchanged:** the function's inputs, its result shape and the stock/ledger logic. No screen changes.
 - **Not covered:** someone using the same signed-in admin session is, to the database, the same person.

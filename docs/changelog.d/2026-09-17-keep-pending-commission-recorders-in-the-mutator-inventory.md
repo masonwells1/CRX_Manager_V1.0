@@ -7,7 +7,7 @@ from `20260904152221` to `20260915033227`, the ledger version of the applied
 nine unapplied migrations went from sorting above the high-water to sorting below
 it and stopped being discovered as pending:
 
-```
+```text
 20260908120000  20260911120000  20260914100100  20260914100200  20260914100300
 20260914100400  20260914100500  20260914100600  20260914100900
 ```
