@@ -38,11 +38,17 @@ export function generateIdempotencyKey(operation: string, userId: string): strin
  * KNOWN LIMIT — do not read more protection into this than it gives. For RPCs
  * that bind the actor and payload server-side, this is only a local convenience
  * and the server remains the authoritative duplicate check. But several call
- * sites deliberately target RPCs that replay on the KEY ALONE — `adjust_inventory`
- * and `retire_inventory_item` say so in their own comments (live catalog:
- * key-only check_idempotency, no actor/payload binding). For those, this 64-bit
+ * sites deliberately target RPCs that replay on the KEY ALONE — `retire_inventory_item`
+ * and `save_blend_recipe` say so in their own comments (live catalog read
+ * 2026-09-20: key-only check_idempotency, no actor/payload binding). For those,
+ * this 64-bit
  * digest is the ONLY thing separating two different payloads, and some of the
- * fingerprinted payloads include operator-entered free text (e.g. `adjustNote`).
+ * fingerprinted payloads include operator-entered free text.
+ *
+ * `adjust_inventory` and `create_inventory_hold` are NO LONGER in that set: both
+ * bind the actor and a payload fingerprint server-side through
+ * check_idempotency_intent (holds applied 2026-09-15, adjustments 2026-09-20), so
+ * for those two the server — not this digest — is the boundary.
  * Accidental collision is negligible at these volumes; a deliberate one is not
  * structurally prevented. Do not widen this function's use to a new key-only RPC
  * without either a collision-resistant digest or server-side payload binding.
