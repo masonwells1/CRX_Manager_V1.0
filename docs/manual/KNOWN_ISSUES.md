@@ -370,6 +370,54 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (ACCEPTED by Mason) 2026-09-20 — `adjust_inventory` accepts an idempotency key containing ASCII control characters
+
+**Status.** Accepted as a known residual by Mason on 2026-09-20, in chat, when the cost of closing
+it was put to him. **Do not re-open it as a finding, and do not write a migration for it without
+asking him again.**
+
+**What is live.** `20260911120000_bind_adjust_inventory_receipt_to_intent` applied 2026-09-20
+(ledger version `20260920052149`; live `adjust_inventory` prosrc 4334 chars, md5
+`22f1f7d0bd190ce74efb5ad3a8379677`; cutover trigger
+`refuse_unbound_adjust_inventory_receipt_20260911` installed). Its key check refuses NULL and blank
+keys and requires at least one printable character — `p_idempotency_key COLLATE "C" !~ '[!-~]'` —
+but a key that carries a printable character **beside** a control character still passes.
+
+**Why it is accepted, not fixed.** There is no live defect and no caller that can reach it. Both
+browser call sites mint plain-ASCII keys client-side, and the applied body already authenticates,
+refuses a forged `p_performed_by`, requires an ACTIVE admin, and binds the receipt to the actor and
+a payload fingerprint before any replay. Closing it means re-emitting a live money-path function in
+a new forward migration pinning `9a503e54…` → a new body, plus CI, a fresh exact-SHA `gpt-5.6-sol`
+review, and Mason's apply approval — a full protected-delivery cycle for hardening nothing can
+currently trigger.
+
+**The written fix exists but is stranded.** Branch `claude/bind-adjust-inventory-receipt-delivery-20260917`
+HEAD `143da828f` (unpushed) adds `OR p_idempotency_key COLLATE "C" ~ '[[:cntrl:]]'` and moves both
+body pins to `457cfb00…`. **That branch can no longer be applied**: it edits an applied migration
+(against the CRX hard rule), and its preflight accepts only `ef485890…` or its own `457cfb00…`,
+while live is now `9a503e54…`, so it aborts with `PREFLIGHT_BODY`. If this is ever taken up, it must
+become a **new forward migration**, not an edit of `20260911120000`.
+
+**Never tested, in either direction.** Neither
+`scripts/smoke/prove-adjust-inventory-intent-binding-real-schema.mjs` nor
+`scripts/smoke/smoke-adjust-inventory-intent-binding.sql` covers a control-character key; they cover
+only the NULL and blank cases. Any future attempt must add that case.
+
+**Related wording trap.** Under `COLLATE "C"` a `[[:cntrl:]]` test refuses only C0 controls and DEL.
+C1 controls, ZWSP, BOM, U+2028 and the soft hyphen still pass, so the behaviour is "ASCII control
+characters", never "non-printable".
+
+**Also carried forward unfixed (postflight only, no effect on the applied body):** the postflight
+checks `position('AUTH_REQUIRED' …) >` without a presence check, so a body with no auth check at all
+would satisfy it. Moot for the applied migration — its postflight already ran and passed against the
+real body — but the shape should not be copied into a new one.
+
+**Separately, still open and NOT covered by this entry:** `inventory.quantity_available` has no
+CHECK constraint, so a pre-existing NaN in that column still propagates. The applied body refuses
+NaN *deltas*; it does not repair a NaN already stored.
+
+---
+
 ## OPEN (ACCEPTED by Mason) 2026-09-13 — a SUSPENDED second tab can still send a stale batch adjustment after another tab's batch froze and finished
 
 **Status.** Accepted as a known limit by Mason on 2026-09-13 ("ship with known limit") when the
