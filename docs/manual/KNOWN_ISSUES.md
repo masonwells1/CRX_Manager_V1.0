@@ -12,8 +12,9 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-19 against the live ledger (read-only ledger query, which confirmed by name that none of
-the parked commission, next-invoice-number or six-generator year candidates below is applied; boundary figures are
+**Last verified: 2026-09-20 against the live ledger (read-only ledger query, which confirmed by name that the
+six-generator year fix `20260908140000` IS applied, and that the parked commission and
+next-invoice-number candidates below are still not; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
@@ -391,21 +392,44 @@ a new forward migration pinning `9a503e54…` → a new body, plus CI, a fresh e
 review, and Mason's apply approval — a full protected-delivery cycle for hardening nothing can
 currently trigger.
 
-**The written fix exists but is stranded.** Branch `claude/bind-adjust-inventory-receipt-delivery-20260917`
-HEAD `143da828f` (unpushed) adds `OR p_idempotency_key COLLATE "C" ~ '[[:cntrl:]]'` and moves both
-body pins to `457cfb00…`. **That branch can no longer be applied**: it edits an applied migration
-(against the CRX hard rule), and its preflight accepts only `ef485890…` or its own `457cfb00…`,
-while live is now `9a503e54…`, so it aborts with `PREFLIGHT_BODY`. If this is ever taken up, it must
-become a **new forward migration**, not an edit of `20260911120000`.
+**A forward migration now exists and is PARKED, not applied (2026-09-20).** The decision above still
+stands — this is recorded so the shelf is findable, not to re-open it. A later session built the fix
+as a proper new forward migration and Mason re-affirmed the accept when it was put to him a second
+time.
 
-**Never tested, in either direction.** Neither
-`scripts/smoke/prove-adjust-inventory-intent-binding-real-schema.mjs` nor
-`scripts/smoke/smoke-adjust-inventory-intent-binding.sql` covers a control-character key; they cover
-only the NULL and blank cases. Any future attempt must add that case.
+- Branch `claude/adjust-inventory-control-char-keys-20260920`, HEAD `4bcb1d5e3` (pushed, **no PR**).
+- `supabase/migrations/20260911130000_refuse_control_character_adjust_inventory_keys.sql` — a
+  forward `CREATE OR REPLACE` pinning the live body `9a503e54…` → a new body `841eeded…`. Stamped
+  deliberately below the eight pending `20260914100*` migrations, since the pending-set guard in
+  `.claude/hooks/migration-pending-lib.mjs` refuses an apply while an **older** migration is pending.
+- Superseded: the earlier branch `claude/bind-adjust-inventory-receipt-delivery-20260917` HEAD
+  `143da828f` (unpushed) **still cannot be applied** — it edits an applied migration, and its
+  preflight accepts only `ef485890…` or `457cfb00…` while live is `9a503e54…`
+  (`PREFLIGHT_BODY`). Do not revive that one.
+- **Known-open on the parked branch, if it is ever taken up:** two postflight assertions were proven
+  defeatable by review — the cutover-trigger check no longer inspects the trigger function's body,
+  and the control-character check is satisfied by a *commented-out* clause. Four documents also still
+  carry the pre-correction scope wording below.
 
-**Related wording trap.** Under `COLLATE "C"` a `[[:cntrl:]]` test refuses only C0 controls and DEL.
-C1 controls, ZWSP, BOM, U+2028 and the soft hyphen still pass, so the behaviour is "ASCII control
-characters", never "non-printable".
+**Now tested, on the parked branch only.** The applied-migration provers
+(`scripts/smoke/prove-adjust-inventory-intent-binding-real-schema.mjs`,
+`scripts/smoke/smoke-adjust-inventory-intent-binding.sql`) still cover only the NULL and blank
+cases. The parked branch adds `prove-adjust-inventory-control-character-keys.mjs` and its chain,
+which reproduce the gap on a byte-identical replay of the live body and then close it. Nothing on
+`main` covers a control-character key.
+
+**Related wording trap — corrected 2026-09-20.** An earlier version of this entry said a
+`COLLATE "C"` `[[:cntrl:]]` test "refuses only C0 controls and DEL" and that C1 controls pass.
+**The C1 half is measured-false.** On PostgreSQL 17.6 the class matches **exactly 64** code points —
+U+0001–U+001F, U+007F (DEL) **and the whole C1 block U+0080–U+009F (32 of 32)** — and the default
+collation matches the same 64, so `COLLATE "C"` is defensive pinning rather than the cause of that
+set. `chr(0)` is refused by PostgreSQL outright, so 31 + 1 + 32 = 64 is exact. NBSP, ZWSP, BOM,
+U+2028 and the soft hyphen genuinely do pass; that half was right. Measured three times
+independently — a container prover plus two reviewers, each of which predicted the opposite and
+tested rather than reasoned. The intuition that trips everyone is that `COLLATE "C"` selects the
+ASCII regex strategy and therefore *looks* like it should cap the class at ASCII; it does not for
+`[[:cntrl:]]`. **Enumerate the code points in a container; do not reason from the collation.** The
+behaviour is still fairly described as "control characters", never as "non-printable".
 
 **Also carried forward unfixed (postflight only, no effect on the applied body):** the postflight
 checks `position('AUTH_REQUIRED' …) >` without a presence check, so a body with no auth check at all
@@ -693,7 +717,16 @@ calendar date — identical rollover, identical six-hour window (re-verified rea
 | `next_po_number` | `extract(year FROM current_date)` | `PO-<year>-nnnn` |
 | `next_return_number` | `extract(year FROM current_date)` | `RMA-<year>-nnnn` (this table said `RET-`; live is `RMA-`) |
 
-**FIX WRITTEN 2026-09-19, NOT APPLIED (issue #617).** `supabase/migrations/20260908140000_number_generators_year_chicago.sql`
+**FIXED AND APPLIED LIVE 2026-09-20 (issue #617).** The table above describes the pre-fix live
+bodies; all six now take the year from `(now() AT TIME ZONE 'America/Chicago')::date`. Merged as
+`6171c0a20` (PR #726) and applied live 2026-09-20 under ledger version `20260920051333`, which was
+the effective ordering high-water only briefly — `20260911120000` (#664) applied eight minutes
+later and superseded it. Post-apply live verification, read-only: all six
+`md5(prosrc)` equal the candidate pins, each body contains `America/Chicago`, and all six remain
+SECURITY DEFINER / `search_path=public, pg_temp` / owner `postgres`. The write-up below is the
+as-written record.
+
+`supabase/migrations/20260908140000_number_generators_year_chicago.sql`
 re-emits all six from their live `prosrc` (read read-only 2026-09-19) with only the year line changed,
 pins each live and candidate md5 (the candidate pins were computed on live as
 `md5(replace(prosrc, old, new))`), and asserts the per-function ACL on both directions:
@@ -710,16 +743,26 @@ substitution cannot pass by matching the real year), and makes each tested refus
 (`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`). The pending-migration guard
 checked with its own code: once this merges, the guard refuses every one of those until this file
 is applied. If any of them applies live first, this file is stranded and must be restamped above it.
-Still needed: exact-SHA Sol review, then Mason's attended apply before 31 December 2026.
+**That ordering requirement is discharged — it applied first, on 2026-09-20 at 05:13 UTC, and
+#664's `20260911120000` applied eight minutes later, which makes that file the current high-water.
+The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply; of the
+field-app season files only `20260908190000` now sorts BELOW it and must be restamped, while
+`20260912165758`, `20260913040359` and `20260913152700` already sort above it. Read the boundary
+block in `docs/reference/migration-history.md` before ordering anything.**
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
-for cycle counts, `8675309`, verified from the live bodies 2026-09-19) — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001`. As with
-`next_invoice_number`, that is a **wrong-year label, not a duplicate**: `next_job_number` takes
-`MAX(...) + 1` over rows already matching that year under an advisory lock (verified against live
-2026-09-05), so the real first job of 2027 simply becomes `JOB-2027-0002`. Nothing is overwritten;
-the December work is filed under the wrong year and consumes that year's first number.
-**Same 31 December 2026 deadline.**
+for cycle counts, `8675309`, verified from the live bodies 2026-09-19).
+
+**Pre-fix behaviour, for the record — no longer live since 2026-09-20.** A job created at 7 pm
+Chicago on 31 December 2026 got `JOB-2027-0001`. As with `next_invoice_number`, that was a
+**wrong-year label, not a duplicate**: `next_job_number` takes `MAX(...) + 1` over rows already
+matching that year under an advisory lock (verified against live 2026-09-05), so the real first job
+of 2027 would simply have become `JOB-2027-0002`. Nothing was overwritten; the December work was
+filed under the wrong year and consumed that year's first number. **Post-fix, that same job is
+numbered in the 2026 sequence — `MAX(...) + 1` over the existing `JOB-2026-*` rows, so the next free
+2026 number, not `JOB-2026-0001` unless that year's sequence is empty.** The six generators now read
+the Chicago business date, so the 31 December 2026 deadline is met.
 The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
 they were deliberately not bundled into the parked migration because that file is pinned to one
 function's body md5. **Do not close this family when `20260914100100` (formerly `20260905090000`) is applied.**
