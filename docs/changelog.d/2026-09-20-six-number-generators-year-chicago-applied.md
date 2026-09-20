@@ -17,7 +17,22 @@ the change itself is `docs/changelog.d/2026-09-19-six-number-generators-year-chi
   CLEAN, no findings. That wrapper worked again only because PR #725 rebuilt its sandbox for Codex
   CLI 0.155 the same night.
 - CodeRabbit: APPROVED, "No actionable comments were generated", reviewing `3b1b559..71bde00` across
-  all seven changed files.
+  all seven changed files. **Incomplete by its own report, and the approval must not be read as a
+  Hard-Rule pass.** CodeRabbit could not clone the repository ("clone-backed analysis was skipped and
+  this review may be incomplete"), so all five `mode: error` Hard-Rule pre-merge checks — RLS on new
+  tables, `SECURITY DEFINER` search_path, mutating-RPC idempotency, exact whole-cent money, and edits
+  to applied migrations — returned "Inconclusive — Repository clone failed" instead of passing. The
+  four checks that did pass (Linked Issues, Out of Scope Changes, Description, Title) are not Hard
+  Rules. A `@coderabbitai full review` retry was refused ("Pull request is closed") because #726 had
+  already merged, so the five rules were verified BY HAND against the merged file instead, and all
+  five hold: no `CREATE TABLE` anywhere, so the RLS rule is not engaged; all six functions carry
+  `SECURITY DEFINER` with `SET search_path = public, pg_temp`, one-for-one; none of the six writes
+  (no `INSERT`/`UPDATE`/`DELETE` in any body), which is the basis of the file's own idempotency-key
+  exemption; no money columns are touched (the "cost" matches are PostgreSQL's planner `procost` in
+  the attribute pins); and the file is new (first added in `5e3b05e67`), not an edit to an applied
+  migration. Evidence: the `🚥 Pre-merge checks` disclosure on the #726 walkthrough reads "✅ 4 | ❌ 5"
+  (`gh api repos/masonwells1/CRX_Manager_V1.0/issues/726/comments`). The clone failure was transient,
+  not chronic — #721, #722 and #724 each reviewed with no clone error.
 - `scripts/write-apply-proofs.mjs`: both reviewer charters CLEAN from `gpt-5.6-sol/high`, run
   markers present — `rls-security-reviewer` ("Safe to apply", 0 BLOCKER/HIGH/MED) and
   `migration-drift-reviewer` (no drift blocker, stamp strictly above the then high-water
