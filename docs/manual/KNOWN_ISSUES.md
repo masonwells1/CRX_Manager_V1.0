@@ -671,8 +671,11 @@ substitution cannot pass by matching the real year), and makes each tested refus
 (`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`). The pending-migration guard
 checked with its own code: once this merges, the guard refuses every one of those until this file
 is applied. If any of them applies live first, this file is stranded and must be restamped above it.
-**That ordering requirement is discharged — it applied first, on 2026-09-20, so the cohort, #664 and
-the field-app files are free to apply in their own order.**
+**That ordering requirement is discharged — it applied first, on 2026-09-20 at 05:13 UTC, and
+#664's `20260911120000` applied eight minutes later, which makes that file the current high-water.
+The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply; the
+field-app season files now sort BELOW it and must be restamped. Read the boundary block in
+`docs/reference/migration-history.md` before ordering anything.**
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
@@ -2128,13 +2131,20 @@ browser only if it did not go through. **Fix:** an admin "verified, clear this r
 records who cleared it and what they checked.
 
 
-## OPEN 2026-09-05 — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold (fix written and proven, not applied)
+## RESOLVED 2026-09-15 (migration `20260908130000` APPLIED LIVE as ledger version `20260915033227`; code merged in PR #691) — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold
 
 **Owner:** the PR #624 lane (worktree `inventory-idempotency-key-reset-888161`), reassignable by the fleet
 coordinator. **Exposure assessment due 2026-09-18:** a read-only look at live holds for the two server
 defects the parked migration closes while it stays unapplied: a NULL `p_force` that skips the admin and
 free-stock checks, and holds created by staff whose profile is missing or inactive. The live read needs
-Mason's explicit OK at the time; the result decides whether the apply moves up.
+Mason's explicit OK at the time; the result decides whether the apply moves up. **Done 2026-09-15:** the
+migration applied before the due date, so per Mason's 2026-09-14 decision the pre-apply check was skipped
+and a read-only look-back ran after the apply. All 29 `inventory_holds` rows ever created (newest 2026-04-28)
+were made by staff who are active admins today, and the `created_by` foreign key rules out a persisted
+hold with a missing profile. The look-back cannot show whether either defect was exercised: `p_force` is
+not stored on the hold, and the old body's `IF p_force` / `AND NOT p_force` meant a NULL `p_force`
+skipped the free-stock check even for an admin; and profile state is read as of today, not as of each
+hold's creation.
 
 The live `create_inventory_hold` body (the `20260630173022` parked_010 body — the 2026-07-27 production
 dump proves it IS installed; earlier notes calling it "parked, never applied" were wrong) reads its
@@ -2167,7 +2177,9 @@ insert boundaries pass without standalone context, while the receipt trigger sti
 stale context naming a different key. Rerun succeeds; deliberately changed insert-barrier code is
 refused and preserved. This supersedes the old residual acceptance and absence of literal interleaving
 proof. The boundary test does not execute every automatic sync RPC end to end.
-**No live apply is authorized.** Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
+**APPLIED LIVE 2026-09-15 03:32Z** (ledger version `20260915033227`), with Mason's in-chat approval
+and a fresh CLEAN `gpt-5.6-sol`/high apply proof; see `docs/reference/migration-history.md` row 927.
+The text that follows is the pre-apply record. Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
 and every preflight condition held: one overload, owner `postgres`, `plpgsql`, SECURITY DEFINER,
 `proconfig = {search_path=public, pg_temp}`, the pinned argument list with defaults,
 `md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` for the 4,046-character body whose sha256 is the

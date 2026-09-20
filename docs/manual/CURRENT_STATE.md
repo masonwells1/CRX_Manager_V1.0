@@ -26,17 +26,24 @@ overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own cand
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
 **Last verified: 2026-09-20 for the migration ledger (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1003 rows / 996 distinct names, `max(version)` `20260920051333` — the
-`20260908140000` six-generator year fix APPLIED LIVE 2026-09-20 and is now the effective ordering
-high-water; the `20260914100100`..`20260914100900` candidates are still not applied); schema shape last re-read 2026-09-05 by the live-introspection regeneration
+`rhyzpcqhnizqbxphqdkr`: 1004 rows / 997 distinct names, `max(version)` `20260920052149` — two
+applies that morning, the `20260908140000` six-generator year fix (issue #617) under
+`20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under
+`20260920052149`, which is now the effective ordering high-water; the
+`20260914100100`..`20260914100900` candidates are still not applied); schema shape last re-read 2026-09-05 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
 migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
 `20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
 ordering high-water is the newest applied row's effective stamp:
+**`20260911120000_bind_adjust_inventory_receipt_to_intent`** (row 930, ledger version
+`20260920052149`, applied live 2026-09-20 via #664; verified live read-only 2026-09-20, 1004 ledger
+rows). A candidate must now sort above the `20260911120000` name-stamp.
+
+**Superseded boundary — row 928's 09-15 apply.** Until the 09-20 applies the high-water was
 **`20260908130000_bind_create_inventory_hold_receipt_to_intent`** (ledger version
 `20260915033227`, applied live 2026-09-15 via PR #691; verified live read-only 2026-09-17, 1002
-ledger rows). A candidate must now sort above the `20260908130000` name-stamp.
+ledger rows).
 
 **Superseded boundary — PR #646's row 923.** Until the 09-15 apply the high-water was
 **`20260908120000_close_pr535_live_gaps`** (row 923, ledger version `20260909023300`, applied live
@@ -59,11 +66,13 @@ again — 1001 rows / 994 distinct names, `max(version)` `20260909023300`, prefi
 `20260908120000_close_pr535_live_gaps`, the PR #535 gap-closer whose file and ledger record are owned
 by open PR #646. A read-only re-read on 2026-09-14 found the same figures, and confirmed that none of the
 seven restamped `20260914100100`..`20260914100900` candidates, `20260908130000`, `20260911120000`, or
-`bind_transfer_invoice_intent` is applied. That 09-14 observation is itself superseded:
-`20260908130000` applied live 2026-09-15 under ledger version `20260915033227` and now holds the
-boundary stated at the top of this section.)
+`bind_transfer_invoice_intent` is applied. That 09-14 observation is itself superseded twice:
+`20260908130000` applied live 2026-09-15 under ledger version `20260915033227`, and
+`20260911120000_bind_adjust_inventory_receipt_to_intent` applied live 2026-09-20 under ledger version
+`20260920052149`, which now holds the boundary. A read-only re-read on 2026-09-20 found 1004 ledger
+rows immediately after that apply.)
 
-**Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and remains unapplied.
+**Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and was applied live on 2026-09-15 (see below).
 
 Six local commission follow-ups (`20260914100200` through `20260914100900`, with no `20260905200500` file) are not applied. The
 six-file set was restamped together on 2026-09-05 evening and again on 2026-09-14 (from
@@ -179,10 +188,15 @@ it from migration filenames alone; it has since been applied, so live `save_job`
 md5 `8acf34542105a90212ddb0a5e7c5d272`, not F06's.
 
 A second local candidate, `20260908130000_bind_create_inventory_hold_receipt_to_intent` (originally on
-`claude/inventory-idempotency-key-reset-888161`, history row 927), is written and container-proven but
-**NOT applied**. Repository delivery is tracked by PR #624 and its landing successors; publishing
-this parked SQL does not authorize or perform a live apply. Fresh apply-time preflight and the
-protected production gate remain required. Its stamp is authored above PR #592's pending `20260905*` files, and
+`claude/inventory-idempotency-key-reset-888161`, history row 927), merged to main as PR #691, was
+**APPLIED LIVE on 2026-09-15 at 03:32Z** (ledger version `20260915033227`) with Mason's explicit in-chat
+approval and a fresh CLEAN `gpt-5.6-sol`/high apply proof. Post-apply read-only checks confirmed the
+SECURITY DEFINER wrapper (authenticated-only), the private impl with no client EXECUTE, and the enabled
+`guard_create_inventory_hold_insert_20260913` trigger. The exposure look-back (due by 2026-09-18, run 2026-09-15 right after the apply) found that all 29
+holds ever created (newest 2026-04-28) were made by staff who are active admins today, and the
+`created_by` foreign key rules out a persisted hold with a missing profile. It cannot show whether the
+NULL `p_force` path (which skipped the free-stock check even for an admin) or the inactive-profile path
+was ever exercised: `p_force` is not stored, and profile state is read as of today. The rest of this paragraph is the pre-apply record. Its stamp is authored above PR #592's pending `20260905*` files, and
 deliberately clear of `20260905210000`, which PR #592 occupies with
 `20260905210000_repair_commission_history_label_snapshots.sql` (two migration files sharing one
 timestamp would have undefined apply order). (Since 2026-09-14 those pending files are restamped

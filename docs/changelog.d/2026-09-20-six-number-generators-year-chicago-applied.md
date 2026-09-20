@@ -42,9 +42,12 @@ the Supabase token was read from Windows Credential Manager in-process and never
 - Ledger: 1003 rows / 996 distinct names, `max(version)` `20260920051333`.
 
 **Unblocked by this.** The pending-migration guard refused every unapplied migration stamped above
-this file. With it applied, the parked `20260914100100`..`20260914100900` cohort, #664's
-`20260911120000` and the field-app season files (`20260908190000`, `20260912165758`,
-`20260913040359`, `20260913152700`) are free to apply in their own order.
+this file. With it applied, #664's `20260911120000_bind_adjust_inventory_receipt_to_intent` went
+live eight minutes later, at 05:21 UTC under ledger version `20260920052149`, and is now the
+effective ordering high-water (1004 ledger rows / 997 distinct names). The parked
+`20260914100100`..`20260914100900` cohort still sorts above that and is clear to apply; the
+field-app season files (`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`)
+sort below it and must be restamped.
 
 **The migration file is unchanged.** Its `PARKED` header stays byte-exact to what ran; applied status
 lives in `docs/reference/migration-history.md` row 929 (corrected 2026-09-10 after the #646 finding).
